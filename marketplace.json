@@ -1,0 +1,9 @@
+{
+  "name": "multiplai",
+  "displayName": "Multiplai",
+  "description": "Personal Claude Code toolkit for context routing, continuous learning, session awareness, and memory management.",
+  "author": "spikelab",
+  "repository": "https://github.com/spikelab/multiplai",
+  "categories": ["productivity", "memory", "learning"],
+  "keywords": ["context-routing", "memory", "learning", "session-lifecycle", "autodream"]
+}
