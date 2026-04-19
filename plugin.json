@@ -1,0 +1,47 @@
+{
+  "name": "multiplai",
+  "version": "0.1.0",
+  "description": "Personal Claude Code toolkit for context routing, continuous learning, session awareness, and memory management.",
+  "author": "spikelab",
+  "license": "MIT",
+  "engines": {
+    "claude-code": ">=1.0.0"
+  },
+  "entrypoints": {
+    "hooks": "hooks.json"
+  },
+  "userConfig": {
+    "memory_dir": {
+      "type": "string",
+      "description": "Directory for memory files (me.md, technical-pref.md, preferences.md)",
+      "default": "~/.multiplai/memory"
+    },
+    "diary_dir": {
+      "type": "string",
+      "description": "Directory for diary entries and session logs",
+      "default": "~/.multiplai/diary"
+    },
+    "anthropic_api_key": {
+      "type": "string",
+      "description": "Anthropic API key for fallback when Agent SDK is unavailable",
+      "sensitive": true
+    }
+  },
+  "skills": [
+    {
+      "name": "setup",
+      "description": "Onboarding interviewer — populates memory files from starter templates",
+      "file": "skills/setup.md"
+    },
+    {
+      "name": "dream",
+      "description": "Manual AutoDream trigger — consolidates learnings into memory",
+      "file": "skills/dream.md"
+    },
+    {
+      "name": "health",
+      "description": "Memory audit — checks completeness and staleness of memory files",
+      "file": "skills/health.md"
+    }
+  ]
+}
