@@ -12,7 +12,7 @@
     },
     {
       "event": "UserPromptSubmit",
-      "script": "scripts/context_router.py",
+      "script": "scripts/context_manager.py",
       "timeout": 5000
     },
     {

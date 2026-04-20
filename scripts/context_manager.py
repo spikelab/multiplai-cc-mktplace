@@ -1,6 +1,6 @@
-"""Context router hook for multiplai plugin.
+"""Context manager hook for multiplai plugin.
 
-Routes user prompts through memory files for context enrichment.
+Manages context assembly for user prompts through memory files.
 Uses path resolver for all file locations. Memory files are ranked by
 metadata (recency + size) and only top candidates are read, staying
 within the 5-second hook timeout (R2 mitigation).
@@ -21,7 +21,7 @@ from lib.paths import get_paths
 from lib.log_utils import setup_logging
 from lib.model_client import create_client  # D3: LLM calls via ModelClient abstraction
 
-logger = setup_logging("context_router")
+logger = setup_logging("context_manager")
 
 # Catalog cache staleness threshold in seconds (15 minutes)
 _CATALOG_CACHE_TTL = 900
@@ -143,11 +143,35 @@ def _is_catalog_fresh(catalogs_dir: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Catalog-first read path with fail-open fallback (Decision 8)
+# ---------------------------------------------------------------------------
+
+def _read_catalog_or_scan(catalog_type: str) -> list:
+    """Try catalog first. On any failure (missing file, parse error,
+    schema mismatch), log warning and fall back to live scanning.
+
+    This is the fail-open fallback stub for catalog-first read paths.
+    Catalog-first logic will be added in later blocks; for now, this
+    always falls back to returning an empty list (equivalent to live
+    scan finding nothing).
+
+    Args:
+        catalog_type: The type of catalog to read (e.g., "memory", "diary",
+                      "skills", "resources").
+
+    Returns:
+        A list of context entries from the catalog or fallback scan.
+    """
+    logger.debug("_read_catalog_or_scan called for '%s' (stub — falling back)", catalog_type)
+    return []
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    """Context router main: read stdin, route context, write JSON to stdout."""
+    """Context manager main: read stdin, route context, write JSON to stdout."""
     paths = get_paths()
     memory_dir = paths.memory_dir()
 
@@ -168,7 +192,7 @@ def main() -> None:
         return
 
     file_count = len(memory_files)
-    logger.info("Context router loaded %d memory files", file_count)
+    logger.info("Context manager loaded %d memory files", file_count)
 
     # Build context from memory files
     context_parts = []

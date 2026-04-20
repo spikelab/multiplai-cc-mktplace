@@ -25,6 +25,51 @@
       "type": "string",
       "description": "Anthropic API key for fallback when Agent SDK is unavailable",
       "sensitive": true
+    },
+    "catalog_model": {
+      "type": "string",
+      "description": "Model to use for LLM-based catalog generation calls",
+      "default": "claude-sonnet-4-6"
+    },
+    "catalog_model_diary": {
+      "type": "string",
+      "description": "Override model for diary catalog generation (volume optimization). Empty = inherit catalog_model.",
+      "default": ""
+    },
+    "catalog_reasoning_effort": {
+      "type": "string",
+      "description": "Reasoning effort level for catalog generation LLM calls (low, medium, high)",
+      "default": "medium"
+    },
+    "catalog_ttl_hours": {
+      "type": "number",
+      "description": "Hours a generated catalog remains valid before being considered stale",
+      "default": 168
+    },
+    "diary_catalog_days": {
+      "type": "number",
+      "description": "Number of days of diary history the diary catalog generator processes",
+      "default": 7
+    },
+    "enable_skills": {
+      "type": "boolean",
+      "description": "Whether the skills catalog generator runs during catalog generation",
+      "default": false
+    },
+    "skills_dir": {
+      "type": "string",
+      "description": "Directory to scan for skills when enable_skills is true",
+      "default": "~/.claude/skills"
+    },
+    "enable_resources": {
+      "type": "boolean",
+      "description": "Whether the resources catalog generator runs during catalog generation",
+      "default": false
+    },
+    "resources_dir": {
+      "type": "string",
+      "description": "Directory to scan for resources when enable_resources is true",
+      "default": ""
     }
   },
   "skills": [

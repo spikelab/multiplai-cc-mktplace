@@ -301,21 +301,21 @@ class TestEndToEndSessionLifecycle:
             assert "Memory:" in result.stdout or "me.md" in result.stdout, \
                 "session_start.py should output loaded memory files"
 
-    def test_context_router_accepts_stdin_json(self, plugin_env):
-        """WHEN context_router.py receives valid JSON on stdin
+    def test_context_manager_accepts_stdin_json(self, plugin_env):
+        """WHEN context_manager.py receives valid JSON on stdin
         THEN it does not crash (exit code 0 or handled gracefully)."""
         input_data = json.dumps({
             "hook_event_name": "UserPromptSubmit",
             "prompt": "Tell me about the project",
         })
         result = _run_plugin_script(
-            "scripts/context_router.py",
+            "scripts/context_manager.py",
             input_data=input_data,
             env_overrides=plugin_env,
         )
         # Allow non-zero exit if venv is missing, but not a crash
         assert "Traceback" not in result.stderr or "venv" in result.stderr.lower(), \
-            f"context_router.py crashed: {result.stderr[:500]}"
+            f"context_manager.py crashed: {result.stderr[:500]}"
 
     def test_session_stop_accepts_stdin_json(self, plugin_env):
         """WHEN session_stop.py receives valid JSON on stdin
@@ -373,7 +373,7 @@ class TestEndToEndSessionLifecycle:
 
         # Phase 2: User Prompt Submit
         result_prompt = _run_plugin_script(
-            "scripts/context_router.py",
+            "scripts/context_manager.py",
             input_data=json.dumps({"hook_event_name": "UserPromptSubmit",
                                    "prompt": "hello"}),
             env_overrides=plugin_env,
