@@ -45,6 +45,34 @@ Manual AutoDream trigger. Runs the consolidation pipeline (extract learnings →
 ### `/multiplai:health`
 Memory audit. Reports the completeness and staleness of your memory files, diary entries, and plugin data. Flags missing or stale files and recommends actions.
 
+## Where your memory lives
+
+By default, `memory_dir` is `~/.multiplai/memory` — a hidden directory with
+no version control. Over time your memory files accumulate — learnings,
+preference updates, corrections — and a single bad write can erase state
+that took months to build.
+
+**Recommended: point `memory_dir` at a git repository.** `/multiplai:setup`
+detects whether your chosen `memory_dir` is inside a git repo and offers
+to `git init` it (with a minimal `.gitignore` and initial commit). Once
+tracked, `/multiplai:dream` auto-commits memory changes after each
+consolidation pass so you always have a recoverable history.
+
+Two common layouts:
+
+- **Dedicated repo:** Keep memory in its own repo (`~/memory/` or
+  similar) and sync it across machines via a personal git remote. Keeps
+  memory portable and independent of any workspace.
+- **Workspace subdirectory:** Point `memory_dir` at
+  `<your-workspace>/MEMORY/` and let the workspace repo track it. Handy
+  when memory evolves alongside your projects.
+
+Either works. The plugin doesn't care — it only needs `memory_dir` to be
+inside *some* git working tree for auto-commit to kick in.
+
+If `memory_dir` isn't a git repo, auto-commit is skipped with a log
+warning and everything else keeps working. No forced lifecycle.
+
 ## Architecture
 
 The plugin uses:
