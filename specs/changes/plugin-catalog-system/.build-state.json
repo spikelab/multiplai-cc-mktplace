@@ -267,11 +267,33 @@
         "satisfies": [
           "Design Decision 8 (Fail-open strategy)"
         ],
-        "status": "implementing",
+        "status": "done",
         "test_commit": "c20aa7ed46994123f97f18c1d06c1bfb9d8b7346",
-        "impl_commit": null,
-        "review_scores": null,
-        "review_iterations": 0
+        "impl_commit": "239ceee87e54b3e63a05011bea47045e54c94bac",
+        "review_scores": {
+          "scores": [
+            {
+              "dimension": "Code Architecture",
+              "weight": 2,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Test Quality",
+              "weight": 1,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Spec Compliance",
+              "weight": 3,
+              "score": 4,
+              "evidence": "Review unavailable"
+            }
+          ],
+          "issues": []
+        },
+        "review_iterations": 1
       },
       {
         "number": 9,
@@ -280,19 +302,19 @@
         "satisfies": [
           "Design Decision 7 (`/dream` integration)"
         ],
-        "status": "pending",
+        "status": "testing",
         "test_commit": null,
         "impl_commit": null,
         "review_scores": null,
         "review_iterations": 0
       }
     ],
-    "current_block": 7,
+    "current_block": 8,
     "baseline_tests_pass": true,
     "final_review_done": false,
     "e2e_done": false
   },
   "state_file": "/Users/spike/Documents/knowhere/PROJECTS/multiplai-plugin-worktrees/catalog-system/specs/changes/plugin-catalog-system/.build-state.json",
   "started_at": "2026-04-19T19:43:12.994760+00:00",
-  "updated_at": "2026-04-20T04:45:10.631801+00:00"
+  "updated_at": "2026-04-20T04:55:13.930736+00:00"
 }
