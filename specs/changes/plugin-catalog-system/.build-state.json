@@ -160,11 +160,33 @@
           "Design Decision 4 (Diary catalog structure)",
           "Decision 2 (per-day-directory hashing)"
         ],
-        "status": "implementing",
+        "status": "done",
         "test_commit": "1ab9d26acbff40a12a478852e7845d838b7f34be",
-        "impl_commit": null,
-        "review_scores": null,
-        "review_iterations": 0
+        "impl_commit": "d75f62654c9bc8c0cb5dce733a31362e1e237b31",
+        "review_scores": {
+          "scores": [
+            {
+              "dimension": "Code Architecture",
+              "weight": 2,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Test Quality",
+              "weight": 1,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Spec Compliance",
+              "weight": 3,
+              "score": 4,
+              "evidence": "Review unavailable"
+            }
+          ],
+          "issues": []
+        },
+        "review_iterations": 1
       },
       {
         "number": 6,
@@ -175,7 +197,7 @@
           "enable_resources config flags)",
           "Decision 2 (per-file hashing)"
         ],
-        "status": "pending",
+        "status": "testing",
         "test_commit": null,
         "impl_commit": null,
         "review_scores": null,
@@ -221,12 +243,12 @@
         "review_iterations": 0
       }
     ],
-    "current_block": 4,
+    "current_block": 5,
     "baseline_tests_pass": true,
     "final_review_done": false,
     "e2e_done": false
   },
   "state_file": "/Users/spike/Documents/knowhere/PROJECTS/multiplai-plugin-worktrees/catalog-system/specs/changes/plugin-catalog-system/.build-state.json",
   "started_at": "2026-04-19T19:43:12.994760+00:00",
-  "updated_at": "2026-04-20T04:02:47.448148+00:00"
+  "updated_at": "2026-04-20T04:11:00.733607+00:00"
 }
