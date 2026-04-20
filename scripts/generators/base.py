@@ -200,8 +200,6 @@ class GeneratorBase:
 
         Default: return new entry as-is. Override to preserve hand-authored fields.
         """
-        if existing is None:
-            return new
         return new
 
     @staticmethod
@@ -417,7 +415,7 @@ class GeneratorBase:
                 generators=data.get("generators", {}),
             )
         except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Corrupt state file, starting fresh: {e}")
+            logger.warning("Corrupt state file, starting fresh: %s", e)
             return GenerationState()
 
     def _save_state(self, state: GenerationState) -> None:
@@ -447,7 +445,7 @@ class GeneratorBase:
                 return empty
             return data
         except (json.JSONDecodeError, ValueError):
-            logger.warning(f"Corrupt catalog file {catalog_file}, starting fresh")
+            logger.warning("Corrupt catalog file %s, starting fresh", catalog_file)
             return empty
 
     def _write_catalog(self, catalog: dict) -> None:
