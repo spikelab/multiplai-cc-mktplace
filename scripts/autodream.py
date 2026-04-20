@@ -7,6 +7,7 @@ Dream state is persisted as YAML in the plugin data directory.
 """
 
 import asyncio
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,66 @@ from generators.config import CatalogConfig, load_catalog_config
 from generators.dispatcher import generate_catalogs
 
 logger = setup_logging("autodream")
+
+
+def _memory_dir_is_git_repo(memory_dir: Path) -> bool:
+    """Return True if memory_dir is inside a git repository."""
+    if not memory_dir.exists():
+        return False
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(memory_dir), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return result.returncode == 0 and result.stdout.strip() == "true"
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return False
+
+
+def _commit_memory_changes(memory_dir: Path) -> bool:
+    """Stage and commit any memory changes. Returns True on commit, False otherwise.
+
+    No-ops when memory_dir is not a git repo, when git is unavailable, or when
+    there are no staged changes to commit.
+    """
+    if not _memory_dir_is_git_repo(memory_dir):
+        logger.warning(
+            "Memory auto-commit skipped — %s is not a git repository. "
+            "Memory changes will not be version-controlled.",
+            memory_dir,
+        )
+        return False
+
+    try:
+        subprocess.run(
+            ["git", "-C", str(memory_dir), "add", "-A"],
+            check=True, timeout=15, capture_output=True,
+        )
+        diff = subprocess.run(
+            ["git", "-C", str(memory_dir), "diff", "--cached", "--quiet"],
+            timeout=10, capture_output=True,
+        )
+        if diff.returncode == 0:
+            logger.info("Memory auto-commit skipped — no changes to commit")
+            return False
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        subprocess.run(
+            ["git", "-C", str(memory_dir), "commit", "-m",
+             f"dream: consolidate {today}"],
+            check=True, timeout=30, capture_output=True,
+        )
+        logger.info("Memory auto-committed in %s", memory_dir)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.warning(
+            "Memory auto-commit failed: git %s exited %d (stderr: %s)",
+            e.cmd, e.returncode, e.stderr.decode("utf-8", "replace") if e.stderr else "",
+        )
+        return False
+    except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
+        logger.warning("Memory auto-commit failed: %s", e)
+        return False
 
 
 def _read_pending_learnings(learnings_file: Path) -> str:
@@ -129,6 +190,11 @@ async def dream() -> None:
         )
     except Exception:
         logger.exception("Catalog generation failed (dream still complete)")
+
+    # Auto-commit memory changes if memory_dir is under git version control.
+    # Silent no-op (with warning) if not — the plugin doesn't own the memory
+    # repo lifecycle, just offers convenience when one exists.
+    _commit_memory_changes(memory_dir)
 
 
 def main() -> None:
