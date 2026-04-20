@@ -232,11 +232,33 @@
         "satisfies": [
           "Design Decision 6 (Dispatcher design)"
         ],
-        "status": "implementing",
+        "status": "done",
         "test_commit": "c884037fa4d8f8dfcf650bab4d94bbda76c0c566",
-        "impl_commit": null,
-        "review_scores": null,
-        "review_iterations": 0
+        "impl_commit": "d2865f3a311e524ee375f0e0309e93079b4cbc65",
+        "review_scores": {
+          "scores": [
+            {
+              "dimension": "Code Architecture",
+              "weight": 2,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Test Quality",
+              "weight": 1,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Spec Compliance",
+              "weight": 3,
+              "score": 4,
+              "evidence": "Review unavailable"
+            }
+          ],
+          "issues": []
+        },
+        "review_iterations": 1
       },
       {
         "number": 8,
@@ -245,7 +267,7 @@
         "satisfies": [
           "Design Decision 8 (Fail-open strategy)"
         ],
-        "status": "pending",
+        "status": "testing",
         "test_commit": null,
         "impl_commit": null,
         "review_scores": null,
@@ -265,12 +287,12 @@
         "review_iterations": 0
       }
     ],
-    "current_block": 6,
+    "current_block": 7,
     "baseline_tests_pass": true,
     "final_review_done": false,
     "e2e_done": false
   },
   "state_file": "/Users/spike/Documents/knowhere/PROJECTS/multiplai-plugin-worktrees/catalog-system/specs/changes/plugin-catalog-system/.build-state.json",
   "started_at": "2026-04-19T19:43:12.994760+00:00",
-  "updated_at": "2026-04-20T04:32:38.347129+00:00"
+  "updated_at": "2026-04-20T04:39:11.346741+00:00"
 }
