@@ -232,8 +232,8 @@
         "satisfies": [
           "Design Decision 6 (Dispatcher design)"
         ],
-        "status": "testing",
-        "test_commit": null,
+        "status": "implementing",
+        "test_commit": "c884037fa4d8f8dfcf650bab4d94bbda76c0c566",
         "impl_commit": null,
         "review_scores": null,
         "review_iterations": 0
@@ -272,5 +272,5 @@
   },
   "state_file": "/Users/spike/Documents/knowhere/PROJECTS/multiplai-plugin-worktrees/catalog-system/specs/changes/plugin-catalog-system/.build-state.json",
   "started_at": "2026-04-19T19:43:12.994760+00:00",
-  "updated_at": "2026-04-20T04:25:53.515094+00:00"
+  "updated_at": "2026-04-20T04:32:38.347129+00:00"
 }
