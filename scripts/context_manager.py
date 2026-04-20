@@ -4,6 +4,12 @@ Manages context assembly for user prompts through memory files.
 Uses path resolver for all file locations. Memory files are ranked by
 metadata (recency + size) and only top candidates are read, staying
 within the 5-second hook timeout (R2 mitigation).
+
+Catalog-first read paths (Design Decision 8): when a valid catalog
+exists for a context type, entries are read from the catalog without
+scanning raw source files. Missing or corrupt catalogs fall back to
+live scanning (fail-open). Warnings are emitted once per session per
+catalog to avoid log spam.
 """
 
 import json
@@ -28,7 +34,12 @@ logger = setup_logging("context_manager")
 _CATALOG_CACHE_TTL = 900
 _CATALOG_FILENAME = "memory_catalog.json"
 
-# Once-per-session warning deduplication (Decision 8)
+# Catalog types supported by _read_catalog_or_scan()
+_KNOWN_CATALOG_TYPES = frozenset({"memory", "diary", "skills", "resources"})
+
+# Once-per-session warning deduplication (Decision 8).
+# Keyed by full catalog file path to correctly dedup across
+# different data directories.
 _catalog_warnings_emitted: set[str] = set()
 
 
@@ -42,7 +53,7 @@ class RankedFile:
 
 
 def _iter_markdown_files(directory: Path):
-    """Yield markdown (.md) files in *directory*, skipping non-files."""
+    """Yield ``.md`` files in *directory*, skipping non-files and subdirs."""
     if not directory.exists():
         return
     for f in directory.iterdir():
@@ -150,29 +161,27 @@ def _is_catalog_fresh(catalogs_dir: Path) -> bool:
 # Catalog-first read path with fail-open fallback (Decision 8)
 # ---------------------------------------------------------------------------
 
-def _read_catalog_or_scan(catalog_type: str) -> list:
-    """Try catalog first. On any failure (missing file, parse error,
-    schema mismatch), log warning and fall back to live scanning.
+def _read_catalog_or_scan(catalog_type: str) -> list[dict]:
+    """Try catalog first. On any failure, fall back to an empty list.
+
+    Implements the fail-open read path (Design Decision 8): attempt to
+    read and validate a catalog JSON file for *catalog_type*.  On any
+    failure — missing file, parse error, schema mismatch — log a
+    once-per-session warning and return an empty list so the caller can
+    fall back to live file scanning.
 
     Args:
-        catalog_type: The type of catalog to read (e.g., "memory", "diary",
-                      "skills", "resources").
+        catalog_type: One of ``"memory"``, ``"diary"``, ``"skills"``,
+            or ``"resources"``.
 
     Returns:
-        A list of context entries from the catalog or fallback scan.
+        Catalog entries on success, or an empty list on any failure.
     """
-    # Known catalog types and their filenames
-    known_types = {"memory", "diary", "skills", "resources"}
-    if catalog_type not in known_types:
+    if catalog_type not in _KNOWN_CATALOG_TYPES:
         logger.debug("Unknown catalog type '%s', returning empty", catalog_type)
         return []
 
-    # Resolve catalog file path
-    paths = get_paths()
-    catalogs_dir = paths.catalogs_dir()
-    catalog_file = catalogs_dir / f"{catalog_type}-catalog.json"
-
-    # Use full path as dedup key for once-per-session warnings
+    catalog_file = _resolve_catalog_path(catalog_type)
     warn_key = str(catalog_file)
 
     try:
@@ -180,39 +189,8 @@ def _read_catalog_or_scan(catalog_type: str) -> list:
             logger.debug("Catalog file not found: %s", catalog_file)
             return []
 
-        raw_text = catalog_file.read_text(encoding="utf-8")
-        data = json.loads(raw_text)
-
-        # Validate structure: must be a dict
-        if not isinstance(data, dict):
-            _warn_once(warn_key, f"Catalog {catalog_type} is not a JSON object, falling back")
-            return []
-
-        # Validate schema version
-        schema_version = data.get("schema_version")
-        if schema_version is None:
-            _warn_once(warn_key, f"Catalog {catalog_type} missing schema_version field, falling back")
-            return []
-
-        if schema_version != CATALOG_SCHEMA_VERSION:
-            _warn_once(
-                warn_key,
-                f"Catalog {catalog_type} schema version mismatch: "
-                f"expected {CATALOG_SCHEMA_VERSION}, got {schema_version}"
-            )
-            return []
-
-        # Validate entries field
-        entries = data.get("entries")
-        if entries is None:
-            # No entries key — treat as empty but valid
-            return []
-        if not isinstance(entries, list):
-            _warn_once(warn_key, f"Catalog {catalog_type} entries is not a list, falling back")
-            return []
-
-        # Success: return catalog entries
-        return entries
+        data = json.loads(catalog_file.read_text(encoding="utf-8"))
+        return _validate_catalog(data, catalog_type, warn_key)
 
     except json.JSONDecodeError as e:
         _warn_once(warn_key, f"Catalog {catalog_type} contains invalid JSON: {e}")
@@ -225,17 +203,56 @@ def _read_catalog_or_scan(catalog_type: str) -> list:
         return []
 
 
-def _warn_once(catalog_key: str, message: str) -> None:
-    """Log a warning for a catalog, but only once per session per catalog path.
+def _resolve_catalog_path(catalog_type: str) -> Path:
+    """Return the expected filesystem path for a catalog type."""
+    paths = get_paths()
+    return paths.catalogs_dir() / f"{catalog_type}-catalog.json"
 
-    Design Decision 8: Warning is emitted once per session, not per call,
-    to avoid log spam. Keyed by full catalog path to correctly dedup
-    across different data directories.
+
+def _validate_catalog(data: object, catalog_type: str, warn_key: str) -> list[dict]:
+    """Validate parsed catalog JSON and return entries, or ``[]`` on failure.
+
+    Checks that *data* is a dict with a matching ``schema_version`` and
+    a list-typed ``entries`` field. Logs a once-per-session warning for
+    each distinct validation failure.
     """
-    if catalog_key in _catalog_warnings_emitted:
-        logger.debug("Suppressed repeated warning for %s: %s", catalog_key, message)
+    if not isinstance(data, dict):
+        _warn_once(warn_key, f"Catalog {catalog_type} is not a JSON object, falling back")
+        return []
+
+    schema_version = data.get("schema_version")
+    if schema_version is None:
+        _warn_once(warn_key, f"Catalog {catalog_type} missing schema_version field, falling back")
+        return []
+
+    if schema_version != CATALOG_SCHEMA_VERSION:
+        _warn_once(
+            warn_key,
+            f"Catalog {catalog_type} schema version mismatch: "
+            f"expected {CATALOG_SCHEMA_VERSION}, got {schema_version}",
+        )
+        return []
+
+    entries = data.get("entries")
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        _warn_once(warn_key, f"Catalog {catalog_type} entries is not a list, falling back")
+        return []
+
+    return entries
+
+
+def _warn_once(warn_key: str, message: str) -> None:
+    """Log *message* at WARNING level, but only once per session per *warn_key*.
+
+    Subsequent calls with the same key are demoted to DEBUG to avoid
+    log spam (Design Decision 8).
+    """
+    if warn_key in _catalog_warnings_emitted:
+        logger.debug("Suppressed repeated warning for %s: %s", warn_key, message)
         return
-    _catalog_warnings_emitted.add(catalog_key)
+    _catalog_warnings_emitted.add(warn_key)
     logger.warning(message)
 
 
