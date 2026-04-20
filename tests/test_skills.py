@@ -204,7 +204,7 @@ class TestSkillsGeneratorConfigGating:
         client = _make_mock_client()
         gen = SkillsGenerator(config=config, model_client=client)
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.total_sources == 0
         assert result.generated == 0
@@ -229,7 +229,7 @@ class TestSkillsGeneratorConfigGating:
         client = _make_mock_client()
         gen = SkillsGenerator(config=config, model_client=client)
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.total_sources == 0
         assert result.generated == 0
@@ -241,7 +241,7 @@ class TestSkillsGeneratorConfigGating:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir)
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.total_sources == 1
         assert result.generated == 1
@@ -265,7 +265,7 @@ class TestSkillsGeneratorConfigGating:
         config = CatalogConfig(enable_skills=False, skills_dir=str(skills_dir))
         gen = SkillsGenerator(config=config, model_client=_make_mock_client())
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         # Catalog should be untouched
         catalog = _read_catalog(catalogs_dir)
@@ -461,7 +461,7 @@ class TestSkillsCatalogOutput:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         assert "schema_version" in catalog
@@ -473,7 +473,7 @@ class TestSkillsCatalogOutput:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         assert "generated_at" in catalog
@@ -487,7 +487,7 @@ class TestSkillsCatalogOutput:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         assert "entries" in catalog
@@ -501,7 +501,7 @@ class TestSkillsCatalogOutput:
         _write_skill_file(skills_dir, "dream.md", "# Dream")
         _write_skill_file(skills_dir, "health.md", "# Health")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         assert len(catalog["entries"]) == 2
@@ -512,7 +512,7 @@ class TestSkillsCatalogOutput:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir, "dream.md", "# Dream")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         entry = catalog["entries"][0]
@@ -524,7 +524,7 @@ class TestSkillsCatalogOutput:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir, "dream.md", "# Dream")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         entry = catalog["entries"][0]
@@ -538,7 +538,7 @@ class TestSkillsCatalogOutput:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir, "dream.md", "# Dream")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         entry = catalog["entries"][0]
@@ -550,7 +550,7 @@ class TestSkillsCatalogOutput:
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         assert catalog["entries"] == []
@@ -569,7 +569,7 @@ class TestSkillsCatalogOutput:
         config = CatalogConfig(enable_skills=True, skills_dir=str(nonexistent))
         gen = SkillsGenerator(config=config, model_client=_make_mock_client())
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.total_sources == 0
         catalog = _read_catalog(catalogs_dir)
@@ -595,12 +595,12 @@ class TestSkillsStateAwareRegeneration:
         _write_skill_file(skills_dir, "dream.md", "# Dream\nReflect.")
 
         # First run: generates
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
         client = gen._model_client
         first_call_count = client.query.call_count
 
         # Second run: should skip (no change)
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.skipped == 1
         assert result.generated == 0
@@ -614,13 +614,13 @@ class TestSkillsStateAwareRegeneration:
         _write_skill_file(skills_dir, "dream.md", "# Dream\nVersion 1.")
 
         # First run
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         # Modify the file
         _write_skill_file(skills_dir, "dream.md", "# Dream\nVersion 2 with changes.")
 
         # Second run
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.generated == 1
         assert result.skipped == 0
@@ -633,12 +633,12 @@ class TestSkillsStateAwareRegeneration:
         _write_skill_file(skills_dir, "dream.md", "# Dream")
 
         # First run
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         # Add a new skill file
         _write_skill_file(skills_dir, "review.md", "# Review\nReview PRs.")
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.generated >= 1  # At least the new file
         catalog = _read_catalog(catalogs_dir)
@@ -652,7 +652,7 @@ class TestSkillsStateAwareRegeneration:
         _write_skill_file(skills_dir, "dream.md", "# Dream")
         _write_skill_file(skills_dir, "health.md", "# Health")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         state = _read_state(catalogs_dir)
         skills_state = state["generators"]["skills"]
@@ -681,7 +681,7 @@ class TestSkillsDeletionPruning:
         _write_skill_file(skills_dir, "health.md", "# Health")
 
         # First run: both entries generated
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
         catalog = _read_catalog(catalogs_dir)
         assert len(catalog["entries"]) == 2
 
@@ -689,7 +689,7 @@ class TestSkillsDeletionPruning:
         dream_path.unlink()
 
         # Second run: should prune
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.pruned == 1
         catalog = _read_catalog(catalogs_dir)
@@ -705,14 +705,14 @@ class TestSkillsDeletionPruning:
         dream_path = _write_skill_file(skills_dir, "dream.md", "# Dream")
         _write_skill_file(skills_dir, "health.md", "# Health")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         state = _read_state(catalogs_dir)
         assert "dream.md" in state["generators"]["skills"]["source_hashes"]
 
         # Delete and re-run
         dream_path.unlink()
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         state = _read_state(catalogs_dir)
         assert "dream.md" not in state["generators"]["skills"]["source_hashes"]
@@ -725,14 +725,14 @@ class TestSkillsDeletionPruning:
 
         dream_path = _write_skill_file(skills_dir, "dream.md", "# Dream")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
         client = gen._model_client
         call_count_after_first = client.query.call_count
 
         # Delete file
         dream_path.unlink()
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         # No new LLM calls for pruning
         assert client.query.call_count == call_count_after_first
@@ -758,7 +758,7 @@ class TestSkillsModelConfig:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         client = gen._model_client
         call_kwargs = client.query.call_args
@@ -785,7 +785,7 @@ class TestSkillsModelConfig:
         client = _make_mock_client()
         gen = SkillsGenerator(config=config, model_client=client)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         call_kwargs = client.query.call_args
         assert call_kwargs is not None
@@ -834,7 +834,7 @@ class TestSkillsLLMFailureHandling:
         config = CatalogConfig(enable_skills=True, skills_dir=str(skills_dir))
         gen = SkillsGenerator(config=config, model_client=client)
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.generated == 2
         assert len(result.errors) == 1
@@ -860,7 +860,7 @@ class TestSkillsLLMFailureHandling:
         config = CatalogConfig(enable_skills=True, skills_dir=str(skills_dir))
         gen = SkillsGenerator(config=config, model_client=client)
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.generated == 0
         assert len(result.errors) == 1
@@ -888,7 +888,7 @@ class TestSkillsLLMFailureHandling:
         gen = SkillsGenerator(config=config, model_client=client)
 
         # Should not raise
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
         assert len(result.errors) == 2
 
 
@@ -957,7 +957,7 @@ class TestSkillsAtomicWrite:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         assert (catalogs_dir / "skills.json").exists()
 
@@ -967,7 +967,7 @@ class TestSkillsAtomicWrite:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         content = (catalogs_dir / "skills.json").read_text(encoding="utf-8")
         catalog = json.loads(content)  # Must not raise
@@ -989,10 +989,10 @@ class TestSkillsForceMode:
         _write_skill_file(skills_dir, "dream.md", "# Dream")
 
         # First run
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         # Second run with force
-        result = asyncio.get_event_loop().run_until_complete(gen.run(force=True))
+        result = asyncio.run(gen.run(force=True))
 
         assert result.generated == 1
         assert result.skipped == 0
@@ -1007,7 +1007,7 @@ class TestSkillsDryRunMode:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir, "dream.md", "# Dream")
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run(dry_run=True))
+        result = asyncio.run(gen.run(dry_run=True))
 
         assert result.dry_run is True
         assert result.generated == 1  # Reports what *would* happen
@@ -1019,7 +1019,7 @@ class TestSkillsDryRunMode:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir, "dream.md", "# Dream")
 
-        asyncio.get_event_loop().run_until_complete(gen.run(dry_run=True))
+        asyncio.run(gen.run(dry_run=True))
 
         gen._model_client.query.assert_not_called()
 
@@ -1029,7 +1029,7 @@ class TestSkillsDryRunMode:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir, "dream.md", "# Dream")
 
-        asyncio.get_event_loop().run_until_complete(gen.run(dry_run=True))
+        asyncio.run(gen.run(dry_run=True))
 
         assert not (catalogs_dir / ".generation-state.json").exists()
 
@@ -1051,7 +1051,7 @@ class TestSkillsLLMRouting:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir, "dream.md", "# Dream")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         gen._model_client.query.assert_called()
 
@@ -1089,7 +1089,7 @@ class TestSkillsBaseClassIntegration:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         state = _read_state(catalogs_dir)
         assert "skills" in state["generators"]
@@ -1113,7 +1113,7 @@ class TestSkillsBaseClassIntegration:
         _write_state(catalogs_dir, existing_state)
         _write_skill_file(skills_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         state = _read_state(catalogs_dir)
         # Memory namespace must be preserved

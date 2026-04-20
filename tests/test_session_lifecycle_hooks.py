@@ -28,8 +28,8 @@ import pytest
 # Paths
 # ---------------------------------------------------------------------------
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-PLUGIN_DIR = PROJECT_ROOT / "multiplai-plugin"
+PLUGIN_DIR = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = PLUGIN_DIR.parent
 SCRIPTS_DIR = PLUGIN_DIR / "scripts"
 LIB_DIR = SCRIPTS_DIR / "lib"
 HOOKS_JSON = PLUGIN_DIR / "hooks.json"

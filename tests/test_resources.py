@@ -206,7 +206,7 @@ class TestResourcesGeneratorConfigGating:
         client = _make_mock_client()
         gen = ResourcesGenerator(config=config, model_client=client)
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.total_sources == 0
         assert result.generated == 0
@@ -226,7 +226,7 @@ class TestResourcesGeneratorConfigGating:
         client = _make_mock_client()
         gen = ResourcesGenerator(config=config, model_client=client)
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.total_sources == 0
         assert result.generated == 0
@@ -246,7 +246,7 @@ class TestResourcesGeneratorConfigGating:
         client = _make_mock_client()
         gen = ResourcesGenerator(config=config, model_client=client)
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.total_sources == 0
         client.query.assert_not_called()
@@ -263,7 +263,7 @@ class TestResourcesGeneratorConfigGating:
         config = CatalogConfig(enable_resources=False, resources_dir="")
         gen = ResourcesGenerator(config=config, model_client=_make_mock_client())
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
         assert result.total_sources == 0
 
     def test_runs_when_enabled_with_valid_dir(self, tmp_path, monkeypatch):
@@ -272,7 +272,7 @@ class TestResourcesGeneratorConfigGating:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_resource_file(resources_dir)
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.total_sources == 1
         assert result.generated == 1
@@ -295,7 +295,7 @@ class TestResourcesGeneratorConfigGating:
         config = CatalogConfig(enable_resources=False, resources_dir=str(resources_dir))
         gen = ResourcesGenerator(config=config, model_client=_make_mock_client())
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         assert catalog == existing
@@ -314,7 +314,7 @@ class TestResourcesGeneratorConfigGating:
         gen = ResourcesGenerator(config=config, model_client=_make_mock_client())
 
         # Should not raise
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
         assert result.total_sources == 0
 
 
@@ -487,7 +487,7 @@ class TestResourcesCatalogOutput:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_resource_file(resources_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         assert "schema_version" in catalog
@@ -499,7 +499,7 @@ class TestResourcesCatalogOutput:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_resource_file(resources_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         assert "generated_at" in catalog
@@ -512,7 +512,7 @@ class TestResourcesCatalogOutput:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_resource_file(resources_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         assert "entries" in catalog
@@ -527,7 +527,7 @@ class TestResourcesCatalogOutput:
         _write_resource_file(resources_dir, "b.md", "# B")
         _write_resource_file(resources_dir, "c.md", "# C")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         assert len(catalog["entries"]) == 3
@@ -538,7 +538,7 @@ class TestResourcesCatalogOutput:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_resource_file(resources_dir, "api.md", "# API")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         entry = catalog["entries"][0]
@@ -552,7 +552,7 @@ class TestResourcesCatalogOutput:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_resource_file(resources_dir, "api.md", "# API")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         entry = catalog["entries"][0]
@@ -565,7 +565,7 @@ class TestResourcesCatalogOutput:
         gen, catalogs_dir, resources_dir = _make_resources_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         catalog = _read_catalog(catalogs_dir)
         assert catalog["entries"] == []
@@ -577,7 +577,7 @@ class TestResourcesCatalogOutput:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_resource_file(resources_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         content = (catalogs_dir / "resources.json").read_text(encoding="utf-8")
         catalog = json.loads(content)  # Must not raise
@@ -602,11 +602,11 @@ class TestResourcesStateAwareRegeneration:
 
         _write_resource_file(resources_dir, "api.md", "# API\nContent.")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
         client = gen._model_client
         first_call_count = client.query.call_count
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.skipped == 1
         assert result.generated == 0
@@ -618,10 +618,10 @@ class TestResourcesStateAwareRegeneration:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
         _write_resource_file(resources_dir, "api.md", "Version 1")
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         _write_resource_file(resources_dir, "api.md", "Version 2 with changes")
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.generated == 1
         assert result.skipped == 0
@@ -632,10 +632,10 @@ class TestResourcesStateAwareRegeneration:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
         _write_resource_file(resources_dir, "api.md", "# API")
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         _write_resource_file(resources_dir, "deploy.md", "# Deploy")
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.generated >= 1
         catalog = _read_catalog(catalogs_dir)
@@ -649,7 +649,7 @@ class TestResourcesStateAwareRegeneration:
         _write_resource_file(resources_dir, "a.md", "# A")
         _write_resource_file(resources_dir, "b.md", "# B")
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.generated == 2
         assert result.skipped == 0
@@ -676,11 +676,11 @@ class TestResourcesDeletionPruning:
         api_path = _write_resource_file(resources_dir, "api.md", "# API")
         _write_resource_file(resources_dir, "deploy.md", "# Deploy")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
         assert len(_read_catalog(catalogs_dir)["entries"]) == 2
 
         api_path.unlink()
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.pruned == 1
         catalog = _read_catalog(catalogs_dir)
@@ -697,13 +697,13 @@ class TestResourcesDeletionPruning:
             _write_resource_file(resources_dir, "c.md", "# C"),
         ]
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         # Delete a and b
         paths[0].unlink()
         paths[1].unlink()
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.pruned == 2
         catalog = _read_catalog(catalogs_dir)
@@ -717,10 +717,10 @@ class TestResourcesDeletionPruning:
         api_path = _write_resource_file(resources_dir, "api.md", "# API")
         _write_resource_file(resources_dir, "deploy.md", "# Deploy")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         api_path.unlink()
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         state = _read_state(catalogs_dir)
         hashes = state["generators"]["resources"]["source_hashes"]
@@ -769,7 +769,7 @@ class TestResourcesLLMFailureHandling:
         config = CatalogConfig(enable_resources=True, resources_dir=str(resources_dir))
         gen = ResourcesGenerator(config=config, model_client=client)
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         assert result.generated == 2
         assert len(result.errors) == 1
@@ -795,7 +795,7 @@ class TestResourcesLLMFailureHandling:
         config = CatalogConfig(enable_resources=True, resources_dir=str(resources_dir))
         gen = ResourcesGenerator(config=config, model_client=client)
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
         assert len(result.errors) == 1
         assert result.generated == 0
 
@@ -845,7 +845,7 @@ class TestResourcesLLMRouting:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_resource_file(resources_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         gen._model_client.query.assert_called()
 
@@ -869,7 +869,7 @@ class TestResourcesLLMRouting:
         client = _make_mock_client()
         gen = ResourcesGenerator(config=config, model_client=client)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         call_kwargs = client.query.call_args
         assert call_kwargs.kwargs.get("model", call_kwargs[1].get("model", "")) == "claude-haiku-4-5"
@@ -889,9 +889,9 @@ class TestResourcesForceMode:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_resource_file(resources_dir, "api.md", "# API")
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run(force=True))
+        result = asyncio.run(gen.run(force=True))
 
         assert result.generated == 1
         assert result.skipped == 0
@@ -906,7 +906,7 @@ class TestResourcesDryRunMode:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_resource_file(resources_dir, "api.md", "# API")
 
-        result = asyncio.get_event_loop().run_until_complete(gen.run(dry_run=True))
+        result = asyncio.run(gen.run(dry_run=True))
 
         assert result.dry_run is True
         assert result.generated == 1
@@ -918,7 +918,7 @@ class TestResourcesDryRunMode:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_resource_file(resources_dir, "api.md", "# API")
 
-        asyncio.get_event_loop().run_until_complete(gen.run(dry_run=True))
+        asyncio.run(gen.run(dry_run=True))
 
         gen._model_client.query.assert_not_called()
 
@@ -937,7 +937,7 @@ class TestResourcesBaseClassIntegration:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_resource_file(resources_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         state = _read_state(catalogs_dir)
         assert "resources" in state["generators"]
@@ -965,7 +965,7 @@ class TestResourcesBaseClassIntegration:
         _write_state(catalogs_dir, existing_state)
         _write_resource_file(resources_dir)
 
-        asyncio.get_event_loop().run_until_complete(gen.run())
+        asyncio.run(gen.run())
 
         state = _read_state(catalogs_dir)
         assert "memory" in state["generators"]
@@ -1008,7 +1008,7 @@ class TestResourcesLargeFileHandling:
         _write_resource_file(resources_dir, "api.md", "# API")
 
         # Should not crash
-        result = asyncio.get_event_loop().run_until_complete(gen.run())
+        result = asyncio.run(gen.run())
 
         # The text file should be processed at minimum
         # Binary file may be skipped or produce a minimal entry

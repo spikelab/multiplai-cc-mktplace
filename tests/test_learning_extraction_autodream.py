@@ -33,8 +33,8 @@ import pytest
 # Project layout
 # ---------------------------------------------------------------------------
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-PLUGIN_ROOT = PROJECT_ROOT / "multiplai-plugin"
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = PLUGIN_ROOT.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 LIB_DIR = SCRIPTS_DIR / "lib"
 

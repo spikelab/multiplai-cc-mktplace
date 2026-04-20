@@ -20,12 +20,12 @@ class TestSkillManifest:
         assert "skills" in self.manifest
         assert isinstance(self.manifest["skills"], list)
 
-    def test_exactly_three_skills(self):
-        assert len(self.manifest["skills"]) == 3
+    def test_exactly_four_skills(self):
+        assert len(self.manifest["skills"]) == 4
 
     def test_skill_names(self):
         names = {s["name"] for s in self.manifest["skills"]}
-        assert names == {"setup", "dream", "health"}
+        assert names == {"setup", "dream", "health", "refresh-catalogs"}
 
     def test_skills_have_descriptions(self):
         for skill in self.manifest["skills"]:
