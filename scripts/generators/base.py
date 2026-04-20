@@ -179,6 +179,22 @@ class GeneratorBase:
         """Parse LLM response text into a catalog entry dict."""
         raise NotImplementedError
 
+    def _disabled_result(self, dry_run: bool = False) -> GenerationResult:
+        """Create a zero-work result for when the generator is disabled or skipped.
+
+        Used by config-gated generators (skills, resources) to return early
+        without touching any catalog or state files.
+        """
+        return GenerationResult(
+            generator=self.name,
+            total_sources=0,
+            skipped=0,
+            generated=0,
+            pruned=0,
+            errors=[],
+            dry_run=dry_run,
+        )
+
     def merge_entry(self, existing: dict | None, new: dict) -> dict:
         """Merge new LLM-generated entry with existing catalog entry.
 

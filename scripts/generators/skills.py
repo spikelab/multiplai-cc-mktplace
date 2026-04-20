@@ -58,14 +58,6 @@ class SkillsGenerator(GeneratorBase):
         and does not write any catalog or state files.
         """
         if not self._config.enable_skills:
-            return GenerationResult(
-                generator=self.name,
-                total_sources=0,
-                skipped=0,
-                generated=0,
-                pruned=0,
-                errors=[],
-                dry_run=dry_run,
-            )
+            return self._disabled_result(dry_run=dry_run)
 
         return await super().run(force=force, dry_run=dry_run)

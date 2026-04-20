@@ -7,13 +7,10 @@ Design Decision 10: Gated on both enable_resources config flag AND
 resources_dir being set to a non-empty string.
 """
 
-import logging
 from pathlib import Path
 from typing import Any
 
 from generators.base import GenerationResult, GeneratorBase
-
-logger = logging.getLogger(__name__)
 
 
 class ResourcesGenerator(GeneratorBase):
@@ -32,11 +29,10 @@ class ResourcesGenerator(GeneratorBase):
 
         Returns source keys as relative paths from resources_dir.
         """
-        resources_dir_str = self._config.resources_dir
-        if not resources_dir_str or not resources_dir_str.strip():
+        if not self._config.resources_dir.strip():
             return {}
 
-        resources_dir = Path(resources_dir_str)
+        resources_dir = Path(self._config.resources_dir)
         if not resources_dir.exists() or not resources_dir.is_dir():
             return {}
 
@@ -73,14 +69,6 @@ class ResourcesGenerator(GeneratorBase):
         returns early with zero work and does not write any files.
         """
         if not self._config.enable_resources or not self._config.resources_dir.strip():
-            return GenerationResult(
-                generator=self.name,
-                total_sources=0,
-                skipped=0,
-                generated=0,
-                pruned=0,
-                errors=[],
-                dry_run=dry_run,
-            )
+            return self._disabled_result(dry_run=dry_run)
 
         return await super().run(force=force, dry_run=dry_run)
