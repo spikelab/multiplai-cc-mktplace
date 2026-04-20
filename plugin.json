@@ -87,6 +87,11 @@
       "name": "health",
       "description": "Memory audit — checks completeness and staleness of memory files",
       "file": "skills/health.md"
+    },
+    {
+      "name": "refresh-catalogs",
+      "description": "Manually regenerate catalog indexes with support for --force, --dry-run, and --only flags",
+      "file": "skills/refresh-catalogs.md"
     }
   ]
 }

@@ -20,6 +20,8 @@ from lib.paths import get_paths
 from lib.model_client import create_client
 from lib.config import load_yaml, save_yaml
 from lib.log_utils import setup_logging
+from generators.config import CatalogConfig, load_catalog_config
+from generators.dispatcher import generate_catalogs
 
 logger = setup_logging("autodream")
 
@@ -76,48 +78,57 @@ async def dream() -> None:
     learnings = _read_pending_learnings(learnings_file)
     if not learnings:
         logger.info("No pending learnings to consolidate")
-        return
+    else:
+        try:
+            client = await create_client()
+            logger.info("AutoDream using %s", type(client).__name__)
 
+            # Find memory files to update concurrently
+            memory_files = list(memory_dir.iterdir()) if memory_dir.exists() else []
+            memory_files = [f for f in memory_files if f.suffix == ".md" and f.name != "learnings.md"]
+
+            if memory_files:
+                # Process multiple memory files concurrently via asyncio.gather
+                tasks = [
+                    _update_memory_file(client, mf, learnings)
+                    for mf in memory_files
+                ]
+                results = await asyncio.gather(*tasks)
+
+                # Write updated memory files back
+                updated_count = 0
+                for memory_file, updated_content in zip(memory_files, results):
+                    if updated_content:
+                        with open(memory_file, "w") as f:
+                            f.write(updated_content)
+                        updated_count += 1
+                        logger.info("Updated %s", memory_file.name)
+
+                # Update dream state with current timestamp after successful run
+                state["last_run"] = datetime.now(timezone.utc).isoformat()
+                state["learnings_processed"] = len(learnings.splitlines())
+                state["files_updated"] = updated_count
+                save_yaml(dream_state_file, state)
+
+                logger.info(
+                    "AutoDream complete: %d files updated, dream state saved", updated_count
+                )
+            else:
+                logger.info("No memory files found to update")
+        except Exception:
+            logger.exception("AutoDream consolidation failed")
+            raise
+
+    # Catalog regeneration — runs after diary/memory writes complete
     try:
-        client = await create_client()
-        logger.info("AutoDream using %s", type(client).__name__)
-
-        # Find memory files to update concurrently
-        memory_files = list(memory_dir.iterdir()) if memory_dir.exists() else []
-        memory_files = [f for f in memory_files if f.suffix == ".md" and f.name != "learnings.md"]
-
-        if not memory_files:
-            logger.info("No memory files found to update")
-            return
-
-        # Process multiple memory files concurrently via asyncio.gather
-        tasks = [
-            _update_memory_file(client, mf, learnings)
-            for mf in memory_files
-        ]
-        results = await asyncio.gather(*tasks)
-
-        # Write updated memory files back
-        updated_count = 0
-        for memory_file, updated_content in zip(memory_files, results):
-            if updated_content:
-                with open(memory_file, "w") as f:
-                    f.write(updated_content)
-                updated_count += 1
-                logger.info("Updated %s", memory_file.name)
-
-        # Update dream state with current timestamp after successful run
-        state["last_run"] = datetime.now(timezone.utc).isoformat()
-        state["learnings_processed"] = len(learnings.splitlines())
-        state["files_updated"] = updated_count
-        save_yaml(dream_state_file, state)
-
+        config = load_catalog_config()
+        catalog_results = await generate_catalogs(config=config)
         logger.info(
-            "AutoDream complete: %d files updated, dream state saved", updated_count
+            "Catalog regeneration complete: %d generators ran",
+            len(catalog_results),
         )
     except Exception:
-        logger.exception("AutoDream consolidation failed")
-        raise
+        logger.exception("Catalog generation failed (dream still complete)")
 
 
 def main() -> None:
