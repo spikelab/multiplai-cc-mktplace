@@ -22,7 +22,7 @@ ensure_venv_python()
 
 from lib.paths import get_paths
 from lib.log_utils import setup_logging
-from generators.config import CatalogConfig, load_catalog_config
+from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
 
 logger = setup_logging("generate_catalog")

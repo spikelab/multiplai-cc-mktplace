@@ -55,6 +55,8 @@ def _all_plugin_files() -> list[Path]:
     for root, dirs, files in os.walk(PLUGIN_ROOT):
         dirs[:] = [d for d in dirs if d not in exclude_dirs]
         for f in files:
+            if f == ".git":  # worktree pointer file, not a plugin file
+                continue
             fp = Path(root) / f
             if fp.suffix in binary_exts:
                 continue
@@ -133,17 +135,20 @@ class TestPluginJsonFullWiring:
 
     def test_user_config_fields_correspond_to_env_vars(self):
         """WHEN userConfig fields are declared in plugin.json
-        THEN some lib/ module reads the corresponding CLAUDE_PLUGIN_OPTION_* env var."""
-        # Collect all lib/ source text
-        lib_sources = {}
-        for py_file in (SCRIPTS_DIR / "lib").glob("*.py"):
-            lib_sources[py_file.name] = py_file.read_text()
-        all_lib_text = "\n".join(lib_sources.values())
+        THEN some scripts/ module reads the corresponding CLAUDE_PLUGIN_OPTION_* env var."""
+        # Collect source text from lib/ and generators/ — the two locations
+        # where plugin config env vars are consumed
+        source_dirs = [SCRIPTS_DIR / "lib", SCRIPTS_DIR / "generators"]
+        all_sources = {}
+        for src_dir in source_dirs:
+            for py_file in src_dir.glob("*.py"):
+                all_sources[py_file.name] = py_file.read_text()
+        all_source_text = "\n".join(all_sources.values())
 
         for field_name in self.plugin.get("userConfig", {}):
             env_var = f"CLAUDE_PLUGIN_OPTION_{field_name}"
-            assert env_var in all_lib_text, \
-                f"userConfig field '{field_name}' has no corresponding {env_var} in any lib/ module"
+            assert env_var in all_source_text, \
+                f"userConfig field '{field_name}' has no corresponding {env_var} in any scripts/ module"
 
     def test_hooks_scripts_all_exist_and_are_python(self):
         """WHEN every hook script path in hooks.json is checked
@@ -430,8 +435,12 @@ class TestGrepAuditHardcodedPaths:
         (r"claude-code-multiplai", "Reference to source repo name"),
     ]
 
-    # Files where these patterns are ALLOWED (tests themselves, docs explaining)
+    # Files where these patterns are ALLOWED (tests, docs, config defaults)
     EXEMPT_FILES = {"test_integration_wiring.py", "CHANGELOG.md"}
+
+    # Files allowed to reference ~/.claude/ (the standard Claude Code config dir)
+    # because they define user-facing path defaults, not hardcoded user paths.
+    _CLAUDE_DIR_EXEMPT = {"plugin.json", "config.py"}
 
     def test_no_hardcoded_paths_in_any_plugin_file(self):
         """WHEN every file in multiplai-plugin/ is scanned
@@ -446,6 +455,9 @@ class TestGrepAuditHardcodedPaths:
                 continue
 
             for pattern, desc in self.FORBIDDEN_PATTERNS:
+                # Allow config files to reference ~/.claude/ (standard config dir)
+                if pattern == r"~/.claude/" and fp.name in self._CLAUDE_DIR_EXEMPT:
+                    continue
                 if pattern in text:
                     rel = fp.relative_to(PLUGIN_ROOT)
                     violations.append(f"  {rel}: {desc}")
