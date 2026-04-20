@@ -13,7 +13,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 EXPECTED_SCRIPTS = [
     "session_start.py",
     "venv_bootstrap.py",
-    "context_router.py",
+    "context_manager.py",
     "session_stop.py",
     "session_end.py",
     "pre_compact.py",
@@ -99,12 +99,12 @@ class TestNoHardcodedPaths:
             assert "/Users/spike" not in text
 
 
-class TestContextRouterPort:
-    """Verify context router port specifics."""
+class TestContextManagerPort:
+    """Verify context manager port specifics."""
 
     @pytest.fixture(autouse=True)
     def load_script(self):
-        path = SCRIPTS_DIR / "context_router.py"
+        path = SCRIPTS_DIR / "context_manager.py"
         self.text = path.read_text() if path.exists() else ""
 
     def test_no_catalog_routing(self):

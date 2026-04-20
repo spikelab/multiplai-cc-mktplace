@@ -1,0 +1,232 @@
+{
+  "change_name": "plugin-catalog-system",
+  "mode": "brief",
+  "tier": "standard",
+  "phase": "failed",
+  "bootstrap_done": true,
+  "interview_summary": "Port catalog generation from claude-code-multiplai/dotfiles/hooks/generate-*.py into the multiplai-plugin as a unified system under scripts/generators/, plus rename scripts/context_router.py to scripts/context_manager.py (it manages context, not just routes).\n\nLOCKED DECISIONS:\n- LLM: claude-sonnet-4-6 at reasoning_effort=medium; all calls via lib/model_client.py (never import claude_agent_sdk directly)\n- Diary catalog: per-day entries keyed by YYYY-MM-DD; default window 7 days, configurable\n- Skills catalog: optional, gated by enable_skills; scans skills_dir (default ~/.claude/skills)\n- Resources catalog: optional, gated by enable_resources AND resources_dir\n- Memory + Diary catalogs: mandatory\n- Regeneration: piggyback on /dream; state-aware — skip entries whose source hash unchanged; deletion-aware\n- Fail-open: context_manager falls back to live scan if mandatory catalogs missing\n\nCONFIG ADDITIONS (plugin.json userConfig):\n- enable_resources (bool, default false)\n- resources_dir (string, optional)\n- enable_skills (bool, default false)\n- skills_dir (string, default ~/.claude/skills)\n- catalog_model (string, default claude-sonnet-4-6)\n- catalog_reasoning_effort (enum low|medium|high, default medium)\n- catalog_model_diary (string, optional)\n- diary_catalog_days (int, default 7)\n- catalog_ttl_hours (int, default 168)\n\nTARGET LAYOUT:\n$CLAUDE_PLUGIN_DATA/catalogs/\n  memory-catalog.json (mandatory)\n  diary-catalog.json (mandatory)\n  skills-catalog.json (optional)\n  resources-catalog.json (optional)\n  .generation-state.json (per-file mtimes + hashes + schema_version)\n\nscripts/\n  context_manager.py (renamed)\n  generate_catalog.py (real dispatcher, not stub)\n  generators/\n    __init__.py\n    base.py (shared LLM client via model_client, retry, state I/O, hashing)\n    memory.py (preserve hand fields: sections, bundle, co_retrieve_for)\n    diary.py (NEW)\n    skills.py\n    resources.py\n\nCATALOG ENTRY SHAPES:\n- Memory: purpose, intent_domains, anti_domains, hand-preserved sections/bundle/co_retrieve_for, last_updated, _hash\n- Diary: date, sessions, projects, topics, summary, word_count, _hash\n- Skills/Resources: mirror kit shapes\n- Top-level _schema_version: 1 on every catalog\n\nREFERENCE IMPLEMENTATIONS (read-only, DO NOT modify):\n- PROJECTS/claude-code-multiplai/dotfiles/hooks/generate-memory-catalog.py\n- PROJECTS/claude-code-multiplai/dotfiles/hooks/generate-skill-catalog.py\n- PROJECTS/claude-code-multiplai/dotfiles/hooks/generate-resources-catalog.py\n\nFILES TO MODIFY:\n- scripts/context_router.py -> rename to scripts/context_manager.py\n- hooks.json (update path after rename)\n- plugin.json (userConfig additions)\n- scripts/generate_catalog.py (replace stub with dispatcher)\n- scripts/lib/paths.py (catalog path accessors if needed)\n- scripts/lib/config.py (state-file helpers)\n- skills/dream.md (integrate catalog regen)\n\nNEW FILES:\n- scripts/generators/{__init__,base,memory,diary,skills,resources}.py\n- skills/refresh-catalogs.md\n\nPHASED BUILD ORDER:\n1. Rename context_router -> context_manager (update hooks.json, imports, tests)\n2. Config surface (plugin.json, paths, state-file infra)\n3. generators/base.py (LLM via model_client, retry, state I/O, hashing)\n4. generators/memory.py (port, preserve hand fields; mtime fallback when no git)\n5. generators/diary.py (NEW; per-day with window filter)\n6. generators/skills.py (port, gated on enable_skills)\n7. generators/resources.py (port, gated on enable_resources AND resources_dir)\n8. generate_catalog.py dispatcher\n9. /dream integration (skills/dream.md + autodream.py call chain)\n10. context_manager catalog-first read path with fail-open\n11. /refresh-catalogs skill (manual force/dry-run)\n12. Evals: unit per generator, integration for dispatcher, fixture test for context_manager\n13. Docs: plugin README update\n\nSCOPE: Work entirely within /Users/spike/Documents/knowhere/PROJECTS/multiplai-plugin-worktrees/catalog-system/ (the worktree). PROJECTS/claude-code-multiplai is reference-only and must NOT be modified. now.md per-project synthesis and cost preview are out of scope.",
+  "research_path": null,
+  "spec_gen": null,
+  "tdd": {
+    "blocks": [
+      {
+        "number": 1,
+        "name": "Rename `context_router.py` → `context_manager.py`",
+        "description": "- Rename `context_router.py` to `context_manager.py`\n- Update `hooks.json` to reference the new module name\n- Update all internal imports across the plugin to use `context_manager`\n- Update all test files referencing `context_router`\n- Run `grep -r context_router` across the plugin to confirm zero remaining references\n- Add `_read_catalog_or_scan()` stub method with fail-open fallback signature per Decision 8",
+        "satisfies": [
+          "Design Decision 9 (Rename strategy)"
+        ],
+        "status": "done",
+        "test_commit": null,
+        "impl_commit": null,
+        "review_scores": {
+          "scores": [
+            {
+              "dimension": "Code Architecture",
+              "weight": 2,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Test Quality",
+              "weight": 1,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Spec Compliance",
+              "weight": 3,
+              "score": 4,
+              "evidence": "Review unavailable"
+            }
+          ],
+          "issues": []
+        },
+        "review_iterations": 1
+      },
+      {
+        "number": 2,
+        "name": "Catalog config schema and plugin configuration",
+        "description": "- Add `catalogs` nested object to `plugin.json` `userConfig` with all fields and defaults\n- Create `CatalogConfig` dataclass in `scripts/generators/config.py`\n- Implement config loading from plugin settings with default fallbacks\n- Add validation for enum fields (`reasoning_effort`) and numeric bounds (`ttl_hours`, `diary_lookback_days`)\n- Write unit tests for config loading and validation edge cases",
+        "satisfies": [
+          "Design Decision 10 (Config schema)"
+        ],
+        "status": "done",
+        "test_commit": null,
+        "impl_commit": null,
+        "review_scores": {
+          "scores": [
+            {
+              "dimension": "Code Architecture",
+              "weight": 2,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Test Quality",
+              "weight": 1,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Spec Compliance",
+              "weight": 3,
+              "score": 4,
+              "evidence": "Review unavailable"
+            }
+          ],
+          "issues": []
+        },
+        "review_iterations": 1
+      },
+      {
+        "number": 3,
+        "name": "Generator base class and state management",
+        "description": "- Create `scripts/generators/` package with `__init__.py`\n- Implement `GenerationResult` and `GenerationState` dataclasses\n- Implement `GeneratorBase` with template method `run()` orchestrating the full lifecycle\n- Implement `_load_state()` / `_save_state()` with atomic writes and schema versioning\n- Implement `_read_catalog()` / `_write_catalog()` with JSON serialization\n- Implement `_call_llm()` with retry logic via `ModelClient`\n- Implement hash comparison logic: skip unchanged, detect new, detect deleted\n- Implement `dry_run` mode that reports what would change without calling LLM or writing state\n- Implement `force` mode that ignores hashes and regenerates all entries\n- Write unit tests for lifecycle, state persistence, hash diffing, pruning, and error handling",
+        "satisfies": [
+          "Design Decision 1 (Generator architecture)",
+          "Decision 2 (Content hashing)",
+          "Decision 3 (State tracking)"
+        ],
+        "status": "done",
+        "test_commit": null,
+        "impl_commit": null,
+        "review_scores": {
+          "scores": [
+            {
+              "dimension": "Code Architecture",
+              "weight": 2,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Test Quality",
+              "weight": 1,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Spec Compliance",
+              "weight": 3,
+              "score": 4,
+              "evidence": "Review unavailable"
+            }
+          ],
+          "issues": []
+        },
+        "review_iterations": 1
+      },
+      {
+        "number": 4,
+        "name": "Memory catalog generator",
+        "description": "- Create `scripts/generators/memory.py` with `MemoryGenerator` class\n- Implement `discover_sources()` to locate the memory file\n- Implement `hash_source()` with SHA-256 of file contents\n- Implement `build_prompt()` with memory-specific LLM prompt\n- Implement `parse_response()` to extract structured catalog entry from LLM output\n- Implement `merge_entry()` preserving `sections`, `bundle`, `co_retrieve_for` from existing entries\n- Write unit tests including merge preservation and first-run behavior",
+        "satisfies": [
+          "Design Decision 5 (Memory catalog hand-authored fields)",
+          "Decision 2 (per-file hashing)"
+        ],
+        "status": "done",
+        "test_commit": null,
+        "impl_commit": null,
+        "review_scores": {
+          "scores": [
+            {
+              "dimension": "Code Architecture",
+              "weight": 2,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Test Quality",
+              "weight": 1,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Spec Compliance",
+              "weight": 3,
+              "score": 4,
+              "evidence": "Review unavailable"
+            }
+          ],
+          "issues": []
+        },
+        "review_iterations": 1
+      },
+      {
+        "number": 5,
+        "name": "Diary catalog generator",
+        "description": "- Create `scripts/generators/diary.py` with `DiaryGenerator` class\n- Implement `discover_sources()` to enumerate day directories within the lookback window\n- Implement `hash_source()` computing SHA-256 over sorted file contents of a day directory\n- Implement `build_prompt()` with diary-specific LLM prompt for day summarization\n- Implement `parse_response()` producing entries matching the diary catalog schema (date, sessions, topics, projects, word_count)\n- Implement pruning of days that fall outside the lookback window\n- Write unit tests for discovery, hashing across multiple files, lookback windowing, and schema compliance",
+        "satisfies": [
+          "Design Decision 4 (Diary catalog structure)",
+          "Decision 2 (per-day-directory hashing)"
+        ],
+        "status": "failed",
+        "test_commit": null,
+        "impl_commit": null,
+        "review_scores": null,
+        "review_iterations": 0
+      },
+      {
+        "number": 6,
+        "name": "Skills and resources catalog generators",
+        "description": "- Create `scripts/generators/skills.py` with `SkillsGenerator` class\n- Create `scripts/generators/resources.py` with `ResourcesGenerator` class\n- Implement `discover_sources()`, `build_prompt()`, and `parse_response()` for each\n- Implement early-exit when the corresponding config flag is disabled\n- Write unit tests for both generators including disabled-state behavior",
+        "satisfies": [
+          "Design Decision 10 (enable_skills",
+          "enable_resources config flags)",
+          "Decision 2 (per-file hashing)"
+        ],
+        "status": "pending",
+        "test_commit": null,
+        "impl_commit": null,
+        "review_scores": null,
+        "review_iterations": 0
+      },
+      {
+        "number": 7,
+        "name": "Catalog dispatcher",
+        "description": "- Create `scripts/generators/dispatcher.py` with `generate_catalogs()` function\n- Implement sequential generator execution with progress logging\n- Implement generator filtering via `generators` parameter\n- Implement error classification: critical (state file corruption) vs. non-critical (single entry LLM failure)\n- Aggregate and return `list[GenerationResult]`\n- Write unit tests for sequencing, filtering, error propagation, and dry-run aggregation",
+        "satisfies": [
+          "Design Decision 6 (Dispatcher design)"
+        ],
+        "status": "pending",
+        "test_commit": null,
+        "impl_commit": null,
+        "review_scores": null,
+        "review_iterations": 0
+      },
+      {
+        "number": 8,
+        "name": "`context_manager.py` catalog-first read paths",
+        "description": "- Implement `_read_catalog_or_scan()` with try/catalog-first, catch/fallback-to-scan logic\n- Add catalog read paths for memory, diary, skills, and resources\n- Implement once-per-session warning logging for catalog failures\n- Implement schema version checking — reject catalogs with unknown schema versions and fall back\n- Write unit tests for catalog hit, catalog miss, corrupt JSON, and schema mismatch scenarios",
+        "satisfies": [
+          "Design Decision 8 (Fail-open strategy)"
+        ],
+        "status": "pending",
+        "test_commit": null,
+        "impl_commit": null,
+        "review_scores": null,
+        "review_iterations": 0
+      },
+      {
+        "number": 9,
+        "name": "`/dream` integration and `/refresh-catalogs` skill",
+        "description": "- Add `<!-- catalog-regen -->` section to `dream.md` skill file calling the dispatcher\n- Create `refresh-catalogs.md` skill file with flag parsing and dispatcher invocation\n- Implement `--dry-run` output formatting showing what would be generated/pruned\n- Implement `--force` flag passthrough to dispatcher\n- Implement `--generators` flag to selectively regenerate specific catalogs\n- Write integration tests verifying `/dream` triggers catalog regeneration\n- Write integration tests for `/refresh-catalogs` with each flag combination",
+        "satisfies": [
+          "Design Decision 7 (`/dream` integration)"
+        ],
+        "status": "pending",
+        "test_commit": null,
+        "impl_commit": null,
+        "review_scores": null,
+        "review_iterations": 0
+      }
+    ],
+    "current_block": 4,
+    "baseline_tests_pass": true,
+    "final_review_done": false,
+    "e2e_done": false
+  },
+  "state_file": "/Users/spike/Documents/knowhere/PROJECTS/multiplai-plugin-worktrees/catalog-system/specs/changes/plugin-catalog-system/.build-state.json",
+  "started_at": "2026-04-19T19:43:12.994760+00:00",
+  "updated_at": "2026-04-20T03:37:39.008789+00:00"
+}

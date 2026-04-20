@@ -1,0 +1,1 @@
+"""Catalog generators package."""

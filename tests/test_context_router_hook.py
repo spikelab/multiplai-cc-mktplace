@@ -33,7 +33,7 @@ from conftest import PLUGIN_ROOT, SCRIPTS_DIR
 # Helpers
 # ---------------------------------------------------------------------------
 
-CONTEXT_ROUTER_PATH = SCRIPTS_DIR / "context_router.py"
+CONTEXT_ROUTER_PATH = SCRIPTS_DIR / "context_manager.py"
 
 # Ensure scripts dir is on sys.path for lib imports
 if str(SCRIPTS_DIR) not in sys.path:
@@ -57,13 +57,13 @@ def _make_catalogs_dir(tmp_path: Path) -> Path:
     return cat_dir
 
 
-def _import_context_router():
-    """Dynamically import context_router module, resetting caches."""
+def _import_context_manager():
+    """Dynamically import context_manager module, resetting caches."""
     from lib.paths import _reset_cache
     _reset_cache()
-    spec = importlib.util.spec_from_file_location("context_router", CONTEXT_ROUTER_PATH)
+    spec = importlib.util.spec_from_file_location("context_manager", CONTEXT_ROUTER_PATH)
     if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot import context_router from {CONTEXT_ROUTER_PATH}")
+        raise ImportError(f"Cannot import context_manager from {CONTEXT_ROUTER_PATH}")
     mod = importlib.util.module_from_spec(spec)
     return mod, spec
 
@@ -93,7 +93,7 @@ class TestContextRouterPathResolution:
         paths = Paths.resolve()
 
         # Import _read_memory_files from the context router
-        from context_router import _read_memory_files
+        from context_manager import _read_memory_files
 
         result = _read_memory_files(paths.memory_dir())
         assert "me.md" in result
@@ -101,7 +101,7 @@ class TestContextRouterPathResolution:
         assert "preferences.md" in result
         assert "About Me" in result["me.md"]
 
-    def test_no_hardcoded_paths_in_context_router(self):
+    def test_no_hardcoded_paths_in_context_manager(self):
         """WHEN the ported context-router source is inspected
         THEN it contains no hardcoded paths."""
         text = CONTEXT_ROUTER_PATH.read_text()
@@ -110,7 +110,7 @@ class TestContextRouterPathResolution:
         assert "/home/spike" not in text, "Hardcoded user home path found"
         assert "/Users/spike" not in text, "Hardcoded user home path found"
 
-    def test_context_router_imports_from_lib_paths(self):
+    def test_context_manager_imports_from_lib_paths(self):
         """WHEN the context-router source is inspected
         THEN it imports from lib.paths for all path resolution."""
         text = CONTEXT_ROUTER_PATH.read_text()
@@ -240,7 +240,7 @@ class TestMetadataFirstRanking:
 
         # The context router should have a ranking function that works on metadata
         # before reading full content
-        from context_router import _rank_memory_files
+        from context_manager import _rank_memory_files
 
         ranked = _rank_memory_files(mem_dir)
         assert isinstance(ranked, list), "Ranking must return a list"
@@ -262,7 +262,7 @@ class TestMetadataFirstRanking:
         stale = mem_dir / "stale.md"
         os.utime(stale, (time.time() - 86400 * 30, time.time() - 86400 * 30))
 
-        from context_router import _rank_memory_files
+        from context_manager import _rank_memory_files
 
         ranked = _rank_memory_files(mem_dir)
         # Extract filenames in ranked order
@@ -284,7 +284,7 @@ class TestMetadataFirstRanking:
         })
         # Both files have the same mtime (just created)
 
-        from context_router import _rank_memory_files
+        from context_manager import _rank_memory_files
 
         ranked = _rank_memory_files(mem_dir)
         # Verify the function accounts for size in some way
@@ -303,7 +303,7 @@ class TestMetadataFirstRanking:
             files[f"memory-{i:02d}.md"] = f"# Memory {i}\n" + ("Content. " * 100)
         mem_dir = _make_memory_dir(tmp_path, files)
 
-        from context_router import _read_top_memory_files
+        from context_manager import _read_top_memory_files
 
         # Should exist: a function that reads only the top N files
         result = _read_top_memory_files(mem_dir, max_files=5)
@@ -338,7 +338,7 @@ class TestCatalogCaching:
         paths = Paths.resolve()
 
         # Context router should have a catalog cache mechanism
-        from context_router import _cache_catalog, _load_cached_catalog
+        from context_manager import _cache_catalog, _load_cached_catalog
 
         catalog_data = {"files": [{"name": "me.md", "size": 30}]}
         _cache_catalog(paths.catalogs_dir(), catalog_data)
@@ -355,7 +355,7 @@ class TestCatalogCaching:
         catalogs_dir = data_dir / "catalogs"
         catalogs_dir.mkdir(parents=True)
 
-        from context_router import _cache_catalog, _load_cached_catalog, _is_catalog_fresh
+        from context_manager import _cache_catalog, _load_cached_catalog, _is_catalog_fresh
 
         catalog_data = {"files": [{"name": "me.md", "size": 30}], "timestamp": time.time()}
         _cache_catalog(catalogs_dir, catalog_data)
@@ -372,7 +372,7 @@ class TestCatalogCaching:
         catalogs_dir = tmp_path / "catalogs"
         catalogs_dir.mkdir()
 
-        from context_router import _cache_catalog, _is_catalog_fresh
+        from context_manager import _cache_catalog, _is_catalog_fresh
 
         old_catalog = {"files": [], "timestamp": time.time() - 3600}
         _cache_catalog(catalogs_dir, old_catalog)
@@ -408,7 +408,7 @@ class TestMissingMemoryFiles:
         """WHEN the context-router runs but the memory directory doesn't exist
         THEN it returns empty results without raising an exception."""
         nonexistent = tmp_path / "does-not-exist"
-        from context_router import _read_memory_files
+        from context_manager import _read_memory_files
 
         result = _read_memory_files(nonexistent)
         assert result == {}, "Missing memory dir should return empty dict"
@@ -421,7 +421,7 @@ class TestMissingMemoryFiles:
             # technical-pref.md is missing
             # preferences.md is missing
         })
-        from context_router import _read_memory_files
+        from context_manager import _read_memory_files
 
         result = _read_memory_files(mem_dir)
         assert "me.md" in result, "Existing file should be read"
@@ -438,7 +438,7 @@ class TestMissingMemoryFiles:
         corrupt = mem_dir / "corrupt.md"
         corrupt.chmod(0o000)
 
-        from context_router import _read_memory_files
+        from context_manager import _read_memory_files
 
         try:
             result = _read_memory_files(mem_dir)
@@ -453,7 +453,7 @@ class TestMissingMemoryFiles:
         THEN the context router returns empty results."""
         mem_dir = _make_memory_dir(tmp_path)  # empty
 
-        from context_router import _read_memory_files
+        from context_manager import _read_memory_files
 
         result = _read_memory_files(mem_dir)
         assert result == {}, "Empty memory dir should return empty dict"
@@ -478,14 +478,14 @@ class TestTimeoutCompliance:
         user_prompt_hooks = [h for h in hooks if h["event"] == "UserPromptSubmit"]
         assert len(user_prompt_hooks) > 0, "No UserPromptSubmit hook found"
 
-        context_router_hook = None
+        context_manager_hook = None
         for h in user_prompt_hooks:
-            if "context_router" in h.get("script", ""):
-                context_router_hook = h
+            if "context_manager" in h.get("script", ""):
+                context_manager_hook = h
                 break
-        assert context_router_hook is not None, "No context_router hook found"
-        assert context_router_hook["timeout"] == 5000, \
-            f"Context router timeout should be 5000ms, got {context_router_hook['timeout']}"
+        assert context_manager_hook is not None, "No context_manager hook found"
+        assert context_manager_hook["timeout"] == 5000, \
+            f"Context manager timeout should be 5000ms, got {context_manager_hook['timeout']}"
 
     def test_completes_under_5_seconds_small_memory(self, tmp_path, monkeypatch, reset_paths_cache):
         """WHEN the context router runs with a small memory set (3 files)
@@ -506,7 +506,7 @@ class TestTimeoutCompliance:
         _reset_cache()
 
         start = time.monotonic()
-        from context_router import _read_memory_files, _rank_memory_files
+        from context_manager import _read_memory_files, _rank_memory_files
         _rank_memory_files(mem_dir)
         _read_memory_files(mem_dir)
         elapsed = time.monotonic() - start
@@ -522,7 +522,7 @@ class TestTimeoutCompliance:
             files[f"memory-{i:02d}.md"] = f"# Memory File {i}\n" + ("x " * 5000)
         mem_dir = _make_memory_dir(tmp_path, files)
 
-        from context_router import _rank_memory_files, _read_top_memory_files
+        from context_manager import _rank_memory_files, _read_top_memory_files
 
         start = time.monotonic()
         ranked = _rank_memory_files(mem_dir)
@@ -542,20 +542,20 @@ class TestVenvPreamble:
     """Context router must include the re-exec venv preamble per D4."""
 
     def test_has_venv_guard_import(self):
-        """WHEN the context_router.py source is inspected
+        """WHEN the context_manager.py source is inspected
         THEN it imports the venv guard module."""
         text = CONTEXT_ROUTER_PATH.read_text()
         assert "venv_guard" in text, "Context router must import venv_guard"
 
     def test_has_ensure_venv_python_call(self):
-        """WHEN the context_router.py source is inspected
+        """WHEN the context_manager.py source is inspected
         THEN it calls ensure_venv_python() early in the script."""
         text = CONTEXT_ROUTER_PATH.read_text()
         assert "ensure_venv_python" in text, \
             "Context router must call ensure_venv_python()"
 
     def test_venv_preamble_before_heavy_imports(self):
-        """WHEN the context_router.py source is inspected
+        """WHEN the context_manager.py source is inspected
         THEN the venv preamble appears before imports that require pip packages."""
         text = CONTEXT_ROUTER_PATH.read_text()
         lines = text.split("\n")
@@ -573,7 +573,7 @@ class TestVenvPreamble:
                 "ensure_venv_python() must be called before heavy imports"
 
     def test_sys_path_insert_before_venv_guard(self):
-        """WHEN the context_router.py source is inspected
+        """WHEN the context_manager.py source is inspected
         THEN sys.path is set up before importing venv_guard."""
         text = CONTEXT_ROUTER_PATH.read_text()
         lines = text.split("\n")
@@ -600,13 +600,13 @@ class TestContextRouterMainFlow:
     """Integration-style tests for the context router main flow."""
 
     def test_main_function_exists(self):
-        """WHEN context_router is imported
+        """WHEN context_manager is imported
         THEN it exposes a main() function."""
         text = CONTEXT_ROUTER_PATH.read_text()
         assert "def main" in text, "Context router must have a main() function"
 
     def test_main_entrypoint_guard(self):
-        """WHEN context_router.py is inspected
+        """WHEN context_manager.py is inspected
         THEN it has an if __name__ == '__main__' guard."""
         text = CONTEXT_ROUTER_PATH.read_text()
         assert "__name__" in text and "__main__" in text, \
@@ -672,27 +672,27 @@ class TestContextRouterHookWiring:
 
     def test_registered_on_user_prompt_submit(self):
         """WHEN hooks.json is parsed
-        THEN there is a UserPromptSubmit hook pointing to context_router.py."""
+        THEN there is a UserPromptSubmit hook pointing to context_manager.py."""
         user_hooks = [h for h in self.hooks if h["event"] == "UserPromptSubmit"]
         scripts = [h["script"] for h in user_hooks]
-        assert any("context_router" in s for s in scripts), \
-            "context_router.py must be registered as UserPromptSubmit hook"
+        assert any("context_manager" in s for s in scripts), \
+            "context_manager.py must be registered as UserPromptSubmit hook"
 
     def test_timeout_set_to_5000(self):
-        """WHEN the context_router hook entry is inspected
+        """WHEN the context_manager hook entry is inspected
         THEN it has a 5000ms timeout."""
         for h in self.hooks:
-            if h["event"] == "UserPromptSubmit" and "context_router" in h.get("script", ""):
+            if h["event"] == "UserPromptSubmit" and "context_manager" in h.get("script", ""):
                 assert h["timeout"] == 5000, \
                     f"Expected 5000ms timeout, got {h['timeout']}"
                 return
-        pytest.fail("Context router hook not found in hooks.json")
+        pytest.fail("Context manager hook not found in hooks.json")
 
     def test_script_path_exists(self):
-        """WHEN the context_router hook entry references a script
+        """WHEN the context_manager hook entry references a script
         THEN that script exists in the plugin directory."""
         for h in self.hooks:
-            if h["event"] == "UserPromptSubmit" and "context_router" in h.get("script", ""):
+            if h["event"] == "UserPromptSubmit" and "context_manager" in h.get("script", ""):
                 script_path = PLUGIN_ROOT / h["script"]
                 assert script_path.is_file(), \
                     f"Hook script not found: {script_path}"
@@ -745,7 +745,7 @@ class TestEdgeCases:
         (mem_dir / "config.json").write_text("{}")
         (mem_dir / ".DS_Store").write_bytes(b"\x00\x00")
 
-        from context_router import _read_memory_files
+        from context_manager import _read_memory_files
 
         result = _read_memory_files(mem_dir)
         assert "me.md" in result
@@ -761,7 +761,7 @@ class TestEdgeCases:
             "empty.md": "",
         })
 
-        from context_router import _read_memory_files
+        from context_manager import _read_memory_files
 
         result = _read_memory_files(mem_dir)
         # Should not crash. Whether empty file is included or skipped is OK.
@@ -776,7 +776,7 @@ class TestEdgeCases:
         link_dir = tmp_path / "link-memory"
         link_dir.symlink_to(real_dir)
 
-        from context_router import _read_memory_files
+        from context_manager import _read_memory_files
 
         result = _read_memory_files(link_dir)
         assert "me.md" in result
@@ -791,7 +791,7 @@ class TestEdgeCases:
             "normal.md": "# Normal\nSmall file.",
         })
 
-        from context_router import _read_memory_files
+        from context_manager import _read_memory_files
 
         result = _read_memory_files(mem_dir)
         # Should not crash
@@ -807,7 +807,7 @@ class TestContextRouterLogging:
     """Context router must use the log_utils module for logging."""
 
     def test_imports_log_utils(self):
-        """WHEN context_router.py is inspected
+        """WHEN context_manager.py is inspected
         THEN it imports from lib.log_utils."""
         text = CONTEXT_ROUTER_PATH.read_text()
         assert "log_utils" in text or "logging" in text, \
