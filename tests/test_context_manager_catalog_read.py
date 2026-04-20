@@ -73,7 +73,7 @@ def _valid_memory_catalog(entries=None):
     return {
         "schema_version": CATALOG_SCHEMA_VERSION,
         "generated_at": "2026-04-19T10:30:00Z",
-        "entries": entries or [
+        "entries": entries if entries is not None else [
             {
                 "source": "me.md",
                 "summary": "Identity and background info",
@@ -96,7 +96,7 @@ def _valid_diary_catalog(entries=None):
     return {
         "schema_version": CATALOG_SCHEMA_VERSION,
         "generated_at": "2026-04-19T22:00:00Z",
-        "entries": entries or [
+        "entries": entries if entries is not None else [
             {
                 "date": "2026-04-19",
                 "sessions": [{"id": "session-abc", "project": "multiplai", "summary": "Catalog work"}],
@@ -120,7 +120,7 @@ def _valid_skills_catalog(entries=None):
     return {
         "schema_version": CATALOG_SCHEMA_VERSION,
         "generated_at": "2026-04-19T10:30:00Z",
-        "entries": entries or [
+        "entries": entries if entries is not None else [
             {
                 "name": "dream",
                 "file": "dream.md",
@@ -137,7 +137,7 @@ def _valid_resources_catalog(entries=None):
     return {
         "schema_version": CATALOG_SCHEMA_VERSION,
         "generated_at": "2026-04-19T10:30:00Z",
-        "entries": entries or [
+        "entries": entries if entries is not None else [
             {
                 "path": "apis/openai.md",
                 "summary": "OpenAI API integration docs",
