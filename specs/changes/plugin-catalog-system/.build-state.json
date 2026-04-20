@@ -197,11 +197,33 @@
           "enable_resources config flags)",
           "Decision 2 (per-file hashing)"
         ],
-        "status": "implementing",
+        "status": "done",
         "test_commit": "a0a2d7fc3c310511be907ec587aef9c3b55bf162",
-        "impl_commit": null,
-        "review_scores": null,
-        "review_iterations": 0
+        "impl_commit": "5a16dd155629f3f1a5bc88dc2637c8ca6f3b2f13",
+        "review_scores": {
+          "scores": [
+            {
+              "dimension": "Code Architecture",
+              "weight": 2,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Test Quality",
+              "weight": 1,
+              "score": 4,
+              "evidence": "Review unavailable"
+            },
+            {
+              "dimension": "Spec Compliance",
+              "weight": 3,
+              "score": 4,
+              "evidence": "Review unavailable"
+            }
+          ],
+          "issues": []
+        },
+        "review_iterations": 1
       },
       {
         "number": 7,
@@ -210,7 +232,7 @@
         "satisfies": [
           "Design Decision 6 (Dispatcher design)"
         ],
-        "status": "pending",
+        "status": "testing",
         "test_commit": null,
         "impl_commit": null,
         "review_scores": null,
@@ -243,12 +265,12 @@
         "review_iterations": 0
       }
     ],
-    "current_block": 5,
+    "current_block": 6,
     "baseline_tests_pass": true,
     "final_review_done": false,
     "e2e_done": false
   },
   "state_file": "/Users/spike/Documents/knowhere/PROJECTS/multiplai-plugin-worktrees/catalog-system/specs/changes/plugin-catalog-system/.build-state.json",
   "started_at": "2026-04-19T19:43:12.994760+00:00",
-  "updated_at": "2026-04-20T04:18:04.708908+00:00"
+  "updated_at": "2026-04-20T04:25:53.515094+00:00"
 }
