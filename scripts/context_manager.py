@@ -20,12 +20,16 @@ ensure_venv_python()
 from lib.paths import get_paths
 from lib.log_utils import setup_logging
 from lib.model_client import create_client  # D3: LLM calls via ModelClient abstraction
+from generators.base import CATALOG_SCHEMA_VERSION
 
 logger = setup_logging("context_manager")
 
 # Catalog cache staleness threshold in seconds (15 minutes)
 _CATALOG_CACHE_TTL = 900
 _CATALOG_FILENAME = "memory_catalog.json"
+
+# Once-per-session warning deduplication (Decision 8)
+_catalog_warnings_emitted: set[str] = set()
 
 
 @dataclass
@@ -150,11 +154,6 @@ def _read_catalog_or_scan(catalog_type: str) -> list:
     """Try catalog first. On any failure (missing file, parse error,
     schema mismatch), log warning and fall back to live scanning.
 
-    This is the fail-open fallback stub for catalog-first read paths.
-    Catalog-first logic will be added in later blocks; for now, this
-    always falls back to returning an empty list (equivalent to live
-    scan finding nothing).
-
     Args:
         catalog_type: The type of catalog to read (e.g., "memory", "diary",
                       "skills", "resources").
@@ -162,8 +161,82 @@ def _read_catalog_or_scan(catalog_type: str) -> list:
     Returns:
         A list of context entries from the catalog or fallback scan.
     """
-    logger.debug("_read_catalog_or_scan called for '%s' (stub — falling back)", catalog_type)
-    return []
+    # Known catalog types and their filenames
+    known_types = {"memory", "diary", "skills", "resources"}
+    if catalog_type not in known_types:
+        logger.debug("Unknown catalog type '%s', returning empty", catalog_type)
+        return []
+
+    # Resolve catalog file path
+    paths = get_paths()
+    catalogs_dir = paths.catalogs_dir()
+    catalog_file = catalogs_dir / f"{catalog_type}-catalog.json"
+
+    # Use full path as dedup key for once-per-session warnings
+    warn_key = str(catalog_file)
+
+    try:
+        if not catalog_file.exists():
+            logger.debug("Catalog file not found: %s", catalog_file)
+            return []
+
+        raw_text = catalog_file.read_text(encoding="utf-8")
+        data = json.loads(raw_text)
+
+        # Validate structure: must be a dict
+        if not isinstance(data, dict):
+            _warn_once(warn_key, f"Catalog {catalog_type} is not a JSON object, falling back")
+            return []
+
+        # Validate schema version
+        schema_version = data.get("schema_version")
+        if schema_version is None:
+            _warn_once(warn_key, f"Catalog {catalog_type} missing schema_version field, falling back")
+            return []
+
+        if schema_version != CATALOG_SCHEMA_VERSION:
+            _warn_once(
+                warn_key,
+                f"Catalog {catalog_type} schema version mismatch: "
+                f"expected {CATALOG_SCHEMA_VERSION}, got {schema_version}"
+            )
+            return []
+
+        # Validate entries field
+        entries = data.get("entries")
+        if entries is None:
+            # No entries key — treat as empty but valid
+            return []
+        if not isinstance(entries, list):
+            _warn_once(warn_key, f"Catalog {catalog_type} entries is not a list, falling back")
+            return []
+
+        # Success: return catalog entries
+        return entries
+
+    except json.JSONDecodeError as e:
+        _warn_once(warn_key, f"Catalog {catalog_type} contains invalid JSON: {e}")
+        return []
+    except OSError as e:
+        _warn_once(warn_key, f"Error reading catalog {catalog_type}: {e}")
+        return []
+    except Exception as e:
+        _warn_once(warn_key, f"Unexpected error reading catalog {catalog_type}: {e}")
+        return []
+
+
+def _warn_once(catalog_key: str, message: str) -> None:
+    """Log a warning for a catalog, but only once per session per catalog path.
+
+    Design Decision 8: Warning is emitted once per session, not per call,
+    to avoid log spam. Keyed by full catalog path to correctly dedup
+    across different data directories.
+    """
+    if catalog_key in _catalog_warnings_emitted:
+        logger.debug("Suppressed repeated warning for %s: %s", catalog_key, message)
+        return
+    _catalog_warnings_emitted.add(catalog_key)
+    logger.warning(message)
 
 
 # ---------------------------------------------------------------------------
