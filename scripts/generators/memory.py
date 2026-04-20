@@ -7,9 +7,7 @@ Design Decision 5: Preserves hand-authored fields (sections, bundle,
 co_retrieve_for) across regeneration via merge_entry() override.
 """
 
-import json
 import os
-import re
 from pathlib import Path
 from typing import Any
 
@@ -54,16 +52,8 @@ class MemoryGenerator(GeneratorBase):
         )
 
     def parse_response(self, raw: str) -> dict:
-        """Parse LLM response text into a catalog entry dict.
-
-        Handles JSON wrapped in markdown code fences.
-        """
-        text = raw.strip()
-        # Strip markdown code fences
-        match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-        if match:
-            text = match.group(1).strip()
-        return json.loads(text)
+        """Parse LLM response into a memory catalog entry dict."""
+        return self._parse_json_response(raw)
 
     def merge_entry(self, existing: dict | None, new: dict) -> dict:
         """Merge new LLM entry with existing, preserving hand-authored fields.

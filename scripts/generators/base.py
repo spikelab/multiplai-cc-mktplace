@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -186,6 +187,19 @@ class GeneratorBase:
         if existing is None:
             return new
         return new
+
+    @staticmethod
+    def _parse_json_response(raw: str) -> dict:
+        """Parse JSON from an LLM response, stripping markdown code fences.
+
+        Handles responses wrapped in ```json ... ``` or plain ``` ... ```.
+        Raises json.JSONDecodeError if the content is not valid JSON.
+        """
+        text = raw.strip()
+        match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+        if match:
+            text = match.group(1).strip()
+        return json.loads(text)
 
     # ---- Template method ----
 
