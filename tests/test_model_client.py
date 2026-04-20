@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 # Ensure scripts/lib is importable
-SCRIPTS_DIR = Path(__file__).parent.parent.parent / "multiplai-plugin" / "scripts"
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -540,7 +540,7 @@ class TestNoVendoring:
         assert hasattr(model_client, "ModelClient")
 
     def test_anthropic_in_requirements(self):
-        req_path = Path(__file__).parent.parent.parent / "multiplai-plugin" / "requirements.txt"
+        req_path = Path(__file__).resolve().parent.parent / "requirements.txt"
         text = req_path.read_text()
         assert "anthropic" in text
         assert "claude-agent-sdk" not in text.lower()

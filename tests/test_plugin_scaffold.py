@@ -83,7 +83,7 @@ class TestPluginJson:
     def test_skills_declared(self):
         assert "skills" in self.manifest
         names = {s["name"] for s in self.manifest["skills"]}
-        assert names == {"setup", "dream", "health"}
+        assert names == {"setup", "dream", "health", "refresh-catalogs"}
 
     def test_skills_have_files(self):
         for skill in self.manifest["skills"]:
