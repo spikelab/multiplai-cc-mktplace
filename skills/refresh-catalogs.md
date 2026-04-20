@@ -1,0 +1,52 @@
+# Refresh Catalogs
+
+Manually regenerate catalog indexes for memory, diary, skills, and resources. This skill invokes the catalog dispatcher (`generate_catalogs` via `scripts/generate_catalog.py`) to rebuild catalog files used by the context manager for fast routing.
+
+## Usage
+
+By default (no arguments), all enabled catalogs are regenerated using state-aware skipping — only catalogs whose source content has changed since the last run are rebuilt. Memory and diary catalogs are always processed (mandatory). Skills and resources catalogs only run if enabled in the plugin configuration.
+
+### Flags
+
+- **`--force`** — Force regeneration of all enabled catalogs, bypassing state-aware skipping. Ignores content hash state and regenerates regardless of whether sources have changed. Pass `--force` flag through to the dispatcher.
+- **`--dry-run`** — Preview mode. Reports what catalogs would be regenerated or skipped without writing any files, modifying `.generation-state.json`, or making LLM calls. Dry-run output shows which generators would run and which would be skipped. No side effects.
+- **`--only <generators>`** — Selectively regenerate specific catalogs. Provide a comma-separated list of generator names: `memory`, `diary`, `skills`, `resources`. Example: `--only memory,diary` runs only those two generators.
+
+### Combinations
+
+- `--dry-run --force` — Shows all enabled catalogs as pending (since force bypasses skip logic).
+- `--only diary --force` — Force-regenerates only the diary catalog.
+- `--only skills --dry-run` — Preview what the skills catalog generator would do.
+
+## Steps
+
+1. **Parse flags** from the user's invocation to determine mode (default, force, dry-run) and any generator filter.
+
+2. **Invoke the catalog dispatcher:**
+   Run `python scripts/generate_catalog.py` with the appropriate flags:
+   - Default: `python scripts/generate_catalog.py`
+   - Force: `python scripts/generate_catalog.py --force`
+   - Dry-run: `python scripts/generate_catalog.py --dry-run`
+   - Selective: `python scripts/generate_catalog.py --only memory,diary`
+   - Combined: `python scripts/generate_catalog.py --force --dry-run`
+
+3. **Report per-catalog status** as a summary table:
+   - Each catalog gets its own status line: **regenerated** (success), **skipped** (unchanged), or **failed** (with error reason).
+   - Show counts: sources processed, entries generated, entries skipped, entries pruned.
+   - On first run or with a missing/corrupt state file, all catalogs are regenerated since no prior state exists. The dispatcher handles graceful recovery from corrupt or invalid `.generation-state.json`.
+
+## Error Handling
+
+- If a generator fails, other generators still run — failures are isolated per catalog.
+- Missing source directories (e.g., diary directory doesn't exist) cause that catalog to be skipped gracefully with a clear message, not a crash.
+- Missing or corrupt `.generation-state.json` triggers full regeneration for all catalogs (equivalent to `--force` for the first run).
+- All LLM calls go through `model_client` using the configured `catalog_model` and `catalog_reasoning_effort` settings. No direct API calls or new external dependencies.
+
+## Configuration
+
+The dispatcher respects these `plugin.json` userConfig settings:
+- `catalog_model` — Model for LLM-based catalog generation (default: `claude-sonnet-4-6`)
+- `catalog_reasoning_effort` — Reasoning effort level: low, medium, high (default: medium)
+- `enable_skills` — Whether to include the skills catalog generator (default: false)
+- `enable_resources` — Whether to include the resources catalog generator (default: false)
+- `resources_dir` — Directory to scan for resources (required when enable_resources is true)
