@@ -10,18 +10,53 @@ The create_client() factory tries Agent SDK first, falls back to API key.
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
 DEFAULT_MAX_TOKENS = 4096
+_STDERR_TAIL_LINES = 2000
 
 
 @dataclass(frozen=True)
 class ModelResponse:
     """Normalized response from any model client."""
     content: str
+
+
+class SDKQueryError(RuntimeError):
+    """Raised when ``claude_agent_sdk.query()`` fails.
+
+    ``stderr_tail`` holds the last captured CLI stderr lines — useful
+    for surfacing rate-limit, auth, or CLI crash details that would
+    otherwise be silently dropped.
+    """
+
+    def __init__(self, message: str, *, stderr_tail: str = "") -> None:
+        super().__init__(message)
+        self.stderr_tail = stderr_tail
+
+
+def _messages_to_prompt(messages: list[dict]) -> str:
+    """Flatten the ModelClient messages list into a single prompt string.
+
+    ``claude_agent_sdk.query()`` takes a ``prompt`` string rather than a
+    messages list. Plugin callers invoke single-turn user queries, so we
+    concatenate every user message. Non-user roles are ignored (the
+    system prompt is passed separately via ``ClaudeAgentOptions``).
+    """
+    user_parts = [m["content"] for m in messages if m.get("role") == "user"]
+    return "\n\n".join(user_parts)
+
+
+def _hook_session_dir() -> Path:
+    """cwd for no-tool SDK calls — prevents project settings.json pickup."""
+    cfg = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
+    d = cfg / "hook-sessions"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 @runtime_checkable
@@ -40,10 +75,21 @@ class ModelClient(Protocol):
 
 
 class AgentSDKClient:
-    """Uses claude_agent_sdk.query() from the Claude Code host runtime.
+    """Uses ``claude_agent_sdk.query()`` from the Claude Code host runtime.
+
+    ``claude_agent_sdk.query()`` is an async generator that takes a
+    ``prompt`` string and a ``ClaudeAgentOptions`` bundle and yields
+    ``AssistantMessage`` objects. This client adapts the ``ModelClient``
+    interface (system + messages list) to that shape for single-turn
+    queries, captures CLI stderr so SDK-internal failures (rate limits,
+    auth, CLI crashes) surface to the caller rather than being silently
+    dropped, and attaches the captured tail to any raised exception.
 
     Requires running inside Claude Code where the host injects
     ``claude_agent_sdk`` into the plugin's Python environment.
+    ``max_tokens`` and ``temperature`` parameters are accepted for
+    interface parity but are not forwarded — the SDK uses session
+    defaults.
     """
 
     def __init__(self) -> None:
@@ -65,28 +111,46 @@ class AgentSDKClient:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: float = 1.0,
     ) -> ModelResponse:
-        """Send a query via the Agent SDK and return a normalized response."""
-        response = self._sdk.query(
-            system=system,
-            messages=messages,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
+        """Send a single-turn query via the Agent SDK and return normalized text."""
+        from claude_agent_sdk import (
+            AssistantMessage,
+            ClaudeAgentOptions,
+            TextBlock,
         )
-        return ModelResponse(content=self._extract_text(response))
 
-    @staticmethod
-    def _extract_text(response: object) -> str:
-        """Extract text content from an Agent SDK response.
+        prompt = _messages_to_prompt(messages)
+        stderr_lines: list[str] = []
 
-        The SDK may return content as a list of TextBlock objects,
-        a plain string attribute, or a raw object.
-        """
-        if hasattr(response, "content"):
-            if isinstance(response.content, list):
-                return response.content[0].text
-            return str(response.content)
-        return str(response)
+        options = ClaudeAgentOptions(
+            allowed_tools=[],
+            max_turns=1,
+            permission_mode="bypassPermissions",
+            system_prompt=system,
+            model=model,
+            env={"_HOOK_CHILD_SESSION": "1"},
+            cwd=str(_hook_session_dir()),
+            setting_sources=[],
+            extra_args={"setting-sources": "", "debug-to-stderr": None},
+            stderr=lambda line: stderr_lines.append(line),
+        )
+
+        chunks: list[str] = []
+        try:
+            async for message in self._sdk.query(prompt=prompt, options=options):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            chunks.append(block.text)
+        except SDKQueryError:
+            raise
+        except Exception as e:
+            tail = "\n".join(stderr_lines[-_STDERR_TAIL_LINES:])
+            raise SDKQueryError(
+                f"claude_agent_sdk.query() failed: {e}",
+                stderr_tail=tail,
+            ) from e
+
+        return ModelResponse(content="".join(chunks).strip())
 
 
 class AnthropicAPIClient:

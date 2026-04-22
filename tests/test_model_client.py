@@ -17,6 +17,62 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 
+# ---------------------------------------------------------------------------
+# Helpers for mocking claude_agent_sdk.query() (async generator)
+# ---------------------------------------------------------------------------
+
+
+class _FakeTextBlock:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _FakeAssistantMessage:
+    def __init__(self, blocks: list) -> None:
+        self.content = blocks
+
+
+def _make_mock_sdk(
+    texts: list[str] | None = None,
+    *,
+    fail: Exception | None = None,
+    stderr_lines: list[str] | None = None,
+) -> MagicMock:
+    """Build a mock ``claude_agent_sdk`` module.
+
+    ``self._sdk.query(prompt=..., options=...)`` must be an async generator
+    yielding ``AssistantMessage`` objects whose ``.content`` is a list of
+    ``TextBlock``. The mock also exposes the types used by ``isinstance()``
+    checks and can simulate CLI stderr via the ``stderr`` options callback.
+    """
+    if texts is None:
+        texts = ["default text"]
+
+    mock = MagicMock()
+    mock.AssistantMessage = _FakeAssistantMessage
+    mock.TextBlock = _FakeTextBlock
+
+    def _options_ctor(**kwargs):
+        stderr_cb = kwargs.get("stderr")
+        if stderr_cb and stderr_lines:
+            for line in stderr_lines:
+                stderr_cb(line)
+        opts = MagicMock()
+        for k, v in kwargs.items():
+            setattr(opts, k, v)
+        return opts
+
+    mock.ClaudeAgentOptions = MagicMock(side_effect=_options_ctor)
+
+    async def _agen(prompt, options):
+        if fail is not None:
+            raise fail
+        yield _FakeAssistantMessage([_FakeTextBlock(t) for t in texts])
+
+    mock.query = MagicMock(side_effect=_agen)
+    return mock
+
+
 class TestModelClientInterface:
     """Verify ModelClient Protocol definition."""
 
@@ -67,11 +123,7 @@ class TestAgentSDKClient:
             assert client._sdk is mock_sdk
 
     def test_query_delegates_to_sdk(self):
-        mock_sdk = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "test response"
-        mock_sdk.query.return_value = mock_response
-
+        mock_sdk = _make_mock_sdk(["test response"])
         with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
             from lib.model_client import AgentSDKClient
             client = AgentSDKClient()
@@ -83,26 +135,29 @@ class TestAgentSDKClient:
             asyncio.run(_test())
 
     def test_query_propagates_exceptions(self):
-        mock_sdk = MagicMock()
-        mock_sdk.query.side_effect = RuntimeError("SDK error")
-
+        """WHEN the SDK async generator raises
+        THEN the error is wrapped in SDKQueryError with the captured stderr tail."""
+        mock_sdk = _make_mock_sdk(
+            fail=RuntimeError("SDK error"),
+            stderr_lines=["auth: token expired"],
+        )
         with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
-            from lib.model_client import AgentSDKClient
+            from lib.model_client import AgentSDKClient, SDKQueryError
             client = AgentSDKClient()
 
             async def _test():
-                with pytest.raises(RuntimeError, match="SDK error"):
-                    await client.query("system", [])
+                with pytest.raises(SDKQueryError) as exc_info:
+                    await client.query("system", [{"role": "user", "content": "hi"}])
+                assert "SDK error" in str(exc_info.value)
+                assert "auth: token expired" in exc_info.value.stderr_tail
 
             asyncio.run(_test())
 
-    def test_query_forwards_all_parameters_to_sdk(self):
-        """WHEN query() is called with system, messages, model, max_tokens, temperature
-        THEN all parameters are forwarded to claude_agent_sdk.query()."""
-        mock_sdk = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "ok"
-        mock_sdk.query.return_value = mock_response
+    def test_query_forwards_prompt_and_options(self):
+        """WHEN query() is called with system, messages, and model
+        THEN ``self._sdk.query(prompt=..., options=...)`` receives the joined
+        user messages as prompt and the system + model in ClaudeAgentOptions."""
+        mock_sdk = _make_mock_sdk(["ok"])
 
         with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
             from lib.model_client import AgentSDKClient
@@ -115,55 +170,50 @@ class TestAgentSDKClient:
                     "system prompt",
                     messages,
                     model="claude-opus-4-20250514",
-                    max_tokens=8000,
-                    temperature=0.5,
                 )
-                mock_sdk.query.assert_called_once_with(
-                    system="system prompt",
-                    messages=messages,
-                    model="claude-opus-4-20250514",
-                    max_tokens=8000,
-                    temperature=0.5,
-                )
+                call = mock_sdk.query.call_args
+                assert call.kwargs["prompt"] == "test"
+                opts = call.kwargs["options"]
+                assert opts.system_prompt == "system prompt"
+                assert opts.model == "claude-opus-4-20250514"
 
             asyncio.run(_test())
 
-    def test_query_default_max_tokens_forwarded(self):
-        """WHEN query() is called without max_tokens
-        THEN max_tokens=4096 is sent to the SDK."""
-        mock_sdk = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "ok"
-        mock_sdk.query.return_value = mock_response
+    def test_query_joins_multiple_user_messages(self):
+        """WHEN query() is called with multiple user messages
+        THEN they are concatenated into the prompt (non-user roles are dropped)."""
+        mock_sdk = _make_mock_sdk(["ok"])
+        with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
+            from lib.model_client import AgentSDKClient
+            client = AgentSDKClient()
 
+            messages = [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "ignored"},
+                {"role": "user", "content": "second"},
+            ]
+
+            async def _test():
+                await client.query("sys", messages)
+                prompt = mock_sdk.query.call_args.kwargs["prompt"]
+                assert "first" in prompt and "second" in prompt
+                assert "ignored" not in prompt
+
+            asyncio.run(_test())
+
+    def test_query_extracts_text_from_text_blocks(self):
+        """WHEN the SDK yields AssistantMessage with multiple TextBlock entries
+        THEN their .text values are concatenated into ModelResponse.content."""
+        mock_sdk = _make_mock_sdk(["first ", "second"])
         with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
             from lib.model_client import AgentSDKClient
             client = AgentSDKClient()
 
             async def _test():
-                await client.query("sys", [])
-                call_kwargs = mock_sdk.query.call_args
-                assert call_kwargs.kwargs["max_tokens"] == 4096
-
-            asyncio.run(_test())
-
-    def test_query_handles_list_content_with_text_blocks(self):
-        """WHEN SDK returns response.content as list of TextBlock objects
-        THEN the content is extracted from content[0].text."""
-        mock_sdk = MagicMock()
-        mock_text_block = MagicMock()
-        mock_text_block.text = "extracted from text block"
-        mock_response = MagicMock()
-        mock_response.content = [mock_text_block]
-        mock_sdk.query.return_value = mock_response
-
-        with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
-            from lib.model_client import AgentSDKClient
-            client = AgentSDKClient()
-
-            async def _test():
-                result = await client.query("sys", [])
-                assert result.content == "extracted from text block"
+                result = await client.query(
+                    "sys", [{"role": "user", "content": "hi"}],
+                )
+                assert result.content == "first second"
 
             asyncio.run(_test())
 
@@ -387,17 +437,15 @@ class TestResponseNormalization:
     """Verify both clients return consistent response objects."""
 
     def test_agent_sdk_response_has_content(self):
-        mock_sdk = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "hello"
-        mock_sdk.query.return_value = mock_response
-
+        mock_sdk = _make_mock_sdk(["hello"])
         with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
             from lib.model_client import AgentSDKClient
 
             async def _test():
                 client = AgentSDKClient()
-                result = await client.query("sys", [])
+                result = await client.query(
+                    "sys", [{"role": "user", "content": "hi"}],
+                )
                 assert hasattr(result, "content")
                 assert isinstance(result.content, str)
 
@@ -438,13 +486,8 @@ class TestResponseNormalization:
         """Both implementations return ModelResponse for interface consistency."""
         from lib.model_client import AgentSDKClient, AnthropicAPIClient, ModelResponse
 
-        # AgentSDKClient
-        mock_sdk = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "sdk text"
-        mock_sdk.query.return_value = mock_response
+        mock_sdk = _make_mock_sdk(["sdk text"])
 
-        # AnthropicAPIClient
         mock_text_block = MagicMock()
         mock_text_block.text = "api text"
         mock_api_response = MagicMock()
@@ -462,12 +505,11 @@ class TestResponseNormalization:
             api_client._client = None
 
             async def _test():
-                sdk_result = await sdk_client.query("sys", [])
-                api_result = await api_client.query("sys", [])
-                # Both must be ModelResponse
+                messages = [{"role": "user", "content": "hi"}]
+                sdk_result = await sdk_client.query("sys", messages)
+                api_result = await api_client.query("sys", messages)
                 assert isinstance(sdk_result, ModelResponse)
                 assert isinstance(api_result, ModelResponse)
-                # Both must have string content
                 assert isinstance(sdk_result.content, str)
                 assert isinstance(api_result.content, str)
 
@@ -493,11 +535,7 @@ class TestAsyncInterface:
     def test_create_client_and_query_work_inside_asyncio_run(self):
         """WHEN create_client() and client.query() are called inside asyncio.run()
         THEN both complete without event loop errors."""
-        mock_sdk = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "integration test"
-        mock_sdk.query.return_value = mock_response
-
+        mock_sdk = _make_mock_sdk(["integration test"])
         with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
             from lib.model_client import create_client
 
@@ -509,23 +547,17 @@ class TestAsyncInterface:
                 )
                 assert result.content == "integration test"
 
-            # Must complete without RuntimeError about event loop
             asyncio.run(_test())
 
     def test_agent_sdk_query_is_awaitable(self):
         """WHEN client.query() is called on AgentSDKClient
         THEN it returns a coroutine that must be awaited."""
-        mock_sdk = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "ok"
-        mock_sdk.query.return_value = mock_response
-
+        mock_sdk = _make_mock_sdk(["ok"])
         with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
             from lib.model_client import AgentSDKClient
             client = AgentSDKClient()
-            result = client.query("sys", [])
+            result = client.query("sys", [{"role": "user", "content": "hi"}])
             assert asyncio.iscoroutine(result)
-            # Must await to get actual result
             actual = asyncio.run(result)
             assert actual.content == "ok"
 
@@ -554,39 +586,26 @@ class TestMaxTokensDefaults:
         from lib.model_client import DEFAULT_MAX_TOKENS
         assert DEFAULT_MAX_TOKENS == 4096
 
-    def test_agent_sdk_default_max_tokens_forwarded(self):
-        """WHEN AgentSDKClient.query() is called without max_tokens
-        THEN the SDK receives max_tokens=4096."""
-        mock_sdk = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "ok"
-        mock_sdk.query.return_value = mock_response
+    def test_agent_sdk_accepts_max_tokens_for_interface_parity(self):
+        """WHEN AgentSDKClient.query() is called with max_tokens
+        THEN the call succeeds even though the SDK uses session defaults.
 
+        ``claude_agent_sdk.query()`` takes no per-query max_tokens argument —
+        the parameter is accepted only so ``AgentSDKClient`` and
+        ``AnthropicAPIClient`` share a consistent interface.
+        """
+        mock_sdk = _make_mock_sdk(["ok"])
         with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
             from lib.model_client import AgentSDKClient
             client = AgentSDKClient()
 
             async def _test():
-                await client.query("sys", [])
-                assert mock_sdk.query.call_args.kwargs["max_tokens"] == 4096
-
-            asyncio.run(_test())
-
-    def test_agent_sdk_caller_override_max_tokens(self):
-        """WHEN AgentSDKClient.query() is called with max_tokens=16000
-        THEN the SDK receives 16000, not the default."""
-        mock_sdk = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "ok"
-        mock_sdk.query.return_value = mock_response
-
-        with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
-            from lib.model_client import AgentSDKClient
-            client = AgentSDKClient()
-
-            async def _test():
-                await client.query("sys", [], max_tokens=16000)
-                assert mock_sdk.query.call_args.kwargs["max_tokens"] == 16000
+                result = await client.query(
+                    "sys",
+                    [{"role": "user", "content": "hi"}],
+                    max_tokens=16000,
+                )
+                assert result.content == "ok"
 
             asyncio.run(_test())
 
