@@ -8,8 +8,10 @@ the LLM to identify actionable learnings worth preserving.
 """
 
 import asyncio
+import fcntl
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -44,11 +46,13 @@ async def extract() -> None:
         logger.info("No session data on stdin, skipping extraction")
         return
 
+    transcript_data: dict = {}
     try:
         transcript_data = json.loads(hook_input)
         transcript = transcript_data.get("transcript", hook_input)
     except (json.JSONDecodeError, AttributeError):
         transcript = hook_input
+    session_id = transcript_data.get("session_id", "") if isinstance(transcript_data, dict) else ""
 
     try:
         client = await create_client()
@@ -69,10 +73,33 @@ async def extract() -> None:
         logger.info("No actionable learnings found, nothing to append")
         return
 
-    # Append learnings to the file (never overwrite)
+    # Append learnings to the file (never overwrite). Serialize concurrent writes
+    # with an advisory flock and skip writing if this session already appended
+    # (prevents doubles when the Stop hook fires twice or a session force-stops
+    # mid-extraction).
     learnings_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(learnings_file, "a") as f:
-        f.write(f"\n{learnings}\n")
+    lock_file = learnings_file.parent / f".{learnings_file.name}.lock"
+
+    with open(lock_file, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            if session_id and learnings_file.exists():
+                existing = learnings_file.read_text()
+                if f"[session:{session_id}]" in existing:
+                    logger.info(
+                        "Session %s already has learnings in %s, skipping",
+                        session_id, learnings_file,
+                    )
+                    return
+
+            timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            header_marker = f" [session:{session_id}]" if session_id else ""
+            header = f"\n---\n## Session Learnings — {timestamp}{header_marker}\n"
+            with open(learnings_file, "a") as f:
+                f.write(header)
+                f.write(f"{learnings}\n")
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
     logger.info("Appended learnings to %s", learnings_file)
 
