@@ -28,7 +28,11 @@ MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 0.1  # seconds
 
 STATE_SCHEMA_VERSION = 1
-CATALOG_SCHEMA_VERSION = "1.0.0"
+# 1.1.0 adds intent_domains and anti_domains to memory catalog entries
+# for intent-based routing. Catalogs pinned to 1.0.0 are invalidated
+# automatically by the catalog-read path; regeneration produces the
+# new shape.
+CATALOG_SCHEMA_VERSION = "1.1.0"
 
 # Keys used to identify the source key in catalog entries
 _ENTRY_KEY_FIELDS = ("source", "path", "file")

@@ -257,6 +257,84 @@ def _warn_once(warn_key: str, message: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Intent-domain routing (catalog-driven)
+# ---------------------------------------------------------------------------
+
+
+def _tokenize(text: str) -> set[str]:
+    """Lowercase word set for cheap overlap scoring between prompt and domains."""
+    return {
+        w.strip(".,;:!?\"'()[]{}").lower()
+        for w in text.split()
+        if len(w.strip(".,;:!?\"'()[]{}")) >= 3
+    }
+
+
+def _score_entry_by_intent(
+    entry: dict, prompt_tokens: set[str],
+) -> tuple[int, int]:
+    """Return (match_score, anti_score) for a catalog entry against the prompt.
+
+    match_score is the number of tokens in any ``intent_domains`` phrase
+    that also appear in the prompt. anti_score is the same for
+    ``anti_domains``. Callers prefer high match and low (ideally zero)
+    anti — files with any anti match should be dropped outright.
+    """
+    def _domain_tokens(field: str) -> set[str]:
+        all_tokens: set[str] = set()
+        for phrase in entry.get(field, []) or []:
+            if isinstance(phrase, str):
+                all_tokens |= _tokenize(phrase)
+        return all_tokens
+
+    match_tokens = _domain_tokens("intent_domains") | _tokenize(
+        entry.get("summary", "") + " " + " ".join(entry.get("topics", []) or [])
+    )
+    anti_tokens = _domain_tokens("anti_domains")
+
+    match_score = len(match_tokens & prompt_tokens)
+    anti_score = len(anti_tokens & prompt_tokens)
+    return match_score, anti_score
+
+
+def _filter_memory_by_intent(
+    catalog_entries: list[dict], prompt: str, *, max_files: int = 10,
+) -> list[str]:
+    """Pick the memory filenames whose intent_domains best overlap *prompt*.
+
+    Returns an ordered list of ``source`` filenames with the highest
+    match_score and zero anti_score. Entries with any anti match are
+    dropped even if they'd otherwise score highly. When no entry has a
+    positive match_score, returns [] so the caller falls back to the
+    mtime+size ranking path — intent routing is opt-in per-prompt.
+    """
+    if not catalog_entries or not prompt:
+        return []
+
+    prompt_tokens = _tokenize(prompt)
+    if not prompt_tokens:
+        return []
+
+    scored: list[tuple[int, str]] = []
+    for entry in catalog_entries:
+        source = entry.get("source") or entry.get("path") or entry.get("file", "")
+        if not source:
+            continue
+        match, anti = _score_entry_by_intent(entry, prompt_tokens)
+        if anti > 0:
+            continue  # Respect anti_domains — don't load this file for this prompt
+        if match == 0:
+            continue
+        scored.append((match, source))
+
+    if not scored:
+        return []
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [source for _, source in scored[:max_files]]
+
+
+# ---------------------------------------------------------------------------
 # Per-project "now" state loading
 # ---------------------------------------------------------------------------
 
@@ -302,10 +380,29 @@ def main() -> None:
         input_data = {}
 
     cwd = input_data.get("cwd", "") if isinstance(input_data, dict) else ""
+    prompt = input_data.get("user_prompt", "") if isinstance(input_data, dict) else ""
 
-    # Rank and read only top memory files to stay under the 5-second
-    # timeout (R2 mitigation — metadata-first ranking, not full reads).
-    memory_files = _read_top_memory_files(memory_dir)
+    # Intent-domain routing: if the memory catalog exists and has
+    # entries with intent_domains, prefer the files whose domains
+    # overlap the prompt. mtime+size ranking is only run for files
+    # the catalog didn't score (or as a pure fallback when the
+    # catalog is missing/empty).
+    catalog_entries = _read_catalog_or_scan("memory") if prompt else []
+    intent_picks = _filter_memory_by_intent(catalog_entries, prompt)
+
+    if intent_picks:
+        memory_files: dict[str, str] = {}
+        for filename in intent_picks:
+            path = memory_dir / filename
+            if path.exists():
+                try:
+                    memory_files[filename] = path.read_text()
+                except OSError:
+                    logger.warning("Failed to read intent-picked memory file: %s", path)
+        if not memory_files:
+            memory_files = _read_top_memory_files(memory_dir)
+    else:
+        memory_files = _read_top_memory_files(memory_dir)
 
     project_state = _load_project_state(now_dir, cwd)
 
