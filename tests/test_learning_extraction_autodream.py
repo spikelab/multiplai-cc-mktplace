@@ -829,12 +829,17 @@ class TestNoBashWrappers:
 
     def test_no_shell_scripts_in_scripts_dir(self):
         """WHEN the plugin's scripts/ directory is listed
-        THEN it contains only .py files."""
+        THEN it contains no .sh/.bash/.zsh/.fish shell wrappers.
+
+        Non-code data files (e.g., correction-patterns.yaml) are allowed
+        — the point is to ban shell wrappers, not all non-Python files.
+        """
+        forbidden_suffixes = {".sh", ".bash", ".zsh", ".fish"}
         for f in SCRIPTS_DIR.iterdir():
             if f.is_file():
-                assert f.suffix == ".py" or f.name == "__pycache__", (
-                    f"Found non-Python file {f.name} in scripts/ — "
-                    "only .py files allowed (no .sh, .bash, .zsh)"
+                assert f.suffix not in forbidden_suffixes, (
+                    f"Found shell wrapper {f.name} in scripts/ — "
+                    f"ban list: {sorted(forbidden_suffixes)}"
                 )
 
     @pytest.mark.parametrize("script_path", ALL_SCRIPTS, ids=ALL_SCRIPT_NAMES)

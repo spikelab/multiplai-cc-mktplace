@@ -22,6 +22,10 @@ ensure_venv_python()
 from lib.paths import get_paths
 from lib.model_client import create_client
 from lib.log_utils import setup_logging
+from lib.correction_patterns import (
+    detect_corrections_in_transcript,
+    format_correction_block,
+)
 
 logger = setup_logging("extract_learnings")
 
@@ -68,8 +72,18 @@ async def extract() -> None:
         logger.exception("LLM call failed during learning extraction")
         return
 
-    # Guard: do not write if no learnings were produced
-    if not learnings or "NO_LEARNINGS" in learnings:
+    # Deterministic correction detection over the transcript. When Spike
+    # corrected Claude during the session, we want that tagged with
+    # trust: verified rather than depending on the LLM to infer it —
+    # the regex is precision-tuned and fires every time, the LLM does
+    # not.
+    corrections = detect_corrections_in_transcript(transcript)
+    correction_block = format_correction_block(corrections) if corrections else ""
+
+    # Guard: do not write if neither the LLM nor the detector produced
+    # anything actionable.
+    has_llm_learnings = bool(learnings) and "NO_LEARNINGS" not in learnings
+    if not has_llm_learnings and not correction_block:
         logger.info("No actionable learnings found, nothing to append")
         return
 
@@ -97,7 +111,11 @@ async def extract() -> None:
             header = f"\n---\n## Session Learnings — {timestamp}{header_marker}\n"
             with open(learnings_file, "a") as f:
                 f.write(header)
-                f.write(f"{learnings}\n")
+                if correction_block:
+                    f.write(correction_block)
+                    f.write("\n")
+                if has_llm_learnings:
+                    f.write(f"{learnings}\n")
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
