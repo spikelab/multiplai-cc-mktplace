@@ -10,6 +10,8 @@ instead of the consolidation silently falling out of rhythm.
 """
 
 import json
+import os
+import subprocess
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -97,6 +99,70 @@ def _learnings_pending(learnings_file: Path, dream_state_file: Path) -> bool:
     return learnings_mtime > last_dt
 
 
+def _process_deferred_extractions(data_dir: Path, extract_script: Path) -> int:
+    """Drain pending extraction markers left by previous SessionEnd hooks.
+
+    Each marker is atomically moved from ``pending_extractions/`` to
+    ``processing_extractions/``, its content (plus the transcript file
+    if still readable) is piped to a detached ``extract_learnings.py``
+    subprocess, and the marker is unlinked. Returns the number of
+    markers processed.
+
+    Atomic rename guarantees at-most-once dequeue if two SessionStart
+    hooks race. Best-effort cleanup — if extraction crashes, the
+    marker is already gone and won't be retried.
+    """
+    pending_dir = data_dir / "pending_extractions"
+    if not pending_dir.exists() or not extract_script.exists():
+        return 0
+
+    processing_dir = data_dir / "processing_extractions"
+    processing_dir.mkdir(parents=True, exist_ok=True)
+
+    processed = 0
+    for marker_file in list(pending_dir.glob("*.json")):
+        dest = processing_dir / marker_file.name
+        try:
+            os.rename(str(marker_file), str(dest))
+        except OSError:
+            continue
+
+        try:
+            marker = json.loads(dest.read_text())
+        except (json.JSONDecodeError, OSError):
+            dest.unlink(missing_ok=True)
+            continue
+
+        transcript_path = marker.get("transcript_path", "")
+        payload: dict = {"session_id": marker.get("session_id", "")}
+        if transcript_path and Path(transcript_path).exists():
+            try:
+                payload["transcript"] = Path(transcript_path).read_text(
+                    encoding="utf-8", errors="replace",
+                )
+            except OSError:
+                logger.warning("Could not read transcript at %s", transcript_path)
+
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, str(extract_script)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            if proc.stdin is not None:
+                proc.stdin.write(json.dumps(payload).encode("utf-8"))
+                proc.stdin.close()
+            processed += 1
+        except Exception:
+            logger.exception("Failed to launch deferred extraction subprocess")
+        finally:
+            dest.unlink(missing_ok=True)
+
+    return processed
+
+
 def _emit_autodream_nudge() -> None:
     """Print an additionalContext nudge prompting Spike to run /multiplai:dream."""
     print(
@@ -136,6 +202,18 @@ def main() -> None:
     if memory_context:
         for filename, content in memory_context.items():
             print(f"\n## Memory: {filename}\n{content}")
+
+    # Drain any deferred extraction markers left by previous session_end
+    # hooks. SessionEnd is kill-within-seconds, so the heavy LLM
+    # extraction is intentionally deferred here where the SessionStart
+    # hook has more headroom.
+    extract_script = paths.scripts_dir() / "extract_learnings.py"
+    try:
+        processed = _process_deferred_extractions(data_dir, extract_script)
+        if processed:
+            logger.info("Launched %d deferred extraction(s)", processed)
+    except Exception:
+        logger.exception("Deferred extraction processing failed (non-fatal)")
 
     # AutoDream gate: emit a nudge when the 24h window has elapsed and
     # fresh learnings are waiting. The nudge is additionalContext only —
