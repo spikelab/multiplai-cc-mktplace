@@ -570,24 +570,26 @@ class TestSynthesizeNowPort:
             "synthesize_now.py must read diary entries from paths.diary_dir()"
         )
 
-    def test_reads_learnings(self):
+    def test_writes_per_project_now_files(self):
         """WHEN synthesize-now runs
-        THEN it reads learnings from paths.learnings_file() or memory_dir."""
+        THEN it writes per-project status summaries to paths.now_dir()."""
         source = _read_source(SYNTHESIZE_NOW)
-        has_learnings_read = (
-            "learnings_file" in source or
-            "learnings" in source.lower()
-        )
-        assert has_learnings_read, (
-            "synthesize_now.py must read learnings for synthesis"
+        assert "now_dir" in source, (
+            "synthesize_now.py must write per-project summaries to paths.now_dir()"
         )
 
-    def test_reads_memory_files(self):
-        """WHEN synthesize-now runs
-        THEN it reads existing memory files from paths.memory_dir()."""
+    def test_groups_by_project(self):
+        """WHEN synthesize-now processes diary entries
+        THEN it groups them by project (derived from working-directory path)."""
         source = _read_source(SYNTHESIZE_NOW)
-        assert "memory_dir" in source, (
-            "synthesize_now.py must read memory files from paths.memory_dir()"
+        has_grouping = (
+            "_derive_project_name" in source or
+            "project_name" in source or
+            "entries_by_project" in source or
+            "Path(working_dir).name" in source
+        )
+        assert has_grouping, (
+            "synthesize_now.py must group diary entries by project name"
         )
 
     def test_writes_output_to_path_resolved_location(self):
@@ -968,17 +970,20 @@ class TestAutodreamDreamState:
 class TestSynthesizeNowInputs:
     """Synthesize-now must read from diary, learnings, and memory files."""
 
-    def test_reads_all_three_sources(self):
+    def test_reads_diary_and_writes_now_dir(self):
         """WHEN synthesize-now runs
-        THEN it reads diary entries, learnings, AND existing memory files."""
+        THEN it reads diary entries and writes per-project summaries to now_dir.
+
+        synthesize_now's purpose is per-project status synthesis, not
+        memory consolidation — learnings and memory files are handled
+        by autodream.py.
+        """
         source = _read_source(SYNTHESIZE_NOW)
         has_diary = "diary" in source.lower()
-        has_learnings = "learnings" in source.lower()
-        has_memory = "memory" in source.lower()
+        has_now = "now_dir" in source
 
         assert has_diary, "synthesize_now.py must read diary entries"
-        assert has_learnings, "synthesize_now.py must read learnings"
-        assert has_memory, "synthesize_now.py must read memory files"
+        assert has_now, "synthesize_now.py must write to paths.now_dir()"
 
     def test_handles_missing_diary_dir(self):
         """WHEN synthesize-now runs but diary directory does not exist
