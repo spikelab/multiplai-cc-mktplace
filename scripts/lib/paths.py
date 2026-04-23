@@ -71,6 +71,7 @@ class Paths:
     data_dir: Path
     memory_dir: Path
     diary_dir: Path
+    now_dir: Path
     venv_dir: Path
     catalogs_dir: Path
     templates_dir: Path
@@ -102,12 +103,20 @@ class Paths:
             _env("CLAUDE_PLUGIN_OPTION_diary_dir"),
             _STANDALONE_BASE / "diary",
         )
+        # now_dir defaults to a sibling of diary_dir (matching kit's
+        # captainslog/now layout) so per-project state files live next
+        # to the diary they're derived from.
+        now_dir = _resolve_env_path(
+            _env("CLAUDE_PLUGIN_OPTION_now_dir"),
+            diary_dir.parent / "now",
+        )
 
         return cls(
             plugin_root=_callable(plugin_root),
             data_dir=_callable(data_dir),
             memory_dir=_callable(memory_dir),
             diary_dir=_callable(diary_dir),
+            now_dir=_callable(now_dir),
             venv_dir=_callable(data_dir / "venv"),
             catalogs_dir=_callable(data_dir / "catalogs"),
             templates_dir=_callable(plugin_root / "templates"),

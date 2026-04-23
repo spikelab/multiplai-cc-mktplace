@@ -257,6 +257,35 @@ def _warn_once(warn_key: str, message: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Per-project "now" state loading
+# ---------------------------------------------------------------------------
+
+def _load_project_state(now_dir: Path, cwd: str) -> str | None:
+    """Return the ``now_dir / {project}.md`` file contents for *cwd*, or None.
+
+    The project name is the final path component of *cwd* — matching how
+    ``synthesize_now.py`` groups diary entries. Returns ``None`` when
+    *cwd* is empty, the directory does not exist, the project file is
+    missing, or the file cannot be read. Per-project scoping keeps
+    signal-to-noise high: working on DolceEngine should not surface the
+    multiplai-plugin status file.
+    """
+    if not cwd or not now_dir.exists():
+        return None
+    project = Path(cwd).name
+    if not project:
+        return None
+    project_file = now_dir / f"{project}.md"
+    if not project_file.exists():
+        return None
+    try:
+        return project_file.read_text(encoding="utf-8")
+    except OSError:
+        logger.warning("Failed to read project state file: %s", project_file)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -264,6 +293,7 @@ def main() -> None:
     """Context manager main: read stdin, route context, write JSON to stdout."""
     paths = get_paths()
     memory_dir = paths.memory_dir()
+    now_dir = paths.now_dir()
 
     # Read user prompt from stdin (Claude Code hook protocol)
     try:
@@ -271,27 +301,35 @@ def main() -> None:
     except (json.JSONDecodeError, ValueError):
         input_data = {}
 
+    cwd = input_data.get("cwd", "") if isinstance(input_data, dict) else ""
+
     # Rank and read only top memory files to stay under the 5-second
     # timeout (R2 mitigation — metadata-first ranking, not full reads).
     memory_files = _read_top_memory_files(memory_dir)
 
-    if not memory_files:
-        logger.info("No memory files found, skipping context routing")
+    project_state = _load_project_state(now_dir, cwd)
+
+    if not memory_files and not project_state:
+        logger.info("No memory files or project state found, skipping context routing")
         result = {"context": "", "memory_files": 0}
         print(json.dumps(result))
         return
 
     file_count = len(memory_files)
-    logger.info("Context manager loaded %d memory files", file_count)
+    logger.info(
+        "Context manager loaded %d memory files%s",
+        file_count,
+        " + project state" if project_state else "",
+    )
 
-    # Build context from memory files
     context_parts = []
+    if project_state:
+        context_parts.append(f"--- PROJECT STATE ---\n{project_state}")
     for name, content in memory_files.items():
         context_parts.append(f"## {name}\n{content}")
 
     session_context = "\n\n".join(context_parts)
 
-    # Output result as JSON to stdout
     result = {
         "context": session_context,
         "memory_files": file_count,
