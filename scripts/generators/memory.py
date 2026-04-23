@@ -13,8 +13,17 @@ from typing import Any
 
 from generators.base import GeneratorBase
 
-# Hand-authored fields preserved during merge
-_HAND_AUTHORED_FIELDS = ("sections", "bundle", "co_retrieve_for")
+# Hand-authored fields preserved during merge. intent_domains and
+# anti_domains are emitted by the LLM on first generation but may be
+# hand-tuned later — preserving them across regeneration prevents the
+# LLM from silently overwriting curated routing hints.
+_HAND_AUTHORED_FIELDS = (
+    "sections",
+    "bundle",
+    "co_retrieve_for",
+    "intent_domains",
+    "anti_domains",
+)
 
 
 class MemoryGenerator(GeneratorBase):
@@ -40,13 +49,26 @@ class MemoryGenerator(GeneratorBase):
         return sources
 
     def build_prompt(self, source: Path) -> str:
-        """Build an LLM prompt for summarizing a memory file."""
+        """Build an LLM prompt for summarizing a memory file.
+
+        Emits intent_domains / anti_domains so context routing can
+        select files by task intent (e.g., "blog-style-guide.md"
+        matches intent_domain "writing long-form content") rather
+        than by mtime+size alone. These fields are hand-authorable
+        and preserved across regeneration.
+        """
         content = source.read_text(encoding="utf-8")
         return (
             "Analyze the following memory file and produce a JSON object with:\n"
             '- "summary": a concise summary of the file\'s content\n'
             '- "topics": an array of topic strings relevant for routing\n'
-            '- "keywords": an array of keyword strings\n\n'
+            '- "keywords": an array of keyword strings\n'
+            '- "intent_domains": an array of short phrases describing task intents '
+            'for which this file is relevant (e.g., "writing a blog post", '
+            '"debugging python async code"). 3-8 phrases.\n'
+            '- "anti_domains": an array of short phrases describing task intents '
+            'for which this file is NOT relevant (use sparingly — most files have '
+            'none). 0-3 phrases.\n\n'
             "Respond with ONLY valid JSON, no explanation.\n\n"
             f"---\n{content}\n---"
         )
