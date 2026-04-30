@@ -123,16 +123,16 @@ class Paths:
         data_fallback = (plugin_root / "data") if is_plugin else (_STANDALONE_BASE / "data")
         data_dir = _resolve_env_path(env_data, data_fallback)
 
-        # Memory follows the user (preferences, voice, long-term facts),
-        # so the standalone fallback lives in $HOME — not workspace.
+        # All four user-data dirs (memory, diary, now, learnings) share
+        # the same fallback hierarchy:
+        #   1. CLAUDE_PLUGIN_OPTION_<name>_dir (specific override)
+        #   2. CLAUDE_PLUGIN_OPTION_workspace_dir/.multiplai/<name>
+        #   3. ~/.multiplai/<name> (when no workspace_dir is set)
+        workspace_base = _workspace_base()
         memory_dir = _resolve_env_path(
             _env("CLAUDE_PLUGIN_OPTION_memory_dir"),
-            _STANDALONE_BASE / "memory",
+            workspace_base / "memory",
         )
-        # Diary, now, and learnings are workspace-scoped: they capture
-        # what happened in a specific project. Default to
-        # ``$CWD/.multiplai/{diary,now,learnings}/``.
-        workspace_base = _workspace_base()
         diary_dir = _resolve_env_path(
             _env("CLAUDE_PLUGIN_OPTION_diary_dir"),
             workspace_base / "diary",

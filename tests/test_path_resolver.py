@@ -106,11 +106,10 @@ class TestStandaloneFallback:
         from lib.paths import Paths
 
         p = Paths.resolve()
+        assert p.memory_dir() == Path("/ws/proj/.multiplai/memory")
         assert p.diary_dir() == Path("/ws/proj/.multiplai/diary")
         assert p.now_dir() == Path("/ws/proj/.multiplai/now")
         assert p.learnings_dir() == Path("/ws/proj/.multiplai/learnings")
-        # Memory is user-scoped, NOT affected by workspace_dir
-        assert p.memory_dir() == Path.home() / ".multiplai" / "memory"
 
     def test_fallback_plugin_data(self, clean_env, reset_paths_cache):
         """Scenario: Fallback plugin data directory."""
