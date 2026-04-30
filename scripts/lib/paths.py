@@ -19,8 +19,28 @@ from pathlib import Path
 _lock = threading.Lock()
 _cached_paths: "Paths | None" = None
 
-# Standalone base directory used when no plugin env vars are set.
+# Standalone base for plugin-private state (catalogs, venv, dream
+# state, memory). Lives in $HOME so it follows the user across
+# workspaces — these aren't workspace-scoped data.
 _STANDALONE_BASE = Path.home() / ".multiplai"
+
+
+def _workspace_base() -> Path:
+    """Workspace-scoped ``.multiplai/`` root, anchored at the current cwd.
+
+    Diary, learnings, and per-project ``now`` files are workspace data:
+    open Claude in a different project and you should see different
+    state, not a global cross-project soup. Defaults are derived from
+    ``Path.cwd()`` at resolve time, so launching Claude in
+    ``/path/to/project`` writes diary entries to
+    ``/path/to/project/.multiplai/diary/``.
+
+    Override any individual directory by setting the matching
+    ``CLAUDE_PLUGIN_OPTION_*_dir`` env var (e.g., point everything at
+    ``$CLAUDE_CONFIG_DIR/.multiplai/`` if you want one shared location
+    instead).
+    """
+    return Path.cwd().resolve() / ".multiplai"
 
 
 class _CallablePath(type(Path())):
@@ -96,25 +116,24 @@ class Paths:
         data_fallback = (plugin_root / "data") if is_plugin else (_STANDALONE_BASE / "data")
         data_dir = _resolve_env_path(env_data, data_fallback)
 
+        # Memory follows the user (preferences, voice, long-term facts),
+        # so the standalone fallback lives in $HOME — not workspace.
         memory_dir = _resolve_env_path(
             _env("CLAUDE_PLUGIN_OPTION_memory_dir"),
             _STANDALONE_BASE / "memory",
         )
+        # Diary, now, and learnings are workspace-scoped: they capture
+        # what happened in a specific project. Default to
+        # ``$CWD/.multiplai/{diary,now,learnings}/``.
+        workspace_base = _workspace_base()
         diary_dir = _resolve_env_path(
             _env("CLAUDE_PLUGIN_OPTION_diary_dir"),
-            _STANDALONE_BASE / "diary",
+            workspace_base / "diary",
         )
-        # now_dir defaults to a sibling of diary_dir (matching kit's
-        # captainslog/now layout) so per-project state files live next
-        # to the diary they're derived from.
         now_dir = _resolve_env_path(
             _env("CLAUDE_PLUGIN_OPTION_now_dir"),
             diary_dir.parent / "now",
         )
-        # learnings_dir holds per-day learning files ({YYYY-MM-DD}.md)
-        # in kit's structured format. Defaults to a sibling of diary_dir
-        # so workspaces using the kit's .multiplai/ layout get a smooth
-        # handover.
         learnings_dir = _resolve_env_path(
             _env("CLAUDE_PLUGIN_OPTION_learnings_dir"),
             diary_dir.parent / "learnings",
