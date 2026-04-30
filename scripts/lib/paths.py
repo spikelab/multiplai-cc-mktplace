@@ -72,6 +72,7 @@ class Paths:
     memory_dir: Path
     diary_dir: Path
     now_dir: Path
+    learnings_dir: Path
     venv_dir: Path
     catalogs_dir: Path
     templates_dir: Path
@@ -110,6 +111,14 @@ class Paths:
             _env("CLAUDE_PLUGIN_OPTION_now_dir"),
             diary_dir.parent / "now",
         )
+        # learnings_dir holds per-day learning files ({YYYY-MM-DD}.md)
+        # in kit's structured format. Defaults to a sibling of diary_dir
+        # so workspaces using the kit's .multiplai/ layout get a smooth
+        # handover.
+        learnings_dir = _resolve_env_path(
+            _env("CLAUDE_PLUGIN_OPTION_learnings_dir"),
+            diary_dir.parent / "learnings",
+        )
 
         return cls(
             plugin_root=_callable(plugin_root),
@@ -117,6 +126,7 @@ class Paths:
             memory_dir=_callable(memory_dir),
             diary_dir=_callable(diary_dir),
             now_dir=_callable(now_dir),
+            learnings_dir=_callable(learnings_dir),
             venv_dir=_callable(data_dir / "venv"),
             catalogs_dir=_callable(data_dir / "catalogs"),
             templates_dir=_callable(plugin_root / "templates"),
@@ -147,9 +157,18 @@ class Paths:
         """AutoDream state tracking file (YAML)."""
         return self.data_dir / "dream_state.yaml"
 
-    def learnings_file(self) -> Path:
-        """Accumulated learnings file in the memory directory."""
-        return self.memory_dir / "learnings.md"
+    def learnings_file(self, date_str: str | None = None) -> Path:
+        """Per-day structured learnings file ``learnings_dir/{YYYY-MM-DD}.md``.
+
+        When *date_str* is omitted, returns today's file (UTC). The
+        per-day naming matches kit's layout so downstream tooling
+        (``/process-learnings``) reads both kit-era and plugin-era
+        entries without changes.
+        """
+        from datetime import datetime, timezone
+        if date_str is None:
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return self.learnings_dir / f"{date_str}.md"
 
     def scripts_dir(self) -> Path:
         """Hook and utility scripts directory."""

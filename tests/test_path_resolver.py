@@ -196,14 +196,30 @@ class TestDerivedPaths:
         p = Paths.resolve()
         assert p.dream_state_file() == Path("/data/dream_state.yaml")
 
-    def test_learnings_derived_from_memory(self, monkeypatch, reset_paths_cache):
-        """Scenario: Learnings path derived from memory directory."""
+    def test_learnings_path_per_day_under_learnings_dir(
+        self, monkeypatch, reset_paths_cache,
+    ):
+        """Scenario: per-day learnings file lives under learnings_dir."""
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "/plugin")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", "/mem")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_dir", "/ws/.multiplai/captainslog")
         from lib.paths import Paths
 
         p = Paths.resolve()
-        assert p.learnings_file() == Path("/mem/learnings.md")
+        # Default learnings_dir is sibling of diary_dir
+        assert p.learnings_dir() == Path("/ws/.multiplai/learnings")
+        assert (
+            p.learnings_file("2026-01-01")
+            == Path("/ws/.multiplai/learnings/2026-01-01.md")
+        )
+
+    def test_learnings_dir_env_override(self, monkeypatch, reset_paths_cache):
+        """CLAUDE_PLUGIN_OPTION_learnings_dir overrides the default."""
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_learnings_dir", "/custom-learn")
+        from lib.paths import Paths
+
+        p = Paths.resolve()
+        assert p.learnings_dir() == Path("/custom-learn")
+        assert p.learnings_file("2026-01-01") == Path("/custom-learn/2026-01-01.md")
 
     def test_templates_derived_from_root(self, monkeypatch, reset_paths_cache):
         """Scenario: Templates path derived from plugin root."""
@@ -686,8 +702,8 @@ class TestEdgeCases:
         # Derived from custom root
         assert p.templates_dir() == Path("/custom-root/templates")
         assert p.scripts_dir() == Path("/custom-root/scripts")
-        # Derived from custom memory
-        assert p.learnings_file() == Path("/custom-mem/learnings.md")
+        # Per-day learnings under learnings_dir (defaults to diary parent)
+        assert p.learnings_file("2026-01-01") == p.learnings_dir() / "2026-01-01.md"
 
     def test_reset_cache_allows_re_resolution(self, monkeypatch, reset_paths_cache):
         """After _reset_cache(), next get_paths() resolves fresh from env."""
@@ -725,7 +741,8 @@ class TestEdgeCases:
         assert p.scripts_dir() == home_base / "scripts"
         assert p.memory_dir() == home_base / "memory"
         assert p.diary_dir() == home_base / "diary"
-        assert p.learnings_file() == home_base / "memory" / "learnings.md"
+        assert p.learnings_dir() == home_base / "learnings"
+        assert p.learnings_file("2026-01-01") == home_base / "learnings" / "2026-01-01.md"
         assert p.dream_state_file() == home_base / "data" / "dream_state.yaml"
 
     def test_empty_diary_env_var_uses_default(self, monkeypatch, reset_paths_cache):

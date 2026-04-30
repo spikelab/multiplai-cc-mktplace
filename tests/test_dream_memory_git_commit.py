@@ -76,8 +76,13 @@ def dream_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_dir", str(diary_dir))
 
     # Ensure pending learnings exist so dream has work to do.
-    # paths.learnings_file() resolves to memory_dir / "learnings.md".
-    (memory_dir / "learnings.md").write_text("- learned a thing\n- learned another\n")
+    # paths.learnings_file() resolves to learnings_dir / "{today}.md".
+    from lib.paths import _reset_cache, get_paths
+    _reset_cache()
+    paths = get_paths()
+    learnings_today = paths.learnings_file()
+    learnings_today.parent.mkdir(parents=True, exist_ok=True)
+    learnings_today.write_text("- learned a thing\n- learned another\n")
     (memory_dir / "technical-pref.md").write_text("# Technical Preferences\n")
 
     return {
@@ -155,7 +160,8 @@ class TestDreamAutoCommit:
         # Wipe pending learnings BEFORE the initial commit so the tracked
         # state matches what dream will observe — otherwise the empty-write
         # itself becomes a tracked change and gets committed.
-        (memory_dir / "learnings.md").write_text("")
+        from lib.paths import get_paths
+        get_paths().learnings_file().write_text("")
         _init_git(memory_dir)
         subprocess.run(["git", "-C", str(memory_dir), "add", "-A"], check=True)
         subprocess.run(

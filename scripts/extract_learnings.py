@@ -1,15 +1,32 @@
-"""Extract learnings script for multiplai plugin.
+"""Structured learning extraction (Stop hook).
 
-Extracts learnings from session interactions and appends to learnings file.
-Uses model client for LLM summarization, path resolver for file locations.
+Asks the LLM to decompose the session transcript into logical units of
+work, then to attach typed learnings (``OBSERVATION``, ``PREFERENCE``,
+``CORRECTION``, ``PATTERN``, ``RULE-PROPOSAL``) with a trust level, a
+target memory file, and a one-sentence action. Writes one entry per
+learning to a per-day ``{YYYY-MM-DD}.md`` file in the structured kit
+format::
 
-Runs as a Stop hook — reads session transcript from stdin JSON and uses
-the LLM to identify actionable learnings worth preserving.
+    ---
+    ## Session Learnings — {timestamp}
+    Session: {session_id}
+    - **[trust: medium]** OBSERVATION ... → Target: file.md — action
+
+The format is what ``/process-learnings`` reads when applying captured
+learnings into memory files. Free-form bullets (the previous
+plugin format) lost the ``type`` taxonomy and the ``target`` field
+that lets the processor route updates to the right memory file —
+this rewrite restores that schema.
+
+Correction-pattern detection (regex) still runs alongside the LLM and
+contributes ``CORRECTION``-tagged entries with ``trust: verified``,
+making sure corrections fire reliably even when the LLM misses them.
 """
 
 import asyncio
 import fcntl
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,29 +39,135 @@ ensure_venv_python()
 from lib.paths import get_paths
 from lib.model_client import create_client
 from lib.log_utils import setup_logging
-from lib.correction_patterns import (
-    detect_corrections_in_transcript,
-    format_correction_block,
-)
+from lib.correction_patterns import detect_corrections_in_transcript
 
 logger = setup_logging("extract_learnings")
 
-SYSTEM_PROMPT = """You are a learning extraction assistant. Analyze the session transcript
-and identify actionable technical learnings — patterns, gotchas, decisions,
-or insights that would be valuable to remember for future sessions.
 
-Return learnings as a markdown list. Each learning should be a concise,
-self-contained bullet point. If there are no actionable learnings, return
-exactly the text "NO_LEARNINGS".
+EXTRACTION_PROMPT = """\
+You are analyzing a conversation transcript between a user and an AI \
+assistant ("Claude"). Extract diary entries and learnings grouped by \
+**logical unit of work** — like commits, not turns.
+
+## What is a "unit of work"?
+
+A coherent topic, task, or decision that stands on its own. One turn \
+might contain multiple units; multiple turns might form one unit. \
+Group by logical coherence, not by message boundaries.
+
+## Output format
+
+A JSON object with a "units" array. Each unit has:
+- "timestamp": ISO timestamp closest to the unit (or "" if unknown)
+- "diary": one-line summary (max 300 chars) of what happened in this unit
+- "learnings": array of things worth remembering across sessions (can be empty [])
+
+Each learning object:
+- "trust": "verified" (confirmed via code/logs/tests) | "high" (strong evidence) | "medium" (inference)
+- "type": OBSERVATION | PREFERENCE | CORRECTION | PATTERN | RULE-PROPOSAL
+- "description": concise but complete (one sentence)
+- "target": one of the valid memory file names below (e.g., "technical-pref.md")
+- "action": what to add/change in the target file (one sentence)
+
+## Valid target files
+
+Use EXACTLY these file names for the "target" field:
+{valid_targets}
+
+Do NOT invent new file names. If no file is a good fit, use the closest match.
+
+## Correction detection
+
+When the user corrects Claude's output or assumption, tag it as:
+- type: CORRECTION, trust: verified
+Indicators: "use X not Y", "no, that's wrong", "actually...", \
+user explicitly contradicts something Claude stated, a fact is discovered to \
+contradict memory. Corrections are highest priority — they prevent recurring mistakes.
+
+## Rules
+
+- Group by logical unit, not by turn
+- A unit with 0 learnings is fine (diary-only, for context)
+- Deduplicate: same insight appears ONCE across all units, even if it applies to \
+multiple files — emit it ONCE with the primary target
+- If something was CORRECTED later, output only the final corrected version
+- Skip trivial exchanges, greetings, routine tool usage
+- If the entire session is trivial, return {{"units": []}}
+
+## Transcript
+
+{transcript}
+
+## Output
+
+Return ONLY this JSON (no markdown fences, no explanation, no commentary):
+{{"units": [{{"timestamp": "...", "diary": "...", "learnings": [...]}}]}}
 """
 
 
-async def extract() -> None:
-    """Extract actionable learnings from the current session transcript."""
-    paths = get_paths()
-    learnings_file = paths.learnings_file()
+def _list_valid_targets(memory_dir: Path) -> list[str]:
+    """Return the *.md files in the memory dir for the prompt's target list."""
+    if not memory_dir.exists():
+        return []
+    return sorted(p.name for p in memory_dir.glob("*.md") if p.is_file())
 
-    # Read session transcript from stdin (hook input)
+
+def _parse_units(raw: str) -> list[dict]:
+    """Parse the LLM JSON response into a list of unit dicts.
+
+    Tolerates fenced code blocks; logs and returns [] on any failure
+    so a malformed extraction skips writing rather than crashing the
+    Stop hook.
+    """
+    text = raw.strip()
+    match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+    if match:
+        text = match.group(1).strip()
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("Extraction LLM returned non-JSON; skipping")
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    units = parsed.get("units")
+    if not isinstance(units, list):
+        return []
+    return [u for u in units if isinstance(u, dict)]
+
+
+def _format_learning_entry(learning: dict) -> str:
+    """Render one learning dict into kit's structured single-line format."""
+    trust = learning.get("trust", "medium")
+    ltype = learning.get("type", "OBSERVATION")
+    desc = (learning.get("description") or "").strip()
+    target = (learning.get("target") or "").strip()
+    action = (learning.get("action") or "").strip()
+    line = f"- **[trust: {trust}]** {ltype} {desc}"
+    if target:
+        line += f" → Target: {target}"
+        if action:
+            line += f" — {action}"
+    return line
+
+
+def _format_correction_entry(match: dict) -> str:
+    """Render a regex-detected correction as a structured CORRECTION line."""
+    excerpt = (match.get("excerpt") or "").replace("\n", " ").strip()
+    category = match.get("category", "correction")
+    return (
+        f"- **[trust: verified]** CORRECTION user signal {category} "
+        f"detected: {excerpt!r} → Target: wrong.md — log the correction "
+        "and apply downstream"
+    )
+
+
+async def extract() -> None:
+    """Run a single extraction pass on the Stop-hook stdin input."""
+    paths = get_paths()
+    memory_dir = paths.memory_dir()
+    learnings_file = paths.learnings_file()  # today's per-day file
+
     hook_input = sys.stdin.read()
     if not hook_input.strip():
         logger.info("No session data on stdin, skipping extraction")
@@ -56,41 +179,44 @@ async def extract() -> None:
         transcript = transcript_data.get("transcript", hook_input)
     except (json.JSONDecodeError, AttributeError):
         transcript = hook_input
-    session_id = transcript_data.get("session_id", "") if isinstance(transcript_data, dict) else ""
+    session_id = (
+        transcript_data.get("session_id", "")
+        if isinstance(transcript_data, dict)
+        else ""
+    )
 
+    valid_targets = _list_valid_targets(memory_dir)
+    targets_block = (
+        "\n".join(f"- {t}" for t in valid_targets) if valid_targets else "(none)"
+    )
+
+    units: list[dict] = []
     try:
         client = await create_client()
         logger.info("Extract learnings using %s", type(client).__name__)
-
-        messages = [{"role": "user", "content": transcript}]
         response = await client.query(
-            system=SYSTEM_PROMPT,
-            messages=messages,
+            system="You are a learnings extractor. Output ONLY valid JSON.",
+            messages=[{
+                "role": "user",
+                "content": EXTRACTION_PROMPT.format(
+                    valid_targets=targets_block,
+                    transcript=transcript,
+                ),
+            }],
         )
-        learnings = response.content.strip()
+        units = _parse_units(response.content)
     except Exception:
         logger.exception("LLM call failed during learning extraction")
-        return
+        # Continue: regex-detected corrections are still worth writing.
 
-    # Deterministic correction detection over the transcript. When Spike
-    # corrected Claude during the session, we want that tagged with
-    # trust: verified rather than depending on the LLM to infer it —
-    # the regex is precision-tuned and fires every time, the LLM does
-    # not.
-    corrections = detect_corrections_in_transcript(transcript)
-    correction_block = format_correction_block(corrections) if corrections else ""
+    correction_matches = detect_corrections_in_transcript(transcript)
 
-    # Guard: do not write if neither the LLM nor the detector produced
-    # anything actionable.
-    has_llm_learnings = bool(learnings) and "NO_LEARNINGS" not in learnings
-    if not has_llm_learnings and not correction_block:
+    if not units and not correction_matches:
         logger.info("No actionable learnings found, nothing to append")
         return
 
-    # Append learnings to the file (never overwrite). Serialize concurrent writes
-    # with an advisory flock and skip writing if this session already appended
-    # (prevents doubles when the Stop hook fires twice or a session force-stops
-    # mid-extraction).
+    # Atomic append per-day with session dedup. Lock prevents double
+    # writes when the Stop hook fires twice or two extractions race.
     learnings_file.parent.mkdir(parents=True, exist_ok=True)
     lock_file = learnings_file.parent / f".{learnings_file.name}.lock"
 
@@ -99,27 +225,43 @@ async def extract() -> None:
         try:
             if session_id and learnings_file.exists():
                 existing = learnings_file.read_text()
-                if f"[session:{session_id}]" in existing:
+                if f"Session: {session_id}" in existing:
                     logger.info(
-                        "Session %s already has learnings in %s, skipping",
+                        "Session %s already appended to %s, skipping",
                         session_id, learnings_file,
                     )
                     return
 
             timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            header_marker = f" [session:{session_id}]" if session_id else ""
-            header = f"\n---\n## Session Learnings — {timestamp}{header_marker}\n"
             with open(learnings_file, "a") as f:
-                f.write(header)
-                if correction_block:
-                    f.write(correction_block)
-                    f.write("\n")
-                if has_llm_learnings:
-                    f.write(f"{learnings}\n")
+                wrote_any = False
+                for unit in units:
+                    learnings = unit.get("learnings") or []
+                    if not learnings:
+                        continue
+                    ts = unit.get("timestamp") or timestamp
+                    f.write(f"\n---\n## Session Learnings — {ts}\n")
+                    if session_id:
+                        f.write(f"Session: {session_id}\n")
+                    for learning in learnings:
+                        if not isinstance(learning, dict):
+                            continue
+                        f.write(_format_learning_entry(learning) + "\n")
+                    wrote_any = True
+
+                if correction_matches:
+                    if not wrote_any:
+                        f.write(f"\n---\n## Session Learnings — {timestamp}\n")
+                        if session_id:
+                            f.write(f"Session: {session_id}\n")
+                    for match in correction_matches:
+                        f.write(_format_correction_entry(match) + "\n")
+                    wrote_any = True
+
+            if wrote_any:
+                logger.info("Appended structured learnings to %s", learnings_file)
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
-
-    logger.info("Appended learnings to %s", learnings_file)
 
 
 def main() -> None:
