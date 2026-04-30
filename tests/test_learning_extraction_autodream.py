@@ -515,17 +515,22 @@ class TestAutodreamFunctional:
             "diary": diary_dir,
         }
 
-    def test_autodream_reads_learnings_from_memory_dir(self, mock_env):
+    def test_autodream_reads_learnings_from_learnings_dir(self, mock_env):
         """WHEN autodream runs in plugin mode
-        THEN it reads learnings from the configured memory directory."""
-        learnings = mock_env["memory"] / "learnings.md"
-        learnings.write_text("## Learning 1\nUse pathlib for paths.\n")
-
+        THEN per-day learnings live under paths.learnings_dir()."""
         from lib.paths import get_paths
         paths = get_paths()
-        assert paths.learnings_file() == learnings, (
-            "paths.learnings_file() should resolve to memory_dir/learnings.md"
+
+        learnings_today = paths.learnings_file("2026-01-01")
+        learnings_today.parent.mkdir(parents=True, exist_ok=True)
+        learnings_today.write_text(
+            "## Session Learnings — 2026-01-01\n"
+            "- **[trust: medium]** OBSERVATION test → Target: x.md — note\n"
         )
+
+        # learnings_dir is per-workspace and per-day files live inside it
+        assert paths.learnings_file("2026-01-01") == learnings_today
+        assert learnings_today.parent == paths.learnings_dir()
 
     def test_autodream_dream_state_in_data_dir(self, mock_env):
         """WHEN autodream updates dream state
