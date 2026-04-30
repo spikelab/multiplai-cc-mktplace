@@ -92,11 +92,11 @@ class TestStandaloneFallback:
         assert p.memory_dir() == Path.home() / ".multiplai" / "memory"
 
     def test_fallback_diary_dir(self, clean_env, reset_paths_cache):
-        """Scenario: Fallback diary directory when no plugin env vars set."""
+        """Scenario: diary defaults to cwd/.multiplai/diary (workspace-scoped)."""
         from lib.paths import Paths
 
         p = Paths.resolve()
-        assert p.diary_dir() == Path.home() / ".multiplai" / "diary"
+        assert p.diary_dir() == Path.cwd().resolve() / ".multiplai" / "diary"
 
     def test_fallback_plugin_data(self, clean_env, reset_paths_cache):
         """Scenario: Fallback plugin data directory."""
@@ -726,12 +726,15 @@ class TestEdgeCases:
     def test_standalone_mode_derived_paths_consistent(
         self, clean_env, reset_paths_cache
     ):
-        """In standalone mode, all derived paths chain from ~/.multiplai."""
+        """Plugin-private paths chain from ~/.multiplai;
+        workspace-scoped paths chain from $CWD/.multiplai."""
         from lib.paths import Paths
 
         p = Paths.resolve()
         home_base = Path.home() / ".multiplai"
+        ws_base = Path.cwd().resolve() / ".multiplai"
 
+        # Plugin-private (follows the user)
         assert p.plugin_root() == home_base
         assert p.plugin_data() == home_base / "data"
         assert p.venv_dir() == home_base / "data" / "venv"
@@ -740,18 +743,21 @@ class TestEdgeCases:
         assert p.templates_dir() == home_base / "templates"
         assert p.scripts_dir() == home_base / "scripts"
         assert p.memory_dir() == home_base / "memory"
-        assert p.diary_dir() == home_base / "diary"
-        assert p.learnings_dir() == home_base / "learnings"
-        assert p.learnings_file("2026-01-01") == home_base / "learnings" / "2026-01-01.md"
         assert p.dream_state_file() == home_base / "data" / "dream_state.yaml"
 
+        # Workspace-scoped (follows the project)
+        assert p.diary_dir() == ws_base / "diary"
+        assert p.now_dir() == ws_base / "now"
+        assert p.learnings_dir() == ws_base / "learnings"
+        assert p.learnings_file("2026-01-01") == ws_base / "learnings" / "2026-01-01.md"
+
     def test_empty_diary_env_var_uses_default(self, monkeypatch, reset_paths_cache):
-        """Empty CLAUDE_PLUGIN_OPTION_diary_dir should use default."""
+        """Empty CLAUDE_PLUGIN_OPTION_diary_dir falls back to cwd/.multiplai/diary."""
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_dir", "")
         from lib.paths import Paths
 
         p = Paths.resolve()
-        assert p.diary_dir() == Path.home() / ".multiplai" / "diary"
+        assert p.diary_dir() == Path.cwd().resolve() / ".multiplai" / "diary"
 
     def test_empty_data_env_var_standalone_fallback(
         self, monkeypatch, reset_paths_cache
