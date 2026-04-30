@@ -26,21 +26,28 @@ _STANDALONE_BASE = Path.home() / ".multiplai"
 
 
 def _workspace_base() -> Path:
-    """Workspace-scoped ``.multiplai/`` root, anchored at the current cwd.
+    """Workspace-scoped ``.multiplai/`` root.
 
-    Diary, learnings, and per-project ``now`` files are workspace data:
-    open Claude in a different project and you should see different
-    state, not a global cross-project soup. Defaults are derived from
-    ``Path.cwd()`` at resolve time, so launching Claude in
-    ``/path/to/project`` writes diary entries to
-    ``/path/to/project/.multiplai/diary/``.
+    Diary, learnings, and per-project ``now`` files are workspace
+    data: there should be one ``.multiplai/`` per workspace, not one
+    per ``cwd`` (Claude routinely shifts ``cwd`` into sub-projects
+    that all belong to the same workspace).
 
-    Override any individual directory by setting the matching
-    ``CLAUDE_PLUGIN_OPTION_*_dir`` env var (e.g., point everything at
-    ``$CLAUDE_CONFIG_DIR/.multiplai/`` if you want one shared location
-    instead).
+    Resolution:
+      1. ``CLAUDE_PLUGIN_OPTION_workspace_dir`` if set — anchors at
+         that path.
+      2. Otherwise falls back to ``~/.multiplai/`` so a fresh install
+         still writes somewhere sensible. We deliberately do NOT use
+         ``cwd`` as a fallback — it would pollute every sub-project
+         with its own data tree.
+
+    Override any individual directory via the matching
+    ``CLAUDE_PLUGIN_OPTION_{diary,now,learnings}_dir`` env var.
     """
-    return Path.cwd().resolve() / ".multiplai"
+    env = _env("CLAUDE_PLUGIN_OPTION_workspace_dir")
+    if env:
+        return Path(env).expanduser().resolve() / ".multiplai"
+    return _STANDALONE_BASE
 
 
 class _CallablePath(type(Path())):

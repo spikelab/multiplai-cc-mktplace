@@ -92,11 +92,25 @@ class TestStandaloneFallback:
         assert p.memory_dir() == Path.home() / ".multiplai" / "memory"
 
     def test_fallback_diary_dir(self, clean_env, reset_paths_cache):
-        """Scenario: diary defaults to cwd/.multiplai/diary (workspace-scoped)."""
+        """Without workspace_dir env, diary falls back to ~/.multiplai/diary."""
         from lib.paths import Paths
 
         p = Paths.resolve()
-        assert p.diary_dir() == Path.cwd().resolve() / ".multiplai" / "diary"
+        assert p.diary_dir() == Path.home() / ".multiplai" / "diary"
+
+    def test_workspace_dir_env_anchors_workspace_paths(
+        self, clean_env, monkeypatch, reset_paths_cache,
+    ):
+        """CLAUDE_PLUGIN_OPTION_workspace_dir anchors diary/now/learnings."""
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_workspace_dir", "/ws/proj")
+        from lib.paths import Paths
+
+        p = Paths.resolve()
+        assert p.diary_dir() == Path("/ws/proj/.multiplai/diary")
+        assert p.now_dir() == Path("/ws/proj/.multiplai/now")
+        assert p.learnings_dir() == Path("/ws/proj/.multiplai/learnings")
+        # Memory is user-scoped, NOT affected by workspace_dir
+        assert p.memory_dir() == Path.home() / ".multiplai" / "memory"
 
     def test_fallback_plugin_data(self, clean_env, reset_paths_cache):
         """Scenario: Fallback plugin data directory."""
@@ -726,13 +740,15 @@ class TestEdgeCases:
     def test_standalone_mode_derived_paths_consistent(
         self, clean_env, reset_paths_cache
     ):
-        """Plugin-private paths chain from ~/.multiplai;
-        workspace-scoped paths chain from $CWD/.multiplai."""
+        """Without any env vars, all paths fall back to ~/.multiplai/.
+
+        Workspace data only diverges from $HOME when
+        CLAUDE_PLUGIN_OPTION_workspace_dir is set.
+        """
         from lib.paths import Paths
 
         p = Paths.resolve()
         home_base = Path.home() / ".multiplai"
-        ws_base = Path.cwd().resolve() / ".multiplai"
 
         # Plugin-private (follows the user)
         assert p.plugin_root() == home_base
@@ -745,19 +761,19 @@ class TestEdgeCases:
         assert p.memory_dir() == home_base / "memory"
         assert p.dream_state_file() == home_base / "data" / "dream_state.yaml"
 
-        # Workspace-scoped (follows the project)
-        assert p.diary_dir() == ws_base / "diary"
-        assert p.now_dir() == ws_base / "now"
-        assert p.learnings_dir() == ws_base / "learnings"
-        assert p.learnings_file("2026-01-01") == ws_base / "learnings" / "2026-01-01.md"
+        # Workspace-scoped — same fallback when no workspace_dir set
+        assert p.diary_dir() == home_base / "diary"
+        assert p.now_dir() == home_base / "now"
+        assert p.learnings_dir() == home_base / "learnings"
+        assert p.learnings_file("2026-01-01") == home_base / "learnings" / "2026-01-01.md"
 
     def test_empty_diary_env_var_uses_default(self, monkeypatch, reset_paths_cache):
-        """Empty CLAUDE_PLUGIN_OPTION_diary_dir falls back to cwd/.multiplai/diary."""
+        """Empty CLAUDE_PLUGIN_OPTION_diary_dir falls back to ~/.multiplai/diary."""
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_dir", "")
         from lib.paths import Paths
 
         p = Paths.resolve()
-        assert p.diary_dir() == Path.cwd().resolve() / ".multiplai" / "diary"
+        assert p.diary_dir() == Path.home() / ".multiplai" / "diary"
 
     def test_empty_data_env_var_standalone_fallback(
         self, monkeypatch, reset_paths_cache
