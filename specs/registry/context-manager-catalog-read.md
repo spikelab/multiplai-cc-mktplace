@@ -4,7 +4,7 @@
 The context manager MUST attempt to read the memory catalog file before falling back to scanning raw memory files. When a valid memory catalog exists, the context manager uses its contents to assemble memory context without reading individual memory source files.
 
 #### Scenario: Memory catalog exists and is valid
-- **WHEN** the context manager is asked to assemble memory context and `$CLAUDE_PLUGIN_DATA/catalogs/memory-catalog.json` exists with a valid schema version
+- **WHEN** the context manager is asked to assemble memory context and `$CLAUDE_PLUGIN_DATA/catalogs/memory.json` exists with a valid schema version
 - **THEN** the context manager reads context from the catalog file and does NOT scan or parse individual memory source files
 
 #### Scenario: Memory catalog is used for routing decisions
@@ -15,7 +15,7 @@ The context manager MUST attempt to read the memory catalog file before falling 
 The context manager MUST attempt to read the diary catalog file before falling back to scanning raw diary day files. When a valid diary catalog exists, the context manager uses per-day summaries (sessions, projects, topics, word count) to select relevant days without reading raw files.
 
 #### Scenario: Diary catalog exists and is valid
-- **WHEN** the context manager is asked to assemble diary context and `$CLAUDE_PLUGIN_DATA/catalogs/diary-catalog.json` exists with a valid schema version
+- **WHEN** the context manager is asked to assemble diary context and `$CLAUDE_PLUGIN_DATA/catalogs/diary.json` exists with a valid schema version
 - **THEN** the context manager reads per-day summaries from the catalog and selects relevant diary days based on catalog metadata instead of scanning individual day files
 
 #### Scenario: Diary catalog enables selective day loading
@@ -26,7 +26,7 @@ The context manager MUST attempt to read the diary catalog file before falling b
 The context manager MUST attempt to read the skills catalog when the `enable_skills` config flag is set, using catalog contents for skill routing instead of scanning skill files directly.
 
 #### Scenario: Skills catalog exists and skills are enabled
-- **WHEN** the context manager is asked to assemble skills context, `enable_skills` is true in config, and `$CLAUDE_PLUGIN_DATA/catalogs/skills-catalog.json` exists with a valid schema version
+- **WHEN** the context manager is asked to assemble skills context, `enable_skills` is true in config, and `$CLAUDE_PLUGIN_DATA/catalogs/skills.json` exists with a valid schema version
 - **THEN** the context manager reads skill metadata from the catalog file for routing decisions
 
 #### Scenario: Skills catalog does not exist but skills are enabled
@@ -37,40 +37,40 @@ The context manager MUST attempt to read the skills catalog when the `enable_ski
 The context manager MUST attempt to read the resources catalog when both `enable_resources` and `resources_dir` config values are set, using catalog contents for resource routing.
 
 #### Scenario: Resources catalog exists and resources are enabled
-- **WHEN** the context manager is asked to assemble resources context, `enable_resources` is true, `resources_dir` is configured, and `$CLAUDE_PLUGIN_DATA/catalogs/resources-catalog.json` exists with a valid schema version
+- **WHEN** the context manager is asked to assemble resources context, `enable_resources` is true, `resources_dir` is configured, and `$CLAUDE_PLUGIN_DATA/catalogs/resources.json` exists with a valid schema version
 - **THEN** the context manager reads resource metadata from the catalog file for routing decisions
 
 ### Requirement: Fail-open fallback when mandatory catalog is missing
 When a mandatory catalog (memory or diary) is missing entirely, the context manager MUST fall back to live file scanning — the current behavior — rather than raising an error or returning empty context.
 
 #### Scenario: Memory catalog file does not exist
-- **WHEN** the context manager is asked to assemble memory context and `$CLAUDE_PLUGIN_DATA/catalogs/memory-catalog.json` does not exist
+- **WHEN** the context manager is asked to assemble memory context and `$CLAUDE_PLUGIN_DATA/catalogs/memory.json` does not exist
 - **THEN** the context manager falls back to scanning and parsing individual memory source files, producing the same output as the pre-catalog behavior
 
 #### Scenario: Diary catalog file does not exist
-- **WHEN** the context manager is asked to assemble diary context and `$CLAUDE_PLUGIN_DATA/catalogs/diary-catalog.json` does not exist
+- **WHEN** the context manager is asked to assemble diary context and `$CLAUDE_PLUGIN_DATA/catalogs/diary.json` does not exist
 - **THEN** the context manager falls back to scanning and parsing individual diary day files, producing the same output as the pre-catalog behavior
 
 ### Requirement: Fail-open fallback when mandatory catalog is corrupt
 When a mandatory catalog file exists but contains invalid JSON or fails schema validation, the context manager MUST log a warning and fall back to live file scanning rather than crashing.
 
 #### Scenario: Memory catalog contains invalid JSON
-- **WHEN** the context manager reads `memory-catalog.json` and the file contains malformed JSON (e.g., truncated, syntax error)
+- **WHEN** the context manager reads `memory.json` and the file contains malformed JSON (e.g., truncated, syntax error)
 - **THEN** the context manager logs a warning message indicating the catalog is corrupt, falls back to live file scanning, and does NOT raise an unhandled exception
 
 #### Scenario: Memory catalog has wrong schema version
-- **WHEN** the context manager reads `memory-catalog.json` and the `schema_version` field does not match the expected version
+- **WHEN** the context manager reads `memory.json` and the `schema_version` field does not match the expected version
 - **THEN** the context manager logs a warning about schema mismatch and falls back to live file scanning
 
 #### Scenario: Diary catalog contains invalid JSON
-- **WHEN** the context manager reads `diary-catalog.json` and the file contains malformed JSON
+- **WHEN** the context manager reads `diary.json` and the file contains malformed JSON
 - **THEN** the context manager logs a warning, falls back to live diary file scanning, and does NOT raise an unhandled exception
 
 ### Requirement: Fail-open fallback when mandatory catalog is empty
 When a mandatory catalog file exists but contains an empty entries list, the context manager MUST treat it as a valid-but-empty catalog, not as a corrupt file requiring fallback.
 
 #### Scenario: Memory catalog exists with zero entries
-- **WHEN** the context manager reads `memory-catalog.json` and it has a valid schema version but an empty entries array
+- **WHEN** the context manager reads `memory.json` and it has a valid schema version but an empty entries array
 - **THEN** the context manager treats this as "no memory context available" and does NOT fall back to live scanning (the catalog is authoritative)
 
 ### Requirement: Optional catalogs do not trigger fallback when missing

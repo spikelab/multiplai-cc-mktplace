@@ -198,13 +198,13 @@ class TestMemoryCatalogHit:
     def test_reads_from_valid_memory_catalog(self, plugin_data_env):
         """Scenario: Memory catalog exists and is valid.
 
-        WHEN memory-catalog.json exists with valid schema version
+        WHEN memory.json exists with valid schema version
         THEN context manager reads from catalog, not source files.
         """
         import context_manager
 
         catalog = _valid_memory_catalog()
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -231,7 +231,7 @@ class TestMemoryCatalogHit:
             }
         ]
         catalog = _valid_memory_catalog(entries=entries)
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -252,7 +252,7 @@ class TestMemoryCatalogHit:
         import context_manager
 
         catalog = _valid_memory_catalog()
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         # Create a memory dir that would be scanned in fallback mode
         memory_dir = tmp_path / "memory"
@@ -294,13 +294,13 @@ class TestDiaryCatalogHit:
     def test_reads_from_valid_diary_catalog(self, plugin_data_env):
         """Scenario: Diary catalog exists and is valid.
 
-        WHEN diary-catalog.json exists with valid schema version
+        WHEN diary.json exists with valid schema version
         THEN context manager reads per-day summaries from the catalog.
         """
         import context_manager
 
         catalog = _valid_diary_catalog()
-        _write_catalog(plugin_data_env, "diary-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "diary.json", catalog)
 
         result = context_manager._read_catalog_or_scan("diary")
 
@@ -313,7 +313,7 @@ class TestDiaryCatalogHit:
         import context_manager
 
         catalog = _valid_diary_catalog()
-        _write_catalog(plugin_data_env, "diary-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "diary.json", catalog)
 
         result = context_manager._read_catalog_or_scan("diary")
 
@@ -343,7 +343,7 @@ class TestDiaryCatalogHit:
             for i in range(1, 31)
         ]
         catalog = _valid_diary_catalog(entries=entries)
-        _write_catalog(plugin_data_env, "diary-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "diary.json", catalog)
 
         result = context_manager._read_catalog_or_scan("diary")
 
@@ -368,7 +368,7 @@ class TestSkillsCatalogHit:
     def test_reads_from_valid_skills_catalog(self, plugin_data_env, monkeypatch):
         """Scenario: Skills catalog exists and skills are enabled.
 
-        WHEN enable_skills is true and skills-catalog.json exists
+        WHEN enable_skills is true and skills.json exists
         THEN context manager reads skill metadata from catalog.
         """
         import context_manager
@@ -376,7 +376,7 @@ class TestSkillsCatalogHit:
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_skills", "true")
 
         catalog = _valid_skills_catalog()
-        _write_catalog(plugin_data_env, "skills-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "skills.json", catalog)
 
         result = context_manager._read_catalog_or_scan("skills")
 
@@ -393,7 +393,7 @@ class TestSkillsCatalogHit:
         import context_manager
 
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_skills", "true")
-        # No skills-catalog.json created
+        # No skills.json created
 
         # Should not raise — should fall back gracefully
         result = context_manager._read_catalog_or_scan("skills")
@@ -416,7 +416,7 @@ class TestResourcesCatalogHit:
         """Scenario: Resources catalog exists and resources are enabled.
 
         WHEN enable_resources is true, resources_dir is configured,
-        and resources-catalog.json exists with valid schema version
+        and resources.json exists with valid schema version
         THEN context manager reads resource metadata from catalog.
         """
         import context_manager
@@ -427,7 +427,7 @@ class TestResourcesCatalogHit:
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_resources_dir", str(resources_dir))
 
         catalog = _valid_resources_catalog()
-        _write_catalog(plugin_data_env, "resources-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "resources.json", catalog)
 
         result = context_manager._read_catalog_or_scan("resources")
 
@@ -451,12 +451,12 @@ class TestFailOpenMissingMandatoryCatalog:
     def test_memory_catalog_missing_falls_back(self, plugin_data_env):
         """Scenario: Memory catalog file does not exist.
 
-        WHEN memory-catalog.json does not exist
+        WHEN memory.json does not exist
         THEN falls back to scanning individual memory source files.
         """
         import context_manager
 
-        # No memory-catalog.json created in catalogs_dir
+        # No memory.json created in catalogs_dir
         result = context_manager._read_catalog_or_scan("memory")
 
         # Should return a list (possibly empty from fallback scan)
@@ -467,7 +467,7 @@ class TestFailOpenMissingMandatoryCatalog:
     def test_diary_catalog_missing_falls_back(self, plugin_data_env):
         """Scenario: Diary catalog file does not exist.
 
-        WHEN diary-catalog.json does not exist
+        WHEN diary.json does not exist
         THEN falls back to scanning individual diary day files.
         """
         import context_manager
@@ -507,12 +507,12 @@ class TestFailOpenCorruptMandatoryCatalog:
     def test_memory_catalog_invalid_json_falls_back(self, plugin_data_env):
         """Scenario: Memory catalog contains invalid JSON.
 
-        WHEN memory-catalog.json contains malformed JSON
+        WHEN memory.json contains malformed JSON
         THEN logs a warning, falls back to live scanning, does NOT raise.
         """
         import context_manager
 
-        (plugin_data_env / "memory-catalog.json").write_text("{invalid json!!!")
+        (plugin_data_env / "memory.json").write_text("{invalid json!!!")
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -523,12 +523,12 @@ class TestFailOpenCorruptMandatoryCatalog:
     def test_memory_catalog_truncated_json_falls_back(self, plugin_data_env):
         """Scenario: Memory catalog contains truncated JSON.
 
-        WHEN memory-catalog.json is truncated mid-write
+        WHEN memory.json is truncated mid-write
         THEN logs a warning and falls back.
         """
         import context_manager
 
-        (plugin_data_env / "memory-catalog.json").write_text('{"schema_version": "1.0.0", "entries": [')
+        (plugin_data_env / "memory.json").write_text('{"schema_version": "1.0.0", "entries": [')
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -539,12 +539,12 @@ class TestFailOpenCorruptMandatoryCatalog:
     def test_diary_catalog_invalid_json_falls_back(self, plugin_data_env):
         """Scenario: Diary catalog contains invalid JSON.
 
-        WHEN diary-catalog.json contains malformed JSON
+        WHEN diary.json contains malformed JSON
         THEN logs a warning, falls back, does NOT raise.
         """
         import context_manager
 
-        (plugin_data_env / "diary-catalog.json").write_text("not json at all")
+        (plugin_data_env / "diary.json").write_text("not json at all")
 
         result = context_manager._read_catalog_or_scan("diary")
 
@@ -555,12 +555,12 @@ class TestFailOpenCorruptMandatoryCatalog:
     def test_corrupt_catalog_logs_warning(self, plugin_data_env, caplog):
         """Corrupt mandatory catalog must log a warning message.
 
-        WHEN memory-catalog.json contains malformed JSON
+        WHEN memory.json contains malformed JSON
         THEN a warning is logged indicating the catalog is corrupt.
         """
         import context_manager
 
-        (plugin_data_env / "memory-catalog.json").write_text("{broken}")
+        (plugin_data_env / "memory.json").write_text("{broken}")
 
         with caplog.at_level(logging.WARNING):
             context_manager._read_catalog_or_scan("memory")
@@ -575,7 +575,7 @@ class TestFailOpenCorruptMandatoryCatalog:
         """Corrupt mandatory catalog must NOT raise an unhandled exception."""
         import context_manager
 
-        (plugin_data_env / "memory-catalog.json").write_text("{{{{")
+        (plugin_data_env / "memory.json").write_text("{{{{")
 
         try:
             context_manager._read_catalog_or_scan("memory")
@@ -611,7 +611,7 @@ class TestSchemaVersionChecking:
 
         catalog = _valid_memory_catalog()
         assert catalog["schema_version"] == CATALOG_SCHEMA_VERSION
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -629,7 +629,7 @@ class TestSchemaVersionChecking:
 
         catalog = _valid_memory_catalog()
         catalog["schema_version"] = "99.0.0"  # Unknown future version
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -647,7 +647,7 @@ class TestSchemaVersionChecking:
 
         catalog = _valid_memory_catalog()
         catalog["schema_version"] = "99.0.0"
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         with caplog.at_level(logging.WARNING):
             context_manager._read_catalog_or_scan("memory")
@@ -667,7 +667,7 @@ class TestSchemaVersionChecking:
 
         catalog = {"entries": [{"source": "me.md", "summary": "test"}]}
         # No schema_version field
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -678,14 +678,14 @@ class TestSchemaVersionChecking:
     def test_diary_schema_version_mismatch_falls_back(self, plugin_data_env):
         """Diary catalog with wrong schema version also falls back.
 
-        WHEN diary-catalog.json has schema_version mismatch
+        WHEN diary.json has schema_version mismatch
         THEN falls back to live scanning.
         """
         import context_manager
 
         catalog = _valid_diary_catalog()
         catalog["schema_version"] = "0.0.1"  # Old/unknown version
-        _write_catalog(plugin_data_env, "diary-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "diary.json", catalog)
 
         result = context_manager._read_catalog_or_scan("diary")
 
@@ -700,8 +700,8 @@ class TestSchemaVersionChecking:
         version-gate logic before full deserialization.
         """
         catalog = _valid_memory_catalog()
-        catalog_path = plugin_data_env / "memory-catalog.json"
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        catalog_path = plugin_data_env / "memory.json"
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         # Read raw JSON and verify schema_version is accessible at top level
         raw = json.loads(catalog_path.read_text())
@@ -728,13 +728,13 @@ class TestEmptyCatalogAuthoritative:
     def test_memory_catalog_empty_entries_no_fallback(self, plugin_data_env):
         """Scenario: Memory catalog exists with zero entries.
 
-        WHEN memory-catalog.json has valid schema but empty entries array
+        WHEN memory.json has valid schema but empty entries array
         THEN treats as "no memory context" and does NOT fall back to scanning.
         """
         import context_manager
 
         catalog = _valid_memory_catalog(entries=[])
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -748,7 +748,7 @@ class TestEmptyCatalogAuthoritative:
         import context_manager
 
         catalog = _valid_diary_catalog(entries=[])
-        _write_catalog(plugin_data_env, "diary-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "diary.json", catalog)
 
         result = context_manager._read_catalog_or_scan("diary")
 
@@ -778,7 +778,7 @@ class TestOptionalCatalogsMissing:
         import context_manager
 
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_skills", "true")
-        # No skills-catalog.json
+        # No skills.json
 
         result = context_manager._read_catalog_or_scan("skills")
 
@@ -839,7 +839,7 @@ class TestOncePerSessionWarning:
         """First call with corrupt catalog should log a warning."""
         import context_manager
 
-        (plugin_data_env / "memory-catalog.json").write_text("not json")
+        (plugin_data_env / "memory.json").write_text("not json")
 
         with caplog.at_level(logging.WARNING):
             context_manager._read_catalog_or_scan("memory")
@@ -859,7 +859,7 @@ class TestOncePerSessionWarning:
         """
         import context_manager
 
-        (plugin_data_env / "memory-catalog.json").write_text("not json")
+        (plugin_data_env / "memory.json").write_text("not json")
 
         with caplog.at_level(logging.WARNING):
             context_manager._read_catalog_or_scan("memory")
@@ -881,8 +881,8 @@ class TestOncePerSessionWarning:
         """
         import context_manager
 
-        (plugin_data_env / "memory-catalog.json").write_text("bad")
-        (plugin_data_env / "diary-catalog.json").write_text("bad")
+        (plugin_data_env / "memory.json").write_text("bad")
+        (plugin_data_env / "diary.json").write_text("bad")
 
         with caplog.at_level(logging.WARNING):
             context_manager._read_catalog_or_scan("memory")
@@ -917,7 +917,7 @@ class TestCatalogStalenessIgnored:
 
         catalog = _valid_memory_catalog()
         catalog["generated_at"] = "2020-01-01T00:00:00Z"  # Very old
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -948,7 +948,7 @@ class TestCatalogReadTransparency:
         import context_manager
 
         catalog = _valid_memory_catalog()
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -968,7 +968,7 @@ class TestCatalogReadTransparency:
         import context_manager
 
         catalog = _valid_diary_catalog()
-        _write_catalog(plugin_data_env, "diary-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "diary.json", catalog)
 
         result = context_manager._read_catalog_or_scan("diary")
 
@@ -996,10 +996,10 @@ class TestCatalogErrorIsolation:
 
         # Valid memory catalog
         memory_catalog = _valid_memory_catalog()
-        _write_catalog(plugin_data_env, "memory-catalog.json", memory_catalog)
+        _write_catalog(plugin_data_env, "memory.json", memory_catalog)
 
         # Corrupt diary catalog
-        (plugin_data_env / "diary-catalog.json").write_text("invalid json")
+        (plugin_data_env / "diary.json").write_text("invalid json")
 
         # Memory should work fine despite diary being corrupt
         memory_result = context_manager._read_catalog_or_scan("memory")
@@ -1024,7 +1024,7 @@ class TestCatalogErrorIsolation:
         # No memory catalog
         # Valid diary catalog
         diary_catalog = _valid_diary_catalog()
-        _write_catalog(plugin_data_env, "diary-catalog.json", diary_catalog)
+        _write_catalog(plugin_data_env, "diary.json", diary_catalog)
 
         # Memory should fall back
         memory_result = context_manager._read_catalog_or_scan("memory")
@@ -1043,9 +1043,9 @@ class TestCatalogErrorIsolation:
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_skills", "true")
 
         # Memory: valid
-        _write_catalog(plugin_data_env, "memory-catalog.json", _valid_memory_catalog())
+        _write_catalog(plugin_data_env, "memory.json", _valid_memory_catalog())
         # Diary: corrupt
-        (plugin_data_env / "diary-catalog.json").write_text("corrupt")
+        (plugin_data_env / "diary.json").write_text("corrupt")
         # Skills: missing (will fall back)
         # Resources: not enabled
 
@@ -1068,34 +1068,34 @@ class TestCatalogErrorIsolation:
 class TestCatalogFileLocation:
     """Verify catalogs are read from the correct path.
 
-    Catalogs must be read from $CLAUDE_PLUGIN_DATA/catalogs/<type>-catalog.json.
+    Catalogs must be read from $CLAUDE_PLUGIN_DATA/catalogs/<type>.json.
     """
 
     def test_memory_catalog_path(self, plugin_data_env):
-        """Memory catalog must be read from catalogs/memory-catalog.json."""
+        """Memory catalog must be read from catalogs/memory.json."""
         import context_manager
 
         catalog = _valid_memory_catalog()
-        expected_path = plugin_data_env / "memory-catalog.json"
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        expected_path = plugin_data_env / "memory.json"
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         assert expected_path.exists(), "Test setup: catalog file should exist"
 
         result = context_manager._read_catalog_or_scan("memory")
         assert len(result) > 0, (
-            "Should read from $CLAUDE_PLUGIN_DATA/catalogs/memory-catalog.json"
+            "Should read from $CLAUDE_PLUGIN_DATA/catalogs/memory.json"
         )
 
     def test_diary_catalog_path(self, plugin_data_env):
-        """Diary catalog must be read from catalogs/diary-catalog.json."""
+        """Diary catalog must be read from catalogs/diary.json."""
         import context_manager
 
         catalog = _valid_diary_catalog()
-        _write_catalog(plugin_data_env, "diary-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "diary.json", catalog)
 
         result = context_manager._read_catalog_or_scan("diary")
         assert len(result) > 0, (
-            "Should read from $CLAUDE_PLUGIN_DATA/catalogs/diary-catalog.json"
+            "Should read from $CLAUDE_PLUGIN_DATA/catalogs/diary.json"
         )
 
 
@@ -1115,7 +1115,7 @@ class TestEdgeCases:
         """
         import context_manager
 
-        (plugin_data_env / "memory-catalog.json").write_text('[1, 2, 3]')
+        (plugin_data_env / "memory.json").write_text('[1, 2, 3]')
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -1135,7 +1135,7 @@ class TestEdgeCases:
             "schema_version": CATALOG_SCHEMA_VERSION,
             "entries": {"not": "a list"},
         }
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -1147,7 +1147,7 @@ class TestEdgeCases:
         """Empty catalog file (0 bytes) should fall back."""
         import context_manager
 
-        (plugin_data_env / "memory-catalog.json").write_text("")
+        (plugin_data_env / "memory.json").write_text("")
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -1177,7 +1177,7 @@ class TestEdgeCases:
         catalog = _valid_memory_catalog()
         catalog["extra_field"] = "should be ignored"
         catalog["entries"][0]["unknown_field"] = "also ignored"
-        _write_catalog(plugin_data_env, "memory-catalog.json", catalog)
+        _write_catalog(plugin_data_env, "memory.json", catalog)
 
         result = context_manager._read_catalog_or_scan("memory")
 
@@ -1214,8 +1214,8 @@ class TestEdgeCases:
         """
         import context_manager
 
-        catalog_path = plugin_data_env / "memory-catalog.json"
-        _write_catalog(plugin_data_env, "memory-catalog.json", _valid_memory_catalog())
+        catalog_path = plugin_data_env / "memory.json"
+        _write_catalog(plugin_data_env, "memory.json", _valid_memory_catalog())
 
         # Make file unreadable
         original_mode = catalog_path.stat().st_mode

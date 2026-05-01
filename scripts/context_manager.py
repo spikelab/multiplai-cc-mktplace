@@ -205,9 +205,13 @@ def _read_catalog_or_scan(catalog_type: str) -> list[dict]:
 
 
 def _resolve_catalog_path(catalog_type: str) -> Path:
-    """Return the expected filesystem path for a catalog type."""
+    """Return the expected filesystem path for a catalog type.
+
+    Filename convention matches what each generator writes via
+    ``catalog_filename`` (e.g., ``memory.json`` for MemoryGenerator).
+    """
     paths = get_paths()
-    return paths.catalogs_dir() / f"{catalog_type}-catalog.json"
+    return paths.catalogs_dir() / f"{catalog_type}.json"
 
 
 def _validate_catalog(data: object, catalog_type: str, warn_key: str) -> list[dict]:
