@@ -1,31 +1,38 @@
-"""Memory router strategies for context assembly.
+"""Multi-corpus router strategies for context assembly.
 
-Context routing picks which memory files to inject into each user
-prompt. Two strategies are supported today, selected via the
-``CLAUDE_PLUGIN_OPTION_memory_router`` environment variable:
+Context routing picks which catalog entries (across memory, skills,
+and resources) to inject into each user prompt. Two strategies are
+supported, selected via the ``CLAUDE_PLUGIN_OPTION_memory_router``
+environment variable:
 
     token_overlap  (default)   Cheap, offline. Tokenizes the prompt
-                               and scores catalog entries by word
-                               overlap against intent_domains. Zero
-                               LLM calls, instant, but misses
-                               synonym matches.
+                               (plus the last assistant response if
+                               available) and scores each catalog
+                               entry by word overlap against
+                               intent_domains. Zero LLM calls,
+                               instant, but misses synonym matches.
 
-    llm                        Semantic. Sends the catalog (with
-                               intent_domains + anti_domains) plus
-                               the prompt to Sonnet and asks it to
-                               return a JSON array of filenames.
-                               Higher precision on synonyms and
-                               task-intent matching; adds one LLM
-                               hop per prompt.
+    llm                        Semantic. Sends ALL catalogs in a
+                               SINGLE LLM call along with the prompt
+                               and last response, asking for a
+                               three-key JSON object selecting from
+                               each corpus. Higher precision; one
+                               LLM hop per prompt.
 
-A third strategy, ``embeddings``, is reserved for a future port that
-scores prompt/domain similarity via a small local embedding model —
+A third strategy, ``embeddings``, is reserved for a future port —
 zero-cost per prompt after an initial embed pass, but requires model
 setup out of scope here.
 
-All routers implement the :class:`MemoryRouter` protocol so the
-context manager can swap them at runtime without caring which is in
-use.
+Both routers expose two methods:
+
+    select(prompt, entries, *, max_files=10) -> list[str]
+        Single-corpus selection. Used by tests and by the legacy
+        single-corpus context_manager path. Last-response unaware.
+
+    select_multi(prompt, last_response, corpora, *, max_files_per_corpus=10)
+        -> dict[str, list[str]]
+        Multi-corpus selection. The canonical entry point for the
+        new context_manager flow.
 """
 
 from __future__ import annotations
@@ -35,7 +42,9 @@ import json
 import logging
 import os
 import re
-from typing import Iterable, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
+
+from lib.router_prompt import SYSTEM_PROMPT, FEW_SHOT_EXAMPLES, build_user_message
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +58,8 @@ STRATEGY_EMBEDDINGS = "embeddings"
 DEFAULT_STRATEGY = STRATEGY_TOKEN_OVERLAP
 KNOWN_STRATEGIES = frozenset({STRATEGY_TOKEN_OVERLAP, STRATEGY_LLM, STRATEGY_EMBEDDINGS})
 
+CORPUS_TYPES = ("memory", "skills", "resources")
+
 
 # ---------------------------------------------------------------------------
 # Protocol
@@ -56,8 +67,8 @@ KNOWN_STRATEGIES = frozenset({STRATEGY_TOKEN_OVERLAP, STRATEGY_LLM, STRATEGY_EMB
 
 
 @runtime_checkable
-class MemoryRouter(Protocol):
-    """Selects relevant memory filenames for a prompt given a catalog."""
+class CorpusRouter(Protocol):
+    """Selects relevant entries across one or more catalog corpora."""
 
     name: str
 
@@ -68,17 +79,27 @@ class MemoryRouter(Protocol):
         *,
         max_files: int = 10,
     ) -> list[str]:
-        """Return an ordered list of memory filenames to load for *prompt*.
+        """Single-corpus pick — returns ordered list of entry names."""
+        ...
 
-        An empty list means "no intent-based picks; fall back to the
-        metadata ranking path." Raising is reserved for configuration
-        errors; transient runtime failures should return ``[]``.
-        """
+    def select_multi(
+        self,
+        prompt: str,
+        last_response: str | None,
+        corpora: dict[str, list[dict]],
+        *,
+        max_files_per_corpus: int = 10,
+    ) -> dict[str, list[str]]:
+        """Multi-corpus pick — returns ``{corpus_name: [name, ...]}``."""
         ...
 
 
+# Legacy alias so existing single-corpus callers keep type-checking.
+MemoryRouter = CorpusRouter
+
+
 # ---------------------------------------------------------------------------
-# Token-overlap router (cheap, offline)
+# Shared helpers
 # ---------------------------------------------------------------------------
 
 
@@ -92,7 +113,22 @@ def _tokenize(text: str) -> set[str]:
 
 
 def _entry_filename(entry: dict) -> str:
-    return entry.get("source") or entry.get("path") or entry.get("file", "")
+    """Resolve the catalog-entry key.
+
+    Skills entries use ``name``; memory and resources use ``source``
+    (with ``path`` / ``file`` legacy fallbacks).
+    """
+    return (
+        entry.get("source")
+        or entry.get("path")
+        or entry.get("name")
+        or entry.get("file", "")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Token-overlap router (cheap, offline)
+# ---------------------------------------------------------------------------
 
 
 class TokenOverlapRouter:
@@ -107,6 +143,44 @@ class TokenOverlapRouter:
         *,
         max_files: int = 10,
     ) -> list[str]:
+        """Single-corpus selection (no last-response awareness)."""
+        return self._score_corpus(prompt, catalog_entries, max_files=max_files)
+
+    def select_multi(
+        self,
+        prompt: str,
+        last_response: str | None,
+        corpora: dict[str, list[dict]],
+        *,
+        max_files_per_corpus: int = 10,
+    ) -> dict[str, list[str]]:
+        """Multi-corpus selection.
+
+        Token scoring combines prompt and last-response tokens — the
+        last response disambiguates short prompts where the same
+        token (e.g., "costs") could match different domains. Each
+        corpus is scored independently using the same tokens.
+        """
+        if not prompt:
+            return {ct: [] for ct in CORPUS_TYPES}
+        combined = prompt
+        if last_response:
+            combined = f"{prompt}\n{last_response}"
+        result: dict[str, list[str]] = {}
+        for corpus_type in CORPUS_TYPES:
+            entries = corpora.get(corpus_type) or []
+            result[corpus_type] = self._score_corpus(
+                combined, entries, max_files=max_files_per_corpus
+            )
+        return result
+
+    def _score_corpus(
+        self,
+        prompt: str,
+        catalog_entries: list[dict],
+        *,
+        max_files: int,
+    ) -> list[str]:
         if not catalog_entries or not prompt:
             return []
         prompt_tokens = _tokenize(prompt)
@@ -119,7 +193,7 @@ class TokenOverlapRouter:
             if not filename:
                 continue
 
-            intent_tokens = set()
+            intent_tokens: set[str] = set()
             for phrase in entry.get("intent_domains", []) or []:
                 if isinstance(phrase, str):
                     intent_tokens |= _tokenize(phrase)
@@ -127,9 +201,9 @@ class TokenOverlapRouter:
             # are still catalog-tagged but not yet hand-curated with
             # intent_domains still score.
             intent_tokens |= _tokenize(
-                entry.get("summary", "")
+                (entry.get("summary") or "")
                 + " "
-                + " ".join(entry.get("topics", []) or [])
+                + " ".join(entry.get("topics") or [])
             )
 
             anti_tokens: set[str] = set()
@@ -138,7 +212,7 @@ class TokenOverlapRouter:
                     anti_tokens |= _tokenize(phrase)
 
             if anti_tokens & prompt_tokens:
-                continue  # Respect anti_domains — skip this file
+                continue  # Respect anti_domains — skip this entry
             match = len(intent_tokens & prompt_tokens)
             if match == 0:
                 continue
@@ -151,42 +225,60 @@ class TokenOverlapRouter:
 
 
 # ---------------------------------------------------------------------------
-# LLM router (semantic, one Sonnet hop per prompt)
+# LLM router (semantic, ONE call covering all corpora)
 # ---------------------------------------------------------------------------
 
 
-_LLM_SYSTEM_PROMPT = (
-    "You are a memory-routing assistant. Given a user prompt and a catalog of "
-    "memory files (each with intent_domains, anti_domains, and a summary), "
-    "select the files whose contents would measurably help answer the prompt. "
-    "Respond with ONLY a JSON array of filenames from the catalog — no prose, "
-    "no markdown fences. If nothing is relevant, respond with []. "
-    "Respect anti_domains: never select a file whose anti_domains match the prompt's intent."
-)
+def _parse_llm_multi_selection(
+    raw: str,
+    known_per_corpus: dict[str, set[str]],
+) -> dict[str, list[str]]:
+    """Extract a ``{corpus: [name, ...]}`` selection from the LLM response.
 
+    Tolerates markdown-fenced JSON. Filters each corpus's selections
+    to entries actually present in that corpus's known-name set.
+    Section refs (``"file#Section"``) are validated by stripping the
+    fragment before checking presence.
+    """
+    text = raw.strip()
+    match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+    if match:
+        text = match.group(1).strip()
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("LLM router returned non-JSON; ignoring")
+        return {ct: [] for ct in CORPUS_TYPES}
 
-def _format_catalog_for_llm(entries: Iterable[dict]) -> str:
-    lines = []
-    for entry in entries:
-        filename = _entry_filename(entry)
-        if not filename:
+    if not isinstance(parsed, dict):
+        logger.warning("LLM router JSON is not an object; ignoring")
+        return {ct: [] for ct in CORPUS_TYPES}
+
+    result: dict[str, list[str]] = {}
+    for corpus_type in CORPUS_TYPES:
+        raw_list = parsed.get(corpus_type, [])
+        if not isinstance(raw_list, list):
+            result[corpus_type] = []
             continue
-        summary = entry.get("summary", "").strip()
-        intent = ", ".join(entry.get("intent_domains", []) or [])
-        anti = ", ".join(entry.get("anti_domains", []) or [])
-        block = [f"FILE: {filename}"]
-        if summary:
-            block.append(f"  Purpose: {summary}")
-        if intent:
-            block.append(f"  Relevant for: {intent}")
-        if anti:
-            block.append(f"  NOT relevant for: {anti}")
-        lines.append("\n".join(block))
-    return "\n\n".join(lines)
+        known = known_per_corpus.get(corpus_type, set())
+        validated: list[str] = []
+        for item in raw_list:
+            if not isinstance(item, str):
+                continue
+            base = item.split("#", 1)[0]
+            if base in known:
+                validated.append(item)
+        result[corpus_type] = validated
+    return result
 
 
-def _parse_llm_selection(raw: str, known_filenames: set[str]) -> list[str]:
-    """Extract a filename list from the LLM response; tolerate fenced JSON."""
+def _parse_llm_single_selection(raw: str, known_filenames: set[str]) -> list[str]:
+    """Parse a single-corpus LLM response (legacy ``select`` path).
+
+    The LLM is asked for a JSON array; we accept either an array or
+    an object with the corpus key. Returns only filenames that exist
+    in ``known_filenames``.
+    """
     text = raw.strip()
     match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
     if match:
@@ -196,18 +288,25 @@ def _parse_llm_selection(raw: str, known_filenames: set[str]) -> list[str]:
     except (json.JSONDecodeError, ValueError):
         logger.warning("LLM router returned non-JSON; ignoring")
         return []
+    if isinstance(parsed, dict):
+        # Tolerate the multi-corpus response shape under the "memory" key.
+        parsed = parsed.get("memory", [])
     if not isinstance(parsed, list):
         logger.warning("LLM router JSON is not a list; ignoring")
         return []
-    return [f for f in parsed if isinstance(f, str) and f in known_filenames]
+    return [
+        f for f in parsed
+        if isinstance(f, str) and f.split("#", 1)[0] in known_filenames
+    ]
 
 
 class LLMRouter:
-    """Semantic router — one LLM call per prompt via the model client.
+    """Semantic router — one LLM call per prompt covering all corpora.
 
-    Failures (no client, query exception, malformed response) log at
-    WARNING and return ``[]`` so the context manager falls back to
-    the metadata ranking path rather than blocking the hook.
+    Failures (no client, query exception, malformed response, timeout)
+    log at WARNING and return empty picks so the context manager
+    falls back to the metadata ranking path rather than blocking the
+    hook.
     """
 
     name = STRATEGY_LLM
@@ -222,6 +321,10 @@ class LLMRouter:
         *,
         max_files: int = 10,
     ) -> list[str]:
+        """Single-corpus selection — convenience for legacy callers and tests.
+
+        Wraps the multi-corpus path with a single ``memory`` corpus.
+        """
         if not catalog_entries or not prompt:
             return []
 
@@ -232,22 +335,58 @@ class LLMRouter:
             return []
 
         try:
-            selection = asyncio.run(
-                self._select_async(prompt, catalog_entries, known_filenames)
+            picks = asyncio.run(
+                self._select_async_single(prompt, catalog_entries, known_filenames)
             )
         except RuntimeError as e:
-            # Running inside an already-active event loop (e.g., from
-            # a test harness). Hooks normally invoke from a plain
-            # sync entry point, so this path is rare.
             logger.warning("LLMRouter could not run event loop: %s", e)
             return []
         except Exception:
             logger.exception("LLMRouter call failed; falling back to no picks")
             return []
+        return picks[:max_files]
 
-        return selection[:max_files]
+    def select_multi(
+        self,
+        prompt: str,
+        last_response: str | None,
+        corpora: dict[str, list[dict]],
+        *,
+        max_files_per_corpus: int = 10,
+    ) -> dict[str, list[str]]:
+        """Multi-corpus selection via a single LLM call covering all 3 corpora."""
+        empty = {ct: [] for ct in CORPUS_TYPES}
+        if not prompt:
+            return empty
 
-    async def _select_async(
+        known_per_corpus: dict[str, set[str]] = {}
+        any_entries = False
+        for corpus_type in CORPUS_TYPES:
+            entries = corpora.get(corpus_type) or []
+            known_per_corpus[corpus_type] = {
+                _entry_filename(e) for e in entries if _entry_filename(e)
+            }
+            if known_per_corpus[corpus_type]:
+                any_entries = True
+        if not any_entries:
+            return empty
+
+        try:
+            picks = asyncio.run(
+                self._select_async_multi(prompt, last_response, corpora, known_per_corpus)
+            )
+        except RuntimeError as e:
+            logger.warning("LLMRouter could not run event loop: %s", e)
+            return empty
+        except Exception:
+            logger.exception("LLMRouter call failed; falling back to no picks")
+            return empty
+
+        return {
+            ct: picks.get(ct, [])[:max_files_per_corpus] for ct in CORPUS_TYPES
+        }
+
+    async def _select_async_single(
         self,
         prompt: str,
         catalog_entries: list[dict],
@@ -256,24 +395,45 @@ class LLMRouter:
         from lib.model_client import create_client
 
         client = await create_client()
-        user_msg = (
-            f"CATALOG:\n{_format_catalog_for_llm(catalog_entries)}\n\n"
-            f"USER PROMPT:\n{prompt}"
+        user_msg = build_user_message(
+            prompt, None, {"memory": catalog_entries, "skills": [], "resources": []}
         )
         try:
             response = await asyncio.wait_for(
                 client.query(
-                    system=_LLM_SYSTEM_PROMPT,
+                    system=SYSTEM_PROMPT + "\n\n" + FEW_SHOT_EXAMPLES,
                     messages=[{"role": "user", "content": user_msg}],
                 ),
                 timeout=self._timeout_seconds,
             )
         except asyncio.TimeoutError:
-            logger.warning(
-                "LLMRouter timed out after %.1fs", self._timeout_seconds,
-            )
+            logger.warning("LLMRouter timed out after %.1fs", self._timeout_seconds)
             return []
-        return _parse_llm_selection(response.content, known_filenames)
+        return _parse_llm_single_selection(response.content, known_filenames)
+
+    async def _select_async_multi(
+        self,
+        prompt: str,
+        last_response: str | None,
+        corpora: dict[str, list[dict]],
+        known_per_corpus: dict[str, set[str]],
+    ) -> dict[str, list[str]]:
+        from lib.model_client import create_client
+
+        client = await create_client()
+        user_msg = build_user_message(prompt, last_response, corpora)
+        try:
+            response = await asyncio.wait_for(
+                client.query(
+                    system=SYSTEM_PROMPT + "\n\n" + FEW_SHOT_EXAMPLES,
+                    messages=[{"role": "user", "content": user_msg}],
+                ),
+                timeout=self._timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("LLMRouter timed out after %.1fs", self._timeout_seconds)
+            return {ct: [] for ct in CORPUS_TYPES}
+        return _parse_llm_multi_selection(response.content, known_per_corpus)
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +459,7 @@ def resolve_strategy(raw: str | None = None) -> str:
     return value
 
 
-def create_router(strategy: str | None = None) -> MemoryRouter:
+def create_router(strategy: str | None = None) -> CorpusRouter:
     """Build a router for *strategy* (or the env default).
 
     ``embeddings`` is accepted by name but not yet implemented — it
@@ -317,7 +477,4 @@ def create_router(strategy: str | None = None) -> MemoryRouter:
             f"{ROUTER_ENV_VAR}={STRATEGY_TOKEN_OVERLAP} or "
             f"{STRATEGY_LLM} to pick an available strategy."
         )
-    # resolve_strategy already filters unknowns; reaching here means
-    # the caller passed something resolve_strategy let through that we
-    # haven't branched on.
     raise ValueError(f"Unhandled memory router strategy: {effective}")
