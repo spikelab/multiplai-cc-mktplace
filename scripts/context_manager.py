@@ -1,15 +1,25 @@
 """Context manager hook for multiplai plugin.
 
-Manages context assembly for user prompts through memory files.
-Uses path resolver for all file locations. Memory files are ranked by
-metadata (recency + size) and only top candidates are read, staying
-within the 5-second hook timeout (R2 mitigation).
+Manages context assembly for user prompts across three corpora —
+memory, skills, and resources — using catalog-first reads with
+intent-domain routing.
 
-Catalog-first read paths (Design Decision 8): when a valid catalog
-exists for a context type, entries are read from the catalog without
-scanning raw source files. Missing or corrupt catalogs fall back to
-live scanning (fail-open). Warnings are emitted once per session per
-catalog to avoid log spam.
+Pipeline:
+    1. Read stdin (cwd, user_prompt, transcript_path)
+    2. Extract last assistant response from transcript (disambiguation)
+    3. Load each enabled corpus catalog (gated on plugin options)
+    4. Run multi-corpus router → per-corpus filename picks
+    5. Expand picks via bundle + co_retrieve_for metadata
+    6. Read picked file contents (with section_loader for memory)
+    7. Emit a single JSON object with the assembled context
+
+Catalog-first reads (Design Decision 8): when a valid catalog exists,
+entries are read from the catalog. Missing or corrupt catalogs fall
+back to live scanning (fail-open). Warnings emit once per session.
+
+Memory remains the only corpus with a metadata-fallback path
+(_read_top_memory_files) so prompts still get useful context even
+without a current catalog. Skills and resources are catalog-only.
 """
 
 import json
@@ -27,7 +37,11 @@ from lib.paths import get_paths
 from lib.log_utils import setup_logging
 from lib.model_client import create_client  # D3: LLM calls via ModelClient abstraction
 from lib.memory_router import create_router
+from lib.routing_logic import expand_picks
+from lib.section_loader import load_picked_content, parse_section_ref
+from lib.transcript_helper import read_last_assistant_response
 from generators.base import CATALOG_SCHEMA_VERSION
+from generators.config import load_catalog_config
 
 logger = setup_logging("context_manager")
 
@@ -291,6 +305,113 @@ def _load_project_state(now_dir: Path, cwd: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Multi-corpus catalog loading
+# ---------------------------------------------------------------------------
+
+def _load_corpora(cfg) -> dict[str, list[dict]]:
+    """Read all enabled catalogs.
+
+    Memory is always loaded. Skills and resources are gated by their
+    respective ``enable_*`` plugin options — when disabled, the corpus
+    is treated as empty (no routing, no content loading).
+    """
+    corpora: dict[str, list[dict]] = {
+        "memory": _read_catalog_or_scan("memory"),
+        "skills": [],
+        "resources": [],
+    }
+    if cfg.enable_skills:
+        corpora["skills"] = _read_catalog_or_scan("skills")
+    if cfg.enable_resources and cfg.resources_dir.strip():
+        corpora["resources"] = _read_catalog_or_scan("resources")
+    return corpora
+
+
+# ---------------------------------------------------------------------------
+# Per-corpus content loading
+# ---------------------------------------------------------------------------
+
+
+def _load_memory_content(memory_dir: Path, picks: list[str]) -> dict[str, str]:
+    """Read picked memory files; honor ``filename#Section`` for partial loads.
+
+    Returns ``{display_name: content}`` where ``display_name`` is the
+    raw pick (e.g., ``"file.md#Section"``) so the assembled context
+    shows which slice was loaded.
+    """
+    result: dict[str, str] = {}
+    for pick in picks:
+        base, _ = parse_section_ref(pick)
+        path = memory_dir / base
+        if not path.exists():
+            logger.debug("Picked memory file missing: %s", path)
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            logger.warning("Failed to read router-picked memory file: %s", path)
+            continue
+        # load_picked_content returns (filename, content_or_section)
+        _, content = load_picked_content(pick, text)
+        result[pick] = content
+    return result
+
+
+def _load_skills_content(cfg, picks: list[str]) -> dict[str, str]:
+    """Read picked skill instruction files from configured skills_dir."""
+    if not picks or not cfg.enable_skills:
+        return {}
+    skills_dir = Path(cfg.skills_dir).expanduser()
+    if not skills_dir.exists():
+        return {}
+    result: dict[str, str] = {}
+    for pick in picks:
+        # Skills entries don't use section refs; they're small docs already.
+        base, _ = parse_section_ref(pick)
+        path = skills_dir / base
+        if not path.exists():
+            logger.debug("Picked skill file missing: %s", path)
+            continue
+        try:
+            result[base] = path.read_text()
+        except OSError:
+            logger.warning("Failed to read picked skill file: %s", path)
+    return result
+
+
+def _load_resources_content(cfg, picks: list[str]) -> dict[str, str]:
+    """Read picked resource files from configured resources_dir."""
+    if not picks or not cfg.enable_resources or not cfg.resources_dir.strip():
+        return {}
+    resources_dir = Path(cfg.resources_dir).expanduser()
+    if not resources_dir.exists():
+        return {}
+    result: dict[str, str] = {}
+    for pick in picks:
+        base, _ = parse_section_ref(pick)
+        path = resources_dir / base
+        if not path.exists():
+            logger.debug("Picked resource file missing: %s", path)
+            continue
+        try:
+            text = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            logger.warning("Failed to read picked resource file: %s", path)
+            continue
+        _, content = load_picked_content(pick, text)
+        result[pick] = content
+    return result
+
+
+def _render_corpus_section(label: str, files: dict[str, str]) -> str:
+    """Render one corpus's loaded files as a labeled markdown block."""
+    parts = [f"=== {label} ==="]
+    for name, content in files.items():
+        parts.append(f"## {name}\n{content}")
+    return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -300,7 +421,7 @@ def main() -> None:
     memory_dir = paths.memory_dir()
     now_dir = paths.now_dir()
 
-    # Read user prompt from stdin (Claude Code hook protocol)
+    # Read hook input from stdin (Claude Code UserPromptSubmit shape)
     try:
         input_data = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
@@ -308,65 +429,98 @@ def main() -> None:
 
     cwd = input_data.get("cwd", "") if isinstance(input_data, dict) else ""
     prompt = input_data.get("user_prompt", "") if isinstance(input_data, dict) else ""
+    transcript_path = (
+        input_data.get("transcript_path") if isinstance(input_data, dict) else None
+    )
 
-    # Intent-domain routing: when the catalog has entries with
-    # intent_domains, delegate the pick to the configured router
-    # (token_overlap or llm — see lib.memory_router). mtime+size
-    # ranking runs only when the router returns no picks (missing
-    # catalog, no prompt, or no matches).
-    catalog_entries = _read_catalog_or_scan("memory") if prompt else []
-    try:
-        router = create_router()
-        intent_picks = router.select(prompt, catalog_entries)
-        if intent_picks:
-            logger.info("Router %s picked %d file(s)", router.name, len(intent_picks))
-    except NotImplementedError as e:
-        logger.warning("Router misconfigured: %s", e)
-        intent_picks = []
-    except Exception:
-        logger.exception("Router call failed; falling back to metadata ranking")
-        intent_picks = []
+    # Last-assistant-response disambiguation. Failure modes already
+    # encoded in read_last_assistant_response (returns None on any error).
+    last_response = (
+        read_last_assistant_response(transcript_path) if prompt else None
+    )
 
-    if intent_picks:
-        memory_files: dict[str, str] = {}
-        for filename in intent_picks:
-            path = memory_dir / filename
-            if path.exists():
-                try:
-                    memory_files[filename] = path.read_text()
-                except OSError:
-                    logger.warning("Failed to read router-picked memory file: %s", path)
-        if not memory_files:
-            memory_files = _read_top_memory_files(memory_dir)
-    else:
-        memory_files = _read_top_memory_files(memory_dir)
+    # Plugin-options-driven config (which corpora are enabled, paths, etc.)
+    cfg = load_catalog_config()
 
+    # Load all enabled corpora
+    corpora = _load_corpora(cfg) if prompt else {"memory": [], "skills": [], "resources": []}
+
+    # Multi-corpus router pass
+    picks_by_corpus: dict[str, list[str]] = {"memory": [], "skills": [], "resources": []}
+    if prompt and any(corpora.values()):
+        try:
+            router = create_router()
+            picks_by_corpus = router.select_multi(prompt, last_response, corpora)
+            logger.info(
+                "Router %s picked: memory=%d skills=%d resources=%d",
+                router.name,
+                len(picks_by_corpus.get("memory", [])),
+                len(picks_by_corpus.get("skills", [])),
+                len(picks_by_corpus.get("resources", [])),
+            )
+        except NotImplementedError as e:
+            logger.warning("Router misconfigured: %s", e)
+        except Exception:
+            logger.exception("Router call failed; per-corpus picks will be empty")
+
+    # Bundle + co_retrieve_for expansion (per-corpus, against that corpus's catalog)
+    for corpus_type in ("memory", "skills", "resources"):
+        picks = picks_by_corpus.get(corpus_type) or []
+        if picks:
+            picks_by_corpus[corpus_type] = expand_picks(picks, corpora.get(corpus_type) or [])
+
+    # Load content per corpus
+    memory_content = _load_memory_content(memory_dir, picks_by_corpus.get("memory") or [])
+    skills_content = _load_skills_content(cfg, picks_by_corpus.get("skills") or [])
+    resources_content = _load_resources_content(cfg, picks_by_corpus.get("resources") or [])
+
+    # Memory fallback: if nothing picked OR none of the picks resolved on
+    # disk, fall back to metadata-ranked top-N. Skills/resources stay
+    # catalog-only — no metadata fallback (no obvious ranking signal).
+    if not memory_content:
+        memory_content = _read_top_memory_files(memory_dir)
+
+    # Per-project "now" state (cwd-scoped)
     project_state = _load_project_state(now_dir, cwd)
 
-    if not memory_files and not project_state:
-        logger.info("No memory files or project state found, skipping context routing")
+    if not memory_content and not skills_content and not resources_content and not project_state:
+        logger.info("No context to inject")
         result = {"context": "", "memory_files": 0}
         print(json.dumps(result))
         return
 
-    file_count = len(memory_files)
+    parts: list[str] = []
+    if project_state:
+        parts.append(f"--- PROJECT STATE ---\n{project_state}")
+    if memory_content:
+        parts.append(_render_corpus_section("MEMORY", memory_content))
+    if skills_content:
+        parts.append(_render_corpus_section("SKILLS", skills_content))
+    if resources_content:
+        parts.append(_render_corpus_section("RESOURCES", resources_content))
+
+    session_context = "\n\n".join(parts)
+
+    corpus_counts = {
+        "memory": len(memory_content),
+        "skills": len(skills_content),
+        "resources": len(resources_content),
+    }
     logger.info(
-        "Context manager loaded %d memory files%s",
-        file_count,
+        "Context assembled: memory=%d skills=%d resources=%d%s",
+        corpus_counts["memory"],
+        corpus_counts["skills"],
+        corpus_counts["resources"],
         " + project state" if project_state else "",
     )
 
-    context_parts = []
-    if project_state:
-        context_parts.append(f"--- PROJECT STATE ---\n{project_state}")
-    for name, content in memory_files.items():
-        context_parts.append(f"## {name}\n{content}")
-
-    session_context = "\n\n".join(context_parts)
-
     result = {
         "context": session_context,
-        "memory_files": file_count,
+        # Backward-compat: older consumers read memory_files
+        "memory_files": corpus_counts["memory"],
+        "skills_files": corpus_counts["skills"],
+        "resources_files": corpus_counts["resources"],
+        "corpus_counts": corpus_counts,
     }
     print(json.dumps(result))
 
