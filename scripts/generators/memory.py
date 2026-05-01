@@ -3,8 +3,9 @@
 Implements MemoryGenerator, a GeneratorBase subclass that catalogs
 memory files (*.md) from the configured memory directory.
 
-Design Decision 5: Preserves hand-authored fields (sections, bundle,
-co_retrieve_for) across regeneration via merge_entry() override.
+Design Decision 5: Preserves hand-authored fields (sections,
+section_anchors, bundle, co_retrieve_for) across regeneration via
+merge_entry() override.
 """
 
 import os
@@ -17,8 +18,12 @@ from generators.base import GeneratorBase
 # anti_domains are emitted by the LLM on first generation but may be
 # hand-tuned later — preserving them across regeneration prevents the
 # LLM from silently overwriting curated routing hints.
+# section_anchors lists the H2 section names available for selective
+# loading (e.g., the router may emit "file.md#Section Name" to load
+# just that section instead of the whole file).
 _HAND_AUTHORED_FIELDS = (
     "sections",
+    "section_anchors",
     "bundle",
     "co_retrieve_for",
     "intent_domains",
@@ -80,8 +85,10 @@ class MemoryGenerator(GeneratorBase):
     def merge_entry(self, existing: dict | None, new: dict) -> dict:
         """Merge new LLM entry with existing, preserving hand-authored fields.
 
-        Preserves: sections, bundle, co_retrieve_for from existing entry.
-        Updates: all LLM-generated fields (summary, topics, keywords, etc).
+        Preserves all entries in ``_HAND_AUTHORED_FIELDS`` (sections,
+        section_anchors, bundle, co_retrieve_for, intent_domains,
+        anti_domains) from the existing entry. Updates everything else
+        (summary, topics, keywords, etc.) from the new LLM output.
         """
         if existing is None:
             return dict(new)

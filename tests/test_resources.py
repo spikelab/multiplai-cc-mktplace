@@ -431,6 +431,16 @@ class TestResourcesBuildPrompt:
         prompt = gen.build_prompt(resource_path)
         assert "json" in prompt.lower()
 
+    def test_prompt_requests_intent_domains(self, tmp_path, monkeypatch):
+        """Prompt must request intent_domains for multi-corpus routing (1.2.0)."""
+        gen, catalogs_dir, resources_dir = _make_resources_generator(tmp_path)
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+
+        resource_path = _write_resource_file(resources_dir)
+        prompt = gen.build_prompt(resource_path)
+        assert "intent_domains" in prompt
+        assert "anti_domains" in prompt
+
 
 # ---------------------------------------------------------------------------
 # parse_response()
@@ -467,6 +477,51 @@ class TestResourcesParseResponse:
 
         with pytest.raises((json.JSONDecodeError, ValueError)):
             gen.parse_response("not valid json")
+
+
+# ---------------------------------------------------------------------------
+# merge_entry() — Hand-Authored Field Preservation
+# ---------------------------------------------------------------------------
+
+
+class TestResourcesMergeEntry:
+    """Requirement: Preserve hand-authored intent_domains/anti_domains across regeneration (1.2.0)."""
+
+    def test_preserves_intent_domains_on_regeneration(self, tmp_path, monkeypatch):
+        gen, _, _ = _make_resources_generator(tmp_path)
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+
+        existing = {
+            "source": "voice-ai/2026.md",
+            "summary": "old",
+            "intent_domains": ["researching voice AI", "comparing voice frameworks"],
+        }
+        new = {"source": "voice-ai/2026.md", "summary": "new", "topics": ["voice"]}
+
+        merged = gen.merge_entry(existing, new)
+        assert merged["intent_domains"] == [
+            "researching voice AI",
+            "comparing voice frameworks",
+        ]
+        assert merged["summary"] == "new"
+
+    def test_preserves_anti_domains_on_regeneration(self, tmp_path, monkeypatch):
+        gen, _, _ = _make_resources_generator(tmp_path)
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+
+        existing = {"source": "x.md", "summary": "old", "anti_domains": ["debugging python"]}
+        new = {"source": "x.md", "summary": "new"}
+
+        merged = gen.merge_entry(existing, new)
+        assert merged["anti_domains"] == ["debugging python"]
+
+    def test_merge_with_none_existing_returns_new(self, tmp_path, monkeypatch):
+        gen, _, _ = _make_resources_generator(tmp_path)
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+
+        new = {"source": "x.md", "summary": "first run"}
+        merged = gen.merge_entry(None, new)
+        assert merged == new
 
 
 # ---------------------------------------------------------------------------

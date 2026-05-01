@@ -38,8 +38,8 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 _SAMPLE_SKILLS_LLM_RESPONSE = json.dumps({
     "name": "dream",
-    "summary": "Triggers a reflection and diary-writing cycle",
-    "triggers": ["reflect", "dream", "consolidate learnings"],
+    "summary": "Runs a reflection and diary-writing cycle",
+    "intent_domains": ["reflect", "dream", "consolidate learnings"],
 })
 
 
@@ -384,14 +384,14 @@ class TestSkillsBuildPrompt:
         prompt = gen.build_prompt(skill_path)
         assert "summary" in prompt.lower()
 
-    def test_prompt_requests_triggers(self, tmp_path, monkeypatch):
-        """Prompt must request trigger phrases."""
+    def test_prompt_requests_intent_domains(self, tmp_path, monkeypatch):
+        """Prompt must request intent_domains (renamed from "triggers" in 1.2.0)."""
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
         skill_path = _write_skill_file(skills_dir)
         prompt = gen.build_prompt(skill_path)
-        assert "trigger" in prompt.lower()
+        assert "intent_domains" in prompt
 
     def test_prompt_requests_json_output(self, tmp_path, monkeypatch):
         """Prompt must request JSON response."""
@@ -416,20 +416,20 @@ class TestSkillsParseResponse:
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
-        raw = json.dumps({"name": "dream", "summary": "Reflect", "triggers": ["dream"]})
+        raw = json.dumps({"name": "dream", "summary": "Reflect", "intent_domains": ["dream"]})
         result = gen.parse_response(raw)
 
         assert isinstance(result, dict)
         assert result["name"] == "dream"
         assert result["summary"] == "Reflect"
-        assert result["triggers"] == ["dream"]
+        assert result["intent_domains"] == ["dream"]
 
     def test_parses_json_in_code_fences(self, tmp_path, monkeypatch):
         """parse_response handles JSON wrapped in markdown code fences."""
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
-        raw = '```json\n{"name": "dream", "summary": "Reflect", "triggers": []}\n```'
+        raw = '```json\n{"name": "dream", "summary": "Reflect", "intent_domains": []}\n```'
         result = gen.parse_response(raw)
 
         assert result["name"] == "dream"
@@ -444,6 +444,56 @@ class TestSkillsParseResponse:
 
 
 # ---------------------------------------------------------------------------
+# merge_entry() — Hand-Authored Field Preservation
+# ---------------------------------------------------------------------------
+
+
+class TestSkillsMergeEntry:
+    """Requirement: Preserve hand-authored intent_domains/anti_domains across regeneration (1.2.0)."""
+
+    def test_preserves_intent_domains_on_regeneration(self, tmp_path, monkeypatch):
+        gen, _, _ = _make_skills_generator(tmp_path)
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+
+        existing = {
+            "source": "writing.md",
+            "name": "writing",
+            "summary": "old",
+            "intent_domains": ["writing a blog post", "drafting an essay"],
+        }
+        new = {"source": "writing.md", "name": "writing", "summary": "new"}
+
+        merged = gen.merge_entry(existing, new)
+        assert merged["intent_domains"] == [
+            "writing a blog post",
+            "drafting an essay",
+        ]
+        assert merged["summary"] == "new"
+
+    def test_preserves_anti_domains_on_regeneration(self, tmp_path, monkeypatch):
+        gen, _, _ = _make_skills_generator(tmp_path)
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+
+        existing = {
+            "source": "writing.md",
+            "summary": "old",
+            "anti_domains": ["debugging code"],
+        }
+        new = {"source": "writing.md", "summary": "new"}
+
+        merged = gen.merge_entry(existing, new)
+        assert merged["anti_domains"] == ["debugging code"]
+
+    def test_merge_with_none_existing_returns_new(self, tmp_path, monkeypatch):
+        gen, _, _ = _make_skills_generator(tmp_path)
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+
+        new = {"source": "x.md", "name": "x", "summary": "first run"}
+        merged = gen.merge_entry(None, new)
+        assert merged == new
+
+
+# ---------------------------------------------------------------------------
 # Catalog Output Structure
 # ---------------------------------------------------------------------------
 
@@ -452,7 +502,7 @@ class TestSkillsCatalogOutput:
     """Requirement: Skills catalog generator produces valid catalog from skill files.
 
     Catalog must include schema_version, generated_at, and entries array
-    with name, file, summary, triggers, content_hash per entry.
+    with name, file, summary, intent_domains, content_hash per entry.
     """
 
     def test_catalog_has_schema_version(self, tmp_path, monkeypatch):
@@ -532,8 +582,8 @@ class TestSkillsCatalogOutput:
         assert isinstance(entry["summary"], str)
         assert len(entry["summary"]) > 0
 
-    def test_entry_has_triggers(self, tmp_path, monkeypatch):
-        """Each entry must include trigger phrases."""
+    def test_entry_has_intent_domains(self, tmp_path, monkeypatch):
+        """Each entry must include intent_domains (renamed from "triggers" in 1.2.0)."""
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         _write_skill_file(skills_dir, "dream.md", "# Dream")
@@ -542,8 +592,8 @@ class TestSkillsCatalogOutput:
 
         catalog = _read_catalog(catalogs_dir)
         entry = catalog["entries"][0]
-        assert "triggers" in entry
-        assert isinstance(entry["triggers"], list)
+        assert "intent_domains" in entry
+        assert isinstance(entry["intent_domains"], list)
 
     def test_empty_skills_dir_produces_empty_catalog(self, tmp_path, monkeypatch):
         """Empty skills directory produces valid catalog with empty entries."""
