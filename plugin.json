@@ -70,6 +70,11 @@
       "type": "string",
       "description": "Directory to scan for resources when enable_resources is true",
       "default": ""
+    },
+    "memory_router": {
+      "type": "string",
+      "description": "Routing strategy for context selection: 'token_overlap' (offline, fast) or 'llm' (Sonnet semantic match, one call per prompt). 'embeddings' is reserved for a future port.",
+      "default": "token_overlap"
     }
   },
   "skills": [
