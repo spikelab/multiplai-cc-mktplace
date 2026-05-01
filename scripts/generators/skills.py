@@ -11,12 +11,20 @@ from typing import Any
 
 from generators.base import GenerationResult, GeneratorBase
 
+# Hand-authored intent fields preserved across regeneration. Skills use
+# the same intent_domains / anti_domains schema as memory and resources
+# so the multi-corpus router can apply uniform routing rules.
+_HAND_AUTHORED_FIELDS = (
+    "intent_domains",
+    "anti_domains",
+)
+
 
 class SkillsGenerator(GeneratorBase):
     """Catalog generator for skill files.
 
     Scans the skills directory for .md files, summarizes each via LLM
-    to extract name, summary, and trigger phrases. Gated on the
+    to extract name, summary, and intent_domains. Gated on the
     enable_skills config flag.
     """
 
@@ -36,13 +44,23 @@ class SkillsGenerator(GeneratorBase):
         return sources
 
     def build_prompt(self, source: Path) -> str:
-        """Build an LLM prompt for summarizing a skill file."""
+        """Build an LLM prompt for summarizing a skill file.
+
+        Emits intent_domains (uniform with memory + resources) so the
+        multi-corpus router can match skills against task intent. The
+        old "triggers" field has been renamed to intent_domains for
+        cross-corpus consistency.
+        """
         content = source.read_text(encoding="utf-8")
         return (
             "Analyze the following skill file and produce a JSON object with:\n"
             '- "name": the skill name (short identifier)\n'
             '- "summary": a concise summary of what the skill does\n'
-            '- "triggers": an array of trigger phrases that would invoke this skill\n\n'
+            '- "intent_domains": an array of short phrases describing task intents '
+            'that should invoke this skill (e.g., "writing a blog post", '
+            '"running a code review"). 2-6 phrases.\n'
+            '- "anti_domains": an array of short phrases describing task intents '
+            'where this skill should NOT be invoked (use sparingly). 0-3 phrases.\n\n'
             "Respond with ONLY valid JSON, no explanation.\n\n"
             f"---\n{content}\n---"
         )
@@ -50,6 +68,16 @@ class SkillsGenerator(GeneratorBase):
     def parse_response(self, raw: str) -> dict:
         """Parse LLM response into a skills catalog entry dict."""
         return self._parse_json_response(raw)
+
+    def merge_entry(self, existing: dict | None, new: dict) -> dict:
+        """Merge new LLM entry with existing, preserving hand-authored intent fields."""
+        if existing is None:
+            return dict(new)
+        merged = dict(new)
+        for field in _HAND_AUTHORED_FIELDS:
+            if field in existing:
+                merged[field] = existing[field]
+        return merged
 
     async def run(self, *, force: bool = False, dry_run: bool = False) -> GenerationResult:
         """Override run to gate on enable_skills config.

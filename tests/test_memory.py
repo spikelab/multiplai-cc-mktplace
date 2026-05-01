@@ -390,8 +390,8 @@ class TestParseResponse:
 class TestMergeEntry:
     """Requirement: Preserve hand-authored fields across regeneration.
 
-    merge_entry() MUST preserve sections, bundle, and co_retrieve_for
-    from existing catalog entries when regenerating.
+    merge_entry() MUST preserve sections, section_anchors, bundle, and
+    co_retrieve_for from existing catalog entries when regenerating.
     """
 
     def test_preserves_sections_on_regeneration(self, tmp_path, monkeypatch):
@@ -454,8 +454,28 @@ class TestMergeEntry:
         merged = gen.merge_entry(existing, new)
         assert merged["co_retrieve_for"] == ["diary", "skills"]
 
-    def test_preserves_all_three_hand_authored_fields(self, tmp_path, monkeypatch):
-        """All three hand-authored fields preserved simultaneously."""
+    def test_preserves_section_anchors_on_regeneration(self, tmp_path, monkeypatch):
+        """Hand-authored 'section_anchors' field must survive regeneration (1.2.0)."""
+        gen, _, memory_dir = _make_memory_generator(tmp_path)
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+
+        existing = {
+            "source": "big.md",
+            "summary": "old",
+            "section_anchors": ["Architecture", "Decisions", "Operations"],
+        }
+        new = {
+            "source": "big.md",
+            "summary": "updated",
+        }
+
+        merged = gen.merge_entry(existing, new)
+        assert merged["section_anchors"] == ["Architecture", "Decisions", "Operations"]
+        assert merged["summary"] == "updated"
+
+    def test_preserves_all_hand_authored_fields(self, tmp_path, monkeypatch):
+        """All hand-authored fields preserved simultaneously."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
@@ -464,6 +484,7 @@ class TestMergeEntry:
             "source": "all.md",
             "summary": "old",
             "sections": ["sec1"],
+            "section_anchors": ["Anchor One"],
             "bundle": "my-bundle",
             "co_retrieve_for": ["diary"],
         }
@@ -475,6 +496,7 @@ class TestMergeEntry:
 
         merged = gen.merge_entry(existing, new)
         assert merged["sections"] == ["sec1"]
+        assert merged["section_anchors"] == ["Anchor One"]
         assert merged["bundle"] == "my-bundle"
         assert merged["co_retrieve_for"] == ["diary"]
         assert merged["summary"] == "brand new"
@@ -1155,10 +1177,11 @@ class TestMergePreservationDuringFullRun:
         # First run — generates initial catalog
         await gen.run()
 
-        # Hand-edit the catalog to add sections, bundle, co_retrieve_for
+        # Hand-edit the catalog to add sections, section_anchors, bundle, co_retrieve_for
         catalog = _read_catalog(catalogs_dir)
         assert len(catalog["entries"]) == 1
         catalog["entries"][0]["sections"] = ["workflow", "tools"]
+        catalog["entries"][0]["section_anchors"] = ["Workflow", "Tools"]
         catalog["entries"][0]["bundle"] = "dev-context"
         catalog["entries"][0]["co_retrieve_for"] = ["diary"]
         (catalogs_dir / "memory.json").write_text(json.dumps(catalog), encoding="utf-8")
@@ -1172,6 +1195,7 @@ class TestMergePreservationDuringFullRun:
         catalog_after = _read_catalog(catalogs_dir)
         entry = catalog_after["entries"][0]
         assert entry.get("sections") == ["workflow", "tools"]
+        assert entry.get("section_anchors") == ["Workflow", "Tools"]
         assert entry.get("bundle") == "dev-context"
         assert entry.get("co_retrieve_for") == ["diary"]
 
