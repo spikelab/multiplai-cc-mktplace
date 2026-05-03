@@ -68,12 +68,30 @@ class TestPluginJson:
     def test_user_config_memory_dir(self):
         cfg = self.manifest["userConfig"]
         assert "memory_dir" in cfg
-        assert cfg["memory_dir"]["default"] == "~/.multiplai/memory"
+        # Empty default delegates to the workspace_dir cascade in lib.paths;
+        # see test_user_config_workspace_dir.
+        assert cfg["memory_dir"]["default"] == ""
 
     def test_user_config_diary_dir(self):
         cfg = self.manifest["userConfig"]
         assert "diary_dir" in cfg
-        assert cfg["diary_dir"]["default"] == "~/.multiplai/diary"
+        assert cfg["diary_dir"]["default"] == ""
+
+    def test_user_config_workspace_dir(self):
+        """workspace_dir is the anchor for memory/diary/now/learnings defaults."""
+        cfg = self.manifest["userConfig"]
+        assert "workspace_dir" in cfg
+        assert cfg["workspace_dir"]["default"] == ""
+
+    def test_user_config_now_dir(self):
+        cfg = self.manifest["userConfig"]
+        assert "now_dir" in cfg
+        assert cfg["now_dir"]["default"] == ""
+
+    def test_user_config_learnings_dir(self):
+        cfg = self.manifest["userConfig"]
+        assert "learnings_dir" in cfg
+        assert cfg["learnings_dir"]["default"] == ""
 
     def test_user_config_api_key_sensitive(self):
         cfg = self.manifest["userConfig"]
