@@ -11,15 +11,30 @@
     "hooks": "hooks.json"
   },
   "userConfig": {
+    "workspace_dir": {
+      "type": "string",
+      "description": "Workspace root. When set, memory/diary/now/learnings default to $workspace_dir/.multiplai/{...}. Falls back to ~/.multiplai/ if unset. Specific *_dir overrides win over this.",
+      "default": ""
+    },
     "memory_dir": {
       "type": "string",
-      "description": "Directory for memory files (me.md, technical-pref.md, preferences.md)",
-      "default": "~/.multiplai/memory"
+      "description": "Directory for memory files (me.md, technical-pref.md, preferences.md). Defaults to <workspace_dir>/.multiplai/memory if workspace_dir is set, else ~/.multiplai/memory.",
+      "default": ""
     },
     "diary_dir": {
       "type": "string",
-      "description": "Directory for diary entries and session logs",
-      "default": "~/.multiplai/diary"
+      "description": "Directory for diary entries and session logs. Defaults to <workspace_dir>/.multiplai/diary if workspace_dir is set, else ~/.multiplai/diary.",
+      "default": ""
+    },
+    "now_dir": {
+      "type": "string",
+      "description": "Per-project status (now-files) directory written by synthesize_now. Defaults to <workspace_dir>/.multiplai/now if workspace_dir is set, else ~/.multiplai/now.",
+      "default": ""
+    },
+    "learnings_dir": {
+      "type": "string",
+      "description": "Per-day structured learnings directory written by extract_learnings. Defaults to <workspace_dir>/.multiplai/learnings if workspace_dir is set, else ~/.multiplai/learnings.",
+      "default": ""
     },
     "anthropic_api_key": {
       "type": "string",
