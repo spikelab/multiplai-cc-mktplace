@@ -1,3 +1,8 @@
+---
+name: refresh-catalogs
+description: "Manually regenerate catalog indexes with support for --force, --dry-run, and --only flags"
+---
+
 # Refresh Catalogs
 
 Manually regenerate catalog indexes for memory, diary, skills, and resources. This skill invokes the catalog dispatcher (`generate_catalogs` via `scripts/generate_catalog.py`) to rebuild catalog files used by the context manager for fast routing.
