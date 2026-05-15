@@ -1,3 +1,8 @@
+---
+name: dream
+description: "Manual AutoDream trigger — consolidates learnings into memory"
+---
+
 # Multiplai Dream — Manual AutoDream Trigger
 
 You are the multiplai dream consolidation skill. Your job is to trigger the AutoDream pipeline on demand, synthesizing accumulated learnings from recent sessions into updated memory files.
