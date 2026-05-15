@@ -119,7 +119,7 @@ class TestPluginJsonFullWiring:
     def test_all_skill_files_reference_existing_scripts(self):
         """WHEN skill markdown files reference scripts via bash tool
         THEN those scripts exist in the plugin scripts/ directory."""
-        for skill_file in (PLUGIN_ROOT / "skills").glob("*.md"):
+        for skill_file in (PLUGIN_ROOT / "skills").glob("*/SKILL.md"):
             content = skill_file.read_text()
             script_refs = re.findall(r'scripts/\w+\.py', content)
             for ref in script_refs:
@@ -762,7 +762,7 @@ class TestTemplateCopyIntegration:
     def test_setup_skill_references_template_files(self):
         """WHEN the setup skill markdown is inspected
         THEN it references the template filenames or the setup scripts."""
-        setup_md = (PLUGIN_ROOT / "skills" / "setup.md").read_text()
+        setup_md = (PLUGIN_ROOT / "skills" / "setup" / "SKILL.md").read_text()
         # Must reference the setup workflow scripts
         assert ("setup_check" in setup_md or "setup_write" in setup_md or
                 "template" in setup_md.lower()), \
@@ -1123,9 +1123,9 @@ class TestPluginValidationReadiness:
     def test_skills_count_matches_expected(self):
         """WHEN skills/ directory is listed
         THEN it has exactly 4 .md skill files."""
-        skill_files = list((PLUGIN_ROOT / "skills").glob("*.md"))
+        skill_files = list((PLUGIN_ROOT / "skills").glob("*/SKILL.md"))
         assert len(skill_files) == 4, \
-            f"Expected 4 skill files, found {len(skill_files)}: {[f.name for f in skill_files]}"
+            f"Expected 4 skill files, found {len(skill_files)}: {[f.parent.name for f in skill_files]}"
 
     def test_five_distinct_hook_events(self):
         """WHEN hooks.json events are collected

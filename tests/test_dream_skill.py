@@ -24,7 +24,7 @@ from conftest import PLUGIN_ROOT, SCRIPTS_DIR
 
 def _dream_fm():
     import re as _re
-    text = (PLUGIN_ROOT / "skills" / "dream.md").read_text()
+    text = (PLUGIN_ROOT / "skills" / "dream" / "SKILL.md").read_text()
     m = _re.match(r'^---\n(.*?)\n---', text, _re.DOTALL)
     fm = {}
     if m:
@@ -39,7 +39,7 @@ class TestDreamSkillFrontmatter:
     """Verify dream skill frontmatter for CC auto-discovery."""
 
     def test_dream_skill_file_exists(self):
-        assert (PLUGIN_ROOT / "skills" / "dream.md").is_file()
+        assert (PLUGIN_ROOT / "skills" / "dream" / "SKILL.md").is_file()
 
     def test_dream_skill_has_frontmatter(self):
         assert _dream_fm(), "skills/dream.md missing YAML frontmatter"
@@ -61,7 +61,7 @@ class TestDreamSkillPrompt:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        self.text = (PLUGIN_ROOT / "skills" / "dream.md").read_text()
+        self.text = (PLUGIN_ROOT / "skills" / "dream" / "SKILL.md").read_text()
 
     def test_has_title_heading(self):
         """Dream skill must have a top-level heading."""
@@ -256,7 +256,7 @@ class TestDreamSkillOutputContract:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        self.text = (PLUGIN_ROOT / "skills" / "dream.md").read_text()
+        self.text = (PLUGIN_ROOT / "skills" / "dream" / "SKILL.md").read_text()
 
     def test_specifies_learnings_count(self):
         """Dream skill output must include count of learnings processed."""
@@ -282,7 +282,7 @@ class TestDreamNoGitOperations:
     @pytest.fixture(autouse=True)
     def load_sources(self):
         self.autodream_source = (SCRIPTS_DIR / "autodream.py").read_text()
-        self.dream_skill = (PLUGIN_ROOT / "skills" / "dream.md").read_text()
+        self.dream_skill = (PLUGIN_ROOT / "skills" / "dream" / "SKILL.md").read_text()
 
     def test_autodream_no_git_stage(self):
         """autodream.py must not contain git_stage calls."""

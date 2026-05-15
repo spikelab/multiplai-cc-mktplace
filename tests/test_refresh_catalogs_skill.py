@@ -44,23 +44,23 @@ class TestRefreshCatalogsSkillRegistration:
     def test_skill_file_exists(self):
         """Scenario: Skill file exists at expected path.
 
-        A skill definition file must exist at skills/refresh-catalogs.md.
+        A skill definition file must exist at skills/refresh-catalogs/SKILL.md.
         """
-        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs.md"
+        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
         assert skill_path.is_file(), (
-            f"skills/refresh-catalogs.md must exist at {skill_path}"
+            f"skills/refresh-catalogs/SKILL.md must exist at {skill_path}"
         )
 
     def test_skill_has_frontmatter(self):
         """Scenario: Skill file has YAML frontmatter for CC auto-discovery."""
         import re as _re
-        text = (PLUGIN_ROOT / "skills" / "refresh-catalogs.md").read_text()
-        assert _re.match(r'^---\n', text), "skills/refresh-catalogs.md missing YAML frontmatter"
+        text = (PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md").read_text()
+        assert _re.match(r'^---\n', text), "skills/refresh-catalogs/SKILL.md missing YAML frontmatter"
 
     def test_skill_frontmatter_name(self):
         """Frontmatter must declare name: refresh-catalogs."""
         import re as _re
-        text = (PLUGIN_ROOT / "skills" / "refresh-catalogs.md").read_text()
+        text = (PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md").read_text()
         m = _re.match(r'^---\n(.*?)\n---', text, _re.DOTALL)
         assert m, "Missing frontmatter block"
         fm = dict(line.partition(':')[::2] for line in m.group(1).splitlines() if ':' in line)
@@ -69,7 +69,7 @@ class TestRefreshCatalogsSkillRegistration:
     def test_skill_frontmatter_description(self):
         """Frontmatter must have a non-empty description."""
         import re as _re
-        text = (PLUGIN_ROOT / "skills" / "refresh-catalogs.md").read_text()
+        text = (PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md").read_text()
         m = _re.match(r'^---\n(.*?)\n---', text, _re.DOTALL)
         assert m, "Missing frontmatter block"
         fm = dict(line.partition(':')[::2] for line in m.group(1).splitlines() if ':' in line)
@@ -86,9 +86,9 @@ class TestRefreshCatalogsSkillContent:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs.md"
+        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
         if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs.md does not exist yet")
+            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
         self.text = skill_path.read_text()
 
     def test_has_title_heading(self):
@@ -195,9 +195,9 @@ class TestRefreshCatalogsDefaultInvocation:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs.md"
+        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
         if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs.md does not exist yet")
+            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
         self.text = skill_path.read_text()
 
     def test_default_invocation_runs_all_enabled(self):
@@ -238,9 +238,9 @@ class TestRefreshCatalogsForceMode:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs.md"
+        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
         if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs.md does not exist yet")
+            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
         self.text = skill_path.read_text()
 
     def test_force_flag_documented(self):
@@ -287,9 +287,9 @@ class TestRefreshCatalogsDryRunMode:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs.md"
+        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
         if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs.md does not exist yet")
+            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
         self.text = skill_path.read_text()
 
     def test_dry_run_flag_documented(self):
@@ -338,9 +338,9 @@ class TestRefreshCatalogsSelectiveGenerators:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs.md"
+        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
         if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs.md does not exist yet")
+            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
         self.text = skill_path.read_text()
 
     def test_selective_flag_documented(self):
@@ -378,9 +378,9 @@ class TestRefreshCatalogsOutputReporting:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs.md"
+        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
         if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs.md does not exist yet")
+            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
         self.text = skill_path.read_text()
 
     def test_reports_per_catalog_status(self):
@@ -432,9 +432,9 @@ class TestRefreshCatalogsDelegatesToDispatcher:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs.md"
+        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
         if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs.md does not exist yet")
+            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
         self.text = skill_path.read_text()
 
     def test_invokes_dispatcher_not_individual_generators(self):
@@ -477,9 +477,9 @@ class TestRefreshCatalogsStateFileHandling:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs.md"
+        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
         if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs.md does not exist yet")
+            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
         self.text = skill_path.read_text()
 
     def test_handles_missing_state(self):
@@ -510,9 +510,9 @@ class TestRefreshCatalogsMissingDirectories:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs.md"
+        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
         if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs.md does not exist yet")
+            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
         self.text = skill_path.read_text()
 
     def test_mentions_directory_handling(self):
@@ -542,9 +542,9 @@ class TestRefreshCatalogsModelConfig:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs.md"
+        skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
         if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs.md does not exist yet")
+            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
         self.text = skill_path.read_text()
 
     def test_mentions_model_configuration(self):

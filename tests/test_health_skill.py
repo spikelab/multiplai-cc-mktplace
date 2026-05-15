@@ -40,16 +40,16 @@ class TestHealthSkillFrontmatter:
     """Verify health skill frontmatter for CC auto-discovery."""
 
     def test_health_skill_file_exists(self):
-        assert (PLUGIN_ROOT / "skills" / "health.md").is_file()
+        assert (PLUGIN_ROOT / "skills" / "health" / "SKILL.md").is_file()
 
     def test_health_skill_has_frontmatter(self):
-        assert _parse_fm("skills/health.md"), "skills/health.md missing YAML frontmatter"
+        assert _parse_fm("skills/health/SKILL.md"), "skills/health/SKILL.md missing YAML frontmatter"
 
     def test_health_skill_name(self):
-        assert _parse_fm("skills/health.md").get("name") == "health"
+        assert _parse_fm("skills/health/SKILL.md").get("name") == "health"
 
     def test_health_skill_has_description(self):
-        assert _parse_fm("skills/health.md").get("description", "").strip()
+        assert _parse_fm("skills/health/SKILL.md").get("description", "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ class TestHealthSkillPrompt:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        self.text = (PLUGIN_ROOT / "skills" / "health.md").read_text()
+        self.text = (PLUGIN_ROOT / "skills" / "health" / "SKILL.md").read_text()
 
     def test_has_title_heading(self):
         """Health skill must have a top-level heading."""
@@ -146,7 +146,7 @@ class TestHealthSkillReportsModelClient:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        self.text = (PLUGIN_ROOT / "skills" / "health.md").read_text()
+        self.text = (PLUGIN_ROOT / "skills" / "health" / "SKILL.md").read_text()
 
     def test_health_check_script_reports_client_type(self):
         """health_check.py must report the active ModelClient implementation.
@@ -440,7 +440,7 @@ class TestHealthCheckOutputFormat:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        self.text = (PLUGIN_ROOT / "skills" / "health.md").read_text()
+        self.text = (PLUGIN_ROOT / "skills" / "health" / "SKILL.md").read_text()
 
     def test_mentions_markdown_format(self):
         """Health skill output must be markdown-formatted."""
@@ -519,7 +519,7 @@ class TestSkillsPluginDirExecution:
 
     def test_all_skill_files_exist(self):
         """All skill files in skills/ must exist with frontmatter."""
-        for skill_file in ["skills/health.md", "skills/dream.md", "skills/setup.md", "skills/refresh-catalogs.md"]:
+        for skill_file in ["skills/health/SKILL.md", "skills/dream/SKILL.md", "skills/setup/SKILL.md", "skills/refresh-catalogs/SKILL.md"]:
             path = PLUGIN_ROOT / skill_file
             assert path.is_file(), f"Skill file missing: {skill_file}"
 
