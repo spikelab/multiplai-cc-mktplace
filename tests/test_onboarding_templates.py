@@ -29,7 +29,7 @@ from conftest import PLUGIN_ROOT, SCRIPTS_DIR
 
 TEMPLATES_DIR = PLUGIN_ROOT / "templates"
 TEMPLATE_FILES = ["me.md", "technical-pref.md", "preferences.md"]
-SETUP_SKILL_PATH = PLUGIN_ROOT / "skills" / "setup.md"
+SETUP_SKILL_PATH = PLUGIN_ROOT / "skills" / "setup" / "SKILL.md"
 SETUP_CHECK_SCRIPT = SCRIPTS_DIR / "setup_check.py"
 SETUP_WRITE_SCRIPT = SCRIPTS_DIR / "setup_write.py"
 

@@ -42,7 +42,7 @@ class TestDreamSkillContainsCatalogRegeneration:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        self.text = (PLUGIN_ROOT / "skills" / "dream.md").read_text()
+        self.text = (PLUGIN_ROOT / "skills" / "dream" / "SKILL.md").read_text()
 
     def test_dream_md_references_catalog_regeneration(self):
         """dream.md must contain instruction to invoke catalog regeneration."""

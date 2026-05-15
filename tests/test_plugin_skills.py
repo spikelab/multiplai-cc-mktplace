@@ -26,10 +26,10 @@ def _skill_frontmatter(skill_file: str) -> dict:
 class TestSkillFrontmatter:
     """Verify skill files have required YAML frontmatter for CC auto-discovery."""
 
-    SKILL_FILES = ["skills/setup.md", "skills/dream.md", "skills/health.md", "skills/refresh-catalogs.md"]
+    SKILL_FILES = ["skills/setup/SKILL.md", "skills/dream/SKILL.md", "skills/health/SKILL.md", "skills/refresh-catalogs/SKILL.md"]
 
     def test_exactly_four_skill_files(self):
-        skill_files = list((PLUGIN_ROOT / "skills").glob("*.md"))
+        skill_files = list((PLUGIN_ROOT / "skills").glob("*/SKILL.md"))
         assert len(skill_files) == 4
 
     @pytest.mark.parametrize("skill_file", SKILL_FILES)
@@ -48,19 +48,19 @@ class TestSkillFrontmatter:
         assert fm.get("description"), f"{skill_file} frontmatter missing 'description'"
 
     def test_skill_names_match_expected(self):
-        names = {_skill_frontmatter(f"skills/{p.name}")["name"]
-                 for p in (PLUGIN_ROOT / "skills").glob("*.md")}
+        names = {_skill_frontmatter(f"skills/{p.parent.name}/SKILL.md")["name"]
+                 for p in (PLUGIN_ROOT / "skills").glob("*/SKILL.md")}
         assert names == {"setup", "dream", "health", "refresh-catalogs"}
 
 
 class TestSkillFileExistence:
     """Verify skill files exist."""
 
-    @pytest.mark.parametrize("skill_file", ["skills/setup.md", "skills/dream.md", "skills/health.md"])
+    @pytest.mark.parametrize("skill_file", ["skills/setup/SKILL.md", "skills/dream/SKILL.md", "skills/health/SKILL.md"])
     def test_skill_file_exists(self, skill_file):
         assert (PLUGIN_ROOT / skill_file).is_file(), f"Skill file missing: {skill_file}"
 
-    @pytest.mark.parametrize("skill_file", ["skills/setup.md", "skills/dream.md", "skills/health.md"])
+    @pytest.mark.parametrize("skill_file", ["skills/setup/SKILL.md", "skills/dream/SKILL.md", "skills/health/SKILL.md"])
     def test_skill_file_nonempty(self, skill_file):
         text = (PLUGIN_ROOT / skill_file).read_text()
         assert len(text.strip()) > 0
@@ -71,7 +71,7 @@ class TestSetupSkillContent:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        self.text = (PLUGIN_ROOT / "skills" / "setup.md").read_text()
+        self.text = (PLUGIN_ROOT / "skills" / "setup" / "SKILL.md").read_text()
 
     def test_has_heading(self):
         assert re.search(r"^#\s+", self.text, re.MULTILINE)
@@ -92,7 +92,7 @@ class TestDreamSkillContent:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        self.text = (PLUGIN_ROOT / "skills" / "dream.md").read_text()
+        self.text = (PLUGIN_ROOT / "skills" / "dream" / "SKILL.md").read_text()
 
     def test_has_heading(self):
         assert re.search(r"^#\s+", self.text, re.MULTILINE)
@@ -110,7 +110,7 @@ class TestHealthSkillContent:
 
     @pytest.fixture(autouse=True)
     def load_skill(self):
-        self.text = (PLUGIN_ROOT / "skills" / "health.md").read_text()
+        self.text = (PLUGIN_ROOT / "skills" / "health" / "SKILL.md").read_text()
 
     def test_has_heading(self):
         assert re.search(r"^#\s+", self.text, re.MULTILINE)
@@ -126,7 +126,7 @@ class TestHealthSkillContent:
 class TestSkillsNoDirectSDK:
     """Verify skill files don't import SDK directly."""
 
-    @pytest.mark.parametrize("skill_file", ["skills/setup.md", "skills/dream.md", "skills/health.md"])
+    @pytest.mark.parametrize("skill_file", ["skills/setup/SKILL.md", "skills/dream/SKILL.md", "skills/health/SKILL.md"])
     def test_no_direct_sdk_imports(self, skill_file):
         text = (PLUGIN_ROOT / skill_file).read_text()
         assert "import claude_agent_sdk" not in text
