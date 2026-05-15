@@ -216,7 +216,7 @@ class TestZeroContextRouterReferences:
     def test_no_context_router_in_plugin_json(self):
         """WHEN plugin.json is searched for 'context_router'
         THEN zero matches are found."""
-        text = (PLUGIN_ROOT / "plugin.json").read_text()
+        text = (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text()
         assert "context_router" not in text, \
             "plugin.json still contains 'context_router'"
 

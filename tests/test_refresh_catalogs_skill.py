@@ -51,53 +51,29 @@ class TestRefreshCatalogsSkillRegistration:
             f"skills/refresh-catalogs.md must exist at {skill_path}"
         )
 
-    def test_skill_registered_in_plugin_json(self):
-        """Scenario: Skill appears in available skills.
+    def test_skill_has_frontmatter(self):
+        """Scenario: Skill file has YAML frontmatter for CC auto-discovery."""
+        import re as _re
+        text = (PLUGIN_ROOT / "skills" / "refresh-catalogs.md").read_text()
+        assert _re.match(r'^---\n', text), "skills/refresh-catalogs.md missing YAML frontmatter"
 
-        The skill must be declared in plugin.json skills array.
-        """
-        manifest = json.loads((PLUGIN_ROOT / "plugin.json").read_text())
-        skill_names = [s["name"] for s in manifest.get("skills", [])]
-        assert "refresh-catalogs" in skill_names, (
-            "refresh-catalogs skill must be declared in plugin.json skills array. "
-            f"Found: {skill_names}"
-        )
+    def test_skill_frontmatter_name(self):
+        """Frontmatter must declare name: refresh-catalogs."""
+        import re as _re
+        text = (PLUGIN_ROOT / "skills" / "refresh-catalogs.md").read_text()
+        m = _re.match(r'^---\n(.*?)\n---', text, _re.DOTALL)
+        assert m, "Missing frontmatter block"
+        fm = dict(line.partition(':')[::2] for line in m.group(1).splitlines() if ':' in line)
+        assert fm.get('name', '').strip().strip('"') == "refresh-catalogs"
 
-    def test_skill_has_description_in_manifest(self):
-        """Skill entry in plugin.json must have a non-empty description."""
-        manifest = json.loads((PLUGIN_ROOT / "plugin.json").read_text())
-        skill = next(
-            (s for s in manifest.get("skills", []) if s["name"] == "refresh-catalogs"),
-            None,
-        )
-        assert skill is not None, "refresh-catalogs skill not found in plugin.json"
-        assert skill.get("description", "").strip(), (
-            "refresh-catalogs skill must have a non-empty description"
-        )
-
-    def test_skill_file_path_in_manifest(self):
-        """Skill entry must reference skills/refresh-catalogs.md."""
-        manifest = json.loads((PLUGIN_ROOT / "plugin.json").read_text())
-        skill = next(
-            (s for s in manifest.get("skills", []) if s["name"] == "refresh-catalogs"),
-            None,
-        )
-        assert skill is not None, "refresh-catalogs skill not found in plugin.json"
-        assert skill.get("file") == "skills/refresh-catalogs.md", (
-            f"Skill file path must be 'skills/refresh-catalogs.md', "
-            f"got '{skill.get('file')}'"
-        )
-
-    def test_skill_file_referenced_in_manifest_exists(self):
-        """The file referenced by the skill entry must exist on disk."""
-        manifest = json.loads((PLUGIN_ROOT / "plugin.json").read_text())
-        skill = next(
-            (s for s in manifest.get("skills", []) if s["name"] == "refresh-catalogs"),
-            None,
-        )
-        assert skill is not None, "refresh-catalogs skill not found"
-        file_path = PLUGIN_ROOT / skill["file"]
-        assert file_path.is_file(), f"Referenced skill file must exist: {file_path}"
+    def test_skill_frontmatter_description(self):
+        """Frontmatter must have a non-empty description."""
+        import re as _re
+        text = (PLUGIN_ROOT / "skills" / "refresh-catalogs.md").read_text()
+        m = _re.match(r'^---\n(.*?)\n---', text, _re.DOTALL)
+        assert m, "Missing frontmatter block"
+        fm = dict(line.partition(':')[::2] for line in m.group(1).splitlines() if ':' in line)
+        assert fm.get('description', '').strip().strip('"')
 
 
 # ---------------------------------------------------------------------------

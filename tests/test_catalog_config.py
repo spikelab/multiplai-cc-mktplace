@@ -35,7 +35,7 @@ class TestPluginJsonUserConfigSchema:
 
     @pytest.fixture(autouse=True)
     def load_plugin_json(self):
-        plugin_json_path = PLUGIN_ROOT / "plugin.json"
+        plugin_json_path = PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
         with open(plugin_json_path) as f:
             self.plugin_config = json.load(f)
         self.user_config = self.plugin_config.get("userConfig", {})

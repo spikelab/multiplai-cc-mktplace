@@ -23,32 +23,33 @@ from conftest import PLUGIN_ROOT, SCRIPTS_DIR
 # ---------------------------------------------------------------------------
 
 
-class TestHealthSkillManifest:
-    """Verify health skill declaration in plugin.json."""
+def _parse_fm(skill_file):
+    import re as _re
+    text = (PLUGIN_ROOT / skill_file).read_text()
+    m = _re.match(r'^---\n(.*?)\n---', text, _re.DOTALL)
+    fm = {}
+    if m:
+        for line in m.group(1).splitlines():
+            if ':' in line:
+                k, _, v = line.partition(':')
+                fm[k.strip()] = v.strip().strip('"')
+    return fm
 
-    @pytest.fixture(autouse=True)
-    def load_manifest(self):
-        self.manifest = json.loads((PLUGIN_ROOT / "plugin.json").read_text())
-        self.health_skill = next(
-            (s for s in self.manifest.get("skills", []) if s["name"] == "health"),
-            None,
-        )
 
-    def test_health_skill_exists_in_manifest(self):
-        """Health skill must be declared in plugin.json skills array."""
-        assert self.health_skill is not None, "health skill not found in plugin.json"
-
-    def test_health_skill_has_description(self):
-        """Health skill must have a non-empty description."""
-        assert self.health_skill["description"].strip()
-
-    def test_health_skill_file_path(self):
-        """Health skill must reference skills/health.md."""
-        assert self.health_skill["file"] == "skills/health.md"
+class TestHealthSkillFrontmatter:
+    """Verify health skill frontmatter for CC auto-discovery."""
 
     def test_health_skill_file_exists(self):
-        """The referenced skill file must exist on disk."""
-        assert (PLUGIN_ROOT / self.health_skill["file"]).is_file()
+        assert (PLUGIN_ROOT / "skills" / "health.md").is_file()
+
+    def test_health_skill_has_frontmatter(self):
+        assert _parse_fm("skills/health.md"), "skills/health.md missing YAML frontmatter"
+
+    def test_health_skill_name(self):
+        assert _parse_fm("skills/health.md").get("name") == "health"
+
+    def test_health_skill_has_description(self):
+        assert _parse_fm("skills/health.md").get("description", "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -516,15 +517,11 @@ class TestSkillsPluginDirExecution:
     - plugin.json is valid JSON with correct structure
     """
 
-    @pytest.fixture(autouse=True)
-    def load_manifest(self):
-        self.manifest = json.loads((PLUGIN_ROOT / "plugin.json").read_text())
-
     def test_all_skill_files_exist(self):
-        """All skill files referenced in plugin.json must exist."""
-        for skill in self.manifest["skills"]:
-            path = PLUGIN_ROOT / skill["file"]
-            assert path.is_file(), f"Skill file missing: {skill['file']}"
+        """All skill files in skills/ must exist with frontmatter."""
+        for skill_file in ["skills/health.md", "skills/dream.md", "skills/setup.md", "skills/refresh-catalogs.md"]:
+            path = PLUGIN_ROOT / skill_file
+            assert path.is_file(), f"Skill file missing: {skill_file}"
 
     def test_dream_skill_autodream_script_exists(self):
         """autodream.py referenced by dream skill must exist."""
