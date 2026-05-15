@@ -9,32 +9,48 @@ import pytest
 from conftest import PLUGIN_ROOT
 
 
-class TestSkillManifest:
-    """Verify skill declarations in plugin.json."""
+def _skill_frontmatter(skill_file: str) -> dict:
+    """Extract frontmatter key/value pairs from a skill markdown file."""
+    text = (PLUGIN_ROOT / skill_file).read_text()
+    match = re.match(r'^---\n(.*?)\n---', text, re.DOTALL)
+    if not match:
+        return {}
+    fm = {}
+    for line in match.group(1).splitlines():
+        if ':' in line:
+            k, _, v = line.partition(':')
+            fm[k.strip()] = v.strip().strip('"')
+    return fm
 
-    @pytest.fixture(autouse=True)
-    def load_manifest(self):
-        self.manifest = json.loads((PLUGIN_ROOT / "plugin.json").read_text())
 
-    def test_has_skills_array(self):
-        assert "skills" in self.manifest
-        assert isinstance(self.manifest["skills"], list)
+class TestSkillFrontmatter:
+    """Verify skill files have required YAML frontmatter for CC auto-discovery."""
 
-    def test_exactly_four_skills(self):
-        assert len(self.manifest["skills"]) == 4
+    SKILL_FILES = ["skills/setup.md", "skills/dream.md", "skills/health.md", "skills/refresh-catalogs.md"]
 
-    def test_skill_names(self):
-        names = {s["name"] for s in self.manifest["skills"]}
+    def test_exactly_four_skill_files(self):
+        skill_files = list((PLUGIN_ROOT / "skills").glob("*.md"))
+        assert len(skill_files) == 4
+
+    @pytest.mark.parametrize("skill_file", SKILL_FILES)
+    def test_has_frontmatter(self, skill_file):
+        fm = _skill_frontmatter(skill_file)
+        assert fm, f"{skill_file} missing YAML frontmatter"
+
+    @pytest.mark.parametrize("skill_file", SKILL_FILES)
+    def test_has_name(self, skill_file):
+        fm = _skill_frontmatter(skill_file)
+        assert fm.get("name"), f"{skill_file} frontmatter missing 'name'"
+
+    @pytest.mark.parametrize("skill_file", SKILL_FILES)
+    def test_has_description(self, skill_file):
+        fm = _skill_frontmatter(skill_file)
+        assert fm.get("description"), f"{skill_file} frontmatter missing 'description'"
+
+    def test_skill_names_match_expected(self):
+        names = {_skill_frontmatter(f"skills/{p.name}")["name"]
+                 for p in (PLUGIN_ROOT / "skills").glob("*.md")}
         assert names == {"setup", "dream", "health", "refresh-catalogs"}
-
-    def test_skills_have_descriptions(self):
-        for skill in self.manifest["skills"]:
-            assert skill.get("description"), f"Skill {skill['name']} missing description"
-
-    def test_skills_have_files(self):
-        for skill in self.manifest["skills"]:
-            assert "file" in skill
-            assert skill["file"].endswith(".md")
 
 
 class TestSkillFileExistence:

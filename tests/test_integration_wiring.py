@@ -70,7 +70,7 @@ def _load_hooks_json() -> dict:
 
 
 def _load_plugin_json() -> dict:
-    return json.loads((PLUGIN_ROOT / "plugin.json").read_text())
+    return json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text())
 
 
 def _python_files_in_scripts() -> list[Path]:
@@ -111,27 +111,20 @@ class TestPluginJsonFullWiring:
         self.plugin = _load_plugin_json()
         self.hooks = _load_hooks_json()
 
-    def test_plugin_entrypoints_reference_hooks_json(self):
-        """WHEN plugin.json entrypoints is inspected
-        THEN it references hooks.json which must exist."""
-        assert "entrypoints" in self.plugin
-        hooks_ref = self.plugin["entrypoints"].get("hooks")
-        assert hooks_ref is not None, "plugin.json must declare hooks entrypoint"
-        assert (PLUGIN_ROOT / hooks_ref).is_file(), \
-            f"hooks entrypoint file '{hooks_ref}' does not exist"
+    def test_hooks_json_exists_at_root(self):
+        """WHEN the plugin is loaded
+        THEN hooks.json exists at the plugin root for CC auto-discovery."""
+        assert (PLUGIN_ROOT / "hooks.json").is_file()
 
     def test_all_skill_files_reference_existing_scripts(self):
         """WHEN skill markdown files reference scripts via bash tool
         THEN those scripts exist in the plugin scripts/ directory."""
-        for skill in self.plugin["skills"]:
-            skill_file = PLUGIN_ROOT / skill["file"]
-            assert skill_file.is_file(), f"Skill file missing: {skill['file']}"
+        for skill_file in (PLUGIN_ROOT / "skills").glob("*.md"):
             content = skill_file.read_text()
-            # Skills call scripts via bash — find script references
             script_refs = re.findall(r'scripts/\w+\.py', content)
             for ref in script_refs:
                 assert (PLUGIN_ROOT / ref).is_file(), \
-                    f"Skill {skill['name']} references non-existent script: {ref}"
+                    f"Skill {skill_file.name} references non-existent script: {ref}"
 
     def test_user_config_fields_correspond_to_env_vars(self):
         """WHEN userConfig fields are declared in plugin.json
@@ -1059,7 +1052,7 @@ class TestPluginValidationReadiness:
     def test_plugin_json_is_valid_json(self):
         """WHEN plugin.json is parsed
         THEN it succeeds without JSON errors."""
-        path = PLUGIN_ROOT / "plugin.json"
+        path = PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
         assert path.is_file()
         json.loads(path.read_text())  # Should not raise
 
@@ -1108,7 +1101,7 @@ class TestPluginValidationReadiness:
     def test_no_json_trailing_commas(self):
         """WHEN JSON manifest files are checked for trailing commas
         THEN none are found (they cause parse errors)."""
-        for filename in ["plugin.json", "hooks.json", "marketplace.json"]:
+        for filename in [".claude-plugin/plugin.json", "hooks.json", "marketplace.json"]:
             path = PLUGIN_ROOT / filename
             if path.exists():
                 text = path.read_text()
@@ -1127,13 +1120,12 @@ class TestPluginValidationReadiness:
         assert version in changelog, \
             f"plugin.json version {version} not found in CHANGELOG.md"
 
-    def test_skills_count_matches_manifest(self):
+    def test_skills_count_matches_expected(self):
         """WHEN skills/ directory is listed
-        THEN it has exactly 3 .md files matching the 3 declared skills."""
-        declared = _load_plugin_json()["skills"]
+        THEN it has exactly 4 .md skill files."""
         skill_files = list((PLUGIN_ROOT / "skills").glob("*.md"))
-        assert len(skill_files) == len(declared), \
-            f"Skills dir has {len(skill_files)} .md files but manifest declares {len(declared)}"
+        assert len(skill_files) == 4, \
+            f"Expected 4 skill files, found {len(skill_files)}: {[f.name for f in skill_files]}"
 
     def test_five_distinct_hook_events(self):
         """WHEN hooks.json events are collected

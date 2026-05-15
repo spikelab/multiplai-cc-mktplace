@@ -22,32 +22,33 @@ from conftest import PLUGIN_ROOT, SCRIPTS_DIR
 # ---------------------------------------------------------------------------
 
 
-class TestDreamSkillManifest:
-    """Verify dream skill declaration in plugin.json."""
+def _dream_fm():
+    import re as _re
+    text = (PLUGIN_ROOT / "skills" / "dream.md").read_text()
+    m = _re.match(r'^---\n(.*?)\n---', text, _re.DOTALL)
+    fm = {}
+    if m:
+        for line in m.group(1).splitlines():
+            if ':' in line:
+                k, _, v = line.partition(':')
+                fm[k.strip()] = v.strip().strip('"')
+    return fm
 
-    @pytest.fixture(autouse=True)
-    def load_manifest(self):
-        self.manifest = json.loads((PLUGIN_ROOT / "plugin.json").read_text())
-        self.dream_skill = next(
-            (s for s in self.manifest.get("skills", []) if s["name"] == "dream"),
-            None,
-        )
 
-    def test_dream_skill_exists_in_manifest(self):
-        """Dream skill must be declared in plugin.json skills array."""
-        assert self.dream_skill is not None, "dream skill not found in plugin.json"
-
-    def test_dream_skill_has_description(self):
-        """Dream skill must have a non-empty description."""
-        assert self.dream_skill["description"].strip()
-
-    def test_dream_skill_file_path(self):
-        """Dream skill must reference skills/dream.md."""
-        assert self.dream_skill["file"] == "skills/dream.md"
+class TestDreamSkillFrontmatter:
+    """Verify dream skill frontmatter for CC auto-discovery."""
 
     def test_dream_skill_file_exists(self):
-        """The referenced skill file must exist on disk."""
-        assert (PLUGIN_ROOT / self.dream_skill["file"]).is_file()
+        assert (PLUGIN_ROOT / "skills" / "dream.md").is_file()
+
+    def test_dream_skill_has_frontmatter(self):
+        assert _dream_fm(), "skills/dream.md missing YAML frontmatter"
+
+    def test_dream_skill_name(self):
+        assert _dream_fm().get("name") == "dream"
+
+    def test_dream_skill_has_description(self):
+        assert _dream_fm().get("description", "").strip()
 
 
 # ---------------------------------------------------------------------------

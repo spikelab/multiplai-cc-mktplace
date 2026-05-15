@@ -48,12 +48,12 @@ class TestPluginJson:
 
     @pytest.fixture(autouse=True)
     def load_manifest(self):
-        path = PLUGIN_ROOT / "plugin.json"
-        assert path.is_file(), "plugin.json does not exist"
+        path = PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
+        assert path.is_file(), ".claude-plugin/plugin.json does not exist"
         self.manifest = json.loads(path.read_text())
 
     def test_required_fields_present(self):
-        for field in ("name", "version", "description", "author", "license", "engines", "entrypoints"):
+        for field in ("name", "version", "description", "author", "license"):
             assert field in self.manifest, f"Missing field: {field}"
 
     def test_name_is_multiplai(self):
@@ -62,8 +62,9 @@ class TestPluginJson:
     def test_version_is_semver(self):
         assert re.match(r"^\d+\.\d+\.\d+$", self.manifest["version"])
 
-    def test_engines_claude_code(self):
-        assert "claude-code" in self.manifest["engines"]
+    def test_author_is_object(self):
+        assert isinstance(self.manifest["author"], dict), "author must be an object"
+        assert "name" in self.manifest["author"]
 
     def test_user_config_memory_dir(self):
         cfg = self.manifest["userConfig"]
@@ -98,20 +99,10 @@ class TestPluginJson:
         assert "anthropic_api_key" in cfg
         assert cfg["anthropic_api_key"].get("sensitive") is True
 
-    def test_skills_declared(self):
-        assert "skills" in self.manifest
-        names = {s["name"] for s in self.manifest["skills"]}
-        assert names == {"setup", "dream", "health", "refresh-catalogs"}
-
-    def test_skills_have_files(self):
-        for skill in self.manifest["skills"]:
-            assert "file" in skill
-            skill_path = PLUGIN_ROOT / skill["file"]
-            assert skill_path.is_file(), f"Skill file missing: {skill['file']}"
-
-    def test_skills_have_descriptions(self):
-        for skill in self.manifest["skills"]:
-            assert skill.get("description"), f"Skill {skill['name']} missing description"
+    def test_userconfig_fields_have_title(self):
+        for key, cfg in self.manifest.get("userConfig", {}).items():
+            assert "title" in cfg, f"userConfig.{key} missing title"
+            assert isinstance(cfg["title"], str), f"userConfig.{key}.title must be string"
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +183,7 @@ class TestSupportFiles:
         assert len(lines) >= 10
 
     def test_license_matches_plugin_json(self):
-        manifest = json.loads((PLUGIN_ROOT / "plugin.json").read_text())
+        manifest = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text())
         license_text = (PLUGIN_ROOT / "LICENSE").read_text()
         if manifest["license"] == "MIT":
             assert "MIT" in license_text
@@ -219,7 +210,7 @@ class TestSupportFiles:
         assert (PLUGIN_ROOT / "CHANGELOG.md").is_file()
 
     def test_changelog_has_version_entry(self):
-        manifest = json.loads((PLUGIN_ROOT / "plugin.json").read_text())
+        manifest = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text())
         version = manifest["version"]
         text = (PLUGIN_ROOT / "CHANGELOG.md").read_text()
         assert version in text
@@ -249,7 +240,7 @@ class TestNoHardcodedPaths:
     """Verify no user-specific paths in scaffold files."""
 
     SCAFFOLD_FILES = [
-        "plugin.json", "marketplace.json", "hooks.json",
+        ".claude-plugin/plugin.json", "marketplace.json", "hooks.json",
         "README.md", "CHANGELOG.md", "requirements.txt",
     ]
 
@@ -263,7 +254,7 @@ class TestNoHardcodedPaths:
         assert "/Users/spike" not in text
 
     def test_user_config_defaults_use_tilde(self):
-        manifest = json.loads((PLUGIN_ROOT / "plugin.json").read_text())
+        manifest = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text())
         for key, cfg in manifest.get("userConfig", {}).items():
             if "default" in cfg and "/" in str(cfg["default"]):
                 assert str(cfg["default"]).startswith("~"), \
