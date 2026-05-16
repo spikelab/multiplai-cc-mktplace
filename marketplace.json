@@ -1,9 +1,0 @@
-{
-  "name": "multiplai",
-  "displayName": "Multiplai",
-  "description": "Memory and context management plugin for Claude Code. Injects session context, captures learnings, and maintains a persistent diary.",
-  "author": "",
-  "repository": "https://github.com/spikelab/multiplai-plugin",
-  "categories": ["productivity", "memory", "context"],
-  "keywords": ["memory", "context", "diary", "learnings", "session", "persistence"]
-}
