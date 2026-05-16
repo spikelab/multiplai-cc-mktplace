@@ -6,7 +6,7 @@ memory, context, and workflow.
 ## Add the marketplace
 
 ```
-/plugin marketplace add spikelab/multiplai
+/plugin marketplace add spikelab/multiplai-cc-mktplace
 ```
 
 Then install any plugin from it:

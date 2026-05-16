@@ -12,7 +12,7 @@ This is the first plugin in the [`multiplai`](../../README.md) marketplace.
 From the marketplace (recommended):
 
 ```
-/plugin marketplace add spikelab/multiplai
+/plugin marketplace add spikelab/multiplai-cc-mktplace
 /plugin install multiplai@multiplai
 ```
 
