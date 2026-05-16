@@ -10,7 +10,7 @@ You are the multiplai health audit skill. Your job is to check the completeness 
 ## Steps
 
 1. **Run the health check script:**
-   Run `python scripts/health_check.py` to audit memory files, directories, and plugin data.
+   Run `python "${CLAUDE_PLUGIN_ROOT}/scripts/health_check.py"` to audit memory files, directories, and plugin data.
    The script outputs structured JSON to stdout.
 
 2. **Parse the JSON output** and present a markdown-formatted audit report with these sections:
