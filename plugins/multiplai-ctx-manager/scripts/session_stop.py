@@ -1,11 +1,16 @@
-"""Session stop hook for multiplai plugin.
+"""Stop hook for multiplai plugin.
 
-Runs extract-learnings when Claude Code finishes a response.
-Reads session context and triggers learning extraction.
+Lightweight end-of-response checkpoint. Learning/diary extraction is
+NOT performed here: it calls the model client, which is too slow for a
+Stop hook and would be interrupted. Extraction is deferred — session_end.py
+writes a marker that the next session_start.py drains into
+extract_learnings.py. This hook only refreshes a liveness timestamp so
+health checks can tell the session is active.
 """
 
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -20,58 +25,31 @@ from lib.log_utils import setup_logging
 logger = setup_logging("session_stop")
 
 
-def _read_stdin_context() -> str:
-    """Read session context from stdin if available (hook input)."""
-    if not sys.stdin.isatty():
-        try:
-            return sys.stdin.read()
-        except Exception as e:
-            logger.debug("Could not read stdin context: %s", e)
-    return ""
-
-
-def _extract_learnings(session_state: dict, context: str) -> list[str]:
-    """Extract learnings from the session context.
-
-    Returns a list of learning strings. If no actionable learnings
-    are found, returns an empty list to avoid mutating the learnings file.
-    """
-    if not session_state and not context:
-        logger.info("No session context available — nothing to extract")
-        return []
-
-    # Placeholder: in the full port, this would use ModelClient
-    # to identify actionable learnings from the session transcript
-    logger.info("Learning extraction triggered for session %s",
-                session_state.get("session_id", "unknown"))
-    return []
-
-
 def main() -> None:
     paths = get_paths()
     data_dir = paths.plugin_data()
 
-    # Read session state for context
     session_state = read_session_state(data_dir) or {}
+    session_id = session_state.get("session_id", "unknown")
 
-    # Read any stdin context from the hook
-    context = _read_stdin_context()
+    # Drain stdin so Claude Code's hook pipe never blocks; the payload is
+    # not needed here (extraction is deferred to the SessionEnd path).
+    if not sys.stdin.isatty():
+        try:
+            sys.stdin.read()
+        except Exception:
+            pass
 
-    # Extract learnings from session
-    learnings = _extract_learnings(session_state, context)
+    if session_state:
+        session_state["last_stop"] = datetime.now(timezone.utc).isoformat()
+        try:
+            (data_dir / "session_state.json").write_text(
+                json.dumps(session_state, indent=2)
+            )
+        except OSError as e:
+            logger.debug("Could not update session_state.json: %s", e)
 
-    # Only write if there are actual learnings
-    if learnings:
-        learnings_file = paths.learnings_file()
-        learnings_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(learnings_file, "a") as f:
-            for learning in learnings:
-                f.write(f"- {learning}\n")
-        logger.info("Wrote %d learnings to %s", len(learnings), learnings_file)
-    else:
-        logger.info("No actionable learnings found — file not modified")
-
-    logger.info("Session stop hook completed")
+    logger.info("Stop hook completed for session %s", session_id)
 
 
 if __name__ == "__main__":

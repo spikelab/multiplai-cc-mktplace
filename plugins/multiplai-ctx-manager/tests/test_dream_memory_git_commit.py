@@ -120,7 +120,7 @@ class TestDreamAutoCommit:
         with patch("generators.dispatcher.generate_catalogs", new=AsyncMock(return_value=[])), \
              patch("lib.model_client.create_client", new=AsyncMock(return_value=_mocked_client_context())):
             mod = _load_dream_module("dream_commit")
-            asyncio.run(mod.dream())
+            asyncio.run(mod.dream_auto())
 
         assert _git_log_count(memory_dir) == initial_commits + 1, (
             "dream() must create a new commit after mutating memory files"
@@ -144,7 +144,7 @@ class TestDreamAutoCommit:
              patch("lib.model_client.create_client", new=AsyncMock(return_value=_mocked_client_context())):
             mod = _load_dream_module("dream_nogit")
             with caplog.at_level("WARNING", logger="dream"):
-                asyncio.run(mod.dream())
+                asyncio.run(mod.dream_auto())
 
         # No .git was created, no commit happened — verify explicitly.
         assert not (memory_dir / ".git").exists()
@@ -173,7 +173,7 @@ class TestDreamAutoCommit:
         with patch("generators.dispatcher.generate_catalogs", new=AsyncMock(return_value=[])), \
              patch("lib.model_client.create_client", new=AsyncMock(return_value=_mocked_client_context())):
             mod = _load_dream_module("dream_noop")
-            asyncio.run(mod.dream())
+            asyncio.run(mod.dream_auto())
 
         assert _git_log_count(memory_dir) == initial_commits, (
             "dream() must not create an empty commit when nothing changed"

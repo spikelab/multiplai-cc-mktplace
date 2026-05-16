@@ -195,7 +195,15 @@ class AnthropicAPIClient:
             system=system,
             messages=messages,
         )
-        return ModelResponse(content=response.content[0].text)
+        # Empty content list (tool-only turn, refusal, non-text stop) would
+        # otherwise IndexError and convert a recoverable empty reply into a
+        # total extraction/routing failure.
+        text = ""
+        for block in response.content:
+            if getattr(block, "type", None) == "text":
+                text = block.text
+                break
+        return ModelResponse(content=text)
 
 
 def detect_client_type() -> str:

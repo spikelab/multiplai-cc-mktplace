@@ -10,12 +10,12 @@ Design Decision 2: Per-day-directory hashing (SHA-256 over sorted file contents)
 """
 
 import hashlib
-import os
 import re
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+from lib.paths import Paths
 from generators.base import GeneratorBase
 
 
@@ -67,8 +67,13 @@ class DiaryGenerator(GeneratorBase):
 
     @property
     def _diary_dir(self) -> Path:
-        """Configured diary directory from plugin environment."""
-        return Path(os.environ.get("CLAUDE_PLUGIN_OPTION_diary_dir", ""))
+        """Configured diary directory, resolver-routed.
+
+        Uses the path resolver (not the raw env var) so the
+        workspace/standalone fallbacks apply when
+        CLAUDE_PLUGIN_OPTION_diary_dir is unset.
+        """
+        return Paths.resolve().diary_dir()
 
     def discover_sources(self) -> dict[str, Any]:
         """Find all date-named directories within the lookback window.

@@ -68,10 +68,15 @@ def _check_memory_file(memory_dir: Path, filename: str) -> dict:
 
 
 def _count_diary_entries(diary_dir: Path) -> int:
-    """Count diary entry files in the diary directory."""
+    """Count diary entry files.
+
+    Canonical layout is ``diary_dir/YYYY-MM-DD/<session>.md`` (written by
+    extraction.write_diary_entries), so a top-level iterdir would always
+    report 0. rglob also catches any legacy flat entries.
+    """
     if not diary_dir.is_dir():
         return 0
-    return len([f for f in diary_dir.iterdir() if f.is_file()])
+    return len(list(diary_dir.rglob("*.md")))
 
 
 def _count_learnings(learnings_dir: Path) -> int:
@@ -173,7 +178,7 @@ def run_health_check() -> dict:
     unprocessed = report["learnings"]["unprocessed_count"]
     if unprocessed > 0:
         recommendations.append(
-            f"{unprocessed} unprocessed learning lines pending. Run /multiplai:dream or /process-learnings."
+            f"{unprocessed} unprocessed learning lines pending. Run /multiplai:dream then /multiplai:dream-remember."
         )
 
     report["recommendations"] = recommendations

@@ -8,10 +8,10 @@ section_anchors, bundle, co_retrieve_for) across regeneration via
 merge_entry() override.
 """
 
-import os
 from pathlib import Path
 from typing import Any
 
+from lib.paths import Paths
 from generators.base import GeneratorBase
 
 # Hand-authored fields preserved during merge. intent_domains and
@@ -43,7 +43,7 @@ class MemoryGenerator(GeneratorBase):
 
     def discover_sources(self) -> dict[str, Any]:
         """Find all .md files in the configured memory directory."""
-        memory_dir = Path(os.environ.get("CLAUDE_PLUGIN_OPTION_memory_dir", ""))
+        memory_dir = Paths.resolve().memory_dir()
         if not memory_dir.exists() or not memory_dir.is_dir():
             return {}
 

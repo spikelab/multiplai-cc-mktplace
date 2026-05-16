@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from lib.paths import Paths
+
 logger = logging.getLogger(__name__)
 
 # Retryable HTTP status codes
@@ -158,9 +160,16 @@ class GeneratorBase:
 
     @property
     def _catalogs_dir(self) -> Path:
-        """Directory where catalogs and state are stored."""
-        data_dir = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-        return Path(data_dir) / "catalogs"
+        """Directory where catalogs and state are stored.
+
+        Routed through the path resolver so the workspace/standalone
+        fallbacks apply when CLAUDE_PLUGIN_DATA is unset (manual/CLI
+        runs). Reading the env var directly would resolve to a relative
+        ``catalogs/`` under cwd and scatter state across projects.
+        Resolved fresh (not the cached singleton) so it tracks env
+        changes within the process.
+        """
+        return Paths.resolve().catalogs_dir()
 
     @property
     def _state_file(self) -> Path:

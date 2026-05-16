@@ -6,7 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from conftest import PLUGIN_ROOT
+from conftest import (
+    PLUGIN_ROOT,
+    REPO_ROOT,
+    HOOKS_JSON,
+    MARKETPLACE_JSON,
+    EXPECTED_HOOK_SCRIPTS,
+    parse_hooks,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -110,24 +117,37 @@ class TestPluginJson:
 # ---------------------------------------------------------------------------
 
 class TestMarketplaceJson:
-    """Verify marketplace.json metadata."""
+    """Verify marketplace.json metadata (Claude Code marketplace schema)."""
 
     @pytest.fixture(autouse=True)
     def load_manifest(self):
-        path = PLUGIN_ROOT / "marketplace.json"
-        assert path.is_file(), "marketplace.json does not exist"
-        self.manifest = json.loads(path.read_text())
+        assert MARKETPLACE_JSON.is_file(), "marketplace.json does not exist"
+        self.manifest = json.loads(MARKETPLACE_JSON.read_text())
 
     def test_required_fields_present(self):
-        for field in ("name", "displayName", "description", "author", "repository", "categories", "keywords"):
+        for field in ("name", "owner", "description", "plugins"):
             assert field in self.manifest, f"Missing field: {field}"
 
-    def test_repository_is_github(self):
-        assert re.match(r"https://github\.com/.+/.+", self.manifest["repository"])
+    def test_owner_is_object_with_name(self):
+        owner = self.manifest["owner"]
+        assert isinstance(owner, dict), "owner must be an object"
+        assert owner.get("name"), "owner.name must be present"
 
-    def test_categories_non_empty(self):
-        assert isinstance(self.manifest["categories"], list)
-        assert len(self.manifest["categories"]) > 0
+    def test_plugins_non_empty(self):
+        plugins = self.manifest["plugins"]
+        assert isinstance(plugins, list)
+        assert len(plugins) > 0, "marketplace.json must declare at least one plugin"
+
+    def test_first_plugin_repository_is_github(self):
+        plugin = self.manifest["plugins"][0]
+        assert "repository" in plugin, "plugins[0] missing repository"
+        assert re.match(r"https://github\.com/.+/.+", plugin["repository"])
+
+    def test_first_plugin_has_keywords_list(self):
+        plugin = self.manifest["plugins"][0]
+        assert "keywords" in plugin, "plugins[0] missing keywords"
+        assert isinstance(plugin["keywords"], list)
+        assert len(plugin["keywords"]) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -135,38 +155,36 @@ class TestMarketplaceJson:
 # ---------------------------------------------------------------------------
 
 class TestHooksJson:
-    """Verify hooks.json declarations."""
+    """Verify hooks/hooks.json declarations (official nested CC schema)."""
 
     @pytest.fixture(autouse=True)
     def load_hooks(self):
-        path = PLUGIN_ROOT / "hooks.json"
-        assert path.is_file(), "hooks.json does not exist"
-        self.hooks = json.loads(path.read_text())
+        assert HOOKS_JSON.is_file(), "hooks/hooks.json does not exist"
+        self.hooks = parse_hooks()
 
     def test_hooks_key_exists(self):
-        assert "hooks" in self.hooks
+        assert "hooks" in json.loads(HOOKS_JSON.read_text())
 
     def test_all_event_types_registered(self):
-        events = {h["event"] for h in self.hooks["hooks"]}
-        expected = {"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact"}
-        assert events == expected
+        events = {h["event"] for h in self.hooks}
+        assert events == set(EXPECTED_HOOK_SCRIPTS.keys())
 
     def test_no_unexpected_events(self):
-        allowed = {"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact"}
-        for hook in self.hooks["hooks"]:
+        allowed = set(EXPECTED_HOOK_SCRIPTS.keys())
+        for hook in self.hooks:
             assert hook["event"] in allowed, f"Unexpected event: {hook['event']}"
 
     def test_each_hook_has_script(self):
-        for hook in self.hooks["hooks"]:
-            assert "script" in hook, f"Hook {hook['event']} missing script"
+        for hook in self.hooks:
+            assert hook["script"], f"Hook {hook['event']} missing script"
 
     def test_hook_scripts_exist(self):
-        for hook in self.hooks["hooks"]:
+        for hook in self.hooks:
             script_path = PLUGIN_ROOT / hook["script"]
             assert script_path.is_file(), f"Hook script missing: {hook['script']}"
 
     def test_no_duplicate_event_script_pairs(self):
-        pairs = [(h["event"], h["script"]) for h in self.hooks["hooks"]]
+        pairs = [(h["event"], h["script"]) for h in self.hooks]
         assert len(pairs) == len(set(pairs)), "Duplicate event-script pairs found"
 
 
@@ -176,15 +194,23 @@ class TestHooksJson:
 
 class TestSupportFiles:
 
+    # In the marketplace monorepo a single LICENSE covers the whole repo;
+    # it lives at REPO_ROOT (fall back to the plugin dir if a per-plugin
+    # LICENSE is ever added).
+    LICENSE_PATH = (
+        REPO_ROOT / "LICENSE"
+        if (REPO_ROOT / "LICENSE").is_file()
+        else PLUGIN_ROOT / "LICENSE"
+    )
+
     def test_license_exists_and_nonempty(self):
-        path = PLUGIN_ROOT / "LICENSE"
-        assert path.is_file()
-        lines = path.read_text().strip().splitlines()
+        assert self.LICENSE_PATH.is_file()
+        lines = self.LICENSE_PATH.read_text().strip().splitlines()
         assert len(lines) >= 10
 
     def test_license_matches_plugin_json(self):
         manifest = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text())
-        license_text = (PLUGIN_ROOT / "LICENSE").read_text()
+        license_text = self.LICENSE_PATH.read_text()
         if manifest["license"] == "MIT":
             assert "MIT" in license_text
 
@@ -194,7 +220,12 @@ class TestSupportFiles:
     def test_readme_has_installation(self):
         text = (PLUGIN_ROOT / "README.md").read_text()
         assert re.search(r"(?i)install", text)
-        assert "claude --plugin-dir" in text
+        # Marketplace-based install — accept any documented install path.
+        assert any(marker in text for marker in (
+            "/plugin marketplace add",
+            "/plugin install",
+            "plugin-dir",
+        )), "README must document marketplace/plugin installation"
 
     def test_readme_documents_config(self):
         text = (PLUGIN_ROOT / "README.md").read_text()
@@ -239,16 +270,21 @@ class TestSupportFiles:
 class TestNoHardcodedPaths:
     """Verify no user-specific paths in scaffold files."""
 
+    # marketplace.json lives at REPO_ROOT/.claude-plugin/, hooks.json at
+    # PLUGIN_ROOT/hooks/ — use explicit Path objects rather than PLUGIN_ROOT / name.
     SCAFFOLD_FILES = [
-        ".claude-plugin/plugin.json", "marketplace.json", "hooks.json",
-        "README.md", "CHANGELOG.md", "requirements.txt",
+        PLUGIN_ROOT / ".claude-plugin" / "plugin.json",
+        MARKETPLACE_JSON,
+        HOOKS_JSON,
+        PLUGIN_ROOT / "README.md",
+        PLUGIN_ROOT / "CHANGELOG.md",
+        PLUGIN_ROOT / "requirements.txt",
     ]
 
-    @pytest.mark.parametrize("filename", SCAFFOLD_FILES)
-    def test_no_hardcoded_home_paths(self, filename):
-        path = PLUGIN_ROOT / filename
+    @pytest.mark.parametrize("path", SCAFFOLD_FILES, ids=lambda p: p.name)
+    def test_no_hardcoded_home_paths(self, path):
         if not path.exists():
-            pytest.skip(f"{filename} does not exist")
+            pytest.skip(f"{path.name} does not exist")
         text = path.read_text()
         assert "/home/spike" not in text
         assert "/Users/spike" not in text

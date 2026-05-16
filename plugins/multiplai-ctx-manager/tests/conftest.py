@@ -1,21 +1,79 @@
 """Shared fixtures for multiplai plugin unit tests.
 
 Tests live alongside the plugin in this repo (dev-only — never loaded
-by the plugin runtime). PLUGIN_ROOT is the repo root.
+by the plugin runtime).
+
+Layout (marketplace monorepo):
+    REPO_ROOT/                         <- marketplace repo root
+      .claude-plugin/marketplace.json  <- MARKETPLACE_JSON
+      plugins/multiplai-ctx-manager/   <- PLUGIN_ROOT
+        .claude-plugin/plugin.json     <- PLUGIN_JSON
+        hooks/hooks.json               <- HOOKS_JSON (official CC schema)
+        scripts/  skills/  templates/  tests/
 """
 
 import importlib.util
+import json
 import os
+import re
 import sys
 from pathlib import Path
 
 import pytest
 
 PLUGIN_ROOT = Path(__file__).parent.parent
+REPO_ROOT = PLUGIN_ROOT.parent.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
+
+HOOKS_JSON = PLUGIN_ROOT / "hooks" / "hooks.json"
+PLUGIN_JSON = PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
+MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
+
+# Maps Claude Code hook event names to the plugin script each invokes.
+EXPECTED_HOOK_SCRIPTS = {
+    "SessionStart": ["scripts/venv_bootstrap.py", "scripts/session_start.py"],
+    "UserPromptSubmit": ["scripts/context_manager.py"],
+    "Stop": ["scripts/session_stop.py"],
+    "SessionEnd": ["scripts/session_end.py"],
+    "PreCompact": ["scripts/pre_compact.py"],
+}
 
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+
+
+def parse_hooks():
+    """Normalize the official Claude Code hooks/hooks.json schema.
+
+    The official schema is::
+
+        {"hooks": {"<Event>": [{"hooks": [
+            {"type": "command",
+             "command": "python \\"${CLAUDE_PLUGIN_ROOT}/scripts/x.py\\"",
+             "timeout": 10}]}]}}
+
+    Returns a flat list of dicts, one per command, each with:
+        event   - event name (e.g. "SessionStart")
+        script  - script path relative to PLUGIN_ROOT (e.g. "scripts/x.py")
+        command - the raw command string
+        timeout - declared timeout (seconds) or None
+    """
+    data = json.loads(HOOKS_JSON.read_text())
+    hooks_obj = data["hooks"]
+    out = []
+    for event, groups in hooks_obj.items():
+        for group in groups:
+            for entry in group.get("hooks", []):
+                command = entry.get("command", "")
+                m = re.search(r"\$\{CLAUDE_PLUGIN_ROOT\}/(\S+?\.py)", command)
+                script = m.group(1) if m else ""
+                out.append({
+                    "event": event,
+                    "script": script,
+                    "command": command,
+                    "timeout": entry.get("timeout"),
+                })
+    return out
 
 
 def import_script(module_name: str, filename: str):

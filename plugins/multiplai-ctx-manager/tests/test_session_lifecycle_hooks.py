@@ -32,7 +32,7 @@ PLUGIN_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = PLUGIN_DIR.parent
 SCRIPTS_DIR = PLUGIN_DIR / "scripts"
 LIB_DIR = SCRIPTS_DIR / "lib"
-HOOKS_JSON = PLUGIN_DIR / "hooks.json"
+HOOKS_JSON = PLUGIN_DIR / "hooks" / "hooks.json"
 
 # Add scripts dir to path for imports
 if str(SCRIPTS_DIR) not in sys.path:
@@ -71,8 +71,14 @@ def _get_all_imports(tree: ast.Module) -> list[str]:
 
 
 def _load_hooks_json() -> dict:
-    """Load and parse hooks.json."""
-    return json.loads(HOOKS_JSON.read_text())
+    """Return hooks normalized to the flat legacy shape this module expects.
+
+    hooks/hooks.json uses the official Claude Code nested schema;
+    conftest.parse_hooks() flattens it to a list of
+    {event, script, command, timeout} dicts (timeout in SECONDS).
+    """
+    from conftest import parse_hooks
+    return {"hooks": parse_hooks()}
 
 
 # ===========================================================================
@@ -358,15 +364,15 @@ class TestHooksJsonTimeouts:
         ]
         assert len(start_hooks) == 1
         timeout = start_hooks[0]["timeout"]
-        # Memory file loading + context injection: needs at least 5s
-        assert timeout >= 5000, (
-            f"SessionStart timeout {timeout}ms is too low for memory loading + context injection"
+        # Official CC hooks schema expresses timeout in SECONDS.
+        assert timeout >= 5, (
+            f"SessionStart timeout {timeout}s is too low for session-state init"
         )
-        # But shouldn't be absurdly high (> 60s)
-        assert timeout <= 60000, f"SessionStart timeout {timeout}ms seems excessive"
+        assert timeout <= 60, f"SessionStart timeout {timeout}s seems excessive"
 
     def test_stop_timeout_adequate_for_learning_extraction(self):
-        """Stop hook triggers learning extraction which may involve LLM calls."""
+        """Stop hook is a lightweight checkpoint (extraction is deferred to
+        the SessionEnd → SessionStart path), but still needs headroom."""
         data = _load_hooks_json()
         stop_hooks = [
             h for h in data["hooks"]
@@ -374,9 +380,9 @@ class TestHooksJsonTimeouts:
         ]
         assert len(stop_hooks) == 1
         timeout = stop_hooks[0]["timeout"]
-        # Learning extraction involves LLM call: needs at least 10s
-        assert timeout >= 10000, (
-            f"Stop timeout {timeout}ms may be too low for LLM-based learning extraction"
+        # Seconds, per the official CC hooks schema.
+        assert timeout >= 10, (
+            f"Stop timeout {timeout}s is too low"
         )
 
     def test_session_end_timeout_adequate_for_diary(self):
@@ -388,9 +394,9 @@ class TestHooksJsonTimeouts:
         ]
         assert len(end_hooks) == 1
         timeout = end_hooks[0]["timeout"]
-        # Diary write + log finalization: needs at least 10s
-        assert timeout >= 10000, (
-            f"SessionEnd timeout {timeout}ms may be too low for diary + log finalization"
+        # Seconds, per the official CC hooks schema.
+        assert timeout >= 10, (
+            f"SessionEnd timeout {timeout}s may be too low for marker write"
         )
 
     def test_venv_bootstrap_has_highest_timeout(self):

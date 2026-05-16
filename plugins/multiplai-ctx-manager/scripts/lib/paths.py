@@ -193,10 +193,9 @@ class Paths:
     def learnings_file(self, date_str: str | None = None) -> Path:
         """Per-day structured learnings file ``learnings_dir/{YYYY-MM-DD}.md``.
 
-        When *date_str* is omitted, returns today's file (UTC). The
-        per-day naming matches kit's layout so downstream tooling
-        (``/process-learnings``) reads both kit-era and plugin-era
-        entries without changes.
+        When *date_str* is omitted, returns today's file (UTC). Per-day
+        naming lets downstream tooling (``/multiplai:dream-remember``)
+        read the full learnings backlog without changes.
         """
         from datetime import datetime, timezone
         if date_str is None:
