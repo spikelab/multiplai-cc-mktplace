@@ -341,12 +341,10 @@ class TestPartialPluginConfig:
     def test_memory_defaults_to_home_when_option_unset(
         self, monkeypatch, reset_paths_cache
     ):
-        """Scenario: Memory dir defaults to home when option is unset.
-
-        Memory lives outside plugin root, so fallback is ~/.multiplai/memory.
-        """
+        """Scenario: Memory dir defaults to home when option is unset (no workspace)."""
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "/plugin")
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_memory_dir", raising=False)
+        monkeypatch.delenv("WORKSPACE", raising=False)
         from lib.paths import Paths
 
         p = Paths.resolve()
@@ -355,13 +353,14 @@ class TestPartialPluginConfig:
     def test_data_defaults_when_root_set_but_data_unset(
         self, monkeypatch, reset_paths_cache
     ):
-        """Scenario: Plugin data defaults when CLAUDE_PLUGIN_DATA unset but root set."""
+        """Scenario: Plugin data defaults to workspace/.multiplai/data regardless of plugin mode."""
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "/plugin")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_workspace_dir", "/ws")
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
         from lib.paths import Paths
 
         p = Paths.resolve()
-        assert p.plugin_data() == Path("/plugin/data")
+        assert p.plugin_data() == Path("/ws/.multiplai/data")
 
 
 # ---------------------------------------------------------------------------
@@ -442,8 +441,9 @@ class TestEmptyVars:
         assert p.plugin_root() == Path.home() / ".multiplai"
 
     def test_empty_memory_dir_uses_default(self, monkeypatch, reset_paths_cache):
-        """Scenario: Empty CLAUDE_PLUGIN_OPTION_memory_dir uses default."""
+        """Scenario: Empty CLAUDE_PLUGIN_OPTION_memory_dir uses default (no workspace)."""
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", "")
+        monkeypatch.delenv("WORKSPACE", raising=False)
         from lib.paths import Paths
 
         p = Paths.resolve()
@@ -463,8 +463,9 @@ class TestEmptyVars:
     def test_whitespace_only_memory_dir_uses_default(
         self, monkeypatch, reset_paths_cache
     ):
-        """Whitespace-only memory dir env var should use default."""
+        """Whitespace-only memory dir env var should use default (no workspace)."""
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", "  \t  ")
+        monkeypatch.delenv("WORKSPACE", raising=False)
         from lib.paths import Paths
 
         p = Paths.resolve()
@@ -767,8 +768,9 @@ class TestEdgeCases:
         assert p.learnings_file("2026-01-01") == home_base / "learnings" / "2026-01-01.md"
 
     def test_empty_diary_env_var_uses_default(self, monkeypatch, reset_paths_cache):
-        """Empty CLAUDE_PLUGIN_OPTION_diary_dir falls back to ~/.multiplai/diary."""
+        """Empty CLAUDE_PLUGIN_OPTION_diary_dir falls back to ~/.multiplai/diary (no workspace)."""
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_dir", "")
+        monkeypatch.delenv("WORKSPACE", raising=False)
         from lib.paths import Paths
 
         p = Paths.resolve()
@@ -777,8 +779,9 @@ class TestEdgeCases:
     def test_empty_data_env_var_standalone_fallback(
         self, monkeypatch, reset_paths_cache
     ):
-        """Empty CLAUDE_PLUGIN_DATA with no root should use standalone fallback."""
+        """Empty CLAUDE_PLUGIN_DATA with no root should use workspace fallback."""
         monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+        monkeypatch.delenv("WORKSPACE", raising=False)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", "")
         from lib.paths import Paths
 

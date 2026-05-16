@@ -697,10 +697,11 @@ class TestVenvPathResolution:
         assert p.venv_dir() == Path("/custom/data/venv")
 
     def test_venv_dir_standalone_fallback(self, monkeypatch, reset_paths_cache):
-        """Scenario: Standalone mode — venv at ~/.multiplai/data/venv."""
+        """Scenario: Standalone mode (no workspace) — venv at ~/.multiplai/data/venv."""
         for key in list(os.environ):
             if key.startswith("CLAUDE_PLUGIN"):
                 monkeypatch.delenv(key, raising=False)
+        monkeypatch.delenv("WORKSPACE", raising=False)
 
         from lib.paths import Paths
 

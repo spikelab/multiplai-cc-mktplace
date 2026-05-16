@@ -7,7 +7,9 @@ lifetime (frozen dataclass + module-level singleton).
 Resolution order per D2 spec:
     1. Plugin env var (``CLAUDE_PLUGIN_ROOT``, ``CLAUDE_PLUGIN_DATA``,
        ``CLAUDE_PLUGIN_OPTION_*``) — expanded and resolved to absolute.
-    2. Hardcoded standalone fallback rooted at ``~/.multiplai/``.
+    2. Workspace-scoped fallback rooted at ``$WORKSPACE/.multiplai/`` (or
+       ``CLAUDE_PLUGIN_OPTION_workspace_dir/.multiplai/``).
+    3. Hardcoded standalone fallback rooted at ``~/.multiplai/``.
 """
 
 import dataclasses
@@ -19,9 +21,7 @@ from pathlib import Path
 _lock = threading.Lock()
 _cached_paths: "Paths | None" = None
 
-# Standalone base for plugin-private state (catalogs, venv, dream
-# state, memory). Lives in $HOME so it follows the user across
-# workspaces — these aren't workspace-scoped data.
+# Standalone base — used only when no workspace or plugin env vars are set.
 _STANDALONE_BASE = Path.home() / ".multiplai"
 
 
@@ -36,7 +36,10 @@ def _workspace_base() -> Path:
     Resolution:
       1. ``CLAUDE_PLUGIN_OPTION_workspace_dir`` if set — anchors at
          that path.
-      2. Otherwise falls back to ``~/.multiplai/`` so a fresh install
+      2. ``WORKSPACE`` env var (set by the container launcher) — anchors
+         at that path. Allows scripts invoked outside the plugin hook
+         mechanism to resolve workspace paths correctly.
+      3. Otherwise falls back to ``~/.multiplai/`` so a fresh install
          still writes somewhere sensible. We deliberately do NOT use
          ``cwd`` as a fallback — it would pollute every sub-project
          with its own data tree.
@@ -47,6 +50,9 @@ def _workspace_base() -> Path:
     env = _env("CLAUDE_PLUGIN_OPTION_workspace_dir")
     if env:
         return Path(env).expanduser().resolve() / ".multiplai"
+    workspace = _env("WORKSPACE")
+    if workspace:
+        return Path(workspace).expanduser().resolve() / ".multiplai"
     return _STANDALONE_BASE
 
 
@@ -118,17 +124,18 @@ class Paths:
         is_plugin = bool(env_root)
 
         plugin_root = _resolve_env_path(env_root, _STANDALONE_BASE)
+        workspace_base = _workspace_base()
 
-        # Data dir has a three-way cascade: env → plugin_root/data → standalone
-        data_fallback = (plugin_root / "data") if is_plugin else (_STANDALONE_BASE / "data")
-        data_dir = _resolve_env_path(env_data, data_fallback)
+        # Data dir: env → workspace/.multiplai/data
+        # Plugin state (catalogs, venv, dream state, logs) lives beside the other
+        # workspace user-data dirs regardless of plugin mode.
+        data_dir = _resolve_env_path(env_data, workspace_base / "data")
 
-        # All four user-data dirs (memory, diary, now, learnings) share
-        # the same fallback hierarchy:
+        # User-data dirs share the same workspace fallback hierarchy:
         #   1. CLAUDE_PLUGIN_OPTION_<name>_dir (specific override)
         #   2. CLAUDE_PLUGIN_OPTION_workspace_dir/.multiplai/<name>
-        #   3. ~/.multiplai/<name> (when no workspace_dir is set)
-        workspace_base = _workspace_base()
+        #   3. $WORKSPACE/.multiplai/<name>
+        #   4. ~/.multiplai/<name> (pure standalone)
         memory_dir = _resolve_env_path(
             _env("CLAUDE_PLUGIN_OPTION_memory_dir"),
             workspace_base / "memory",
