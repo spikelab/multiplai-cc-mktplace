@@ -1,5 +1,0 @@
-context: "Project: \n"
-schema: spec-driven
-tdd:
-  enabled: true
-  test_command: ''
