@@ -6,11 +6,11 @@ LLM-based extractor, detection is deterministic: if the user wrote "nope"
 the pattern fires, every time. The result is used by
 ``extract_learnings`` to tag any learnings from a session that
 contained corrections with ``type: CORRECTION, trust: verified`` so
-``/process-learnings`` can prioritize them.
+``/multiplai:dream-remember`` can prioritize them.
 
-Ported from the kit's context-router correction-detection helpers,
-stripped of the UserPromptSubmit nudge logic which doesn't apply in
-the Stop-hook learning-extraction path.
+Deterministic correction-detection helpers, separate from the
+UserPromptSubmit routing path — used only in the deferred
+learning-extraction flow.
 """
 
 from __future__ import annotations

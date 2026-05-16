@@ -1110,37 +1110,26 @@ class TestScriptIntegrationPatterns:
         )
 
     def test_extract_learnings_is_stop_hook(self):
-        """WHEN hooks.json is read
-        THEN extract_learnings is registered as a Stop hook."""
-        import json
-        hooks_json = PLUGIN_ROOT / "hooks.json"
-        hooks = json.loads(hooks_json.read_text())
-        stop_hooks = [
-            h for h in hooks.get("hooks", [])
-            if h.get("event") == "Stop"
-        ]
-        stop_scripts = [h.get("script", "") for h in stop_hooks]
+        """The Stop hook is session_stop.py (it gates the deferred
+        extract_learnings path via session_end → session_start)."""
+        from conftest import parse_hooks
+        stop_scripts = [h["script"] for h in parse_hooks() if h["event"] == "Stop"]
         has_extract = any(
             "extract_learnings" in s or "session_stop" in s
             for s in stop_scripts
         )
         assert has_extract, (
-            "hooks.json must register extract_learnings (or session_stop which "
-            "triggers it) as a Stop hook"
+            "hooks/hooks.json must register session_stop.py (or "
+            "extract_learnings.py) as the Stop hook"
         )
 
     def test_pre_compact_is_precompact_hook(self):
-        """WHEN hooks.json is read
-        THEN pre_compact.py is registered as a PreCompact hook."""
-        import json
-        hooks_json = PLUGIN_ROOT / "hooks.json"
-        hooks = json.loads(hooks_json.read_text())
-        precompact_hooks = [
-            h for h in hooks.get("hooks", [])
-            if h.get("event") == "PreCompact"
+        """pre_compact.py must be registered as the PreCompact hook."""
+        from conftest import parse_hooks
+        precompact_scripts = [
+            h["script"] for h in parse_hooks() if h["event"] == "PreCompact"
         ]
-        precompact_scripts = [h.get("script", "") for h in precompact_hooks]
         has_precompact = any("pre_compact" in s for s in precompact_scripts)
         assert has_precompact, (
-            "hooks.json must register pre_compact.py as a PreCompact hook"
+            "hooks/hooks.json must register pre_compact.py as a PreCompact hook"
         )

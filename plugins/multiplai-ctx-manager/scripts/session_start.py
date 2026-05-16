@@ -1,7 +1,9 @@
 """Session start hook for multiplai plugin.
 
-Loads memory files, injects context, logs client selection,
-records session start timestamp and initializes session state.
+Logs client selection, records the session start timestamp, initializes
+session state, and drains deferred extraction markers. Routed memory
+injection is handled per-prompt by context_manager.py (UserPromptSubmit);
+this hook deliberately does NOT dump memory into the session context.
 
 Also checks the Dream 24h gate: when more than 24 hours have
 elapsed since the last dream run and fresh learnings are pending,
@@ -23,12 +25,12 @@ from lib.venv_guard import ensure_venv_python
 ensure_venv_python()
 
 from lib.paths import get_paths
-from lib.config import load_yaml, read_memory_files
+from lib.config import load_yaml
 from lib.log_utils import setup_logging
 
 logger = setup_logging("session_start")
 
-_AUTODREAM_GATE_HOURS = 24
+_DREAM_GATE_HOURS = 24
 
 
 def _log_client_selection() -> str:
@@ -67,7 +69,7 @@ def _dream_gate_open(dream_state_file: Path) -> bool:
         return True
     if last_dt.tzinfo is None:
         last_dt = last_dt.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - last_dt >= timedelta(hours=_AUTODREAM_GATE_HOURS)
+    return datetime.now(timezone.utc) - last_dt >= timedelta(hours=_DREAM_GATE_HOURS)
 
 
 def _learnings_pending(learnings_file: Path, dream_state_file: Path) -> bool:
@@ -182,9 +184,15 @@ def main() -> None:
     # Log which model client is available
     client_type = _log_client_selection()
 
-    # Load memory files for context injection
+    # List available memory files for the session-state record. Contents
+    # are NOT read or injected here — context_manager.py performs routed,
+    # per-prompt memory injection on UserPromptSubmit.
     memory_dir = paths.memory_dir()
-    memory_context = read_memory_files(memory_dir)
+    memory_files = (
+        sorted(p.name for p in memory_dir.glob("*.md"))
+        if memory_dir.is_dir()
+        else []
+    )
 
     session_id = str(uuid.uuid4())[:8]
     session_state = {
@@ -192,16 +200,11 @@ def main() -> None:
         "start_time": datetime.now(timezone.utc).isoformat(),
         "plugin_mode": paths.is_plugin_mode(),
         "client_type": client_type,
-        "memory_files_loaded": list(memory_context.keys()),
+        "memory_files_available": memory_files,
     }
 
     state_file = data_dir / "session_state.json"
     state_file.write_text(json.dumps(session_state, indent=2))
-
-    # Inject memory context to stdout for Claude Code to consume
-    if memory_context:
-        for filename, content in memory_context.items():
-            print(f"\n## Memory: {filename}\n{content}")
 
     # Drain any deferred extraction markers left by previous session_end
     # hooks. SessionEnd is kill-within-seconds, so the heavy LLM
@@ -228,7 +231,7 @@ def main() -> None:
         logger.info("Dream gate open with pending learnings; emitting nudge")
         _emit_dream_nudge()
 
-    logger.info("Session started: %s (loaded %d memory files)", session_id, len(memory_context))
+    logger.info("Session started: %s (%d memory files available)", session_id, len(memory_files))
 
 
 if __name__ == "__main__":

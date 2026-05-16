@@ -254,7 +254,7 @@ class TestAutodreamCatalogGenerationBehavior:
                 # This will fail until dream.py integrates catalog generation
                 try:
                     spec.loader.exec_module(mod)
-                    asyncio.run(mod.dream())
+                    asyncio.run(mod.dream_auto())
                 except Exception:
                     pass  # Allow import/runtime errors
 
@@ -291,7 +291,7 @@ class TestAutodreamCatalogGenerationBehavior:
 
                 # dream() should call generate_catalogs and NOT raise
                 # even when catalog gen fails
-                asyncio.run(mod.dream())
+                asyncio.run(mod.dream_auto())
 
                 # Verify generate_catalogs was actually called
                 mock_gen.assert_called(), (

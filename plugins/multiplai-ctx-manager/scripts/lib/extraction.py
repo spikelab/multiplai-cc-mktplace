@@ -62,7 +62,7 @@ Corrections are highest priority — they prevent recurring mistakes.
 - Deduplicate: emit each insight ONCE, even if it spans multiple units
 - If something was CORRECTED later, output only the final corrected version
 - Skip trivial exchanges, greetings, routine tool usage
-- If the entire session is trivial, return {{"units": []}}
+- If the entire session is trivial, return {"units": []}
 
 ## Transcript
 
@@ -71,7 +71,7 @@ Corrections are highest priority — they prevent recurring mistakes.
 ## Output
 
 Return ONLY valid JSON (no markdown fences, no explanation):
-{{"units": [{{"timestamp": "...", "diary_entry": "...", "learnings": [...]}}]}}
+{"units": [{"timestamp": "...", "diary_entry": "...", "learnings": [...]}]}
 """
 
 
@@ -105,14 +105,20 @@ async def extract_units(
     correction-only output.
     """
     targets_block = "\n".join(f"- {t}" for t in valid_targets) if valid_targets else "(none)"
+    # NOT str.format: transcript text routinely contains literal { } (JSON,
+    # code, f-strings) which would raise KeyError/ValueError and silently
+    # kill extraction. Plain replacement never interprets braces. Replace
+    # valid_targets first (controlled), transcript last (untrusted).
+    prompt = (
+        EXTRACTION_PROMPT
+        .replace("{valid_targets}", targets_block)
+        .replace("{transcript}", text)
+    )
     response = await client.query(
         system="You are a learnings extractor. Output ONLY valid JSON.",
         messages=[{
             "role": "user",
-            "content": EXTRACTION_PROMPT.format(
-                valid_targets=targets_block,
-                transcript=text,
-            ),
+            "content": prompt,
         }],
     )
     return _parse_units(response.content)

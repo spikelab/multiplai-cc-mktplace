@@ -32,7 +32,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import PLUGIN_ROOT, SCRIPTS_DIR
+from conftest import PLUGIN_ROOT, SCRIPTS_DIR, HOOKS_JSON, parse_hooks
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -66,7 +66,13 @@ def _all_plugin_files() -> list[Path]:
 
 
 def _load_hooks_json() -> dict:
-    return json.loads((PLUGIN_ROOT / "hooks.json").read_text())
+    """Normalized view of the official nested hooks/hooks.json schema.
+
+    Returns ``{"hooks": [...]}`` where each entry is a flat dict with
+    ``event``, ``script``, ``command`` and ``timeout`` keys (one per hook
+    command), so existing iteration over ``data["hooks"]`` keeps working.
+    """
+    return {"hooks": parse_hooks()}
 
 
 def _load_plugin_json() -> dict:
@@ -111,10 +117,11 @@ class TestPluginJsonFullWiring:
         self.plugin = _load_plugin_json()
         self.hooks = _load_hooks_json()
 
-    def test_hooks_json_exists_at_root(self):
+    def test_hooks_json_exists_at_hooks_dir(self):
         """WHEN the plugin is loaded
-        THEN hooks.json exists at the plugin root for CC auto-discovery."""
-        assert (PLUGIN_ROOT / "hooks.json").is_file()
+        THEN hooks/hooks.json exists for CC auto-discovery."""
+        assert HOOKS_JSON.is_file()
+        assert HOOKS_JSON == PLUGIN_ROOT / "hooks" / "hooks.json"
 
     def test_all_skill_files_reference_existing_scripts(self):
         """WHEN skill markdown files reference scripts via bash tool
@@ -170,11 +177,14 @@ class TestPluginJsonFullWiring:
         session_start_hooks = [h for h in self.hooks["hooks"]
                                if h["event"] == "SessionStart"]
         scripts = [h["script"] for h in session_start_hooks]
-        if "scripts/venv_bootstrap.py" in scripts and "scripts/session_start.py" in scripts:
-            bootstrap_idx = scripts.index("scripts/venv_bootstrap.py")
-            start_idx = scripts.index("scripts/session_start.py")
-            assert bootstrap_idx < start_idx, \
-                "venv_bootstrap.py must appear before session_start.py in hooks array"
+        assert scripts, "No SessionStart hooks found"
+        # parse_hooks preserves declaration order — bootstrap must run first.
+        assert scripts[0].endswith("venv_bootstrap.py"), \
+            f"First SessionStart command must be venv_bootstrap.py, got {scripts[0]}"
+        if "scripts/session_start.py" in scripts:
+            assert scripts.index("scripts/venv_bootstrap.py") < \
+                scripts.index("scripts/session_start.py"), \
+                "venv_bootstrap.py must appear before session_start.py"
 
 
 # ===========================================================================
@@ -214,21 +224,22 @@ class TestAfterFieldAndBootstrapFallback:
                 assert has_guard, \
                     f"{hook['script']} missing venv re-exec guard (R3 fallback)"
 
-    def test_hooks_json_valid_with_or_without_after_field(self):
-        """WHEN hooks.json is parsed
-        THEN it is valid JSON whether or not `after` fields are present.
-        The plugin must work with or without `after` support."""
-        hooks_text = (PLUGIN_ROOT / "hooks.json").read_text()
-        parsed = json.loads(hooks_text)
-        assert isinstance(parsed.get("hooks"), list)
-        # `after` field is optional — if present, must be a list of strings
-        for hook in parsed["hooks"]:
-            if "after" in hook:
-                assert isinstance(hook["after"], list), \
-                    f"Hook 'after' field must be a list: {hook}"
-                for ref in hook["after"]:
-                    assert isinstance(ref, str), \
-                        f"Hook 'after' entries must be strings: {hook}"
+    def test_hooks_json_valid_official_nested_schema(self):
+        """WHEN hooks/hooks.json is parsed
+        THEN it is valid JSON conforming to the official nested CC schema:
+        top-level "hooks" maps each event to a list of groups, each group
+        holding a "hooks" list of command entries."""
+        parsed = json.loads(HOOKS_JSON.read_text())
+        assert isinstance(parsed.get("hooks"), dict), \
+            "official schema: 'hooks' must be an object keyed by event"
+        for event, groups in parsed["hooks"].items():
+            assert isinstance(groups, list), f"{event} must map to a list"
+            for group in groups:
+                assert isinstance(group.get("hooks"), list), \
+                    f"{event} group must contain a 'hooks' list"
+                for entry in group["hooks"]:
+                    assert entry.get("type") == "command"
+                    assert isinstance(entry.get("command"), str) and entry["command"]
 
     def test_venv_guard_handles_missing_venv_gracefully(self):
         """WHEN ensure_venv_python() is called but no venv exists
@@ -285,9 +296,15 @@ class TestEndToEndSessionLifecycle:
             assert "session_id" in state
             assert "start_time" in state
 
-    def test_session_start_loads_memory_files(self, tmp_path, plugin_env):
+    def test_session_start_records_available_memory_files(self, tmp_path, plugin_env):
         """WHEN session_start.py runs with memory files present
-        THEN it outputs memory context to stdout."""
+        THEN it records the available memory files in session_state.json.
+
+        Post-restructure, session_start.py intentionally does NOT read or
+        inject memory contents (its docstring: "Contents are NOT read or
+        injected here — context_manager.py performs routed, per-prompt
+        memory injection on UserPromptSubmit"). It only enumerates the
+        available files into the session_state record."""
         memory_dir = Path(plugin_env["CLAUDE_PLUGIN_OPTION_memory_dir"])
         (memory_dir / "me.md").write_text("# About Me\nI am a test user")
 
@@ -296,8 +313,11 @@ class TestEndToEndSessionLifecycle:
             env_overrides=plugin_env,
         )
         if result.returncode == 0:
-            assert "Memory:" in result.stdout or "me.md" in result.stdout, \
-                "session_start.py should output loaded memory files"
+            state_file = Path(plugin_env["CLAUDE_PLUGIN_DATA"]) / "session_state.json"
+            assert state_file.exists(), "session_start.py must write session_state.json"
+            state = json.loads(state_file.read_text())
+            assert "me.md" in state.get("memory_files_available", []), \
+                "session_start.py should record available memory files"
 
     def test_context_manager_accepts_stdin_json(self, plugin_env):
         """WHEN context_manager.py receives valid JSON on stdin
@@ -1057,18 +1077,17 @@ class TestPluginValidationReadiness:
         json.loads(path.read_text())  # Should not raise
 
     def test_hooks_json_is_valid_json(self):
-        """WHEN hooks.json is parsed
+        """WHEN hooks/hooks.json is parsed
         THEN it succeeds without JSON errors."""
-        path = PLUGIN_ROOT / "hooks.json"
-        assert path.is_file()
-        json.loads(path.read_text())  # Should not raise
+        assert HOOKS_JSON.is_file()
+        json.loads(HOOKS_JSON.read_text())  # Should not raise
 
     def test_marketplace_json_is_valid_json(self):
         """WHEN marketplace.json is parsed
         THEN it succeeds without JSON errors."""
-        path = PLUGIN_ROOT / "marketplace.json"
-        assert path.is_file()
-        json.loads(path.read_text())  # Should not raise
+        from conftest import MARKETPLACE_JSON
+        assert MARKETPLACE_JSON.is_file()
+        json.loads(MARKETPLACE_JSON.read_text())  # Should not raise
 
     def test_all_referenced_files_exist(self):
         """WHEN all file references in plugin.json and hooks.json are collected
@@ -1101,15 +1120,20 @@ class TestPluginValidationReadiness:
     def test_no_json_trailing_commas(self):
         """WHEN JSON manifest files are checked for trailing commas
         THEN none are found (they cause parse errors)."""
-        for filename in [".claude-plugin/plugin.json", "hooks.json", "marketplace.json"]:
-            path = PLUGIN_ROOT / filename
+        from conftest import MARKETPLACE_JSON
+        manifest_paths = [
+            PLUGIN_ROOT / ".claude-plugin" / "plugin.json",
+            HOOKS_JSON,
+            MARKETPLACE_JSON,
+        ]
+        for path in manifest_paths:
             if path.exists():
                 text = path.read_text()
                 # Simple check: no comma followed by } or ]
                 cleaned = re.sub(r'//.*$', '', text, flags=re.MULTILINE)
                 cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
                 if re.search(r',\s*[\]}]', cleaned):
-                    pytest.fail(f"{filename} has trailing comma(s)")
+                    pytest.fail(f"{path.name} has trailing comma(s)")
 
     def test_plugin_version_matches_changelog(self):
         """WHEN plugin.json version is checked against CHANGELOG.md

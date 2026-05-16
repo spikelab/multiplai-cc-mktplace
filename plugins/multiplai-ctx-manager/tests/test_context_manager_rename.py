@@ -27,7 +27,7 @@ from unittest.mock import patch
 
 import pytest
 
-from conftest import PLUGIN_ROOT, SCRIPTS_DIR
+from conftest import PLUGIN_ROOT, SCRIPTS_DIR, HOOKS_JSON, parse_hooks
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -123,51 +123,47 @@ class TestHooksJsonUpdated:
 
     @pytest.fixture(autouse=True)
     def load_hooks(self):
-        self.hooks = json.loads((PLUGIN_ROOT / "hooks.json").read_text())
+        self.hooks = parse_hooks()
 
     def test_hooks_json_references_context_manager(self):
-        """WHEN hooks.json is parsed after the rename
-        THEN every command/path entry that previously referenced context_router.py
-        now references context_manager.py."""
+        """WHEN hooks/hooks.json is parsed after the rename
+        THEN a UserPromptSubmit hook references scripts/context_manager.py."""
         user_prompt_hooks = [
-            h for h in self.hooks["hooks"]
-            if h["event"] == "UserPromptSubmit"
+            h for h in self.hooks if h["event"] == "UserPromptSubmit"
         ]
         assert len(user_prompt_hooks) > 0, "No UserPromptSubmit hook found"
-
-        context_manager_hook = None
-        for h in user_prompt_hooks:
-            if "context_manager" in h.get("script", ""):
-                context_manager_hook = h
-                break
-        assert context_manager_hook is not None, \
-            "hooks.json must have a UserPromptSubmit hook pointing to context_manager.py"
+        assert any(h["script"] == "scripts/context_manager.py"
+                   for h in user_prompt_hooks), \
+            "hooks.json must have a UserPromptSubmit hook -> scripts/context_manager.py"
 
     def test_no_stale_context_router_in_hooks_json(self):
-        """WHEN hooks.json is searched for the string 'context_router'
-        THEN zero matches are found."""
-        hooks_text = (PLUGIN_ROOT / "hooks.json").read_text()
-        assert "context_router" not in hooks_text, \
-            "hooks.json must not contain any 'context_router' references"
+        """WHEN hooks/hooks.json is searched for 'context_router'
+        THEN zero matches are found (no command string, no script path)."""
+        hooks_text = HOOKS_JSON.read_text()
+        assert "context_router" not in hooks_text
+        assert "context-router" not in hooks_text
+        for h in self.hooks:
+            assert "context_router" not in h["command"]
+            assert "context-router" not in h["command"]
+            assert h["script"] != "scripts/context_router.py"
 
     def test_hook_script_path_exists(self):
         """WHEN the context_manager hook entry references a script
         THEN that script file exists in the plugin directory."""
-        for h in self.hooks["hooks"]:
-            if h["event"] == "UserPromptSubmit" and "context_manager" in h.get("script", ""):
+        for h in self.hooks:
+            if h["event"] == "UserPromptSubmit" and h["script"] == "scripts/context_manager.py":
                 script_path = PLUGIN_ROOT / h["script"]
-                assert script_path.is_file(), \
-                    f"Hook script not found: {script_path}"
+                assert script_path.is_file(), f"Hook script not found: {script_path}"
                 return
         pytest.fail("context_manager hook not found in hooks.json")
 
     def test_hook_timeout_preserved(self):
         """WHEN the context_manager hook entry is inspected
-        THEN it retains the same 5000ms timeout as the old context_router hook."""
-        for h in self.hooks["hooks"]:
-            if h["event"] == "UserPromptSubmit" and "context_manager" in h.get("script", ""):
-                assert h["timeout"] == 5000, \
-                    f"Expected 5000ms timeout, got {h['timeout']}"
+        THEN its timeout is 5 (seconds, official schema)."""
+        for h in self.hooks:
+            if h["event"] == "UserPromptSubmit" and h["script"] == "scripts/context_manager.py":
+                assert h["timeout"] == 5, \
+                    f"Expected 5s timeout, got {h['timeout']}"
                 return
         pytest.fail("context_manager hook not found in hooks.json")
 
@@ -207,9 +203,9 @@ class TestZeroContextRouterReferences:
             f"'context_router' found in Python files:\n" + "\n".join(violations)
 
     def test_no_context_router_in_hooks_json(self):
-        """WHEN hooks.json is searched for 'context_router'
+        """WHEN hooks/hooks.json is searched for 'context_router'
         THEN zero matches are found."""
-        text = (PLUGIN_ROOT / "hooks.json").read_text()
+        text = HOOKS_JSON.read_text()
         assert "context_router" not in text, \
             "hooks.json still contains 'context_router'"
 
@@ -670,8 +666,7 @@ class TestHookExecutionAfterRename:
     def test_hook_script_path_matches_actual_file(self):
         """WHEN hooks.json declares a UserPromptSubmit script
         THEN the script path resolves to an actual file on disk."""
-        hooks = json.loads((PLUGIN_ROOT / "hooks.json").read_text())
-        for h in hooks["hooks"]:
+        for h in parse_hooks():
             if h["event"] == "UserPromptSubmit":
                 script_path = PLUGIN_ROOT / h["script"]
                 assert script_path.is_file(), \

@@ -27,7 +27,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from conftest import PLUGIN_ROOT, SCRIPTS_DIR
+from conftest import PLUGIN_ROOT, SCRIPTS_DIR, HOOKS_JSON, parse_hooks
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -471,21 +471,21 @@ class TestTimeoutCompliance:
     read all files' content when there are many memory files.
     """
 
-    def test_hooks_json_timeout_is_5000(self):
-        """WHEN the UserPromptSubmit hook is inspected in hooks.json
-        THEN it has a 5000ms (5-second) timeout."""
-        hooks = json.loads((PLUGIN_ROOT / "hooks.json").read_text())["hooks"]
-        user_prompt_hooks = [h for h in hooks if h["event"] == "UserPromptSubmit"]
+    def test_hooks_json_timeout_is_5_seconds(self):
+        """WHEN the UserPromptSubmit hook is inspected in hooks/hooks.json
+        THEN it has a 5-second timeout (official schema uses seconds)."""
+        user_prompt_hooks = [h for h in parse_hooks()
+                             if h["event"] == "UserPromptSubmit"]
         assert len(user_prompt_hooks) > 0, "No UserPromptSubmit hook found"
 
         context_manager_hook = None
         for h in user_prompt_hooks:
-            if "context_manager" in h.get("script", ""):
+            if "context_manager" in h["script"]:
                 context_manager_hook = h
                 break
         assert context_manager_hook is not None, "No context_manager hook found"
-        assert context_manager_hook["timeout"] == 5000, \
-            f"Context manager timeout should be 5000ms, got {context_manager_hook['timeout']}"
+        assert context_manager_hook["timeout"] == 5, \
+            f"Context manager timeout should be 5s, got {context_manager_hook['timeout']}"
 
     def test_completes_under_5_seconds_small_memory(self, tmp_path, monkeypatch, reset_paths_cache):
         """WHEN the context router runs with a small memory set (3 files)
@@ -663,12 +663,13 @@ class TestContextRouterMainFlow:
 
 
 class TestContextRouterHookWiring:
-    """Context router must be correctly wired in hooks.json."""
+    """Context router must be correctly wired in hooks/hooks.json
+    (official nested Claude Code schema)."""
 
     @pytest.fixture(autouse=True)
     def load_hooks(self):
-        hooks_path = PLUGIN_ROOT / "hooks.json"
-        self.hooks = json.loads(hooks_path.read_text())["hooks"]
+        assert HOOKS_JSON.is_file()
+        self.hooks = parse_hooks()
 
     def test_registered_on_user_prompt_submit(self):
         """WHEN hooks.json is parsed
@@ -678,13 +679,13 @@ class TestContextRouterHookWiring:
         assert any("context_manager" in s for s in scripts), \
             "context_manager.py must be registered as UserPromptSubmit hook"
 
-    def test_timeout_set_to_5000(self):
+    def test_timeout_set_to_5(self):
         """WHEN the context_manager hook entry is inspected
-        THEN it has a 5000ms timeout."""
+        THEN it has a 5-second timeout (official schema uses seconds)."""
         for h in self.hooks:
-            if h["event"] == "UserPromptSubmit" and "context_manager" in h.get("script", ""):
-                assert h["timeout"] == 5000, \
-                    f"Expected 5000ms timeout, got {h['timeout']}"
+            if h["event"] == "UserPromptSubmit" and "context_manager" in h["script"]:
+                assert h["timeout"] == 5, \
+                    f"Expected 5s timeout, got {h['timeout']}"
                 return
         pytest.fail("Context manager hook not found in hooks.json")
 
@@ -692,7 +693,7 @@ class TestContextRouterHookWiring:
         """WHEN the context_manager hook entry references a script
         THEN that script exists in the plugin directory."""
         for h in self.hooks:
-            if h["event"] == "UserPromptSubmit" and "context_manager" in h.get("script", ""):
+            if h["event"] == "UserPromptSubmit" and "context_manager" in h["script"]:
                 script_path = PLUGIN_ROOT / h["script"]
                 assert script_path.is_file(), \
                     f"Hook script not found: {script_path}"

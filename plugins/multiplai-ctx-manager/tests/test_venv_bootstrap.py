@@ -737,21 +737,16 @@ class TestHooksJsonWiring:
 
     def test_hooks_json_has_venv_bootstrap(self, plugin_root):
         """Scenario: SessionStart hook points to venv_bootstrap script."""
-        import json
+        from conftest import HOOKS_JSON, parse_hooks
 
-        hooks_path = plugin_root / "hooks.json"
-        assert hooks_path.exists(), "hooks.json must exist"
-
-        hooks_data = json.loads(hooks_path.read_text())
-        hooks_list = hooks_data.get("hooks", [])
+        assert HOOKS_JSON.is_file(), "hooks/hooks.json must exist"
 
         session_start_hooks = [
-            h for h in hooks_list if h.get("event") == "SessionStart"
+            h for h in parse_hooks() if h["event"] == "SessionStart"
         ]
         assert len(session_start_hooks) >= 1, "Must have at least one SessionStart hook"
 
-        # At least one SessionStart hook should reference venv_bootstrap
-        scripts = [h.get("script", "") for h in session_start_hooks]
+        scripts = [h["script"] for h in session_start_hooks]
         assert any(
             "venv_bootstrap" in s for s in scripts
         ), f"No venv_bootstrap in SessionStart scripts: {scripts}"

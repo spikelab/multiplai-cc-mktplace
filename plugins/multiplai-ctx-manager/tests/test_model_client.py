@@ -249,6 +249,7 @@ class TestAnthropicAPIClient:
         from lib.model_client import AnthropicAPIClient
 
         mock_text_block = MagicMock()
+        mock_text_block.type = "text"
         mock_text_block.text = "API response text"
         mock_api_response = MagicMock()
         mock_api_response.content = [mock_text_block]
@@ -458,6 +459,7 @@ class TestResponseNormalization:
         from lib.model_client import AnthropicAPIClient, ModelResponse
 
         mock_text_block = MagicMock()
+        mock_text_block.type = "text"
         mock_text_block.text = "anthropic response text"
         mock_api_response = MagicMock()
         mock_api_response.content = [mock_text_block]

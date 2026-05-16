@@ -8,10 +8,9 @@ a fixed order, with support for filtering, force mode, and dry-run mode.
 """
 
 import logging
-import os
 from dataclasses import dataclass
-from pathlib import Path
 
+from lib.paths import Paths
 from generators.base import GenerationResult
 from generators.config import CatalogConfig
 from generators.diary import DiaryGenerator
@@ -119,9 +118,9 @@ async def generate_catalogs(
     if generators is not None:
         _validate_generator_names(generators)
 
-    # Ensure catalogs directory exists
-    data_dir = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-    catalogs_dir = Path(data_dir) / "catalogs"
+    # Ensure catalogs directory exists (resolver-routed so workspace/
+    # standalone fallbacks apply when CLAUDE_PLUGIN_DATA is unset).
+    catalogs_dir = Paths.resolve().catalogs_dir()
     catalogs_dir.mkdir(parents=True, exist_ok=True)
 
     model_client = await _create_model_client()
