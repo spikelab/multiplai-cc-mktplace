@@ -25,7 +25,7 @@ You are the multiplai health audit skill. Your job is to check the completeness 
 
    - **Learnings**: Number of unprocessed learning lines.
 
-   - **AutoDream**: Date of last dream consolidation, or "never" if none has occurred.
+   - **Dream**: Date of last dream consolidation, or "never" if none has occurred.
 
    - **Recommendations**: Actionable suggestions — recommend `/multiplai:setup` for missing files, `/multiplai:dream` for stale memory or unprocessed learnings.
 

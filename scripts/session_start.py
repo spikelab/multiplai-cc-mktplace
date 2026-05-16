@@ -3,7 +3,7 @@
 Loads memory files, injects context, logs client selection,
 records session start timestamp and initializes session state.
 
-Also checks the AutoDream 24h gate: when more than 24 hours have
+Also checks the Dream 24h gate: when more than 24 hours have
 elapsed since the last dream run and fresh learnings are pending,
 emits a system nudge so Spike is prompted to run ``/multiplai:dream``
 instead of the consolidation silently falling out of rhythm.
@@ -43,7 +43,7 @@ def _log_client_selection() -> str:
     return client_type
 
 
-def _autodream_gate_open(dream_state_file: Path) -> bool:
+def _dream_gate_open(dream_state_file: Path) -> bool:
     """Return True when >=24h have passed since the last dream run.
 
     Missing state or an unparseable timestamp is treated as gate-open
@@ -163,11 +163,11 @@ def _process_deferred_extractions(data_dir: Path, extract_script: Path) -> int:
     return processed
 
 
-def _emit_autodream_nudge() -> None:
+def _emit_dream_nudge() -> None:
     """Print an additionalContext nudge prompting Spike to run /multiplai:dream."""
     print(
         "\n--- SYSTEM NUDGE ---\n"
-        "AutoDream gate is open (>24h since last consolidation) with "
+        "Dream gate is open (>24h since last consolidation) with "
         "unprocessed learnings on disk. Surface this to Spike at the next "
         "natural stopping point: 'Dream reports look due — worth running "
         "/multiplai:dream?'"
@@ -215,18 +215,18 @@ def main() -> None:
     except Exception:
         logger.exception("Deferred extraction processing failed (non-fatal)")
 
-    # AutoDream gate: emit a nudge when the 24h window has elapsed and
+    # Dream gate: emit a nudge when the 24h window has elapsed and
     # fresh learnings are waiting. The nudge is additionalContext only —
     # the actual dream still runs via /multiplai:dream when Spike
     # chooses.
     dream_state_file = paths.dream_state_file()
     learnings_file = paths.learnings_file()
     if (
-        _autodream_gate_open(dream_state_file)
+        _dream_gate_open(dream_state_file)
         and _learnings_pending(learnings_file, dream_state_file)
     ):
-        logger.info("AutoDream gate open with pending learnings; emitting nudge")
-        _emit_autodream_nudge()
+        logger.info("Dream gate open with pending learnings; emitting nudge")
+        _emit_dream_nudge()
 
     logger.info("Session started: %s (loaded %d memory files)", session_id, len(memory_context))
 

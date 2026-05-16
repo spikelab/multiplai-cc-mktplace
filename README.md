@@ -40,10 +40,10 @@ The plugin supports three user configuration options via `plugin.json` `userConf
 Onboarding interviewer. Conducts an interactive interview to populate your memory files from starter templates. Asks about your identity, technical preferences, and workflow preferences, then writes `me.md`, `technical-pref.md`, and `preferences.md` to your memory directory.
 
 ### `/multiplai:dream`
-Manual AutoDream trigger. By default runs in **report mode** — generates a proposal file in `.multiplai/inbox/` for you to review without touching your memory files. Pass `--auto` to apply changes directly instead.
+Dream trigger. By default runs in **report mode** — generates a proposal file in `.multiplai/inbox/` for you to review without touching your memory files. Pass `--auto` to apply changes directly instead.
 
 ### `/multiplai:process-learnings`
-Human-in-the-loop learning review. Checks `.multiplai/inbox/` for a pending AutoDream proposal (generating one if none exists), then walks through proposed memory updates grouped by target file. You approve, reject, or modify each change before anything is written. Cleans up processed learning files on completion.
+Human-in-the-loop learning review. Checks `.multiplai/inbox/` for a pending Dream proposal (generating one if none exists), then walks through proposed memory updates grouped by target file. You approve, reject, or modify each change before anything is written. Cleans up processed learning files on completion.
 
 ### `/multiplai:health`
 Memory audit. Reports the completeness and staleness of your memory files, diary entries, and plugin data. Flags missing or stale files and recommends actions.
@@ -97,7 +97,7 @@ multiplai-plugin/
 │   ├── session_stop.py      # Stop hook — diary + learnings capture
 │   ├── session_end.py       # SessionEnd hook
 │   ├── pre_compact.py       # PreCompact hook
-│   ├── autodream.py         # Learnings consolidation (report or --auto)
+│   ├── dream.py             # Learnings consolidation (report or --auto)
 │   └── generate_catalog.py  # Catalog index builder
 └── skills/
     ├── setup/SKILL.md
@@ -116,7 +116,7 @@ multiplai-plugin/
 ### Learning lifecycle
 
 1. **Capture** — `session_stop.py` writes raw learnings to `.multiplai/learnings/` after each session.
-2. **Consolidate** — `autodream.py` (via `/multiplai:dream` or nightly) reads learnings + diary, generates a proposal in `.multiplai/inbox/`.
+2. **Consolidate** — `dream.py` (via `/multiplai:dream` or nightly) reads learnings + diary, generates a proposal in `.multiplai/inbox/`.
 3. **Review & apply** — `/multiplai:process-learnings` walks through the proposal with you and applies approved edits to memory files.
 
 ## License

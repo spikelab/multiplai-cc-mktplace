@@ -59,23 +59,23 @@ The extract-learnings script must be ported with `git_stage()` removed. Learning
 
 ---
 
-### Requirement: AutoDream Port
-The autodream script must be ported to use plugin paths for dream state and memory files, and `ModelClient` for LLM synthesis.
+### Requirement: Dream Port
+The dream script must be ported to use plugin paths for dream state and memory files, and `ModelClient` for LLM synthesis.
 
 #### Scenario: Dream state persisted in plugin data directory
-- **WHEN** autodream runs and updates dream state (last run timestamp, pending learnings count)
+- **WHEN** dream runs and updates dream state (last run timestamp, pending learnings count)
 - **THEN** dream state is read from and written to `paths.plugin_data() / "dream_state"` or equivalent path-resolver location
 
-#### Scenario: AutoDream reads learnings from path-resolved location
-- **WHEN** autodream triggers a consolidation cycle
+#### Scenario: Dream reads learnings from path-resolved location
+- **WHEN** dream triggers a consolidation cycle
 - **THEN** it reads accumulated learnings from `paths.learnings_file()`, not from a hardcoded path
 
-#### Scenario: AutoDream synthesizes via ModelClient
-- **WHEN** autodream invokes the LLM to consolidate learnings into memory updates
+#### Scenario: Dream synthesizes via ModelClient
+- **WHEN** dream invokes the LLM to consolidate learnings into memory updates
 - **THEN** it uses `ModelClient` methods, not direct `claude_agent_sdk` imports
 
-#### Scenario: AutoDream updates memory files in user-configured directory
-- **WHEN** autodream produces memory-file updates (e.g., updating `me.md`)
+#### Scenario: Dream updates memory files in user-configured directory
+- **WHEN** dream produces memory-file updates (e.g., updating `me.md`)
 - **THEN** it writes those updates to the directory returned by `paths.memory_dir()`
 
 ---

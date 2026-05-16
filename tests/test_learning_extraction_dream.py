@@ -1,8 +1,8 @@
-"""Tests for Block 7: Learning Extraction & AutoDream (plugin port).
+"""Tests for Block 7: Learning Extraction & Dream (plugin port).
 
 Covers the four plugin scripts ported from claude-code-multiplai:
   - scripts/extract_learnings.py — Extract learnings with path/SDK/stripping transforms
-  - scripts/autodream.py — AutoDream consolidation with async model client
+  - scripts/dream.py — Dream consolidation with async model client
   - scripts/synthesize_now.py — Manual dream trigger
   - scripts/pre_compact.py — PreCompact hook event handler
 
@@ -40,14 +40,14 @@ LIB_DIR = SCRIPTS_DIR / "lib"
 
 # Script paths
 EXTRACT_LEARNINGS = SCRIPTS_DIR / "extract_learnings.py"
-AUTODREAM = SCRIPTS_DIR / "autodream.py"
+DREAM = SCRIPTS_DIR / "dream.py"
 SYNTHESIZE_NOW = SCRIPTS_DIR / "synthesize_now.py"
 PRE_COMPACT = SCRIPTS_DIR / "pre_compact.py"
 
-ALL_SCRIPTS = [EXTRACT_LEARNINGS, AUTODREAM, SYNTHESIZE_NOW, PRE_COMPACT]
+ALL_SCRIPTS = [EXTRACT_LEARNINGS, DREAM, SYNTHESIZE_NOW, PRE_COMPACT]
 ALL_SCRIPT_NAMES = [
     "extract_learnings.py",
-    "autodream.py",
+    "dream.py",
     "synthesize_now.py",
     "pre_compact.py",
 ]
@@ -377,61 +377,61 @@ class TestExtractLearningsPort:
 
 
 # ===================================================================
-# Requirement: AutoDream Port — specific behaviors
+# Requirement: Dream Port — specific behaviors
 # ===================================================================
 
 class TestAutodreamPort:
-    """autodream.py must be ported with concurrent LLM calls via async model client."""
+    """dream.py must be ported with concurrent LLM calls via async model client."""
 
     def test_uses_model_client(self):
-        """WHEN autodream invokes the LLM to consolidate learnings
+        """WHEN dream invokes the LLM to consolidate learnings
         THEN it uses ModelClient methods via create_client()."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         assert "create_client" in source, (
-            "autodream.py must use create_client() from lib.model_client "
+            "dream.py must use create_client() from lib.model_client "
             "for LLM synthesis"
         )
 
     def test_reads_learnings_from_path_resolver(self):
-        """WHEN autodream triggers a consolidation cycle
+        """WHEN dream triggers a consolidation cycle
         THEN it reads learnings from a path-resolved location (learnings_dir or learnings_file)."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         assert "learnings_dir" in source or "learnings_file" in source, (
-            "autodream.py must read learnings from a path-resolved location "
+            "dream.py must read learnings from a path-resolved location "
             "(paths.learnings_dir or paths.learnings_file()), not from a hardcoded path"
         )
 
     def test_reads_dream_state_from_path_resolver(self):
-        """WHEN autodream reads/writes dream state
+        """WHEN dream reads/writes dream state
         THEN it uses paths.dream_state_file()."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         assert "dream_state_file" in source or "dream_state" in source, (
-            "autodream.py must use paths.dream_state_file() for dream state tracking"
+            "dream.py must use paths.dream_state_file() for dream state tracking"
         )
 
     def test_writes_to_memory_dir(self):
-        """WHEN autodream produces memory-file updates
+        """WHEN dream produces memory-file updates
         THEN it writes to the directory returned by paths.memory_dir()."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         assert "memory_dir" in source, (
-            "autodream.py must write memory updates to paths.memory_dir()"
+            "dream.py must write memory updates to paths.memory_dir()"
         )
 
     def test_async_entry_point(self):
-        """WHEN autodream is inspected
+        """WHEN dream is inspected
         THEN it has an async entry point (for concurrent LLM calls)."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         assert "async def" in source, (
-            "autodream.py must have async functions for concurrent LLM calls"
+            "dream.py must have async functions for concurrent LLM calls"
         )
         assert "asyncio.run" in source, (
-            "autodream.py must use asyncio.run() for the async entry point"
+            "dream.py must use asyncio.run() for the async entry point"
         )
 
     def test_concurrent_llm_calls(self):
-        """WHEN autodream processes multiple memory files for consolidation
+        """WHEN dream processes multiple memory files for consolidation
         THEN it uses concurrent LLM calls (asyncio.gather or TaskGroup)."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         has_concurrency = (
             "asyncio.gather" in source or
             "TaskGroup" in source or
@@ -439,27 +439,27 @@ class TestAutodreamPort:
             "gather(" in source
         )
         assert has_concurrency, (
-            "autodream.py must use concurrent LLM calls (asyncio.gather, TaskGroup, "
+            "dream.py must use concurrent LLM calls (asyncio.gather, TaskGroup, "
             "or create_task) for processing multiple memory files in parallel"
         )
 
     def test_dream_state_persisted_in_plugin_data(self):
-        """WHEN autodream updates dream state
+        """WHEN dream updates dream state
         THEN dream state is written to paths.plugin_data() / dream_state."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         has_state_write = (
             "dream_state" in source and
             ("write" in source or "dump" in source or "save" in source)
         )
         assert has_state_write, (
-            "autodream.py must persist dream state (last run timestamp, etc.) "
+            "dream.py must persist dream state (last run timestamp, etc.) "
             "to the dream_state file in plugin data directory"
         )
 
     def test_handles_empty_learnings(self):
-        """WHEN autodream runs but there are no learnings
+        """WHEN dream runs but there are no learnings
         THEN it exits early without modifying memory files."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         has_empty_check = (
             "not learnings" in source or
             "is empty" in source.lower() or
@@ -469,29 +469,29 @@ class TestAutodreamPort:
             "if not learnings" in source
         )
         assert has_empty_check, (
-            "autodream.py must check for empty/missing learnings and exit early"
+            "dream.py must check for empty/missing learnings and exit early"
         )
 
     def test_handles_missing_learnings_file(self):
-        """WHEN autodream runs but the learnings file does not exist
+        """WHEN dream runs but the learnings file does not exist
         THEN it exits gracefully without error."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         has_existence_check = (
             ".exists()" in source or
             "FileNotFoundError" in source or
             "not learnings_file" in source
         )
         assert has_existence_check, (
-            "autodream.py must handle missing learnings file gracefully"
+            "dream.py must handle missing learnings file gracefully"
         )
 
 
 # ===================================================================
-# Requirement: AutoDream — functional behavior tests
+# Requirement: Dream — functional behavior tests
 # ===================================================================
 
 class TestAutodreamFunctional:
-    """Functional tests for autodream.py using mocked dependencies."""
+    """Functional tests for dream.py using mocked dependencies."""
 
     @pytest.fixture
     def mock_env(self, tmp_path, monkeypatch, reset_paths_cache):
@@ -515,8 +515,8 @@ class TestAutodreamFunctional:
             "diary": diary_dir,
         }
 
-    def test_autodream_reads_learnings_from_learnings_dir(self, mock_env):
-        """WHEN autodream runs in plugin mode
+    def test_dream_reads_learnings_from_learnings_dir(self, mock_env):
+        """WHEN dream runs in plugin mode
         THEN per-day learnings live under paths.learnings_dir()."""
         from lib.paths import get_paths
         paths = get_paths()
@@ -532,8 +532,8 @@ class TestAutodreamFunctional:
         assert paths.learnings_file("2026-01-01") == learnings_today
         assert learnings_today.parent == paths.learnings_dir()
 
-    def test_autodream_dream_state_in_data_dir(self, mock_env):
-        """WHEN autodream updates dream state
+    def test_dream_dream_state_in_data_dir(self, mock_env):
+        """WHEN dream updates dream state
         THEN it writes to plugin data directory."""
         from lib.paths import get_paths
         paths = get_paths()
@@ -542,8 +542,8 @@ class TestAutodreamFunctional:
             "Dream state file should be under plugin data directory"
         )
 
-    def test_autodream_memory_updates_go_to_memory_dir(self, mock_env):
-        """WHEN autodream produces memory file updates
+    def test_dream_memory_updates_go_to_memory_dir(self, mock_env):
+        """WHEN dream produces memory file updates
         THEN they are written to the configured memory directory."""
         from lib.paths import get_paths
         paths = get_paths()
@@ -731,7 +731,7 @@ class TestModelClientUsage:
 
     @pytest.mark.parametrize("script_path,script_name", [
         (EXTRACT_LEARNINGS, "extract_learnings.py"),
-        (AUTODREAM, "autodream.py"),
+        (DREAM, "dream.py"),
         (SYNTHESIZE_NOW, "synthesize_now.py"),
     ])
     def test_llm_scripts_use_create_client(self, script_path, script_name):
@@ -748,7 +748,7 @@ class TestModelClientUsage:
 
     @pytest.mark.parametrize("script_path,script_name", [
         (EXTRACT_LEARNINGS, "extract_learnings.py"),
-        (AUTODREAM, "autodream.py"),
+        (DREAM, "dream.py"),
         (SYNTHESIZE_NOW, "synthesize_now.py"),
     ])
     def test_llm_scripts_await_create_client(self, script_path, script_name):
@@ -761,7 +761,7 @@ class TestModelClientUsage:
 
     @pytest.mark.parametrize("script_path,script_name", [
         (EXTRACT_LEARNINGS, "extract_learnings.py"),
-        (AUTODREAM, "autodream.py"),
+        (DREAM, "dream.py"),
         (SYNTHESIZE_NOW, "synthesize_now.py"),
     ])
     def test_llm_scripts_call_query(self, script_path, script_name):
@@ -794,25 +794,25 @@ class TestMemoryFileWriteLocations:
             "extract_learnings.py must write to paths.learnings_file() (under memory_dir)"
         )
 
-    def test_autodream_reads_from_memory_dir(self):
-        """WHEN autodream reads current memory files
+    def test_dream_reads_from_memory_dir(self):
+        """WHEN dream reads current memory files
         THEN it uses paths.memory_dir()."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         assert "memory_dir" in source, (
-            "autodream.py must read/write memory files via paths.memory_dir()"
+            "dream.py must read/write memory files via paths.memory_dir()"
         )
 
-    def test_autodream_updates_memory_files(self):
-        """WHEN autodream produces memory-file updates (e.g., updating me.md)
+    def test_dream_updates_memory_files(self):
+        """WHEN dream produces memory-file updates (e.g., updating me.md)
         THEN it writes those updates to the directory returned by paths.memory_dir()."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         # Must have logic to write updated memory files
         has_memory_write = (
             "memory_dir" in source and
             ("write" in source or "open" in source)
         )
         assert has_memory_write, (
-            "autodream.py must write updated memory files to paths.memory_dir()"
+            "dream.py must write updated memory files to paths.memory_dir()"
         )
 
     def test_synthesize_reads_diary_dir(self):
@@ -896,17 +896,17 @@ class TestExtractLearningsQueryPattern:
 
 
 # ===================================================================
-# Requirement: AutoDream concurrent processing
+# Requirement: Dream concurrent processing
 # ===================================================================
 
 class TestAutodreamConcurrency:
-    """AutoDream must use concurrent LLM calls for processing multiple
+    """Dream must use concurrent LLM calls for processing multiple
     memory files in parallel."""
 
     def test_processes_multiple_memory_files(self):
-        """WHEN autodream consolidates learnings
+        """WHEN dream consolidates learnings
         THEN it can process updates for multiple memory files."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         has_multi_file = (
             "for " in source and "memory" in source.lower() or
             "files" in source.lower() or
@@ -914,61 +914,61 @@ class TestAutodreamConcurrency:
             "iterdir" in source
         )
         assert has_multi_file, (
-            "autodream.py must handle processing updates for multiple memory files"
+            "dream.py must handle processing updates for multiple memory files"
         )
 
     def test_uses_asyncio_for_concurrency(self):
-        """WHEN autodream makes multiple LLM calls
+        """WHEN dream makes multiple LLM calls
         THEN it uses asyncio concurrency primitives."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         assert "asyncio" in source, (
-            "autodream.py must use asyncio for concurrent LLM call processing"
+            "dream.py must use asyncio for concurrent LLM call processing"
         )
 
 
 # ===================================================================
-# Requirement: AutoDream dream state management
+# Requirement: Dream dream state management
 # ===================================================================
 
 class TestAutodreamDreamState:
-    """AutoDream must read/write dream state to track consolidation runs."""
+    """Dream must read/write dream state to track consolidation runs."""
 
     def test_reads_dream_state(self):
-        """WHEN autodream starts
+        """WHEN dream starts
         THEN it reads existing dream state to check last run time."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         has_state_read = (
             "dream_state" in source and
             ("read" in source or "load" in source or "open" in source or
              "exists" in source)
         )
         assert has_state_read, (
-            "autodream.py must read dream state to check last run timing"
+            "dream.py must read dream state to check last run timing"
         )
 
     def test_updates_dream_state_after_run(self):
-        """WHEN autodream completes successfully
+        """WHEN dream completes successfully
         THEN it updates the dream state with the current timestamp."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         has_state_update = (
             "dream_state" in source and
             ("write" in source or "dump" in source or "save" in source or
              "timestamp" in source.lower())
         )
         assert has_state_update, (
-            "autodream.py must update dream state after successful consolidation"
+            "dream.py must update dream state after successful consolidation"
         )
 
     def test_uses_yaml_for_state(self):
-        """WHEN autodream persists dream state
+        """WHEN dream persists dream state
         THEN it uses YAML format (as specified by dream_state_file path .yaml)."""
-        source = _read_source(AUTODREAM)
+        source = _read_source(DREAM)
         has_yaml = (
             "yaml" in source.lower() or
             "pyyaml" in source.lower()
         )
         assert has_yaml, (
-            "autodream.py must use YAML for dream state persistence "
+            "dream.py must use YAML for dream state persistence "
             "(dream_state_file is .yaml)"
         )
 
@@ -986,7 +986,7 @@ class TestSynthesizeNowInputs:
 
         synthesize_now's purpose is per-project status synthesis, not
         memory consolidation — learnings and memory files are handled
-        by autodream.py.
+        by dream.py.
         """
         source = _read_source(SYNTHESIZE_NOW)
         has_diary = "diary" in source.lower()
@@ -1086,9 +1086,9 @@ class TestScriptIntegrationPatterns:
 
     @pytest.mark.parametrize("script_path,script_name", [
         (EXTRACT_LEARNINGS, "extract_learnings.py"),
-        (AUTODREAM, "autodream.py"),
+        (DREAM, "dream.py"),
         (SYNTHESIZE_NOW, "synthesize_now.py"),
-    ], ids=["extract_learnings", "autodream", "synthesize_now"])
+    ], ids=["extract_learnings", "dream", "synthesize_now"])
     def test_llm_scripts_have_error_handling(self, script_path, script_name):
         """WHEN an LLM-calling script is inspected
         THEN it has error handling for LLM call failures."""

@@ -98,9 +98,9 @@ class TestHealthSkillPrompt:
         """Health skill must check unprocessed learnings."""
         assert re.search(r"(?i)learning", self.text)
 
-    def test_mentions_autodream_status(self):
-        """Health skill must report last AutoDream consolidation date."""
-        assert re.search(r"(?i)(autodream|consolidat|dream|never)", self.text)
+    def test_mentions_dream_status(self):
+        """Health skill must report last Dream consolidation date."""
+        assert re.search(r"(?i)(dream|consolidat|dream|never)", self.text)
 
     def test_mentions_recommendations(self):
         """Health skill must provide recommendations for issues found."""
@@ -402,7 +402,7 @@ class TestHealthCheckDiaryAndLearnings:
         assert re.search(r"(?i)learning", self.source)
 
     def test_reports_last_dream_date(self):
-        """health_check.py must report last AutoDream date or 'never'."""
+        """health_check.py must report last Dream date or 'never'."""
         assert re.search(r"(?i)(dream.*state|last.*dream|never|consolidat)", self.source)
 
 
@@ -490,9 +490,9 @@ class TestHealthNoGitOperations:
 class TestSkillScriptsAreEntryPoints:
     """Verify skill scripts can be invoked as standalone entry points."""
 
-    def test_autodream_has_main_guard(self):
-        """autodream.py must have if __name__ == '__main__' guard."""
-        source = (SCRIPTS_DIR / "autodream.py").read_text()
+    def test_dream_has_main_guard(self):
+        """dream.py must have if __name__ == '__main__' guard."""
+        source = (SCRIPTS_DIR / "dream.py").read_text()
         assert re.search(r'if\s+__name__\s*==\s*["\']__main__["\']', source)
 
     def test_health_check_has_main_guard(self):
@@ -523,9 +523,9 @@ class TestSkillsPluginDirExecution:
             path = PLUGIN_ROOT / skill_file
             assert path.is_file(), f"Skill file missing: {skill_file}"
 
-    def test_dream_skill_autodream_script_exists(self):
-        """autodream.py referenced by dream skill must exist."""
-        assert (SCRIPTS_DIR / "autodream.py").is_file()
+    def test_dream_skill_dream_script_exists(self):
+        """dream.py referenced by dream skill must exist."""
+        assert (SCRIPTS_DIR / "dream.py").is_file()
 
     def test_health_skill_health_check_script_exists(self):
         """health_check.py referenced by health skill must exist."""
@@ -538,7 +538,7 @@ class TestSkillsPluginDirExecution:
 
     def test_scripts_use_sys_path_setup(self):
         """All scripts must set up sys.path for lib/ imports."""
-        for script_name in ["autodream.py"]:
+        for script_name in ["dream.py"]:
             source = (SCRIPTS_DIR / script_name).read_text()
             assert re.search(r"sys\.path\.insert", source), \
                 f"{script_name} must set up sys.path for lib/ imports"

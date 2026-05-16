@@ -18,7 +18,7 @@ EXPECTED_SCRIPTS = [
     "session_end.py",
     "pre_compact.py",
     "extract_learnings.py",
-    "autodream.py",
+    "dream.py",
     "synthesize_now.py",
     "generate_catalog.py",
 ]
@@ -159,11 +159,11 @@ class TestExtractLearningsPort:
 
 
 class TestAutodreamPort:
-    """Verify autodream port specifics."""
+    """Verify dream port specifics."""
 
     @pytest.fixture(autouse=True)
     def load_script(self):
-        self.text = (SCRIPTS_DIR / "autodream.py").read_text()
+        self.text = (SCRIPTS_DIR / "dream.py").read_text()
 
     def test_uses_path_resolver(self):
         assert "from lib.paths" in self.text or "lib.paths" in self.text
