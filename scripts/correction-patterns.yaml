@@ -35,7 +35,7 @@ categories:
     confidence: high
     description: "Direct statements that something is wrong"
     patterns:
-      # "nope" — Spike's signature correction word. ~100% precision.
+      # "nope" — a common short correction word. ~100% precision.
       - "^nope\\b"
       # "No, [redirect]" — "No, that's not what I asked", "No, hold on"
       - "^no[,.]?\\s+(that|I|it|the|this|we|hold|don't|wait)"

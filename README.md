@@ -11,8 +11,8 @@ claude --plugin-dir ./multiplai-plugin
 Or clone and point to the local directory:
 
 ```bash
-git clone https://github.com/spikelab/multiplai.git
-claude --plugin-dir ./multiplai
+git clone https://github.com/your-username/multiplai-plugin.git
+claude --plugin-dir ./multiplai-plugin
 ```
 
 ## Configuration

@@ -2,7 +2,7 @@
 
 Loads regex patterns from ``scripts/correction-patterns.yaml`` and
 matches them against user turns in a session transcript. Unlike the
-LLM-based extractor, detection is deterministic: if Spike wrote "nope"
+LLM-based extractor, detection is deterministic: if the user wrote "nope"
 the pattern fires, every time. The result is used by
 ``extract_learnings`` to tag any learnings from a session that
 contained corrections with ``type: CORRECTION, trust: verified`` so

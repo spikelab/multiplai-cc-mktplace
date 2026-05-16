@@ -55,7 +55,7 @@ The file `marketplace.json` at the repository root MUST contain metadata require
 
 #### Scenario: Repository URL points to GitHub
 - **WHEN** reading the `repository` field from `marketplace.json`
-- **THEN** the value is `"https://github.com/spikelab/multiplai"` or follows the `https://github.com/<owner>/<repo>` pattern
+- **THEN** the value is `"https://github.com/<owner>/<repo>"` or follows the `https://github.com/<owner>/<repo>` pattern
 
 #### Scenario: Categories is a non-empty array
 - **WHEN** reading the `categories` field from `marketplace.json`
