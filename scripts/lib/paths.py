@@ -203,6 +203,10 @@ class Paths:
             date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return self.learnings_dir / f"{date_str}.md"
 
+    def inbox_dir(self) -> Path:
+        """Inbox directory for pending review items (proposals from AutoDream, etc.)."""
+        return self.data_dir.parent / "inbox"
+
     def scripts_dir(self) -> Path:
         """Hook and utility scripts directory."""
         return self.plugin_root / "scripts"

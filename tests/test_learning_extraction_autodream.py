@@ -394,11 +394,11 @@ class TestAutodreamPort:
 
     def test_reads_learnings_from_path_resolver(self):
         """WHEN autodream triggers a consolidation cycle
-        THEN it reads learnings from paths.learnings_file()."""
+        THEN it reads learnings from a path-resolved location (learnings_dir or learnings_file)."""
         source = _read_source(AUTODREAM)
-        assert "learnings_file" in source, (
-            "autodream.py must read learnings from paths.learnings_file(), "
-            "not from a hardcoded path"
+        assert "learnings_dir" in source or "learnings_file" in source, (
+            "autodream.py must read learnings from a path-resolved location "
+            "(paths.learnings_dir or paths.learnings_file()), not from a hardcoded path"
         )
 
     def test_reads_dream_state_from_path_resolver(self):
