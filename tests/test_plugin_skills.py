@@ -26,11 +26,11 @@ def _skill_frontmatter(skill_file: str) -> dict:
 class TestSkillFrontmatter:
     """Verify skill files have required YAML frontmatter for CC auto-discovery."""
 
-    SKILL_FILES = ["skills/setup/SKILL.md", "skills/dream/SKILL.md", "skills/health/SKILL.md", "skills/refresh-catalogs/SKILL.md"]
+    SKILL_FILES = ["skills/setup/SKILL.md", "skills/dream/SKILL.md", "skills/health/SKILL.md", "skills/refresh-catalogs/SKILL.md", "skills/process-learnings/SKILL.md"]
 
-    def test_exactly_four_skill_files(self):
+    def test_exactly_five_skill_files(self):
         skill_files = list((PLUGIN_ROOT / "skills").glob("*/SKILL.md"))
-        assert len(skill_files) == 4
+        assert len(skill_files) == 5
 
     @pytest.mark.parametrize("skill_file", SKILL_FILES)
     def test_has_frontmatter(self, skill_file):
@@ -50,7 +50,7 @@ class TestSkillFrontmatter:
     def test_skill_names_match_expected(self):
         names = {_skill_frontmatter(f"skills/{p.parent.name}/SKILL.md")["name"]
                  for p in (PLUGIN_ROOT / "skills").glob("*/SKILL.md")}
-        assert names == {"setup", "dream", "health", "refresh-catalogs"}
+        assert names == {"setup", "dream", "health", "refresh-catalogs", "process-learnings"}
 
 
 class TestSkillFileExistence:
