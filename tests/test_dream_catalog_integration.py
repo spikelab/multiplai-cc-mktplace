@@ -108,23 +108,23 @@ class TestDreamSkillContainsCatalogRegeneration:
 
 
 # ---------------------------------------------------------------------------
-# autodream.py triggers catalog regeneration
+# dream.py triggers catalog regeneration
 # ---------------------------------------------------------------------------
 
 
 class TestAutodreamTriggersCatalogRegeneration:
     """Requirement: Autodream call chain includes catalog regeneration.
 
-    autodream.py must trigger catalog regeneration after the dream
+    dream.py must trigger catalog regeneration after the dream
     consolidation phase completes, using the catalog dispatcher.
     """
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (SCRIPTS_DIR / "autodream.py").read_text()
+        self.source = (SCRIPTS_DIR / "dream.py").read_text()
 
-    def test_autodream_imports_or_references_catalog_generation(self):
-        """autodream.py must import or reference catalog generation."""
+    def test_dream_imports_or_references_catalog_generation(self):
+        """dream.py must import or reference catalog generation."""
         has_import = re.search(
             r"(from\s+generators\.dispatcher\s+import|"
             r"import\s+generators\.dispatcher|"
@@ -133,23 +133,23 @@ class TestAutodreamTriggersCatalogRegeneration:
             self.source,
         )
         assert has_import, (
-            "autodream.py must import or reference the catalog dispatcher "
+            "dream.py must import or reference the catalog dispatcher "
             "or generate_catalog module"
         )
 
-    def test_autodream_calls_generate_catalogs(self):
-        """autodream.py must call generate_catalogs() or equivalent."""
+    def test_dream_calls_generate_catalogs(self):
+        """dream.py must call generate_catalogs() or equivalent."""
         has_call = re.search(
             r"generate_catalogs?\s*\(|catalog.*dispatch|run_catalog",
             self.source,
         )
         assert has_call, (
-            "autodream.py must call generate_catalogs() or equivalent "
+            "dream.py must call generate_catalogs() or equivalent "
             "dispatcher function"
         )
 
-    def test_autodream_catalog_generation_after_dream(self):
-        """Catalog generation must come after dream consolidation in autodream.py.
+    def test_dream_catalog_generation_after_dream(self):
+        """Catalog generation must come after dream consolidation in dream.py.
 
         The code must call catalog generation after the dream() function
         or consolidation step completes, so the diary entry is written first.
@@ -161,16 +161,16 @@ class TestAutodreamTriggersCatalogRegeneration:
             r"generate_catalogs?\s*\(|catalog.*dispatch|run_catalog",
             self.source,
         )
-        assert dream_call is not None, "autodream.py must have a dream/consolidation call"
-        assert catalog_call is not None, "autodream.py must have a catalog generation call"
+        assert dream_call is not None, "dream.py must have a dream/consolidation call"
+        assert catalog_call is not None, "dream.py must have a catalog generation call"
         assert catalog_call.start() > dream_call.start(), (
             "Catalog generation must come after dream consolidation in source order"
         )
 
-    def test_autodream_catalog_generation_handles_errors(self):
-        """autodream.py must catch catalog generation errors gracefully.
+    def test_dream_catalog_generation_handles_errors(self):
+        """dream.py must catch catalog generation errors gracefully.
 
-        Catalog generation failure must not prevent autodream from completing.
+        Catalog generation failure must not prevent dream from completing.
         """
         # Look for try/except around catalog generation
         has_error_handling = re.search(
@@ -180,21 +180,21 @@ class TestAutodreamTriggersCatalogRegeneration:
             re.DOTALL,
         )
         assert has_error_handling, (
-            "autodream.py must handle catalog generation errors gracefully "
+            "dream.py must handle catalog generation errors gracefully "
             "so dream cycle completes even on catalog failure"
         )
 
 
 class TestAutodreamCatalogGenerationBehavior:
-    """Behavioral tests for autodream catalog regeneration integration.
+    """Behavioral tests for dream catalog regeneration integration.
 
-    These tests mock the catalog dispatcher to verify that autodream
+    These tests mock the catalog dispatcher to verify that dream
     correctly invokes catalog generation after the dream phase.
     """
 
     @pytest.fixture
     def mock_env(self, tmp_path, monkeypatch):
-        """Set up mock environment for autodream tests."""
+        """Set up mock environment for dream tests."""
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         memory_dir = tmp_path / "memory"
@@ -224,7 +224,7 @@ class TestAutodreamCatalogGenerationBehavior:
         }
 
     def test_dream_triggers_catalog_generation(self, mock_env):
-        """When autodream completes dream, it must invoke catalog generation.
+        """When dream completes dream, it must invoke catalog generation.
 
         Scenario: Catalogs regenerate after a normal dream cycle.
         """
@@ -242,16 +242,16 @@ class TestAutodreamCatalogGenerationBehavior:
                 from lib.paths import _reset_cache
                 _reset_cache()
 
-                # Import and run autodream
+                # Import and run dream
                 import importlib
                 import importlib.util
                 spec = importlib.util.spec_from_file_location(
-                    "autodream_test", SCRIPTS_DIR / "autodream.py"
+                    "dream_test", SCRIPTS_DIR / "dream.py"
                 )
                 mod = importlib.util.module_from_spec(spec)
 
                 # The test should verify generate_catalogs is called
-                # This will fail until autodream.py integrates catalog generation
+                # This will fail until dream.py integrates catalog generation
                 try:
                     spec.loader.exec_module(mod)
                     asyncio.run(mod.dream())
@@ -259,7 +259,7 @@ class TestAutodreamCatalogGenerationBehavior:
                     pass  # Allow import/runtime errors
 
                 mock_gen.assert_called(), (
-                    "autodream dream() must call generate_catalogs() "
+                    "dream dream() must call generate_catalogs() "
                     "after completing the consolidation phase"
                 )
 
@@ -284,7 +284,7 @@ class TestAutodreamCatalogGenerationBehavior:
 
                 import importlib.util
                 spec = importlib.util.spec_from_file_location(
-                    "autodream_fail_test", SCRIPTS_DIR / "autodream.py"
+                    "dream_fail_test", SCRIPTS_DIR / "dream.py"
                 )
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
@@ -314,14 +314,14 @@ class TestCatalogRegenerationOrdering:
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (SCRIPTS_DIR / "autodream.py").read_text()
+        self.source = (SCRIPTS_DIR / "dream.py").read_text()
 
     def test_diary_write_before_catalog_generation(self):
         """The diary/memory write must complete before catalog generation starts.
 
         Scenario: Ordering guarantee on diary write before catalog generation.
         """
-        # Find memory file write (the "diary write" in autodream is writing
+        # Find memory file write (the "diary write" in dream is writing
         # updated memory files and persisting dream state)
         write_match = re.search(
             r"(write|save|open.*\"w\"|\.write_text|save_yaml.*dream_state)",
@@ -331,8 +331,8 @@ class TestCatalogRegenerationOrdering:
             r"generate_catalogs?\s*\(|catalog.*dispatch|run_catalog",
             self.source,
         )
-        assert write_match is not None, "autodream must have a file write operation"
-        assert catalog_match is not None, "autodream must have catalog generation"
+        assert write_match is not None, "dream must have a file write operation"
+        assert catalog_match is not None, "dream must have catalog generation"
         assert catalog_match.start() > write_match.start(), (
             "Catalog generation must occur after diary/memory file writes "
             "to ensure new entries are indexed"
@@ -353,10 +353,10 @@ class TestDreamCatalogConfigRespected:
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (SCRIPTS_DIR / "autodream.py").read_text()
+        self.source = (SCRIPTS_DIR / "dream.py").read_text()
 
-    def test_autodream_loads_catalog_config(self):
-        """autodream.py must load catalog config for generation.
+    def test_dream_loads_catalog_config(self):
+        """dream.py must load catalog config for generation.
 
         Scenario: Custom model config is used during dream-triggered generation.
         """
@@ -365,12 +365,12 @@ class TestDreamCatalogConfigRespected:
             self.source,
         )
         assert has_config_load, (
-            "autodream.py must load catalog configuration "
+            "dream.py must load catalog configuration "
             "so that generators use the configured model and effort"
         )
 
-    def test_autodream_passes_config_to_generate_catalogs(self):
-        """autodream.py must pass config to the catalog dispatcher.
+    def test_dream_passes_config_to_generate_catalogs(self):
+        """dream.py must pass config to the catalog dispatcher.
 
         The dispatcher needs config to determine which generators run
         and what model/effort to use.
@@ -380,7 +380,7 @@ class TestDreamCatalogConfigRespected:
             self.source,
         )
         assert has_config_param, (
-            "autodream.py must pass CatalogConfig to generate_catalogs()"
+            "dream.py must pass CatalogConfig to generate_catalogs()"
         )
 
 
@@ -398,9 +398,9 @@ class TestDreamStateAwareSkipping:
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (SCRIPTS_DIR / "autodream.py").read_text()
+        self.source = (SCRIPTS_DIR / "dream.py").read_text()
 
-    def test_autodream_does_not_force_regeneration(self):
+    def test_dream_does_not_force_regeneration(self):
         """Dream-triggered catalog generation should NOT use force mode by default.
 
         Scenario: Unchanged catalogs are skipped.
@@ -413,7 +413,7 @@ class TestDreamStateAwareSkipping:
             self.source,
         )
         assert has_call, (
-            "autodream.py must call generate_catalogs() before we can verify "
+            "dream.py must call generate_catalogs() before we can verify "
             "it doesn't use force=True"
         )
         # Then check it's NOT called with force=True
@@ -422,7 +422,7 @@ class TestDreamStateAwareSkipping:
             self.source,
         )
         assert not force_call, (
-            "autodream.py must not pass force=True to generate_catalogs() — "
+            "dream.py must not pass force=True to generate_catalogs() — "
             "dream-triggered regeneration should use state-aware skipping"
         )
 
@@ -431,15 +431,15 @@ class TestDreamStateAwareSkipping:
         only the diary catalog should regenerate.
 
         Scenario: Only changed catalogs are regenerated.
-        This is a behavioral property of the dispatcher, but autodream
+        This is a behavioral property of the dispatcher, but dream
         must not override it with force=True.
         """
-        # Already tested by test_autodream_does_not_force_regeneration
-        # This test verifies the contract from the autodream side
+        # Already tested by test_dream_does_not_force_regeneration
+        # This test verifies the contract from the dream side
         assert re.search(
             r"generate_catalogs?\s*\(",
             self.source,
-        ), "autodream must call generate_catalogs()"
+        ), "dream must call generate_catalogs()"
 
 
 # ---------------------------------------------------------------------------
@@ -456,13 +456,13 @@ class TestDreamTriggeredPruning:
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (SCRIPTS_DIR / "autodream.py").read_text()
+        self.source = (SCRIPTS_DIR / "dream.py").read_text()
 
-    def test_autodream_uses_standard_dispatcher(self):
-        """autodream must use the standard dispatcher (which handles pruning).
+    def test_dream_uses_standard_dispatcher(self):
+        """dream must use the standard dispatcher (which handles pruning).
 
         Scenario: Removed diary day file is pruned from catalog.
-        Pruning is a dispatcher concern, but autodream must delegate to it
+        Pruning is a dispatcher concern, but dream must delegate to it
         rather than implementing its own catalog generation logic.
         """
         has_dispatcher = re.search(
@@ -471,7 +471,7 @@ class TestDreamTriggeredPruning:
             self.source,
         )
         assert has_dispatcher, (
-            "autodream must use the standard catalog dispatcher "
+            "dream must use the standard catalog dispatcher "
             "which handles deletion pruning automatically"
         )
 
@@ -490,7 +490,7 @@ class TestDreamDoesNotBlockOnOptionalCatalogs:
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (SCRIPTS_DIR / "autodream.py").read_text()
+        self.source = (SCRIPTS_DIR / "dream.py").read_text()
 
     def test_catalog_generation_not_blocking_dream_completion(self):
         """Dream cycle must complete regardless of catalog generation time.
@@ -509,6 +509,6 @@ class TestDreamDoesNotBlockOnOptionalCatalogs:
             re.DOTALL,
         )
         assert has_protection, (
-            "autodream must protect dream completion from slow catalog generation "
+            "dream must protect dream completion from slow catalog generation "
             "via error handling or timeout"
         )

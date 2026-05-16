@@ -1,6 +1,6 @@
 ---
 name: process-learnings
-description: Review and apply pending memory updates from the learnings backlog. Checks .multiplai/inbox/ for a pre-generated AutoDream proposal; if none exists, generates one. Then presents updates grouped by target file, waits for approval, applies edits, and cleans up processed learnings files.
+description: Review and apply pending memory updates from the learnings backlog. Checks .multiplai/inbox/ for a pre-generated Dream proposal; if none exists, generates one. Then presents updates grouped by target file, waits for approval, applies edits, and cleans up processed learnings files.
 model: opus
 effort: high
 ---
@@ -9,7 +9,7 @@ effort: high
 
 Human-in-the-loop workflow for applying accumulated session learnings to memory files.
 
-AutoDream (nightly or on demand via `/multiplai:dream`) generates a proposal file in
+Dream (nightly or on demand via `/multiplai:dream`) generates a proposal file in
 `.multiplai/inbox/`. This skill loads that proposal, walks through it with Spike, and
 applies approved changes.
 
@@ -22,7 +22,7 @@ Check `.multiplai/inbox/` for a file matching `processed-learnings-*.md`, most r
 - **Found:** load it, report its date and summary line to Spike, proceed to Step 3.
 - **Not found:** tell Spike "No pre-generated proposal found — generating one now" and run:
   ```
-  python "${CLAUDE_PLUGIN_ROOT}/scripts/autodream.py"
+  python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
   ```
   Wait for it to complete, then load the newly written file from inbox and proceed to Step 3.
 
@@ -32,9 +32,9 @@ The learnings directory is `.multiplai/learnings/` relative to the workspace roo
 
 ---
 
-## Step 2: Scan the Backlog (only if generating fresh without autodream)
+## Step 2: Scan the Backlog (only if generating fresh without dream.py)
 
-If `autodream.py` is unavailable and you need to generate manually:
+If `dream.py` is unavailable and you need to generate manually:
 
 1. Read all `.md` files in `.multiplai/learnings/` (skip `archived/` subdirectory).
 2. Split on `---` separators to extract individual session blocks.

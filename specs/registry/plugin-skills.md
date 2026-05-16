@@ -38,12 +38,12 @@ The `/multiplai:setup` skill MUST conduct an interactive onboarding interview th
 
 ---
 
-### Requirement: Dream skill — manual AutoDream trigger
-The `/multiplai:dream` skill MUST trigger the AutoDream consolidation process on demand, synthesizing learnings from the current session and recent diary entries into updated memory files.
+### Requirement: Dream skill — manual Dream trigger
+The `/multiplai:dream` skill MUST trigger the Dream consolidation process on demand, synthesizing learnings from the current session and recent diary entries into updated memory files.
 
 #### Scenario: Dream skill runs consolidation successfully
 - **WHEN** a user runs `/multiplai:dream` and there are accumulated learnings or diary entries to process
-- **THEN** the skill invokes the AutoDream pipeline (extract-learnings → synthesize-now) and reports a summary of what was consolidated and which memory files were updated
+- **THEN** the skill invokes the Dream pipeline (extract-learnings → synthesize-now) and reports a summary of what was consolidated and which memory files were updated
 
 #### Scenario: Dream skill uses model client for LLM reasoning
 - **WHEN** the dream skill needs to synthesize learnings into memory updates
@@ -76,7 +76,7 @@ The `/multiplai:health` skill MUST audit the current state of the user's memory 
 
 #### Scenario: Health skill checks diary and learnings directories
 - **WHEN** a user runs `/multiplai:health`
-- **THEN** the report includes the number of diary entries, the number of unprocessed learnings, and the date of the last AutoDream consolidation (or "never" if none has occurred)
+- **THEN** the report includes the number of diary entries, the number of unprocessed learnings, and the date of the last Dream consolidation (or "never" if none has occurred)
 
 #### Scenario: Health skill works with custom directories
 - **WHEN** `memory_dir` and `diary_dir` are configured to non-default paths via `userConfig`

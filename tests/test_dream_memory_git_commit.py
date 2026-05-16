@@ -49,11 +49,11 @@ def _git_log_count(dir_path: Path) -> int:
     return int(result.stdout.strip() or 0)
 
 
-def _load_autodream_module(alias: str):
-    """Load autodream.py as an isolated module (fresh paths cache) per test."""
+def _load_dream_module(alias: str):
+    """Load dream.py as an isolated module (fresh paths cache) per test."""
     from lib.paths import _reset_cache
     _reset_cache()
-    spec = importlib.util.spec_from_file_location(alias, SCRIPTS_DIR / "autodream.py")
+    spec = importlib.util.spec_from_file_location(alias, SCRIPTS_DIR / "dream.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -119,7 +119,7 @@ class TestDreamAutoCommit:
 
         with patch("generators.dispatcher.generate_catalogs", new=AsyncMock(return_value=[])), \
              patch("lib.model_client.create_client", new=AsyncMock(return_value=_mocked_client_context())):
-            mod = _load_autodream_module("autodream_commit")
+            mod = _load_dream_module("dream_commit")
             asyncio.run(mod.dream())
 
         assert _git_log_count(memory_dir) == initial_commits + 1, (
@@ -142,8 +142,8 @@ class TestDreamAutoCommit:
 
         with patch("generators.dispatcher.generate_catalogs", new=AsyncMock(return_value=[])), \
              patch("lib.model_client.create_client", new=AsyncMock(return_value=_mocked_client_context())):
-            mod = _load_autodream_module("autodream_nogit")
-            with caplog.at_level("WARNING", logger="autodream"):
+            mod = _load_dream_module("dream_nogit")
+            with caplog.at_level("WARNING", logger="dream"):
                 asyncio.run(mod.dream())
 
         # No .git was created, no commit happened — verify explicitly.
@@ -172,7 +172,7 @@ class TestDreamAutoCommit:
 
         with patch("generators.dispatcher.generate_catalogs", new=AsyncMock(return_value=[])), \
              patch("lib.model_client.create_client", new=AsyncMock(return_value=_mocked_client_context())):
-            mod = _load_autodream_module("autodream_noop")
+            mod = _load_dream_module("dream_noop")
             asyncio.run(mod.dream())
 
         assert _git_log_count(memory_dir) == initial_commits, (

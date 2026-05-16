@@ -12,14 +12,14 @@ When the `/dream` skill executes its reflection cycle, it must invoke catalog re
 - **THEN** the dream cycle still completes successfully, the error is logged, and no dream output is lost
 
 ### Requirement: Autodream call chain includes catalog regeneration
-The `autodream.py` script, which triggers dream cycles automatically, must also trigger catalog regeneration as part of its execution flow.
+The `dream.py` script, which triggers dream cycles automatically, must also trigger catalog regeneration as part of its execution flow.
 
 #### Scenario: Autodream triggers catalog generation
-- **WHEN** `autodream.py` invokes a dream cycle and the dream phase completes
+- **WHEN** `dream.py` invokes a dream cycle and the dream phase completes
 - **THEN** catalog regeneration is triggered via the catalog dispatcher with the same behavior as a manual `/dream` invocation
 
 #### Scenario: Autodream respects catalog configuration
-- **WHEN** `autodream.py` triggers catalog regeneration and optional catalogs (skills, resources) are disabled in `plugin.json`
+- **WHEN** `dream.py` triggers catalog regeneration and optional catalogs (skills, resources) are disabled in `plugin.json`
 - **THEN** only mandatory/enabled catalog generators run; disabled generators are skipped
 
 ### Requirement: Catalog regeneration runs after diary write

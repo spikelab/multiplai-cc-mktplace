@@ -1,7 +1,7 @@
-"""Tests for the /multiplai:dream skill — manual AutoDream trigger.
+"""Tests for the /multiplai:dream skill — manual Dream trigger.
 
 Block 9: Dream & Health Skills
-Covers: D6 skill definition, dream.md prompt, autodream pipeline invocation,
+Covers: D6 skill definition, dream.md prompt, dream pipeline invocation,
 model client usage, error handling, and --plugin-dir execution.
 """
 
@@ -87,9 +87,9 @@ class TestDreamSkillPrompt:
         """Dream skill must check for pending learnings before running."""
         assert re.search(r"(?i)(check|pending|nothing)", self.text)
 
-    def test_references_autodream_script(self):
-        """Dream skill must reference the autodream.py script for execution."""
-        assert "autodream" in self.text.lower()
+    def test_references_dream_script(self):
+        """Dream skill must reference the dream.py script for execution."""
+        assert "dream.py" in self.text.lower()
 
     def test_no_hardcoded_paths(self):
         """Dream skill must not contain hardcoded filesystem paths."""
@@ -122,39 +122,39 @@ class TestDreamSkillPrompt:
 
 
 # ---------------------------------------------------------------------------
-# AutoDream script — behavioral contracts
+# Dream script — behavioral contracts
 # ---------------------------------------------------------------------------
 
 
 class TestAutodreamScriptExists:
-    """Verify the autodream.py script exists and is valid Python."""
+    """Verify the dream.py script exists and is valid Python."""
 
     def test_script_exists(self):
-        """autodream.py must exist in scripts/."""
-        assert (SCRIPTS_DIR / "autodream.py").is_file()
+        """dream.py must exist in scripts/."""
+        assert (SCRIPTS_DIR / "dream.py").is_file()
 
     def test_script_compiles(self):
-        """autodream.py must be syntactically valid Python."""
+        """dream.py must be syntactically valid Python."""
         import py_compile
         py_compile.compile(
-            str(SCRIPTS_DIR / "autodream.py"),
+            str(SCRIPTS_DIR / "dream.py"),
             doraise=True,
         )
 
 
 class TestAutodreamUsesPathResolver:
-    """Verify autodream.py uses the path resolver for all file locations."""
+    """Verify dream.py uses the path resolver for all file locations."""
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (SCRIPTS_DIR / "autodream.py").read_text()
+        self.source = (SCRIPTS_DIR / "dream.py").read_text()
 
     def test_imports_path_resolver(self):
-        """autodream.py must import from the paths module."""
+        """dream.py must import from the paths module."""
         assert re.search(r"from\s+lib\.paths\s+import", self.source)
 
     def test_no_hardcoded_paths(self):
-        """autodream.py must not contain hardcoded directory paths."""
+        """dream.py must not contain hardcoded directory paths."""
         # Should not have literal home-dir references
         assert "~/.multiplai/" not in self.source
         assert "~/.claude/" not in self.source
@@ -168,18 +168,18 @@ class TestAutodreamUsesPathResolver:
 
 
 class TestAutodreamUsesModelClient:
-    """Verify autodream.py uses ModelClient abstraction for LLM calls."""
+    """Verify dream.py uses ModelClient abstraction for LLM calls."""
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (SCRIPTS_DIR / "autodream.py").read_text()
+        self.source = (SCRIPTS_DIR / "dream.py").read_text()
 
     def test_imports_model_client(self):
-        """autodream.py must import from the model_client module."""
+        """dream.py must import from the model_client module."""
         assert re.search(r"from\s+lib\.model_client\s+import", self.source)
 
     def test_no_direct_sdk_imports(self):
-        """autodream.py must not directly import claude_agent_sdk or anthropic."""
+        """dream.py must not directly import claude_agent_sdk or anthropic."""
         lines = self.source.split("\n")
         for line in lines:
             if line.strip().startswith("#"):
@@ -190,23 +190,23 @@ class TestAutodreamUsesModelClient:
                 f"Direct SDK import found: {line.strip()}"
 
     def test_uses_create_client(self):
-        """autodream.py must use create_client() factory."""
+        """dream.py must use create_client() factory."""
         assert "create_client" in self.source
 
 
 class TestAutodreamDreamState:
-    """Verify autodream persists dream state to plugin data directory."""
+    """Verify dream persists dream state to plugin data directory."""
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (SCRIPTS_DIR / "autodream.py").read_text()
+        self.source = (SCRIPTS_DIR / "dream.py").read_text()
 
     def test_reads_dream_state(self):
-        """autodream must read dream state from a path-resolved location."""
+        """dream must read dream state from a path-resolved location."""
         assert re.search(r"dream_state", self.source)
 
     def test_writes_dream_state(self):
-        """autodream must save dream state after processing."""
+        """dream must save dream state after processing."""
         assert re.search(r"save.*dream.*state|dream_state.*write|_save_dream_state", self.source)
 
     def test_uses_yaml_for_state(self):
@@ -215,34 +215,34 @@ class TestAutodreamDreamState:
 
 
 class TestAutodreamLearnings:
-    """Verify autodream reads learnings from path-resolved location."""
+    """Verify dream reads learnings from path-resolved location."""
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (SCRIPTS_DIR / "autodream.py").read_text()
+        self.source = (SCRIPTS_DIR / "dream.py").read_text()
 
     def test_reads_learnings_file(self):
-        """autodream must read learnings from path-resolved location."""
+        """dream must read learnings from path-resolved location."""
         assert re.search(r"learnings", self.source)
 
     def test_updates_memory_files(self):
-        """autodream must write updates to memory directory."""
+        """dream must write updates to memory directory."""
         assert re.search(r"memory", self.source.lower())
 
 
 class TestAutodreamCheckMode:
-    """Verify autodream supports a --check mode for dry-run inspection."""
+    """Verify dream supports a --check mode for dry-run inspection."""
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (SCRIPTS_DIR / "autodream.py").read_text()
+        self.source = (SCRIPTS_DIR / "dream.py").read_text()
 
     def test_supports_check_flag(self):
-        """autodream.py must accept --check flag for checking pending learnings."""
+        """dream.py must accept --check flag for checking pending learnings."""
         assert re.search(r"--check", self.source)
 
     def test_supports_run_flag(self):
-        """autodream.py must accept --run flag for triggering consolidation."""
+        """dream.py must accept --run flag for triggering consolidation."""
         assert re.search(r"--run", self.source)
 
 
@@ -272,7 +272,7 @@ class TestDreamSkillOutputContract:
 
 
 # ---------------------------------------------------------------------------
-# No git operations in dream/autodream
+# No git operations in dream/dream
 # ---------------------------------------------------------------------------
 
 
@@ -281,18 +281,18 @@ class TestDreamNoGitOperations:
 
     @pytest.fixture(autouse=True)
     def load_sources(self):
-        self.autodream_source = (SCRIPTS_DIR / "autodream.py").read_text()
+        self.dream_source = (SCRIPTS_DIR / "dream.py").read_text()
         self.dream_skill = (PLUGIN_ROOT / "skills" / "dream" / "SKILL.md").read_text()
 
-    def test_autodream_no_git_stage(self):
-        """autodream.py must not contain git_stage calls."""
-        assert "git_stage" not in self.autodream_source
+    def test_dream_no_git_stage(self):
+        """dream.py must not contain git_stage calls."""
+        assert "git_stage" not in self.dream_source
 
-    def test_autodream_no_git_add(self):
-        """autodream.py must not contain git add calls."""
+    def test_dream_no_git_add(self):
+        """dream.py must not contain git add calls."""
         # Check for subprocess git add, not variable names
-        assert not re.search(r'git\s+add\b', self.autodream_source)
+        assert not re.search(r'git\s+add\b', self.dream_source)
 
-    def test_autodream_no_git_commit(self):
-        """autodream.py must not contain git commit calls."""
-        assert not re.search(r'git\s+commit\b', self.autodream_source)
+    def test_dream_no_git_commit(self):
+        """dream.py must not contain git commit calls."""
+        assert not re.search(r'git\s+commit\b', self.dream_source)

@@ -187,7 +187,7 @@ class Paths:
         return self.data_dir / "logs"
 
     def dream_state_file(self) -> Path:
-        """AutoDream state tracking file (YAML)."""
+        """Dream state tracking file (YAML)."""
         return self.data_dir / "dream_state.yaml"
 
     def learnings_file(self, date_str: str | None = None) -> Path:
@@ -204,7 +204,7 @@ class Paths:
         return self.learnings_dir / f"{date_str}.md"
 
     def inbox_dir(self) -> Path:
-        """Inbox directory for pending review items (proposals from AutoDream, etc.)."""
+        """Inbox directory for pending review items (proposals from Dream, etc.)."""
         return self.data_dir.parent / "inbox"
 
     def scripts_dir(self) -> Path:

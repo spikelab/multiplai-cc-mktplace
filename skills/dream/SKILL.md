@@ -5,7 +5,7 @@ description: "Generate a processed-learnings proposal from the pending backlog a
 
 # Multiplai Dream — Generate Learnings Proposal
 
-Runs the AutoDream analysis pipeline: reads all pending learnings from `.multiplai/learnings/`,
+Runs the Dream analysis pipeline: reads all pending learnings from `.multiplai/learnings/`,
 calls the LLM to deduplicate and draft a structured change proposal, and writes it to
 `.multiplai/inbox/processed-learnings-YYYY-MM-DD.md`.
 
@@ -18,13 +18,13 @@ Run `/multiplai:process-learnings` to load the proposal and apply approved chang
 
 1. **Check for pending learnings:**
    ```
-   python "${CLAUDE_PLUGIN_ROOT}/scripts/autodream.py" --check
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --check
    ```
    If the output says no pending learnings, inform Spike and exit.
 
 2. **Generate the proposal:**
    ```
-   python "${CLAUDE_PLUGIN_ROOT}/scripts/autodream.py"
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
    ```
    (No flags — default is report mode.)
 
@@ -39,7 +39,7 @@ Run `/multiplai:process-learnings` to load the proposal and apply approved chang
 
 If Spike explicitly asks to apply changes without review:
 ```
-python "${CLAUDE_PLUGIN_ROOT}/scripts/autodream.py" --auto
+python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --auto
 ```
 
 This rewrites memory files directly and commits. Use only when Spike explicitly
@@ -60,8 +60,8 @@ changes via `/multiplai:process-learnings`.)
 
 ## Constraints
 - Never invoke `--auto` unless Spike explicitly requests autonomous operation.
-- The default (`python autodream.py`) is always report mode — safe to run anytime.
-- The autodream script uses the path resolver for all file locations — never hardcode paths.
+- The default (`python dream.py`) is always report mode — safe to run anytime.
+- The dream script uses the path resolver for all file locations — never hardcode paths.
 - All LLM calls go through the model client abstraction — never import the SDK directly.
 - If catalog generation fails or errors occur, the dream cycle still completes successfully. Catalog failures are logged but do not block or prevent the dream from finishing.
 - If there is nothing to consolidate (empty learnings), inform the user and exit — do not run consolidation on an empty backlog.
