@@ -1,6 +1,6 @@
 ---
 name: dream
-description: "Generate a processed-learnings proposal from the pending backlog and write it to .multiplai/inbox/ for review. Does NOT apply changes — run /multiplai:process-learnings to review and apply."
+description: "Generate a processed-learnings proposal from the pending backlog and write it to .multiplai/inbox/ for review. Does NOT apply changes — run /multiplai:dream-remember to review and apply."
 ---
 
 # Multiplai Dream — Generate Learnings Proposal
@@ -10,7 +10,7 @@ calls the LLM to deduplicate and draft a structured change proposal, and writes 
 `.multiplai/inbox/processed-learnings-YYYY-MM-DD.md`.
 
 **No memory files are modified.** The proposal is for review only.
-Run `/multiplai:process-learnings` to load the proposal and apply approved changes.
+Run `/multiplai:dream-remember` to load the proposal and apply approved changes.
 
 ---
 
@@ -31,7 +31,7 @@ Run `/multiplai:process-learnings` to load the proposal and apply approved chang
 3. **Report results:**
    - Path to the proposal file in `.multiplai/inbox/`
    - Number of source files and approximate learnings count
-   - Remind: run `/multiplai:process-learnings` to review and apply
+   - Remind: run `/multiplai:dream-remember` to review and apply
 
 ---
 
@@ -54,7 +54,7 @@ After `--auto` mode completes, regenerate catalogs:
 python "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"
 ```
 (Skipped for report-only mode — catalogs are regenerated after the user applies
-changes via `/multiplai:process-learnings`.)
+changes via `/multiplai:dream-remember`.)
 
 ---
 

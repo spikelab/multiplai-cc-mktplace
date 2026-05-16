@@ -766,12 +766,15 @@ class TestModelClientUsage:
     ])
     def test_llm_scripts_call_query(self, script_path, script_name):
         """WHEN the script uses the model client
-        THEN it calls client.query() to make LLM requests."""
+        THEN it or its shared lib calls client.query() to make LLM requests."""
         source = _read_source(script_path)
+        # extract_learnings delegates to lib/extraction.py; check both
+        lib_extraction = SCRIPTS_DIR / "lib" / "extraction.py"
+        combined = source + (lib_extraction.read_text() if lib_extraction.exists() else "")
         has_query_call = (
-            ".query(" in source or
-            "client.query" in source or
-            "await client.query" in source
+            ".query(" in combined or
+            "client.query" in combined or
+            "await client.query" in combined
         )
         assert has_query_call, (
             f"{script_name} must call client.query() for LLM requests"
@@ -871,9 +874,12 @@ class TestExtractLearningsQueryPattern:
         """WHEN extract_learnings calls the LLM
         THEN it provides a system prompt for learning extraction."""
         source = _read_source(EXTRACT_LEARNINGS)
+        # May delegate to lib/extraction.py
+        lib_extraction = SCRIPTS_DIR / "lib" / "extraction.py"
+        combined = source + (lib_extraction.read_text() if lib_extraction.exists() else "")
         has_system = (
-            "system" in source.lower() and
-            ("prompt" in source.lower() or "='" in source or '="' in source)
+            "system" in combined.lower() and
+            ("prompt" in combined.lower() or "='" in combined or '="' in combined)
         )
         assert has_system, (
             "extract_learnings.py must provide a system prompt for the LLM call "

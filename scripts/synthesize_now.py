@@ -87,7 +87,7 @@ def _scan_diary(
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
     entries_by_project: dict[str, list[dict]] = {}
 
-    for md_file in sorted(diary_dir.glob("*.md")):
+    for md_file in sorted(diary_dir.glob("*/*.md")):
         entry = _parse_diary_entry(md_file)
         if entry is None:
             continue

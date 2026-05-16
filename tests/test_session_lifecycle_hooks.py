@@ -731,16 +731,17 @@ class TestSessionStopLearningExtraction:
 # ===========================================================================
 
 class TestSessionEndDiaryEntry:
-    """session_end.py must finalize captain's log and write a diary entry."""
+    """session_end.py writes a deferred extraction marker; narrative diary
+    is written later by extract_learnings.py (deferred via pending_extractions).
+    """
 
-    def test_session_end_writes_diary_entry(self, tmp_path):
-        """Session end must write a diary entry to the diary directory."""
+    def test_session_end_writes_deferred_marker(self, tmp_path):
+        """Session end must write a deferred extraction marker."""
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         diary_dir = tmp_path / "diary"
         diary_dir.mkdir()
 
-        # Create session state as if session_start ran
         session_state = {
             "session_id": "test-abc",
             "start_time": "2026-04-19T10:00:00+00:00",
@@ -760,16 +761,13 @@ class TestSessionEndDiaryEntry:
                 importlib.reload(session_end)
                 session_end.main()
 
-                # Diary should have a session summary file
-                diary_files = list(diary_dir.glob("*.json"))
-                assert len(diary_files) >= 1, (
-                    "Session end must write a diary entry to the diary directory"
-                )
+                marker = data_dir / "pending_extractions" / "test-abc.json"
+                assert marker.exists(), "Session end must write deferred extraction marker"
             finally:
                 _reset_cache()
 
-    def test_session_end_includes_end_timestamp(self, tmp_path):
-        """Diary entry must include an end timestamp."""
+    def test_session_end_marker_includes_timestamp(self, tmp_path):
+        """Deferred marker must include a UTC timestamp."""
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         diary_dir = tmp_path / "diary"
@@ -793,18 +791,17 @@ class TestSessionEndDiaryEntry:
                 importlib.reload(session_end)
                 session_end.main()
 
-                diary_files = list(diary_dir.glob("*.json"))
-                assert len(diary_files) >= 1
-                entry = json.loads(diary_files[0].read_text())
-                assert "end_time" in entry, "Diary entry must include end_time"
-                # Verify it's a valid ISO timestamp
-                dt = datetime.fromisoformat(entry["end_time"])
-                assert dt.tzinfo is not None or "Z" in entry["end_time"]
+                marker = data_dir / "pending_extractions" / "test-xyz.json"
+                assert marker.exists()
+                entry = json.loads(marker.read_text())
+                assert "timestamp" in entry, "Marker must include timestamp"
+                dt = datetime.fromisoformat(entry["timestamp"])
+                assert dt.tzinfo is not None
             finally:
                 _reset_cache()
 
-    def test_session_end_preserves_session_id(self, tmp_path):
-        """Diary entry must include the session ID from session start."""
+    def test_session_end_marker_preserves_session_id(self, tmp_path):
+        """Deferred marker must include the session ID."""
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         diary_dir = tmp_path / "diary"
@@ -828,18 +825,18 @@ class TestSessionEndDiaryEntry:
                 importlib.reload(session_end)
                 session_end.main()
 
-                diary_files = list(diary_dir.glob("*.json"))
-                assert len(diary_files) >= 1
-                entry = json.loads(diary_files[0].read_text())
+                marker = data_dir / "pending_extractions" / "test-preserve-id.json"
+                assert marker.exists()
+                entry = json.loads(marker.read_text())
                 assert entry.get("session_id") == "test-preserve-id"
             finally:
                 _reset_cache()
 
-    def test_session_end_creates_diary_dir_if_missing(self, tmp_path):
-        """Session end must create the diary directory if it doesn't exist."""
+    def test_session_end_creates_pending_extractions_dir(self, tmp_path):
+        """Session end must create the pending_extractions directory if missing."""
         data_dir = tmp_path / "data"
         data_dir.mkdir()
-        diary_dir = tmp_path / "diary"  # Not created
+        diary_dir = tmp_path / "diary"
 
         session_state = {
             "session_id": "test-mkdir",
@@ -859,7 +856,8 @@ class TestSessionEndDiaryEntry:
                 importlib.reload(session_end)
                 session_end.main()
 
-                assert diary_dir.exists(), "Session end must create diary dir"
+                pending_dir = data_dir / "pending_extractions"
+                assert pending_dir.exists(), "Session end must create pending_extractions dir"
             finally:
                 _reset_cache()
 
@@ -905,11 +903,11 @@ class TestSessionEndDiaryEntry:
             "session_end.py must finalize captain's log / session summary"
         )
 
-    def test_session_end_writes_to_path_resolved_diary_dir(self):
-        """Diary entries must be written to paths.diary_dir(), not hardcoded."""
+    def test_session_end_uses_path_resolved_data_dir(self):
+        """Deferred markers must be written via paths.plugin_data(), not hardcoded."""
         source = (SCRIPTS_DIR / "session_end.py").read_text()
-        assert "diary_dir" in source, (
-            "session_end.py must use paths.diary_dir() for diary entry location"
+        assert "plugin_data" in source or "data_dir" in source, (
+            "session_end.py must use paths.plugin_data() for marker location"
         )
 
     def test_session_end_no_auto_commit(self):
@@ -1046,31 +1044,28 @@ class TestSessionLifecycleFlow:
                 importlib.reload(session_start)
                 importlib.reload(session_end)
 
-                # Start session
                 session_start.main()
 
-                # Verify state file exists
                 state_file = data_dir / "session_state.json"
                 assert state_file.exists(), "session_start must create state file"
 
                 state = json.loads(state_file.read_text())
                 original_session_id = state["session_id"]
 
-                # End session
                 session_end.main()
 
-                # Diary entry should reference the same session ID
-                diary_files = list(diary_dir.glob("*.json"))
-                assert len(diary_files) >= 1, "session_end must write diary entry"
-                entry = json.loads(diary_files[0].read_text())
+                # Deferred marker should reference the same session ID
+                marker = data_dir / "pending_extractions" / f"{original_session_id}.json"
+                assert marker.exists(), "session_end must write deferred extraction marker"
+                entry = json.loads(marker.read_text())
                 assert entry["session_id"] == original_session_id, (
-                    "Diary entry session_id must match session_start's session_id"
+                    "Marker session_id must match session_start's session_id"
                 )
             finally:
                 _reset_cache()
 
-    def test_session_end_after_start_includes_both_timestamps(self, tmp_path):
-        """Diary entry must have both start_time (from start) and end_time (from end)."""
+    def test_session_end_after_start_writes_marker_with_timestamp(self, tmp_path):
+        """Deferred marker must include a timestamp recorded at session end."""
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         diary_dir = tmp_path / "diary"
@@ -1091,16 +1086,12 @@ class TestSessionLifecycleFlow:
                 session_start.main()
                 session_end.main()
 
-                diary_files = list(diary_dir.glob("*.json"))
-                assert len(diary_files) >= 1
-                entry = json.loads(diary_files[0].read_text())
-                assert "start_time" in entry, "Diary entry must include start_time"
-                assert "end_time" in entry, "Diary entry must include end_time"
-
-                # end_time must be after start_time
-                start = datetime.fromisoformat(entry["start_time"])
-                end = datetime.fromisoformat(entry["end_time"])
-                assert end >= start, "end_time must be >= start_time"
+                markers = list((data_dir / "pending_extractions").glob("*.json"))
+                assert len(markers) >= 1
+                entry = json.loads(markers[0].read_text())
+                assert "timestamp" in entry, "Marker must include timestamp"
+                dt = datetime.fromisoformat(entry["timestamp"])
+                assert dt.tzinfo is not None
             finally:
                 _reset_cache()
 

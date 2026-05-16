@@ -1,13 +1,12 @@
 """Session end hook for multiplai plugin.
 
-Writes the session summary to the diary and saves a deferred
-extraction marker for the next SessionStart hook to pick up.
+Saves a deferred extraction marker for the next SessionStart hook to
+pick up. Narrative diary entries are written by extract_learnings.py
+(runs deferred via the pending_extractions queue), not here.
 
 Claude Code kills SessionEnd hooks within a few seconds, so learning
 extraction (which calls the model client) can't run here — it would
-be interrupted mid-LLM-call. Instead we persist a marker describing
-what needs extraction; the next SessionStart hook drains the marker
-queue and launches ``extract_learnings.py`` as a detached subprocess.
+be interrupted mid-LLM-call.
 """
 
 import json
@@ -26,21 +25,6 @@ from lib.paths import get_paths
 from lib.log_utils import setup_logging
 
 logger = setup_logging("session_end")
-
-
-def _write_diary_entry(diary_dir: Path, session_state: dict) -> None:
-    """Write a session summary to the diary directory."""
-    diary_dir.mkdir(parents=True, exist_ok=True)
-
-    entry = {
-        **session_state,
-        "end_time": datetime.now(timezone.utc).isoformat(),
-    }
-    session_id = entry.get("session_id", "unknown")
-    summary_file = diary_dir / f"session-{session_id}.json"
-    summary_file.write_text(json.dumps(entry, indent=2))
-
-    logger.info("Session ended, summary written to %s", summary_file)
 
 
 def _save_deferred_marker(
@@ -89,11 +73,6 @@ def main() -> None:
 
     paths = get_paths()
     session_state = read_session_state(paths.plugin_data()) or {}
-
-    if session_state:
-        _write_diary_entry(paths.diary_dir(), session_state)
-    else:
-        logger.warning("No session_state.json found — skipping diary entry")
 
     try:
         _save_deferred_marker(paths.plugin_data(), session_state, hook_input)
