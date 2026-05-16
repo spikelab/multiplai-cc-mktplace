@@ -4,8 +4,8 @@
   "description": "Claude Code plugin for context routing, continuous learning, session awareness, and memory management.",
   "author": {"name": "Filippo Spike Morelli"},
   "license": "MIT",
-  "homepage": "https://github.com/spikelab/multiplai",
-  "repository": "https://github.com/spikelab/multiplai",
+  "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
+  "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
   "keywords": ["memory", "context", "diary", "learnings", "session", "persistence"],
   "hooks": "./hooks/hooks.json",
   "userConfig": {

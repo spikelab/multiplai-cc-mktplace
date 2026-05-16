@@ -13,8 +13,8 @@
       "author": {
         "name": "Filippo Spike Morelli"
       },
-      "homepage": "https://github.com/spikelab/multiplai",
-      "repository": "https://github.com/spikelab/multiplai",
+      "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
       "license": "MIT",
       "keywords": ["memory", "context", "diary", "learnings", "session", "persistence"]
     }
