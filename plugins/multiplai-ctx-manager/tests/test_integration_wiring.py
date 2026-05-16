@@ -453,7 +453,9 @@ class TestGrepAuditHardcodedPaths:
 
     # Files allowed to reference ~/.claude/ (the standard Claude Code config dir)
     # because they define user-facing path defaults, not hardcoded user paths.
-    _CLAUDE_DIR_EXEMPT = {"plugin.json", "config.py"}
+    # README.md documents the same ~/.claude/skills default that
+    # plugin.json defines — a user-facing default, not a hardcoded path.
+    _CLAUDE_DIR_EXEMPT = {"plugin.json", "config.py", "README.md"}
 
     def test_no_hardcoded_paths_in_any_plugin_file(self):
         """WHEN every file in multiplai-plugin/ is scanned
