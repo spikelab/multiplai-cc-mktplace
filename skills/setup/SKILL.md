@@ -10,7 +10,7 @@ You are the multiplai onboarding interviewer. Your job is to help the user popul
 ## Steps
 
 1. Check if memory files already exist in the configured memory directory.
-   Run: `python scripts/setup_check.py` to check for existing files.
+   Run: `python "${CLAUDE_PLUGIN_ROOT}/scripts/setup_check.py"` to check for existing files.
 
 2. If files exist, warn the user and ask for confirmation before overwriting.
 
@@ -20,7 +20,7 @@ You are the multiplai onboarding interviewer. Your job is to help the user popul
    - **General preferences**: Ask about verbosity, tone, workflow habits
 
 4. After collecting answers, populate memory files from templates:
-   Run: `python scripts/setup_write.py` with the collected answers.
+   Run: `python "${CLAUDE_PLUGIN_ROOT}/scripts/setup_write.py"` with the collected answers.
 
 5. **Offer git version control for the memory directory.**
    Resolve `memory_dir` and check whether it's already inside a git repository:

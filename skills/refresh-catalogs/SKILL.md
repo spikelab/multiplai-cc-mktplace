@@ -5,7 +5,7 @@ description: "Manually regenerate catalog indexes with support for --force, --dr
 
 # Refresh Catalogs
 
-Manually regenerate catalog indexes for memory, diary, skills, and resources. This skill invokes the catalog dispatcher (`generate_catalogs` via `scripts/generate_catalog.py`) to rebuild catalog files used by the context manager for fast routing.
+Manually regenerate catalog indexes for memory, diary, skills, and resources. This skill invokes the catalog dispatcher (`generate_catalogs` via `"${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"`) to rebuild catalog files used by the context manager for fast routing.
 
 ## Usage
 
@@ -28,12 +28,12 @@ By default (no arguments), all enabled catalogs are regenerated using state-awar
 1. **Parse flags** from the user's invocation to determine mode (default, force, dry-run) and any generator filter.
 
 2. **Invoke the catalog dispatcher:**
-   Run `python scripts/generate_catalog.py` with the appropriate flags:
-   - Default: `python scripts/generate_catalog.py`
-   - Force: `python scripts/generate_catalog.py --force`
-   - Dry-run: `python scripts/generate_catalog.py --dry-run`
-   - Selective: `python scripts/generate_catalog.py --only memory,diary`
-   - Combined: `python scripts/generate_catalog.py --force --dry-run`
+   Run `python "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"` with the appropriate flags:
+   - Default: `python "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"`
+   - Force: `python "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --force`
+   - Dry-run: `python "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --dry-run`
+   - Selective: `python "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --only memory,diary`
+   - Combined: `python "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --force --dry-run`
 
 3. **Report per-catalog status** as a summary table:
    - Each catalog gets its own status line: **regenerated** (success), **skipped** (unchanged), or **failed** (with error reason).

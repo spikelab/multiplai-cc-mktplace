@@ -10,11 +10,11 @@ You are the multiplai dream consolidation skill. Your job is to trigger the Auto
 ## Steps
 
 1. **Check for pending learnings:**
-   Run `python scripts/autodream.py --check` to inspect what needs consolidation.
+   Run `python "${CLAUDE_PLUGIN_ROOT}/scripts/autodream.py" --check` to inspect what needs consolidation.
    - If the output says nothing to consolidate (empty or no new learnings), inform the user and exit — do not proceed to step 2.
 
 2. **Run the consolidation pipeline:**
-   Run `python scripts/autodream.py --run` to extract learnings and synthesize them into memory file updates via the model client abstraction.
+   Run `python "${CLAUDE_PLUGIN_ROOT}/scripts/autodream.py" --run` to extract learnings and synthesize them into memory file updates via the model client abstraction.
 
 3. **Report a summary of results** as markdown:
    - **Number of learnings processed** — how many learning lines were consumed
@@ -28,7 +28,7 @@ You are the multiplai dream consolidation skill. Your job is to trigger the Auto
 After the consolidation and diary write completes, regenerate catalogs to keep indexes fresh:
 
 4. **Refresh catalogs after consolidation:**
-   Run `python scripts/generate_catalog.py` to invoke the catalog dispatcher (`generate_catalogs`) and regenerate all enabled catalog indexes (memory, diary, and any optional catalogs like skills/resources).
+   Run `python "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"` to invoke the catalog dispatcher (`generate_catalogs`) and regenerate all enabled catalog indexes (memory, diary, and any optional catalogs like skills/resources).
 
    - The dispatcher uses state-aware skipping — only catalogs whose source content has changed since the last run are regenerated. This keeps dream execution fast.
    - If catalog generation fails or errors occur, the dream cycle still completes successfully. Catalog failures are logged but do not block or prevent the dream from finishing.
