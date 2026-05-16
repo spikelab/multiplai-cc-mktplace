@@ -99,9 +99,10 @@ class TestFreshBootstrap:
     pip install runs, and a marker file records the requirements hash.
     """
 
+    @patch("venv_bootstrap._has_uv", return_value=False)
     @patch("venv_bootstrap.subprocess.run")
     def test_creates_venv_with_system_site_packages(
-        self, mock_run, tmp_path, monkeypatch, reset_paths_cache
+        self, mock_run, mock_has_uv, tmp_path, monkeypatch, reset_paths_cache
     ):
         """Scenario: Venv created with --system-site-packages flag."""
         data_dir = tmp_path / "data"
@@ -126,9 +127,10 @@ class TestFreshBootstrap:
         assert "-m" in cmd
         assert "venv" in cmd
 
+    @patch("venv_bootstrap._has_uv", return_value=False)
     @patch("venv_bootstrap.subprocess.run")
     def test_runs_pip_install_with_requirements(
-        self, mock_run, tmp_path, monkeypatch, reset_paths_cache
+        self, mock_run, mock_has_uv, tmp_path, monkeypatch, reset_paths_cache
     ):
         """Scenario: pip install -r requirements.txt runs within the venv."""
         data_dir = tmp_path / "data"
@@ -637,11 +639,11 @@ class TestVenvGuard:
             call_args = mock_execv.call_args[0]
             assert call_args[0] == str(venv_python)
 
-    def test_venv_guard_noop_when_venv_missing(self, monkeypatch, tmp_path):
-        """Scenario: Non-SessionStart hook fires before venv exists — graceful exit.
+    def test_venv_guard_bootstraps_when_venv_missing(self, monkeypatch, tmp_path):
+        """Scenario: Venv is missing (deleted or first run) — guard bootstraps it.
 
-        WHEN a hook fires but no venv has been bootstrapped yet, THEN the
-        guard returns (no-op) rather than crashing.
+        WHEN a hook fires and the venv Python does not exist, THEN the guard
+        calls bootstrap() to recreate it before attempting re-exec.
         """
         data_dir = tmp_path / "data"
         # venv dir does NOT exist
@@ -651,10 +653,10 @@ class TestVenvGuard:
 
         from lib.venv_guard import ensure_venv_python
 
-        with patch("os.execv") as mock_execv:
-            # Should not crash, should not attempt execv
+        with patch("lib.venv_guard._bootstrap_venv") as mock_bootstrap, \
+             patch("os.execv"):
             ensure_venv_python()
-            mock_execv.assert_not_called()
+            mock_bootstrap.assert_called_once()
 
     def test_venv_guard_uses_plugin_data_env(self, monkeypatch, tmp_path):
         """Scenario: Guard resolves venv from CLAUDE_PLUGIN_DATA env var."""

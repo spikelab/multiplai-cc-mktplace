@@ -1122,10 +1122,10 @@ class TestPluginValidationReadiness:
 
     def test_skills_count_matches_expected(self):
         """WHEN skills/ directory is listed
-        THEN it has exactly 4 .md skill files."""
+        THEN it has exactly 5 .md skill files."""
         skill_files = list((PLUGIN_ROOT / "skills").glob("*/SKILL.md"))
-        assert len(skill_files) == 4, \
-            f"Expected 4 skill files, found {len(skill_files)}: {[f.parent.name for f in skill_files]}"
+        assert len(skill_files) == 5, \
+            f"Expected 5 skill files, found {len(skill_files)}: {[f.parent.name for f in skill_files]}"
 
     def test_five_distinct_hook_events(self):
         """WHEN hooks.json events are collected
