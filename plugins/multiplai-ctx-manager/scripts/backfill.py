@@ -4,6 +4,14 @@ Discovers JSONL transcripts in ``$CLAUDE_CONFIG_DIR/projects/``, distills
 them, extracts diary entries + learnings, and writes them using the same
 shared helpers as the live pipeline.
 
+Privacy / prompt-injection caveat: this reads **every local Claude Code
+transcript across all projects** (not just the current workspace) and
+feeds their text to the extraction model. A transcript containing
+attacker-influenced content (pasted web data, untrusted repo files) is an
+indirect prompt-injection surface into your memory files. Use
+``--projects`` to scope, and review consolidations before applying them
+via ``/multiplai:dream-remember``.
+
 Usage::
 
     python scripts/backfill.py [--days N] [--since YYYY-MM-DD] [--all]
@@ -18,7 +26,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -246,8 +254,6 @@ async def backfill(
     tasks = []
     for jsonl_path in sorted(in_window):
         session_id = _session_id_from_path(jsonl_path)
-        day = since.strftime("%Y-%m-%d")
-        # Use session-level learnings_file for today; backfill writes by session ts
         learnings_file = paths.learnings_file()
         tasks.append(_process_session(
             jsonl_path, session_id, since, until,
@@ -324,6 +330,18 @@ def main() -> None:
         since = datetime.now(timezone.utc) - timedelta(days=args.days)
 
     project_slugs = [s.strip() for s in args.projects.split(",")] if args.projects else None
+
+    if not args.dry_run:
+        print(
+            "Privacy notice: backfill reads ALL local Claude Code transcripts "
+            "across every project and feeds them to the extraction model "
+            "(indirect prompt-injection surface into memory)."
+        )
+        if project_slugs:
+            print(f"Scoped to projects: {', '.join(project_slugs)}")
+        else:
+            print("Tip: use --projects SLUG,... to scope. Review results with "
+                  "/multiplai:dream-remember before applying.")
 
     summary = asyncio.run(backfill(
         since,

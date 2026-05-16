@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -31,6 +32,12 @@ from lib.log_utils import setup_logging
 logger = setup_logging("session_start")
 
 _DREAM_GATE_HOURS = 24
+
+# Deferred-extraction retry policy. A detached extraction child should
+# finish well within the stale window; markers older than this with no
+# completion are assumed orphaned and requeued, capped at MAX_ATTEMPTS.
+_EXTRACTION_STALE_SECONDS = 900
+_EXTRACTION_MAX_ATTEMPTS = 3
 
 
 def _log_client_selection() -> str:
@@ -101,25 +108,77 @@ def _learnings_pending(learnings_file: Path, dream_state_file: Path) -> bool:
     return learnings_mtime > last_dt
 
 
+def _recover_stale_processing(processing_dir: Path, pending_dir: Path) -> None:
+    """Requeue (or fail) markers stuck in ``processing_extractions/``.
+
+    A detached extraction child deletes its own marker on success. If the
+    child died (venv re-exec failure, crash, no model client) the marker
+    lingers here. Markers older than the stale window are requeued for
+    retry, capped at ``_EXTRACTION_MAX_ATTEMPTS`` before being moved to
+    ``failed_extractions/`` so a permanently-bad transcript can't loop
+    forever and stays visible for debugging.
+    """
+    if not processing_dir.exists():
+        return
+    failed_dir = processing_dir.parent / "failed_extractions"
+    now = time.time()
+    for m in list(processing_dir.glob("*.json")):
+        try:
+            if now - m.stat().st_mtime < _EXTRACTION_STALE_SECONDS:
+                continue  # a live child may still be working on it
+        except OSError:
+            continue
+        try:
+            data = json.loads(m.read_text())
+            if not isinstance(data, dict):
+                data = {}
+        except (json.JSONDecodeError, OSError):
+            data = {}
+        attempts = int(data.get("attempts", 0)) + 1
+        data["attempts"] = attempts
+        try:
+            if attempts > _EXTRACTION_MAX_ATTEMPTS:
+                failed_dir.mkdir(parents=True, exist_ok=True)
+                m.write_text(json.dumps(data, indent=2))
+                os.replace(str(m), str(failed_dir / m.name))
+                logger.warning(
+                    "Deferred extraction permanently failed after %d attempts: %s",
+                    attempts - 1, m.name,
+                )
+            else:
+                m.write_text(json.dumps(data, indent=2))
+                os.replace(str(m), str(pending_dir / m.name))
+                logger.info(
+                    "Requeued stale extraction marker (attempt %d): %s",
+                    attempts, m.name,
+                )
+        except OSError:
+            logger.exception("Could not recover stale marker %s", m.name)
+
+
 def _process_deferred_extractions(data_dir: Path, extract_script: Path) -> int:
     """Drain pending extraction markers left by previous SessionEnd hooks.
 
     Each marker is atomically moved from ``pending_extractions/`` to
-    ``processing_extractions/``, its content (plus the transcript file
-    if still readable) is piped to a detached ``extract_learnings.py``
-    subprocess, and the marker is unlinked. Returns the number of
-    markers processed.
+    ``processing_extractions/`` and piped (with the transcript, if still
+    readable) to a detached ``extract_learnings.py``. The child deletes
+    its own marker on success; failed/crashed children leave the marker
+    for :func:`_recover_stale_processing` to retry. Returns the number of
+    markers launched this run.
 
     Atomic rename guarantees at-most-once dequeue if two SessionStart
-    hooks race. Best-effort cleanup — if extraction crashes, the
-    marker is already gone and won't be retried.
+    hooks race.
     """
-    pending_dir = data_dir / "pending_extractions"
-    if not pending_dir.exists() or not extract_script.exists():
+    if not extract_script.exists():
         return 0
 
+    pending_dir = data_dir / "pending_extractions"
     processing_dir = data_dir / "processing_extractions"
+    pending_dir.mkdir(parents=True, exist_ok=True)
     processing_dir.mkdir(parents=True, exist_ok=True)
+
+    # Retry anything a previous run launched but that never completed.
+    _recover_stale_processing(processing_dir, pending_dir)
 
     processed = 0
     for marker_file in list(pending_dir.glob("*.json")):
@@ -132,11 +191,16 @@ def _process_deferred_extractions(data_dir: Path, extract_script: Path) -> int:
         try:
             marker = json.loads(dest.read_text())
         except (json.JSONDecodeError, OSError):
+            # Unparseable marker will never succeed — discard it.
             dest.unlink(missing_ok=True)
             continue
 
         transcript_path = marker.get("transcript_path", "")
-        payload: dict = {"session_id": marker.get("session_id", "")}
+        payload: dict = {
+            "session_id": marker.get("session_id", ""),
+            # The child removes this marker once the session is handled.
+            "marker_path": str(dest),
+        }
         if transcript_path and Path(transcript_path).exists():
             try:
                 payload["transcript"] = Path(transcript_path).read_text(
@@ -159,8 +223,12 @@ def _process_deferred_extractions(data_dir: Path, extract_script: Path) -> int:
             processed += 1
         except Exception:
             logger.exception("Failed to launch deferred extraction subprocess")
-        finally:
-            dest.unlink(missing_ok=True)
+            # Launch failed — return the marker to the queue so a later
+            # SessionStart retries it instead of losing the session.
+            try:
+                os.replace(str(dest), str(pending_dir / dest.name))
+            except OSError:
+                logger.exception("Could not requeue marker after launch failure")
 
     return processed
 

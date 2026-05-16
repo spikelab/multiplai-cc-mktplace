@@ -34,7 +34,23 @@ def _list_valid_targets(memory_dir: Path) -> list[str]:
     return sorted(p.name for p in memory_dir.glob("*.md") if p.is_file())
 
 
-async def extract() -> None:
+def _drop_marker(marker_path: str) -> None:
+    """Delete the processing marker once this session is fully handled."""
+    if marker_path:
+        try:
+            Path(marker_path).unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("Could not remove processed marker %s: %s", marker_path, e)
+
+
+async def extract() -> bool:
+    """Process one deferred session.
+
+    Returns True when the session was handled (written, or there was
+    genuinely nothing to write) — caller may drop the marker. Returns
+    False when extraction FAILED (LLM/transient error) so the marker is
+    retained for stale-recovery retry by the next SessionStart.
+    """
     paths = get_paths()
     memory_dir = paths.memory_dir()
     learnings_file = paths.learnings_file()
@@ -43,7 +59,7 @@ async def extract() -> None:
     hook_input = sys.stdin.read()
     if not hook_input.strip():
         logger.info("No session data on stdin, skipping extraction")
-        return
+        return True
 
     transcript_data: dict = {}
     try:
@@ -51,6 +67,12 @@ async def extract() -> None:
         transcript = transcript_data.get("transcript", hook_input)
     except (json.JSONDecodeError, AttributeError):
         transcript = hook_input
+
+    marker_path = (
+        transcript_data.get("marker_path", "")
+        if isinstance(transcript_data, dict)
+        else ""
+    )
 
     session_id = (
         transcript_data.get("session_id", "")
@@ -65,6 +87,7 @@ async def extract() -> None:
 
     valid_targets = _list_valid_targets(memory_dir)
     units: list[dict] = []
+    llm_failed = False
     try:
         client = await create_client()
         logger.info("Extract learnings using %s", type(client).__name__)
@@ -75,12 +98,20 @@ async def extract() -> None:
         )
     except Exception:
         logger.exception("LLM call failed during learning extraction")
+        llm_failed = True
 
     correction_matches = detect_corrections_in_transcript(transcript)
 
     if not units and not correction_matches:
+        if llm_failed:
+            # Distinguish a real failure from a genuinely empty session:
+            # keep the marker so the next SessionStart retries instead of
+            # silently dropping the session's learnings.
+            logger.warning("Extraction failed and produced nothing; retaining marker for retry")
+            return False
         logger.info("No actionable content found, nothing to write")
-        return
+        _drop_marker(marker_path)
+        return True
 
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -95,8 +126,13 @@ async def extract() -> None:
     elif session_id:
         logger.info("Session %s already in %s, skipping", session_id, learnings_file)
 
+    _drop_marker(marker_path)
+    return True
+
 
 def main() -> None:
+    # On any unhandled exception the marker is intentionally NOT removed,
+    # so the next SessionStart's stale-recovery retries this session.
     asyncio.run(extract())
 
 
