@@ -26,6 +26,15 @@ def _resolve_venv_python() -> Path:
     return Path(data_dir) / "venv" / "bin" / "python"
 
 
+def _bootstrap_venv() -> None:
+    """Import and run venv_bootstrap.bootstrap() to recreate a missing venv."""
+    scripts_dir = Path(__file__).resolve().parents[1]
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from venv_bootstrap import bootstrap
+    bootstrap()
+
+
 def ensure_venv_python() -> None:
     """Re-exec into the plugin venv's Python if not already there.
 
@@ -33,11 +42,13 @@ def ensure_venv_python() -> None:
       1. ``$CLAUDE_PLUGIN_DATA/venv/bin/python``
       2. ``<plugin-root>/data/venv/bin/python`` (standalone fallback)
 
-    If the venv Python exists on disk and differs from the current
-    ``sys.executable``, replaces the current process via :func:`os.execv`.
-    Otherwise returns immediately (no-op).
+    If the venv Python is missing, bootstraps it first. Then re-execs
+    via :func:`os.execv` if the current interpreter differs from the venv.
     """
     venv_python = _resolve_venv_python()
+
+    if not venv_python.exists():
+        _bootstrap_venv()
 
     if venv_python.exists() and Path(sys.executable).resolve() != venv_python.resolve():
         target = str(venv_python)

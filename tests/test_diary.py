@@ -198,28 +198,32 @@ class TestDiscoverSources:
     def test_discovers_date_named_day_dirs(self, tmp_path):
         """Standard day directories are discovered."""
         gen, _, diary_dir = _make_diary_generator(tmp_path)
-        _make_day_dir(diary_dir, "2026-04-15")
-        _make_day_dir(diary_dir, "2026-04-16")
-        _make_day_dir(diary_dir, "2026-04-17")
+        d1 = _date_str_days_ago(1)
+        d2 = _date_str_days_ago(2)
+        d3 = _date_str_days_ago(3)
+        _make_day_dir(diary_dir, d1)
+        _make_day_dir(diary_dir, d2)
+        _make_day_dir(diary_dir, d3)
 
         sources = gen.discover_sources()
-        assert "2026-04-15" in sources
-        assert "2026-04-16" in sources
-        assert "2026-04-17" in sources
+        assert d1 in sources
+        assert d2 in sources
+        assert d3 in sources
 
     def test_ignores_non_date_entries(self, tmp_path):
         """Non-diary files/dirs are ignored.
 
-        WHEN the diary directory contains 2026-04-15, README.md, and notes.txt
-        THEN only 2026-04-15 is discovered.
+        WHEN the diary directory contains a recent date dir, README.md, and notes.txt
+        THEN only the date dir is discovered.
         """
         gen, _, diary_dir = _make_diary_generator(tmp_path)
-        _make_day_dir(diary_dir, "2026-04-15")
+        d1 = _date_str_days_ago(1)
+        _make_day_dir(diary_dir, d1)
         (diary_dir / "README.md").write_text("readme", encoding="utf-8")
         (diary_dir / "notes.txt").write_text("notes", encoding="utf-8")
 
         sources = gen.discover_sources()
-        assert "2026-04-15" in sources
+        assert d1 in sources
         assert "README.md" not in sources
         assert "notes.txt" not in sources
         assert len(sources) == 1
@@ -231,14 +235,15 @@ class TestDiscoverSources:
         THEN they are ignored.
         """
         gen, _, diary_dir = _make_diary_generator(tmp_path)
+        d1 = _date_str_days_ago(1)
         _make_day_dir(diary_dir, "not-a-date")
         _make_day_dir(diary_dir, "2026-13-45")
-        _make_day_dir(diary_dir, "2026-04-15")
+        _make_day_dir(diary_dir, d1)
 
         sources = gen.discover_sources()
         assert "not-a-date" not in sources
         assert "2026-13-45" not in sources
-        assert "2026-04-15" in sources
+        assert d1 in sources
         assert len(sources) == 1
 
     def test_empty_diary_dir_returns_empty(self, tmp_path):

@@ -5,6 +5,7 @@ Idempotent — skips if venv exists and requirements hash matches.
 """
 
 import hashlib
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -31,31 +32,58 @@ def _is_up_to_date(marker: Path, req_file: Path) -> bool:
     return stored_hash == _requirements_hash(req_file)
 
 
+def _has_uv() -> bool:
+    return shutil.which("uv") is not None
+
+
 def _create_venv(venv_dir: Path) -> None:
-    """Create a venv with --system-site-packages for claude_agent_sdk access."""
+    """Create a venv with --system-site-packages for claude_agent_sdk access.
+
+    Skips creation if the venv Python binary already exists (uv refuses to
+    overwrite; python -m venv would unnecessarily reset it).
+    """
+    venv_python = venv_dir / "bin" / "python"
+    if venv_python.exists():
+        return
     venv_dir.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run(
-            [sys.executable, "-m", "venv", "--system-site-packages", str(venv_dir)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        if _has_uv():
+            subprocess.run(
+                ["uv", "venv", "--system-site-packages", str(venv_dir)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        else:
+            subprocess.run(
+                [sys.executable, "-m", "venv", "--system-site-packages", str(venv_dir)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
     except subprocess.CalledProcessError as e:
         logger.error("Failed to create venv: %s", e.stderr)
         raise
 
 
 def _install_requirements(venv_dir: Path, req_file: Path, marker: Path) -> None:
-    """Run pip install inside the venv. Cleans up marker on failure."""
+    """Install requirements using uv if available, else pip. Cleans marker on failure."""
     venv_python = venv_dir / "bin" / "python"
     try:
-        subprocess.run(
-            [str(venv_python), "-m", "pip", "install", "-r", str(req_file)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        if _has_uv():
+            subprocess.run(
+                ["uv", "pip", "install", "-r", str(req_file), "--python", str(venv_python)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        else:
+            subprocess.run(
+                [str(venv_python), "-m", "pip", "install", "-r", str(req_file)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
     except subprocess.CalledProcessError as e:
         logger.error("Failed to install requirements: %s", e.stderr)
         # Remove stale marker so next run retries instead of seeing "up to date"

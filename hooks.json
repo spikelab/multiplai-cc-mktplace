@@ -1,0 +1,10 @@
+{
+  "hooks": [
+    {"event": "SessionStart", "script": "scripts/venv_bootstrap.py", "timeout": 30000},
+    {"event": "SessionStart", "script": "scripts/session_start.py", "timeout": 10000},
+    {"event": "UserPromptSubmit", "script": "scripts/context_manager.py", "timeout": 5000},
+    {"event": "Stop", "script": "scripts/session_stop.py", "timeout": 15000},
+    {"event": "SessionEnd", "script": "scripts/session_end.py", "timeout": 20000},
+    {"event": "PreCompact", "script": "scripts/pre_compact.py", "timeout": 10000}
+  ]
+}
