@@ -23,34 +23,45 @@ def _skill_frontmatter(skill_file: str) -> dict:
     return fm
 
 
+_EXPECTED_SKILLS = {
+    "setup", "dream", "dream-remember", "health",
+    "refresh-catalogs", "memory-health-audit", "backfill",
+}
+
+_SKILL_FILES = [f"skills/{name}/SKILL.md" for name in sorted(_EXPECTED_SKILLS)]
+
+
 class TestSkillFrontmatter:
     """Verify skill files have required YAML frontmatter for CC auto-discovery."""
 
-    SKILL_FILES = ["skills/setup/SKILL.md", "skills/dream/SKILL.md", "skills/health/SKILL.md", "skills/refresh-catalogs/SKILL.md", "skills/process-learnings/SKILL.md"]
-
-    def test_exactly_five_skill_files(self):
+    def test_skill_count_matches_expected(self):
         skill_files = list((PLUGIN_ROOT / "skills").glob("*/SKILL.md"))
-        assert len(skill_files) == 5
+        actual_names = {p.parent.name for p in skill_files}
+        assert actual_names == _EXPECTED_SKILLS, (
+            f"Skill mismatch. Extra: {actual_names - _EXPECTED_SKILLS!r}, "
+            f"Missing: {_EXPECTED_SKILLS - actual_names!r}"
+        )
 
-    @pytest.mark.parametrize("skill_file", SKILL_FILES)
+    @pytest.mark.parametrize("skill_file", _SKILL_FILES)
     def test_has_frontmatter(self, skill_file):
         fm = _skill_frontmatter(skill_file)
         assert fm, f"{skill_file} missing YAML frontmatter"
 
-    @pytest.mark.parametrize("skill_file", SKILL_FILES)
+    @pytest.mark.parametrize("skill_file", _SKILL_FILES)
     def test_has_name(self, skill_file):
         fm = _skill_frontmatter(skill_file)
         assert fm.get("name"), f"{skill_file} frontmatter missing 'name'"
 
-    @pytest.mark.parametrize("skill_file", SKILL_FILES)
+    @pytest.mark.parametrize("skill_file", _SKILL_FILES)
     def test_has_description(self, skill_file):
         fm = _skill_frontmatter(skill_file)
         assert fm.get("description"), f"{skill_file} frontmatter missing 'description'"
 
     def test_skill_names_match_expected(self):
-        names = {_skill_frontmatter(f"skills/{p.parent.name}/SKILL.md")["name"]
+        names = {_skill_frontmatter(f"skills/{p.parent.name}/SKILL.md").get("name")
                  for p in (PLUGIN_ROOT / "skills").glob("*/SKILL.md")}
-        assert names == {"setup", "dream", "health", "refresh-catalogs", "process-learnings"}
+        names.discard(None)
+        assert names == _EXPECTED_SKILLS
 
 
 class TestSkillFileExistence:

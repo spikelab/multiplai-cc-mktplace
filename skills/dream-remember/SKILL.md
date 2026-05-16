@@ -1,5 +1,5 @@
 ---
-name: process-learnings
+name: dream-remember
 description: Review and apply pending memory updates from the learnings backlog. Checks .multiplai/inbox/ for a pre-generated Dream proposal; if none exists, generates one. Then presents updates grouped by target file, waits for approval, applies edits, and cleans up processed learnings files.
 model: opus
 effort: high
