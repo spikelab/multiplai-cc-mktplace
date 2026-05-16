@@ -469,6 +469,14 @@ def main() -> None:
         if picks:
             picks_by_corpus[corpus_type] = expand_picks(picks, corpora.get(corpus_type) or [])
 
+    # Log per-file routing decisions (post-expansion) for health audit analytics.
+    logger.info(
+        "ROUTING memory=%s skills=%s resources=%s",
+        json.dumps(sorted(picks_by_corpus.get("memory") or [])),
+        json.dumps(sorted(picks_by_corpus.get("skills") or [])),
+        json.dumps(sorted(picks_by_corpus.get("resources") or [])),
+    )
+
     # Load content per corpus
     memory_content = _load_memory_content(memory_dir, picks_by_corpus.get("memory") or [])
     skills_content = _load_skills_content(cfg, picks_by_corpus.get("skills") or [])
@@ -479,6 +487,8 @@ def main() -> None:
     # catalog-only — no metadata fallback (no obvious ranking signal).
     if not memory_content:
         memory_content = _read_top_memory_files(memory_dir)
+        if memory_content:
+            logger.info("FALLBACK memory=%s", json.dumps(sorted(memory_content.keys())))
 
     # Per-project "now" state (cwd-scoped)
     project_state = _load_project_state(now_dir, cwd)
