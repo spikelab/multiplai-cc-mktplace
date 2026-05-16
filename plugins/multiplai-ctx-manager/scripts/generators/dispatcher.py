@@ -157,7 +157,16 @@ class _StubModelResponse:
 
 
 class _StubModelClient:
-    """Minimal stub for environments where no real model client is available."""
+    """Stub for environments with no real model client.
+
+    ``is_stub`` lets GeneratorBase detect this and SKIP persisting
+    catalogs/state — otherwise empty stub output would be written and
+    its source hashes recorded, so every later run (even after a real
+    API key is configured) would "skip unchanged" and the catalog would
+    stay permanently empty.
+    """
+
+    is_stub = True
 
     async def query(self, system, messages, **kwargs):
         return _StubModelResponse()

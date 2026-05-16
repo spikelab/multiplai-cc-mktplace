@@ -259,7 +259,18 @@ class GeneratorBase:
         # because batch.hashes only contains keys from current sources)
         pruned = self._prune_deleted(sources, stored_hashes, batch.entries)
 
-        if not dry_run:
+        # No real model client: do NOT persist. Writing empty stub output
+        # and recording its source hashes would make every later run
+        # "skip unchanged" and lock the catalog permanently empty.
+        # `is True` (not just truthy): a MagicMock test client would
+        # auto-create a truthy .is_stub attribute and wrongly skip writes.
+        stub = getattr(self._model_client, "is_stub", False) is True
+        errors = batch.errors
+        if stub:
+            errors = errors + [
+                "model client unavailable — catalog not generated or persisted"
+            ]
+        elif not dry_run:
             self._write_results(state, batch.entries, batch.hashes)
 
         return GenerationResult(
@@ -268,7 +279,7 @@ class GeneratorBase:
             skipped=batch.skipped,
             generated=batch.generated,
             pruned=pruned,
-            errors=batch.errors,
+            errors=errors,
             dry_run=dry_run,
         )
 
