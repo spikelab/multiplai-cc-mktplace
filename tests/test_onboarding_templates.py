@@ -487,13 +487,14 @@ class TestSetupRespectsconfiguredDir:
                 f"Template {fname} not in custom memory dir"
 
     def test_default_memory_dir_when_unconfigured(self, monkeypatch, reset_paths_cache):
-        """WHEN no custom memory_dir, should use ~/.multiplai/memory."""
+        """WHEN no custom memory_dir and no workspace, should use ~/.multiplai/memory."""
         from lib.paths import _reset_cache, Paths
 
         _reset_cache()
         for key in list(os.environ):
             if key.startswith("CLAUDE_PLUGIN"):
                 monkeypatch.delenv(key, raising=False)
+        monkeypatch.delenv("WORKSPACE", raising=False)
 
         paths = Paths.resolve()
         expected = Path.home() / ".multiplai" / "memory"

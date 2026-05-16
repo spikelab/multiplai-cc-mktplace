@@ -55,7 +55,7 @@ def template_files(plugin_root):
 @pytest.fixture
 def clean_env(monkeypatch):
     for key in list(os.environ):
-        if key.startswith("CLAUDE_PLUGIN"):
+        if key.startswith("CLAUDE_PLUGIN") or key == "WORKSPACE":
             monkeypatch.delenv(key, raising=False)
 
 

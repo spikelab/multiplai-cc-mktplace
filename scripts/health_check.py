@@ -74,15 +74,16 @@ def _count_diary_entries(diary_dir: Path) -> int:
     return len([f for f in diary_dir.iterdir() if f.is_file()])
 
 
-def _count_learnings(memory_dir: Path) -> int:
-    """Count unprocessed learning lines in the learnings file."""
-    learnings_file = memory_dir / "learnings.md"
-    if not learnings_file.exists():
+def _count_learnings(learnings_dir: Path) -> int:
+    """Count lines across all per-day learnings files in learnings_dir."""
+    if not learnings_dir.is_dir():
         return 0
-    content = learnings_file.read_text().strip()
-    if not content:
-        return 0
-    return len(content.splitlines())
+    total = 0
+    for f in sorted(learnings_dir.glob("*.md")):
+        content = f.read_text().strip()
+        if content:
+            total += len(content.splitlines())
+    return total
 
 
 def _get_last_dream_date(data_dir: Path) -> str | None:
@@ -104,6 +105,7 @@ def run_health_check() -> dict:
     paths = get_paths()
     memory_dir = paths.memory_dir()
     diary_dir = paths.diary_dir()
+    learnings_dir = paths.learnings_dir()
     data_dir = paths.plugin_data()
     venv_dir = paths.venv_dir()
 
@@ -142,7 +144,7 @@ def run_health_check() -> dict:
         "entry_count": _count_diary_entries(diary_dir),
     }
     report["learnings"] = {
-        "unprocessed_count": _count_learnings(memory_dir),
+        "unprocessed_count": _count_learnings(learnings_dir),
     }
 
     # Last dream consolidation date
@@ -166,6 +168,12 @@ def run_health_check() -> dict:
         recommendations.append(
             f"Stale memory files (>{STALENESS_THRESHOLD_DAYS} days): {names}. "
             f"Run /multiplai:dream to refresh them."
+        )
+
+    unprocessed = report["learnings"]["unprocessed_count"]
+    if unprocessed > 0:
+        recommendations.append(
+            f"{unprocessed} unprocessed learning lines pending. Run /multiplai:dream or /process-learnings."
         )
 
     report["recommendations"] = recommendations
