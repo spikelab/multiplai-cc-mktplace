@@ -10,7 +10,7 @@ effort: high
 Human-in-the-loop workflow for applying accumulated session learnings to memory files.
 
 Dream (nightly or on demand via `/multiplai:dream`) generates a proposal file in
-`.multiplai/inbox/`. This skill loads that proposal, walks through it with Spike, and
+`.multiplai/inbox/`. This skill loads that proposal, walks through it with the user, and
 applies approved changes.
 
 ---
@@ -19,8 +19,8 @@ applies approved changes.
 
 Check `.multiplai/inbox/` for a file matching `processed-learnings-*.md`, most recent first.
 
-- **Found:** load it, report its date and summary line to Spike, proceed to Step 3.
-- **Not found:** tell Spike "No pre-generated proposal found — generating one now" and run:
+- **Found:** load it, report its date and summary line to the user, proceed to Step 3.
+- **Not found:** tell the user "No pre-generated proposal found — generating one now" and run:
   ```
   python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
   ```
@@ -46,29 +46,29 @@ If `dream.py` is unavailable and you need to generate manually:
 
 ## Step 3: Present the Proposal
 
-Read the proposal file in full. Then tell Spike:
+Read the proposal file in full. Then tell the user:
 
 - The source file path and date
 - A one-line summary: e.g. "17 proposed updates across 5 files from 8 learnings files"
 - **"Review the file and tell me: `all` / `none` / numbers like `1,3,5` or `1-12,16-20` / or `modify`"**
 
-Do NOT dump the full proposal into chat. Tell Spike where the file is so they can open it.
+Do NOT dump the full proposal into chat. Tell the user where the file is so they can open it.
 
 ---
 
 ## Step 4: Apply Approved Updates
 
-Parse Spike's response:
+Parse the user's response:
 
 - **`all`** → apply every numbered update
 - **`none`** → skip all, go to Step 6 cleanup
 - **Number ranges** (e.g. `1-12, 16-20, 34`) → apply only those items; silently skip unlisted ones — do NOT ask for confirmation on skipped items
-- **`modify N`** → ask Spike what change they want for item N, then apply modified version
+- **`modify N`** → ask the user what change they want for item N, then apply modified version
 
 ### RULE-PROPOSAL handling
 
 Items marked `**[RULE-PROPOSAL]**` (changes to CLAUDE.md behavioral rules) MUST be
-presented individually, one at a time, even when Spike said "all". For each one:
+presented individually, one at a time, even when the user said "all". For each one:
 
 ```
 RULE-PROPOSAL #N: {short title}
@@ -137,7 +137,7 @@ Print a brief summary:
 ## Guidelines
 
 - Be aggressive about deduplication. The same lesson appearing 4× should become ONE entry.
-- Respect trust levels — don't apply untrusted single-occurrence items unless Spike explicitly approves.
+- Respect trust levels — don't apply untrusted single-occurrence items unless the user explicitly approves.
 - Match the existing style of each memory file exactly.
-- Never silently drop learnings — filtered-out items still get deleted (they're in the proposal's "Filtered Out" section so Spike saw them).
-- Do not ask for confirmation on items Spike didn't mention in their approval range.
+- Never silently drop learnings — filtered-out items still get deleted (they're in the proposal's "Filtered Out" section so the user saw them).
+- Do not ask for confirmation on items the user didn't mention in their approval range.

@@ -5,7 +5,7 @@ records session start timestamp and initializes session state.
 
 Also checks the Dream 24h gate: when more than 24 hours have
 elapsed since the last dream run and fresh learnings are pending,
-emits a system nudge so Spike is prompted to run ``/multiplai:dream``
+emits a system nudge so the user is prompted to run ``/multiplai:dream``
 instead of the consolidation silently falling out of rhythm.
 """
 
@@ -164,11 +164,11 @@ def _process_deferred_extractions(data_dir: Path, extract_script: Path) -> int:
 
 
 def _emit_dream_nudge() -> None:
-    """Print an additionalContext nudge prompting Spike to run /multiplai:dream."""
+    """Print an additionalContext nudge prompting the user to run /multiplai:dream."""
     print(
         "\n--- SYSTEM NUDGE ---\n"
         "Dream gate is open (>24h since last consolidation) with "
-        "unprocessed learnings on disk. Surface this to Spike at the next "
+        "unprocessed learnings on disk. Surface this to the user at the next "
         "natural stopping point: 'Dream reports look due — worth running "
         "/multiplai:dream?'"
     )
@@ -217,7 +217,7 @@ def main() -> None:
 
     # Dream gate: emit a nudge when the 24h window has elapsed and
     # fresh learnings are waiting. The nudge is additionalContext only —
-    # the actual dream still runs via /multiplai:dream when Spike
+    # the actual dream still runs via /multiplai:dream when the user
     # chooses.
     dream_state_file = paths.dream_state_file()
     learnings_file = paths.learnings_file()
