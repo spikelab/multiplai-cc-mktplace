@@ -4,16 +4,30 @@ Implements ``reference/dev/logging-standard.md``:
 
 - UTC ISO-8601 line format with component + session id
 - ``MULTIPLAI_DEBUG`` / ``MULTIPLAI_LOG_LEVEL`` env-driven level
-- Date-rotated per-component logs (7-day retention)
+- Date-rotated per-component logs with configurable retention
 - Shared ``hook-errors.log`` for ERROR+ across all components
 
 On top of the standard, ``log_event()`` writes a curated, human-readable
-activity stream (``activity-YYYY-MM-DD.log``) plus a machine-parseable
-mirror (``activity-YYYY-MM-DD.jsonl``). This is the human-in-the-loop
-view: one narrative line per meaningful thing the plugin does (context
-injected, nudge fired, diary written, learnings captured, catalog
-rebuilt). It is written regardless of log level — it is the signal, not
-the debug noise.
+activity stream (``activity.log``) plus a machine-parseable mirror
+(``activity.jsonl``). This is the human-in-the-loop view: one narrative
+line per meaningful thing the plugin does (context injected, nudge
+fired, diary written, learnings captured, catalog rebuilt). It is
+written regardless of log level — it is the signal, not the debug noise.
+
+**File-naming convention (one rule for every log in the directory):**
+
+- ``<name>.log`` — the *current* file (no date suffix).
+- On the first write of a new UTC day the current file is rotated to
+  ``<name>-YYYY-MM-DD.log`` (date infix *before* the extension). The
+  ``<name>.log.YYYY-MM-DD`` form produced by stdlib
+  ``TimedRotatingFileHandler`` is rejected — editors don't recognise it
+  as a log file — and any such legacy files are migrated to the correct
+  form opportunistically.
+
+Retention is governed by ``MULTIPLAI_LOG_RETENTION_DAYS`` (default 7,
+``0`` = keep forever). It applies uniformly to every rotated
+``<name>-DATE.log`` / ``<name>-DATE.jsonl`` file, including the activity
+stream.
 
 All log files live under the plugin data directory via the path resolver.
 """
@@ -21,9 +35,9 @@ All log files live under the plugin data directory via the path resolver.
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
-from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 _LEVELS = {
@@ -33,17 +47,45 @@ _LEVELS = {
     "ERROR": logging.ERROR,
 }
 
-# How long activity-*.log/.jsonl files are kept before opportunistic prune.
-_ACTIVITY_RETENTION_DAYS = 14
+# Default rotated-log retention when MULTIPLAI_LOG_RETENTION_DAYS is unset
+# or invalid. Matches the documented logging standard.
+_DEFAULT_RETENTION_DAYS = 7
 
-# Prune runs at most once per process.
-_pruned = False
+# A trailing ``-YYYY-MM-DD`` before the extension marks a rotated file.
+_DATED_RE = re.compile(r"-(\d{4}-\d{2}-\d{2})\.(log|jsonl)$")
+
+# The rejected stdlib form: ``<name>.log.YYYY-MM-DD``.
+_REJECTED_RE = re.compile(r"^(?P<base>.+)\.log\.(?P<date>\d{4}-\d{2}-\d{2})$")
+
+# Directory sweep (migrate + prune) runs at most once per process.
+_swept = False
 
 
 def _get_logs_dir() -> Path:
     """Get logs directory from path resolver (imported lazily)."""
     from lib.paths import get_paths
     return get_paths().logs_dir()
+
+
+def _utc_today() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def retention_days() -> int:
+    """Resolve rotated-log retention from ``MULTIPLAI_LOG_RETENTION_DAYS``.
+
+    Returns the configured day count, ``0`` for "keep forever", or the
+    default (7) when unset or unparseable. Negative values fall back to
+    the default.
+    """
+    raw = os.environ.get("MULTIPLAI_LOG_RETENTION_DAYS", "").strip()
+    if not raw:
+        return _DEFAULT_RETENTION_DAYS
+    try:
+        n = int(raw)
+    except ValueError:
+        return _DEFAULT_RETENTION_DAYS
+    return n if n >= 0 else _DEFAULT_RETENTION_DAYS
 
 
 def resolve_level() -> int:
@@ -58,6 +100,74 @@ def resolve_level() -> int:
         return logging.DEBUG
     name = os.environ.get("MULTIPLAI_LOG_LEVEL", "").strip().upper()
     return _LEVELS.get(name, logging.INFO)
+
+
+def _rotate_dated(base: Path) -> None:
+    """Archive *base* to ``<stem>-<its-day>.<ext>`` if it predates today.
+
+    The day a file's content belongs to is taken from its mtime (UTC).
+    A non-existent or empty file, or one already written today, is left
+    untouched. If the dated target already exists (e.g. two processes
+    crossing midnight), the stale content is appended rather than lost.
+    Best-effort: never raises.
+    """
+    try:
+        if not base.exists() or base.stat().st_size == 0:
+            return
+        file_day = datetime.fromtimestamp(
+            base.stat().st_mtime, timezone.utc
+        ).strftime("%Y-%m-%d")
+        if file_day == _utc_today():
+            return
+        target = base.with_name(f"{base.stem}-{file_day}{base.suffix}")
+        if target.exists():
+            with base.open("rb") as src, target.open("ab") as dst:
+                dst.write(src.read())
+            base.unlink()
+        else:
+            base.rename(target)
+    except OSError:
+        pass
+
+
+def _sweep_logs(logs_dir: Path, days: int) -> None:
+    """Normalise and prune the logs directory (best-effort, once/process).
+
+    1. Migrate any legacy ``<name>.log.YYYY-MM-DD`` (the rejected stdlib
+       form) to the standard ``<name>-YYYY-MM-DD.log``.
+    2. When *days* > 0, delete rotated ``<name>-DATE.log`` /
+       ``<name>-DATE.jsonl`` files whose mtime is older than the cutoff.
+       *days* == 0 keeps rotated files forever (migration still runs).
+    """
+    try:
+        for f in list(logs_dir.glob("*.log.*")):
+            m = _REJECTED_RE.match(f.name)
+            if not m:
+                continue
+            target = f.with_name(f"{m['base']}-{m['date']}.log")
+            try:
+                if target.exists():
+                    with f.open("rb") as src, target.open("ab") as dst:
+                        dst.write(src.read())
+                    f.unlink()
+                else:
+                    f.rename(target)
+            except OSError:
+                pass
+
+        if days <= 0:
+            return
+        cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+        for f in list(logs_dir.glob("*.log")) + list(logs_dir.glob("*.jsonl")):
+            if not _DATED_RE.search(f.name):
+                continue
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
 
 
 class _StandardFormatter(logging.Formatter):
@@ -86,6 +196,39 @@ class _StandardFormatter(logging.Formatter):
         return line
 
 
+class _DatedRotatingFileHandler(logging.FileHandler):
+    """Write ``<name>.log``; rotate to ``<name>-YYYY-MM-DD.log`` on day change.
+
+    Hooks are short-lived, so the common rotation path is at construction:
+    a ``<name>.log`` left over from a previous UTC day is archived before
+    the stream is (re)opened. Long-lived processes are also covered — the
+    emit path re-checks the UTC day and rotates mid-run.
+
+    Retention is not handled here; :func:`_sweep_logs` prunes uniformly
+    across the whole directory per ``MULTIPLAI_LOG_RETENTION_DAYS``.
+    """
+
+    def __init__(self, base: Path):
+        self._base = Path(base)
+        _rotate_dated(self._base)
+        super().__init__(self._base, encoding="utf-8")
+        self._day = _utc_today()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if _utc_today() != self._day:
+            self.acquire()
+            try:
+                if self.stream:
+                    self.stream.flush()
+                    self.stream.close()
+                _rotate_dated(self._base)
+                self.stream = self._open()
+                self._day = _utc_today()
+            finally:
+                self.release()
+        super().emit(record)
+
+
 def setup_logging(
     name: str = "multiplai",
     level: int | None = None,
@@ -94,10 +237,10 @@ def setup_logging(
     """Set up logging for a multiplai script.
 
     Configures (idempotently) a stderr handler, a date-rotated per-component
-    file handler (7-day retention), and a shared ``hook-errors.log`` handler
-    for ERROR+. When *level* is omitted it is resolved from the environment
-    via :func:`resolve_level` so ``MULTIPLAI_DEBUG=1`` makes every script
-    verbose without code changes.
+    file handler (``<name>.log`` current, ``<name>-DATE.log`` rotated), and
+    a shared ``hook-errors.log`` handler for ERROR+. When *level* is omitted
+    it is resolved from the environment via :func:`resolve_level` so
+    ``MULTIPLAI_DEBUG=1`` makes every script verbose without code changes.
     """
     logger = logging.getLogger(name)
     resolved = level if level is not None else resolve_level()
@@ -119,42 +262,28 @@ def setup_logging(
         logs_dir = _get_logs_dir()
         logs_dir.mkdir(parents=True, exist_ok=True)
 
-        # Date-rotated per-component log, 7-day retention (replaces the old
-        # unbounded {name}-{date}.log scheme).
-        file_handler = TimedRotatingFileHandler(
-            logs_dir / f"{name}.log",
-            when="midnight",
-            utc=True,
-            backupCount=7,
-            encoding="utf-8",
-        )
+        file_handler = _DatedRotatingFileHandler(logs_dir / f"{name}.log")
         file_handler.setLevel(resolved)
         file_handler.setFormatter(fmt)
         logger.addHandler(file_handler)
 
-        # Shared ERROR+ sink across all components (append-only).
+        # Shared ERROR+ sink across all components (append-only, undated
+        # per the logging standard).
         error_handler = logging.FileHandler(
             logs_dir / "hook-errors.log", encoding="utf-8"
         )
         error_handler.setLevel(logging.ERROR)
         error_handler.setFormatter(fmt)
         logger.addHandler(error_handler)
+
+        global _swept
+        if not _swept:
+            _swept = True
+            _sweep_logs(logs_dir, retention_days())
     except Exception:
         logger.debug("Could not set up file logging", exc_info=True)
 
     return logger
-
-
-def _prune_old_activity(logs_dir: Path, days: int = _ACTIVITY_RETENTION_DAYS) -> None:
-    """Delete ``activity-*`` files older than *days* (best-effort)."""
-    cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
-    for pattern in ("activity-*.log", "activity-*.jsonl"):
-        for f in logs_dir.glob(pattern):
-            try:
-                if f.stat().st_mtime < cutoff:
-                    f.unlink()
-            except OSError:
-                pass
 
 
 def log_event(
@@ -172,6 +301,11 @@ def log_event(
     in plain language. Written regardless of configured log level and
     never raises (a logging failure must not break a hook).
 
+    Writes to the *current* files ``activity.log`` / ``activity.jsonl``
+    (no date suffix); the previous day's stream is rotated to
+    ``activity-YYYY-MM-DD.{log,jsonl}`` on the first write of a new UTC
+    day, consistent with every other log in the directory.
+
     Args:
         component: Short subsystem tag (e.g. ``context``, ``nudge``,
             ``diary``, ``learnings``, ``catalog``, ``session``).
@@ -180,21 +314,25 @@ def log_event(
         message: Human-readable sentence describing what happened.
         session_id: Claude Code session id (first 8 chars are recorded).
         level: Severity label for the JSONL record (INFO/WARNING/ERROR).
-        **fields: Structured key/values appended to both sinks.
+        **fields: Structured key/values appended to the JSONL mirror.
     """
     try:
         logs_dir = _get_logs_dir()
         logs_dir.mkdir(parents=True, exist_ok=True)
 
+        log_path = logs_dir / "activity.log"
+        jsonl_path = logs_dir / "activity.jsonl"
+        _rotate_dated(log_path)
+        _rotate_dated(jsonl_path)
+
         now = datetime.now(timezone.utc)
-        date = now.strftime("%Y-%m-%d")
         sid = (session_id or "")[:8] or "--------"
 
         # The human line is the message, verbatim — a clean sentence the
         # call site is responsible for making self-contained. Structured
         # fields enrich the JSONL mirror only (no noisy key=value tail).
         human = f"{now.strftime('%H:%M:%S')} [{component}] {message}"
-        with (logs_dir / f"activity-{date}.log").open("a", encoding="utf-8") as fh:
+        with log_path.open("a", encoding="utf-8") as fh:
             fh.write(human + "\n")
 
         record: dict[str, object] = {
@@ -206,13 +344,13 @@ def log_event(
             "msg": message,
         }
         record.update(fields)
-        with (logs_dir / f"activity-{date}.jsonl").open("a", encoding="utf-8") as fh:
+        with jsonl_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, default=str) + "\n")
 
-        global _pruned
-        if not _pruned:
-            _pruned = True
-            _prune_old_activity(logs_dir)
+        global _swept
+        if not _swept:
+            _swept = True
+            _sweep_logs(logs_dir, retention_days())
     except Exception:
         # Observability must never break the thing it observes.
         pass

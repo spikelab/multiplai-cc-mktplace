@@ -144,10 +144,11 @@ option overrides everything; with no workspace configured it uses
 
 ### The activity log — what to watch
 
-`activity-YYYY-MM-DD.log` is the human-in-the-loop view: one
-plain-language line per meaningful action — context injected (and the
-exact files), nudges fired, diary written, learnings captured, catalogs
-rebuilt, session start/end.
+`activity.log` is the human-in-the-loop view: one plain-language line
+per meaningful action — context injected (and the exact files), nudges
+fired, diary written, learnings captured, catalogs rebuilt, session
+start/end. It's the *current* file (no date); the previous day's stream
+rotates to `activity-YYYY-MM-DD.log` on the first write of a new day.
 
 ```
 14:51:03 [context]   injected 10 memory · 0 skills · 0 resources → preferences.md, technical-pref.md, multiplai.md, …
@@ -165,11 +166,11 @@ Watch it live from a **second terminal** (it stays out of Claude's
 context entirely):
 
 ```bash
-tail -f <workspace>/.multiplai/data/logs/activity-$(date +%F).log
+tail -f <workspace>/.multiplai/data/logs/activity.log
 ```
 
-`activity-YYYY-MM-DD.jsonl` mirrors the same events as one JSON object
-per line, for tooling and the health audit.
+`activity.jsonl` mirrors the same events as one JSON object per line,
+for tooling and the health audit (rotated the same way).
 
 ### Debug mode — see every script
 
@@ -186,10 +187,15 @@ per-component log **and** stderr — visible under `claude --debug`.
 
 ### Log layout & retention
 
-- `<component>.log` — per-component, date-rotated, **7-day retention**.
+- `<component>.log` — current per-component file; rotates to
+  `<component>-YYYY-MM-DD.log` on UTC day change.
+- `activity.{log,jsonl}` — current curated activity stream; rotates to
+  `activity-YYYY-MM-DD.{log,jsonl}` the same way.
 - `hook-errors.log` — every ERROR+ across all components, append-only.
-- `activity-YYYY-MM-DD.{log,jsonl}` — curated activity stream,
-  14-day retention.
+- Retention: `MULTIPLAI_LOG_RETENTION_DAYS` (default **7**, `0` = keep
+  forever) — applies uniformly to every rotated `*-DATE.{log,jsonl}`.
+  The rejected `<name>.log.DATE` form is auto-migrated to the standard
+  `<name>-DATE.log`.
 
 Every line follows the project logging standard:
 `[<UTC ISO-8601>Z] [<component>] [session:<8-char id>] LEVEL: message`.
