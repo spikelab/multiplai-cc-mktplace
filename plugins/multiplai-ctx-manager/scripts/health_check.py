@@ -125,12 +125,13 @@ def _routing_status(paths) -> dict:
     """Routing-quality block — the single most critical health signal.
 
     Zero LLM cost: configured-vs-effective strategy, live aggregates
-    parsed from the machine routing log, and the last *offline* eval
-    snapshot. Note the honest caveats consumed by the skill:
-    - token_overlap NONE-accuracy is ~0% by construction (a known
-      ceiling, not a regression) — it is the offline fallback.
-    - The offline eval can only score token_overlap; scoring the llm
-      default needs an API key / in-session run.
+    parsed from the machine routing log, and the last eval snapshot.
+    Note the honest caveats consumed by the skill:
+    - token_overlap is the default; its NONE-accuracy is ~0% by
+      construction (a known ceiling, not a regression) — abstention
+      needs the semantic llm router.
+    - llm is deferred/opt-in: ~17s/prompt via the Agent SDK (unusable
+      as a blocking pre-prompt hook) pending an async / API-key design.
     """
     status: dict = {}
     try:
@@ -316,9 +317,9 @@ def run_health_check() -> dict:
     routing = report.get("routing") or {}
     if routing.get("degraded_to_fallback"):
         recommendations.append(
-            "Routing degraded to the offline token_overlap fallback "
-            "(llm configured but no model client). Run inside Claude Code "
-            "or set an API key so the semantic default router runs."
+            "memory_router is explicitly set to llm but no model client "
+            "is available, so routing fell back to token_overlap. Unset "
+            "the option to use the default, or provide a model client."
         )
     last_eval = routing.get("last_eval")
     if last_eval is None:

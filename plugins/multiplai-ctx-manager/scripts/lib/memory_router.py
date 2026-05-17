@@ -56,12 +56,16 @@ STRATEGY_TOKEN_OVERLAP = "token_overlap"
 STRATEGY_LLM = "llm"
 STRATEGY_EMBEDDINGS = "embeddings"
 
-# llm is the default: it is the only strategy that can abstain
-# (return nothing when no memory helps) — token_overlap's NONE
-# accuracy is ~0% by construction (proven via the golden eval).
-# When no model client is available, create_router() degrades to
-# token_overlap so offline / no-API-key sessions still get routing.
-DEFAULT_STRATEGY = STRATEGY_LLM
+# token_overlap is the default: it is instant and runs synchronously
+# in the UserPromptSubmit hook every prompt. llm routing is
+# semantically better (it can abstain — token_overlap's NONE accuracy
+# is ~0% by construction) BUT measured at ~17s/prompt via the Agent
+# SDK (CLI cold-start per call), which is unusable as a blocking
+# pre-prompt hook. llm therefore remains opt-in (set the
+# CLAUDE_PLUGIN_OPTION_memory_router env var) pending an async /
+# API-key design. create_router() still degrades an explicit llm
+# choice to token_overlap when no model client is available.
+DEFAULT_STRATEGY = STRATEGY_TOKEN_OVERLAP
 KNOWN_STRATEGIES = frozenset({STRATEGY_TOKEN_OVERLAP, STRATEGY_LLM, STRATEGY_EMBEDDINGS})
 
 CORPUS_TYPES = ("memory", "skills", "resources")
@@ -126,11 +130,12 @@ STOPWORDS = frozenset({
 # Tunable routing policy (select_multi only — select() stays pure
 # rank+cap so the mechanism contract / unit tests are untouched).
 # Calibrated against the 50-case golden eval; see eval_router.py.
-# Calibrated on the 50-case golden eval (see eval_router.py). This is
-# the OFFLINE FALLBACK router — llm is the default and the only
-# strategy that can abstain (NONE). token_overlap's NONE-accuracy is
-# ~0% by construction (NONE/true-positive score distributions fully
-# overlap); these constants optimise recall + low volume instead:
+# Calibrated on the 50-case golden eval (see eval_router.py).
+# token_overlap is the DEFAULT router. Its NONE-accuracy is ~0% by
+# construction (NONE/true-positive score distributions fully
+# overlap) — abstention needs the semantic llm router, which is
+# opt-in/deferred (17s/prompt via the SDK). These constants instead
+# optimise what lexical matching *can* do — recall + low volume:
 # recall 74%, false-positive 10%, cap-saturation 17% (vs the pre-T3
 # 72% / 24% / 75%).
 KEEP_RATIO = 0.20          # drop entries scoring < ratio × top
@@ -589,12 +594,13 @@ class LLMRouter:
 
 
 def resolve_strategy(raw: str | None = None) -> str:
-    """Return the effective strategy name, defaulting to ``llm``.
+    """Return the effective strategy name, defaulting to ``token_overlap``.
 
     Unknown values are logged and fall back to the default rather than
     raising — a typo in a plugin option shouldn't break the hook.
     Note: this returns the *configured* strategy; create_router() may
-    still degrade ``llm`` → ``token_overlap`` when no client exists.
+    still degrade an explicit ``llm`` → ``token_overlap`` when no
+    client exists.
     """
     value = (raw if raw is not None else os.environ.get(ROUTER_ENV_VAR, "")).strip().lower()
     if not value:

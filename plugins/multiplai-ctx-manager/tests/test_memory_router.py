@@ -19,19 +19,18 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 
 class TestResolveStrategy:
-    def test_default_is_llm(self, monkeypatch):
-        # llm is the configured default — it is the only strategy that
-        # can abstain. create_router() may still degrade to
-        # token_overlap when no client exists (see TestCreateRouter).
+    def test_default_is_token_overlap(self, monkeypatch):
+        # token_overlap is the default: instant, runs synchronously
+        # every prompt. llm is opt-in/deferred (~17s via the SDK).
         from lib.memory_router import (
             DEFAULT_STRATEGY,
             ROUTER_ENV_VAR,
-            STRATEGY_LLM,
+            STRATEGY_TOKEN_OVERLAP,
             resolve_strategy,
         )
         monkeypatch.delenv(ROUTER_ENV_VAR, raising=False)
-        assert DEFAULT_STRATEGY == STRATEGY_LLM
-        assert resolve_strategy() == STRATEGY_LLM
+        assert DEFAULT_STRATEGY == STRATEGY_TOKEN_OVERLAP
+        assert resolve_strategy() == STRATEGY_TOKEN_OVERLAP
 
     def test_env_override_to_llm(self, monkeypatch):
         from lib.memory_router import (
@@ -58,15 +57,11 @@ class TestResolveStrategy:
 
 
 class TestCreateRouter:
-    def test_default_degrades_to_token_overlap_without_client(self, monkeypatch):
-        # Default is llm, but with no model client create_router()
-        # degrades to the offline router so sessions still get routing.
+    def test_default_returns_token_overlap(self, monkeypatch):
+        # Default strategy is token_overlap — returned directly,
+        # without consulting the model client.
         import lib.memory_router as mr
         monkeypatch.delenv(mr.ROUTER_ENV_VAR, raising=False)
-        monkeypatch.setattr(
-            "lib.model_client.detect_client_type",
-            lambda: "none (no SDK or API key)",
-        )
         assert isinstance(mr.create_router(), mr.TokenOverlapRouter)
 
     def test_llm_returns_llm_router_when_client_available(self, monkeypatch):
