@@ -21,7 +21,7 @@ ensure_venv_python()
 
 from lib.paths import get_paths
 from lib.model_client import create_client
-from lib.log_utils import setup_logging
+from lib.log_utils import setup_logging, log_event
 from lib.correction_patterns import detect_corrections_in_transcript
 from lib.extraction import extract_units, write_diary_entries, append_learnings
 
@@ -119,12 +119,32 @@ async def extract() -> bool:
         diary_path = write_diary_entries(units, diary_dir, session_id, cwd, timestamp)
         if diary_path:
             logger.info("Wrote diary entry to %s", diary_path)
+            log_event(
+                "diary", "write",
+                f"wrote diary entry ({len(units)} unit(s)) to {Path(diary_path).name}",
+                session_id=session_id,
+                units=len(units),
+                path=str(diary_path),
+            )
 
     wrote = append_learnings(units, learnings_file, session_id, correction_matches, timestamp)
     if wrote:
         logger.info("Appended structured learnings to %s", learnings_file)
+        n_learnings = sum(len(u.get("learnings") or []) for u in units)
+        log_event(
+            "learnings", "capture",
+            f"captured {n_learnings} learning(s) + {len(correction_matches)} correction(s) to backlog",
+            session_id=session_id,
+            learnings=n_learnings,
+            corrections=len(correction_matches),
+        )
     elif session_id:
         logger.info("Session %s already in %s, skipping", session_id, learnings_file)
+        log_event(
+            "learnings", "skip",
+            "session already in learnings backlog — nothing new captured",
+            session_id=session_id,
+        )
 
     _drop_marker(marker_path)
     return True

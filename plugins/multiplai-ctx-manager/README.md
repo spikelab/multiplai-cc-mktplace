@@ -68,7 +68,7 @@ All commands are namespaced under `/multiplai:`.
 | Command | What it does |
 |---------|--------------|
 | `/multiplai:setup` | Onboarding interviewer — populates memory files from starter templates. |
-| `/multiplai:dream` | Generate a consolidation **proposal** from the pending learnings backlog into `.multiplai/inbox/`. Does not modify memory. |
+| `/multiplai:dream` | Generate a consolidation **proposal** from the pending learnings backlog into `.multiplai/dreams/`. Does not modify memory. |
 | `/multiplai:dream-remember` | Review the proposal (generating one if needed), approve/reject per target file, apply approved edits, clean up processed learnings. |
 | `/multiplai:health` | Infrastructure audit — completeness/staleness of memory files, plugin dirs, active model client. |
 | `/multiplai:memory-health-audit` | Deeper audit — cross-correlates retrieval logs, diary, learnings, and memory structure. |
@@ -121,9 +121,78 @@ the next `SessionStart`.
    `SessionStart` runs `extract_learnings.py`, writing diary entries and
    per-day learnings.
 2. **Propose** — `/multiplai:dream` reads learnings + diary and writes a
-   review proposal to `.multiplai/inbox/`.
+   review proposal to `.multiplai/dreams/`.
 3. **Apply** — `/multiplai:dream-remember` walks the proposal with you
    and applies approved edits to memory files.
+
+## Observability
+
+The plugin is not a black box — every meaningful action is logged. All
+runtime state (logs, catalogs, venv, dream state) lives with the
+workspace, beside memory/diary/learnings:
+
+```
+<workspace>/.multiplai/data/logs/
+```
+
+`<workspace>` is the configured workspace dir (`workspace_dir` option or
+`$WORKSPACE`). The plugin deliberately does **not** scatter logs into
+Claude Code's per-install `CLAUDE_PLUGIN_DATA` dir — runtime state stays
+with the workspace it describes. Fallbacks: an explicit `data_dir`
+option overrides everything; with no workspace configured it uses
+`CLAUDE_PLUGIN_DATA` (managed) or finally `~/.multiplai/data`.
+
+### The activity log — what to watch
+
+`activity-YYYY-MM-DD.log` is the human-in-the-loop view: one
+plain-language line per meaningful action — context injected (and the
+exact files), nudges fired, diary written, learnings captured, catalogs
+rebuilt, session start/end.
+
+```
+14:51:03 [context]   injected 10 memory · 0 skills · 0 resources → preferences.md, technical-pref.md, multiplai.md, …
+14:51:03 [nudge]     dream gate open (>24h, pending learnings) — surfaced to user
+14:51:18 [diary]     wrote diary entry (1 unit(s)) to <session>.md
+14:51:18 [learnings] captured 2 learning(s) + 0 correction(s) to backlog
+14:52:01 [catalog]   rebuilt 3 catalog(s) (14 entries, 0 pruned) in 312ms
+```
+
+The message is the line, verbatim — no `key=value` tail. Structured
+fields (full file list, byte counts, timings) live in the `.jsonl`
+mirror.
+
+Watch it live from a **second terminal** (it stays out of Claude's
+context entirely):
+
+```bash
+tail -f <workspace>/.multiplai/data/logs/activity-$(date +%F).log
+```
+
+`activity-YYYY-MM-DD.jsonl` mirrors the same events as one JSON object
+per line, for tooling and the health audit.
+
+### Debug mode — see every script
+
+Logging level is environment-driven. Launch Claude with:
+
+```bash
+MULTIPLAI_DEBUG=1 claude          # everything at DEBUG, all scripts
+MULTIPLAI_LOG_LEVEL=WARNING claude # quieter
+```
+
+`MULTIPLAI_DEBUG=1` makes every hook and script (context routing, diary,
+learnings, catalog rebuilds, venv bootstrap) emit DEBUG detail to its
+per-component log **and** stderr — visible under `claude --debug`.
+
+### Log layout & retention
+
+- `<component>.log` — per-component, date-rotated, **7-day retention**.
+- `hook-errors.log` — every ERROR+ across all components, append-only.
+- `activity-YYYY-MM-DD.{log,jsonl}` — curated activity stream,
+  14-day retention.
+
+Every line follows the project logging standard:
+`[<UTC ISO-8601>Z] [<component>] [session:<8-char id>] LEVEL: message`.
 
 ## Development
 

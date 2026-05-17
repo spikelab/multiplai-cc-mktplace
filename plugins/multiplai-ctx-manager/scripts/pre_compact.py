@@ -21,7 +21,7 @@ ensure_venv_python()
 
 from lib.config import read_session_state
 from lib.paths import get_paths
-from lib.log_utils import setup_logging
+from lib.log_utils import setup_logging, log_event
 
 logger = setup_logging("pre_compact")
 
@@ -71,6 +71,11 @@ def main() -> None:
         tmp.write_text(json.dumps(marker, indent=2))
         os.replace(str(tmp), str(marker_path))
         logger.info("PreCompact: wrote deferred extraction marker %s", marker_path)
+        log_event(
+            "session", "precompact",
+            "context compacting — queued deferred extraction to preserve learnings",
+            session_id=session_id,
+        )
     except OSError:
         logger.exception("PreCompact: failed to write deferred extraction marker")
 

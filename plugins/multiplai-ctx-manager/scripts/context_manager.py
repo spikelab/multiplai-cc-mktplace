@@ -34,7 +34,7 @@ from lib.venv_guard import ensure_venv_python
 ensure_venv_python()
 
 from lib.paths import get_paths
-from lib.log_utils import setup_logging
+from lib.log_utils import setup_logging, log_event
 from lib.model_client import create_client  # D3: LLM calls via ModelClient abstraction
 from lib.memory_router import create_router
 from lib.routing_logic import expand_picks
@@ -432,6 +432,9 @@ def main() -> None:
     transcript_path = (
         input_data.get("transcript_path") if isinstance(input_data, dict) else None
     )
+    session_id = (
+        input_data.get("session_id") if isinstance(input_data, dict) else None
+    )
 
     # Last-assistant-response disambiguation. Failure modes already
     # encoded in read_last_assistant_response (returns None on any error).
@@ -489,12 +492,23 @@ def main() -> None:
         memory_content = _read_top_memory_files(memory_dir)
         if memory_content:
             logger.info("FALLBACK memory=%s", json.dumps(sorted(memory_content.keys())))
+            log_event(
+                "context", "fallback",
+                "router matched nothing — fell back to recency-ranked memory → "
+                + ", ".join(sorted(memory_content.keys())),
+                session_id=session_id,
+                files=sorted(memory_content.keys()),
+            )
 
     # Per-project "now" state (cwd-scoped)
     project_state = _load_project_state(now_dir, cwd)
 
     if not memory_content and not skills_content and not resources_content and not project_state:
         logger.info("No context to inject")
+        log_event(
+            "context", "skip", "no context matched this prompt",
+            session_id=session_id,
+        )
         result = {"context": "", "memory_files": 0}
         print(json.dumps(result))
         return
@@ -522,6 +536,25 @@ def main() -> None:
         corpus_counts["skills"],
         corpus_counts["resources"],
         " + project state" if project_state else "",
+    )
+
+    injected = sorted(memory_content) + sorted(skills_content) + sorted(resources_content)
+    summary = (
+        f"injected {corpus_counts['memory']} memory · "
+        f"{corpus_counts['skills']} skills · "
+        f"{corpus_counts['resources']} resources"
+        + (" · project state" if project_state else "")
+        + (f" → {', '.join(injected)}" if injected else "")
+    )
+    log_event(
+        "context", "inject", summary,
+        session_id=session_id,
+        memory=corpus_counts["memory"],
+        skills=corpus_counts["skills"],
+        resources=corpus_counts["resources"],
+        project_state=bool(project_state),
+        files=injected,
+        bytes=len(session_context),
     )
 
     result = {

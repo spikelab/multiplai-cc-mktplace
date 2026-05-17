@@ -1,6 +1,6 @@
 ---
 name: dream-remember
-description: Review and apply pending memory updates from the learnings backlog. Checks .multiplai/inbox/ for a pre-generated Dream proposal; if none exists, generates one. Then presents updates grouped by target file, waits for approval, applies edits, and cleans up processed learnings files.
+description: Review and apply pending memory updates from the learnings backlog. Checks .multiplai/dreams/ for a pre-generated Dream proposal; if none exists, generates one. Then presents updates grouped by target file, waits for approval, applies edits, and cleans up processed learnings files.
 model: opus
 effort: high
 ---
@@ -10,21 +10,21 @@ effort: high
 Human-in-the-loop workflow for applying accumulated session learnings to memory files.
 
 Dream (nightly or on demand via `/multiplai:dream`) generates a proposal file in
-`.multiplai/inbox/`. This skill loads that proposal, walks through it with the user, and
+`.multiplai/dreams/`. This skill loads that proposal, walks through it with the user, and
 applies approved changes.
 
 ---
 
 ## Step 1: Locate the Proposal
 
-Check `.multiplai/inbox/` for a file matching `processed-learnings-*.md`, most recent first.
+Check `.multiplai/dreams/` for a file matching `processed-learnings-*.md`, most recent first.
 
 - **Found:** load it, report its date and summary line to the user, proceed to Step 3.
 - **Not found:** tell the user "No pre-generated proposal found — generating one now" and run:
   ```
   python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
   ```
-  Wait for it to complete, then load the newly written file from inbox and proceed to Step 3.
+  Wait for it to complete, then load the newly written file from the dreams directory and proceed to Step 3.
 
 Determine `CLAUDE_PLUGIN_ROOT` from the environment variable `$CLAUDE_PLUGIN_ROOT`.
 The learnings directory is `.multiplai/learnings/` relative to the workspace root

@@ -22,7 +22,7 @@ ensure_venv_python()
 
 from lib.config import read_session_state
 from lib.paths import get_paths
-from lib.log_utils import setup_logging
+from lib.log_utils import setup_logging, log_event
 
 logger = setup_logging("session_end")
 
@@ -57,6 +57,11 @@ def _save_deferred_marker(
     tmp.write_text(json.dumps(marker, indent=2))
     os.replace(str(tmp), str(marker_path))
     logger.info("Wrote deferred extraction marker: %s", marker_path)
+    log_event(
+        "session", "end",
+        "session ended — queued deferred extraction for next startup",
+        session_id=session_id,
+    )
 
 
 def main() -> None:

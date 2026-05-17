@@ -27,7 +27,7 @@ ensure_venv_python()
 
 from lib.paths import get_paths
 from lib.config import load_yaml
-from lib.log_utils import setup_logging
+from lib.log_utils import setup_logging, log_event
 
 logger = setup_logging("session_start")
 
@@ -283,6 +283,12 @@ def main() -> None:
         processed = _process_deferred_extractions(data_dir, extract_script)
         if processed:
             logger.info("Launched %d deferred extraction(s)", processed)
+            log_event(
+                "extract", "launch",
+                f"launched {processed} deferred extraction(s) from prior session(s)",
+                session_id=session_id,
+                count=processed,
+            )
     except Exception:
         logger.exception("Deferred extraction processing failed (non-fatal)")
 
@@ -297,9 +303,21 @@ def main() -> None:
         and _learnings_pending(learnings_file, dream_state_file)
     ):
         logger.info("Dream gate open with pending learnings; emitting nudge")
+        log_event(
+            "nudge", "dream",
+            "dream gate open (>24h, pending learnings) — surfaced to user",
+            session_id=session_id,
+        )
         _emit_dream_nudge()
 
     logger.info("Session started: %s (%d memory files available)", session_id, len(memory_files))
+    log_event(
+        "session", "start",
+        f"session started — {len(memory_files)} memory files available, client={client_type}",
+        session_id=session_id,
+        memory_files=len(memory_files),
+        client=client_type,
+    )
 
 
 if __name__ == "__main__":
