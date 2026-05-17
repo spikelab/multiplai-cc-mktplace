@@ -1,13 +1,13 @@
 ---
 name: dream
-description: "Generate a processed-learnings proposal from the pending backlog and write it to .multiplai/inbox/ for review. Does NOT apply changes — run /multiplai:dream-remember to review and apply."
+description: "Generate a processed-learnings proposal from the pending backlog and write it to .multiplai/dreams/ for review. Does NOT apply changes — run /multiplai:dream-remember to review and apply."
 ---
 
 # Multiplai Dream — Generate Learnings Proposal
 
 Runs the Dream analysis pipeline: reads all pending learnings from `.multiplai/learnings/`,
 calls the LLM to deduplicate and draft a structured change proposal, and writes it to
-`.multiplai/inbox/processed-learnings-YYYY-MM-DD.md`.
+`.multiplai/dreams/processed-learnings-YYYY-MM-DD.md`.
 
 **No memory files are modified.** The proposal is for review only.
 Run `/multiplai:dream-remember` to load the proposal and apply approved changes.
@@ -29,7 +29,7 @@ Run `/multiplai:dream-remember` to load the proposal and apply approved changes.
    (No flags — default is report mode.)
 
 3. **Report results:**
-   - Path to the proposal file in `.multiplai/inbox/`
+   - Path to the proposal file in `.multiplai/dreams/`
    - Number of source files and approximate learnings count
    - Remind: run `/multiplai:dream-remember` to review and apply
 

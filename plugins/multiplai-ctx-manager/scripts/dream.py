@@ -1,7 +1,7 @@
 """Dream consolidation script for multiplai plugin.
 
 Default mode (no flags): generates a human-readable change proposal and writes it
-to .multiplai/inbox/ for review. Run /multiplai:dream-remember to apply.
+to .multiplai/dreams/ for review. Run /multiplai:dream-remember to apply.
 
 --auto: fully autonomous — applies changes directly to memory files without review.
 --check: report pending learnings count and exit.
@@ -147,11 +147,11 @@ async def _generate_proposal(
 
 
 async def dream_report() -> None:
-    """Generate a change proposal and write it to .multiplai/inbox/ for review."""
+    """Generate a change proposal and write it to .multiplai/dreams/ for review."""
     paths = get_paths()
     learnings_dir = paths.learnings_dir
     memory_dir = paths.memory_dir()
-    inbox_dir = paths.inbox_dir()
+    dreams_dir = paths.dreams_dir()
 
     all_learnings, source_files = _read_all_learnings(learnings_dir)
     if not all_learnings:
@@ -166,9 +166,9 @@ async def dream_report() -> None:
     memory_contents = _read_memory_files(memory_dir)
     proposal = await _generate_proposal(client, all_learnings, memory_contents, source_files)
 
-    inbox_dir.mkdir(parents=True, exist_ok=True)
+    dreams_dir.mkdir(parents=True, exist_ok=True)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    output_file = inbox_dir / f"processed-learnings-{today}.md"
+    output_file = dreams_dir / f"processed-learnings-{today}.md"
     output_file.write_text(proposal)
 
     line_count = sum(1 for _ in all_learnings.splitlines())

@@ -25,6 +25,27 @@ _cached_paths: "Paths | None" = None
 _STANDALONE_BASE = Path.home() / ".multiplai"
 
 
+def _explicit_workspace_base() -> Path | None:
+    """Workspace ``.multiplai/`` root *if explicitly configured*, else None.
+
+    Resolution:
+      1. ``CLAUDE_PLUGIN_OPTION_workspace_dir`` if set.
+      2. ``WORKSPACE`` env var (set by the container launcher) — lets
+         scripts invoked outside the plugin hook mechanism resolve
+         workspace paths correctly.
+
+    Returns ``None`` when neither is set, so callers can distinguish a
+    configured workspace from the pure-standalone fallback.
+    """
+    env = _env("CLAUDE_PLUGIN_OPTION_workspace_dir")
+    if env:
+        return Path(env).expanduser().resolve() / ".multiplai"
+    workspace = _env("WORKSPACE")
+    if workspace:
+        return Path(workspace).expanduser().resolve() / ".multiplai"
+    return None
+
+
 def _workspace_base() -> Path:
     """Workspace-scoped ``.multiplai/`` root.
 
@@ -33,27 +54,15 @@ def _workspace_base() -> Path:
     per ``cwd`` (Claude routinely shifts ``cwd`` into sub-projects
     that all belong to the same workspace).
 
-    Resolution:
-      1. ``CLAUDE_PLUGIN_OPTION_workspace_dir`` if set — anchors at
-         that path.
-      2. ``WORKSPACE`` env var (set by the container launcher) — anchors
-         at that path. Allows scripts invoked outside the plugin hook
-         mechanism to resolve workspace paths correctly.
-      3. Otherwise falls back to ``~/.multiplai/`` so a fresh install
-         still writes somewhere sensible. We deliberately do NOT use
-         ``cwd`` as a fallback — it would pollute every sub-project
-         with its own data tree.
+    Falls back to ``~/.multiplai/`` when no workspace is configured so
+    a fresh install still writes somewhere sensible. We deliberately do
+    NOT use ``cwd`` as a fallback — it would pollute every sub-project
+    with its own data tree.
 
     Override any individual directory via the matching
     ``CLAUDE_PLUGIN_OPTION_{diary,now,learnings}_dir`` env var.
     """
-    env = _env("CLAUDE_PLUGIN_OPTION_workspace_dir")
-    if env:
-        return Path(env).expanduser().resolve() / ".multiplai"
-    workspace = _env("WORKSPACE")
-    if workspace:
-        return Path(workspace).expanduser().resolve() / ".multiplai"
-    return _STANDALONE_BASE
+    return _explicit_workspace_base() or _STANDALONE_BASE
 
 
 class _CallablePath(type(Path())):
@@ -126,10 +135,27 @@ class Paths:
         plugin_root = _resolve_env_path(env_root, _STANDALONE_BASE)
         workspace_base = _workspace_base()
 
-        # Data dir: env → workspace/.multiplai/data
-        # Plugin state (catalogs, venv, dream state, logs) lives beside the other
-        # workspace user-data dirs regardless of plugin mode.
-        data_dir = _resolve_env_path(env_data, workspace_base / "data")
+        # Data dir holds runtime state: logs, catalogs, venv, dream state.
+        # Whenever a workspace is explicitly configured it stays inside
+        # <workspace>/.multiplai/data — beside memory/diary/learnings —
+        # NOT in the per-install dir Claude Code points CLAUDE_PLUGIN_DATA
+        # at (anchoring there split runtime state away from the workspace).
+        # CLAUDE_PLUGIN_DATA is kept only as a managed fallback for installs
+        # with no configured workspace. Resolution:
+        #   1. CLAUDE_PLUGIN_OPTION_data_dir   (explicit override)
+        #   2. <explicit workspace>/.multiplai/data
+        #   3. CLAUDE_PLUGIN_DATA              (managed dir; no workspace)
+        #   4. ~/.multiplai/data              (pure standalone)
+        explicit_ws = _explicit_workspace_base()
+        opt_data = _env("CLAUDE_PLUGIN_OPTION_data_dir")
+        if opt_data:
+            data_dir = Path(opt_data).expanduser().resolve()
+        elif explicit_ws is not None:
+            data_dir = explicit_ws / "data"
+        elif env_data:
+            data_dir = Path(env_data).expanduser().resolve()
+        else:
+            data_dir = _STANDALONE_BASE / "data"
 
         # User-data dirs share the same workspace fallback hierarchy:
         #   1. CLAUDE_PLUGIN_OPTION_<name>_dir (specific override)
@@ -202,9 +228,9 @@ class Paths:
             date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return self.learnings_dir / f"{date_str}.md"
 
-    def inbox_dir(self) -> Path:
-        """Inbox directory for pending review items (proposals from Dream, etc.)."""
-        return self.data_dir.parent / "inbox"
+    def dreams_dir(self) -> Path:
+        """Dreams directory for pending Dream proposals awaiting review."""
+        return self.data_dir.parent / "dreams"
 
     def scripts_dir(self) -> Path:
         """Hook and utility scripts directory."""

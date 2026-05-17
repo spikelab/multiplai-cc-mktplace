@@ -23,7 +23,7 @@ Reconstruct diary entries and learnings from existing Claude Code session transc
 2. **Dry-run first** to see what will be processed:
 
    ```
-   python scripts/backfill.py --dry-run [--days N] [--projects slug,...]
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/backfill.py" --dry-run [--days N] [--projects slug,...]
    ```
 
    Review: session count, estimated tokens, and the **privacy notice** — backfill
@@ -35,8 +35,8 @@ Reconstruct diary entries and learnings from existing Claude Code session transc
 4. **Run the backfill**:
 
    ```
-   python scripts/backfill.py [--days N] [--since DATE] [--all]
-                              [--projects slug,...] [--concurrency 3]
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/backfill.py" [--days N] [--since DATE] [--all]
+                                                      [--projects slug,...] [--concurrency 3]
    ```
 
    Flags:

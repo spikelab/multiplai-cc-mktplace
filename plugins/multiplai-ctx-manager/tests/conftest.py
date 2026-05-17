@@ -110,6 +110,20 @@ def template_files(plugin_root):
     return list(templates_dir.glob("*.md")) if templates_dir.exists() else []
 
 
+@pytest.fixture(autouse=True)
+def _isolate_env(monkeypatch):
+    """Scrub ambient CLAUDE_PLUGIN_* / WORKSPACE before every test.
+
+    ``data_dir`` is workspace-anchored: a leaked host ``WORKSPACE`` (or
+    ``CLAUDE_PLUGIN_OPTION_workspace_dir``) would point runtime state at
+    the real workspace and break isolation. Tests that need these set
+    them explicitly via monkeypatch (applied after this autouse fixture).
+    """
+    for key in list(os.environ):
+        if key.startswith("CLAUDE_PLUGIN") or key == "WORKSPACE":
+            monkeypatch.delenv(key, raising=False)
+
+
 @pytest.fixture
 def clean_env(monkeypatch):
     for key in list(os.environ):

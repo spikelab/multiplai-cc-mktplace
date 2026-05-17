@@ -13,6 +13,7 @@ Usage:
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -21,7 +22,7 @@ from lib.venv_guard import ensure_venv_python
 ensure_venv_python()
 
 from lib.paths import get_paths
-from lib.log_utils import setup_logging
+from lib.log_utils import setup_logging, log_event
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
 
@@ -60,6 +61,7 @@ def main() -> None:
     if args.only:
         generator_filter = [g.strip() for g in args.only.split(",")]
 
+    started = time.monotonic()
     try:
         results = asyncio.run(
             generate_catalogs(
@@ -72,6 +74,7 @@ def main() -> None:
     except ValueError as e:
         logger.error("Invalid generator filter: %s", e)
         sys.exit(1)
+    elapsed_ms = round((time.monotonic() - started) * 1000)
 
     # Report results
     has_errors = False
@@ -88,6 +91,23 @@ def main() -> None:
                 logger.error("  %s: %s", r.generator, err)
 
     logger.info("Catalog generation complete at %s", catalogs_dir)
+
+    total_generated = sum(r.generated for r in results)
+    total_pruned = sum(r.pruned for r in results)
+    rebuilt = sorted(r.generator for r in results)
+    mode = "dry-run" if args.dry_run else "rebuilt"
+    log_event(
+        "catalog", "rebuild",
+        f"{mode} {len(results)} catalog(s) ({total_generated} entries, "
+        f"{total_pruned} pruned) in {elapsed_ms}ms"
+        + (" — with errors" if has_errors else ""),
+        level="WARNING" if has_errors else "INFO",
+        catalogs=rebuilt,
+        generated=total_generated,
+        pruned=total_pruned,
+        ms=elapsed_ms,
+        errors=has_errors,
+    )
 
     if has_errors and not args.dry_run:
         sys.exit(1)
