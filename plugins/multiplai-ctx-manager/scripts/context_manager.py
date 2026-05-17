@@ -439,6 +439,7 @@ def main() -> None:
                         "picked": [[fn, round(s, 3)] for s, fn in _scored[:_cap]],
                         "cap": _cap,
                         "n_candidates": _mem.get("n_candidates", len(_scored)),
+                        "n_picked": _mem.get("n_picked", len(_scored[:_cap])),
                         "capped": _mem.get("capped", False),
                         "floor_excluded": (
                             round(_scored[_cap][0], 3)
