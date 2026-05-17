@@ -21,8 +21,15 @@ from lib.paths import get_paths
 from lib.model_client import detect_client_type
 
 
-MEMORY_FILES = ["me.md", "technical-pref.md", "preferences.md"]
+# The starter-template files /multiplai:setup creates. Their *absence*
+# is what drives the setup recommendation — it does not bound the
+# staleness audit, which scans the whole memory corpus.
+REQUIRED_MEMORY_FILES = ["me.md", "technical-pref.md", "preferences.md"]
 STALENESS_THRESHOLD_DAYS = 30
+
+# How many stale filenames to enumerate in a recommendation before
+# collapsing the rest to a "+N more" tail.
+_MAX_LISTED_STALE = 10
 
 
 def _check_directory_status(name: str, path: Path) -> dict:
@@ -139,10 +146,29 @@ def run_health_check() -> dict:
 
     report["fresh_install"] = False
 
-    # Memory file inventory with size, mtime, staleness
+    # Full-corpus inventory: every *.md in the memory dir gets size,
+    # mtime, and staleness — not just the starter-template trio.
+    corpus = sorted(p.name for p in memory_dir.glob("*.md"))
     report["memory_files"] = [
-        _check_memory_file(memory_dir, f) for f in MEMORY_FILES
+        _check_memory_file(memory_dir, name) for name in corpus
     ]
+    # Required starter files that are absent (drives the setup hint).
+    required_missing = [
+        name for name in REQUIRED_MEMORY_FILES
+        if not (memory_dir / name).exists()
+    ]
+    report["required_missing"] = required_missing
+
+    stale = [f for f in report["memory_files"] if f.get("stale")]
+    report["memory_summary"] = {
+        "total": len(report["memory_files"]),
+        "fresh": sum(
+            1 for f in report["memory_files"]
+            if f["exists"] and not f.get("stale")
+        ),
+        "stale": len(stale),
+        "required_missing": len(required_missing),
+    }
 
     # Diary and learnings status
     report["diary"] = {
@@ -160,19 +186,23 @@ def run_health_check() -> dict:
 
     # Build recommendations
     recommendations = []
-    missing_files = [f for f in report["memory_files"] if not f["exists"]]
-    if missing_files:
-        names = ", ".join(f["name"] for f in missing_files)
+    if required_missing:
+        names = ", ".join(required_missing)
         recommendations.append(
-            f"Missing memory files: {names}. Run /multiplai:setup to create them."
+            f"Missing required memory files: {names}. "
+            f"Run /multiplai:setup to create them."
         )
 
     stale_files = [f for f in report["memory_files"] if f.get("stale")]
     if stale_files:
-        names = ", ".join(f["name"] for f in stale_files)
+        ordered = sorted(stale_files, key=lambda f: f.get("age_days", 0), reverse=True)
+        listed = [f["name"] for f in ordered[:_MAX_LISTED_STALE]]
+        names = ", ".join(listed)
+        if len(ordered) > _MAX_LISTED_STALE:
+            names += f", +{len(ordered) - _MAX_LISTED_STALE} more"
         recommendations.append(
-            f"Stale memory files (>{STALENESS_THRESHOLD_DAYS} days): {names}. "
-            f"Run /multiplai:dream to refresh them."
+            f"{len(ordered)} stale memory file(s) (>{STALENESS_THRESHOLD_DAYS} "
+            f"days), oldest first: {names}. Run /multiplai:dream to refresh them."
         )
 
     unprocessed = report["learnings"]["unprocessed_count"]

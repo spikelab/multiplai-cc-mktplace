@@ -19,7 +19,7 @@ You are the multiplai health audit skill. Your job is to check the completeness 
 
    - **Directory Validation**: For each Paths field (`memory_dir`, `diary_dir`, `data_dir`, `venv_dir`), report whether the directory exists on disk or is missing.
 
-   - **Memory Files**: List each expected file (`me.md`, `technical-pref.md`, `preferences.md`) with existence status, size in bytes, and last-modified timestamp. Flag files not modified in >30 days as stale.
+   - **Memory Files**: The script scans the **entire** memory dir (`memory_dir.glob("*.md")`), not a fixed list. Use `memory_summary` (`total`, `fresh`, `stale`, `required_missing`) for the headline (e.g. "21/27 fresh"). Then enumerate explicitly **only** the files that need attention — anything in `required_missing` and any entry with `"stale": true` (show size + age_days, oldest first). Do **not** dump a row for every healthy file; collapse those to the fresh count. `required_missing` lists only absent starter-template files (`me.md`, `technical-pref.md`, `preferences.md`); a missing non-starter file is not flagged as an error.
 
    - **Diary Status**: Number of diary entries found.
 
@@ -27,7 +27,7 @@ You are the multiplai health audit skill. Your job is to check the completeness 
 
    - **Dream**: Date of last dream consolidation, or "never" if none has occurred.
 
-   - **Recommendations**: Actionable suggestions — recommend `/multiplai:setup` for missing files, `/multiplai:dream` for stale memory or unprocessed learnings.
+   - **Recommendations**: Actionable suggestions — recommend `/multiplai:setup` only when `required_missing` is non-empty, `/multiplai:dream` for stale memory (any file in the corpus, not just starter files) or unprocessed learnings. Pass the script's pre-built `recommendations` through; don't narrow them back to the starter trio.
 
 3. **Handle fresh install gracefully:** If the plugin is not yet configured (no memory directory exists), report that the plugin needs first-time setup and recommend running `/multiplai:setup` rather than showing errors.
 
