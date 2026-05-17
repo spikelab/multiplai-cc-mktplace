@@ -355,6 +355,31 @@ class TestHealthCheckMemoryInventory:
         """health_check.py must report last-modified timestamps."""
         assert re.search(r"(?i)(mtime|st_mtime|modified|timestamp)", self.source)
 
+    def test_scans_whole_memory_dir_not_fixed_list(self):
+        """Inventory must glob every *.md in memory_dir, not iterate a
+        hardcoded trio (the trio is required-existence only)."""
+        assert re.search(r"memory_dir\.glob\(\s*['\"]\*\.md['\"]\s*\)", self.source), \
+            "health_check must scan memory_dir.glob('*.md') for the inventory"
+        assert "REQUIRED_MEMORY_FILES" in self.source
+        # The old bug: comprehension over the fixed list for the inventory.
+        assert "for f in MEMORY_FILES" not in self.source
+
+    def test_reports_memory_summary_counts(self):
+        """A memory_summary with total/fresh/stale/required_missing keys
+        lets the skill headline without dumping every row."""
+        assert '"memory_summary"' in self.source
+        for key in ('"total"', '"fresh"', '"stale"', '"required_missing"'):
+            assert key in self.source, f"memory_summary missing {key}"
+
+    def test_required_missing_drives_setup_not_arbitrary_files(self):
+        """Only absent starter-template files trigger the setup hint."""
+        assert '"required_missing"' in self.source
+        assert "required_missing" in self.source
+        assert re.search(
+            r"required_missing.*\n.*multiplai:setup|setup.*required",
+            self.source, re.DOTALL,
+        ) or "Run /multiplai:setup" in self.source
+
 
 # ---------------------------------------------------------------------------
 # Health skill staleness detection
