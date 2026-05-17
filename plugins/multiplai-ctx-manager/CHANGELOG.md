@@ -6,13 +6,21 @@
 
 - `log_utils.py` rewritten to the project logging standard: UTC ISO-8601
   lines with `[component] [session:xxxxxxxx] LEVEL:` shape, env-driven
-  level (`MULTIPLAI_DEBUG=1` or `MULTIPLAI_LOG_LEVEL`), date-rotated
-  per-component logs with 7-day retention, and a shared `hook-errors.log`
-  for ERROR+ across all components.
+  level (`MULTIPLAI_DEBUG=1` or `MULTIPLAI_LOG_LEVEL`), and a shared
+  `hook-errors.log` for ERROR+ across all components.
+- **Uniform date-rotation across every log.** `<name>.log` is always the
+  *current* file; on the first write of a new UTC day it rotates to
+  `<name>-YYYY-MM-DD.log` (date infix *before* the extension, per the
+  standard). The stdlib `TimedRotatingFileHandler` was emitting the
+  rejected `<name>.log.YYYY-MM-DD` form; legacy files in that shape are
+  auto-migrated. Retention is `MULTIPLAI_LOG_RETENTION_DAYS` (default 7,
+  `0` = keep forever), applied uniformly to every rotated file.
 - New `log_event()` curated activity stream — one plain-language line per
-  meaningful action in `activity-YYYY-MM-DD.log`, mirrored to
-  `activity-YYYY-MM-DD.jsonl` for tooling. Written regardless of log
-  level; never raises into a hook.
+  meaningful action in `activity.log` (current), mirrored to
+  `activity.jsonl` for tooling, both rotating to `activity-YYYY-MM-DD.*`
+  the same way. Previously these were always date-stamped with *today*,
+  so there was never a stable current file to `tail -f`. Written
+  regardless of log level; never raises into a hook.
 - Lifecycle scripts instrumented: context inject/skip/fallback (with the
   exact files loaded), dream nudge, session start/end/pre-compact, diary
   write, learnings capture, catalog rebuild (+entry count and timing),
