@@ -152,7 +152,8 @@ class TestMultiCorpusOutput:
         _write_catalog(
             env_setup["catalogs_dir"],
             "skills.json",
-            [{"source": "writing.md", "name": "writing", "intent_domains": ["writing"]}],
+            [{"source": "writing.md", "name": "writing",
+              "intent_domains": ["writing a blog post"]}],
         )
 
         out = _run_hook(

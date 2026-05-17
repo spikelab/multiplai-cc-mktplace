@@ -19,16 +19,19 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 
 class TestResolveStrategy:
-    def test_default_is_token_overlap(self, monkeypatch):
+    def test_default_is_llm(self, monkeypatch):
+        # llm is the configured default — it is the only strategy that
+        # can abstain. create_router() may still degrade to
+        # token_overlap when no client exists (see TestCreateRouter).
         from lib.memory_router import (
             DEFAULT_STRATEGY,
             ROUTER_ENV_VAR,
-            STRATEGY_TOKEN_OVERLAP,
+            STRATEGY_LLM,
             resolve_strategy,
         )
         monkeypatch.delenv(ROUTER_ENV_VAR, raising=False)
-        assert DEFAULT_STRATEGY == STRATEGY_TOKEN_OVERLAP
-        assert resolve_strategy() == STRATEGY_TOKEN_OVERLAP
+        assert DEFAULT_STRATEGY == STRATEGY_LLM
+        assert resolve_strategy() == STRATEGY_LLM
 
     def test_env_override_to_llm(self, monkeypatch):
         from lib.memory_router import (
@@ -55,18 +58,31 @@ class TestResolveStrategy:
 
 
 class TestCreateRouter:
-    def test_default_returns_token_overlap(self, monkeypatch):
-        from lib.memory_router import (
-            ROUTER_ENV_VAR,
-            TokenOverlapRouter,
-            create_router,
+    def test_default_degrades_to_token_overlap_without_client(self, monkeypatch):
+        # Default is llm, but with no model client create_router()
+        # degrades to the offline router so sessions still get routing.
+        import lib.memory_router as mr
+        monkeypatch.delenv(mr.ROUTER_ENV_VAR, raising=False)
+        monkeypatch.setattr(
+            "lib.model_client.detect_client_type",
+            lambda: "none (no SDK or API key)",
         )
-        monkeypatch.delenv(ROUTER_ENV_VAR, raising=False)
-        assert isinstance(create_router(), TokenOverlapRouter)
+        assert isinstance(mr.create_router(), mr.TokenOverlapRouter)
 
-    def test_llm_returns_llm_router(self):
-        from lib.memory_router import LLMRouter, create_router
-        assert isinstance(create_router("llm"), LLMRouter)
+    def test_llm_returns_llm_router_when_client_available(self, monkeypatch):
+        import lib.memory_router as mr
+        monkeypatch.setattr(
+            "lib.model_client.detect_client_type", lambda: "AgentSDKClient"
+        )
+        assert isinstance(mr.create_router("llm"), mr.LLMRouter)
+
+    def test_llm_degrades_to_token_overlap_without_client(self, monkeypatch):
+        import lib.memory_router as mr
+        monkeypatch.setattr(
+            "lib.model_client.detect_client_type",
+            lambda: "none (no SDK or API key)",
+        )
+        assert isinstance(mr.create_router("llm"), mr.TokenOverlapRouter)
 
     def test_embeddings_not_implemented(self):
         from lib.memory_router import create_router
@@ -331,10 +347,14 @@ class TestTokenOverlapMultiCorpus:
     def test_missing_corpus_treated_as_empty(self):
         from lib.memory_router import TokenOverlapRouter
         # Only memory corpus provided
+        # intent_domains rich enough to clear the relevance floor —
+        # the mechanism under test is "absent corpora → []", not the
+        # (removed) "any single-token overlap → returned" behavior.
         result = TokenOverlapRouter().select_multi(
-            "blog post writing",
+            "writing a blog post",
             None,
-            {"memory": [{"source": "x.md", "intent_domains": ["writing"]}]},
+            {"memory": [{"source": "x.md",
+                         "intent_domains": ["writing a blog post"]}]},
         )
         assert result["skills"] == []
         assert result["resources"] == []
@@ -351,6 +371,70 @@ class TestTokenOverlapMultiCorpus:
             "python code", None, corpora, max_files_per_corpus=4
         )
         assert len(result["memory"]) == 4
+
+
+# ---------------------------------------------------------------------------
+# Routing policy (NONE floor, continuation guard, relative cutoff) —
+# select_multi only; select() stays pure rank+cap.
+# ---------------------------------------------------------------------------
+
+
+class TestRoutingPolicy:
+    def _rich(self) -> list[dict]:
+        # One strongly-relevant entry + several weak ones.
+        return [
+            {"source": "finances.md",
+             "intent_domains": ["italian taxes and FBAR filing"],
+             "keywords": ["FBAR", "backdoor Roth", "Form 8606"]},
+            {"source": "python.md", "intent_domains": ["debugging python"]},
+            {"source": "life.md", "intent_domains": ["personal life logistics"]},
+        ]
+
+    def test_none_floor_returns_empty_when_no_real_match(self):
+        from lib.memory_router import TokenOverlapRouter
+        # Prompt shares at most a faint token with any entry → below
+        # MIN_SIGNAL → nothing injected (the abstention the old
+        # always-top-N behavior could never do).
+        result = TokenOverlapRouter().select_multi(
+            "fix the CSS bug on line 42", None,
+            {"memory": self._rich(), "skills": [], "resources": []},
+        )
+        assert result["memory"] == []
+
+    @pytest.mark.parametrize("phrase", ["yes", "go ahead", "do it", "thanks", "continue"])
+    def test_continuation_guard_returns_all_empty(self, phrase):
+        from lib.memory_router import TokenOverlapRouter
+        r = TokenOverlapRouter()
+        result = r.select_multi(
+            phrase,
+            "We were deep in italian taxes and FBAR filing details",
+            {"memory": self._rich(), "skills": [], "resources": []},
+        )
+        assert result == {"memory": [], "skills": [], "resources": []}
+        assert r.last_scores["memory"].get("continuation") is True
+
+    def test_relative_cutoff_isolates_the_strong_match(self):
+        from lib.memory_router import TokenOverlapRouter
+        result = TokenOverlapRouter().select_multi(
+            "help with my FBAR and backdoor Roth for italian taxes",
+            None,
+            {"memory": self._rich(), "skills": [], "resources": []},
+        )
+        # The strong entry is picked; weak unrelated ones are cut off,
+        # so the result does not saturate to the whole catalog.
+        assert "finances.md" in result["memory"]
+        assert len(result["memory"]) < 3
+
+    def test_diagnostics_exposed_for_logging(self):
+        from lib.memory_router import TokenOverlapRouter
+        r = TokenOverlapRouter()
+        r.select_multi(
+            "FBAR and backdoor Roth", None,
+            {"memory": self._rich(), "skills": [], "resources": []},
+        )
+        mem = r.last_scores["memory"]
+        assert set(mem) >= {"scored", "cap", "n_candidates", "n_picked", "capped"}
+        assert mem["scored"] and mem["scored"][0][0] > 0
 
 
 # ---------------------------------------------------------------------------

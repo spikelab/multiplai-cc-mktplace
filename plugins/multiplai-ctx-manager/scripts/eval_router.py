@@ -144,8 +144,8 @@ def _evaluate(metrics: Metrics, case: dict, picked: list[str], n_candidates: int
     metrics.fp_hits += len(irrelevant)
     # Rank of first expected file.
     metrics.cand_n += 1
-    metrics.cand_sum += n_candidates
-    if n_candidates >= cap:
+    metrics.cand_sum += n_candidates  # raw matched pool (informative)
+    if len(picked) >= cap:            # saturation = the *returned* set
         metrics.capped += 1
     first_rank = 0
     for i, f in enumerate(picked, 1):
