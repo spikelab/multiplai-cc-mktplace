@@ -82,7 +82,7 @@ def _run_hook(env_setup, *, prompt: str, extra_env: dict | None = None) -> dict:
 
     stdin = json.dumps({
         "hook_event_name": "UserPromptSubmit",
-        "user_prompt": prompt,
+        "prompt": prompt,
         "cwd": "/tmp",
     })
     result = subprocess.run(

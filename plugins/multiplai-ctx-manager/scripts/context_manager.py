@@ -5,7 +5,7 @@ memory, skills, and resources — using catalog-first reads with
 intent-domain routing.
 
 Pipeline:
-    1. Read stdin (cwd, user_prompt, transcript_path)
+    1. Read stdin (cwd, prompt, transcript_path)
     2. Extract last assistant response from transcript (disambiguation)
     3. Load each enabled corpus catalog (gated on plugin options)
     4. Run multi-corpus router → per-corpus filename picks
@@ -428,7 +428,7 @@ def main() -> None:
         input_data = {}
 
     cwd = input_data.get("cwd", "") if isinstance(input_data, dict) else ""
-    prompt = input_data.get("user_prompt", "") if isinstance(input_data, dict) else ""
+    prompt = input_data.get("prompt", "") if isinstance(input_data, dict) else ""
     transcript_path = (
         input_data.get("transcript_path") if isinstance(input_data, dict) else None
     )
