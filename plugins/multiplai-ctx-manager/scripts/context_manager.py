@@ -412,6 +412,8 @@ def main() -> None:
 
     # Multi-corpus router pass
     picks_by_corpus: dict[str, list[str]] = {"memory": [], "skills": [], "resources": []}
+    router_diag: dict | None = None
+    used_fallback = False
     if prompt and any(corpora.values()):
         try:
             router = create_router()
@@ -423,6 +425,28 @@ def main() -> None:
                 len(picks_by_corpus.get("skills", [])),
                 len(picks_by_corpus.get("resources", [])),
             )
+            # Routing-quality diagnostics (token_overlap only; the LLM
+            # router exposes no scores). Machine-readable line consumed
+            # by the eval harness and the /health Routing Quality check.
+            router_diag = getattr(router, "last_scores", None) or None
+            if router_diag:
+                _mem = router_diag.get("memory") or {}
+                _scored = _mem.get("scored") or []
+                _cap = _mem.get("cap", 10)
+                logger.info(
+                    "ROUTING_SCORES memory=%s",
+                    json.dumps({
+                        "picked": [[fn, round(s, 3)] for s, fn in _scored[:_cap]],
+                        "cap": _cap,
+                        "n_candidates": _mem.get("n_candidates", len(_scored)),
+                        "capped": _mem.get("capped", False),
+                        "floor_excluded": (
+                            round(_scored[_cap][0], 3)
+                            if _mem.get("capped") and len(_scored) > _cap
+                            else None
+                        ),
+                    }),
+                )
         except NotImplementedError as e:
             logger.warning("Router misconfigured: %s", e)
         except Exception:
@@ -453,6 +477,7 @@ def main() -> None:
     if not memory_content:
         memory_content = _read_top_memory_files(memory_dir)
         if memory_content:
+            used_fallback = True
             logger.info("FALLBACK memory=%s", json.dumps(sorted(memory_content.keys())))
             log_event(
                 "context", "fallback",
@@ -501,11 +526,30 @@ def main() -> None:
     )
 
     injected = sorted(memory_content) + sorted(skills_content) + sorted(resources_content)
+    # Compact routing-quality hint for the human activity log: top and
+    # floor score of the picked memory, plus whether the cap was binding
+    # (CAP-HIT = the #10/#11 cutoff is arbitrary — low-signal routing).
+    score_hint = ""
+    if not used_fallback and router_diag:
+        _m = router_diag.get("memory") or {}
+        _s = _m.get("scored") or []
+        if _s:
+            _cap = _m.get("cap", 10)
+            _top = _s[0][0]
+            _floor = _s[min(_cap, len(_s)) - 1][0]
+            if _m.get("capped"):
+                score_hint = (
+                    f" · scores {_top:g}→{_floor:g} "
+                    f"CAP-HIT/{_m.get('n_candidates', len(_s))}cand"
+                )
+            else:
+                score_hint = f" · scores {_top:g}→{_floor:g} ({len(_s)}cand)"
     summary = (
         f"injected {corpus_counts['memory']} memory · "
         f"{corpus_counts['skills']} skills · "
         f"{corpus_counts['resources']} resources"
         + (" · project state" if project_state else "")
+        + score_hint
         + (f" → {', '.join(injected)}" if injected else "")
     )
     log_event(

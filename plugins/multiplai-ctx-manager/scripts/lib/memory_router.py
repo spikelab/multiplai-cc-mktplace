@@ -136,6 +136,13 @@ class TokenOverlapRouter:
 
     name = STRATEGY_TOKEN_OVERLAP
 
+    def __init__(self) -> None:
+        # Populated by select_multi each call: per-corpus full
+        # pre-truncation ranking + cap diagnostics, for the context
+        # manager to log. This is the routing-quality signal /health
+        # reports. Empty until the first select_multi call.
+        self.last_scores: dict[str, dict] = {}
+
     def select(
         self,
         prompt: str,
@@ -160,7 +167,13 @@ class TokenOverlapRouter:
         last response disambiguates short prompts where the same
         token (e.g., "costs") could match different domains. Each
         corpus is scored independently using the same tokens.
+
+        Per-corpus scoring diagnostics (full pre-truncation ranking,
+        the cap, candidate count, whether the cap was binding) are
+        stashed on ``self.last_scores`` for the context manager to
+        log — this is the routing-quality signal /health reports.
         """
+        self.last_scores = {}
         if not prompt:
             return {ct: [] for ct in CORPUS_TYPES}
         combined = prompt
@@ -169,9 +182,16 @@ class TokenOverlapRouter:
         result: dict[str, list[str]] = {}
         for corpus_type in CORPUS_TYPES:
             entries = corpora.get(corpus_type) or []
-            result[corpus_type] = self._score_corpus(
-                combined, entries, max_files=max_files_per_corpus
-            )
+            scored = self._scored_pairs(combined, entries)
+            result[corpus_type] = [
+                fn for _, fn in scored[:max_files_per_corpus]
+            ]
+            self.last_scores[corpus_type] = {
+                "scored": scored,
+                "cap": max_files_per_corpus,
+                "n_candidates": len(scored),
+                "capped": len(scored) > max_files_per_corpus,
+            }
         return result
 
     def _score_corpus(
@@ -181,13 +201,29 @@ class TokenOverlapRouter:
         *,
         max_files: int,
     ) -> list[str]:
+        scored = self._scored_pairs(prompt, catalog_entries)
+        return [filename for _, filename in scored[:max_files]]
+
+    def _scored_pairs(
+        self,
+        prompt: str,
+        catalog_entries: list[dict],
+    ) -> list[tuple[float, str]]:
+        """Score every entry; return ``(score, filename)`` sorted desc.
+
+        Full, un-truncated ranking — callers truncate to their own
+        cap. Scoring logic here is unchanged from the original
+        ``_score_corpus`` (raw intent/summary/topics token overlap);
+        T1 only exposes the ranking so the cutoff can be measured.
+        T3 reworks the scoring itself.
+        """
         if not catalog_entries or not prompt:
             return []
         prompt_tokens = _tokenize(prompt)
         if not prompt_tokens:
             return []
 
-        scored: list[tuple[int, str]] = []
+        scored: list[tuple[float, str]] = []
         for entry in catalog_entries:
             filename = _entry_filename(entry)
             if not filename:
@@ -216,12 +252,10 @@ class TokenOverlapRouter:
             match = len(intent_tokens & prompt_tokens)
             if match == 0:
                 continue
-            scored.append((match, filename))
+            scored.append((float(match), filename))
 
-        if not scored:
-            return []
         scored.sort(key=lambda pair: pair[0], reverse=True)
-        return [filename for _, filename in scored[:max_files]]
+        return scored
 
 
 # ---------------------------------------------------------------------------
