@@ -254,7 +254,9 @@ async def backfill(
     tasks = []
     for jsonl_path in sorted(in_window):
         session_id = _session_id_from_path(jsonl_path)
-        learnings_file = paths.learnings_file()
+        ts = _transcript_timestamp(jsonl_path)
+        date_str = ts.strftime("%Y-%m-%d") if ts else None
+        learnings_file = paths.learnings_file(date_str)
         tasks.append(_process_session(
             jsonl_path, session_id, since, until,
             valid_targets=valid_targets,
