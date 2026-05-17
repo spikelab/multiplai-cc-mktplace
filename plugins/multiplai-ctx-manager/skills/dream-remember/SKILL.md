@@ -24,7 +24,16 @@ Check `.multiplai/dreams/` for a file matching `processed-learnings-*.md`, most 
   ```
   python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
   ```
-  Wait for it to complete, then load the newly written file from the dreams directory and proceed to Step 3.
+  This can run for many minutes, past the Bash tool's 600s max timeout. You **MUST**
+  invoke it via the Bash tool with **`run_in_background: true`** (no `&`, no `nohup`).
+  The harness re-invokes you automatically when the process exits. Confirm success by
+  the sentinel line **`Proposal written to <path>`**; then load the newly written file
+  from the dreams directory and proceed to Step 3.
+
+  **NEVER** wait via a process-liveness loop (`until ! ps -p "$PID" …`): here PID 1 is
+  the `claude` process, not an init reaper, so a finished script becomes an unreaped
+  `<defunct>` zombie that matches `ps -p PID` forever and the loop never terminates.
+  Detect completion by the sentinel line / output file only.
 
 Determine `CLAUDE_PLUGIN_ROOT` from the environment variable `$CLAUDE_PLUGIN_ROOT`.
 The learnings directory is `.multiplai/learnings/` relative to the workspace root

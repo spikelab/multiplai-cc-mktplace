@@ -32,12 +32,28 @@ Reconstruct diary entries and learnings from existing Claude Code session transc
 3. **Confirm with the user** — surface the dry-run output and ask:
    > "This will process N sessions (~X estimated tokens). Proceed?"
 
-4. **Run the backfill**:
+4. **Run the backfill** — long-running (minutes to hours, well past the Bash tool's
+   600s max timeout). You **MUST** invoke it via the Bash tool with
+   `run_in_background: true`:
 
    ```
    python "${CLAUDE_PLUGIN_ROOT}/scripts/backfill.py" [--days N] [--since DATE] [--all]
                                                       [--projects slug,...] [--concurrency 3]
    ```
+
+   - Use the Bash tool's **`run_in_background: true`** option (no `&`, no `nohup`).
+     The harness owns the process lifecycle and **re-invokes you automatically when
+     it exits** — no polling, no manual timeout handling.
+   - When re-invoked, read the captured output and confirm success by the sentinel
+     line: **`Backfill complete: N scanned, ...`** (and `Synthesized now/` unless
+     `--no-now` was passed). Only then proceed to step 5.
+   - **NEVER** detect completion with a process-liveness loop
+     (`nohup … & ; until ! ps -p "$PID"; do sleep …; done`). In this environment
+     PID 1 is the `claude` process, not an init reaper: a finished script reparents
+     to PID 1 and becomes an **unreaped `<defunct>` zombie that matches `ps -p PID`
+     forever**, so the loop never terminates and completion is never reported (the
+     user then has to kill it by hand). Detect completion by the **sentinel line /
+     output file only** — never by process liveness.
 
    Flags:
    - `--concurrency 3` — parallel LLM calls (default: 3; reduce if rate-limited)
