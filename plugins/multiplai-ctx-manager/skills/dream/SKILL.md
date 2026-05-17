@@ -22,11 +22,24 @@ Run `/multiplai:dream-remember` to load the proposal and apply approved changes.
    ```
    If the output says no pending learnings, inform the user and exit.
 
-2. **Generate the proposal:**
+2. **Generate the proposal** — this can run for many minutes (often >10 min on a
+   large backlog), past the Bash tool's 600s max timeout. You **MUST** invoke it
+   via the Bash tool with `run_in_background: true`:
    ```
    python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
    ```
    (No flags — default is report mode.)
+
+   - Use the Bash tool's **`run_in_background: true`** option (no `&`, no `nohup`).
+     The harness **re-invokes you automatically when the process exits** — no polling.
+   - On re-invocation, confirm success by the sentinel line
+     **`Proposal written to <path>`** (the file under `.multiplai/dreams/` will also
+     exist). Only then proceed to step 3.
+   - **NEVER** detect completion with `nohup … & ; until ! ps -p "$PID" …`. In this
+     environment PID 1 is the `claude` process, not an init reaper: a finished script
+     becomes an **unreaped `<defunct>` zombie that matches `ps -p PID` forever**, so
+     the loop never terminates and the user has to kill it by hand. Detect completion
+     by the **sentinel line / output file only** — never by process liveness.
 
 3. **Report results:**
    - Path to the proposal file in `.multiplai/dreams/`
