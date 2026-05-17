@@ -45,10 +45,6 @@ from generators.config import load_catalog_config
 
 logger = setup_logging("context_manager")
 
-# Catalog cache staleness threshold in seconds (15 minutes)
-_CATALOG_CACHE_TTL = 900
-_CATALOG_FILENAME = "memory_catalog.json"
-
 # Catalog types supported by _read_catalog_or_scan()
 _KNOWN_CATALOG_TYPES = frozenset({"memory", "diary", "skills", "resources"})
 
@@ -136,40 +132,6 @@ def _read_top_memory_files(memory_dir: Path, *, max_files: int = 10) -> dict[str
         except Exception:
             logger.warning("Failed to read ranked memory file: %s", item.path)
     return result
-
-
-# ---------------------------------------------------------------------------
-# Catalog caching in $data_dir/catalogs/
-# ---------------------------------------------------------------------------
-
-def _cache_catalog(catalogs_dir: Path, catalog_data: dict) -> None:
-    """Write catalog data to the cache directory."""
-    catalogs_dir.mkdir(parents=True, exist_ok=True)
-    cache_file = catalogs_dir / _CATALOG_FILENAME
-    cache_file.write_text(json.dumps(catalog_data, indent=2))
-
-
-def _load_cached_catalog(catalogs_dir: Path) -> dict | None:
-    """Load a cached catalog from disk, or return None if absent."""
-    cache_file = catalogs_dir / _CATALOG_FILENAME
-    if not cache_file.exists():
-        return None
-    try:
-        return json.loads(cache_file.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
-def _is_catalog_fresh(catalogs_dir: Path) -> bool:
-    """Check whether the cached catalog is still within the TTL."""
-    cache_file = catalogs_dir / _CATALOG_FILENAME
-    if not cache_file.exists():
-        return False
-    try:
-        age = time.time() - cache_file.stat().st_mtime
-        return age < _CATALOG_CACHE_TTL
-    except OSError:
-        return False
 
 
 # ---------------------------------------------------------------------------

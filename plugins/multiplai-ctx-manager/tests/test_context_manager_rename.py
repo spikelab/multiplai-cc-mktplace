@@ -311,14 +311,6 @@ class TestImportsResolve:
         assert hasattr(mod, "_read_top_memory_files"), \
             "context_manager must expose _read_top_memory_files"
 
-    def test_context_manager_exposes_catalog_caching(self):
-        """WHEN context_manager is imported
-        THEN it exposes _cache_catalog, _load_cached_catalog, _is_catalog_fresh."""
-        mod = _import_context_manager()
-        for name in ["_cache_catalog", "_load_cached_catalog", "_is_catalog_fresh"]:
-            assert hasattr(mod, name), \
-                f"context_manager must expose {name}"
-
     def test_context_manager_exposes_ranked_file(self):
         """WHEN context_manager is imported
         THEN it exposes the RankedFile dataclass."""
@@ -384,9 +376,6 @@ class TestNoFunctionalChange:
             "_rank_memory_files",
             "_read_memory_files",
             "_read_top_memory_files",
-            "_cache_catalog",
-            "_load_cached_catalog",
-            "_is_catalog_fresh",
         ]
         for name in expected_names:
             assert hasattr(mod, name), \
@@ -432,20 +421,6 @@ class TestNoFunctionalChange:
         result = mod._read_top_memory_files(mem_dir, max_files=3)
         assert isinstance(result, dict)
         assert len(result) <= 3
-
-    def test_catalog_cache_round_trip(self, tmp_path):
-        """WHEN context_manager catalog caching functions are used
-        THEN data round-trips correctly."""
-        catalogs_dir = tmp_path / "catalogs"
-        catalogs_dir.mkdir()
-
-        mod = _import_context_manager()
-        data = {"files": [{"name": "test.md"}], "timestamp": time.time()}
-        mod._cache_catalog(catalogs_dir, data)
-
-        loaded = mod._load_cached_catalog(catalogs_dir)
-        assert loaded is not None
-        assert loaded["files"][0]["name"] == "test.md"
 
     def test_empty_memory_dir_returns_empty_dict(self, tmp_path):
         """WHEN _read_memory_files is called on empty dir
@@ -742,10 +717,3 @@ class TestScoringPreserved:
         mod = _import_context_manager()
         assert hasattr(mod, "_SIZE_NORM_BYTES")
         assert mod._SIZE_NORM_BYTES == 10_000
-
-    def test_catalog_cache_ttl_preserved(self):
-        """WHEN context_manager.py is inspected
-        THEN _CATALOG_CACHE_TTL is 900."""
-        mod = _import_context_manager()
-        assert hasattr(mod, "_CATALOG_CACHE_TTL")
-        assert mod._CATALOG_CACHE_TTL == 900

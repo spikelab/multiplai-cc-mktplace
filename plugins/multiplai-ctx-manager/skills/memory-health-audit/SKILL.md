@@ -19,7 +19,7 @@ Full cross-source analysis of the memory system. Produces a dated assessment sna
 | Diary | `.multiplai/diary/*.md` | Session diary — what happened, which projects, commits |
 | Learnings | `.multiplai/learnings/*.md` | Extracted insights — types, trust levels, target files |
 | Memory corpus | `.multiplai/memory/*.md` | The actual memory files — structure, size, staleness |
-| Memory catalog | `$CLAUDE_PLUGIN_DATA/catalogs/memory_catalog.json` | Routing descriptions, intent_domains, anti_domains |
+| Memory catalog | `$CLAUDE_PLUGIN_DATA/catalogs/memory.json` | Routing descriptions, intent_domains, anti_domains |
 | Previous assessments | `$CLAUDE_PLUGIN_DATA/memory-health/*.md` | Past audit snapshots for delta comparison |
 
 ## Workflow
@@ -102,7 +102,7 @@ Read ALL `.multiplai/learnings/*.md` files. Return:
 - List ALL corrections found (full text) — these are highest signal
 
 #### Agent 4: Memory Corpus Analysis
-Read ALL `.multiplai/memory/*.md` files and `$CLAUDE_PLUGIN_DATA/catalogs/memory_catalog.json`. Return:
+Read ALL `.multiplai/memory/*.md` files and `$CLAUDE_PLUGIN_DATA/catalogs/memory.json`. Return:
 - Per-file: name, line count, section headers, density assessment (high/medium/low)
 - Staleness: last modified date per file, flag anything >30 days
 - Overlap identification: content that appears in multiple files
