@@ -7,7 +7,6 @@
   "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
   "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
   "keywords": ["memory", "context", "diary", "learnings", "session", "persistence"],
-  "hooks": "./hooks/hooks.json",
   "userConfig": {
     "workspace_dir": {
       "type": "string",
