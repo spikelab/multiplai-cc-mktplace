@@ -565,7 +565,7 @@ class TestAsyncInterface:
 
 
 class TestNoVendoring:
-    """Verify claude-agent-sdk is not vendored."""
+    """Verify the SDK is depended on, not vendored (source bundled)."""
 
     def test_sdk_import_deferred(self):
         """Module imports without claude_agent_sdk installed."""
@@ -573,12 +573,18 @@ class TestNoVendoring:
         from lib import model_client
         assert hasattr(model_client, "ModelClient")
 
-    def test_anthropic_in_requirements(self):
+    def test_requirements_declares_deps_not_vendored(self):
+        """anthropic + a pinned claude-agent-sdk are declared as pip
+        deps (the opposite of vendoring). Vendoring = bundling SDK
+        source into the repo, which would show up as a committed
+        package dir, not a requirements line."""
         req_path = Path(__file__).resolve().parent.parent / "requirements.txt"
         text = req_path.read_text()
         assert "anthropic" in text
-        assert "claude-agent-sdk" not in text.lower()
-        assert "claude_agent_sdk" not in text.lower()
+        assert "claude-agent-sdk==" in text.lower()
+        # Not vendored: no SDK source tree committed under scripts/.
+        scripts = Path(__file__).resolve().parent.parent / "scripts"
+        assert not (scripts / "claude_agent_sdk").exists()
 
 
 class TestMaxTokensDefaults:

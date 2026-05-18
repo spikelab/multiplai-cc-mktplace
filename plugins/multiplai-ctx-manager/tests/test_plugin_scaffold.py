@@ -257,10 +257,11 @@ class TestSupportFiles:
         text = (PLUGIN_ROOT / "requirements.txt").read_text()
         assert "pyyaml" in text.lower()
 
-    def test_requirements_no_claude_agent_sdk(self):
+    def test_requirements_pins_claude_agent_sdk(self):
+        # Installed into the plugin venv (so standalone/skill SDK runs
+        # work, not only host-injected hooks); pinned to avoid drift.
         text = (PLUGIN_ROOT / "requirements.txt").read_text()
-        assert "claude-agent-sdk" not in text.lower()
-        assert "claude_agent_sdk" not in text.lower()
+        assert "claude-agent-sdk==" in text.lower()
 
 
 # ---------------------------------------------------------------------------
