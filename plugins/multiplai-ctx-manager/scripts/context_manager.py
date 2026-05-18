@@ -435,17 +435,24 @@ def main() -> None:
                 _mem = router_diag.get("memory") or {}
                 _scored = _mem.get("scored") or []
                 _cap = _mem.get("cap", 10)
+                # _apply_policy keeps a contiguous top prefix, so the
+                # set actually injected is scored[:n_picked]. Emit that
+                # — NOT scored[:cap], the raw candidate pool — so
+                # /health's live top/floor describe what was injected,
+                # not an excluded candidate (the conflation that made
+                # the live floor read artificially low).
+                _np = _mem.get("n_picked", 0)
                 logger.info(
                     "ROUTING_SCORES memory=%s",
                     json.dumps({
-                        "picked": [[fn, round(s, 3)] for s, fn in _scored[:_cap]],
+                        "picked": [[fn, round(s, 3)] for s, fn in _scored[:_np]],
                         "cap": _cap,
                         "n_candidates": _mem.get("n_candidates", len(_scored)),
-                        "n_picked": _mem.get("n_picked", len(_scored[:_cap])),
+                        "n_picked": _np,
                         "capped": _mem.get("capped", False),
                         "floor_excluded": (
-                            round(_scored[_cap][0], 3)
-                            if _mem.get("capped") and len(_scored) > _cap
+                            round(_scored[_np][0], 3)
+                            if len(_scored) > _np
                             else None
                         ),
                     }),

@@ -372,6 +372,55 @@ class TestAbstentionVsFallback:
         assert "real.md" in out["context"]
 
 
+class TestRoutingScoresEmission:
+    """ROUTING_SCORES (consumed by /health) must report the *picked*
+    set, not the cap-truncated candidate pool — otherwise /health's
+    live floor reads an excluded candidate's score, lower than what
+    was actually injected.
+    """
+
+    def test_picked_array_matches_n_picked_not_candidate_pool(self, env_setup):
+        # One strong entry + several weak candidates the relevance
+        # cutoff drops: n_candidates > n_picked, so the old
+        # scored[:cap] emission would over-report.
+        for n in ("strong.md", "w1.md", "w2.md", "w3.md"):
+            (env_setup["memory_dir"] / n).write_text(f"# {n}\nbody")
+        _write_catalog(
+            env_setup["catalogs_dir"],
+            "memory.json",
+            [
+                {"source": "strong.md",
+                 "intent_domains": ["italian tax filing and FBAR"]},
+                {"source": "w1.md", "intent_domains": ["italian cooking"]},
+                {"source": "w2.md", "intent_domains": ["tax software bugs"]},
+                {"source": "w3.md", "intent_domains": ["filing cabinets"]},
+            ],
+        )
+
+        out = _run_hook(
+            env_setup,
+            prompt="help with my italian tax filing and FBAR",
+            extra_env={"MULTIPLAI_LOG_LEVEL": "INFO"},
+        )
+        logs = list(env_setup["data_dir"].rglob("context_manager.log"))
+        assert logs, "context_manager.log not written"
+        line = next(
+            (ln for ln in logs[0].read_text().splitlines()
+             if "ROUTING_SCORES memory=" in ln),
+            None,
+        )
+        assert line, "no ROUTING_SCORES line emitted"
+        rec = json.loads(line.split("ROUTING_SCORES memory=", 1)[1])
+        # The contract: picked has exactly n_picked rows (the injected
+        # set), never the cap/candidate-pool count.
+        assert len(rec["picked"]) == rec["n_picked"]
+        assert rec["n_picked"] == out["memory_files"]
+        assert rec["n_picked"] < rec["n_candidates"]
+        # Floor = lowest injected score, sorted desc → last row.
+        scores = [s for _, s in rec["picked"]]
+        assert scores == sorted(scores, reverse=True)
+
+
 # ---------------------------------------------------------------------------
 # Empty-everything case
 # ---------------------------------------------------------------------------
