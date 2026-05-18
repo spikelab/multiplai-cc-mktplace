@@ -326,6 +326,26 @@ class TestBuildPrompt:
         assert isinstance(prompt, str)
         assert len(prompt) > 0
 
+    def test_keywords_instruction_demands_discriminative_not_glossary(
+        self, tmp_path, monkeypatch
+    ):
+        """The keyword instruction must steer away from generic glossaries.
+
+        Regression for the career-history.md flood: a bare "array of
+        keyword strings" let the LLM dump every technology a file
+        mentions, which then over-matched unrelated prompts.
+        """
+        gen, _, memory_dir = _make_memory_generator(tmp_path)
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        path = _write_memory_file(memory_dir, "career.md", "career bio")
+
+        prompt = gen.build_prompt(path).lower()
+        assert "discriminative" in prompt
+        assert "exclude" in prompt
+        # It must explicitly warn off generic tech as keywords.
+        assert "python" in prompt and "docker" in prompt
+
 
 # ---------------------------------------------------------------------------
 # parse_response()
