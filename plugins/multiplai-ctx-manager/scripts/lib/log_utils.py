@@ -331,7 +331,12 @@ def log_event(
         # The human line is the message, verbatim — a clean sentence the
         # call site is responsible for making self-contained. Structured
         # fields enrich the JSONL mirror only (no noisy key=value tail).
-        human = f"{now.strftime('%H:%M:%S')} [{component}] {message}"
+        # Time carries a ``Z`` (UTC, unambiguous across timezones) and
+        # the 8-char session id is inline so a line is self-traceable
+        # (grep one id to replay a whole session) without the JSONL.
+        human = (
+            f"{now.strftime('%H:%M:%S')}Z [{sid}] [{component}] {message}"
+        )
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(human + "\n")
 

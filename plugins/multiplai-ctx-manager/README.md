@@ -151,16 +151,24 @@ start/end. It's the *current* file (no date); the previous day's stream
 rotates to `activity-YYYY-MM-DD.log` on the first write of a new day.
 
 ```
-14:51:03 [context]   injected 4 memory · 0 skills · 0 resources · scores 31.5→9.8 (4/12 kept) → finances.md, life.md, preferences.md, taxes-italy.md
-14:51:03 [nudge]     dream gate open (>24h, pending learnings) — surfaced to user
-14:51:18 [diary]     wrote diary entry (1 unit(s)) to <session>.md
-14:51:18 [learnings] captured 2 learning(s) + 0 correction(s) to backlog
-14:52:01 [catalog]   rebuilt 3 catalog(s) (14 entries, 0 pruned) in 312ms
+14:51:03Z [a1b2c3d4] [context]   injected 4 memory · 0 skills · 0 resources · scores 31.5→9.8 (4/12 kept) → finances.md, life.md, preferences.md, taxes-italy.md
+14:51:03Z [a1b2c3d4] [nudge]     dream gate open (>24h, pending learnings) — surfaced to user
+14:51:18Z [a1b2c3d4] [diary]     wrote diary entry (1 unit(s)) to <session>.md
+14:51:18Z [a1b2c3d4] [learnings] captured 2 learning(s) + 0 correction(s) to backlog
+14:52:01Z [e5f6a7b8] [catalog]   rebuilt 3 catalog(s) (14 entries, 0 pruned) in 312ms
 ```
 
-The message is the line, verbatim — no `key=value` tail. Structured
-fields (full file list, byte counts, timings) live in the `.jsonl`
-mirror.
+Each line is `HH:MM:SS**Z** [**session**] [component] message`:
+
+- The **`Z`** marks the time as **UTC** — it is *not* your local
+  clock. If you're at UTC+2, `14:51Z` happened at 16:51 your time.
+- The **8-char session id** in brackets makes a line self-traceable:
+  `grep a1b2c3d4 activity.log` replays everything one session did,
+  and the same id maps to the transcript at
+  `$CLAUDE_CONFIG_DIR/projects/**/a1b2c3d4-*.jsonl` (which has the
+  actual prompts).
+- The message is verbatim — no `key=value` tail. Structured fields
+  (full file list, byte counts, timings) live in the `.jsonl` mirror.
 
 ### Reading a `[context]` routing line
 
