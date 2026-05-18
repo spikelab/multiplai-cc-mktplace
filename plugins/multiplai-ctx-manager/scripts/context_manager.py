@@ -414,10 +414,12 @@ def main() -> None:
     picks_by_corpus: dict[str, list[str]] = {"memory": [], "skills": [], "resources": []}
     router_diag: dict | None = None
     used_fallback = False
+    router_ran = False
     if prompt and any(corpora.values()):
         try:
             router = create_router()
             picks_by_corpus = router.select_multi(prompt, last_response, corpora)
+            router_ran = True
             logger.info(
                 "Router %s picked: memory=%d skills=%d resources=%d",
                 router.name,
@@ -472,10 +474,16 @@ def main() -> None:
     skills_content = _load_skills_content(cfg, picks_by_corpus.get("skills") or [])
     resources_content = _load_resources_content(cfg, picks_by_corpus.get("resources") or [])
 
-    # Memory fallback: if nothing picked OR none of the picks resolved on
-    # disk, fall back to metadata-ranked top-N. Skills/resources stay
-    # catalog-only — no metadata fallback (no obvious ranking signal).
-    if not memory_content:
+    # Memory fallback — a safety net for *failure*, not for abstention.
+    # A successful router run that returns no memory picks is a
+    # deliberate "nothing is relevant" (NONE floor or continuation
+    # guard); honoring it means injecting nothing, which is correct.
+    # The recency net only fires when the router never ran (exception /
+    # misconfig) or it picked files that didn't resolve on disk
+    # (catalog↔disk drift) — genuine failures with no ranking signal.
+    mem_picks = picks_by_corpus.get("memory") or []
+    router_abstained = router_ran and not mem_picks
+    if not memory_content and not router_abstained:
         memory_content = _read_top_memory_files(memory_dir)
         if memory_content:
             used_fallback = True
@@ -493,8 +501,24 @@ def main() -> None:
 
     if not memory_content and not skills_content and not resources_content and not project_state:
         logger.info("No context to inject")
+        # Make abstention visible in the human log: a deliberate
+        # "nothing relevant" is the floor/continuation guard working,
+        # not a failure — say which, with the top score as evidence.
+        _skip_msg = "no context matched this prompt"
+        if router_abstained:
+            _dm = (router_diag or {}).get("memory") or {}
+            _ds = _dm.get("scored") or []
+            if _dm.get("continuation"):
+                _skip_msg = "continuation prompt — context already in conversation, nothing injected"
+            elif _ds:
+                _skip_msg = (
+                    f"router abstained — best memory score {_ds[0][0]:g} "
+                    f"below relevance floor ({len(_ds)} cand), nothing injected"
+                )
+            else:
+                _skip_msg = "router abstained — no memory matched, nothing injected"
         log_event(
-            "context", "skip", "no context matched this prompt",
+            "context", "skip", _skip_msg,
             session_id=session_id,
         )
         result = {"context": "", "memory_files": 0}
@@ -527,24 +551,33 @@ def main() -> None:
     )
 
     injected = sorted(memory_content) + sorted(skills_content) + sorted(resources_content)
-    # Compact routing-quality hint for the human activity log: top and
-    # floor score of the picked memory, plus whether the cap was binding
-    # (CAP-HIT = the #10/#11 cutoff is arbitrary — low-signal routing).
+    # Compact routing-quality hint for the human activity log. Scores
+    # are read from the *picked* set, not the raw candidate pool: since
+    # _apply_policy keeps a contiguous top-of-ranking prefix, the floor
+    # is scored[n_picked-1] (the lowest file actually injected) — not
+    # scored[cap-1], which would report an excluded file's score.
+    # Abstention is reported honestly instead of a fake range.
     score_hint = ""
     if not used_fallback and router_diag:
         _m = router_diag.get("memory") or {}
         _s = _m.get("scored") or []
-        if _s:
-            _cap = _m.get("cap", 10)
+        _np = _m.get("n_picked", 0)
+        if _m.get("continuation"):
+            score_hint = " · continuation — nothing injected"
+        elif _np <= 0:
+            score_hint = (
+                f" · no match (best {_s[0][0]:g} < floor) — nothing injected"
+                if _s else " · no candidates — nothing injected"
+            )
+        elif _s:
+            _cand = _m.get("n_candidates", len(_s))
             _top = _s[0][0]
-            _floor = _s[min(_cap, len(_s)) - 1][0]
-            if _m.get("capped"):
-                score_hint = (
-                    f" · scores {_top:g}→{_floor:g} "
-                    f"CAP-HIT/{_m.get('n_candidates', len(_s))}cand"
-                )
-            else:
-                score_hint = f" · scores {_top:g}→{_floor:g} ({len(_s)}cand)"
+            _floor = _s[_np - 1][0]
+            _cap_tag = " CAP-HIT" if _m.get("capped") else ""
+            score_hint = (
+                f" · scores {_top:g}→{_floor:g}{_cap_tag} "
+                f"({_np}/{_cand} kept)"
+            )
     summary = (
         f"injected {corpus_counts['memory']} memory · "
         f"{corpus_counts['skills']} skills · "
