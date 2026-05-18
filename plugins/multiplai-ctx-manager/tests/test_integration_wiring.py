@@ -534,17 +534,20 @@ class TestGrepAuditHardcodedPaths:
 # ===========================================================================
 
 class TestMinimalDependencies:
-    """Verify requirements.txt contains ONLY anthropic and pyyaml per G6.
-    No claude-agent-sdk, no transitive dependency trees."""
+    """Verify requirements.txt stays minimal: anthropic, pyyaml, and a
+    pinned claude-agent-sdk. The SDK was originally omitted (host
+    injection + --system-site-packages) but that broke standalone /
+    skill-invoked SDK scripts; it is now a normal pinned venv dep. No
+    other packages, no transitive trees pulled in explicitly."""
 
-    def test_only_two_dependencies(self):
+    def test_three_dependencies(self):
         """WHEN requirements.txt is parsed
-        THEN it contains exactly 2 non-comment, non-empty lines."""
+        THEN it contains exactly 3 non-comment, non-empty lines."""
         text = (PLUGIN_ROOT / "requirements.txt").read_text()
         deps = [line.strip() for line in text.splitlines()
                 if line.strip() and not line.strip().startswith("#")]
-        assert len(deps) == 2, \
-            f"requirements.txt must have exactly 2 deps (G6), got {len(deps)}: {deps}"
+        assert len(deps) == 3, \
+            f"requirements.txt must have exactly 3 deps, got {len(deps)}: {deps}"
 
     def test_anthropic_present_with_version(self):
         """WHEN requirements.txt is inspected
@@ -560,16 +563,20 @@ class TestMinimalDependencies:
         assert re.search(r"pyyaml\s*>=\s*6\.0", text), \
             "requirements.txt must declare pyyaml>=6.0"
 
-    def test_no_claude_agent_sdk_in_requirements(self):
+    def test_claude_agent_sdk_pinned_in_requirements(self):
         """WHEN requirements.txt is inspected
-        THEN claude-agent-sdk is NOT listed (it's provided by host runtime)."""
+        THEN claude-agent-sdk is declared and pinned (==).
+
+        Installed into the plugin venv so SDK features work for
+        standalone/skill runs, not only host-injected hooks. Pinned so
+        it can't drift from the version the runtime expects."""
         text = (PLUGIN_ROOT / "requirements.txt").read_text().lower()
-        assert "claude-agent-sdk" not in text
-        assert "claude_agent_sdk" not in text
+        assert re.search(r"claude-agent-sdk\s*==", text), \
+            "requirements.txt must declare claude-agent-sdk== (pinned)"
 
     def test_no_extra_dependencies_snuck_in(self):
         """WHEN requirements.txt dependency names are extracted
-        THEN they are only 'anthropic' and 'pyyaml'."""
+        THEN they are only anthropic, pyyaml, and claude-agent-sdk."""
         text = (PLUGIN_ROOT / "requirements.txt").read_text()
         deps = []
         for line in text.splitlines():
@@ -579,8 +586,8 @@ class TestMinimalDependencies:
             # Extract package name before version specifier
             name = re.split(r'[>=<!\[\s]', line)[0].strip().lower()
             deps.append(name)
-        assert set(deps) == {"anthropic", "pyyaml"}, \
-            f"Only anthropic and pyyaml allowed (G6), got: {deps}"
+        assert set(deps) == {"anthropic", "pyyaml", "claude-agent-sdk"}, \
+            f"Only anthropic, pyyaml, claude-agent-sdk allowed, got: {deps}"
 
 
 # ===========================================================================
