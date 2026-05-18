@@ -120,9 +120,14 @@ class TestFreshBootstrap:
 
         bootstrap()
 
-        # First subprocess call should be venv creation
-        venv_call = mock_run.call_args_list[0]
-        cmd = venv_call[0][0]  # positional args -> first arg is the command list
+        # Find the venv-creation call by content (SDK-probe subprocess
+        # calls may now precede it).
+        venv_cmds = [
+            c[0][0] for c in mock_run.call_args_list
+            if "venv" in c[0][0] and "--system-site-packages" in c[0][0]
+        ]
+        assert venv_cmds, "no venv-creation subprocess call found"
+        cmd = venv_cmds[0]
         assert "--system-site-packages" in cmd
         assert "-m" in cmd
         assert "venv" in cmd
@@ -148,16 +153,20 @@ class TestFreshBootstrap:
 
         bootstrap()
 
-        # Second subprocess call should be pip install
-        assert len(mock_run.call_args_list) >= 2
-        pip_call = mock_run.call_args_list[1]
-        cmd = pip_call[0][0]
+        # Find the pip-install call by content (SDK-probe + venv-create
+        # calls precede it; index is no longer fixed).
+        venv_python = str(data_dir / "venv" / "bin" / "python")
+        pip_cmds = [
+            c[0][0] for c in mock_run.call_args_list
+            if "pip" in c[0][0] and "install" in c[0][0]
+        ]
+        assert pip_cmds, "no pip-install subprocess call found"
+        cmd = pip_cmds[0]
         assert "-m" in cmd
         assert "pip" in cmd
         assert "install" in cmd
         assert "-r" in cmd
         # Pip should use venv python, not system python
-        venv_python = str(data_dir / "venv" / "bin" / "python")
         assert cmd[0] == venv_python
 
     @patch("venv_bootstrap.subprocess.run")
@@ -241,6 +250,9 @@ class TestIdempotency:
         # Write marker with matching hash
         marker = venv_dir / ".bootstrap-complete"
         marker.write_text(_sha256(req_content))
+        # Steady state also has the SDK-bridge sentinel — its presence
+        # is what makes the no-op fast path skip the one-time SDK probe.
+        (venv_dir / ".sdk-bridge").write_text("/rt/site-packages")
 
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_dir))
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
@@ -274,6 +286,8 @@ class TestIdempotency:
 
         marker = venv_dir / ".bootstrap-complete"
         marker.write_text(_sha256(req_content))
+        # Steady state: SDK-bridge sentinel present → fast path, no probe.
+        (venv_dir / ".sdk-bridge").write_text("/rt/site-packages")
 
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_dir))
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
@@ -381,9 +395,11 @@ class TestReBootstrap:
         req_content = b"anthropic>=0.40.0\npyyaml>=6.0\n"
         req.write_bytes(req_content)
 
-        # Simulate post-bootstrap state: marker matches requirements
+        # Simulate post-bootstrap state: marker matches requirements and
+        # the SDK-bridge sentinel was written by the prior bootstrap.
         marker = venv_dir / ".bootstrap-complete"
         marker.write_text(_sha256(req_content))
+        (venv_dir / ".sdk-bridge").write_text("/rt/site-packages")
 
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_dir))
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
@@ -392,6 +408,94 @@ class TestReBootstrap:
 
         bootstrap()
         mock_run.assert_not_called()
+
+
+class TestSdkSelfHeal:
+    """A venv whose base interpreter lacks the SDK is rebuilt once
+    against an SDK-capable base — but never in a loop.
+    """
+
+    def _setup(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        venv_dir = data_dir / "venv"
+        (venv_dir / "bin").mkdir(parents=True)
+        (venv_dir / "bin" / "python").write_text("#!/stub\n")
+        plugin_dir = tmp_path / "plugin"
+        plugin_dir.mkdir()
+        req = plugin_dir / "requirements.txt"
+        req.write_bytes(b"anthropic>=0.40.0\n")
+        (venv_dir / ".bootstrap-complete").write_text(
+            _sha256(b"anthropic>=0.40.0\n")
+        )
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
+        return venv_dir
+
+    def test_writes_sdk_bridge_pth_for_unbridged_venv_no_rebuild(
+        self, tmp_path, monkeypatch, reset_paths_cache
+    ):
+        venv_dir = self._setup(tmp_path, monkeypatch)
+        # Real venv site-packages so the actual _ensure_sdk_bridge runs.
+        site = venv_dir / "lib" / "python3.12" / "site-packages"
+        site.mkdir(parents=True)
+        # Old venv from before this fix: marker matches, but no
+        # .sdk-bridge sentinel → fast path skipped, bridge gets wired.
+        assert not (venv_dir / ".sdk-bridge").exists()
+
+        import venv_bootstrap as vb
+
+        with patch.object(vb, "_resolve_sdk_site", return_value="/rt/sp"), \
+             patch.object(vb, "_python_has_sdk", return_value=True), \
+             patch.object(vb, "_create_venv") as mock_create, \
+             patch.object(vb, "_install_requirements") as mock_install:
+            vb.bootstrap()
+
+        # No rebuild/reinstall (deps current); bridge .pth + sentinel written.
+        mock_create.assert_not_called()
+        mock_install.assert_not_called()
+        pth = site / "_multiplai_runtime_sdk.pth"
+        assert pth.exists() and pth.read_text().strip() == "/rt/sp"
+        assert (venv_dir / ".sdk-bridge").read_text() == "/rt/sp"
+
+    def test_steady_state_with_sentinel_skips_all_work(
+        self, tmp_path, monkeypatch, reset_paths_cache
+    ):
+        # Bootstrapped + requirements-current + bridge sentinel present:
+        # the fast path returns before any SDK probe, bridge, or rebuild
+        # — a one-time migration, never an every-session tax.
+        venv_dir = self._setup(tmp_path, monkeypatch)
+        (venv_dir / ".sdk-bridge").write_text("/rt/sp")
+
+        import venv_bootstrap as vb
+
+        with patch.object(vb, "_resolve_sdk_site") as mock_resolve, \
+             patch.object(vb, "_python_has_sdk") as mock_probe, \
+             patch.object(vb, "_create_venv") as mock_create, \
+             patch.object(vb, "_install_requirements"):
+            vb.bootstrap()
+
+        mock_resolve.assert_not_called()  # fast path: no probe at all
+        mock_probe.assert_not_called()
+        mock_create.assert_not_called()
+        assert (venv_dir / "bin" / "python").exists()
+
+    def test_no_sdk_anywhere_records_sentinel_no_loop(
+        self, tmp_path, monkeypatch, reset_paths_cache
+    ):
+        # SDK genuinely absent (e.g. CI): bootstrap must still record the
+        # sentinel ("none") so the next run fast-paths instead of
+        # re-probing forever.
+        venv_dir = self._setup(tmp_path, monkeypatch)
+
+        import venv_bootstrap as vb
+
+        with patch.object(vb, "_resolve_sdk_site", return_value=None), \
+             patch.object(vb, "_create_venv") as mock_create, \
+             patch.object(vb, "_install_requirements"):
+            vb.bootstrap()
+
+        mock_create.assert_not_called()  # deps current → no rebuild
+        assert (venv_dir / ".sdk-bridge").read_text() == "none"
 
 
 # ---------------------------------------------------------------------------
