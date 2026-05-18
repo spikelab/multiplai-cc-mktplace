@@ -199,16 +199,16 @@ class TestMultiCorpusOutput:
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
-            [{"source": "voice.md", "intent_domains": ["writing"]}],
+            [{"source": "voice.md", "intent_domains": ["writing a blog post"]}],
         )
         _write_catalog(
             env_setup["catalogs_dir"],
             "skills.json",
-            [{"source": "writing.md", "name": "writing", "intent_domains": ["writing"]}],
+            [{"source": "writing.md", "name": "writing", "intent_domains": ["writing a blog post"]}],
         )
 
         # NO enable_skills env var set
-        out = _run_hook(env_setup, prompt="writing")
+        out = _run_hook(env_setup, prompt="writing a blog post")
         assert "=== SKILLS ===" not in out["context"]
         assert out["skills_files"] == 0
 
@@ -258,10 +258,10 @@ class TestSectionLoading:
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
-            [{"source": "big.md", "intent_domains": ["architecture"]}],
+            [{"source": "big.md", "intent_domains": ["software architecture decisions"]}],
         )
 
-        out = _run_hook(env_setup, prompt="architecture details")
+        out = _run_hook(env_setup, prompt="software architecture decisions")
         # Whole file loaded
         assert "Arch text." in out["context"]
         assert "Decision text." in out["context"]
@@ -310,6 +310,66 @@ class TestBackwardCompat:
         assert "context" in out
         # The non-existent old.md is NOT loaded; fallback scan finds fallback.md
         assert "old.md" not in out.get("context", "")
+
+
+class TestAbstentionVsFallback:
+    """The recency net is a failure safety net, not an abstention override.
+
+    A successful router run that returns no memory picks (sub-floor or
+    continuation guard) must inject *nothing* — the old behaviour
+    silently dumped 10 recency-ranked files over a correct "nothing
+    relevant", which was the dominant source of irrelevant context.
+    The net must still fire for genuine failure (picked-but-not-on-disk,
+    or the router never ran).
+    """
+
+    def test_subfloor_prompt_injects_nothing_not_recency_dump(self, env_setup):
+        """Router scores below floor → empty context, NOT a recency dump."""
+        # Several real files on disk: the old fallback WOULD have dumped these.
+        for name in ("alpha.md", "beta.md", "gamma.md"):
+            (env_setup["memory_dir"] / name).write_text(f"# {name}\nbody")
+        _write_catalog(
+            env_setup["catalogs_dir"],
+            "memory.json",
+            [{"source": "alpha.md", "intent_domains": ["python programming"]}],
+        )
+
+        out = _run_hook(env_setup, prompt="completely unrelated zebra giraffe")
+        assert out["memory_files"] == 0
+        assert out["context"] == ""
+
+    def test_continuation_prompt_injects_nothing(self, env_setup):
+        """A bare go-ahead ("yes") abstains — no recency dump."""
+        for name in ("alpha.md", "beta.md"):
+            (env_setup["memory_dir"] / name).write_text(f"# {name}\nbody")
+        _write_catalog(
+            env_setup["catalogs_dir"],
+            "memory.json",
+            [{"source": "alpha.md", "intent_domains": ["software architecture decisions"]}],
+        )
+
+        out = _run_hook(env_setup, prompt="yes")
+        assert out["memory_files"] == 0
+        assert out["context"] == ""
+
+    def test_genuine_drift_still_uses_recency_safety_net(self, env_setup):
+        """Router picks a file that isn't on disk → net still fires.
+
+        This is real failure (catalog↔disk drift), not abstention, so
+        the recency net must still surface *something* readable.
+        """
+        # Catalog points at ghost.md (strong match) but it's absent on disk;
+        # only real.md exists, so the net must load real.md.
+        (env_setup["memory_dir"] / "real.md").write_text("# Real\nrecoverable body")
+        _write_catalog(
+            env_setup["catalogs_dir"],
+            "memory.json",
+            [{"source": "ghost.md", "intent_domains": ["software architecture decisions"]}],
+        )
+
+        out = _run_hook(env_setup, prompt="software architecture decisions")
+        assert out["memory_files"] >= 1
+        assert "real.md" in out["context"]
 
 
 # ---------------------------------------------------------------------------
