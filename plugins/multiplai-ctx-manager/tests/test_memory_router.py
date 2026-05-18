@@ -431,6 +431,40 @@ class TestRoutingPolicy:
         assert set(mem) >= {"scored", "cap", "n_candidates", "n_picked", "capped"}
         assert mem["scored"] and mem["scored"][0][0] > 0
 
+    # --- glossary-keyword regression (the career-history.md bug) ---
+    # A bio file whose catalog keywords are a generic tech glossary
+    # (Python/Docker/AWS…) must NOT be pulled into unrelated technical
+    # prompts on keywords alone — keywords are a capped boost, only
+    # intent_domains can clear MIN_SIGNAL.
+    def _glossary_catalog(self) -> list[dict]:
+        return [
+            {"source": "career.md",
+             "intent_domains": ["writing or tailoring a resume or CV"],
+             "keywords": ["Python", "Docker", "AWS", "Kubernetes",
+                          "FastAPI", "DevOps", "agentic AI"]},
+            {"source": "python.md",
+             "intent_domains": ["debugging python code"]},
+        ]
+
+    def test_glossary_keywords_alone_do_not_pick_the_file(self):
+        from lib.memory_router import TokenOverlapRouter
+        # Pure coding prompt: overlaps career.md's generic keywords
+        # (python, docker) but none of its resume intent_domain.
+        result = TokenOverlapRouter().select_multi(
+            "debug my python docker container", None,
+            {"memory": self._glossary_catalog(), "skills": [], "resources": []},
+        )
+        assert "career.md" not in result["memory"]
+
+    def test_intent_domain_still_picks_the_file(self):
+        from lib.memory_router import TokenOverlapRouter
+        # The legitimate route: a prompt that hits the resume domain.
+        result = TokenOverlapRouter().select_multi(
+            "help writing and tailoring my resume", None,
+            {"memory": self._glossary_catalog(), "skills": [], "resources": []},
+        )
+        assert "career.md" in result["memory"]
+
 
 # ---------------------------------------------------------------------------
 # LLMRouter.select_multi (multi-corpus, single LLM call)
