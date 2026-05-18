@@ -128,7 +128,9 @@ def test_log_event_writes_human_and_jsonl(logs_dir):
     # Current file is undated — no date in the filename.
     human = (logs_dir / "activity.log").read_text().strip()
     assert re.match(
-        r"^\d{2}:\d{2}:\d{2} \[context\] injected 2 memory · 0 skills$", human
+        r"^\d{2}:\d{2}:\d{2}Z \[sess1234\] \[context\] "
+        r"injected 2 memory · 0 skills$",
+        human,
     ), human
 
     # Structured fields live only in the JSONL mirror.
