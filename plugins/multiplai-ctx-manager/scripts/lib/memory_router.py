@@ -131,16 +131,34 @@ STOPWORDS = frozenset({
 # rank+cap so the mechanism contract / unit tests are untouched).
 # Calibrated against the 50-case golden eval; see eval_router.py.
 # Calibrated on the 50-case golden eval (see eval_router.py).
-# token_overlap is the DEFAULT router. Its NONE-accuracy is ~0% by
-# construction (NONE/true-positive score distributions fully
-# overlap) — abstention needs the semantic llm router, which is
-# opt-in/deferred (17s/prompt via the SDK). These constants instead
-# optimise what lexical matching *can* do — recall + low volume:
-# recall 74%, false-positive 10%, cap-saturation 17% (vs the pre-T3
-# 72% / 24% / 75%).
+# token_overlap is the DEFAULT router. Splitting the score into a
+# trusted IDF-weighted intent_domains signal + a capped keyword boost
+# (keywords alone can't clear MIN_SIGNAL) traded a little recall for a
+# large precision / false-positive / NONE-accuracy gain — the right
+# trade given the dominant failure was a generic-keyword bloated entry
+# (e.g. career-history.md) flooding unrelated prompts:
+# recall 72%, precision 97%, false-positive 4%, NONE-acc 15%,
+# cap-saturation 17% (vs the prior domains+keywords-merged
+# 74% / 94% / 10% / 0%).
 KEEP_RATIO = 0.20          # drop entries scoring < ratio × top
 MIN_SIGNAL = 2.0           # top must clear this or the corpus → []
-PHRASE_BONUS = 2.5         # multi-word keyword found verbatim in prompt
+
+# intent_domains are the trusted, well-scoped signal (curated task
+# phrases) and carry the full IDF-weighted score — they alone can
+# clear MIN_SIGNAL. keywords are noisy: LLM catalog generation tends
+# to dump every technology/proper-noun a file mentions (e.g. a career
+# bio keyworded with Python/Docker/AWS), and IDF over a tiny catalog
+# *rewards* those because they're locally rare. So keyword hits are a
+# small, capped *boost* that can rank or tie-break a domain-matched
+# entry but, by construction (cap < MIN_SIGNAL), can never pull a file
+# in on keywords alone.
+KEYWORD_UNIT = 0.5         # per distinct keyword TOKEN matched
+KEYWORD_PHRASE_UNIT = 1.0  # per verbatim multi-word keyword matched
+KEYWORD_CAP = 1.5          # max total keyword contribution per entry
+                           # (< MIN_SIGNAL: keywords can't clear floor;
+                           # eval is flat across [1.5,1.9] — the
+                           # domains-primary split, not this value, is
+                           # what moves precision/recall)
 
 # Short go-aheads: the conversation already has the context (mirrors
 # the LLM router's rule #1).
@@ -317,13 +335,20 @@ class TokenOverlapRouter:
 
         Full, un-truncated ranking — callers truncate / cut off.
 
-        T3 scoring (replaces raw token-count overlap):
-        - Match only on ``intent_domains`` + ``keywords`` (the curated
-          discriminators). ``summary``/``topics`` are dropped — prose
-          that flooded the match bag with common words.
-        - IDF-weight matched terms over the corpus itself: a term
-          unique to one file dominates; a term in many is ~free.
-        - Verbatim multi-word keyword hits get a phrase bonus.
+        Scoring (two asymmetric signals):
+        - ``intent_domains`` — the trusted, well-scoped signal. Tokens
+          are IDF-weighted over the *domain* corpus (a term unique to
+          one file dominates; a shared one is ~free) and carry the full
+          score: only this can clear ``MIN_SIGNAL``.
+        - ``keywords`` — noisy (LLM catalogs over-tag generic tech /
+          proper nouns; IDF-over-a-tiny-corpus then rewards them). Each
+          matched keyword token (``KEYWORD_UNIT``) and verbatim
+          multi-word keyword (``KEYWORD_PHRASE_UNIT``) adds a flat,
+          non-IDF amount, but the total keyword contribution per entry
+          is capped at ``KEYWORD_CAP`` (< ``MIN_SIGNAL``) — keywords can
+          boost / tie-break a domain match but never pull a file in
+          alone.
+        - ``summary``/``topics`` are not scored (prose floods the bag).
         - ``anti_domains`` still hard-excludes (unchanged contract).
         """
         if not catalog_entries or not prompt:
@@ -333,41 +358,47 @@ class TokenOverlapRouter:
             return []
         prompt_lc = prompt.lower()
 
-        # Pass 1: per-entry curated term sets + keyword phrases.
-        rows: list[tuple[str, set[str], set[str], list[str]]] = []
-        per_entry_terms: list[set[str]] = []
+        # Pass 1: per-entry domain terms (primary) kept separate from
+        # keyword terms / phrases (demoted).
+        rows: list[tuple[str, set[str], set[str], list[str], set[str]]] = []
+        per_entry_domain_terms: list[set[str]] = []
         for entry in catalog_entries:
             filename = _entry_filename(entry)
             if not filename:
                 continue
-            terms: set[str] = set()
+            domain_terms: set[str] = set()
             for phrase in entry.get("intent_domains", []) or []:
                 if isinstance(phrase, str):
-                    terms |= _tokenize(phrase)
+                    domain_terms |= _tokenize(phrase)
+            kw_terms: set[str] = set()
             phrases: list[str] = []
             for kw in entry.get("keywords", []) or []:
                 if isinstance(kw, str) and kw.strip():
-                    terms |= _tokenize(kw)
+                    kw_terms |= _tokenize(kw)
                     if " " in kw.strip():
                         phrases.append(kw.strip().lower())
             anti: set[str] = set()
             for phrase in entry.get("anti_domains", []) or []:
                 if isinstance(phrase, str):
                     anti |= _tokenize(phrase)
-            rows.append((filename, terms, anti, phrases))
-            per_entry_terms.append(terms)
+            rows.append((filename, domain_terms, anti, phrases, kw_terms))
+            per_entry_domain_terms.append(domain_terms)
 
-        idf = _idf_map(per_entry_terms)
+        idf = _idf_map(per_entry_domain_terms)
 
-        # Pass 2: IDF-weighted score + phrase bonus, anti-domain gate.
+        # Pass 2: IDF-weighted domain score + capped keyword boost.
         scored: list[tuple[float, str]] = []
-        for filename, terms, anti, phrases in rows:
+        for filename, domain_terms, anti, phrases, kw_terms in rows:
             if anti & prompt_tokens:
                 continue  # Respect anti_domains — skip this entry
-            score = sum(idf.get(t, 1.0) for t in (terms & prompt_tokens))
-            for ph in phrases:
-                if ph in prompt_lc:
-                    score += PHRASE_BONUS
+            domain_score = sum(
+                idf.get(t, 1.0) for t in (domain_terms & prompt_tokens)
+            )
+            kw_boost = KEYWORD_UNIT * len(kw_terms & prompt_tokens)
+            kw_boost += KEYWORD_PHRASE_UNIT * sum(
+                1 for ph in phrases if ph in prompt_lc
+            )
+            score = domain_score + min(kw_boost, KEYWORD_CAP)
             if score <= 0.0:
                 continue
             scored.append((score, filename))
