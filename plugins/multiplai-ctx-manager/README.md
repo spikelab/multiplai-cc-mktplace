@@ -70,8 +70,8 @@ All commands are namespaced under `/multiplai:`.
 | `/multiplai:setup` | Onboarding interviewer — populates memory files from starter templates. |
 | `/multiplai:dream` | Generate a consolidation **proposal** from the pending learnings backlog into `.multiplai/dreams/`. Does not modify memory. |
 | `/multiplai:dream-remember` | Review the proposal (generating one if needed), approve/reject per target file, apply approved edits, clean up processed learnings. |
-| `/multiplai:health` | Infrastructure audit — completeness/staleness of memory files, plugin dirs, active model client. |
-| `/multiplai:memory-health-audit` | Deeper audit — cross-correlates retrieval logs, diary, learnings, and memory structure. |
+| `/multiplai:health` | **Is it broken?** Mechanical infrastructure check (deterministic script): active model client, directories present, memory-file freshness by mtime, diary/learnings/dream counts. Fast, cheap, run anytime. |
+| `/multiplai:memory-health-audit` | **Is it good?** Analytical effectiveness audit — cross-correlates retrieval logs, diary, learnings, and memory structure to find what's useful, what's wasted, and what to restructure. Slower; run ~monthly. |
 | `/multiplai:refresh-catalogs` | Regenerate catalog indexes. Supports `--force`, `--dry-run`, `--only`. |
 | `/multiplai:backfill` | Reconstruct learnings/diary/now summaries from existing Claude Code transcripts. Default window 7 days; `--days N`, `--since DATE`, `--all`. |
 
@@ -151,7 +151,7 @@ start/end. It's the *current* file (no date); the previous day's stream
 rotates to `activity-YYYY-MM-DD.log` on the first write of a new day.
 
 ```
-14:51:03 [context]   injected 10 memory · 0 skills · 0 resources → preferences.md, technical-pref.md, multiplai.md, …
+14:51:03 [context]   injected 4 memory · 0 skills · 0 resources · scores 31.5→9.8 (4/12 kept) → finances.md, life.md, preferences.md, taxes-italy.md
 14:51:03 [nudge]     dream gate open (>24h, pending learnings) — surfaced to user
 14:51:18 [diary]     wrote diary entry (1 unit(s)) to <session>.md
 14:51:18 [learnings] captured 2 learning(s) + 0 correction(s) to backlog
@@ -161,6 +161,62 @@ rotates to `activity-YYYY-MM-DD.log` on the first write of a new day.
 The message is the line, verbatim — no `key=value` tail. Structured
 fields (full file list, byte counts, timings) live in the `.jsonl`
 mirror.
+
+### Reading a `[context]` routing line
+
+This is the most important line to understand — it tells you *whether
+routing is actually working*, not just that it ran. Anatomy:
+
+```
+injected 4 memory · 0 skills · 0 resources · scores 31.5→9.8 (4/12 kept) → finances.md, life.md, …
+         └── how many files from each corpus made it in           └── the files, alphabetical
+                                          └── routing-quality hint (token_overlap only)
+```
+
+**The score hint** (`scores TOP→FLOOR (KEPT/CANDIDATES kept)`) is the
+signal:
+
+- `scores 31.5→9.8` — the highest-scoring file scored 31.5, the
+  lowest one that was *actually injected* scored 9.8. A wide gap
+  (top ≫ floor) means routing found a clear winner; a flat range
+  (e.g. `7.2→6.8`) means everything scored about the same — weak,
+  low-confidence routing where the cut is near-arbitrary.
+- `(4/12 kept)` — **12 files** had some keyword overlap (candidates);
+  only **4** cleared the relevance cutoff and were injected. The
+  other 8 were dropped as too weak. Big drop = good filtering;
+  `(12/12 kept)` = the filter did nothing.
+- `CAP-HIT` — appears as `scores 22.4→6.5 CAP-HIT (10/18 kept)`. It
+  means the relevance cutoff would have kept *more* than the 10-file
+  ceiling, so the #10/#11 boundary is arbitrary. Frequent `CAP-HIT`
+  on low top-scores = the prompt is matching too much weakly; routing
+  is noisy, not precise.
+
+**Abstention** — routing deciding *nothing* is relevant is correct
+behaviour, not a failure. You'll see one of:
+
+- `· continuation — nothing injected` — the prompt was a bare
+  go-ahead (`yes`, `go on`, `do it`); the context is already in the
+  conversation, so nothing is added.
+- `· no match (best 1.4 < floor) — nothing injected` — files were
+  considered but even the best one scored below the relevance floor.
+- A `[context] skip` line such as
+  `router abstained — best memory score 1.4 below relevance floor
+  (3 cand), nothing injected` — same thing when *no* corpus produced
+  anything, so there was nothing to inject at all.
+
+**Fallback** — `[context] router matched nothing — fell back to
+recency-ranked memory → …` means routing failed (catalog/disk drift
+or a router error, **not** a clean abstention) and the most-recently-
+edited memory files were injected as a safety net. Occasional is fine;
+frequent fallback means the catalog is stale — run
+`/multiplai:refresh-catalogs`.
+
+Notes: the score hint only appears under the `token_overlap` router
+(the default) — the `llm` router doesn't expose scores. Healthy
+`token_overlap` looks like: a clear `TOP→FLOOR` gap, `KEPT` well
+below `CANDIDATES`, and `CAP-HIT` rare. Persistent flat ranges,
+`CAP-HIT` everywhere, or constant fallback are the symptoms to act on
+(start with `/multiplai:health`, which summarises these same numbers).
 
 Watch it live from a **second terminal** (it stays out of Claude's
 context entirely):
