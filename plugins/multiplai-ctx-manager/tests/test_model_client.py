@@ -218,6 +218,98 @@ class TestAgentSDKClient:
             asyncio.run(_test())
 
 
+    def test_safe_query_skips_unknown_message_types(self):
+        """WHEN the SDK parser raises 'Unknown message type' mid-stream
+        THEN _safe_query skips it and the surrounding good messages still
+        produce a complete response (regression: debug-to-stderr emits
+        internal message types the bundled parser doesn't recognize)."""
+
+        class _UnknownThenGood:
+            def __init__(self):
+                self._i = 0
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                self._i += 1
+                if self._i == 1:
+                    return _FakeAssistantMessage([_FakeTextBlock("hello ")])
+                if self._i == 2:
+                    raise RuntimeError("Unknown message type: rate_limit_event")
+                if self._i == 3:
+                    return _FakeAssistantMessage([_FakeTextBlock("world")])
+                raise StopAsyncIteration
+
+        mock = MagicMock()
+        mock.AssistantMessage = _FakeAssistantMessage
+        mock.TextBlock = _FakeTextBlock
+        mock.ClaudeAgentOptions = MagicMock(side_effect=lambda **kw: MagicMock())
+        mock.query = MagicMock(side_effect=lambda prompt, options: _UnknownThenGood())
+
+        with patch.dict(sys.modules, {"claude_agent_sdk": mock}):
+            from lib.model_client import AgentSDKClient
+            client = AgentSDKClient()
+
+            async def _test():
+                result = await client.query("sys", [{"role": "user", "content": "hi"}])
+                assert result.content == "hello world"
+
+            asyncio.run(_test())
+
+    def test_query_retries_then_succeeds(self):
+        """WHEN the first SDK call fails with a transient exit-1
+        THEN query() retries and returns the second call's result."""
+        calls = {"n": 0}
+
+        async def _agen(prompt, options):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("Command failed with exit code 1")
+            yield _FakeAssistantMessage([_FakeTextBlock("recovered")])
+
+        mock = MagicMock()
+        mock.AssistantMessage = _FakeAssistantMessage
+        mock.TextBlock = _FakeTextBlock
+        mock.ClaudeAgentOptions = MagicMock(side_effect=lambda **kw: MagicMock())
+        mock.query = MagicMock(side_effect=_agen)
+
+        with patch.dict(sys.modules, {"claude_agent_sdk": mock}):
+            from lib import model_client
+            client = model_client.AgentSDKClient()
+
+            async def _test():
+                with patch.object(model_client, "_SDK_RETRY_BACKOFF_S", 0):
+                    result = await client.query(
+                        "sys", [{"role": "user", "content": "hi"}]
+                    )
+                assert result.content == "recovered"
+                assert calls["n"] == 2
+
+            asyncio.run(_test())
+
+    def test_query_raises_after_max_attempts(self):
+        """WHEN every attempt fails THEN SDKQueryError reports the attempt
+        count and preserves the captured stderr tail."""
+        mock_sdk = _make_mock_sdk(
+            fail=RuntimeError("persistent failure"),
+            stderr_lines=["cli: fatal"],
+        )
+        with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
+            from lib import model_client
+            client = model_client.AgentSDKClient()
+
+            async def _test():
+                with patch.object(model_client, "_SDK_RETRY_BACKOFF_S", 0):
+                    with pytest.raises(model_client.SDKQueryError) as exc:
+                        await client.query("sys", [{"role": "user", "content": "x"}])
+                assert "after 2 attempts" in str(exc.value)
+                assert "persistent failure" in str(exc.value)
+                assert "cli: fatal" in exc.value.stderr_tail
+
+            asyncio.run(_test())
+
+
 class TestAnthropicAPIClient:
     """Verify AnthropicAPIClient implementation."""
 
