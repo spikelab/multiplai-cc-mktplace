@@ -7,6 +7,7 @@ Provides a Protocol-based interface with two implementations:
 The create_client() factory tries Agent SDK first, falls back to API key.
 """
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass
@@ -18,6 +19,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
 DEFAULT_MAX_TOKENS = 4096
 _STDERR_TAIL_LINES = 2000
+
+# The bundled CLI intermittently exits 1 (verified recurring: diary
+# 2026-04-19/28304b42, 2026-04-29/8bcd0f1c). One bounded retry turns a flaky
+# failure into a transparent recovery for unattended pipelines like dream.
+_SDK_MAX_ATTEMPTS = 2
+_SDK_RETRY_BACKOFF_S = 1.5
 
 
 @dataclass(frozen=True)
@@ -57,6 +64,31 @@ def _hook_session_dir() -> Path:
     d = cfg / "hook-sessions"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+async def _safe_query(sdk, *, prompt, options):
+    """Wrap ``claude_agent_sdk.query()`` to skip unknown message types.
+
+    The SDK message parser raises for message types it doesn't recognize.
+    With ``debug-to-stderr`` enabled (which this client sets), the CLI emits
+    additional internal message types the bundled SDK parser doesn't know
+    about — without this wrapper they crash the call with a generic
+    ``Command failed with exit code 1``. Mirrors deep-research/sdk.py and
+    buildme's ``_safe_query``. This guard is mandatory whenever
+    ``debug-to-stderr`` is on.
+    """
+    gen = sdk.query(prompt=prompt, options=options).__aiter__()
+    while True:
+        try:
+            message = await gen.__anext__()
+            yield message
+        except StopAsyncIteration:
+            break
+        except Exception as e:  # noqa: BLE001
+            if "Unknown message type" in str(e):
+                logger.debug("Skipping unknown SDK message type: %s", e)
+                continue
+            raise
 
 
 @runtime_checkable
@@ -119,38 +151,53 @@ class AgentSDKClient:
         )
 
         prompt = _messages_to_prompt(messages)
-        stderr_lines: list[str] = []
 
-        options = ClaudeAgentOptions(
-            allowed_tools=[],
-            max_turns=1,
-            permission_mode="bypassPermissions",
-            system_prompt=system,
-            model=model,
-            env={"_HOOK_CHILD_SESSION": "1"},
-            cwd=str(_hook_session_dir()),
-            setting_sources=[],
-            extra_args={"setting-sources": "", "debug-to-stderr": None},
-            stderr=lambda line: stderr_lines.append(line),
-        )
+        last_exc: Exception | None = None
+        last_tail = ""
+        for attempt in range(_SDK_MAX_ATTEMPTS):
+            stderr_lines: list[str] = []
+            options = ClaudeAgentOptions(
+                allowed_tools=[],
+                max_turns=1,
+                permission_mode="bypassPermissions",
+                system_prompt=system,
+                model=model,
+                env={"_HOOK_CHILD_SESSION": "1"},
+                cwd=str(_hook_session_dir()),
+                setting_sources=[],
+                extra_args={"setting-sources": "", "debug-to-stderr": None},
+                stderr=lambda line, _s=stderr_lines: _s.append(line),
+            )
 
-        chunks: list[str] = []
-        try:
-            async for message in self._sdk.query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            chunks.append(block.text)
-        except SDKQueryError:
-            raise
-        except Exception as e:
-            tail = "\n".join(stderr_lines[-_STDERR_TAIL_LINES:])
-            raise SDKQueryError(
-                f"claude_agent_sdk.query() failed: {e}",
-                stderr_tail=tail,
-            ) from e
+            chunks: list[str] = []
+            try:
+                async for message in _safe_query(
+                    self._sdk, prompt=prompt, options=options
+                ):
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                chunks.append(block.text)
+                return ModelResponse(content="".join(chunks).strip())
+            except Exception as e:  # noqa: BLE001
+                last_exc = e
+                last_tail = "\n".join(stderr_lines[-_STDERR_TAIL_LINES:])
+                if attempt + 1 < _SDK_MAX_ATTEMPTS:
+                    logger.warning(
+                        "claude_agent_sdk.query() failed (attempt %d/%d), "
+                        "retrying in %.1fs: %s",
+                        attempt + 1,
+                        _SDK_MAX_ATTEMPTS,
+                        _SDK_RETRY_BACKOFF_S,
+                        e,
+                    )
+                    await asyncio.sleep(_SDK_RETRY_BACKOFF_S)
 
-        return ModelResponse(content="".join(chunks).strip())
+        raise SDKQueryError(
+            f"claude_agent_sdk.query() failed after {_SDK_MAX_ATTEMPTS} "
+            f"attempts: {last_exc}",
+            stderr_tail=last_tail,
+        ) from last_exc
 
 
 class AnthropicAPIClient:
