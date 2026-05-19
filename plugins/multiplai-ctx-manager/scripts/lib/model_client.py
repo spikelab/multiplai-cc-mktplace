@@ -165,7 +165,19 @@ class AgentSDKClient:
                 env={"_HOOK_CHILD_SESSION": "1"},
                 cwd=str(_hook_session_dir()),
                 setting_sources=[],
-                extra_args={"setting-sources": "", "debug-to-stderr": None},
+                # strict-mcp-config isolates this subprocess from
+                # account-level MCP integrations (claude.ai Gmail/Drive/
+                # Calendar/etc). Without it the bundled CLI discovers those
+                # OAuth integrations and tries to authenticate them in a
+                # non-interactive subprocess, collapsing with exit 1 and no
+                # usable stderr. Verified root cause 2026-05-19 against
+                # mcp-needs-auth-cache.json; see anthropics/
+                # claude-agent-sdk-python issues + PLANS doc.
+                extra_args={
+                    "setting-sources": "",
+                    "debug-to-stderr": None,
+                    "strict-mcp-config": None,
+                },
                 stderr=lambda line, _s=stderr_lines: _s.append(line),
             )
 

@@ -179,6 +179,23 @@ class TestAgentSDKClient:
 
             asyncio.run(_test())
 
+    def test_query_sets_strict_mcp_config(self):
+        """Regression: the SDK subprocess MUST pass --strict-mcp-config so it
+        ignores account-level MCP integrations (claude.ai Gmail/Drive/etc).
+        Without it the nested CLI tries non-interactive OAuth and exits 1.
+        Verified root cause 2026-05-19 — do not remove."""
+        mock_sdk = _make_mock_sdk(["ok"])
+        with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
+            from lib.model_client import AgentSDKClient
+            client = AgentSDKClient()
+
+            async def _test():
+                await client.query("sys", [{"role": "user", "content": "hi"}])
+                opts = mock_sdk.query.call_args.kwargs["options"]
+                assert "strict-mcp-config" in opts.extra_args
+
+            asyncio.run(_test())
+
     def test_query_joins_multiple_user_messages(self):
         """WHEN query() is called with multiple user messages
         THEN they are concatenated into the prompt (non-user roles are dropped)."""
