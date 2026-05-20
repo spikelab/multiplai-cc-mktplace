@@ -158,22 +158,54 @@ async def dream_report() -> None:
         print("No pending learnings — nothing to propose.")
         return
 
-    logger.info("Generating proposal from %d learnings files", len(source_files))
+    learnings_bytes = len(all_learnings.encode("utf-8"))
+    learnings_lines = len(all_learnings.splitlines())
+    logger.info(
+        "Source learnings: %d files (%d lines, %d bytes): %s",
+        len(source_files), learnings_lines, learnings_bytes,
+        ", ".join(f.name for f in source_files),
+    )
 
     client = await create_client()
     logger.info("Dream using %s", type(client).__name__)
 
     memory_contents = _read_memory_files(memory_dir)
+    logger.info(
+        "Loaded %d memory files for context: %s",
+        len(memory_contents), ", ".join(sorted(memory_contents)),
+    )
+
     proposal = await _generate_proposal(client, all_learnings, memory_contents, source_files)
+
+    # Quick structural digest so the log answers "what did the model decide?"
+    # without having to open the proposal file.
+    proposal_lines = proposal.splitlines()
+    target_files = [
+        l.split("`")[1] for l in proposal_lines
+        if l.startswith("## Updates for `") and "`" in l[15:]
+    ]
+    has_filtered = any(l.startswith("## Filtered Out") for l in proposal_lines)
+    logger.info(
+        "Proposal generated: %d bytes, %d target files (%s), filtered-out section=%s",
+        len(proposal.encode("utf-8")),
+        len(target_files),
+        ", ".join(target_files) if target_files else "none",
+        has_filtered,
+    )
+    if not has_filtered or not target_files:
+        logger.warning(
+            "Proposal looks incomplete — missing target updates or Filtered Out section"
+        )
 
     dreams_dir.mkdir(parents=True, exist_ok=True)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     output_file = dreams_dir / f"processed-learnings-{today}.md"
     output_file.write_text(proposal)
+    logger.info("Proposal written to %s", output_file)
 
-    line_count = sum(1 for _ in all_learnings.splitlines())
     print(f"Proposal written to {output_file}")
-    print(f"Sources: {len(source_files)} files, ~{line_count} lines")
+    print(f"Sources: {len(source_files)} files, ~{learnings_lines} lines")
+    print(f"Targets: {len(target_files)} files ({', '.join(target_files) or 'none'})")
     print("Review with: /multiplai:dream-remember")
 
 
