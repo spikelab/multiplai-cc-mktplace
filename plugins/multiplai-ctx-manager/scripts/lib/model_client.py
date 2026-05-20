@@ -10,9 +10,23 @@ The create_client() factory tries Agent SDK first, falls back to API key.
 import asyncio
 import logging
 import os
+import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+# The plugin's canonical logs dir is `<data_dir>/logs`. Resolved lazily to
+# tolerate model_client being imported before paths config is available;
+# falls back to the OS tempdir if the import or directory creation fails.
+def _stderr_log_dir() -> Path:
+    try:
+        from lib.paths import get_paths  # local import to avoid cycles
+        d = get_paths().logs_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    except Exception:  # noqa: BLE001
+        return Path(tempfile.gettempdir())
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +52,35 @@ class SDKQueryError(RuntimeError):
 
     ``stderr_tail`` holds the last captured CLI stderr lines — useful
     for surfacing rate-limit, auth, or CLI crash details that would
-    otherwise be silently dropped.
+    otherwise be silently dropped. ``stderr_log_path`` is the on-disk
+    file where every captured stderr line was written in real time,
+    independent of whether the in-memory buffer was flushed before the
+    SDK cancelled the stderr-reader task.
     """
 
-    def __init__(self, message: str, *, stderr_tail: str = "") -> None:
-        super().__init__(message)
+    def __init__(
+        self,
+        message: str,
+        *,
+        stderr_tail: str = "",
+        stderr_log_path: str = "",
+    ) -> None:
+        self._base_message = message
         self.stderr_tail = stderr_tail
+        self.stderr_log_path = stderr_log_path
+        super().__init__(self._format())
+
+    def _format(self) -> str:
+        parts = [self._base_message]
+        if self.stderr_log_path:
+            parts.append(f"(full CLI stderr: {self.stderr_log_path})")
+        if self.stderr_tail:
+            parts.append("--- captured CLI stderr (tail) ---")
+            parts.append(self.stderr_tail)
+            parts.append("--- end stderr ---")
+        else:
+            parts.append("(no CLI stderr captured — subprocess likely died before emitting any output)")
+        return "\n".join(parts)
 
 
 def _messages_to_prompt(messages: list[dict]) -> str:
@@ -151,11 +188,36 @@ class AgentSDKClient:
         )
 
         prompt = _messages_to_prompt(messages)
+        system_bytes = len(system.encode("utf-8")) if system else 0
+        prompt_bytes = len(prompt.encode("utf-8"))
+        logger.info(
+            "SDK call start: model=%s system=%d bytes prompt=%d bytes",
+            model, system_bytes, prompt_bytes,
+        )
+        call_start = asyncio.get_event_loop().time()
 
         last_exc: Exception | None = None
         last_tail = ""
+        last_log_path = ""
+        any_attempt_failed = False
+        # One stderr log per invocation, attempts appended in order. The CLI
+        # subprocess can die between emitting useful debug output and the
+        # SDK's stderr-reader task being cancelled, so writing each line
+        # through to disk on arrival guarantees we keep it for inspection.
+        stderr_log_path = _stderr_log_dir() / (
+            f"sdk-stderr-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}.log"
+        )
+        stderr_log_fh = stderr_log_path.open("w", encoding="utf-8", buffering=1)
         for attempt in range(_SDK_MAX_ATTEMPTS):
             stderr_lines: list[str] = []
+
+            def _on_stderr(line: str, _s=stderr_lines, _fh=stderr_log_fh, _a=attempt) -> None:
+                _s.append(line)
+                try:
+                    _fh.write(f"[attempt {_a + 1}] {line}\n")
+                except Exception:
+                    pass
+
             options = ClaudeAgentOptions(
                 allowed_tools=[],
                 max_turns=1,
@@ -178,22 +240,46 @@ class AgentSDKClient:
                     "debug-to-stderr": None,
                     "strict-mcp-config": None,
                 },
-                stderr=lambda line, _s=stderr_lines: _s.append(line),
+                stderr=_on_stderr,
             )
 
             chunks: list[str] = []
+            message_count = 0
             try:
                 async for message in _safe_query(
                     self._sdk, prompt=prompt, options=options
                 ):
+                    message_count += 1
                     if isinstance(message, AssistantMessage):
                         for block in message.content:
                             if isinstance(block, TextBlock):
                                 chunks.append(block.text)
+                response_bytes = sum(len(c.encode("utf-8")) for c in chunks)
+                elapsed = asyncio.get_event_loop().time() - call_start
+                logger.info(
+                    "SDK call OK on attempt %d/%d: messages=%d response=%d bytes elapsed=%.1fs",
+                    attempt + 1, _SDK_MAX_ATTEMPTS, message_count, response_bytes, elapsed,
+                )
+                stderr_log_fh.close()
+                if any_attempt_failed:
+                    # An earlier attempt failed but we recovered — keep the
+                    # log so the intermittent failure can be diagnosed.
+                    logger.warning(
+                        "claude_agent_sdk.query() recovered after failure; "
+                        "stderr log preserved at %s",
+                        stderr_log_path,
+                    )
+                else:
+                    try:
+                        stderr_log_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 return ModelResponse(content="".join(chunks).strip())
             except Exception as e:  # noqa: BLE001
                 last_exc = e
                 last_tail = "\n".join(stderr_lines[-_STDERR_TAIL_LINES:])
+                last_log_path = str(stderr_log_path)
+                any_attempt_failed = True
                 if attempt + 1 < _SDK_MAX_ATTEMPTS:
                     logger.warning(
                         "claude_agent_sdk.query() failed (attempt %d/%d), "
@@ -205,10 +291,16 @@ class AgentSDKClient:
                     )
                     await asyncio.sleep(_SDK_RETRY_BACKOFF_S)
 
+        try:
+            stderr_log_fh.close()
+        except Exception:
+            pass
+
         raise SDKQueryError(
             f"claude_agent_sdk.query() failed after {_SDK_MAX_ATTEMPTS} "
             f"attempts: {last_exc}",
             stderr_tail=last_tail,
+            stderr_log_path=last_log_path,
         ) from last_exc
 
 
