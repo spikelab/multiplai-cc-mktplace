@@ -80,8 +80,18 @@ def _make_skills_generator(tmp_path, *, client=None, config=None):
 
 
 def _write_skill_file(skills_dir, filename="dream.md", content="# Dream Skill\nTrigger a reflection cycle."):
-    """Write a skill file to the skills directory."""
-    path = skills_dir / filename
+    """Write a skill file under the Claude Code skill layout: <skills_dir>/<name>/SKILL.md.
+
+    Accepts ``filename`` for backwards-compatible call sites: a value like
+    ``"dream.md"`` is mapped to ``<skills_dir>/dream/SKILL.md`` (the ``.md``
+    suffix is stripped to derive the skill directory name). The returned
+    path points at the SKILL.md, and the source key used by
+    ``discover_sources`` is the parent directory name (``"dream"``).
+    """
+    skill_name = filename[:-3] if filename.endswith(".md") else filename
+    skill_dir = skills_dir / skill_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    path = skill_dir / "SKILL.md"
     path.write_text(content, encoding="utf-8")
     return path
 
@@ -280,11 +290,12 @@ class TestSkillsGeneratorConfigGating:
 class TestSkillsDiscoverSources:
     """Requirement: Skills catalog generator discovers skill files.
 
-    The generator MUST scan all .md files in the skills/ directory.
+    The generator MUST scan ``<skills_dir>/<name>/SKILL.md`` files matching
+    the Claude Code skill layout. Source keys are the skill directory names.
     """
 
-    def test_discovers_md_files(self, tmp_path, monkeypatch):
-        """Discovers all .md files in the skills directory."""
+    def test_discovers_skill_md_files(self, tmp_path, monkeypatch):
+        """Discovers SKILL.md under each skill subdirectory."""
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
@@ -294,22 +305,26 @@ class TestSkillsDiscoverSources:
 
         sources = gen.discover_sources()
         assert len(sources) == 3
-        assert "dream.md" in sources
-        assert "health.md" in sources
-        assert "setup.md" in sources
+        assert "dream" in sources
+        assert "health" in sources
+        assert "setup" in sources
 
-    def test_ignores_non_md_files(self, tmp_path, monkeypatch):
-        """Non-.md files in skills directory are ignored."""
+    def test_ignores_non_skill_files(self, tmp_path, monkeypatch):
+        """Files other than ``<name>/SKILL.md`` are ignored."""
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
         _write_skill_file(skills_dir, "dream.md", "# Dream")
+        # Loose files at the top level of skills_dir — must be ignored
         (skills_dir / "notes.txt").write_text("notes", encoding="utf-8")
         (skills_dir / "config.json").write_text("{}", encoding="utf-8")
+        (skills_dir / "stray.md").write_text("not a skill", encoding="utf-8")
+        # An assets file inside a skill dir — must not be discovered as a skill
+        (skills_dir / "dream" / "assets.md").write_text("# Assets", encoding="utf-8")
 
         sources = gen.discover_sources()
         assert len(sources) == 1
-        assert "dream.md" in sources
+        assert "dream" in sources
 
     def test_empty_skills_dir_returns_empty(self, tmp_path, monkeypatch):
         """Empty skills directory returns empty dict."""
@@ -334,17 +349,18 @@ class TestSkillsDiscoverSources:
         assert sources == {}
 
     def test_sources_are_path_objects(self, tmp_path, monkeypatch):
-        """Source values should be Path objects pointing to skill files."""
+        """Source values should be Path objects pointing to SKILL.md files."""
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 
         _write_skill_file(skills_dir, "dream.md", "# Dream")
 
         sources = gen.discover_sources()
-        path = sources["dream.md"]
+        path = sources["dream"]
         assert isinstance(path, Path)
         assert path.exists()
-        assert path.name == "dream.md"
+        assert path.name == "SKILL.md"
+        assert path.parent.name == "dream"
 
 
 # ---------------------------------------------------------------------------
@@ -566,7 +582,7 @@ class TestSkillsCatalogOutput:
 
         catalog = _read_catalog(catalogs_dir)
         entry = catalog["entries"][0]
-        assert entry.get("source") == "dream.md"
+        assert entry.get("source") == "dream"
 
     def test_entry_has_summary(self, tmp_path, monkeypatch):
         """Each entry must include an LLM-generated summary."""
@@ -706,8 +722,8 @@ class TestSkillsStateAwareRegeneration:
 
         state = _read_state(catalogs_dir)
         skills_state = state["generators"]["skills"]
-        assert "dream.md" in skills_state["source_hashes"]
-        assert "health.md" in skills_state["source_hashes"]
+        assert "dream" in skills_state["source_hashes"]
+        assert "health" in skills_state["source_hashes"]
 
 
 # ---------------------------------------------------------------------------
@@ -745,7 +761,7 @@ class TestSkillsDeletionPruning:
         catalog = _read_catalog(catalogs_dir)
         assert len(catalog["entries"]) == 1
         sources = [e.get("source") for e in catalog["entries"]]
-        assert "dream.md" not in sources
+        assert "dream" not in sources
 
     def test_prune_deleted_skill_from_state(self, tmp_path, monkeypatch):
         """Deleted skill file's hash is removed from state."""
@@ -758,15 +774,15 @@ class TestSkillsDeletionPruning:
         asyncio.run(gen.run())
 
         state = _read_state(catalogs_dir)
-        assert "dream.md" in state["generators"]["skills"]["source_hashes"]
+        assert "dream" in state["generators"]["skills"]["source_hashes"]
 
         # Delete and re-run
         dream_path.unlink()
         asyncio.run(gen.run())
 
         state = _read_state(catalogs_dir)
-        assert "dream.md" not in state["generators"]["skills"]["source_hashes"]
-        assert "health.md" in state["generators"]["skills"]["source_hashes"]
+        assert "dream" not in state["generators"]["skills"]["source_hashes"]
+        assert "health" in state["generators"]["skills"]["source_hashes"]
 
     def test_pruning_does_not_trigger_llm_calls(self, tmp_path, monkeypatch):
         """Pruning deleted entries must not make any LLM calls."""

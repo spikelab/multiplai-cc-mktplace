@@ -32,15 +32,21 @@ class SkillsGenerator(GeneratorBase):
     catalog_filename = "skills.json"
 
     def discover_sources(self) -> dict[str, Any]:
-        """Find all .md files in the configured skills directory."""
+        """Find all SKILL.md files in <skills_dir>/<name>/SKILL.md.
+
+        Matches the Claude Code skill layout: one directory per skill
+        containing a SKILL.md (plus optional assets/, references/, scripts/).
+        Source keys are the skill directory names (the canonical skill
+        identifier used by /<name> invocation).
+        """
         skills_dir = Path(self._config.skills_dir)
         if not skills_dir.exists() or not skills_dir.is_dir():
             return {}
 
         sources = {}
-        for path in sorted(skills_dir.glob("*.md")):
+        for path in sorted(skills_dir.glob("*/SKILL.md")):
             if path.is_file():
-                sources[path.name] = path
+                sources[path.parent.name] = path
         return sources
 
     def build_prompt(self, source: Path) -> str:
