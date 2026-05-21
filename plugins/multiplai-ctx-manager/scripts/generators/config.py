@@ -15,6 +15,8 @@ DEFAULT_REASONING_EFFORT = "medium"
 DEFAULT_TTL_HOURS = 168  # 7 days
 DEFAULT_DIARY_CATALOG_DAYS = 7
 DEFAULT_SKILLS_DIR = "~/.claude/skills"
+DEFAULT_CATALOG_CONCURRENCY = 5  # Anthropic API tolerates this comfortably;
+                                 # raise via env var if you have higher quotas.
 
 
 @dataclass
@@ -30,6 +32,7 @@ class CatalogConfig:
     skills_dir: str = DEFAULT_SKILLS_DIR
     enable_resources: bool = False
     resources_dir: str = ""
+    catalog_concurrency: int = DEFAULT_CATALOG_CONCURRENCY
 
     def __post_init__(self):
         if not self.model or not self.model.strip():
@@ -43,6 +46,9 @@ class CatalogConfig:
 
         if self.diary_catalog_days < 0:
             self.diary_catalog_days = DEFAULT_DIARY_CATALOG_DAYS
+
+        if self.catalog_concurrency < 1:
+            self.catalog_concurrency = DEFAULT_CATALOG_CONCURRENCY
 
     @property
     def effective_diary_model(self) -> str:
@@ -89,6 +95,12 @@ def load_catalog_config() -> CatalogConfig:
         os.environ.get("CLAUDE_PLUGIN_OPTION_enable_resources", "false")
     )
     resources_dir = os.environ.get("CLAUDE_PLUGIN_OPTION_resources_dir", "")
+    catalog_concurrency = _parse_int(
+        os.environ.get(
+            "CLAUDE_PLUGIN_OPTION_catalog_concurrency", str(DEFAULT_CATALOG_CONCURRENCY)
+        ),
+        DEFAULT_CATALOG_CONCURRENCY,
+    )
 
     return CatalogConfig(
         model=model,
@@ -100,4 +112,5 @@ def load_catalog_config() -> CatalogConfig:
         skills_dir=skills_dir,
         enable_resources=enable_resources,
         resources_dir=resources_dir,
+        catalog_concurrency=catalog_concurrency,
     )
