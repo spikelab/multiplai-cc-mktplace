@@ -77,7 +77,70 @@ After they're written, you edit them with the user's answers (step 5 below).
    tool — don't regenerate the whole file from scratch unless the template
    is unrecognisable.
 
-6. **Offer git version control for the memory directory.**
+6. **Routing scope — ask what the context router should pull from.**
+
+   The router always pulls from memory and diary. Skills and resources are
+   opt-in because they cost LLM calls during catalog generation and only
+   help if the user actually keeps skills/resources in standard locations.
+
+   Ask each question, capture answers, then write them to the user's
+   `settings.json` under `pluginConfigs.multiplai.options` (see step 6a
+   below). Workaround for [#39455](https://github.com/anthropics/claude-code/issues/39455) —
+   Claude Code currently does not prompt for `userConfig` values declared
+   in `plugin.json`, so we collect them here.
+
+   - **Skills routing.** "Should the router suggest skills based on your
+     prompts? (yes/no, default no) — Skills live under a directory you point
+     at; default `~/.claude/skills`. {name}, do you have a non-default
+     location?"
+     → `enable_skills` (bool), `skills_dir` (path; default `~/.claude/skills`).
+   - **Resources routing.** "Should the router suggest reference docs from
+     a resources directory? (yes/no, default no) — If yes, what's the path?
+     ({name}, a workspace like `~/work/RESOURCES` is typical.)"
+     → `enable_resources` (bool), `resources_dir` (path; required if
+     `enable_resources=true`).
+   - **Memory router strategy.** "Memory routing: `token_overlap` (fast,
+     offline, free) or `llm` (semantic match via Sonnet, one extra LLM
+     call per prompt — better recall but pricier)? Default `token_overlap`."
+     → `memory_router` (string: `token_overlap` or `llm`).
+   - **Workspace dir.** "Where's your workspace root? This is where
+     `.multiplai/{memory,diary,now,learnings}` will live by default. Press
+     enter for `~/.multiplai/`."
+     → `workspace_dir` (path; optional).
+
+6a. **Write plugin options to settings.json.**
+
+   Locate the user's settings file:
+   ```
+   $CLAUDE_CONFIG_DIR/settings.json   # if CLAUDE_CONFIG_DIR is set
+   ~/.claude/settings.json            # fallback
+   ```
+   Read it (or start `{}` if missing), then merge in:
+   ```json
+   {
+     "pluginConfigs": {
+       "multiplai": {
+         "options": {
+           "workspace_dir": "...",
+           "enable_skills": true,
+           "skills_dir": "...",
+           "enable_resources": true,
+           "resources_dir": "...",
+           "memory_router": "token_overlap"
+         }
+       }
+     }
+   }
+   ```
+   Only include keys the user actually set. Preserve every other top-level
+   key in `settings.json`. Write the file back with a 2-space-indented JSON
+   dump.
+
+   **Tell the user** the values will take effect on the next Claude Code
+   restart, and that the next `/multiplai:refresh-catalogs` run will need
+   to populate skills/resources catalogs if they were just enabled.
+
+7. **Offer git version control for the memory directory.**
    Check whether `memory_dir` is already inside a git repository:
    ```
    git -C <memory_dir> rev-parse --is-inside-work-tree
@@ -102,8 +165,10 @@ After they're written, you edit them with the user's answers (step 5 below).
      can always run `git init` in `<memory_dir>` later." Do not force the
      issue.
 
-7. Confirm which files were written and suggest running `/multiplai:health`
-   to verify.
+8. Confirm which files were written and suggest running `/multiplai:health`
+   to verify. If `enable_skills` or `enable_resources` were turned on in
+   step 6, also suggest restarting Claude Code and then running
+   `/multiplai:refresh-catalogs --force` to populate the new catalogs.
 
 ## Important
 - The two helper scripts have documented contracts above. **Do not** explore
