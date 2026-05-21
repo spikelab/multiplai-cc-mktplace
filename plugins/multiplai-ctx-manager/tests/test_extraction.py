@@ -140,53 +140,70 @@ class TestExtractUnits:
 # ---------------------------------------------------------------------------
 
 class TestWriteDiaryEntries:
-    def test_writes_to_day_dir(self, tmp_path):
+    """Per-day diary file format (aligned with append_learnings).
+
+    Layout: ``diary_dir/YYYY-MM-DD.md`` with internal session blocks
+    headed by ``## Session: <id> — <ts> — <cwd>``. fcntl.flock on a
+    sibling lock file; idempotent on ``## Session: <id>`` substring.
+    """
+
+    def test_writes_to_day_file(self, tmp_path):
         from lib.extraction import write_diary_entries
-        units = _sample_units()
         ts = "2026-05-16T14:00:00+00:00"
-        path = write_diary_entries(units, tmp_path, "sid-abc", "/some/cwd", ts)
+        path = write_diary_entries(_sample_units(), tmp_path, "sid-abc", "/some/cwd", ts)
         assert path is not None
-        assert path == tmp_path / "2026-05-16" / "sid-abc.md"
+        assert path == tmp_path / "2026-05-16.md"
         assert path.exists()
+        # No legacy per-session subdir.
+        assert not (tmp_path / "2026-05-16").exists()
 
-    def test_first_line_has_three_brackets(self, tmp_path):
-        from lib.extraction import write_diary_entries
-        units = _sample_units()
-        ts = "2026-05-16T14:00:00+00:00"
-        path = write_diary_entries(units, tmp_path, "sid-abc", "/some/cwd", ts)
-        first_line = path.read_text().split("\n", 1)[0]
-        brackets = re.findall(r"\[([^\]]+)\]", first_line)
-        assert len(brackets) >= 3, f"Expected 3 brackets in header, got {brackets!r}"
-
-    def test_first_line_contains_session_id(self, tmp_path):
+    def test_day_header_on_first_write(self, tmp_path):
         from lib.extraction import write_diary_entries
         ts = "2026-05-16T14:00:00+00:00"
-        path = write_diary_entries(_sample_units(), tmp_path, "sid-xyz", "/cwd", ts)
+        path = write_diary_entries(_sample_units(), tmp_path, "sid-abc", "/cwd", ts)
         first_line = path.read_text().split("\n", 1)[0]
-        assert "sid-xyz" in first_line
+        assert first_line == "# Diary — 2026-05-16"
 
-    def test_first_line_contains_cwd(self, tmp_path):
+    def test_session_header_contains_id_ts_and_cwd(self, tmp_path):
         from lib.extraction import write_diary_entries
         ts = "2026-05-16T14:00:00+00:00"
-        path = write_diary_entries(_sample_units(), tmp_path, "s1", "/Users/spike/knowhere", ts)
-        first_line = path.read_text().split("\n", 1)[0]
-        assert "/Users/spike/knowhere" in first_line
+        path = write_diary_entries(
+            _sample_units(), tmp_path, "sid-xyz", "/Users/spike/knowhere", ts,
+        )
+        text = path.read_text()
+        # The session header is the parser anchor for downstream tools.
+        assert "## Session: sid-xyz —" in text
+        assert "/Users/spike/knowhere" in text
+        assert ts in text
 
     def test_body_contains_diary_entry(self, tmp_path):
         from lib.extraction import write_diary_entries
         ts = "2026-05-16T14:00:00+00:00"
         path = write_diary_entries(_sample_units(), tmp_path, "s1", "/cwd", ts)
-        body = path.read_text()
-        assert "Implemented extraction refactor" in body
+        assert "Implemented extraction refactor" in path.read_text()
 
-    def test_idempotent_does_not_overwrite(self, tmp_path):
+    def test_second_session_same_day_appends(self, tmp_path):
+        """Two sessions on the same UTC day → one file, two ## Session blocks."""
+        from lib.extraction import write_diary_entries
+        ts = "2026-05-16T14:00:00+00:00"
+        p1 = write_diary_entries(_sample_units(), tmp_path, "sid-1", "/a", ts)
+        p2 = write_diary_entries(_sample_units(), tmp_path, "sid-2", "/b", ts)
+        assert p1 == p2
+        text = p1.read_text()
+        # Exactly one day header, two session headers.
+        assert text.count("# Diary — 2026-05-16") == 1
+        assert text.count("## Session: sid-1") == 1
+        assert text.count("## Session: sid-2") == 1
+
+    def test_idempotent_on_same_session_id(self, tmp_path):
+        """Re-running extraction for the same session_id is a no-op."""
         from lib.extraction import write_diary_entries
         ts = "2026-05-16T14:00:00+00:00"
         path1 = write_diary_entries(_sample_units(), tmp_path, "sid-1", "/cwd", ts)
         original = path1.read_text()
-        path2 = write_diary_entries(_sample_units(), tmp_path, "sid-1", "/other", ts)
+        path2 = write_diary_entries(_sample_units(), tmp_path, "sid-1", "/cwd", ts)
         assert path1 == path2
-        assert path1.read_text() == original, "Idempotent write must not overwrite existing file"
+        assert path1.read_text() == original
 
     def test_returns_none_when_no_diary_content(self, tmp_path):
         from lib.extraction import write_diary_entries
@@ -199,18 +216,23 @@ class TestWriteDiaryEntries:
         result = write_diary_entries([], tmp_path, "s1", "/cwd", "2026-05-16T14:00:00+00:00")
         assert result is None
 
-    def test_creates_day_dir(self, tmp_path):
+    def test_creates_diary_dir_if_missing(self, tmp_path):
+        """diary_dir itself is mkdir'd; no per-day subdir is created."""
         from lib.extraction import write_diary_entries
         ts = "2026-05-16T09:00:00+00:00"
-        write_diary_entries(_sample_units(), tmp_path, "s1", "/cwd", ts)
-        assert (tmp_path / "2026-05-16").is_dir()
+        target = tmp_path / "diary"  # does not exist yet
+        path = write_diary_entries(_sample_units(), target, "s1", "/cwd", ts)
+        assert path == target / "2026-05-16.md"
+        assert target.is_dir()
+        # No nested per-day directory.
+        assert not (target / "2026-05-16").is_dir()
 
     def test_date_from_unit_timestamp(self, tmp_path):
-        """Date in path derived from unit timestamp, not provided timestamp."""
+        """Date in filename derived from unit timestamp, not provided timestamp."""
         from lib.extraction import write_diary_entries
         units = [{"timestamp": "2026-04-01T12:00:00+00:00", "diary_entry": "Work.", "learnings": []}]
         path = write_diary_entries(units, tmp_path, "s1", "/cwd", "2026-05-16T09:00:00+00:00")
-        assert "2026-04-01" in str(path)
+        assert path == tmp_path / "2026-04-01.md"
 
 
 # ---------------------------------------------------------------------------

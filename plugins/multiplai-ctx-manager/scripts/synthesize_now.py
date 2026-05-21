@@ -33,41 +33,59 @@ DEFAULT_LOOKBACK_HOURS = 48
 MAX_SUMMARY_LINES = 5
 
 
-def _parse_diary_entry(filepath: Path) -> dict | None:
-    """Parse a diary entry file, returning working_dir, content, and timestamp.
+# Session block header in per-day diary files (v0.3.0+):
+#     ## Session: <id> — <iso-ts> — <cwd>
+# em-dash separators, written by lib.extraction.write_diary_entries.
+_SESSION_HEADER_RE = re.compile(
+    r"^## Session:\s*(?P<sid>\S+)\s*—\s*(?P<ts>\S+)\s*—\s*(?P<cwd>.+?)\s*$",
+    re.MULTILINE,
+)
 
-    The first line is expected to be ``[TIMESTAMP] [SESSION_ID] [/path/to/cwd]``.
-    Returns ``None`` if the file is empty or the header is missing.
+
+def _iter_diary_session_blocks(filepath: Path):
+    """Yield one entry per ``## Session:`` block inside a per-day diary file.
+
+    Each yielded dict has the same shape as the legacy per-session parser:
+    ``{working_dir, content, timestamp, filepath}``. The ``content`` is the
+    body of that session block only (header excluded).
     """
     try:
         text = filepath.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return None
+        return
 
     if not text.strip():
-        return None
+        return
 
-    first_line = text.split("\n", 1)[0]
-    brackets = re.findall(r"\[([^\]]+)\]", first_line)
-    if len(brackets) < 3:
-        return None
+    matches = list(_SESSION_HEADER_RE.finditer(text))
+    if not matches:
+        return
 
-    timestamp_str, _session_id, working_dir = brackets[0], brackets[1], brackets[2]
+    for i, m in enumerate(matches):
+        body_start = m.end()
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[body_start:body_end].strip()
+        if not body:
+            continue
 
-    try:
-        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-    except (ValueError, TypeError):
+        ts_str = m.group("ts")
         try:
-            timestamp = datetime.fromtimestamp(filepath.stat().st_mtime, tz=timezone.utc)
-        except OSError:
-            timestamp = datetime.now(timezone.utc)
+            timestamp = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            try:
+                timestamp = datetime.fromtimestamp(
+                    filepath.stat().st_mtime, tz=timezone.utc,
+                )
+            except OSError:
+                timestamp = datetime.now(timezone.utc)
 
-    return {
-        "working_dir": working_dir,
-        "content": text,
-        "timestamp": timestamp,
-        "filepath": filepath,
-    }
+        yield {
+            "working_dir": m.group("cwd").strip(),
+            "content": body,
+            "timestamp": timestamp,
+            "filepath": filepath,
+            "session_id": m.group("sid"),
+        }
 
 
 def _derive_project_name(working_dir: str) -> str:
@@ -79,7 +97,11 @@ def _scan_diary(
     diary_dir: Path,
     lookback_hours: int = DEFAULT_LOOKBACK_HOURS,
 ) -> dict[str, list[dict]]:
-    """Scan diary entries, filter by lookback window, and group by project."""
+    """Scan diary entries, filter by lookback window, and group by project.
+
+    Per-day layout (v0.3.0+): each ``YYYY-MM-DD.md`` file holds one or more
+    ``## Session:`` blocks. Each session block is treated as one entry.
+    """
     if not diary_dir.exists():
         logger.info("Diary directory does not exist: %s", diary_dir)
         return {}
@@ -87,21 +109,18 @@ def _scan_diary(
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
     entries_by_project: dict[str, list[dict]] = {}
 
-    for md_file in sorted(diary_dir.glob("*/*.md")):
-        entry = _parse_diary_entry(md_file)
-        if entry is None:
-            continue
+    for md_file in sorted(diary_dir.glob("*.md")):
+        for entry in _iter_diary_session_blocks(md_file):
+            entry_time = entry["timestamp"]
+            if entry_time.tzinfo is None:
+                entry_time = entry_time.replace(tzinfo=timezone.utc)
+            if entry_time < cutoff:
+                continue
 
-        entry_time = entry["timestamp"]
-        if entry_time.tzinfo is None:
-            entry_time = entry_time.replace(tzinfo=timezone.utc)
-        if entry_time < cutoff:
-            continue
-
-        project = _derive_project_name(entry["working_dir"])
-        if not project:
-            continue
-        entries_by_project.setdefault(project, []).append(entry)
+            project = _derive_project_name(entry["working_dir"])
+            if not project:
+                continue
+            entries_by_project.setdefault(project, []).append(entry)
 
     return entries_by_project
 

@@ -109,13 +109,24 @@ def _session_id_from_path(jsonl_path: Path) -> str:
 
 
 def _is_already_processed(session_id: str, learnings_file: Path, diary_dir: Path) -> bool:
-    """Pre-LLM idempotency gate: skip if both learnings and diary exist."""
-    if learnings_file.exists():
-        if f"Session: {session_id}" in learnings_file.read_text(encoding="utf-8", errors="replace"):
-            # Also check diary
-            for day_dir in diary_dir.glob("*/"):
-                if (day_dir / f"{session_id}.md").exists():
-                    return True
+    """Pre-LLM idempotency gate: skip if both learnings and diary already
+    contain this ``session_id``.
+
+    Both files use the same ``## Session: <id>`` (diary) / ``Session: <id>``
+    (learnings) substring marker per the per-day layout introduced in v0.3.0.
+    """
+    if not learnings_file.exists():
+        return False
+    if f"Session: {session_id}" not in learnings_file.read_text(
+        encoding="utf-8", errors="replace",
+    ):
+        return False
+    if not diary_dir.is_dir():
+        return False
+    marker = f"## Session: {session_id}"
+    for day_file in diary_dir.glob("*.md"):
+        if marker in day_file.read_text(encoding="utf-8", errors="replace"):
+            return True
     return False
 
 

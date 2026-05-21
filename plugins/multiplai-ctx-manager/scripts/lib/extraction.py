@@ -131,13 +131,18 @@ def write_diary_entries(
     cwd: str,
     timestamp: str,
 ) -> Optional[Path]:
-    """Write canonical diary entries to diary/YYYY-MM-DD/<sessionId>.md.
+    """Atomic append diary entries to per-day file ``diary/YYYY-MM-DD.md``.
 
-    Format: first line is ``[ts] [session_id] [cwd]`` (parsed by
-    synthesize_now._parse_diary_entry); body is one rich entry per unit.
+    Layout aligned with ``append_learnings``:
+      - One file per UTC day; new sessions append a ``## Session: <id>``
+        block. Day header ``# Diary — YYYY-MM-DD`` written on first touch.
+      - ``fcntl.flock`` on a sibling lock file serialises concurrent
+        SessionStart subprocesses writing the same day.
+      - Idempotent on ``session_id``: if ``## Session: <id>`` is already
+        in the file, this is a no-op and returns the existing path.
 
-    Idempotent: returns existing path without overwriting.
-    Returns None if no units have diary content.
+    Returns the day file path on write (or existing-session no-op),
+    or ``None`` if no units have diary content.
     """
     diary_units = [u for u in units if (u.get("diary_entry") or "").strip()]
     if not diary_units:
@@ -151,24 +156,34 @@ def write_diary_entries(
     except (ValueError, TypeError):
         date_str = timestamp[:10] if len(timestamp) >= 10 else datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    day_dir = diary_dir / date_str
-    day_dir.mkdir(parents=True, exist_ok=True)
+    diary_dir.mkdir(parents=True, exist_ok=True)
+    diary_file = diary_dir / f"{date_str}.md"
+    lock_file = diary_dir / f".{diary_file.name}.lock"
 
-    diary_file = day_dir / f"{session_id}.md"
-    if diary_file.exists():
-        return diary_file
+    with open(lock_file, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            if session_id and diary_file.exists():
+                if f"## Session: {session_id}" in diary_file.read_text():
+                    return diary_file
 
-    lines = [f"[{timestamp}] [{session_id}] [{cwd}]", ""]
-    for unit in diary_units:
-        entry = unit["diary_entry"].strip()
-        unit_ts = unit.get("timestamp") or timestamp
-        lines.append(f"[{unit_ts}]")
-        lines.append("")
-        lines.append(entry)
-        lines.append("")
+            with open(diary_file, "a", encoding="utf-8") as f:
+                if diary_file.stat().st_size == 0:
+                    f.write(f"# Diary — {date_str}\n")
+                # Session boundary header: id, kickoff ts, cwd. Mirrors
+                # the structure synthesize_now and the diary catalog
+                # generator parse on.
+                f.write(
+                    f"\n## Session: {session_id} — {timestamp} — {cwd}\n\n"
+                )
+                for unit in diary_units:
+                    unit_ts = unit.get("timestamp") or timestamp
+                    entry = unit["diary_entry"].strip()
+                    f.write(f"[{unit_ts}]\n\n{entry}\n\n")
 
-    diary_file.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    return diary_file
+            return diary_file
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
 def _format_learning_entry(learning: dict) -> str:

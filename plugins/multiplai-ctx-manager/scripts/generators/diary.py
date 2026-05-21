@@ -1,12 +1,15 @@
 """Diary catalog generator.
 
 Implements DiaryGenerator, a GeneratorBase subclass that catalogs
-diary day directories (YYYY-MM-DD named directories containing session files)
-from the configured diary directory.
+per-day diary files (``YYYY-MM-DD.md``) from the configured diary
+directory.
 
 Design Decision 4: Per-day entries keyed by date string, each containing
 session summaries, project references, topic tags, and word count.
-Design Decision 2: Per-day-directory hashing (SHA-256 over sorted file contents).
+Design Decision 2: Per-day-file hashing (SHA-256 over file contents).
+
+Layout (v0.3.0+): one file per day, ``diary_dir/YYYY-MM-DD.md``, with
+``## Session: <id>`` blocks inside. Aligned with learnings layout.
 """
 
 import hashlib
@@ -19,47 +22,34 @@ from lib.paths import Paths
 from generators.base import GeneratorBase
 
 
-# Regex for valid YYYY-MM-DD directory names
+# Regex for valid YYYY-MM-DD file stems
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def _is_valid_date_dir(name: str) -> bool:
-    """Check if a directory name is a valid YYYY-MM-DD date."""
-    if not _DATE_PATTERN.match(name):
+def _is_valid_date_stem(stem: str) -> bool:
+    """Check if a file stem is a valid YYYY-MM-DD date."""
+    if not _DATE_PATTERN.match(stem):
         return False
     try:
-        date.fromisoformat(name)
+        date.fromisoformat(stem)
         return True
     except ValueError:
         return False
 
 
-def _iter_day_files(day_dir: Path):
-    """Yield sorted regular files from a day directory.
-
-    Sorting by name ensures deterministic ordering regardless of
-    filesystem iteration order.
-    """
-    for path in sorted(day_dir.iterdir()):
-        if path.is_file():
-            yield path
-
-
-def _count_words_in_dir(day_dir: Path) -> int:
-    """Compute total word count across all files in a day directory."""
-    total = 0
-    for file_path in _iter_day_files(day_dir):
-        content = file_path.read_text(encoding="utf-8")
-        total += len(content.split())
-    return total
+def _count_words_in_file(day_file: Path) -> int:
+    """Compute total word count of a per-day diary file."""
+    if not day_file.is_file():
+        return 0
+    return len(day_file.read_text(encoding="utf-8").split())
 
 
 class DiaryGenerator(GeneratorBase):
-    """Catalog generator for diary day directories.
+    """Catalog generator for per-day diary files.
 
-    Scans the diary directory for YYYY-MM-DD named subdirectories,
-    summarizes each day's files via LLM, and produces a per-day catalog
-    with sessions, projects, topics, and word count.
+    Scans the diary directory for ``YYYY-MM-DD.md`` files, summarizes
+    each day's content via LLM, and produces a per-day catalog with
+    sessions, projects, topics, and word count.
     """
 
     name = "diary"
@@ -76,11 +66,7 @@ class DiaryGenerator(GeneratorBase):
         return Paths.resolve().diary_dir()
 
     def discover_sources(self) -> dict[str, Any]:
-        """Find all date-named directories within the lookback window.
-
-        Scans CLAUDE_PLUGIN_OPTION_diary_dir for directories matching
-        YYYY-MM-DD format, filtered by diary_catalog_days config.
-        """
+        """Find all ``YYYY-MM-DD.md`` files within the lookback window."""
         diary_dir = self._diary_dir
         if not diary_dir.exists() or not diary_dir.is_dir():
             return {}
@@ -92,35 +78,25 @@ class DiaryGenerator(GeneratorBase):
         cutoff = date.today() - timedelta(days=lookback_days - 1)
 
         sources = {}
-        for entry in sorted(diary_dir.iterdir()):
-            if not entry.is_dir():
+        for entry in sorted(diary_dir.glob("*.md")):
+            stem = entry.stem
+            if not _is_valid_date_stem(stem):
                 continue
-            if not _is_valid_date_dir(entry.name):
-                continue
-            if date.fromisoformat(entry.name) >= cutoff:
-                sources[entry.name] = entry
+            if date.fromisoformat(stem) >= cutoff:
+                sources[stem] = entry
         return sources
 
     def hash_source(self, path: Path) -> str:
-        """Compute SHA-256 over sorted file contents of a day directory.
-
-        Files are sorted by name to ensure deterministic hashing
-        regardless of filesystem ordering.
-        """
+        """Compute SHA-256 over the per-day diary file contents."""
         h = hashlib.sha256()
-        for file_path in _iter_day_files(path):
-            h.update(file_path.name.encode("utf-8"))
-            h.update(file_path.read_bytes())
+        h.update(path.name.encode("utf-8"))
+        h.update(path.read_bytes())
         return h.hexdigest()
 
     def build_prompt(self, source: Path) -> str:
-        """Build an LLM prompt for summarizing a diary day directory."""
-        date_str = source.name
-        file_contents = [
-            f"### {fp.name}\n{fp.read_text(encoding='utf-8')}"
-            for fp in _iter_day_files(source)
-        ]
-        combined = "\n\n".join(file_contents)
+        """Build an LLM prompt for summarizing a per-day diary file."""
+        date_str = source.stem
+        content = source.read_text(encoding="utf-8")
 
         return (
             f"Analyze the following diary entries for {date_str} and produce a JSON object with:\n"
@@ -128,7 +104,7 @@ class DiaryGenerator(GeneratorBase):
             '- "projects": an array of project name strings mentioned in the entries\n'
             '- "topics": an array of topic strings covered in the entries\n\n'
             "Respond with ONLY valid JSON, no explanation.\n\n"
-            f"---\n{combined}\n---"
+            f"---\n{content}\n---"
         )
 
     def parse_response(self, raw: str) -> dict:
@@ -150,8 +126,8 @@ class DiaryGenerator(GeneratorBase):
     def _enrich_entries_with_word_counts(self) -> None:
         """Post-process catalog entries to add word_count and date fields.
 
-        word_count is computed directly from source files for accuracy.
-        date is set from the source key (YYYY-MM-DD directory name).
+        word_count is computed directly from the per-day file for accuracy.
+        date is set from the source key (YYYY-MM-DD file stem).
         """
         catalog = self._read_catalog()
         diary_dir = self._diary_dir
@@ -159,9 +135,9 @@ class DiaryGenerator(GeneratorBase):
 
         for entry in catalog.get("entries", []):
             entry_date = entry.get("source", "")
-            day_dir = diary_dir / entry_date
-            if day_dir.exists() and day_dir.is_dir():
-                entry["word_count"] = _count_words_in_dir(day_dir)
+            day_file = diary_dir / f"{entry_date}.md"
+            if day_file.is_file():
+                entry["word_count"] = _count_words_in_file(day_file)
                 entry.setdefault("date", entry_date)
                 modified = True
             else:
