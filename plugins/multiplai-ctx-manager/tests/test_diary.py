@@ -88,22 +88,48 @@ def _make_diary_generator(tmp_path, *, client=None, config=None):
 
 
 def _make_day_dir(diary_dir, date_str, files=None):
-    """Create a day directory with files inside.
+    """Create a per-day diary file ``diary_dir/<date_str>.md`` with one or
+    more ``## Session:`` blocks (v0.3.0 layout).
 
     Args:
         diary_dir: Parent diary directory.
-        date_str: Date string like '2026-04-15'.
-        files: Dict of {filename: content}. Defaults to one session file.
+        date_str: Date string like '2026-04-15' — also the file stem.
+        files: Dict of {session_filename_or_id: content}. Each becomes a
+            ``## Session: <stem>`` block in the day file (``.md`` extension
+            is stripped from the key to form the session id). Defaults to
+            one session.
 
-    Returns the day directory Path.
+    Returns the day file Path (``diary_dir/<date_str>.md``).
     """
-    day_dir = diary_dir / date_str
-    day_dir.mkdir(parents=True, exist_ok=True)
+    diary_dir.mkdir(parents=True, exist_ok=True)
     if files is None:
         files = {"session-1.md": f"# Session 1\nWorked on stuff for {date_str}."}
+
+    parts = [f"# Diary — {date_str}\n"]
     for fname, content in files.items():
-        (day_dir / fname).write_text(content, encoding="utf-8")
-    return day_dir
+        sid = fname[:-3] if fname.endswith(".md") else fname
+        ts = f"{date_str}T00:00:00+00:00"
+        parts.append(
+            f"\n## Session: {sid} — {ts} — /test/cwd\n\n{content}\n"
+        )
+
+    day_file = diary_dir / f"{date_str}.md"
+    day_file.write_text("".join(parts), encoding="utf-8")
+    return day_file
+
+
+def _rewrite_day_file(day_file, files):
+    """Rewrite a day file's session blocks. Used when tests mutate content
+    after the initial _make_day_dir call (e.g. to change the hash)."""
+    date_str = day_file.stem
+    parts = [f"# Diary — {date_str}\n"]
+    for fname, content in files.items():
+        sid = fname[:-3] if fname.endswith(".md") else fname
+        ts = f"{date_str}T00:00:00+00:00"
+        parts.append(
+            f"\n## Session: {sid} — {ts} — /test/cwd\n\n{content}\n"
+        )
+    day_file.write_text("".join(parts), encoding="utf-8")
 
 
 def _read_catalog(catalogs_dir, filename="diary.json"):
@@ -405,34 +431,30 @@ class TestHashSource:
 
         hash1 = gen.hash_source(day_dir)
 
-        (day_dir / "session.md").write_text("content B", encoding="utf-8")
+        _rewrite_day_file(day_dir, {"session.md": "content B"})
         hash2 = gen.hash_source(day_dir)
 
         assert hash1 != hash2
 
-    def test_hash_over_sorted_files(self, tmp_path):
-        """Hash is computed over SORTED file contents.
+    def test_hash_deterministic_across_identical_files(self, tmp_path):
+        """Two days with identical content produce identical hashes (modulo
+        the filename byte which is part of the hash). Same file → same hash.
 
-        Creating files in different order should produce the same hash
-        if the file names and contents are identical.
+        v0.3.0+ per-day layout: hash is over a single file, so sort-order
+        across multiple per-session files is no longer a thing. This test
+        replaces the legacy test_hash_over_sorted_files, asserting that
+        within a single day, hash is content-deterministic.
         """
         gen, _, diary_dir = _make_diary_generator(tmp_path)
+        day = _make_day_dir(diary_dir, "2026-04-15", {"a.md": "alpha", "b.md": "beta"})
 
-        # Create day1 with files in one order
-        day1 = diary_dir / "2026-04-15"
-        day1.mkdir()
-        (day1 / "a.md").write_text("alpha", encoding="utf-8")
-        (day1 / "b.md").write_text("beta", encoding="utf-8")
-
-        # Create day2 with same files, written in reverse order
-        day2 = diary_dir / "2026-04-16"
-        day2.mkdir()
-        (day2 / "b.md").write_text("beta", encoding="utf-8")
-        (day2 / "a.md").write_text("alpha", encoding="utf-8")
-
-        hash1 = gen.hash_source(day1)
-        hash2 = gen.hash_source(day2)
-        assert hash1 == hash2
+        h1 = gen.hash_source(day)
+        # Rewrite with same key/value pairs in different dict-iteration order
+        # — Python dict ordering preserves insertion, so this would only
+        # break if our helper sorted differently. Belt-and-braces.
+        _rewrite_day_file(day, {"a.md": "alpha", "b.md": "beta"})
+        h2 = gen.hash_source(day)
+        assert h1 == h2
 
     def test_hash_differs_for_different_files(self, tmp_path):
         """Different file contents produce different hashes."""
@@ -443,14 +465,17 @@ class TestHashSource:
 
         assert gen.hash_source(day1) != gen.hash_source(day2)
 
-    def test_hash_includes_multiple_files(self, tmp_path):
-        """Adding a file to the day directory changes the hash."""
+    def test_hash_changes_when_session_added(self, tmp_path):
+        """Appending a new session block to the day file changes the hash."""
         gen, _, diary_dir = _make_diary_generator(tmp_path)
         day_dir = _make_day_dir(diary_dir, "2026-04-15", {"session1.md": "content"})
 
         hash1 = gen.hash_source(day_dir)
 
-        (day_dir / "session2.md").write_text("extra content", encoding="utf-8")
+        _rewrite_day_file(day_dir, {
+            "session1.md": "content",
+            "session2.md": "extra content",
+        })
         hash2 = gen.hash_source(day_dir)
 
         assert hash1 != hash2
@@ -472,8 +497,7 @@ class TestHashSource:
         hash1 = gen.hash_source(day_dir)
 
         # Touch the file to change mtime without changing content
-        path = day_dir / "s.md"
-        path.write_text("fixed content", encoding="utf-8")
+        _rewrite_day_file(day_dir, {"s.md": "fixed content"})
 
         hash2 = gen.hash_source(day_dir)
         assert hash1 == hash2
@@ -638,47 +662,60 @@ class TestWordCount:
 
     @pytest.mark.asyncio
     async def test_word_count_matches_source(self, tmp_path):
-        """WHEN a day-file contains exactly N words
-        THEN the catalog entry has word_count set to N.
+        """word_count counts every word in the per-day file, including the
+        day-header and ``## Session:`` boundary headers. We verify it equals
+        the actual file ``read_text().split()`` length (not a hand-counted
+        body-only number — the fixture writes both header and body).
         """
-        content = "one two three four five six seven eight nine ten"  # 10 words
+        content = "one two three four five six seven eight nine ten"
         gen, catalogs_dir, diary_dir = _make_diary_generator(tmp_path)
-        _make_day_dir(diary_dir, _date_str_days_ago(0), {"session.md": content})
+        day_file = _make_day_dir(diary_dir, _date_str_days_ago(0), {"session.md": content})
+        expected = len(day_file.read_text().split())
 
-        result = await gen.run()
+        await gen.run()
 
         catalog = _read_catalog(catalogs_dir)
         entry = catalog["entries"][0]
-        assert entry["word_count"] == 10
+        assert entry["word_count"] == expected
+        # And the body content is included.
+        assert entry["word_count"] >= 10
 
     @pytest.mark.asyncio
-    async def test_word_count_zero_for_empty_file(self, tmp_path):
-        """WHEN a day-file is empty or whitespace-only
-        THEN word_count is 0.
-        """
+    async def test_word_count_for_whitespace_only_session_body(self, tmp_path):
+        """A whitespace-only session body still produces a non-zero
+        word_count (header and session marker contribute), but does not
+        increase the count beyond the header. Validates the field is
+        always present and derived from the file."""
         gen, catalogs_dir, diary_dir = _make_diary_generator(tmp_path)
-        _make_day_dir(diary_dir, _date_str_days_ago(0), {"session.md": "   \n  \n  "})
+        day_file = _make_day_dir(diary_dir, _date_str_days_ago(0), {"session.md": "   \n  \n  "})
+        expected = len(day_file.read_text().split())
 
-        result = await gen.run()
+        await gen.run()
 
         catalog = _read_catalog(catalogs_dir)
         entry = catalog["entries"][0]
-        assert entry["word_count"] == 0
+        assert entry["word_count"] == expected
+        # Body itself is whitespace-only → expected count equals the
+        # number of header tokens (positive but small).
+        assert entry["word_count"] > 0
 
     @pytest.mark.asyncio
-    async def test_word_count_across_multiple_files(self, tmp_path):
-        """Word count sums across all files in a day directory."""
+    async def test_word_count_across_multiple_session_blocks(self, tmp_path):
+        """Word count covers all ``## Session:`` blocks in the per-day file."""
         gen, catalogs_dir, diary_dir = _make_diary_generator(tmp_path)
-        _make_day_dir(diary_dir, _date_str_days_ago(0), {
-            "session1.md": "one two three",  # 3 words
-            "session2.md": "four five",  # 2 words
+        day_file = _make_day_dir(diary_dir, _date_str_days_ago(0), {
+            "session1.md": "one two three",
+            "session2.md": "four five",
         })
+        expected = len(day_file.read_text().split())
 
-        result = await gen.run()
+        await gen.run()
 
         catalog = _read_catalog(catalogs_dir)
         entry = catalog["entries"][0]
-        assert entry["word_count"] == 5
+        assert entry["word_count"] == expected
+        # Both bodies present (5 body words minimum).
+        assert entry["word_count"] >= 5
 
 
 # ---------------------------------------------------------------------------
@@ -863,8 +900,8 @@ class TestContentHashSkipLogic:
         # First run
         await gen.run()
 
-        # Modify the file
-        (day_dir / "s.md").write_text("modified content", encoding="utf-8")
+        # Modify the day file content
+        _rewrite_day_file(day_dir, {"s.md": "modified content"})
 
         # Second run — should regenerate
         result = await gen.run()
@@ -925,9 +962,8 @@ class TestDeletionPruning:
         catalog = _read_catalog(catalogs_dir)
         assert len(catalog["entries"]) == 1
 
-        # Delete the day directory
-        import shutil
-        shutil.rmtree(day_dir)
+        # Delete the day file
+        day_dir.unlink()
 
         # Run again
         result = await gen.run()
@@ -1124,8 +1160,8 @@ class TestLLMFailureHandling:
         catalog_before = _read_catalog(catalogs_dir)
         assert len(catalog_before["entries"]) == 1
 
-        # Modify content so it needs regeneration
-        (day_dir / "s.md").write_text("modified", encoding="utf-8")
+        # Modify day-file content so it needs regeneration
+        _rewrite_day_file(day_dir, {"s.md": "modified"})
 
         # Make LLM fail
         gen._model_client.query = AsyncMock(side_effect=Exception("LLM error"))
@@ -1152,7 +1188,7 @@ class TestLLMFailureHandling:
         hash_before = state_before["generators"]["diary"]["source_hashes"][day_str]
 
         # Modify and fail
-        (day_dir / "s.md").write_text("modified", encoding="utf-8")
+        _rewrite_day_file(day_dir, {"s.md": "modified"})
         gen._model_client.query = AsyncMock(side_effect=Exception("fail"))
 
         await gen.run()
@@ -1327,7 +1363,7 @@ class TestGenerationResult:
         await gen.run()
 
         # Modify only day0
-        (day0 / "s.md").write_text("modified", encoding="utf-8")
+        _rewrite_day_file(day0, {"s.md": "modified"})
 
         result = await gen.run()
         assert result.generated == 1

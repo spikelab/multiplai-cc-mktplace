@@ -83,16 +83,16 @@ def _check_memory_file(memory_dir: Path, filename: str) -> dict:
     }
 
 
-def _count_diary_entries(diary_dir: Path) -> int:
-    """Count diary entry files.
+def _count_diary_days(diary_dir: Path) -> int:
+    """Count ``YYYY-MM-DD.md`` per-day diary files.
 
-    Canonical layout is ``diary_dir/YYYY-MM-DD/<session>.md`` (written by
-    extraction.write_diary_entries), so a top-level iterdir would always
-    report 0. rglob also catches any legacy flat entries.
+    Layout (v0.3.0+): one file per UTC day, with internal ``## Session:``
+    blocks. Aligned with learnings. Returns the number of distinct day
+    files; not the number of sessions within them.
     """
     if not diary_dir.is_dir():
         return 0
-    return len(list(diary_dir.rglob("*.md")))
+    return len([p for p in diary_dir.glob("*.md") if p.is_file()])
 
 
 def _count_learnings(learnings_dir: Path) -> int:
@@ -318,9 +318,10 @@ def run_health_check() -> dict:
         "required_missing": len(required_missing),
     }
 
-    # Diary and learnings status
+    # Diary and learnings status. Renamed in v0.3.0 to reflect the
+    # per-day layout: each value is a day file, not a session file.
     report["diary"] = {
-        "entry_count": _count_diary_entries(diary_dir),
+        "day_count": _count_diary_days(diary_dir),
     }
 
     # Deferred-extraction queue snapshot — explains why a just-started

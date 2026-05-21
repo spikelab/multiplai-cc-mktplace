@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.0 — 2026-05-21
+
+Diary layout aligned with learnings — one file per UTC day.
+
+### Changed (breaking on-disk layout)
+- **Diary now uses per-day files**, matching the learnings layout. Each
+  ``YYYY-MM-DD.md`` file under your diary dir holds one ``# Diary``
+  header plus one ``## Session: <id> — <ts> — <cwd>`` block per session
+  that ran on that day. The previous ``YYYY-MM-DD/<sessionId>.md``
+  per-session layout is gone.
+- Why: easier to browse (`ls diary/` shows ~365 entries/year instead of
+  thousands), consistent with learnings, append-only with `fcntl.flock`
+  for concurrent SessionStart subprocesses.
+- Idempotent on session_id: re-extracting the same session is a no-op.
+- The diary catalog generator now iterates ``*.md`` files at the top of
+  the diary directory; one catalog entry per day, same schema as before.
+- Health check renamed ``diary.entry_count`` → ``diary.day_count`` to
+  reflect what it actually measures.
+
+### Migration
+- No public users existed on the pre-0.3.0 layout, so no user-facing
+  migration tool ships. The internal migration was a one-shot script
+  applied to existing on-disk diaries during development and discarded.
+
 ## 0.2.1 — 2026-05-21
 
 First public-marketplace-ready release. Focused on safety, transparency,

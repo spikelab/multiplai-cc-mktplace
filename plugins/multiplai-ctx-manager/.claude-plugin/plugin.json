@@ -1,6 +1,6 @@
 {
   "name": "multiplai",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Claude Code plugin for context routing, continuous learning, session awareness, and memory management.",
   "author": {"name": "Filippo Spike Morelli"},
   "license": "MIT",

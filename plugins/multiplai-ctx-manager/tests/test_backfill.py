@@ -123,13 +123,28 @@ class TestIsAlreadyProcessed:
         assert not _is_already_processed("sid-1", lf, tmp_path / "diary")
 
     def test_returns_true_when_both_exist(self, tmp_path):
+        """Per-day diary layout: ``## Session: <id>`` block in diary/YYYY-MM-DD.md."""
         from backfill import _is_already_processed
         lf = tmp_path / "lf.md"
         lf.write_text("Session: sid-1\n")
-        day_dir = tmp_path / "diary" / "2026-05-16"
-        day_dir.mkdir(parents=True)
-        (day_dir / "sid-1.md").write_text("header\nbody")
-        assert _is_already_processed("sid-1", lf, tmp_path / "diary")
+        diary_dir = tmp_path / "diary"
+        diary_dir.mkdir()
+        (diary_dir / "2026-05-16.md").write_text(
+            "# Diary — 2026-05-16\n\n## Session: sid-1 — ts — /cwd\n\nbody\n"
+        )
+        assert _is_already_processed("sid-1", lf, diary_dir)
+
+    def test_returns_false_when_diary_has_different_session(self, tmp_path):
+        """Diary day-file exists but doesn't contain the queried session."""
+        from backfill import _is_already_processed
+        lf = tmp_path / "lf.md"
+        lf.write_text("Session: sid-1\n")
+        diary_dir = tmp_path / "diary"
+        diary_dir.mkdir()
+        (diary_dir / "2026-05-16.md").write_text(
+            "# Diary — 2026-05-16\n\n## Session: sid-OTHER — ts — /cwd\n\nbody\n"
+        )
+        assert not _is_already_processed("sid-1", lf, diary_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +231,7 @@ class TestBackfillRealRun:
                 run_now=False,
             ))
 
-        diary_files = list((tmp_path / "diary").glob("*/*.md"))
+        diary_files = list((tmp_path / "diary").glob("*.md"))
         from lib.paths import _reset_cache
         _reset_cache()
 
@@ -225,13 +240,15 @@ class TestBackfillRealRun:
         t = self._setup_env(tmp_path, monkeypatch)
 
         sid = _session_id_from_path(t)
-        # Pre-mark as processed
+        # Pre-mark as processed in both per-day files (v0.3.0 layout).
         lf = tmp_path / "learnings" / "2026-05-16.md"
         lf.parent.mkdir(parents=True, exist_ok=True)
         lf.write_text(f"Session: {sid}\n")
-        day_dir = tmp_path / "diary" / "2026-05-16"
-        day_dir.mkdir(parents=True, exist_ok=True)
-        (day_dir / f"{sid}.md").write_text("[ts] [sid] [cwd]\nbody\n")
+        diary_dir = tmp_path / "diary"
+        diary_dir.mkdir(parents=True, exist_ok=True)
+        (diary_dir / "2026-05-16.md").write_text(
+            f"# Diary — 2026-05-16\n\n## Session: {sid} — ts — /cwd\n\nbody\n"
+        )
 
         client = _mock_client()
         since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
