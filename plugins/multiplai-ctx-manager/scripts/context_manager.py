@@ -616,4 +616,20 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # Hook runs on every prompt; never propagate a traceback or
+        # non-zero exit, or we break the user's Claude Code session.
+        try:
+            logger.exception("context_manager hook failed; emitting empty context")
+        except Exception:
+            pass
+        print(json.dumps({
+            "context": "",
+            "memory_files": 0,
+            "skills_files": 0,
+            "resources_files": 0,
+            "corpus_counts": {"memory": 0, "skills": 0, "resources": 0},
+        }))
+        sys.exit(0)

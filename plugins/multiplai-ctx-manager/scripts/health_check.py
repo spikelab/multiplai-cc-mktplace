@@ -107,6 +107,51 @@ def _count_learnings(learnings_dir: Path) -> int:
     return total
 
 
+def _check_extraction_queue(data_dir: Path) -> dict:
+    """Snapshot the deferred-extraction queue.
+
+    Extraction runs as a detached subprocess after `SessionStart` returns,
+    so a freshly-started session can briefly show "0 diary entries" while
+    the subprocess is still working. Surfacing this prevents users from
+    misreading the snapshot as a bug.
+
+    Layout (managed by session_start._process_deferred_extractions and
+    session_start._recover_stale_processing):
+      - data/pending_extractions/      — queued markers, not yet started
+      - data/processing_extractions/   — in-flight (subprocess alive)
+      - data/failed_extractions/       — permanently failed after 3 attempts
+    """
+    pending_dir = data_dir / "pending_extractions"
+    processing_dir = data_dir / "processing_extractions"
+    failed_dir = data_dir / "failed_extractions"
+
+    def _count(d: Path) -> int:
+        return len(list(d.glob("*.json"))) if d.is_dir() else 0
+
+    pending = _count(pending_dir)
+    processing = _count(processing_dir)
+    failed = _count(failed_dir)
+
+    # An in-flight extraction's marker file mtime reflects when the
+    # subprocess took it off the pending queue. Surfacing the oldest
+    # in-flight age helps distinguish "extraction running normally"
+    # from "extraction child crashed and the marker is orphaned".
+    oldest_processing_age_s = None
+    if processing_dir.is_dir():
+        markers = list(processing_dir.glob("*.json"))
+        if markers:
+            oldest_mtime = min(m.stat().st_mtime for m in markers)
+            oldest_processing_age_s = int(time.time() - oldest_mtime)
+
+    return {
+        "pending": pending,
+        "processing": processing,
+        "failed": failed,
+        "in_flight": pending + processing,
+        "oldest_processing_age_s": oldest_processing_age_s,
+    }
+
+
 def _get_last_dream_date(data_dir: Path) -> str | None:
     """Read last dream consolidation date from dream state file."""
     dream_state_file = data_dir / "dream_state.yaml"
@@ -277,6 +322,10 @@ def run_health_check() -> dict:
     report["diary"] = {
         "entry_count": _count_diary_entries(diary_dir),
     }
+
+    # Deferred-extraction queue snapshot — explains why a just-started
+    # session might transiently report 0 new diary entries.
+    report["extractions"] = _check_extraction_queue(data_dir)
     report["learnings"] = {
         "unprocessed_count": _count_learnings(learnings_dir),
     }
@@ -312,6 +361,34 @@ def run_health_check() -> dict:
     if unprocessed > 0:
         recommendations.append(
             f"{unprocessed} unprocessed learning lines pending. Run /multiplai:dream then /multiplai:dream-remember."
+        )
+
+    # Surface in-flight extractions so the user knows diary/learnings
+    # counts may grow shortly without further action.
+    extractions = report["extractions"]
+    if extractions["in_flight"] > 0:
+        age = extractions["oldest_processing_age_s"]
+        if extractions["processing"] > 0 and age is not None and age < 60:
+            recommendations.append(
+                f"{extractions['in_flight']} extraction(s) in flight (oldest "
+                f"{age}s old). Diary/learnings counts above are a live "
+                f"snapshot — re-run /multiplai:health in ~30s for the "
+                f"settled state."
+            )
+        else:
+            recommendations.append(
+                f"{extractions['in_flight']} extraction(s) queued "
+                f"(pending={extractions['pending']}, "
+                f"processing={extractions['processing']}). They'll run on "
+                f"the next /multiplai:health-triggering SessionStart, or "
+                f"are running now in the background."
+            )
+    if extractions["failed"] > 0:
+        recommendations.append(
+            f"{extractions['failed']} extraction(s) permanently failed "
+            f"after 3 retries. Inspect "
+            f"`<data>/failed_extractions/` for details, or delete the "
+            f"markers to suppress."
         )
 
     routing = report.get("routing") or {}

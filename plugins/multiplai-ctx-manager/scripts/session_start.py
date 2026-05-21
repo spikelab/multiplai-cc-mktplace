@@ -233,6 +233,29 @@ def _process_deferred_extractions(data_dir: Path, extract_script: Path) -> int:
     return processed
 
 
+def _emit_no_client_warning(data_dir: Path) -> None:
+    """Surface a one-time user-visible warning when no model client is available.
+
+    Without either claude-agent-sdk or anthropic_api_key, all LLM-backed
+    features (extraction, dreams, catalog generation) silently no-op. We
+    warn once per install (marker file) so the user knows to run setup;
+    repeating it every session would be noise.
+    """
+    marker = data_dir / "no_client_warning_emitted"
+    if marker.exists():
+        return
+    print(
+        "[multiplai] No Anthropic API key configured and no Agent SDK "
+        "detected — extraction, dreams, and catalog generation will be "
+        "skipped. Run /multiplai:setup or set anthropic_api_key in plugin "
+        "config to enable them."
+    )
+    try:
+        marker.touch()
+    except OSError:
+        pass
+
+
 def _emit_dream_nudge() -> None:
     """Print an additionalContext nudge prompting the user to run /multiplai:dream."""
     print(
@@ -251,6 +274,10 @@ def main() -> None:
 
     # Log which model client is available
     client_type = _log_client_selection()
+
+    # Warn the user once if neither the SDK nor an API key is present.
+    if client_type.startswith("none"):
+        _emit_no_client_warning(data_dir)
 
     # List available memory files for the session-state record. Contents
     # are NOT read or injected here — context_manager.py performs routed,
