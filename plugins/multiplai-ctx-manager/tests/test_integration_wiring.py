@@ -919,9 +919,9 @@ class TestModelClientFactoryWiring:
 
     def test_default_model_is_correct(self):
         """WHEN DEFAULT_MODEL is inspected
-        THEN it matches claude-sonnet-4-20250514."""
+        THEN it matches claude-sonnet-4-6."""
         from lib.model_client import DEFAULT_MODEL
-        assert DEFAULT_MODEL == "claude-sonnet-4-20250514"
+        assert DEFAULT_MODEL == "claude-sonnet-4-6"
 
     def test_default_max_tokens_is_4096(self):
         """WHEN DEFAULT_MAX_TOKENS is inspected

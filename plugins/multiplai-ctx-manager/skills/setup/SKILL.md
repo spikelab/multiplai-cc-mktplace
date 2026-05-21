@@ -90,13 +90,16 @@ After they're written, you edit them with the user's answers (step 5 below).
    in `plugin.json`, so we collect them here.
 
    - **Skills routing.** "Should the router suggest skills based on your
-     prompts? (yes/no, default no) — Skills live under a directory you point
-     at; default `~/.claude/skills`. {name}, do you have a non-default
+     prompts? (yes/no, default no) — Skills live under a directory you
+     point at; the default is the platform skills directory documented in
+     the plugin's `userConfig.skills_dir`. {name}, do you have a non-default
      location?"
-     → `enable_skills` (bool), `skills_dir` (path; default `~/.claude/skills`).
+     → `enable_skills` (bool), `skills_dir` (path; falls back to the
+     plugin's default if left blank).
    - **Resources routing.** "Should the router suggest reference docs from
      a resources directory? (yes/no, default no) — If yes, what's the path?
-     ({name}, a workspace like `~/work/RESOURCES` is typical.)"
+     ({name}, a workspace-rooted directory like `<workspace>/RESOURCES` is
+     typical.)"
      → `enable_resources` (bool), `resources_dir` (path; required if
      `enable_resources=true`).
    - **Memory router strategy.** "Memory routing: `token_overlap` (fast,
@@ -112,8 +115,8 @@ After they're written, you edit them with the user's answers (step 5 below).
 
    Locate the user's settings file:
    ```
-   $CLAUDE_CONFIG_DIR/settings.json   # if CLAUDE_CONFIG_DIR is set
-   ~/.claude/settings.json            # fallback
+   $CLAUDE_CONFIG_DIR/settings.json           # if CLAUDE_CONFIG_DIR is set
+   <user home>/.claude/settings.json          # fallback
    ```
    Read it (or start `{}` if missing), then merge in:
    ```json

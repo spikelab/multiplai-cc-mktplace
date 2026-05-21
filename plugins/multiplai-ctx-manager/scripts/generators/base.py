@@ -304,9 +304,16 @@ class GeneratorBase:
         force: bool,
         dry_run: bool,
     ) -> _ProcessingBatch:
-        """Classify and process each source: skip, dry-run, or generate."""
-        batch = _ProcessingBatch()
+        """Classify and process each source: skip, dry-run, or generate.
 
+        Generation runs concurrently bounded by ``config.catalog_concurrency``
+        — single-threaded asyncio means batch mutations between ``await``
+        points remain race-free.
+        """
+        batch = _ProcessingBatch()
+        to_generate: list[tuple[str, Any]] = []
+
+        # Pass 1: classify each source synchronously (no LLM calls)
         for key, source in sources.items():
             current_hash = self.hash_source(source)
             batch.hashes[key] = current_hash
@@ -323,9 +330,19 @@ class GeneratorBase:
                     batch.entries[key] = existing_by_key[key]
                 continue
 
-            await self._generate_or_preserve(
-                key, source, existing_by_key, stored_hashes, batch
-            )
+            to_generate.append((key, source))
+
+        # Pass 2: generate entries with bounded concurrency
+        if to_generate:
+            sem = asyncio.Semaphore(max(1, self._config.catalog_concurrency))
+
+            async def _bounded(k: str, s: Any) -> None:
+                async with sem:
+                    await self._generate_or_preserve(
+                        k, s, existing_by_key, stored_hashes, batch
+                    )
+
+            await asyncio.gather(*(_bounded(k, s) for k, s in to_generate))
 
         return batch
 
