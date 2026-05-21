@@ -415,7 +415,7 @@ class TestAnthropicAPIClient:
 
     def test_default_model_sent_to_api(self):
         """WHEN query() is called without explicit model kwarg
-        THEN the request uses 'claude-sonnet-4-20250514' as default."""
+        THEN the request uses 'claude-sonnet-4-6' as default."""
         from lib.model_client import AnthropicAPIClient, DEFAULT_MODEL
 
         mock_text_block = MagicMock()
@@ -437,7 +437,7 @@ class TestAnthropicAPIClient:
                 await client.query("sys", [])
                 call_kwargs = mock_async_client.messages.create.call_args
                 assert call_kwargs.kwargs["model"] == DEFAULT_MODEL
-                assert call_kwargs.kwargs["model"] == "claude-sonnet-4-20250514"
+                assert call_kwargs.kwargs["model"] == "claude-sonnet-4-6"
 
             asyncio.run(_test())
 
