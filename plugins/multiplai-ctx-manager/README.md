@@ -7,6 +7,33 @@ diary, and consolidates what it learns back into your memory files.
 
 This is the first plugin in the [`multiplai`](../../README.md) marketplace.
 
+**Platforms:** built and tested on macOS and Linux. WSL on Windows is
+expected to work but not actively tested — please open an issue if it
+doesn't. Native Windows (without WSL) isn't supported.
+
+## How it works
+
+1. **Setup** — `/multiplai:setup` walks you through populating a small set
+   of memory files (who you are, how you work, technical preferences).
+2. **Per prompt** — a `UserPromptSubmit` hook routes your prompt against
+   indexed catalogs of memory (and optionally skills/resources) and
+   injects only the relevant pieces. No memory dump.
+3. **Per session** — diary entries and a learnings backlog are captured
+   in the background; nothing blocks your session.
+4. **Consolidation** — `/multiplai:dream-remember` reviews the backlog
+   and proposes edits back into your memory files. You approve before
+   anything is written.
+
+```
+  setup → memory files
+              ↓
+  every prompt: context_manager picks relevant memory/skills/resources
+              ↓
+  Stop / SessionEnd: diary written, learnings queued
+              ↓
+  /multiplai:dream-remember: backlog reviewed → memory updated
+```
+
 ## Installation
 
 From the marketplace (recommended):
@@ -31,6 +58,25 @@ the plugin's Python dependencies (`uv` if available, else `python -m venv`
 All options are set via the plugin's `userConfig` (Claude Code prompts for
 them at enable time; values are exposed to hooks as
 `CLAUDE_PLUGIN_OPTION_*`).
+
+### Quick start: the only options you probably need
+
+Most users only touch these:
+
+| Option | Why |
+|--------|-----|
+| `workspace_dir` | Anchor for all state. Set it once; everything else defaults under it. |
+| `anthropic_api_key` | Only if you're not running inside Claude Code's Agent SDK (set as a fallback). |
+| `memory_router` | Leave `token_overlap` (fast, offline) unless you want LLM-based routing (`llm` = one Sonnet call per prompt). |
+
+Optional, for power users:
+
+- `enable_skills` + `skills_dir` — index a skills corpus for routing.
+- `enable_resources` + `resources_dir` — index a research/notes corpus.
+
+Everything else (catalog model, TTL, reasoning effort, diary catalog
+window, individual `*_dir` overrides) has sensible defaults — leave
+alone unless you're tuning.
 
 ### Directory layout
 
@@ -75,6 +121,31 @@ All commands are namespaced under `/multiplai:`.
 | `/multiplai:refresh-catalogs` | Regenerate catalog indexes. Supports `--force`, `--dry-run`, `--only`. |
 | `/multiplai:backfill` | Reconstruct learnings/diary/now summaries from existing Claude Code transcripts. Default window 7 days; `--days N`, `--since DATE`, `--all`. |
 
+## Where your data lives
+
+Everything stays on your machine under `<workspace>/.multiplai/`
+(or `~/.multiplai/` if `workspace_dir` is unset):
+
+| Subdir | What's in it |
+|--------|--------------|
+| `memory/` | Your memory files. You edit these directly. |
+| `diary/YYYY-MM-DD/` | One file per session — a narrative of what happened. |
+| `learnings/` | Extracted insights pending consolidation. |
+| `now/` | Per-project current-state summaries. |
+| `data/` | Runtime state — catalogs, logs, plugin venv. Disposable; recreated as needed. |
+
+Delete any of these any time; the plugin recreates what it needs. If
+`.multiplai/` lives inside a git repo and you don't want diary/learnings
+tracked, add to `.gitignore`:
+
+```gitignore
+.multiplai/diary/
+.multiplai/learnings/
+.multiplai/data/
+```
+
+Memory files are the one thing worth tracking — see the next section.
+
 ## Where your memory lives
 
 By default `memory_dir` is under `.multiplai/` with no version control.
@@ -117,13 +188,34 @@ the next `SessionStart`.
 
 ### Learning lifecycle
 
-1. **Capture** — `SessionEnd`/`PreCompact` enqueue markers; the next
-   `SessionStart` runs `extract_learnings.py`, writing diary entries and
-   per-day learnings.
-2. **Propose** — `/multiplai:dream` reads learnings + diary and writes a
+1. **Capture** — when you exit a session (or it pre-compacts), the
+   `SessionEnd`/`PreCompact` hook writes a tiny *marker* JSON to
+   `data/pending_extractions/`. The hook itself does no LLM work — those
+   hooks get killed within seconds by Claude Code, so any multi-second
+   call would be unreliable.
+2. **Extract (deferred, async)** — the next `SessionStart` reads the
+   pending markers and spawns `extract_learnings.py` as a *detached
+   background subprocess* (`subprocess.Popen(..., start_new_session=True)`).
+   `SessionStart` returns immediately so your first prompt isn't blocked.
+   The subprocess does the LLM call to produce the diary entry + per-day
+   learnings, writes them, and removes its marker.
+3. **Propose** — `/multiplai:dream` reads learnings + diary and writes a
    review proposal to `.multiplai/dreams/`.
-3. **Apply** — `/multiplai:dream-remember` walks the proposal with you
+4. **Apply** — `/multiplai:dream-remember` walks the proposal with you
    and applies approved edits to memory files.
+
+> **Heads-up on timing.** Because extraction runs in the background, it
+> may still be in flight when you ask your first question (or run
+> `/multiplai:health`). A typical transcript takes 10-30 seconds depending
+> on length and model latency. If you started a session and the latest
+> diary entry isn't there yet, wait ~30 seconds and check again — the
+> subprocess is still working. The plugin will *never* block your prompt
+> on extraction; it always catches up asynchronously.
+>
+> If a marker stays in `data/pending_extractions/` across multiple
+> sessions, the next `SessionStart` retries it (up to 3 attempts); a
+> permanently-failing transcript is moved to `data/failed_extractions/`
+> for inspection.
 
 ## Observability
 

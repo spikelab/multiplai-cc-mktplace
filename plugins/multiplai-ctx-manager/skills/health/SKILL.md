@@ -29,9 +29,11 @@ You are the multiplai health audit skill. Your job is to check the completeness 
 
    - **Memory Files**: The script scans the **entire** memory dir (`memory_dir.glob("*.md")`), not a fixed list. Use `memory_summary` (`total`, `fresh`, `stale`, `required_missing`) for the headline (e.g. "21/27 fresh"). Then enumerate explicitly **only** the files that need attention — anything in `required_missing` and any entry with `"stale": true` (show size + age_days, oldest first). Do **not** dump a row for every healthy file; collapse those to the fresh count. `required_missing` lists only absent starter-template files (`me.md`, `technical-pref.md`, `preferences.md`); a missing non-starter file is not flagged as an error.
 
-   - **Diary Status**: Number of diary entries found.
+   - **Diary Status**: Number of diary entries found. If `extractions.in_flight > 0`, append a one-line caveat: *"N extraction(s) in flight — this count may grow shortly without further action"*. Counts are a filesystem snapshot, not a settled state.
 
-   - **Learnings**: Number of unprocessed learning lines.
+   - **Extractions**: Read the `extractions` block. If `in_flight == 0` and `failed == 0`, omit this section entirely (no news is good news). Otherwise report `pending`, `processing`, `failed`, and `oldest_processing_age_s` (in-flight age). Briefly explain: deferred extraction runs as a detached subprocess from `SessionStart`, so a freshly-started session can transiently report 0 new diary entries while the subprocess works (typical: 10-30s). If `failed > 0`, recommend the user inspect `<data_dir>/failed_extractions/` and surface the marker filenames if useful.
+
+   - **Learnings**: Number of unprocessed learning lines. Same caveat as Diary if extractions are in flight.
 
    - **Dream**: Date of last dream consolidation, or "never" if none has occurred.
 

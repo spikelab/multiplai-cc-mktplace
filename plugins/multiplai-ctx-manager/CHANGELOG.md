@@ -1,6 +1,50 @@
 # Changelog
 
+## 0.2.1 — 2026-05-21
+
+First public-marketplace-ready release. Focused on safety, transparency,
+and onboarding rather than new features.
+
+### Fixed
+- **`UserPromptSubmit` hook can no longer crash your session.** The
+  context-routing hook now wraps all work in a top-level guard: any
+  unhandled error logs to `hook-errors.log` and emits a safe empty
+  context. Previously a single failing file read could surface a
+  traceback mid-prompt.
+
+### Added
+- One-time warning at session start when neither the Agent SDK nor an
+  Anthropic API key is configured — so LLM-backed features (extraction,
+  dreams, catalogs) silently no-op'ing is no longer a mystery.
+- README: **How it works** (4-step lifecycle), **Where your data lives**
+  (what gets written where + `.gitignore` snippet), **Quick start: the
+  only options you probably need** (cuts the 18-option config wall down
+  to 3-4 that matter).
+- Platform support note in README — macOS / Linux / WSL on Windows;
+  native Windows isn't supported.
+
+### Changed
+- `anthropic` dependency pinned to an exact version for reproducible
+  installs.
+
 ## 0.2.0 — 2026-05-17
+
+Internal release. Highlights for users:
+
+- **Runtime state moved next to your memory.** Logs, catalogs, the
+  plugin venv, and dream state now live at `<workspace>/.multiplai/data`
+  instead of Claude Code's managed plugin dir. Side effect: routing
+  catalogs are now actually loaded by default (they were silently
+  unreachable before). New `data_dir` config option to override.
+- **Tail-friendly logs.** Every log file rotates daily into
+  `<name>-YYYY-MM-DD.log`, with `<name>.log` always pointing at today.
+  Retention controlled by `MULTIPLAI_LOG_RETENTION_DAYS` (default 7).
+- **`activity.log` curated stream.** One plain-language line per
+  meaningful action — context injected, dream nudge, session boundary,
+  diary write, learnings capture, catalog rebuild. Tail with
+  `tail -f <data>/logs/activity.log`.
+- Test suite hardened so it never inherits the host workspace's
+  `CLAUDE_PLUGIN_*` / `WORKSPACE` env.
 
 ### Observability
 

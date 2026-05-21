@@ -551,10 +551,13 @@ class TestMinimalDependencies:
 
     def test_anthropic_present_with_version(self):
         """WHEN requirements.txt is inspected
-        THEN anthropic>=0.40.0 is declared."""
+        THEN anthropic is pinned (== or >=) at version >=0.40.0."""
         text = (PLUGIN_ROOT / "requirements.txt").read_text()
-        assert re.search(r"anthropic\s*>=\s*0\.40\.0", text), \
-            "requirements.txt must declare anthropic>=0.40.0"
+        m = re.search(r"anthropic\s*(==|>=)\s*(\d+)\.(\d+)\.(\d+)", text)
+        assert m, "requirements.txt must declare anthropic with a version pin"
+        major, minor, patch = int(m.group(2)), int(m.group(3)), int(m.group(4))
+        assert (major, minor, patch) >= (0, 40, 0), \
+            f"anthropic version must be >=0.40.0, got {major}.{minor}.{patch}"
 
     def test_pyyaml_present_with_version(self):
         """WHEN requirements.txt is inspected
