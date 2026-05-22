@@ -326,6 +326,65 @@ class TestAgentSDKClient:
 
             asyncio.run(_test())
 
+    def test_failure_tail_prefers_error_lines(self):
+        """WHEN the CLI emits [ERROR] lines amid DEBUG noise and the call fails
+        THEN the surfaced stderr_tail keeps the [ERROR] lines and drops DEBUG."""
+        mock_sdk = _make_mock_sdk(
+            fail=RuntimeError("Command failed with exit code 1"),
+            stderr_lines=[
+                "2026-01-01 [DEBUG] configureGlobalAgents complete",
+                "2026-01-01 [DEBUG] MDM settings load completed",
+                "2026-01-01 [ERROR] API error: 429 rate_limit_error",
+                "2026-01-01 [DEBUG] LSP server manager shut down",
+            ],
+        )
+        with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
+            from lib import model_client
+            client = model_client.AgentSDKClient()
+
+            async def _test():
+                with patch.object(model_client, "_SDK_RETRY_BACKOFF_S", 0):
+                    with pytest.raises(model_client.SDKQueryError) as exc:
+                        await client.query("sys", [{"role": "user", "content": "x"}])
+                tail = exc.value.stderr_tail
+                assert "429 rate_limit_error" in tail
+                assert "[DEBUG]" not in tail
+
+            asyncio.run(_test())
+
+    def test_no_stderr_files_written(self):
+        """REGRESSION: stderr is captured in memory only — the per-invocation
+        file machinery (and its helper) must not come back."""
+        from lib import model_client
+        assert not hasattr(model_client, "_stderr_log_dir")
+        assert "stderr_log_path" not in inspect.signature(
+            model_client.SDKQueryError.__init__
+        ).parameters
+
+
+class TestSummarizeStderr:
+    """Unit tests for the in-memory stderr summarizer."""
+
+    def test_keeps_error_lines_and_dedups_consecutive(self):
+        from lib.model_client import _summarize_stderr
+        out = _summarize_stderr(
+            error_lines=["[ERROR] boom", "[ERROR] boom", "[ERROR] kapow"],
+            recent_lines=["[DEBUG] noise"],
+        )
+        assert out == "[ERROR] boom\n[ERROR] kapow"
+
+    def test_falls_back_to_recent_lines_when_no_errors(self):
+        from lib.model_client import _summarize_stderr
+        out = _summarize_stderr(
+            error_lines=[],
+            recent_lines=["[DEBUG] a", "[WARN] b", "last line"],
+        )
+        assert out == "[DEBUG] a\n[WARN] b\nlast line"
+
+    def test_empty_when_nothing_captured(self):
+        from lib.model_client import _summarize_stderr
+        assert _summarize_stderr([], []) == ""
+
 
 class TestAnthropicAPIClient:
     """Verify AnthropicAPIClient implementation."""

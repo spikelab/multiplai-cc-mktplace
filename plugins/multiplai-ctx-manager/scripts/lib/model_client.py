@@ -10,29 +10,23 @@ The create_client() factory tries Agent SDK first, falls back to API key.
 import asyncio
 import logging
 import os
-import tempfile
+from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, runtime_checkable
-
-# The plugin's canonical logs dir is `<data_dir>/logs`. Resolved lazily to
-# tolerate model_client being imported before paths config is available;
-# falls back to the OS tempdir if the import or directory creation fails.
-def _stderr_log_dir() -> Path:
-    try:
-        from lib.paths import get_paths  # local import to avoid cycles
-        d = get_paths().logs_dir()
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-    except Exception:  # noqa: BLE001
-        return Path(tempfile.gettempdir())
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_MAX_TOKENS = 4096
-_STDERR_TAIL_LINES = 2000
+
+# CLI stderr capture (debug-to-stderr is on, so raw volume is large). We keep
+# it all in memory, never on disk, and only surface a compact slice when a
+# call actually fails: the `[ERROR]` lines (which carry the real cause —
+# rate limit, auth, crash), or a few trailing raw lines if there were none.
+_STDERR_RING_LINES = 50          # trailing context kept for the fallback tail
+_STDERR_MAX_ERROR_LINES = 15     # [ERROR] lines surfaced in the summary
+_STDERR_ERROR_CAPTURE_CAP = 200  # absolute cap on captured [ERROR] lines
 
 # The bundled CLI intermittently exits 1 (verified recurring: diary
 # 2026-04-19/28304b42, 2026-04-29/8bcd0f1c). One bounded retry turns a flaky
@@ -50,37 +44,43 @@ class ModelResponse:
 class SDKQueryError(RuntimeError):
     """Raised when ``claude_agent_sdk.query()`` fails.
 
-    ``stderr_tail`` holds the last captured CLI stderr lines — useful
-    for surfacing rate-limit, auth, or CLI crash details that would
-    otherwise be silently dropped. ``stderr_log_path`` is the on-disk
-    file where every captured stderr line was written in real time,
-    independent of whether the in-memory buffer was flushed before the
-    SDK cancelled the stderr-reader task.
+    ``stderr_tail`` holds a filtered summary of the CLI stderr — the
+    ``[ERROR]`` lines (or the last few raw lines if there were none) —
+    enough to surface rate-limit, auth, or crash details that the SDK's
+    generic "exit code 1" would otherwise hide. Captured in memory only;
+    nothing is written to disk.
     """
 
-    def __init__(
-        self,
-        message: str,
-        *,
-        stderr_tail: str = "",
-        stderr_log_path: str = "",
-    ) -> None:
+    def __init__(self, message: str, *, stderr_tail: str = "") -> None:
         self._base_message = message
         self.stderr_tail = stderr_tail
-        self.stderr_log_path = stderr_log_path
         super().__init__(self._format())
 
     def _format(self) -> str:
         parts = [self._base_message]
-        if self.stderr_log_path:
-            parts.append(f"(full CLI stderr: {self.stderr_log_path})")
         if self.stderr_tail:
-            parts.append("--- captured CLI stderr (tail) ---")
+            parts.append("--- captured CLI stderr (errors) ---")
             parts.append(self.stderr_tail)
             parts.append("--- end stderr ---")
         else:
             parts.append("(no CLI stderr captured — subprocess likely died before emitting any output)")
         return "\n".join(parts)
+
+
+def _summarize_stderr(error_lines: list[str], recent_lines: list[str]) -> str:
+    """Build a compact stderr summary for a failed SDK call.
+
+    Prefers CLI ``[ERROR]`` lines (consecutive duplicates collapsed, capped)
+    since they carry the actionable cause. Falls back to the last few raw
+    lines when the CLI emitted no error-level output.
+    """
+    if error_lines:
+        deduped: list[str] = []
+        for line in error_lines:
+            if not deduped or deduped[-1] != line:
+                deduped.append(line)
+        return "\n".join(deduped[-_STDERR_MAX_ERROR_LINES:])
+    return "\n".join(recent_lines[-_STDERR_RING_LINES:])
 
 
 def _messages_to_prompt(messages: list[dict]) -> str:
@@ -198,25 +198,19 @@ class AgentSDKClient:
 
         last_exc: Exception | None = None
         last_tail = ""
-        last_log_path = ""
         any_attempt_failed = False
-        # One stderr log per invocation, attempts appended in order. The CLI
-        # subprocess can die between emitting useful debug output and the
-        # SDK's stderr-reader task being cancelled, so writing each line
-        # through to disk on arrival guarantees we keep it for inspection.
-        stderr_log_path = _stderr_log_dir() / (
-            f"sdk-stderr-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}.log"
-        )
-        stderr_log_fh = stderr_log_path.open("w", encoding="utf-8", buffering=1)
         for attempt in range(_SDK_MAX_ATTEMPTS):
-            stderr_lines: list[str] = []
+            # Capture stderr in memory only: a ring buffer of recent lines for
+            # trailing context, plus a bounded list of [ERROR] lines so a
+            # fatal error is never evicted by a DEBUG burst. Summarized into a
+            # compact tail only if the call fails.
+            recent_lines: deque[str] = deque(maxlen=_STDERR_RING_LINES)
+            error_lines: list[str] = []
 
-            def _on_stderr(line: str, _s=stderr_lines, _fh=stderr_log_fh, _a=attempt) -> None:
-                _s.append(line)
-                try:
-                    _fh.write(f"[attempt {_a + 1}] {line}\n")
-                except Exception:
-                    pass
+            def _on_stderr(line: str, _r=recent_lines, _e=error_lines) -> None:
+                _r.append(line)
+                if "[ERROR]" in line and len(_e) < _STDERR_ERROR_CAPTURE_CAP:
+                    _e.append(line)
 
             options = ClaudeAgentOptions(
                 allowed_tools=[],
@@ -260,25 +254,14 @@ class AgentSDKClient:
                     "SDK call OK on attempt %d/%d: messages=%d response=%d bytes elapsed=%.1fs",
                     attempt + 1, _SDK_MAX_ATTEMPTS, message_count, response_bytes, elapsed,
                 )
-                stderr_log_fh.close()
                 if any_attempt_failed:
-                    # An earlier attempt failed but we recovered — keep the
-                    # log so the intermittent failure can be diagnosed.
                     logger.warning(
-                        "claude_agent_sdk.query() recovered after failure; "
-                        "stderr log preserved at %s",
-                        stderr_log_path,
+                        "claude_agent_sdk.query() recovered after a failed attempt"
                     )
-                else:
-                    try:
-                        stderr_log_path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
                 return ModelResponse(content="".join(chunks).strip())
             except Exception as e:  # noqa: BLE001
                 last_exc = e
-                last_tail = "\n".join(stderr_lines[-_STDERR_TAIL_LINES:])
-                last_log_path = str(stderr_log_path)
+                last_tail = _summarize_stderr(error_lines, list(recent_lines))
                 any_attempt_failed = True
                 if attempt + 1 < _SDK_MAX_ATTEMPTS:
                     logger.warning(
@@ -291,16 +274,10 @@ class AgentSDKClient:
                     )
                     await asyncio.sleep(_SDK_RETRY_BACKOFF_S)
 
-        try:
-            stderr_log_fh.close()
-        except Exception:
-            pass
-
         raise SDKQueryError(
             f"claude_agent_sdk.query() failed after {_SDK_MAX_ATTEMPTS} "
             f"attempts: {last_exc}",
             stderr_tail=last_tail,
-            stderr_log_path=last_log_path,
         ) from last_exc
 
 
