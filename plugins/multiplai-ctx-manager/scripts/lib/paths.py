@@ -216,6 +216,15 @@ class Paths:
         """Dream state tracking file (YAML)."""
         return self.data_dir / "dream_state.yaml"
 
+    def project_map_file(self) -> Path:
+        """Project-identity config (YAML) at the workspace ``.multiplai/`` root.
+
+        Sits beside ``memory/``, ``diary/``, ``now/`` (``diary_dir.parent`` is
+        the workspace base). Read by ``lib.project_identity`` to map a session
+        ``cwd`` onto a stable project name. Optional — absent means defaults.
+        """
+        return self.diary_dir.parent / "project-map.yaml"
+
     def learnings_file(self, date_str: str | None = None) -> Path:
         """Per-day structured learnings file ``learnings_dir/{YYYY-MM-DD}.md``.
 
