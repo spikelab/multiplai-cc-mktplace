@@ -141,9 +141,14 @@ class TestMultiCorpusOutput:
         assert "Writing guide" in out["context"]
 
     def test_skills_corpus_loaded_when_enabled(self, env_setup):
-        # Memory + skills both relevant to writing
+        # Skills are surfaced as lightweight recommendations built from
+        # the catalog (summary + /<name> invocation hint), NOT by reading
+        # the SKILL.md body — Claude Code already exposes skill bodies via
+        # the Skill tool. The catalog stores the bare dir name as the key.
         (env_setup["memory_dir"] / "voice.md").write_text("# Voice")
-        (env_setup["skills_dir"] / "writing.md").write_text("# Writing skill body")
+        skill_dir = env_setup["skills_dir"] / "writing"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# Writing skill body")
         _write_catalog(
             env_setup["catalogs_dir"],
             "memory.json",
@@ -152,7 +157,8 @@ class TestMultiCorpusOutput:
         _write_catalog(
             env_setup["catalogs_dir"],
             "skills.json",
-            [{"source": "writing.md", "name": "writing",
+            [{"source": "writing", "name": "writing",
+              "summary": "Drafts and edits blog posts",
               "intent_domains": ["writing a blog post"]}],
         )
 
@@ -162,7 +168,10 @@ class TestMultiCorpusOutput:
             extra_env={"CLAUDE_PLUGIN_OPTION_enable_skills": "true"},
         )
         assert "=== SKILLS ===" in out["context"]
-        assert "Writing skill body" in out["context"]
+        # Recommendation: catalog summary + invocation hint, not the body.
+        assert "Drafts and edits blog posts" in out["context"]
+        assert "/writing" in out["context"]
+        assert "Writing skill body" not in out["context"]
         assert out["skills_files"] >= 1
         assert out["corpus_counts"]["skills"] >= 1
 

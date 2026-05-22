@@ -138,6 +138,33 @@ class TestTokenOverlapRouter:
         )
         assert "writing.md" not in picks
 
+    def test_anti_domain_sharing_domain_vocab_does_not_self_exclude(self):
+        """An anti_domain that reuses the entry's own positive words must
+        not hard-exclude it on those shared tokens.
+
+        Regression: anti phrases routinely restate the topic to negate a
+        sub-case (e.g. "...inspection unrelated to memory routing"). A
+        naive bag-of-words OR match excluded the entry on "memory" /
+        "routing" — the very words that make it relevant.
+        """
+        from lib.memory_router import TokenOverlapRouter
+        catalog = [
+            {
+                "source": "router-audit.md",
+                "intent_domains": [
+                    "auditing retrieval routing quality",
+                    "identifying false negatives in context routing",
+                ],
+                "anti_domains": [
+                    "general log inspection unrelated to memory routing",
+                ],
+            },
+        ]
+        picks = TokenOverlapRouter().select(
+            "audit the retrieval routing quality and false negatives", catalog,
+        )
+        assert "router-audit.md" in picks
+
     def test_sorts_by_overlap_count(self):
         from lib.memory_router import TokenOverlapRouter
         catalog = [

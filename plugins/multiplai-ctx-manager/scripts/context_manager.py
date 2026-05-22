@@ -319,25 +319,32 @@ def _load_memory_content(memory_dir: Path, picks: list[str]) -> dict[str, str]:
     return result
 
 
-def _load_skills_content(cfg, picks: list[str]) -> dict[str, str]:
-    """Read picked skill instruction files from configured skills_dir."""
+def _build_skills_recommendations(
+    cfg, picks: list[str], entries: list[dict]
+) -> dict[str, str]:
+    """Build lightweight skill recommendations from the catalog.
+
+    Skills are surfaced as *pointers*, not content. Claude Code already
+    exposes every skill body via the Skill tool and lists available
+    skills, so injecting the full SKILL.md per prompt is redundant and
+    heavy. Instead we emit the catalog summary plus the ``/<name>``
+    invocation hint so the model knows a relevant skill exists and how
+    to call it. No file reads — the catalog is the source of truth.
+    """
     if not picks or not cfg.enable_skills:
         return {}
-    skills_dir = Path(cfg.skills_dir).expanduser()
-    if not skills_dir.exists():
-        return {}
+    by_name: dict[str, dict] = {}
+    for entry in entries or []:
+        key = entry.get("name") or entry.get("source")
+        if key:
+            by_name[key] = entry
     result: dict[str, str] = {}
     for pick in picks:
-        # Skills entries don't use section refs; they're small docs already.
+        # Skills entries don't use section refs.
         base, _ = parse_section_ref(pick)
-        path = skills_dir / base
-        if not path.exists():
-            logger.debug("Picked skill file missing: %s", path)
-            continue
-        try:
-            result[base] = path.read_text()
-        except OSError:
-            logger.warning("Failed to read picked skill file: %s", path)
+        summary = (by_name.get(base) or {}).get("summary", "").strip()
+        hint = f"Invoke with /{base} when relevant."
+        result[base] = f"{summary}\n{hint}" if summary else hint
     return result
 
 
@@ -478,7 +485,9 @@ def main() -> None:
 
     # Load content per corpus
     memory_content = _load_memory_content(memory_dir, picks_by_corpus.get("memory") or [])
-    skills_content = _load_skills_content(cfg, picks_by_corpus.get("skills") or [])
+    skills_content = _build_skills_recommendations(
+        cfg, picks_by_corpus.get("skills") or [], corpora.get("skills") or []
+    )
     resources_content = _load_resources_content(cfg, picks_by_corpus.get("resources") or [])
 
     # Memory fallback — a safety net for *failure*, not for abstention.

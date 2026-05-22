@@ -381,6 +381,13 @@ class TokenOverlapRouter:
             for phrase in entry.get("anti_domains", []) or []:
                 if isinstance(phrase, str):
                     anti |= _tokenize(phrase)
+            # Drop anti tokens that are also the entry's own positive
+            # vocabulary. Anti phrases routinely reuse domain words
+            # (e.g. "...inspection UNRELATED to memory routing"), and a
+            # bag-of-words OR match would otherwise hard-exclude an entry
+            # on the very tokens that make it relevant. Only the
+            # distinctive anti terms should gate exclusion.
+            anti -= domain_terms
             rows.append((filename, domain_terms, anti, phrases, kw_terms))
             per_entry_domain_terms.append(domain_terms)
 
