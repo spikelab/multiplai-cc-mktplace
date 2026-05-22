@@ -387,9 +387,11 @@ class TestTimeoutCompliance:
     read all files' content when there are many memory files.
     """
 
-    def test_hooks_json_timeout_is_5_seconds(self):
+    def test_hooks_json_timeout_is_15_seconds(self):
         """WHEN the UserPromptSubmit hook is inspected in hooks/hooks.json
-        THEN it has a 5-second timeout (official schema uses seconds)."""
+        THEN it has a 15-second timeout. token_overlap routing is instant,
+        but the opt-in llm router runs a model call inline (~7-10s via the
+        Agent SDK), so the budget is raised to 15s to let it complete."""
         user_prompt_hooks = [h for h in parse_hooks()
                              if h["event"] == "UserPromptSubmit"]
         assert len(user_prompt_hooks) > 0, "No UserPromptSubmit hook found"
@@ -400,8 +402,8 @@ class TestTimeoutCompliance:
                 context_manager_hook = h
                 break
         assert context_manager_hook is not None, "No context_manager hook found"
-        assert context_manager_hook["timeout"] == 5, \
-            f"Context manager timeout should be 5s, got {context_manager_hook['timeout']}"
+        assert context_manager_hook["timeout"] == 15, \
+            f"Context manager timeout should be 15s, got {context_manager_hook['timeout']}"
 
     def test_completes_under_5_seconds_small_memory(self, tmp_path, monkeypatch, reset_paths_cache):
         """WHEN the context router runs with a small memory set (3 files)
@@ -595,13 +597,13 @@ class TestContextRouterHookWiring:
         assert any("context_manager" in s for s in scripts), \
             "context_manager.py must be registered as UserPromptSubmit hook"
 
-    def test_timeout_set_to_5(self):
+    def test_timeout_set_to_15(self):
         """WHEN the context_manager hook entry is inspected
-        THEN it has a 5-second timeout (official schema uses seconds)."""
+        THEN it has a 15-second timeout (headroom for the inline llm router)."""
         for h in self.hooks:
             if h["event"] == "UserPromptSubmit" and "context_manager" in h["script"]:
-                assert h["timeout"] == 5, \
-                    f"Expected 5s timeout, got {h['timeout']}"
+                assert h["timeout"] == 15, \
+                    f"Expected 15s timeout, got {h['timeout']}"
                 return
         pytest.fail("Context manager hook not found in hooks.json")
 
