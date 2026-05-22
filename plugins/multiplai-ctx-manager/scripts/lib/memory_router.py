@@ -69,11 +69,14 @@ STRATEGY_EMBEDDINGS = "embeddings"
 # construction).
 #
 # LATENCY CAVEAT (measured 2026-05-22, Haiku, memory+skills ~10k-token
-# prompt): llm via the Agent SDK is ~7-10s/prompt — the cost is the SDK
-# spawning the `claude` CLI subprocess per call, not the model. That
-# exceeds a comfortable pre-prompt budget; the hook timeout is raised to
-# 15s and the router timeout to 12s to let calls complete while we
-# evaluate routing QUALITY. This is a stopgap: the real fix is to move
+# prompt): llm via the Agent SDK is ~12s+/prompt — the cost is the SDK
+# spawning the `claude` CLI subprocess (cold-start) per call, not the
+# model. The first 12s/15s budget proved too tight (router timed out every
+# prompt → empty context), so the hook timeout is raised to 30s and the
+# router timeout to 25s (≈5s headroom for parse/log/inject under the hook
+# kill) to let calls complete while we evaluate routing QUALITY. These two
+# numbers are coupled: keep router timeout < hook timeout. This is a
+# stopgap: the real fix is to move
 # routing OUT of the blocking hook to an external always-running agent /
 # local routing service (no per-call cold-start), or a direct-API path
 # (needs an API key with credits). See the README "Router latency"
@@ -515,7 +518,7 @@ class LLMRouter:
 
     name = STRATEGY_LLM
 
-    def __init__(self, *, timeout_seconds: float = 12.0, model: str | None = None) -> None:
+    def __init__(self, *, timeout_seconds: float = 25.0, model: str | None = None) -> None:
         self._timeout_seconds = timeout_seconds
         self._model = (
             model
