@@ -1,9 +1,16 @@
 """Session start hook for multiplai plugin.
 
 Logs client selection, records the session start timestamp, initializes
-session state, and drains deferred extraction markers. Routed memory
+session state, and drains deferred extraction markers. Routed *memory*
 injection is handled per-prompt by context_manager.py (UserPromptSubmit);
 this hook deliberately does NOT dump memory into the session context.
+
+It DOES inject the per-project "now" snapshot once, here at session start:
+the session's ``cwd`` is resolved to a project (lib.project_identity) and the
+matching ``now/<project>.md`` is emitted as additionalContext so the session
+opens knowing where that project left off. This is one-time on purpose —
+re-injecting project status on every prompt (the old behavior) was wasteful
+and added no signal.
 
 Also checks the Dream 24h gate: when more than 24 hours have
 elapsed since the last dream run and fresh learnings are pending,
@@ -256,6 +263,37 @@ def _emit_no_client_warning(data_dir: Path) -> None:
         pass
 
 
+def _inject_project_state(now_dir: Path, cwd: str) -> bool:
+    """Emit the matching project's ``now`` snapshot as additionalContext.
+
+    Resolves *cwd* to a project via the shared resolver and, if
+    ``now/<project>.md`` exists, prints it once so the session opens with
+    that project's status. Returns True when something was injected.
+    Best-effort: a missing file or any error is swallowed — project state
+    is a nicety, never a reason to fail session start.
+    """
+    if not cwd:
+        return False
+    try:
+        from lib.project_identity import resolve_project
+
+        project = resolve_project(cwd)
+        if not project:
+            return False
+        project_file = now_dir / f"{project}.md"
+        if not project_file.exists():
+            return False
+        content = project_file.read_text(encoding="utf-8").strip()
+        if not content:
+            return False
+        print(f"\n--- PROJECT STATE ---\n{content}")
+        logger.info("Injected project state for %s", project)
+        return True
+    except Exception:
+        logger.warning("Could not inject project state (cwd=%s)", cwd, exc_info=True)
+        return False
+
+
 def _emit_dream_nudge() -> None:
     """Print an additionalContext nudge prompting the user to run /multiplai:dream."""
     print(
@@ -268,6 +306,21 @@ def _emit_dream_nudge() -> None:
 
 
 def main() -> None:
+    # SessionStart hook input carries the session cwd; we use it to pick the
+    # project's now-snapshot to inject. Read defensively — a missing/garbage
+    # payload just means "no project state".
+    try:
+        raw_stdin = sys.stdin.read()
+    except OSError:
+        raw_stdin = ""
+    try:
+        hook_input = json.loads(raw_stdin or "{}")
+    except (json.JSONDecodeError, ValueError):
+        hook_input = {}
+    if not isinstance(hook_input, dict):
+        hook_input = {}
+    cwd = hook_input.get("cwd", "")
+
     paths = get_paths()
     data_dir = paths.plugin_data()
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -296,10 +349,17 @@ def main() -> None:
         "plugin_mode": paths.is_plugin_mode(),
         "client_type": client_type,
         "memory_files_available": memory_files,
+        # Recorded so SessionEnd can tag the diary entry with the project's
+        # working directory. context_manager refreshes this each prompt as a
+        # fallback for environments where SessionStart input lacks cwd.
+        "cwd": cwd,
     }
 
     state_file = data_dir / "session_state.json"
     state_file.write_text(json.dumps(session_state, indent=2))
+
+    # One-time per-project "now" snapshot injection (additionalContext).
+    _inject_project_state(paths.now_dir(), cwd)
 
     # Drain any deferred extraction markers left by previous session_end
     # hooks. SessionEnd is kill-within-seconds, so the heavy LLM

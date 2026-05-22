@@ -1,17 +1,17 @@
 """Per-project status synthesis for multiplai plugin.
 
-Scans recent diary entries from ``paths.diary_dir()``, groups them by
-project derived from the working-directory path, and writes a short
-status summary per project to ``paths.now_dir() / {project}.md``.
+Scans recent diary entries from ``paths.diary_dir()``, groups them by project
+via :func:`lib.project_identity.resolve_project`, and writes a short status
+summary per project to ``paths.now_dir() / {project}.md``.
 
-Runs as the manual dream trigger (``/multiplai:now``) or can be invoked
-directly. Uses the path resolver for file locations and the model
-client abstraction for LLM summarization; falls back to an extractive
-summary when the LLM is unavailable.
+Invoked three ways: scoped per-project from the live extraction pipeline
+(after a diary write), as a full rebuild from ``/multiplai:now`` and after a
+backfill, or directly with ``--project NAME``. Uses the path resolver for file
+locations and the model client abstraction for LLM summarization; falls back to
+an extractive summary when the LLM is unavailable.
 """
 
 import asyncio
-import json
 import os
 import re
 import sys
@@ -26,6 +26,7 @@ ensure_venv_python()
 from lib.paths import get_paths
 from lib.model_client import create_client
 from lib.log_utils import setup_logging
+from lib.project_identity import load_project_map, resolve_project
 
 logger = setup_logging("synthesize_now")
 
@@ -36,8 +37,11 @@ MAX_SUMMARY_LINES = 5
 # Session block header in per-day diary files (v0.3.0+):
 #     ## Session: <id> — <iso-ts> — <cwd>
 # em-dash separators, written by lib.extraction.write_diary_entries.
+# Separators use ``[ \t]`` (not ``\s``) so an EMPTY cwd doesn't let the
+# engine swallow the trailing newline and capture the next line's text as
+# the cwd. ``cwd`` is ``[^\n]*?`` (may be empty) for the same reason.
 _SESSION_HEADER_RE = re.compile(
-    r"^## Session:\s*(?P<sid>\S+)\s*—\s*(?P<ts>\S+)\s*—\s*(?P<cwd>.+?)\s*$",
+    r"^## Session:[ \t]*(?P<sid>\S+)[ \t]*—[ \t]*(?P<ts>\S+)[ \t]*—[ \t]*(?P<cwd>[^\n]*?)[ \t]*$",
     re.MULTILINE,
 )
 
@@ -88,23 +92,24 @@ def _iter_diary_session_blocks(filepath: Path):
         }
 
 
-def _derive_project_name(working_dir: str) -> str:
-    """Project name is the final component of the working-directory path."""
-    return Path(working_dir).name
-
-
 def _scan_diary(
     diary_dir: Path,
     lookback_hours: int = DEFAULT_LOOKBACK_HOURS,
+    config: dict | None = None,
 ) -> dict[str, list[dict]]:
     """Scan diary entries, filter by lookback window, and group by project.
 
     Per-day layout (v0.3.0+): each ``YYYY-MM-DD.md`` file holds one or more
-    ``## Session:`` blocks. Each session block is treated as one entry.
+    ``## Session:`` blocks. Each session block is treated as one entry. The
+    project name comes from :func:`lib.project_identity.resolve_project` so it
+    matches what the SessionStart hook injects (single source of truth).
     """
     if not diary_dir.exists():
         logger.info("Diary directory does not exist: %s", diary_dir)
         return {}
+
+    if config is None:
+        config = load_project_map()
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
     entries_by_project: dict[str, list[dict]] = {}
@@ -117,7 +122,7 @@ def _scan_diary(
             if entry_time < cutoff:
                 continue
 
-            project = _derive_project_name(entry["working_dir"])
+            project = resolve_project(entry["working_dir"], config)
             if not project:
                 continue
             entries_by_project.setdefault(project, []).append(entry)
@@ -214,13 +219,22 @@ def _write_summary(
     os.replace(str(tmp), str(target))
 
 
-async def synthesize() -> int:
-    """Scan diary, group by project, write per-project status summaries."""
+async def synthesize(project_filter: str | None = None) -> int:
+    """Scan diary, group by project, write per-project status summaries.
+
+    When *project_filter* is given, only that project is (re)summarized — used
+    by the live pipeline to refresh one project's ``now`` file after its diary
+    is written, instead of rewriting every project.
+    """
     paths = get_paths()
     diary_dir = paths.diary_dir()
     now_dir = paths.now_dir()
 
     entries_by_project = _scan_diary(diary_dir)
+    if project_filter:
+        entries_by_project = {
+            k: v for k, v in entries_by_project.items() if k == project_filter
+        }
     if not entries_by_project:
         logger.info("No recent diary entries to synthesize")
         return 0
@@ -248,12 +262,25 @@ async def synthesize() -> int:
     return 0
 
 
+def _parse_project_arg(argv: list[str]) -> str | None:
+    """Return the value of ``--project NAME`` / ``--project=NAME`` if present."""
+    for i, arg in enumerate(argv):
+        if arg == "--project" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--project="):
+            return arg.split("=", 1)[1]
+    return None
+
+
 def main() -> None:
+    # stdin may carry a hook payload (ignored); drain it so a piping caller
+    # doesn't block. The project scope comes from argv, not stdin.
     try:
-        json.loads(sys.stdin.read() or "{}")
-    except (json.JSONDecodeError, OSError):
+        sys.stdin.read()
+    except OSError:
         pass
-    sys.exit(asyncio.run(synthesize()))
+    project_filter = _parse_project_arg(sys.argv[1:])
+    sys.exit(asyncio.run(synthesize(project_filter)))
 
 
 if __name__ == "__main__":
