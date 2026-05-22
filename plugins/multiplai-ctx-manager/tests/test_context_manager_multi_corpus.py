@@ -441,3 +441,98 @@ class TestEmptyEverything:
         # Empty prompt → router skipped, fallback may still pick up nothing
         assert "context" in out
         assert "memory_files" in out
+
+
+# ---------------------------------------------------------------------------
+# Re-recommendation cooldown (turn-based dedup)
+# ---------------------------------------------------------------------------
+
+
+class TestRecommendationCooldown:
+    """A file injected on turn T is suppressed for the next `cooldown`
+    turns (it's already in the conversation), then becomes eligible
+    again. State persists in session_state.json across hook calls."""
+
+    def _one_memory_file(self, env_setup):
+        (env_setup["memory_dir"] / "python.md").write_text("# Python prefs")
+        _write_catalog(
+            env_setup["catalogs_dir"], "memory.json",
+            [{"source": "python.md",
+              "intent_domains": ["debugging python async code"]}],
+        )
+
+    def test_injected_file_suppressed_next_turn(self, env_setup):
+        self._one_memory_file(env_setup)
+        env = {"CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns": "4"}
+        first = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
+        assert first["memory_files"] == 1
+        assert "python.md" in first["context"]
+        second = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
+        assert second["memory_files"] == 0
+        assert "python.md" not in second["context"]
+
+    def test_cooldown_expires_after_window(self, env_setup):
+        self._one_memory_file(env_setup)
+        env = {"CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns": "1"}
+        # turn 1: injected
+        assert _run_hook(env_setup, prompt="debugging python async code",
+                         extra_env=env)["memory_files"] == 1
+        # turn 2: within window (2-1=1 <= 1) → suppressed
+        assert _run_hook(env_setup, prompt="debugging python async code",
+                         extra_env=env)["memory_files"] == 0
+        # turn 3: window passed (3-1=2 > 1) → re-injected
+        assert _run_hook(env_setup, prompt="debugging python async code",
+                         extra_env=env)["memory_files"] == 1
+
+    def test_cooldown_zero_disables(self, env_setup):
+        self._one_memory_file(env_setup)
+        env = {"CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns": "0"}
+        a = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
+        b = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
+        assert a["memory_files"] == 1
+        assert b["memory_files"] == 1  # no cooldown → re-injected every turn
+
+    def test_turn_state_persisted_to_session_state(self, env_setup):
+        self._one_memory_file(env_setup)
+        env = {"CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns": "4"}
+        _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
+        state = json.loads(
+            (env_setup["data_dir"] / "session_state.json").read_text()
+        )
+        assert state["turn_index"] == 1
+        assert "python.md" in state["recently_injected"]["memory"]
+        assert state["recently_injected"]["memory"]["python.md"] == 1
+
+    def test_precompact_clears_cooldown_map(self, env_setup):
+        """PreCompact resets recently_injected so post-compaction every
+        file is eligible again (the injected content was summarized away)."""
+        # Seed a populated cooldown map.
+        state_file = env_setup["data_dir"] / "session_state.json"
+        state_file.write_text(json.dumps({
+            "session_id": "abc123",
+            "turn_index": 5,
+            "recently_injected": {"memory": {"python.md": 5}, "skills": {}, "resources": {}},
+        }))
+
+        env = os.environ.copy()
+        for k in list(env):
+            if k.startswith("CLAUDE_PLUGIN"):
+                del env[k]
+        env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
+        env["CLAUDE_PLUGIN_DATA"] = str(env_setup["data_dir"])
+        stdin = json.dumps({
+            "hook_event_name": "PreCompact",
+            "transcript_path": str(env_setup["tmp_path"] / "transcript.jsonl"),
+            "session_id": "abc123",
+            "cwd": "/tmp",
+        })
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / "pre_compact.py")],
+            input=stdin, capture_output=True, text=True, env=env, timeout=15,
+        )
+        assert result.returncode == 0, result.stderr[:500]
+
+        state = json.loads(state_file.read_text())
+        assert state["recently_injected"] == {}
+        # Unrelated state is preserved.
+        assert state["session_id"] == "abc123"

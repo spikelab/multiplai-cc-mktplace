@@ -17,6 +17,10 @@ DEFAULT_DIARY_CATALOG_DAYS = 7
 DEFAULT_SKILLS_DIR = "~/.claude/skills"
 DEFAULT_CATALOG_CONCURRENCY = 5  # Anthropic API tolerates this comfortably;
                                  # raise via env var if you have higher quotas.
+DEFAULT_RECOMMEND_COOLDOWN_TURNS = 4  # Suppress re-recommending a file for
+                                      # this many turns after it was injected
+                                      # (already in conversation context).
+                                      # 0 disables the cooldown.
 
 
 @dataclass
@@ -33,6 +37,7 @@ class CatalogConfig:
     enable_resources: bool = False
     resources_dir: str = ""
     catalog_concurrency: int = DEFAULT_CATALOG_CONCURRENCY
+    recommend_cooldown_turns: int = DEFAULT_RECOMMEND_COOLDOWN_TURNS
 
     def __post_init__(self):
         if not self.model or not self.model.strip():
@@ -49,6 +54,9 @@ class CatalogConfig:
 
         if self.catalog_concurrency < 1:
             self.catalog_concurrency = DEFAULT_CATALOG_CONCURRENCY
+
+        if self.recommend_cooldown_turns < 0:
+            self.recommend_cooldown_turns = DEFAULT_RECOMMEND_COOLDOWN_TURNS
 
     @property
     def effective_diary_model(self) -> str:
@@ -101,6 +109,13 @@ def load_catalog_config() -> CatalogConfig:
         ),
         DEFAULT_CATALOG_CONCURRENCY,
     )
+    recommend_cooldown_turns = _parse_int(
+        os.environ.get(
+            "CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns",
+            str(DEFAULT_RECOMMEND_COOLDOWN_TURNS),
+        ),
+        DEFAULT_RECOMMEND_COOLDOWN_TURNS,
+    )
 
     return CatalogConfig(
         model=model,
@@ -113,4 +128,5 @@ def load_catalog_config() -> CatalogConfig:
         enable_resources=enable_resources,
         resources_dir=resources_dir,
         catalog_concurrency=catalog_concurrency,
+        recommend_cooldown_turns=recommend_cooldown_turns,
     )

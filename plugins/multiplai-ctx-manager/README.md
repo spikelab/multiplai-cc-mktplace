@@ -17,7 +17,9 @@ doesn't. Native Windows (without WSL) isn't supported.
    of memory files (who you are, how you work, technical preferences).
 2. **Per prompt** — a `UserPromptSubmit` hook routes your prompt against
    indexed catalogs of memory (and optionally skills/resources) and
-   injects only the relevant pieces. No memory dump.
+   injects only the relevant pieces. No memory dump. Files injected on
+   recent turns are skipped — they're already in the conversation (see
+   [Re-recommendation cooldown](#re-recommendation-cooldown)).
 3. **Per session** — diary entries and a learnings backlog are captured
    in the background; nothing blocks your session.
 4. **Consolidation** — `/multiplai:dream-remember` reviews the backlog
@@ -104,6 +106,7 @@ over the anchor:
 | `catalog_ttl_hours` | `168` | Hours a generated catalog stays valid |
 | `diary_catalog_days` | `7` | Days of diary history the diary catalog covers |
 | `memory_router` | `token_overlap` | Context selection strategy: `token_overlap` (offline, fast) or `llm` (one Sonnet call per prompt) |
+| `recommend_cooldown_turns` | `4` | After a file is injected, suppress re-injecting it for this many turns (it's already in the conversation). `0` disables. See [Re-recommendation cooldown](#re-recommendation-cooldown). |
 | `enable_skills` / `skills_dir` | `false` / `~/.claude/skills` | Optionally catalog skills for routing |
 | `enable_resources` / `resources_dir` | `false` / `""` | Optionally catalog a research/reference corpus |
 
@@ -171,7 +174,7 @@ with a log warning and everything else keeps working.
 | `UserPromptSubmit` | `context_manager.py` | Route the prompt against catalogs and inject only the relevant memory. |
 | `Stop` | `session_stop.py` | Lightweight checkpoint (extraction is deferred, not run here). |
 | `SessionEnd` | `session_end.py` | Write a deferred-extraction marker for the next session to process. |
-| `PreCompact` | `pre_compact.py` | Enqueue a deferred-extraction marker so pre-compaction learnings survive. |
+| `PreCompact` | `pre_compact.py` | Enqueue a deferred-extraction marker so pre-compaction learnings survive; clear the re-recommendation cooldown map (injected context is summarized away). |
 
 Heavy LLM extraction never runs inside a kill-within-seconds hook: it is
 deferred via a marker queue and processed by `extract_learnings.py` from
@@ -243,7 +246,7 @@ start/end. It's the *current* file (no date); the previous day's stream
 rotates to `activity-YYYY-MM-DD.log` on the first write of a new day.
 
 ```
-14:51:03Z [a1b2c3d4] [context]   injected 4 memory · 0 skills · 0 resources · scores 31.5→9.8 (4/12 kept) → finances.md, life.md, preferences.md, taxes-italy.md
+14:51:03Z [a1b2c3d4] [context]   injected 4 memory · 0 skills · 0 resources · scores 31.5→9.8 (4/12 kept) → memory: finances.md, life.md, preferences.md, taxes-italy.md
 14:51:03Z [a1b2c3d4] [nudge]     dream gate open (>24h, pending learnings) — surfaced to user
 14:51:18Z [a1b2c3d4] [diary]     wrote diary entry (1 unit(s)) to <session>.md
 14:51:18Z [a1b2c3d4] [learnings] captured 2 learning(s) + 0 correction(s) to backlog
@@ -268,10 +271,15 @@ This is the most important line to understand — it tells you *whether
 routing is actually working*, not just that it ran. Anatomy:
 
 ```
-injected 4 memory · 0 skills · 0 resources · scores 31.5→9.8 (4/12 kept) → finances.md, life.md, …
-         └── how many files from each corpus made it in           └── the files, alphabetical
+injected 4 memory · 0 skills · 0 resources · scores 31.5→9.8 (4/12 kept) → memory: finances.md, life.md, …
+         └── how many files from each corpus made it in           └── files grouped by corpus
                                           └── routing-quality hint (token_overlap only)
 ```
+
+The file list after `→` is grouped and labelled by corpus —
+`memory: … · skills: … · resources: …` — so you can always tell which
+corpus each injected file came from (only corpora that contributed are
+shown; files are alphabetical within each).
 
 **The score hint** (`scores TOP→FLOOR (KEPT/CANDIDATES kept)`) is the
 signal:
@@ -303,6 +311,10 @@ behaviour, not a failure. You'll see one of:
   `router abstained — best memory score 1.4 below relevance floor
   (3 cand), nothing injected` — same thing when *no* corpus produced
   anything, so there was nothing to inject at all.
+- `all 4 matched file(s) injected within the last 4 turns — on
+  cooldown, nothing injected` — routing *did* find relevant files, but
+  they were all injected recently and are still in the conversation.
+  See [Re-recommendation cooldown](#re-recommendation-cooldown).
 
 **Fallback** — `[context] router matched nothing — fell back to
 recency-ranked memory → …` means routing failed (catalog/disk drift
@@ -317,6 +329,44 @@ Notes: the score hint only appears under the `token_overlap` router
 below `CANDIDATES`, and `CAP-HIT` rare. Persistent flat ranges,
 `CAP-HIT` everywhere, or constant fallback are the symptoms to act on
 (start with `/multiplai:health`, which summarises these same numbers).
+
+### Re-recommendation cooldown
+
+Routing runs fresh on every prompt, so without a guard a multi-turn
+exchange on one topic would re-inject the *same* files turn after turn —
+content that's already sitting in the conversation. The cooldown
+suppresses that waste.
+
+**How it works.** Each prompt advances a turn counter, and every file
+that gets injected is stamped with the current turn in a small
+`recently_injected` map (kept in `data/session_state.json`). On the next
+prompt, any pick that was injected within the last
+`recommend_cooldown_turns` turns is dropped before it's loaded — it's
+already in context. A file becomes eligible again once the window passes;
+if it's re-injected, its stamp refreshes. Aged entries are pruned so the
+map stays small.
+
+```
+turn 1  "audit the routing quality"   → injects 7 memory · 1 skill · 10 resources
+turn 2  "and the false-negative rate" → on cooldown, nothing injected
+turn 3  "what about precision"         → on cooldown, nothing injected
+turn 4  (window passed)                → re-injects the relevant set
+```
+
+(That trace is with `recommend_cooldown_turns = 2`; the default is `4`.)
+
+**Compaction resets it.** When Claude Code compacts the conversation,
+the injected content is summarized away — so the `PreCompact` hook clears
+`recently_injected`, making every file eligible again. This is what keeps
+a longer cooldown safe: it can never starve the model of context that
+compaction has already discarded.
+
+**Tuning.** `recommend_cooldown_turns` (default `4`) is the window. Raise
+it if you find the same files re-appearing too often within a focused
+session; lower it (or set `0` to disable) if you want routing to re-inject
+more eagerly. Suppression is distinct from abstention — an all-suppressed
+turn logs `on cooldown, nothing injected` and does **not** trigger the
+recency fallback.
 
 Watch it live from a **second terminal** (it stays out of Claude's
 context entirely):

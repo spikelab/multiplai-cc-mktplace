@@ -34,6 +34,7 @@ from lib.venv_guard import ensure_venv_python
 ensure_venv_python()
 
 from lib.paths import get_paths
+from lib.config import read_session_state, write_session_state
 from lib.log_utils import setup_logging, log_event
 from lib.model_client import create_client  # D3: LLM calls via ModelClient abstraction
 from lib.memory_router import create_router
@@ -381,6 +382,67 @@ def _render_corpus_section(label: str, files: dict[str, str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Re-recommendation cooldown (turn-based dedup)
+# ---------------------------------------------------------------------------
+
+
+def _filter_cooldown(
+    picks: list[str], last_injected: dict, turn_index: int, cooldown: int
+) -> tuple[list[str], list[str]]:
+    """Split *picks* into (kept, suppressed) by the cooldown window.
+
+    A pick is suppressed when it was injected within the last *cooldown*
+    turns (it's already in the conversation). ``turn_index - last <=
+    cooldown`` is the suppression test.
+    """
+    kept: list[str] = []
+    suppressed: list[str] = []
+    cmap = last_injected if isinstance(last_injected, dict) else {}
+    for pick in picks:
+        last = cmap.get(pick)
+        if isinstance(last, int) and (turn_index - last) <= cooldown:
+            suppressed.append(pick)
+        else:
+            kept.append(pick)
+    return kept, suppressed
+
+
+def _persist_turn_state(
+    session_state: dict,
+    turn_index: int,
+    recent: dict,
+    injected_by_corpus: dict[str, dict],
+    cooldown: int,
+) -> None:
+    """Stamp this turn's injections into *recent* and write session state.
+
+    Records ``turn_index`` for every injected key, prunes entries that
+    have aged past the cooldown window (bounds file growth), bumps the
+    turn counter, and atomically rewrites ``session_state.json``.
+    Fail-open: a write error is logged at debug, never raised — the hook
+    must not break a prompt over bookkeeping.
+    """
+    for corpus_type, content in injected_by_corpus.items():
+        cmap = recent.get(corpus_type)
+        if not isinstance(cmap, dict):
+            cmap = recent[corpus_type] = {}
+        for key in content:
+            cmap[key] = turn_index
+        stale = [
+            k for k, t in cmap.items()
+            if not isinstance(t, int) or (turn_index - t) > cooldown
+        ]
+        for k in stale:
+            del cmap[k]
+    session_state["turn_index"] = turn_index
+    session_state["recently_injected"] = recent
+    try:
+        write_session_state(get_paths().data_dir(), session_state)
+    except Exception:
+        logger.debug("Could not persist turn state", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -483,6 +545,47 @@ def main() -> None:
         json.dumps(sorted(picks_by_corpus.get("resources") or [])),
     )
 
+    # --- Re-recommendation cooldown (turn-based dedup) -------------------
+    # Drop picks injected within the last `cooldown` turns: they're
+    # already in the conversation, so re-injecting them just wastes
+    # context. State (a turn counter + per-file last-injected turn) lives
+    # in session_state.json and is reset on PreCompact, so once context
+    # is summarized away every file becomes eligible again. Fail-open: a
+    # state read/parse error degrades to "no cooldown this turn".
+    cooldown = max(0, cfg.recommend_cooldown_turns)
+    cooldown_active = bool(prompt) and cooldown > 0
+    session_state: dict = {}
+    turn_index = 0
+    recent: dict = {}
+    cooldown_suppressed: dict[str, list[str]] = {}
+    # Capture what the router actually picked, before cooldown trims it,
+    # so the fallback can tell genuine abstention from cooldown removal.
+    router_picked = {ct: bool(picks_by_corpus.get(ct)) for ct in ("memory", "skills", "resources")}
+    if cooldown_active:
+        try:
+            _ss = read_session_state(paths.data_dir())
+        except Exception:
+            _ss = None
+        session_state = _ss if isinstance(_ss, dict) else {}
+        turn_index = int(session_state.get("turn_index", 0) or 0) + 1
+        _recent = session_state.get("recently_injected")
+        recent = _recent if isinstance(_recent, dict) else {}
+        for corpus_type in ("memory", "skills", "resources"):
+            kept, suppressed = _filter_cooldown(
+                picks_by_corpus.get(corpus_type) or [],
+                recent.get(corpus_type) or {},
+                turn_index, cooldown,
+            )
+            picks_by_corpus[corpus_type] = kept
+            if suppressed:
+                cooldown_suppressed[corpus_type] = suppressed
+        if any(cooldown_suppressed.values()):
+            logger.info(
+                "COOLDOWN turn=%d window=%d suppressed=%s",
+                turn_index, cooldown,
+                json.dumps({k: sorted(v) for k, v in cooldown_suppressed.items()}),
+            )
+
     # Load content per corpus
     memory_content = _load_memory_content(memory_dir, picks_by_corpus.get("memory") or [])
     skills_content = _build_skills_recommendations(
@@ -497,9 +600,14 @@ def main() -> None:
     # The recency net only fires when the router never ran (exception /
     # misconfig) or it picked files that didn't resolve on disk
     # (catalog↔disk drift) — genuine failures with no ranking signal.
-    mem_picks = picks_by_corpus.get("memory") or []
-    router_abstained = router_ran and not mem_picks
-    if not memory_content and not router_abstained:
+    # Use the *pre-cooldown* pick count for abstention: the router
+    # genuinely abstained only if it picked no memory at all. If it
+    # picked files that cooldown then trimmed, that's a deliberate
+    # "already in context", not abstention — and must not trigger the
+    # recency dump either.
+    router_abstained = router_ran and not router_picked["memory"]
+    mem_on_cooldown = bool(cooldown_suppressed.get("memory")) and not memory_content
+    if not memory_content and not router_abstained and not mem_on_cooldown:
         memory_content = _read_top_memory_files(memory_dir)
         if memory_content:
             used_fallback = True
@@ -521,7 +629,13 @@ def main() -> None:
         # "nothing relevant" is the floor/continuation guard working,
         # not a failure — say which, with the top score as evidence.
         _skip_msg = "no context matched this prompt"
-        if router_abstained:
+        if any(cooldown_suppressed.values()) and not router_abstained:
+            _n = sum(len(v) for v in cooldown_suppressed.values())
+            _skip_msg = (
+                f"all {_n} matched file(s) injected within the last "
+                f"{cooldown} turns — on cooldown, nothing injected"
+            )
+        elif router_abstained:
             _dm = (router_diag or {}).get("memory") or {}
             _ds = _dm.get("scored") or []
             if _dm.get("continuation"):
@@ -537,6 +651,8 @@ def main() -> None:
             "context", "skip", _skip_msg,
             session_id=session_id,
         )
+        if cooldown_active:
+            _persist_turn_state(session_state, turn_index, recent, {}, cooldown)
         result = {"context": "", "memory_files": 0}
         print(json.dumps(result))
         return
@@ -566,7 +682,19 @@ def main() -> None:
         " + project state" if project_state else "",
     )
 
-    injected = sorted(memory_content) + sorted(skills_content) + sorted(resources_content)
+    # Per-corpus file groups so the activity line says which files are
+    # memory vs skills vs resources — a flat list loses that attribution.
+    files_by_corpus = {
+        "memory": sorted(memory_content),
+        "skills": sorted(skills_content),
+        "resources": sorted(resources_content),
+    }
+    injected = files_by_corpus["memory"] + files_by_corpus["skills"] + files_by_corpus["resources"]
+    file_groups = [
+        f"{corpus}: {', '.join(names)}"
+        for corpus, names in files_by_corpus.items()
+        if names
+    ]
     # Compact routing-quality hint for the human activity log. Scores
     # are read from the *picked* set, not the raw candidate pool: since
     # _apply_policy keeps a contiguous top-of-ranking prefix, the floor
@@ -600,7 +728,7 @@ def main() -> None:
         f"{corpus_counts['resources']} resources"
         + (" · project state" if project_state else "")
         + score_hint
-        + (f" → {', '.join(injected)}" if injected else "")
+        + (f" → {' · '.join(file_groups)}" if file_groups else "")
     )
     log_event(
         "context", "inject", summary,
@@ -610,8 +738,17 @@ def main() -> None:
         resources=corpus_counts["resources"],
         project_state=bool(project_state),
         files=injected,
+        files_by_corpus=files_by_corpus,
         bytes=len(session_context),
     )
+
+    if cooldown_active:
+        _persist_turn_state(
+            session_state, turn_index, recent,
+            {"memory": memory_content, "skills": skills_content,
+             "resources": resources_content},
+            cooldown,
+        )
 
     result = {
         "context": session_context,

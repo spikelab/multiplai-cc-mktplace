@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.venv_guard import ensure_venv_python
 ensure_venv_python()
 
-from lib.config import read_session_state
+from lib.config import read_session_state, write_session_state
 from lib.paths import get_paths
 from lib.log_utils import setup_logging, log_event
 
@@ -41,6 +41,16 @@ def main() -> None:
     paths = get_paths()
     data_dir = paths.plugin_data()
     session_state = read_session_state(data_dir) or {}
+
+    # Compaction summarizes the conversation, so any context the
+    # UserPromptSubmit hook injected this session may no longer be
+    # present verbatim. Clear the re-recommendation cooldown map so every
+    # file becomes eligible again — otherwise a file injected just before
+    # compaction would stay suppressed for X turns despite being gone.
+    if session_state.get("recently_injected"):
+        session_state["recently_injected"] = {}
+        if write_session_state(data_dir, session_state):
+            logger.info("PreCompact: cleared re-recommendation cooldown map")
 
     transcript_path = hook_input.get("transcript_path", "")
     if not transcript_path:
