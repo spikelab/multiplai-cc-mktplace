@@ -349,6 +349,10 @@ def main() -> None:
         "plugin_mode": paths.is_plugin_mode(),
         "client_type": client_type,
         "memory_files_available": memory_files,
+        # Recorded so SessionEnd can tag the diary entry with the project's
+        # working directory. context_manager refreshes this each prompt as a
+        # fallback for environments where SessionStart input lacks cwd.
+        "cwd": cwd,
     }
 
     state_file = data_dir / "session_state.json"

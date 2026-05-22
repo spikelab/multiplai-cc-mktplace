@@ -45,6 +45,12 @@ class TestEdgeCases:
     def test_empty_cwd_returns_none(self):
         assert resolve_project("", config={}) is None
 
+    @pytest.mark.parametrize("val", ["unknown", "UNKNOWN", "none", "null", "  ", "unknown "])
+    def test_null_placeholder_cwds_return_none(self, val):
+        # Placeholder cwds written when the real dir was unavailable name no
+        # project — must never become a bucket.
+        assert resolve_project(val, config={"project_roots": ["/work"]}) is None
+
     def test_basename_detection(self):
         cfg = {"detection": "basename"}
         assert resolve_project("/a/b/myproj", config=cfg) == "myproj"
