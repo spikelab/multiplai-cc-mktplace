@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Re-recommendation cooldown.** After a file is injected, it is
+  suppressed from re-injection for `recommend_cooldown_turns` turns
+  (default `4`; `0` disables) — it's already in the conversation, so
+  re-injecting wastes context. A turn counter and a `recently_injected`
+  map persist in `data/session_state.json`; the `PreCompact` hook clears
+  the map so post-compaction every file is eligible again. An
+  all-suppressed turn logs `on cooldown, nothing injected` and is
+  distinct from router abstention (no recency fallback). New
+  `recommend_cooldown_turns` userConfig option.
+
+### Changed
+- **Activity-log `[context] inject` lines now group injected files by
+  corpus** — `→ memory: … · skills: … · resources: …` instead of one
+  flat comma-separated list, so you can tell which files came from which
+  corpus. The JSONL mirror gains a `files_by_corpus` field.
+
+### Fixed
+- **Skills were routed but never injected.** The loader called
+  `read_text()` on the skill *directory* instead of `<name>/SKILL.md`
+  (the real Claude Code layout), so the skills count was always 0.
+  Skills are now surfaced as lightweight recommendations (catalog
+  summary + `/<name>` invocation hint) rather than full SKILL.md bodies.
+- **`anti_domains` hard-excluded relevant entries across all corpora.**
+  Anti phrases that reuse the entry's own positive vocabulary (e.g.
+  "…unrelated to memory routing") nuked the entry on the very tokens
+  that made it relevant. Anti tokens that are also the entry's
+  `intent_domains` vocabulary are now dropped before the exclusion check.
+
 ## 0.3.0 — 2026-05-21
 
 Diary layout aligned with learnings — one file per UTC day.

@@ -6,6 +6,7 @@ Exports shared constants and reusable file-handling helpers used across scripts.
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,25 @@ def read_session_state(data_dir: Path) -> dict[str, Any] | None:
         return json.loads(state_file.read_text())
     except Exception:
         return None
+
+
+def write_session_state(data_dir: Path, state: dict[str, Any]) -> bool:
+    """Atomically write ``session_state.json`` to *data_dir*.
+
+    Writes to a temp file then ``os.replace`` so a crash mid-write never
+    leaves a half-written state file. Returns ``True`` on success,
+    ``False`` on any OS error (callers treat this as best-effort).
+    """
+    state_file = data_dir / "session_state.json"
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        tmp = state_file.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        os.replace(str(tmp), str(state_file))
+        return True
+    except OSError:
+        logger.warning("Could not write %s", state_file.name)
+        return False
 
 
 def load_config(config_path: Path) -> dict[str, Any]:

@@ -109,6 +109,12 @@
       "title": "Memory Router",
       "description": "Routing strategy for context selection: 'token_overlap' (offline, fast) or 'llm' (Sonnet semantic match, one call per prompt). 'embeddings' is reserved for a future port.",
       "default": "token_overlap"
+    },
+    "recommend_cooldown_turns": {
+      "type": "number",
+      "title": "Re-recommendation Cooldown (Turns)",
+      "description": "After a file is injected, suppress re-recommending it for this many turns (it's already in the conversation). Reset on context compaction. 0 disables the cooldown.",
+      "default": 4
     }
   }
 }

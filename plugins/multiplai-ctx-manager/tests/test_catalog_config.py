@@ -391,6 +391,27 @@ class TestCatalogConfigDefaults:
         config = CatalogConfig()
         assert config.resources_dir == ""
 
+    def test_default_recommend_cooldown_turns(self):
+        """Scenario: Re-recommendation cooldown defaults to 4 turns."""
+        from generators.config import CatalogConfig
+
+        config = CatalogConfig()
+        assert config.recommend_cooldown_turns == 4
+
+    def test_negative_cooldown_resets_to_default(self):
+        """Scenario: A negative cooldown is clamped back to the default."""
+        from generators.config import CatalogConfig
+
+        config = CatalogConfig(recommend_cooldown_turns=-3)
+        assert config.recommend_cooldown_turns == 4
+
+    def test_zero_cooldown_preserved(self):
+        """Scenario: 0 is a valid value (disables the cooldown)."""
+        from generators.config import CatalogConfig
+
+        config = CatalogConfig(recommend_cooldown_turns=0)
+        assert config.recommend_cooldown_turns == 0
+
 
 # ---------------------------------------------------------------------------
 # CatalogConfig Validation — Reasoning Effort
