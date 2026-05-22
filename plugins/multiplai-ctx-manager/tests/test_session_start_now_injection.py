@@ -6,6 +6,9 @@ of the old per-prompt path.
 """
 
 import io
+import json
+import os
+import subprocess
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -80,6 +83,32 @@ class TestInjectProjectState:
         result, text = _capture_inject(get_paths().now_dir(), str(ws))
         assert result is True
         assert "cross-project work" in text
+
+
+class TestCwdCapture:
+    """SessionStart must record cwd in session_state so SessionEnd can tag
+    the diary entry with the project (the live capture that was missing)."""
+
+    def test_session_start_records_cwd(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        env = os.environ.copy()
+        for k in list(env):
+            if k.startswith("CLAUDE_PLUGIN") or k == "WORKSPACE":
+                del env[k]
+        env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
+        env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
+
+        subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / "session_start.py")],
+            input=json.dumps({"cwd": "/some/proj", "session_id": "zzz"}),
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=30,
+        )
+        state = json.loads((data_dir / "session_state.json").read_text())
+        assert state.get("cwd") == "/some/proj"
 
 
 class TestPerPromptInjectionRemoved:

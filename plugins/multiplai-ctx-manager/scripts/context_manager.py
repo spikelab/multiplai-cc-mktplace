@@ -436,6 +436,21 @@ def main() -> None:
         input_data.get("session_id") if isinstance(input_data, dict) else None
     )
 
+    # Capture the working directory for the diary/now pipeline. UserPromptSubmit
+    # reliably carries cwd, so this is the dependable place to record it;
+    # SessionEnd reads it back from session_state to tag the diary entry (and
+    # thus the project). Best-effort and only written when it changes, so the
+    # common steady-state path adds no extra write.
+    cwd = input_data.get("cwd", "") if isinstance(input_data, dict) else ""
+    if cwd:
+        try:
+            _ss = read_session_state(paths.data_dir()) or {}
+            if _ss.get("cwd") != cwd:
+                _ss["cwd"] = cwd
+                write_session_state(paths.data_dir(), _ss)
+        except Exception:
+            logger.debug("Could not persist cwd to session_state", exc_info=True)
+
     # Last-assistant-response disambiguation. Failure modes already
     # encoded in read_last_assistant_response (returns None on any error).
     last_response = (

@@ -38,6 +38,12 @@ logger = logging.getLogger(__name__)
 WORKSPACE_PROJECT = "workspace"
 _GIT_TIMEOUT_SECONDS = 3
 
+# Placeholder cwd values written by the capture pipeline when the real
+# working directory was unavailable. They name no project, so resolution
+# returns None and the caller skips the entry rather than inventing a
+# bogus "unknown" bucket.
+_NULL_CWDS = {"", "unknown", "none", "null"}
+
 
 def _norm(p: str) -> Path:
     """Absolute, ``~``-expanded, ``..``-collapsed path — no filesystem access.
@@ -106,7 +112,7 @@ def resolve_project(cwd: str, config: Optional[dict[str, Any]] = None) -> Option
     Pass *config* (the parsed project-map) to avoid re-reading it per call;
     omit it to load from disk via :func:`load_project_map`.
     """
-    if not cwd:
+    if not cwd or cwd.strip().lower() in _NULL_CWDS:
         return None
     if config is None:
         config = load_project_map()

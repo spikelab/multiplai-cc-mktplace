@@ -47,6 +47,40 @@ def _no_llm(monkeypatch):
     monkeypatch.setattr(synthesize_now, "create_client", _raise)
 
 
+class TestEmptyCwdParsing:
+    def test_empty_and_unknown_cwd_are_skipped_no_junk(self, workspace):
+        # Empty cwd must NOT swallow the following [timestamp] line as the
+        # project name (the \\s-eats-newline regex bug), and 'unknown' is a
+        # null placeholder — both are dropped, leaving only the real project.
+        _write_diary(
+            workspace,
+            [
+                ("aaa", "", "Empty cwd session."),
+                ("bbb", "unknown", "Unknown cwd session."),
+                ("ccc", "/work/PROJECTS/foo", "Real project session."),
+            ],
+        )
+        cfg = {"project_roots": ["/work/PROJECTS"]}
+        import synthesize_now
+        from lib.paths import get_paths
+
+        grouped = synthesize_now._scan_diary(get_paths().diary_dir(), config=cfg)
+        assert set(grouped) == {"foo"}
+
+    def test_empty_cwd_does_not_capture_next_line(self, workspace):
+        diary_dir = workspace / ".multiplai" / "diary"
+        diary_dir.mkdir(parents=True, exist_ok=True)
+        ts = _now_iso()
+        (diary_dir / "today.md").write_text(
+            f"# Diary — test\n\n## Session: aaa — {ts} — \n\n[{ts}]\n\nbody\n"
+        )
+        import synthesize_now
+
+        blocks = list(synthesize_now._iter_diary_session_blocks(diary_dir / "today.md"))
+        assert len(blocks) == 1
+        assert blocks[0]["working_dir"] == ""
+
+
 class TestScanDiaryGrouping:
     def test_groups_by_resolved_project(self, workspace):
         _write_diary(

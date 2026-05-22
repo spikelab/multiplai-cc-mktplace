@@ -37,8 +37,11 @@ MAX_SUMMARY_LINES = 5
 # Session block header in per-day diary files (v0.3.0+):
 #     ## Session: <id> — <iso-ts> — <cwd>
 # em-dash separators, written by lib.extraction.write_diary_entries.
+# Separators use ``[ \t]`` (not ``\s``) so an EMPTY cwd doesn't let the
+# engine swallow the trailing newline and capture the next line's text as
+# the cwd. ``cwd`` is ``[^\n]*?`` (may be empty) for the same reason.
 _SESSION_HEADER_RE = re.compile(
-    r"^## Session:\s*(?P<sid>\S+)\s*—\s*(?P<ts>\S+)\s*—\s*(?P<cwd>.+?)\s*$",
+    r"^## Session:[ \t]*(?P<sid>\S+)[ \t]*—[ \t]*(?P<ts>\S+)[ \t]*—[ \t]*(?P<cwd>[^\n]*?)[ \t]*$",
     re.MULTILINE,
 )
 
