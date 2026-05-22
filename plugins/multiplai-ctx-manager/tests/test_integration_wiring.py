@@ -1161,7 +1161,7 @@ class TestPluginValidationReadiness:
         THEN it has the expected set of skill files."""
         expected = {
             "setup", "dream", "dream-remember", "health",
-            "refresh-catalogs", "memory-health-audit", "backfill",
+            "refresh-catalogs", "memory-health-audit", "backfill", "now",
         }
         skill_files = list((PLUGIN_ROOT / "skills").glob("*/SKILL.md"))
         actual = {f.parent.name for f in skill_files}
