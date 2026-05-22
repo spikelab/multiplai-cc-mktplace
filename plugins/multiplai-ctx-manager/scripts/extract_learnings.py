@@ -43,6 +43,34 @@ def _drop_marker(marker_path: str) -> None:
             logger.warning("Could not remove processed marker %s: %s", marker_path, e)
 
 
+async def _refresh_now(cwd: str, session_id: str) -> None:
+    """Re-summarize this session's project ``now`` file after a diary write.
+
+    Keeps ``now/<project>.md`` current on the live pipeline (it used to refresh
+    only during a backfill). Scoped to the one project this session belongs to,
+    so it's a single summary call. Best-effort: any failure is logged and
+    swallowed — a stale ``now`` file must never break extraction.
+    """
+    from lib.project_identity import resolve_project
+
+    project = resolve_project(cwd)
+    if not project:
+        return
+    try:
+        from synthesize_now import synthesize
+
+        await synthesize(project_filter=project)
+        logger.info("Refreshed now/%s.md", project)
+        log_event(
+            "now", "refresh",
+            f"refreshed now/{project}.md after diary write",
+            session_id=session_id,
+            project=project,
+        )
+    except Exception:
+        logger.exception("now refresh failed for project %s (non-fatal)", project)
+
+
 async def extract() -> bool:
     """Process one deferred session.
 
@@ -126,6 +154,7 @@ async def extract() -> bool:
                 units=len(units),
                 path=str(diary_path),
             )
+            await _refresh_now(cwd, session_id)
 
     wrote = append_learnings(units, learnings_file, session_id, correction_matches, timestamp)
     if wrote:

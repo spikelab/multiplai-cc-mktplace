@@ -239,35 +239,6 @@ def _warn_once(warn_key: str, message: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Per-project "now" state loading
-# ---------------------------------------------------------------------------
-
-def _load_project_state(now_dir: Path, cwd: str) -> str | None:
-    """Return the ``now_dir / {project}.md`` file contents for *cwd*, or None.
-
-    The project name is the final path component of *cwd* — matching how
-    ``synthesize_now.py`` groups diary entries. Returns ``None`` when
-    *cwd* is empty, the directory does not exist, the project file is
-    missing, or the file cannot be read. Per-project scoping keeps
-    signal-to-noise high: working on DolceEngine should not surface the
-    multiplai-plugin status file.
-    """
-    if not cwd or not now_dir.exists():
-        return None
-    project = Path(cwd).name
-    if not project:
-        return None
-    project_file = now_dir / f"{project}.md"
-    if not project_file.exists():
-        return None
-    try:
-        return project_file.read_text(encoding="utf-8")
-    except OSError:
-        logger.warning("Failed to read project state file: %s", project_file)
-        return None
-
-
-# ---------------------------------------------------------------------------
 # Multi-corpus catalog loading
 # ---------------------------------------------------------------------------
 
@@ -450,7 +421,6 @@ def main() -> None:
     """Context manager main: read stdin, route context, write JSON to stdout."""
     paths = get_paths()
     memory_dir = paths.memory_dir()
-    now_dir = paths.now_dir()
 
     # Read hook input from stdin (Claude Code UserPromptSubmit shape)
     try:
@@ -458,7 +428,6 @@ def main() -> None:
     except (json.JSONDecodeError, ValueError):
         input_data = {}
 
-    cwd = input_data.get("cwd", "") if isinstance(input_data, dict) else ""
     prompt = input_data.get("prompt", "") if isinstance(input_data, dict) else ""
     transcript_path = (
         input_data.get("transcript_path") if isinstance(input_data, dict) else None
@@ -466,6 +435,21 @@ def main() -> None:
     session_id = (
         input_data.get("session_id") if isinstance(input_data, dict) else None
     )
+
+    # Capture the working directory for the diary/now pipeline. UserPromptSubmit
+    # reliably carries cwd, so this is the dependable place to record it;
+    # SessionEnd reads it back from session_state to tag the diary entry (and
+    # thus the project). Best-effort and only written when it changes, so the
+    # common steady-state path adds no extra write.
+    cwd = input_data.get("cwd", "") if isinstance(input_data, dict) else ""
+    if cwd:
+        try:
+            _ss = read_session_state(paths.data_dir()) or {}
+            if _ss.get("cwd") != cwd:
+                _ss["cwd"] = cwd
+                write_session_state(paths.data_dir(), _ss)
+        except Exception:
+            logger.debug("Could not persist cwd to session_state", exc_info=True)
 
     # Last-assistant-response disambiguation. Failure modes already
     # encoded in read_last_assistant_response (returns None on any error).
@@ -620,10 +604,7 @@ def main() -> None:
                 files=sorted(memory_content.keys()),
             )
 
-    # Per-project "now" state (cwd-scoped)
-    project_state = _load_project_state(now_dir, cwd)
-
-    if not memory_content and not skills_content and not resources_content and not project_state:
+    if not memory_content and not skills_content and not resources_content:
         logger.info("No context to inject")
         # Make abstention visible in the human log: a deliberate
         # "nothing relevant" is the floor/continuation guard working,
@@ -658,8 +639,6 @@ def main() -> None:
         return
 
     parts: list[str] = []
-    if project_state:
-        parts.append(f"--- PROJECT STATE ---\n{project_state}")
     if memory_content:
         parts.append(_render_corpus_section("MEMORY", memory_content))
     if skills_content:
@@ -675,11 +654,10 @@ def main() -> None:
         "resources": len(resources_content),
     }
     logger.info(
-        "Context assembled: memory=%d skills=%d resources=%d%s",
+        "Context assembled: memory=%d skills=%d resources=%d",
         corpus_counts["memory"],
         corpus_counts["skills"],
         corpus_counts["resources"],
-        " + project state" if project_state else "",
     )
 
     # Per-corpus file groups so the activity line says which files are
@@ -726,7 +704,6 @@ def main() -> None:
         f"injected {corpus_counts['memory']} memory · "
         f"{corpus_counts['skills']} skills · "
         f"{corpus_counts['resources']} resources"
-        + (" · project state" if project_state else "")
         + score_hint
         + (f" → {' · '.join(file_groups)}" if file_groups else "")
     )
@@ -736,7 +713,6 @@ def main() -> None:
         memory=corpus_counts["memory"],
         skills=corpus_counts["skills"],
         resources=corpus_counts["resources"],
-        project_state=bool(project_state),
         files=injected,
         files_by_corpus=files_by_corpus,
         bytes=len(session_context),
