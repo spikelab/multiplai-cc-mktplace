@@ -143,6 +143,42 @@ After they're written, you edit them with the user's answers (step 5 below).
    restart, and that the next `/multiplai:refresh-catalogs` run will need
    to populate skills/resources catalogs if they were just enabled.
 
+6b. **Project identity — how sessions map to projects.**
+
+   The SessionStart hook injects a per-project "now" status snapshot. To do
+   that it must map each session's working directory onto a stable project
+   name. The default needs no configuration; the rest is opt-in for
+   workspace/monorepo layouts.
+
+   Ask {name}:
+   - "By default I treat the **git repository** you're working in as the
+     project — that works out of the box. Do your projects instead live
+     under one parent directory?" If yes: "What's that parent path? I'll
+     treat each immediate subfolder as its own project."
+     → `project_roots` (a list; e.g. a workspace-rooted `<workspace>/PROJECTS`).
+   - "Is your workspace root itself an umbrella that holds many projects
+     rather than being a project of its own? If so I'll file workspace-level
+     sessions under `workspace` instead of guessing a name."
+     → `umbrella_roots` (a list).
+
+   Persist the answers to `.multiplai/project-map.yaml` at the workspace root
+   (it sits beside `memory/`, `diary/`, and `now/`). Include only the keys the
+   user actually set:
+   ```yaml
+   detection: git            # git | basename | roots   (default: git)
+   project_roots:
+     - <workspace>/PROJECTS
+   umbrella_roots:
+     - <workspace>
+   ```
+   Resolution order is: `project_roots` (a cwd under one resolves to the first
+   subfolder beneath it) → `umbrella_roots` (→ `workspace`) → the `detection`
+   default (`git` repo name, with worktrees collapsed onto the main repo) →
+   the cwd's basename. If {name} is happy with the git default and has no
+   parent dir or umbrella, skip the file entirely — defaults apply. Mention
+   the change takes effect next session, and that `/multiplai:now` rebuilds
+   the snapshots immediately if they want.
+
 7. **Offer git version control for the memory directory.**
    Check whether `memory_dir` is already inside a git repository:
    ```
