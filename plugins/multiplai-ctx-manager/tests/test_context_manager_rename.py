@@ -159,11 +159,12 @@ class TestHooksJsonUpdated:
 
     def test_hook_timeout_preserved(self):
         """WHEN the context_manager hook entry is inspected
-        THEN its timeout is 5 (seconds, official schema)."""
+        THEN its timeout is 15 (seconds, official schema) — headroom for
+        the opt-in inline llm router."""
         for h in self.hooks:
             if h["event"] == "UserPromptSubmit" and h["script"] == "scripts/context_manager.py":
-                assert h["timeout"] == 5, \
-                    f"Expected 5s timeout, got {h['timeout']}"
+                assert h["timeout"] == 15, \
+                    f"Expected 15s timeout, got {h['timeout']}"
                 return
         pytest.fail("context_manager hook not found in hooks.json")
 

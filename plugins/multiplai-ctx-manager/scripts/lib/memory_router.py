@@ -52,19 +52,33 @@ logger = logging.getLogger(__name__)
 # Env var name — matches the plugin's CLAUDE_PLUGIN_OPTION_* convention.
 ROUTER_ENV_VAR = "CLAUDE_PLUGIN_OPTION_memory_router"
 
+# Model used by the llm router. Haiku is the right default for a
+# per-prompt blocking hook: routing is a cheap classification, so the
+# smallest/fastest model keeps latency tolerable. Overridable via
+# CLAUDE_PLUGIN_OPTION_router_model.
+ROUTER_MODEL_ENV_VAR = "CLAUDE_PLUGIN_OPTION_router_model"
+DEFAULT_ROUTER_MODEL = "claude-haiku-4-5"
+
 STRATEGY_TOKEN_OVERLAP = "token_overlap"
 STRATEGY_LLM = "llm"
 STRATEGY_EMBEDDINGS = "embeddings"
 
-# token_overlap is the default: it is instant and runs synchronously
-# in the UserPromptSubmit hook every prompt. llm routing is
-# semantically better (it can abstain — token_overlap's NONE accuracy
-# is ~0% by construction) BUT measured at ~17s/prompt via the Agent
-# SDK (CLI cold-start per call), which is unusable as a blocking
-# pre-prompt hook. llm therefore remains opt-in (set the
-# CLAUDE_PLUGIN_OPTION_memory_router env var) pending an async /
-# API-key design. create_router() still degrades an explicit llm
-# choice to token_overlap when no model client is available.
+# token_overlap is the shipped default: instant, runs synchronously in
+# the UserPromptSubmit hook every prompt. llm routing is semantically
+# better (it can abstain — token_overlap's NONE accuracy is ~0% by
+# construction).
+#
+# LATENCY CAVEAT (measured 2026-05-22, Haiku, memory+skills ~10k-token
+# prompt): llm via the Agent SDK is ~7-10s/prompt — the cost is the SDK
+# spawning the `claude` CLI subprocess per call, not the model. That
+# exceeds a comfortable pre-prompt budget; the hook timeout is raised to
+# 15s and the router timeout to 12s to let calls complete while we
+# evaluate routing QUALITY. This is a stopgap: the real fix is to move
+# routing OUT of the blocking hook to an external always-running agent /
+# local routing service (no per-call cold-start), or a direct-API path
+# (needs an API key with credits). See the README "Router latency"
+# note. create_router() degrades an explicit llm choice to
+# token_overlap when no model client is available.
 DEFAULT_STRATEGY = STRATEGY_TOKEN_OVERLAP
 KNOWN_STRATEGIES = frozenset({STRATEGY_TOKEN_OVERLAP, STRATEGY_LLM, STRATEGY_EMBEDDINGS})
 
@@ -501,8 +515,13 @@ class LLMRouter:
 
     name = STRATEGY_LLM
 
-    def __init__(self, *, timeout_seconds: float = 4.0) -> None:
+    def __init__(self, *, timeout_seconds: float = 12.0, model: str | None = None) -> None:
         self._timeout_seconds = timeout_seconds
+        self._model = (
+            model
+            or os.environ.get(ROUTER_MODEL_ENV_VAR, "").strip()
+            or DEFAULT_ROUTER_MODEL
+        )
 
     def select(
         self,
@@ -593,6 +612,7 @@ class LLMRouter:
                 client.query(
                     system=SYSTEM_PROMPT + "\n\n" + FEW_SHOT_EXAMPLES,
                     messages=[{"role": "user", "content": user_msg}],
+                    model=self._model,
                 ),
                 timeout=self._timeout_seconds,
             )
@@ -617,6 +637,7 @@ class LLMRouter:
                 client.query(
                     system=SYSTEM_PROMPT + "\n\n" + FEW_SHOT_EXAMPLES,
                     messages=[{"role": "user", "content": user_msg}],
+                    model=self._model,
                 ),
                 timeout=self._timeout_seconds,
             )

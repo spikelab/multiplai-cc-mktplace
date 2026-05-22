@@ -105,10 +105,28 @@ over the anchor:
 | `catalog_reasoning_effort` | `medium` | Reasoning effort for catalog generation |
 | `catalog_ttl_hours` | `168` | Hours a generated catalog stays valid |
 | `diary_catalog_days` | `7` | Days of diary history the diary catalog covers |
-| `memory_router` | `token_overlap` | Context selection strategy: `token_overlap` (offline, fast) or `llm` (one Sonnet call per prompt) |
+| `memory_router` | `token_overlap` | Context selection strategy: `token_overlap` (offline, fast) or `llm` (one model call per prompt). See [Router latency](#router-latency) before choosing `llm`. |
+| `router_model` | `claude-haiku-4-5` | Model for the `llm` router. Haiku by default — routing is cheap classification, so the smallest/fastest model keeps per-prompt latency down. Ignored under `token_overlap`. |
 | `recommend_cooldown_turns` | `4` | After a file is injected, suppress re-injecting it for this many turns (it's already in the conversation). `0` disables. See [Re-recommendation cooldown](#re-recommendation-cooldown). |
 | `enable_skills` / `skills_dir` | `false` / `~/.claude/skills` | Optionally catalog skills for routing |
 | `enable_resources` / `resources_dir` | `false` / `""` | Optionally catalog a research/reference corpus |
+
+#### Router latency
+
+The `llm` router runs one model call **inside the blocking
+`UserPromptSubmit` hook**, before Claude sees your prompt. Via the Agent
+SDK this measured **~7–10s/prompt** (Haiku, memory+skills) — the cost is
+the SDK spawning the `claude` CLI subprocess per call, not the model. The
+hook timeout is therefore raised to 15s (router timeout 12s) when `llm`
+is active. That is a real per-prompt latency cost; `token_overlap` (the
+default) is instant.
+
+`llm` is currently best treated as a **routing-quality experiment**, not
+a steady-state config. The durable fix is to move routing out of the
+blocking hook — an always-running external routing agent / local service
+that holds a warm model connection (no per-call cold-start), or a
+direct-API path (needs an API key with credits, which bypasses the SDK
+subprocess). Until then, prefer `token_overlap` for daily use.
 
 ## Skills
 

@@ -107,8 +107,14 @@
     "memory_router": {
       "type": "string",
       "title": "Memory Router",
-      "description": "Routing strategy for context selection: 'token_overlap' (offline, fast) or 'llm' (Sonnet semantic match, one call per prompt). 'embeddings' is reserved for a future port.",
+      "description": "Routing strategy for context selection: 'token_overlap' (offline, fast) or 'llm' (semantic match, one model call per prompt). 'embeddings' is reserved for a future port.",
       "default": "token_overlap"
+    },
+    "router_model": {
+      "type": "string",
+      "title": "Router Model (llm strategy)",
+      "description": "Model used by the 'llm' memory_router. Defaults to Haiku — routing is a cheap classification, so the smallest/fastest model keeps the per-prompt hook latency tolerable. Ignored under 'token_overlap'.",
+      "default": "claude-haiku-4-5"
     },
     "recommend_cooldown_turns": {
       "type": "number",

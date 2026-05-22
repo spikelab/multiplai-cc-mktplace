@@ -337,10 +337,14 @@ def main() -> None:
         )
         _emit_dream_nudge()
 
-    logger.info("Session started: %s (%d memory files available)", session_id, len(memory_files))
+    logger.info(
+        "Session started: %s (%d memory files on disk; not injected — routed per-prompt)",
+        session_id, len(memory_files),
+    )
     log_event(
         "session", "start",
-        f"session started — {len(memory_files)} memory files available, client={client_type}",
+        f"session started — {len(memory_files)} memory files indexed "
+        f"(not injected; routed per-prompt), client={client_type}",
         session_id=session_id,
         memory_files=len(memory_files),
         client=client_type,

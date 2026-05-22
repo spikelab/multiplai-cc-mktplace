@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- **`router_model` option for the `llm` router** (default `claude-haiku-4-5`).
+  The LLM router now forwards a model to the client; Haiku keeps the
+  per-prompt classification cheap. The `UserPromptSubmit` hook timeout is
+  raised to 15s (router timeout 12s) so an inline `llm` call can complete.
+  See the README "Router latency" note — `llm` runs ~7-10s/prompt via the
+  Agent SDK (CLI cold-start per call) and is best treated as a routing-
+  quality experiment until routing moves off the blocking hook.
 - **Re-recommendation cooldown.** After a file is injected, it is
   suppressed from re-injection for `recommend_cooldown_turns` turns
   (default `4`; `0` disables) — it's already in the conversation, so
