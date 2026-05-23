@@ -342,7 +342,11 @@ def main() -> None:
         else []
     )
 
-    session_id = str(uuid.uuid4())[:8]
+    # Use the real Claude Code session id so every hook (context, nudge,
+    # extract, session-end) logs under one id and the activity stream is
+    # followable end-to-end. The random fallback only applies when the hook
+    # input omits it (older clients / tests).
+    session_id = hook_input.get("session_id") or str(uuid.uuid4())[:8]
     session_state = {
         "session_id": session_id,
         "start_time": datetime.now(timezone.utc).isoformat(),
