@@ -110,6 +110,31 @@ class TestCwdCapture:
         state = json.loads((data_dir / "session_state.json").read_text())
         assert state.get("cwd") == "/some/proj"
 
+    def test_session_start_uses_real_session_id(self, tmp_path):
+        """The Claude Code session id from the hook input must be recorded
+        verbatim, so every hook logs under one id and the activity stream
+        is followable end-to-end (no random per-hook ids)."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        env = os.environ.copy()
+        for k in list(env):
+            if k.startswith("CLAUDE_PLUGIN") or k == "WORKSPACE":
+                del env[k]
+        env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
+        env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
+
+        real_id = "abc12345-dead-beef-0000-111122223333"
+        subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / "session_start.py")],
+            input=json.dumps({"cwd": "/some/proj", "session_id": real_id}),
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=30,
+        )
+        state = json.loads((data_dir / "session_state.json").read_text())
+        assert state.get("session_id") == real_id
+
 
 class TestPerPromptInjectionRemoved:
     """Regression: context_manager must no longer inject project state."""
