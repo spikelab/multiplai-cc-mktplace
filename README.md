@@ -12,14 +12,14 @@ memory, context, and workflow.
 Then install any plugin from it:
 
 ```
-/plugin install multiplai@multiplai
+/plugin install multiplai-context@multiplai
 ```
 
 ## Plugins
 
 | Plugin | Status | Description |
 |--------|--------|-------------|
-| [`multiplai`](plugins/multiplai-ctx-manager) (context manager) | **Available** | Context routing, continuous learning, session awareness, and memory management. |
+| [`multiplai-context`](plugins/multiplai-context) | **Available** | Context routing, continuous learning, session awareness, and memory management. |
 | `multiplai-container` | Planned | Containerized execution environment. |
 | `multiplai-deepresearch` | Planned | Multi-source deep-research pipeline. |
 
@@ -33,7 +33,7 @@ is `.claude-plugin/marketplace.json`.
 ├── .claude-plugin/
 │   └── marketplace.json          # marketplace manifest (lists plugins)
 ├── plugins/
-│   └── multiplai-ctx-manager/    # the context-manager plugin
+│   └── multiplai-context/    # the context-manager plugin
 │       ├── .claude-plugin/plugin.json
 │       ├── hooks/  scripts/  skills/  templates/  tests/
 │       ├── README.md             # plugin docs
@@ -44,7 +44,7 @@ is `.claude-plugin/marketplace.json`.
 
 ## Development
 
-See [`plugins/multiplai-ctx-manager/README.md`](plugins/multiplai-ctx-manager/README.md)
+See [`plugins/multiplai-context/README.md`](plugins/multiplai-context/README.md)
 for plugin-specific setup, configuration, and the test suite.
 
 ## License
