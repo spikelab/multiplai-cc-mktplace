@@ -34,6 +34,32 @@ _STDERR_ERROR_CAPTURE_CAP = 200  # absolute cap on captured [ERROR] lines
 _SDK_MAX_ATTEMPTS = 2
 _SDK_RETRY_BACKOFF_S = 1.5
 
+# These callers want a pure text completion, but claude_agent_sdk.query() runs
+# the full agentic loop. allowed_tools=[] does NOT remove tools — under
+# permission_mode="bypassPermissions" it's only an allow-list, so every default
+# tool stays present and auto-approved. With the original max_turns=1 the model
+# would nondeterministically spend its single turn on an exploratory tool call
+# (Agent→Explore, a guessed Read path, or ToolSearch loading a deferred tool
+# like AskUserQuestion) whose result needs a turn 2 that never comes, so the
+# session ends with no text → CLI exit 1. Verified across subprocess transcripts
+# 2026-05-24. Enumerating disallowed_tools can't fully fix this: ToolSearch is a
+# meta-tool that can load any deferred tool, so there is always something to
+# call. The real fix is _SDK_MAX_TURNS > 1 (a stray tool call recovers instead
+# of crashing) plus a system-prompt directive to answer directly. disallowed_
+# tools is kept as a SAFETY floor only: under bypassPermissions a multi-turn run
+# must never be able to mutate the filesystem, shell out, ask a (headless,
+# unanswerable) question, or spawn an expensive subagent.
+_SDK_MAX_TURNS = 6
+_DISALLOWED_TOOLS = [
+    "Bash", "BashOutput", "KillShell", "Edit", "Write", "NotebookEdit",
+    "Task", "Agent", "AskUserQuestion", "SlashCommand", "ExitPlanMode",
+]
+_NO_TOOLS_SUFFIX = (
+    "\n\nAll information you need is already provided in this message. Do NOT "
+    "use any tools, skills, subagents, or tool search, and do NOT ask "
+    "questions. Respond directly with only the requested output text."
+)
+
 
 @dataclass(frozen=True)
 class ModelResponse:
@@ -214,9 +240,10 @@ class AgentSDKClient:
 
             options = ClaudeAgentOptions(
                 allowed_tools=[],
-                max_turns=1,
+                disallowed_tools=_DISALLOWED_TOOLS,  # see _DISALLOWED_TOOLS note
+                max_turns=_SDK_MAX_TURNS,
                 permission_mode="bypassPermissions",
-                system_prompt=system,
+                system_prompt=system + _NO_TOOLS_SUFFIX,
                 model=model,
                 env={"_HOOK_CHILD_SESSION": "1"},
                 cwd=str(_hook_session_dir()),
