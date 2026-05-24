@@ -6,8 +6,8 @@
   "description": "Multiplai — a suite of Claude Code plugins for memory, context, and workflow. Context manager is the first; more plugins follow.",
   "plugins": [
     {
-      "name": "multiplai",
-      "source": "./plugins/multiplai-ctx-manager",
+      "name": "multiplai-context",
+      "source": "./plugins/multiplai-context",
       "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
       "version": "0.3.0",
       "author": {
