@@ -11,6 +11,7 @@ for the canonical data contract and shared helpers.
 import asyncio
 import json
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,8 +25,46 @@ from lib.model_client import create_client
 from lib.log_utils import setup_logging, log_event
 from lib.correction_patterns import detect_corrections_in_transcript
 from lib.extraction import extract_units, write_diary_entries, append_learnings
+from lib.transcript_distiller import distill
 
 logger = setup_logging("extract_learnings")
+
+
+def _distill_transcript(transcript_path: str, raw_transcript: str) -> list[str]:
+    """Distill a transcript into token-bounded chunks before the LLM call.
+
+    Prefers the on-disk JSONL path; falls back to raw JSONL piped on stdin
+    (staged to a temp file, since the distiller reads from a path). Returns
+    an empty list when there is nothing to extract (missing/empty
+    transcript) — the caller then drops the marker instead of retrying.
+    """
+    if transcript_path:
+        p = Path(transcript_path)
+        if not p.exists():
+            logger.info("Transcript gone: %s — nothing to extract", transcript_path)
+            return []
+        try:
+            return distill(p)
+        except Exception:
+            logger.exception("Distillation failed for %s", transcript_path)
+            return []
+
+    if raw_transcript.strip():
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".jsonl", delete=False, encoding="utf-8"
+            ) as tmp:
+                tmp.write(raw_transcript)
+                tmp_path = Path(tmp.name)
+            try:
+                return distill(tmp_path)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+        except Exception:
+            logger.exception("Distillation of raw piped transcript failed")
+            return []
+
+    return []
 
 
 def _list_valid_targets(memory_dir: Path) -> list[str]:
@@ -92,43 +131,53 @@ async def extract() -> bool:
     transcript_data: dict = {}
     try:
         transcript_data = json.loads(hook_input)
-        transcript = transcript_data.get("transcript", hook_input)
     except (json.JSONDecodeError, AttributeError):
-        transcript = hook_input
+        transcript_data = {}
 
-    marker_path = (
-        transcript_data.get("marker_path", "")
-        if isinstance(transcript_data, dict)
-        else ""
-    )
+    def _field(key: str) -> str:
+        return transcript_data.get(key, "") if isinstance(transcript_data, dict) else ""
 
-    session_id = (
-        transcript_data.get("session_id", "")
-        if isinstance(transcript_data, dict)
-        else ""
-    )
-    cwd = (
-        transcript_data.get("cwd", "")
-        if isinstance(transcript_data, dict)
-        else ""
-    )
+    marker_path = _field("marker_path")
+    session_id = _field("session_id")
+    cwd = _field("cwd")
+    transcript_path = _field("transcript_path")
+    # Back-compat: a raw transcript may still arrive inline, or as bare
+    # (non-JSON) stdin from a direct invocation.
+    raw_transcript = _field("transcript") or (hook_input if not transcript_data else "")
+
+    chunks = _distill_transcript(transcript_path, raw_transcript)
 
     valid_targets = _list_valid_targets(memory_dir)
     units: list[dict] = []
     llm_failed = False
-    try:
-        client = await create_client()
-        logger.info("Extract learnings using %s", type(client).__name__)
-        units = await extract_units(
-            transcript,
-            valid_targets=valid_targets,
-            client=client,
-        )
-    except Exception:
-        logger.exception("LLM call failed during learning extraction")
-        llm_failed = True
+    if chunks:
+        try:
+            client = await create_client()
+            logger.info(
+                "Extract learnings using %s (%d chunk(s))",
+                type(client).__name__, len(chunks),
+            )
+            for i, chunk in enumerate(chunks):
+                try:
+                    chunk_units = await extract_units(
+                        chunk,
+                        valid_targets=valid_targets,
+                        client=client,
+                    )
+                    units.extend(chunk_units)
+                except Exception:
+                    logger.exception(
+                        "LLM call failed during extraction (chunk %d/%d)",
+                        i + 1, len(chunks),
+                    )
+                    llm_failed = True
+        except Exception:
+            logger.exception("Could not create model client for extraction")
+            llm_failed = True
 
-    correction_matches = detect_corrections_in_transcript(transcript)
+    correction_matches = detect_corrections_in_transcript(
+        "\n\n".join(chunks) if chunks else raw_transcript
+    )
 
     if not units and not correction_matches:
         if llm_failed:

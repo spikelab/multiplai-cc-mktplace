@@ -202,19 +202,17 @@ def _process_deferred_extractions(data_dir: Path, extract_script: Path) -> int:
             dest.unlink(missing_ok=True)
             continue
 
-        transcript_path = marker.get("transcript_path", "")
+        # Pass the transcript PATH, not its contents: the child distills it
+        # into token-bounded chunks before the LLM call. Piping a raw
+        # multi-MB transcript here previously forced a single >200K-token
+        # request that tripped the long-context billing gate (429).
         payload: dict = {
             "session_id": marker.get("session_id", ""),
+            "cwd": marker.get("cwd", ""),
+            "transcript_path": marker.get("transcript_path", ""),
             # The child removes this marker once the session is handled.
             "marker_path": str(dest),
         }
-        if transcript_path and Path(transcript_path).exists():
-            try:
-                payload["transcript"] = Path(transcript_path).read_text(
-                    encoding="utf-8", errors="replace",
-                )
-            except OSError:
-                logger.warning("Could not read transcript at %s", transcript_path)
 
         try:
             proc = subprocess.Popen(

@@ -376,7 +376,27 @@ def main() -> None:
     )
     # --run kept as deprecated alias for --auto
     parser.add_argument("--run", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--stamp",
+        action="store_true",
+        help="Record that a consolidation was applied (updates dream_state). "
+             "Used by /dream-remember after the human-in-the-loop apply so the "
+             "dream gate stops nudging.",
+    )
+    parser.add_argument("--files-updated", type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument("--learnings-processed", type=int, default=0, help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    if args.stamp:
+        paths = get_paths()
+        dream_state_file = paths.dream_state_file()
+        state = load_yaml(dream_state_file) or {}
+        state["last_run"] = datetime.now(timezone.utc).isoformat()
+        state["files_updated"] = args.files_updated
+        state["learnings_processed"] = args.learnings_processed
+        save_yaml(dream_state_file, state)
+        print(f"Stamped dream_state: last_run={state['last_run']}")
+        return
 
     if args.check:
         paths = get_paths()
