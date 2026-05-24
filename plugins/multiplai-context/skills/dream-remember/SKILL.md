@@ -70,7 +70,7 @@ Do NOT dump the full proposal into chat. Tell the user where the file is so they
 Parse the user's response:
 
 - **`all`** → apply every numbered update
-- **`none`** → skip all, go to Step 6 cleanup
+- **`none`** → skip all, go to Step 5 cleanup
 - **Number ranges** (e.g. `1-12, 16-20, 34`) → apply only those items; silently skip unlisted ones — do NOT ask for confirmation on skipped items
 - **`modify N`** → ask the user what change they want for item N, then apply modified version
 
@@ -117,7 +117,24 @@ After all approved updates are applied:
 
 ---
 
-## Step 6: Regenerate Memory Catalog
+## Step 6: Record the Consolidation (stamp dream state)
+
+**Always run this after applying updates** (even if the user approved only a subset).
+It writes `last_run` to `dream_state.yaml` so the SessionStart dream gate stops
+nudging — the report-only `/dream` and this skill otherwise never record that a
+consolidation happened, leaving the gate permanently "due".
+
+```bash
+python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --stamp \
+  --files-updated <M> --learnings-processed <N>
+```
+
+Where `<M>` = number of memory files actually edited and `<N>` = number of updates
+applied. Skip only when the user chose `none` (nothing was applied).
+
+---
+
+## Step 7: Regenerate Memory Catalog
 
 After memory files have been updated, run:
 
@@ -129,7 +146,7 @@ Skip this step if no memory files were actually modified.
 
 ---
 
-## Step 7: Summary
+## Step 8: Summary
 
 Print a brief summary:
 
