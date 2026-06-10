@@ -8,7 +8,6 @@ Covers:
 - write_diary_entries() returns None when no diary content
 - append_learnings() atomic write with flock + Session: dedup
 - append_learnings() skips if session already present
-- append_learnings() writes correction entries
 - EXTRACTION_PROMPT is diary-first (not a one-liner constraint)
 """
 
@@ -243,7 +242,7 @@ class TestAppendLearnings:
     def test_writes_learning_entries(self, tmp_path):
         from lib.extraction import append_learnings
         lf = tmp_path / "2026-05-16.md"
-        result = append_learnings(_sample_units(), lf, "sid-1", [], "2026-05-16T14:00:00+00:00")
+        result = append_learnings(_sample_units(), lf, "sid-1", "2026-05-16T14:00:00+00:00")
         assert result is True
         content = lf.read_text()
         assert "PATTERN" in content
@@ -253,44 +252,34 @@ class TestAppendLearnings:
         from lib.extraction import append_learnings
         lf = tmp_path / "2026-05-16.md"
         lf.write_text("---\n## Session Learnings\nSession: sid-1\n- existing\n")
-        result = append_learnings(_sample_units(), lf, "sid-1", [], "2026-05-16T14:00:00+00:00")
+        result = append_learnings(_sample_units(), lf, "sid-1", "2026-05-16T14:00:00+00:00")
         assert result is False
         assert lf.read_text().count("Session: sid-1") == 1
-
-    def test_writes_correction_entries(self, tmp_path):
-        from lib.extraction import append_learnings
-        lf = tmp_path / "2026-05-16.md"
-        corrections = [{"excerpt": "use X not Y", "category": "explicit_correction"}]
-        result = append_learnings([], lf, "sid-2", corrections, "2026-05-16T14:00:00+00:00")
-        assert result is True
-        content = lf.read_text()
-        assert "CORRECTION" in content
-        assert "use X not Y" in content
 
     def test_creates_parent_dirs(self, tmp_path):
         from lib.extraction import append_learnings
         lf = tmp_path / "subdir" / "2026-05-16.md"
-        append_learnings(_sample_units(), lf, "sid-3", [], "2026-05-16T14:00:00+00:00")
+        append_learnings(_sample_units(), lf, "sid-3", "2026-05-16T14:00:00+00:00")
         assert lf.exists()
 
     def test_session_id_written_to_file(self, tmp_path):
         from lib.extraction import append_learnings
         lf = tmp_path / "2026-05-16.md"
-        append_learnings(_sample_units(), lf, "my-session-id", [], "2026-05-16T14:00:00+00:00")
+        append_learnings(_sample_units(), lf, "my-session-id", "2026-05-16T14:00:00+00:00")
         assert "Session: my-session-id" in lf.read_text()
 
     def test_units_with_no_learnings_not_written(self, tmp_path):
         from lib.extraction import append_learnings
         units = [{"timestamp": "", "diary_entry": "x", "learnings": []}]
         lf = tmp_path / "2026-05-16.md"
-        result = append_learnings(units, lf, "s1", [], "2026-05-16T14:00:00+00:00")
+        result = append_learnings(units, lf, "s1", "2026-05-16T14:00:00+00:00")
         assert result is False
 
     def test_learning_format_matches_kit_schema(self, tmp_path):
         """Learning entries must use the structured kit format."""
         from lib.extraction import append_learnings
         lf = tmp_path / "2026-05-16.md"
-        append_learnings(_sample_units(), lf, "s1", [], "2026-05-16T14:00:00+00:00")
+        append_learnings(_sample_units(), lf, "s1", "2026-05-16T14:00:00+00:00")
         content = lf.read_text()
         assert "**[trust:" in content
         assert "→ Target:" in content

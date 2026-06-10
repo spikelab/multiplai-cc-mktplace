@@ -200,21 +200,10 @@ def _format_learning_entry(learning: dict) -> str:
     return line
 
 
-def _format_correction_entry(match: dict) -> str:
-    excerpt = (match.get("excerpt") or "").replace("\n", " ").strip()
-    category = match.get("category", "correction")
-    return (
-        f"- **[trust: verified]** CORRECTION user signal {category} "
-        f"detected: {excerpt!r} → Target: wrong.md — log the correction "
-        "and apply downstream"
-    )
-
-
 def append_learnings(
     units: list[dict],
     learnings_file: Path,
     session_id: str,
-    correction_matches: list[dict],
     timestamp: str,
 ) -> bool:
     """Atomic append learnings to per-day file with flock + Session: dedup.
@@ -245,15 +234,6 @@ def append_learnings(
                         if not isinstance(learning, dict):
                             continue
                         f.write(_format_learning_entry(learning) + "\n")
-                    wrote_any = True
-
-                if correction_matches:
-                    if not wrote_any:
-                        f.write(f"\n---\n## Session Learnings — {timestamp}\n")
-                        if session_id:
-                            f.write(f"Session: {session_id}\n")
-                    for match in correction_matches:
-                        f.write(_format_correction_entry(match) + "\n")
                     wrote_any = True
 
             return wrote_any
