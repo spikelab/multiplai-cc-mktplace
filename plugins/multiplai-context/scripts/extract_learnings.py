@@ -23,7 +23,6 @@ ensure_venv_python()
 from lib.paths import get_paths
 from lib.model_client import create_client
 from lib.log_utils import setup_logging, log_event
-from lib.correction_patterns import detect_corrections_in_transcript
 from lib.extraction import extract_units, write_diary_entries, append_learnings
 from lib.transcript_distiller import distill
 
@@ -175,11 +174,7 @@ async def extract() -> bool:
             logger.exception("Could not create model client for extraction")
             llm_failed = True
 
-    correction_matches = detect_corrections_in_transcript(
-        "\n\n".join(chunks) if chunks else raw_transcript
-    )
-
-    if not units and not correction_matches:
+    if not units:
         if llm_failed:
             # Distinguish a real failure from a genuinely empty session:
             # keep the marker so the next SessionStart retries instead of
@@ -205,16 +200,15 @@ async def extract() -> bool:
             )
             await _refresh_now(cwd, session_id)
 
-    wrote = append_learnings(units, learnings_file, session_id, correction_matches, timestamp)
+    wrote = append_learnings(units, learnings_file, session_id, timestamp)
     if wrote:
         logger.info("Appended structured learnings to %s", learnings_file)
         n_learnings = sum(len(u.get("learnings") or []) for u in units)
         log_event(
             "learnings", "capture",
-            f"captured {n_learnings} learning(s) + {len(correction_matches)} correction(s) to backlog",
+            f"captured {n_learnings} learning(s) to backlog",
             session_id=session_id,
             learnings=n_learnings,
-            corrections=len(correction_matches),
         )
     elif session_id:
         logger.info("Session %s already in %s, skipping", session_id, learnings_file)
