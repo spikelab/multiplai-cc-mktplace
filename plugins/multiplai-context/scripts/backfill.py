@@ -39,7 +39,6 @@ from lib.model_client import create_client
 from lib.log_utils import setup_logging
 from lib.extraction import extract_units, write_diary_entries, append_learnings
 from lib.transcript_distiller import distill, estimate_tokens
-from lib.correction_patterns import detect_corrections_in_transcript
 
 logger = setup_logging("backfill")
 
@@ -194,13 +193,11 @@ async def _process_session(
             except Exception as e:
                 logger.warning("LLM call failed for session %s chunk %d: %s", session_id, i, e)
 
-    correction_matches = detect_corrections_in_transcript("\n\n".join(chunks))
-
     if units:
         diary_path = write_diary_entries(units, diary_dir, session_id, cwd, timestamp)
         stats["diary"] = diary_path is not None
 
-    wrote = append_learnings(units, learnings_file, session_id, correction_matches, timestamp)
+    wrote = append_learnings(units, learnings_file, session_id, timestamp)
     stats["learnings"] = wrote
 
     return stats
