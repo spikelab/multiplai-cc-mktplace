@@ -839,7 +839,7 @@ class TestNoBashWrappers:
         """WHEN the plugin's scripts/ directory is listed
         THEN it contains no .sh/.bash/.zsh/.fish shell wrappers.
 
-        Non-code data files (e.g., correction-patterns.yaml) are allowed
+        Non-code data files (e.g., catalog YAML/JSON) are allowed
         — the point is to ban shell wrappers, not all non-Python files.
         """
         forbidden_suffixes = {".sh", ".bash", ".zsh", ".fish"}

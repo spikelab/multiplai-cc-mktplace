@@ -267,7 +267,7 @@ rotates to `activity-YYYY-MM-DD.log` on the first write of a new day.
 14:51:03Z [a1b2c3d4] [context]   injected 4 memory · 0 skills · 0 resources · scores 31.5→9.8 (4/12 kept) → memory: finances.md, life.md, preferences.md, taxes-italy.md
 14:51:03Z [a1b2c3d4] [nudge]     dream gate open (>24h, pending learnings) — surfaced to user
 14:51:18Z [a1b2c3d4] [diary]     wrote diary entry (1 unit(s)) to <session>.md
-14:51:18Z [a1b2c3d4] [learnings] captured 2 learning(s) + 0 correction(s) to backlog
+14:51:18Z [a1b2c3d4] [learnings] captured 2 learning(s) to backlog
 14:52:01Z [e5f6a7b8] [catalog]   rebuilt 3 catalog(s) (14 entries, 0 pruned) in 312ms
 ```
 
