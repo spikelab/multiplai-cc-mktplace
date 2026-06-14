@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.1"]
+# ///
 """Check for existing memory files before onboarding.
 
 Reports which memory files already exist in the configured memory directory
@@ -16,8 +20,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib.config import TEMPLATE_FILENAMES
-from lib.paths import get_paths
+from multiplai_core.config import TEMPLATE_FILENAMES
+from multiplai_core.paths import get_paths
 
 
 def check_memory_files() -> dict:

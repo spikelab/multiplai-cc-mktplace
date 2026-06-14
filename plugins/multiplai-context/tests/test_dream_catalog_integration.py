@@ -233,13 +233,13 @@ class TestAutodreamCatalogGenerationBehavior:
             mock_gen.return_value = []
 
             # Mock the model client so we don't make real LLM calls
-            with patch("lib.model_client.create_client") as mock_client:
+            with patch("multiplai_core.model_client.create_client") as mock_client:
                 mock_client.return_value = AsyncMock()
                 mock_client.return_value.query = AsyncMock(
                     return_value=MagicMock(content="Updated content")
                 )
 
-                from lib.paths import _reset_cache
+                from multiplai_core.paths import _reset_cache
                 _reset_cache()
 
                 # Import and run dream
@@ -273,13 +273,13 @@ class TestAutodreamCatalogGenerationBehavior:
         with patch("generators.dispatcher.generate_catalogs") as mock_gen:
             mock_gen.side_effect = RuntimeError("LLM call failed")
 
-            with patch("lib.model_client.create_client") as mock_client:
+            with patch("multiplai_core.model_client.create_client") as mock_client:
                 mock_client.return_value = AsyncMock()
                 mock_client.return_value.query = AsyncMock(
                     return_value=MagicMock(content="Updated content")
                 )
 
-                from lib.paths import _reset_cache
+                from multiplai_core.paths import _reset_cache
                 _reset_cache()
 
                 import importlib.util

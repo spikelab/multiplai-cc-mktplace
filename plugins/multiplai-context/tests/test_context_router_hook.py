@@ -59,7 +59,7 @@ def _make_catalogs_dir(tmp_path: Path) -> Path:
 
 def _import_context_manager():
     """Dynamically import context_manager module, resetting caches."""
-    from lib.paths import _reset_cache
+    from multiplai_core.paths import _reset_cache
     _reset_cache()
     spec = importlib.util.spec_from_file_location("context_manager", CONTEXT_ROUTER_PATH)
     if spec is None or spec.loader is None:
@@ -88,7 +88,7 @@ class TestContextRouterPathResolution:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(mem_dir))
 
-        from lib.paths import _reset_cache, Paths
+        from multiplai_core.paths import _reset_cache, Paths
         _reset_cache()
         paths = Paths.resolve()
 
@@ -110,12 +110,12 @@ class TestContextRouterPathResolution:
         assert "/home/spike" not in text, "Hardcoded user home path found"
         assert "/Users/spike" not in text, "Hardcoded user home path found"
 
-    def test_context_manager_imports_from_lib_paths(self):
+    def test_context_manager_imports_from_core_paths(self):
         """WHEN the context-router source is inspected
-        THEN it imports from lib.paths for all path resolution."""
+        THEN it imports from multiplai_core.paths for all path resolution."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        assert "from lib.paths" in text or "lib.paths" in text, \
-            "Context router must import from lib.paths"
+        assert "from multiplai_core.paths" in text or "multiplai_core.paths" in text, \
+            "Context router must import from multiplai_core.paths"
 
 
 # ===========================================================================
@@ -234,7 +234,7 @@ class TestMetadataFirstRanking:
 
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(mem_dir))
 
-        from lib.paths import _reset_cache, Paths
+        from multiplai_core.paths import _reset_cache, Paths
         _reset_cache()
         paths = Paths.resolve()
 
@@ -421,7 +421,7 @@ class TestTimeoutCompliance:
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(mem_dir))
 
-        from lib.paths import _reset_cache
+        from multiplai_core.paths import _reset_cache
         _reset_cache()
 
         start = time.monotonic()
@@ -453,61 +453,34 @@ class TestTimeoutCompliance:
 
 
 # ===========================================================================
-# VENV RE-EXEC PREAMBLE
+# PEP 723 INLINE METADATA (replaces the retired venv re-exec preamble)
 # ===========================================================================
 
 
 class TestVenvPreamble:
-    """Context router must include the re-exec venv preamble per D4."""
+    """Post-uv-migration: the context router runs via `uv run --no-project`
+    with PEP 723 inline metadata; the venv re-exec preamble is gone."""
 
-    def test_has_venv_guard_import(self):
+    def test_has_pep723_header(self):
         """WHEN the context_manager.py source is inspected
-        THEN it imports the venv guard module."""
+        THEN it carries a PEP 723 inline-metadata header."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        assert "venv_guard" in text, "Context router must import venv_guard"
+        assert "# /// script" in text, \
+            "Context router must carry a PEP 723 header"
 
-    def test_has_ensure_venv_python_call(self):
+    def test_declares_multiplai_core(self):
         """WHEN the context_manager.py source is inspected
-        THEN it calls ensure_venv_python() early in the script."""
+        THEN its inline metadata depends on multiplai-core."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        assert "ensure_venv_python" in text, \
-            "Context router must call ensure_venv_python()"
+        assert "multiplai-core" in text, \
+            "Context router must declare a multiplai-core dependency"
 
-    def test_venv_preamble_before_heavy_imports(self):
+    def test_no_venv_guard(self):
         """WHEN the context_manager.py source is inspected
-        THEN the venv preamble appears before imports that require pip packages."""
+        THEN the retired venv guard preamble is gone."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        lines = text.split("\n")
-        ensure_line = None
-        heavy_import_line = None
-
-        for i, line in enumerate(lines):
-            if "ensure_venv_python" in line and "import" not in line:
-                ensure_line = i
-            if any(pkg in line for pkg in ["import yaml", "import anthropic"]):
-                heavy_import_line = i
-
-        if ensure_line is not None and heavy_import_line is not None:
-            assert ensure_line < heavy_import_line, \
-                "ensure_venv_python() must be called before heavy imports"
-
-    def test_sys_path_insert_before_venv_guard(self):
-        """WHEN the context_manager.py source is inspected
-        THEN sys.path is set up before importing venv_guard."""
-        text = CONTEXT_ROUTER_PATH.read_text()
-        lines = text.split("\n")
-        path_insert_line = None
-        venv_import_line = None
-
-        for i, line in enumerate(lines):
-            if "sys.path.insert" in line:
-                path_insert_line = i
-            if "from lib.venv_guard" in line:
-                venv_import_line = i
-
-        if path_insert_line is not None and venv_import_line is not None:
-            assert path_insert_line < venv_import_line, \
-                "sys.path setup must come before venv_guard import"
+        assert "venv_guard" not in text and "ensure_venv_python" not in text, \
+            "Context router must not reference the retired venv guard"
 
 
 # ===========================================================================

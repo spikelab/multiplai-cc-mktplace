@@ -18,7 +18,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from lib.paths import Paths
+from multiplai_core.paths import Paths
 from generators.base import GeneratorBase
 
 

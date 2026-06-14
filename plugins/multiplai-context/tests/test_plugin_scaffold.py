@@ -41,8 +41,20 @@ class TestDirectoryStructure:
     def test_lib_init_exists(self):
         assert (PLUGIN_ROOT / "scripts" / "lib" / "__init__.py").is_file()
 
-    @pytest.mark.parametrize("module", ["paths.py", "model_client.py", "log_utils.py", "config.py"])
+    @pytest.mark.parametrize(
+        "module",
+        [
+            "extraction.py",
+            "memory_router.py",
+            "routing_logic.py",
+            "section_loader.py",
+            "project_identity.py",
+        ],
+    )
     def test_lib_modules_exist(self, module):
+        # Generic core modules (paths, config, log_utils, model_client) were
+        # extracted into the standalone `multiplai_core` package; scripts/lib/
+        # now holds only the plugin's context-specific modules.
         assert (PLUGIN_ROOT / "scripts" / "lib" / module).is_file()
 
 
@@ -249,19 +261,24 @@ class TestSupportFiles:
     def test_requirements_exists(self):
         assert (PLUGIN_ROOT / "requirements.txt").is_file()
 
-    def test_requirements_has_anthropic(self):
+    def test_requirements_no_longer_pins_runtime_deps(self):
+        # Runtime deps (anthropic, claude-agent-sdk, pyyaml) moved out of
+        # requirements.txt: entry-point scripts declare them inline via
+        # PEP 723 and pull them transitively through multiplai-core.
         text = (PLUGIN_ROOT / "requirements.txt").read_text()
-        assert "anthropic" in text
+        for pin in ("anthropic==", "claude-agent-sdk==", "pyyaml>="):
+            assert pin not in text, (
+                f"requirements.txt should no longer pin {pin!r} — "
+                "runtime deps are declared inline via PEP 723 + multiplai-core"
+            )
 
-    def test_requirements_has_pyyaml(self):
-        text = (PLUGIN_ROOT / "requirements.txt").read_text()
-        assert "pyyaml" in text.lower()
-
-    def test_requirements_pins_claude_agent_sdk(self):
-        # Installed into the plugin venv (so standalone/skill SDK runs
-        # work, not only host-injected hooks); pinned to avoid drift.
-        text = (PLUGIN_ROOT / "requirements.txt").read_text()
-        assert "claude-agent-sdk==" in text.lower()
+    def test_entry_points_declare_pep723_core_dep(self):
+        # Every entry-point script carries inline PEP 723 metadata that
+        # depends on multiplai-core.
+        for name in ("session_start.py", "context_manager.py", "dream.py"):
+            text = (PLUGIN_ROOT / "scripts" / name).read_text()
+            assert "# /// script" in text, f"{name} missing PEP 723 header"
+            assert "multiplai-core" in text, f"{name} missing multiplai-core dependency"
 
 
 # ---------------------------------------------------------------------------

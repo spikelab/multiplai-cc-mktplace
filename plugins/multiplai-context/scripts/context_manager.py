@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.1"]
+# ///
 """Context manager hook for multiplai plugin.
 
 Manages context assembly for user prompts across three corpora —
@@ -30,13 +34,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib.venv_guard import ensure_venv_python
-ensure_venv_python()
-
-from lib.paths import get_paths
-from lib.config import read_session_state, write_session_state
-from lib.log_utils import setup_logging, log_event
-from lib.model_client import create_client  # D3: LLM calls via ModelClient abstraction
+from multiplai_core.paths import get_paths
+from multiplai_core.config import read_session_state, write_session_state
+from multiplai_core.log_utils import setup_logging, log_event
+from multiplai_core.model_client import create_client  # D3: LLM calls via ModelClient abstraction
 from lib.memory_router import create_router
 from lib.routing_logic import expand_picks
 from lib.section_loader import load_picked_content, parse_section_ref

@@ -220,14 +220,15 @@ class TestD8StrippingTransformation:
 
 
 # ===========================================================================
-# D4: Venv Re-exec Preamble
+# PEP 723 inline metadata (replaces the retired venv re-exec preamble)
 # ===========================================================================
 
-class TestVenvReexecPreamble:
-    """Each session lifecycle script must include the venv re-exec preamble.
+class TestPep723Preamble:
+    """Each session lifecycle script must carry PEP 723 inline metadata.
 
-    D4: All hook scripts begin with the re-exec pattern that checks if
-    running in the plugin venv and re-execs if not.
+    The managed-venv re-exec preamble was retired: scripts are now launched
+    via `uv run --no-project`, which reads the inline metadata to provision
+    dependencies (multiplai-core + transitive SDK).
     """
 
     @pytest.mark.parametrize("script", [
@@ -235,11 +236,11 @@ class TestVenvReexecPreamble:
         SCRIPTS_DIR / "session_stop.py",
         SCRIPTS_DIR / "session_end.py",
     ], ids=["session_start", "session_stop", "session_end"])
-    def test_has_venv_guard_import(self, script):
-        """Script imports the venv guard module."""
+    def test_has_pep723_header(self, script):
+        """Script begins with a PEP 723 inline-metadata block."""
         source = script.read_text()
-        assert "venv_guard" in source, (
-            f"{script.name} must import from lib.venv_guard for venv re-exec"
+        assert "# /// script" in source, (
+            f"{script.name} must carry a PEP 723 '# /// script' header"
         )
 
     @pytest.mark.parametrize("script", [
@@ -247,11 +248,11 @@ class TestVenvReexecPreamble:
         SCRIPTS_DIR / "session_stop.py",
         SCRIPTS_DIR / "session_end.py",
     ], ids=["session_start", "session_stop", "session_end"])
-    def test_calls_ensure_venv_python(self, script):
-        """Script calls ensure_venv_python() before importing heavy deps."""
+    def test_declares_multiplai_core(self, script):
+        """Inline metadata depends on multiplai-core."""
         source = script.read_text()
-        assert "ensure_venv_python()" in source, (
-            f"{script.name} must call ensure_venv_python() for venv re-exec"
+        assert "multiplai-core" in source, (
+            f"{script.name} must declare a multiplai-core dependency in PEP 723 metadata"
         )
 
     @pytest.mark.parametrize("script", [
@@ -259,20 +260,15 @@ class TestVenvReexecPreamble:
         SCRIPTS_DIR / "session_stop.py",
         SCRIPTS_DIR / "session_end.py",
     ], ids=["session_start", "session_stop", "session_end"])
-    def test_venv_guard_before_heavy_imports(self, script):
-        """ensure_venv_python() must be called before lib.paths or lib.model_client imports."""
+    def test_no_venv_guard(self, script):
+        """The retired venv re-exec preamble must be gone."""
         source = script.read_text()
-        guard_pos = source.find("ensure_venv_python()")
-        assert guard_pos != -1, f"{script.name} missing ensure_venv_python()"
-
-        # Check that heavy imports (paths, model_client) come AFTER the guard
-        for module in ["from lib.paths", "from lib.model_client"]:
-            mod_pos = source.find(module)
-            if mod_pos != -1:
-                assert mod_pos > guard_pos, (
-                    f"{script.name}: '{module}' imported before ensure_venv_python() — "
-                    "venv guard must execute first to ensure correct Python interpreter"
-                )
+        assert "venv_guard" not in source, (
+            f"{script.name} must not reference the retired venv_guard"
+        )
+        assert "ensure_venv_python" not in source, (
+            f"{script.name} must not call the retired ensure_venv_python()"
+        )
 
 
 # ===========================================================================
@@ -399,23 +395,6 @@ class TestHooksJsonTimeouts:
             f"SessionEnd timeout {timeout}s may be too low for marker write"
         )
 
-    def test_venv_bootstrap_has_highest_timeout(self):
-        """Venv bootstrap (first-time pip install) needs the longest timeout."""
-        data = _load_hooks_json()
-        bootstrap = [
-            h for h in data["hooks"]
-            if "venv_bootstrap" in h["script"]
-        ]
-        assert len(bootstrap) == 1
-        other_timeouts = [
-            h["timeout"] for h in data["hooks"]
-            if "venv_bootstrap" not in h["script"]
-        ]
-        assert bootstrap[0]["timeout"] >= max(other_timeouts), (
-            "Venv bootstrap should have the highest timeout (first-time pip install)"
-        )
-
-
 # ===========================================================================
 # Session Start: Memory Loading & Context Injection
 # ===========================================================================
@@ -425,7 +404,7 @@ class TestSessionStartMemoryLoading:
 
     def test_session_start_reads_memory_files(self, tmp_path):
         """Session start must read memory files from paths.memory_dir()."""
-        from lib.paths import Paths, _callable, _reset_cache
+        from multiplai_core.paths import Paths, _callable, _reset_cache
 
         # Set up mock memory directory with files
         memory_dir = tmp_path / "memory"
@@ -468,7 +447,7 @@ class TestSessionStartMemoryLoading:
             "CLAUDE_PLUGIN_ROOT": str(tmp_path / "plugin"),
             "CLAUDE_PLUGIN_DATA": str(data_dir),
         }, clear=False):
-            from lib.paths import _reset_cache
+            from multiplai_core.paths import _reset_cache
             _reset_cache()
             try:
                 import importlib
@@ -490,7 +469,7 @@ class TestSessionStartMemoryLoading:
         with patch.dict(os.environ, {
             "CLAUDE_PLUGIN_DATA": str(data_dir),
         }, clear=False):
-            from lib.paths import _reset_cache
+            from multiplai_core.paths import _reset_cache
             _reset_cache()
             try:
                 import importlib
@@ -521,7 +500,7 @@ class TestSessionStartMemoryLoading:
         with patch.dict(os.environ, {
             "CLAUDE_PLUGIN_DATA": str(data_dir),
         }, clear=False):
-            from lib.paths import _reset_cache
+            from multiplai_core.paths import _reset_cache
             _reset_cache()
             try:
                 import importlib
@@ -541,7 +520,7 @@ class TestSessionStartMemoryLoading:
         with patch.dict(os.environ, {
             "CLAUDE_PLUGIN_DATA": str(data_dir),
         }, clear=False):
-            from lib.paths import _reset_cache
+            from multiplai_core.paths import _reset_cache
             _reset_cache()
             try:
                 import importlib
@@ -563,7 +542,7 @@ class TestSessionStartMemoryLoading:
         with patch.dict(os.environ, {
             "CLAUDE_PLUGIN_DATA": str(data_dir),
         }, clear=False):
-            from lib.paths import _reset_cache
+            from multiplai_core.paths import _reset_cache
             _reset_cache()
             try:
                 import importlib
@@ -599,7 +578,7 @@ class TestSessionStartMemoryLoading:
             "CLAUDE_PLUGIN_OPTION_memory_dir": str(memory_dir),
             "CLAUDE_PLUGIN_DATA": str(data_dir),
         }, clear=False):
-            from lib.paths import _reset_cache
+            from multiplai_core.paths import _reset_cache
             _reset_cache()
             try:
                 import importlib
@@ -759,7 +738,7 @@ class TestSessionEndDiaryEntry:
             "CLAUDE_PLUGIN_DATA": str(data_dir),
             "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
         }, clear=False):
-            from lib.paths import _reset_cache
+            from multiplai_core.paths import _reset_cache
             _reset_cache()
             try:
                 import importlib
@@ -789,7 +768,7 @@ class TestSessionEndDiaryEntry:
             "CLAUDE_PLUGIN_DATA": str(data_dir),
             "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
         }, clear=False):
-            from lib.paths import _reset_cache
+            from multiplai_core.paths import _reset_cache
             _reset_cache()
             try:
                 import importlib
@@ -823,7 +802,7 @@ class TestSessionEndDiaryEntry:
             "CLAUDE_PLUGIN_DATA": str(data_dir),
             "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
         }, clear=False):
-            from lib.paths import _reset_cache
+            from multiplai_core.paths import _reset_cache
             _reset_cache()
             try:
                 import importlib
@@ -854,7 +833,7 @@ class TestSessionEndDiaryEntry:
             "CLAUDE_PLUGIN_DATA": str(data_dir),
             "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
         }, clear=False):
-            from lib.paths import _reset_cache
+            from multiplai_core.paths import _reset_cache
             _reset_cache()
             try:
                 import importlib
@@ -880,7 +859,7 @@ class TestSessionEndDiaryEntry:
             "CLAUDE_PLUGIN_DATA": str(data_dir),
             "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
         }, clear=False):
-            from lib.paths import _reset_cache
+            from multiplai_core.paths import _reset_cache
             _reset_cache()
             try:
                 import importlib
@@ -1041,7 +1020,7 @@ class TestSessionLifecycleFlow:
             "CLAUDE_PLUGIN_DATA": str(data_dir),
             "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
         }, clear=False):
-            from lib.paths import _reset_cache
+            from multiplai_core.paths import _reset_cache
             _reset_cache()
             try:
                 import importlib
@@ -1080,7 +1059,7 @@ class TestSessionLifecycleFlow:
             "CLAUDE_PLUGIN_DATA": str(data_dir),
             "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
         }, clear=False):
-            from lib.paths import _reset_cache
+            from multiplai_core.paths import _reset_cache
             _reset_cache()
             try:
                 import importlib
@@ -1134,19 +1113,6 @@ class TestErrorResilience:
         assert handles_missing, (
             "session_end.py must handle missing session_state.json gracefully"
         )
-
-    def test_session_stop_exits_gracefully_without_venv(self):
-        """If venv doesn't exist, session_stop should exit with warning, not stack trace.
-
-        Per plugin-hooks spec: Non-SessionStart hooks firing before venv exists
-        should exit gracefully with a warning message.
-        """
-        source = (SCRIPTS_DIR / "session_stop.py").read_text()
-        has_venv_guard = "venv_guard" in source or "ensure_venv" in source
-        assert has_venv_guard, (
-            "session_stop.py must have venv guard for graceful handling when venv missing"
-        )
-
 
 # ===========================================================================
 # Exactly Five Hook Event Types

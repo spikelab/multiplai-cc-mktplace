@@ -18,7 +18,7 @@ Run `/multiplai-context:dream-remember` to load the proposal and apply approved 
 
 1. **Check for pending learnings:**
    ```
-   python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --check
+   uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --check
    ```
    If the output says no pending learnings, inform the user and exit.
 
@@ -26,7 +26,7 @@ Run `/multiplai-context:dream-remember` to load the proposal and apply approved 
    large backlog), past the Bash tool's 600s max timeout. You **MUST** invoke it
    via the Bash tool with `run_in_background: true`:
    ```
-   python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
+   uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
    ```
    (No flags — default is report mode.)
 
@@ -52,7 +52,7 @@ Run `/multiplai-context:dream-remember` to load the proposal and apply approved 
 
 If the user explicitly asks to apply changes without review:
 ```
-python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --auto
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --auto
 ```
 
 This rewrites memory files directly and commits. Use only when the user explicitly
@@ -64,7 +64,7 @@ requests fully autonomous operation — the default is always human-in-the-loop.
 
 After `--auto` mode completes, regenerate catalogs:
 ```
-python "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"
 ```
 (Skipped for report-only mode — catalogs are regenerated after the user applies
 changes via `/multiplai-context:dream-remember`.)

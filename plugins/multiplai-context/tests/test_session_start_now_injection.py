@@ -43,7 +43,7 @@ class TestInjectProjectState:
         (ws / ".multiplai" / "now" / "foo.md").write_text(
             "# Project Status: foo\n\n- shipped the thing\n"
         )
-        from lib.paths import get_paths
+        from multiplai_core.paths import get_paths
 
         result, text = _capture_inject(get_paths().now_dir(), "/a/b/foo")
         assert result is True
@@ -52,7 +52,7 @@ class TestInjectProjectState:
 
     def test_empty_cwd_no_output(self, tmp_path, monkeypatch, reset_paths_cache):
         _make_ws(tmp_path, monkeypatch)
-        from lib.paths import get_paths
+        from multiplai_core.paths import get_paths
 
         result, text = _capture_inject(get_paths().now_dir(), "")
         assert result is False
@@ -60,7 +60,7 @@ class TestInjectProjectState:
 
     def test_missing_now_file_no_output(self, tmp_path, monkeypatch, reset_paths_cache):
         _make_ws(tmp_path, monkeypatch)
-        from lib.paths import get_paths
+        from multiplai_core.paths import get_paths
 
         result, text = _capture_inject(get_paths().now_dir(), "/a/b/nope")
         assert result is False
@@ -78,7 +78,7 @@ class TestInjectProjectState:
         (ws / ".multiplai" / "now" / "workspace.md").write_text(
             "# Project Status: workspace\n\n- cross-project work\n"
         )
-        from lib.paths import get_paths
+        from multiplai_core.paths import get_paths
 
         result, text = _capture_inject(get_paths().now_dir(), str(ws))
         assert result is True

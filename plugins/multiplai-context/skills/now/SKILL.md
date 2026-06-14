@@ -19,11 +19,11 @@ recover from stale/incorrect snapshots.
 
 - **Full rebuild (all projects):**
   ```
-  python "${CLAUDE_PLUGIN_ROOT}/scripts/synthesize_now.py"
+  uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/synthesize_now.py"
   ```
 - **Single project:**
   ```
-  python "${CLAUDE_PLUGIN_ROOT}/scripts/synthesize_now.py" --project <name>
+  uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/synthesize_now.py" --project <name>
   ```
 
 ## Steps

@@ -62,7 +62,7 @@ class TestEmptyCwdParsing:
         )
         cfg = {"project_roots": ["/work/PROJECTS"]}
         import synthesize_now
-        from lib.paths import get_paths
+        from multiplai_core.paths import get_paths
 
         grouped = synthesize_now._scan_diary(get_paths().diary_dir(), config=cfg)
         assert set(grouped) == {"foo"}
@@ -97,7 +97,7 @@ class TestScanDiaryGrouping:
         }
         import synthesize_now
 
-        from lib.paths import get_paths
+        from multiplai_core.paths import get_paths
 
         grouped = synthesize_now._scan_diary(get_paths().diary_dir(), config=cfg)
         assert set(grouped) == {"foo", "bar", "workspace"}
@@ -118,7 +118,7 @@ class TestScopedSynthesize:
         )
         import synthesize_now
 
-        from lib.paths import get_paths
+        from multiplai_core.paths import get_paths
 
         asyncio.run(synthesize_now.synthesize())
         now_dir = get_paths().now_dir()
@@ -138,7 +138,7 @@ class TestScopedSynthesize:
         )
         import synthesize_now
 
-        from lib.paths import get_paths
+        from multiplai_core.paths import get_paths
 
         asyncio.run(synthesize_now.synthesize(project_filter="foo"))
         now_dir = get_paths().now_dir()

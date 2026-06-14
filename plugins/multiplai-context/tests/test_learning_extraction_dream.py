@@ -81,52 +81,43 @@ def _find_imports(tree: ast.Module) -> list[str]:
 
 
 # ===================================================================
-# Requirement: Re-exec venv preamble present in all four scripts
+# Requirement: PEP 723 inline metadata present in all four scripts
 # ===================================================================
 
-class TestVenvPreamble:
-    """All four ported scripts must include the venv re-exec preamble
-    so they run inside the plugin's virtual environment."""
+class TestPep723Preamble:
+    """All four ported entry-point scripts carry PEP 723 inline metadata
+    declaring multiplai-core, so they run via `uv run --no-project`."""
 
     @pytest.mark.parametrize("script_path", ALL_SCRIPTS, ids=ALL_SCRIPT_NAMES)
-    def test_imports_venv_guard(self, script_path):
+    def test_has_pep723_header(self, script_path):
         """WHEN any of the four scripts is inspected
-        THEN it imports from lib.venv_guard."""
+        THEN it begins with a PEP 723 inline-metadata block."""
         source = _read_source(script_path)
-        assert "venv_guard" in source, (
-            f"{script_path.name} must import from lib.venv_guard "
-            "for venv re-exec preamble"
+        assert "# /// script" in source, (
+            f"{script_path.name} must carry a PEP 723 '# /// script' header"
         )
 
     @pytest.mark.parametrize("script_path", ALL_SCRIPTS, ids=ALL_SCRIPT_NAMES)
-    def test_calls_ensure_venv_python(self, script_path):
+    def test_declares_multiplai_core(self, script_path):
         """WHEN any of the four scripts is inspected
-        THEN it calls ensure_venv_python() at module level, before other lib imports."""
+        THEN its inline metadata depends on multiplai-core."""
         source = _read_source(script_path)
-        assert "ensure_venv_python()" in source, (
-            f"{script_path.name} must call ensure_venv_python() "
-            "to re-exec into the plugin venv"
+        assert "multiplai-core" in source, (
+            f"{script_path.name} must declare a multiplai-core dependency "
+            "in its PEP 723 metadata"
         )
 
     @pytest.mark.parametrize("script_path", ALL_SCRIPTS, ids=ALL_SCRIPT_NAMES)
-    def test_venv_guard_before_lib_imports(self, script_path):
+    def test_no_venv_guard(self, script_path):
         """WHEN the script source is read
-        THEN ensure_venv_python() appears BEFORE imports of lib.paths / lib.model_client."""
+        THEN the retired venv re-exec preamble is gone."""
         source = _read_source(script_path)
-        venv_pos = source.find("ensure_venv_python()")
-        paths_pos = source.find("from lib.paths")
-        model_pos = source.find("from lib.model_client")
-
-        if paths_pos != -1:
-            assert venv_pos < paths_pos, (
-                f"{script_path.name}: ensure_venv_python() must appear "
-                "before 'from lib.paths' import"
-            )
-        if model_pos != -1:
-            assert venv_pos < model_pos, (
-                f"{script_path.name}: ensure_venv_python() must appear "
-                "before 'from lib.model_client' import"
-            )
+        assert "venv_guard" not in source, (
+            f"{script_path.name} must not reference the retired venv_guard"
+        )
+        assert "ensure_venv_python" not in source, (
+            f"{script_path.name} must not call the retired ensure_venv_python()"
+        )
 
 
 # ===================================================================
@@ -199,11 +190,11 @@ class TestNoHardcodedPaths:
         THEN it imports from lib.paths."""
         source = _read_source(script_path)
         has_paths_import = (
-            "from lib.paths" in source or
-            "import lib.paths" in source
+            "from multiplai_core.paths" in source or
+            "import multiplai_core.paths" in source
         )
         assert has_paths_import, (
-            f"{script_path.name} must import from lib.paths for path resolution"
+            f"{script_path.name} must import from multiplai_core.paths for path resolution"
         )
 
 
@@ -518,7 +509,7 @@ class TestAutodreamFunctional:
     def test_dream_reads_learnings_from_learnings_dir(self, mock_env):
         """WHEN dream runs in plugin mode
         THEN per-day learnings live under paths.learnings_dir()."""
-        from lib.paths import get_paths
+        from multiplai_core.paths import get_paths
         paths = get_paths()
 
         learnings_today = paths.learnings_file("2026-01-01")
@@ -535,7 +526,7 @@ class TestAutodreamFunctional:
     def test_dream_dream_state_in_data_dir(self, mock_env):
         """WHEN dream updates dream state
         THEN it writes to plugin data directory."""
-        from lib.paths import get_paths
+        from multiplai_core.paths import get_paths
         paths = get_paths()
         dream_state = paths.dream_state_file()
         assert str(mock_env["data"]) in str(dream_state), (
@@ -545,7 +536,7 @@ class TestAutodreamFunctional:
     def test_dream_memory_updates_go_to_memory_dir(self, mock_env):
         """WHEN dream produces memory file updates
         THEN they are written to the configured memory directory."""
-        from lib.paths import get_paths
+        from multiplai_core.paths import get_paths
         paths = get_paths()
         assert paths.memory_dir() == mock_env["memory"], (
             "Memory dir should resolve to the configured CLAUDE_PLUGIN_OPTION_memory_dir"
@@ -739,11 +730,11 @@ class TestModelClientUsage:
         THEN it imports create_client from lib.model_client."""
         source = _read_source(script_path)
         has_model_import = (
-            "from lib.model_client import" in source or
-            "from lib.model_client import create_client" in source
+            "from multiplai_core.model_client import" in source or
+            "from multiplai_core.model_client import create_client" in source
         )
         assert has_model_import, (
-            f"{script_name} must import create_client from lib.model_client"
+            f"{script_name} must import create_client from multiplai_core.model_client"
         )
 
     @pytest.mark.parametrize("script_path,script_name", [

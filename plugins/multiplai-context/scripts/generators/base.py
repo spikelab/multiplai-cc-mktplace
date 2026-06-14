@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from lib.paths import Paths
+from multiplai_core.paths import Paths
 
 logger = logging.getLogger(__name__)
 

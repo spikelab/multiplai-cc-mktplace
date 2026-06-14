@@ -40,7 +40,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 def _make_mock_client(response_content='{"summary": "test summary", "topics": ["topic1"]}'):
     """Create an AsyncMock model client that returns the given content."""
-    from lib.model_client import ModelResponse
+    from multiplai_core.model_client import ModelResponse
 
     client = AsyncMock()
     client.query = AsyncMock(return_value=ModelResponse(content=response_content))
@@ -949,7 +949,7 @@ class TestLLMFailureHandling:
     @pytest.mark.asyncio
     async def test_partial_failure_does_not_abort(self, tmp_path, monkeypatch):
         """One failed LLM call does not prevent other entries from generating."""
-        from lib.model_client import ModelResponse
+        from multiplai_core.model_client import ModelResponse
 
         call_count = 0
 
@@ -981,7 +981,7 @@ class TestLLMFailureHandling:
     @pytest.mark.asyncio
     async def test_all_llm_failures_preserves_prior_entries(self, tmp_path, monkeypatch):
         """When all LLM calls fail, prior catalog entries are preserved."""
-        from lib.model_client import ModelResponse
+        from multiplai_core.model_client import ModelResponse
 
         # First run succeeds
         success_client = _make_mock_client()

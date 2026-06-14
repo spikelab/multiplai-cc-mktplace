@@ -67,14 +67,14 @@ class TestCreateRouter:
     def test_llm_returns_llm_router_when_client_available(self, monkeypatch):
         import lib.memory_router as mr
         monkeypatch.setattr(
-            "lib.model_client.detect_client_type", lambda: "AgentSDKClient"
+            "multiplai_core.model_client.detect_client_type", lambda: "AgentSDKClient"
         )
         assert isinstance(mr.create_router("llm"), mr.LLMRouter)
 
     def test_llm_degrades_to_token_overlap_without_client(self, monkeypatch):
         import lib.memory_router as mr
         monkeypatch.setattr(
-            "lib.model_client.detect_client_type",
+            "multiplai_core.model_client.detect_client_type",
             lambda: "none (no SDK or API key)",
         )
         assert isinstance(mr.create_router("llm"), mr.TokenOverlapRouter)
@@ -221,7 +221,7 @@ class TestLLMRouter:
         async def _fake_create_client():
             return mock_client
 
-        with patch("lib.model_client.create_client", _fake_create_client):
+        with patch("multiplai_core.model_client.create_client", _fake_create_client):
             picks = LLMRouter().select("help me debug python", self._catalog())
         assert picks == ["python.md"]
 
@@ -237,7 +237,7 @@ class TestLLMRouter:
         async def _fake_create_client():
             return mock_client
 
-        with patch("lib.model_client.create_client", _fake_create_client):
+        with patch("multiplai_core.model_client.create_client", _fake_create_client):
             picks = LLMRouter().select("prompt", self._catalog())
         assert picks == ["python.md"]
 
@@ -252,7 +252,7 @@ class TestLLMRouter:
         async def _fake_create_client():
             return mock_client
 
-        with patch("lib.model_client.create_client", _fake_create_client):
+        with patch("multiplai_core.model_client.create_client", _fake_create_client):
             picks = LLMRouter().select("prompt", self._catalog())
         assert picks == ["python.md"]
 
@@ -267,7 +267,7 @@ class TestLLMRouter:
         async def _fake_create_client():
             return mock_client
 
-        with patch("lib.model_client.create_client", _fake_create_client):
+        with patch("multiplai_core.model_client.create_client", _fake_create_client):
             picks = LLMRouter().select("prompt", self._catalog())
         assert picks == []
 
@@ -278,7 +278,7 @@ class TestLLMRouter:
         async def _failing_client():
             raise RuntimeError("no backend configured")
 
-        with patch("lib.model_client.create_client", _failing_client):
+        with patch("multiplai_core.model_client.create_client", _failing_client):
             picks = LLMRouter().select("prompt", self._catalog())
         assert picks == []
 
@@ -532,7 +532,7 @@ class TestLLMRouterMultiCorpus:
         fake_create, mock_client = self._make_mock_client(
             '{"memory": ["voice.md"], "skills": ["writing"], "resources": ["ai/voice-ai.md"]}'
         )
-        with patch("lib.model_client.create_client", fake_create):
+        with patch("multiplai_core.model_client.create_client", fake_create):
             result = LLMRouter().select_multi(
                 "help me write a blog post", None, self._corpora()
             )
@@ -548,7 +548,7 @@ class TestLLMRouterMultiCorpus:
         from lib.memory_router import LLMRouter
 
         fake_create, mock_client = self._make_mock_client('{}')
-        with patch("lib.model_client.create_client", fake_create):
+        with patch("multiplai_core.model_client.create_client", fake_create):
             result = LLMRouter().select_multi("", None, self._corpora())
         assert result == {"memory": [], "skills": [], "resources": []}
         mock_client.query.assert_not_called()
@@ -560,7 +560,7 @@ class TestLLMRouterMultiCorpus:
         fake_create, _ = self._make_mock_client(
             '{"memory": ["voice.md", "fake.md"], "skills": ["writing", "no-such"], "resources": []}'
         )
-        with patch("lib.model_client.create_client", fake_create):
+        with patch("multiplai_core.model_client.create_client", fake_create):
             result = LLMRouter().select_multi("prompt", None, self._corpora())
         assert result["memory"] == ["voice.md"]
         assert result["skills"] == ["writing"]
@@ -572,7 +572,7 @@ class TestLLMRouterMultiCorpus:
         fake_create, _ = self._make_mock_client(
             '{"memory": ["voice.md#Voice Tone"], "skills": [], "resources": []}'
         )
-        with patch("lib.model_client.create_client", fake_create):
+        with patch("multiplai_core.model_client.create_client", fake_create):
             result = LLMRouter().select_multi("prompt", None, self._corpora())
         assert result["memory"] == ["voice.md#Voice Tone"]
 
@@ -580,7 +580,7 @@ class TestLLMRouterMultiCorpus:
         from lib.memory_router import LLMRouter
 
         fake_create, _ = self._make_mock_client("not json at all")
-        with patch("lib.model_client.create_client", fake_create):
+        with patch("multiplai_core.model_client.create_client", fake_create):
             result = LLMRouter().select_multi("prompt", None, self._corpora())
         assert result == {"memory": [], "skills": [], "resources": []}
 
@@ -590,7 +590,7 @@ class TestLLMRouterMultiCorpus:
         async def _failing_client():
             raise RuntimeError("no backend")
 
-        with patch("lib.model_client.create_client", _failing_client):
+        with patch("multiplai_core.model_client.create_client", _failing_client):
             result = LLMRouter().select_multi("prompt", None, self._corpora())
         assert result == {"memory": [], "skills": [], "resources": []}
 
@@ -598,7 +598,7 @@ class TestLLMRouterMultiCorpus:
         from lib.memory_router import LLMRouter
 
         fake_create, mock_client = self._make_mock_client('{}')
-        with patch("lib.model_client.create_client", fake_create):
+        with patch("multiplai_core.model_client.create_client", fake_create):
             result = LLMRouter().select_multi(
                 "prompt",
                 None,
@@ -614,7 +614,7 @@ class TestLLMRouterMultiCorpus:
         fake_create, mock_client = self._make_mock_client(
             '{"memory": [], "skills": [], "resources": []}'
         )
-        with patch("lib.model_client.create_client", fake_create):
+        with patch("multiplai_core.model_client.create_client", fake_create):
             LLMRouter().select_multi(
                 "are these costs ok?",
                 "I just showed you the API pricing breakdown.",
@@ -631,7 +631,7 @@ class TestLLMRouterMultiCorpus:
         fake_create, _ = self._make_mock_client(
             '{"memory": ["voice.md", "py.md"], "skills": [], "resources": []}'
         )
-        with patch("lib.model_client.create_client", fake_create):
+        with patch("multiplai_core.model_client.create_client", fake_create):
             result = LLMRouter().select_multi(
                 "prompt", None, self._corpora(), max_files_per_corpus=1
             )

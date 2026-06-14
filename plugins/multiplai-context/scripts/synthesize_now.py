@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.1"]
+# ///
 """Per-project status synthesis for multiplai plugin.
 
 Scans recent diary entries from ``paths.diary_dir()``, groups them by project
@@ -20,12 +24,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib.venv_guard import ensure_venv_python
-ensure_venv_python()
-
-from lib.paths import get_paths
-from lib.model_client import create_client
-from lib.log_utils import setup_logging
+from multiplai_core.paths import get_paths
+from multiplai_core.model_client import create_client
+from multiplai_core.log_utils import setup_logging
 from lib.project_identity import load_project_map, resolve_project
 
 logger = setup_logging("synthesize_now")

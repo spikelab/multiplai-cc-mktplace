@@ -78,14 +78,14 @@ class TestSetupScriptImports:
         self.write_src = SETUP_WRITE_SCRIPT.read_text() if SETUP_WRITE_SCRIPT.is_file() else ""
 
     def test_check_imports_paths(self):
-        """setup_check.py must import from lib.paths for path resolution."""
-        assert re.search(r"from\s+lib\.paths\s+import|import\s+lib\.paths", self.check_src), \
-            "setup_check.py must import path resolver from lib.paths"
+        """setup_check.py must import from multiplai_core.paths for path resolution."""
+        assert re.search(r"from\s+multiplai_core\.paths\s+import|import\s+multiplai_core\.paths", self.check_src), \
+            "setup_check.py must import path resolver from multiplai_core.paths"
 
     def test_write_imports_paths(self):
-        """setup_write.py must import from lib.paths for path resolution."""
-        assert re.search(r"from\s+lib\.paths\s+import|import\s+lib\.paths", self.write_src), \
-            "setup_write.py must import path resolver from lib.paths"
+        """setup_write.py must import from multiplai_core.paths for path resolution."""
+        assert re.search(r"from\s+multiplai_core\.paths\s+import|import\s+multiplai_core\.paths", self.write_src), \
+            "setup_write.py must import path resolver from multiplai_core.paths"
 
     def test_check_no_hardcoded_paths(self):
         """setup_check.py must not contain hardcoded home directory paths."""
@@ -272,7 +272,7 @@ class TestTemplatePathResolution:
 
     def test_plugin_mode_templates_dir(self, monkeypatch, reset_paths_cache):
         """In plugin mode, templates resolve to $CLAUDE_PLUGIN_ROOT/templates."""
-        from lib.paths import _reset_cache, Paths
+        from multiplai_core.paths import _reset_cache, Paths
 
         _reset_cache()
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN_ROOT))
@@ -283,7 +283,7 @@ class TestTemplatePathResolution:
 
     def test_standalone_mode_templates_dir(self, monkeypatch, reset_paths_cache):
         """In standalone mode, templates resolve to ~/.multiplai/templates."""
-        from lib.paths import _reset_cache, Paths
+        from multiplai_core.paths import _reset_cache, Paths
 
         _reset_cache()
         # Clear all plugin env vars
@@ -297,7 +297,7 @@ class TestTemplatePathResolution:
 
     def test_templates_dir_is_path_instance(self, monkeypatch, reset_paths_cache):
         """templates_dir must return a Path instance."""
-        from lib.paths import _reset_cache, Paths
+        from multiplai_core.paths import _reset_cache, Paths
 
         _reset_cache()
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN_ROOT))
@@ -307,7 +307,7 @@ class TestTemplatePathResolution:
 
     def test_template_files_accessible_via_resolved_path(self, monkeypatch, reset_paths_cache):
         """All three templates must exist at the path-resolved templates dir."""
-        from lib.paths import _reset_cache, Paths
+        from multiplai_core.paths import _reset_cache, Paths
 
         _reset_cache()
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN_ROOT))
@@ -468,7 +468,7 @@ class TestSetupRespectsconfiguredDir:
 
     def test_custom_memory_dir_via_env(self, tmp_path, monkeypatch, reset_paths_cache):
         """WHEN CLAUDE_PLUGIN_OPTION_memory_dir is set, setup should use it."""
-        from lib.paths import _reset_cache, Paths
+        from multiplai_core.paths import _reset_cache, Paths
 
         _reset_cache()
         custom_mem = tmp_path / "custom-memory"
@@ -488,7 +488,7 @@ class TestSetupRespectsconfiguredDir:
 
     def test_default_memory_dir_when_unconfigured(self, monkeypatch, reset_paths_cache):
         """WHEN no custom memory_dir and no workspace, should use ~/.multiplai/memory."""
-        from lib.paths import _reset_cache, Paths
+        from multiplai_core.paths import _reset_cache, Paths
 
         _reset_cache()
         for key in list(os.environ):
@@ -511,7 +511,7 @@ class TestTemplateSourceResolution:
 
     def test_templates_dir_in_plugin_mode(self, monkeypatch, reset_paths_cache):
         """In plugin mode, templates_dir = $CLAUDE_PLUGIN_ROOT/templates."""
-        from lib.paths import _reset_cache, Paths
+        from multiplai_core.paths import _reset_cache, Paths
 
         _reset_cache()
         fake_root = "/fake/plugin/root"
@@ -617,7 +617,7 @@ class TestTemplateIntegration:
 
     def test_plugin_root_templates_dir_matches_reality(self):
         """The templates_dir derivation must point to where templates actually live."""
-        from lib.paths import Paths
+        from multiplai_core.paths import Paths
 
         # In actual plugin layout, templates are at PLUGIN_ROOT/templates/
         expected = PLUGIN_ROOT / "templates"

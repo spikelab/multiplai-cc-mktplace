@@ -10,7 +10,7 @@ You are the multiplai health audit skill. Your job is to check the completeness 
 ## Steps
 
 1. **Run the health check script:**
-   Run `python "${CLAUDE_PLUGIN_ROOT}/scripts/health_check.py"` to audit memory files, directories, and plugin data.
+   Run `uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/health_check.py"` to audit memory files, directories, and plugin data.
    The script outputs structured JSON to stdout.
 
 2. **Parse the JSON output** and present a markdown-formatted audit report with these sections:
@@ -23,7 +23,7 @@ You are the multiplai health audit skill. Your job is to check the completeness 
      - **Last eval** (`routing.last_eval`): report `strategy`, `total_cases`, `recall_pct`, `precision_pct`, `none_accuracy_pct`, `cap_saturation_pct`, and `age_days`. **Mandatory caveats — state these, do not present the numbers bare:**
        - `token_overlap` `none_accuracy_pct ≈ 0` is **expected and by design**, not a regression — lexical overlap structurally cannot abstain (proven: NONE and true-positive score distributions fully overlap). Abstention needs the semantic `llm` router, which is **deferred/opt-in**: ~17s/prompt via the Agent SDK, unusable as a blocking pre-prompt hook pending an async / API-key design.
        - The eval scores whatever `strategy` it last ran with (normally `token_overlap`, the default). If `last_eval.strategy` differs from `effective_strategy`, the numbers don't describe what's running — say so.
-       - If `last_eval` is null or `age_days` > 30, recommend re-running `python "${CLAUDE_PLUGIN_ROOT}/scripts/eval_router.py"` (zero LLM cost under `token_overlap`).
+       - If `last_eval` is null or `age_days` > 30, recommend re-running `uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/eval_router.py"` (zero LLM cost under `token_overlap`).
 
    - **Directory Validation**: For each Paths field (`memory_dir`, `diary_dir`, `data_dir`, `venv_dir`), report whether the directory exists on disk or is missing.
 

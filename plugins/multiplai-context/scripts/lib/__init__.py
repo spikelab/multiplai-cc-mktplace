@@ -1,9 +1,15 @@
-"""Shared library for multiplai plugin scripts.
+"""Context-specific library for multiplai plugin scripts.
 
-Modules:
-    paths         — Centralized path resolution with env-var cascade
-    model_client  — Abstract LLM client (Agent SDK / Anthropic API)
-    log_utils     — Logging setup with file + stderr handlers
-    config        — JSON/YAML config file loader
-    venv_guard    — Venv re-exec guard for hook scripts
+Generic core modules (paths, config, log_utils, model_client) now live in
+the standalone `multiplai_core` package. This package holds the plugin's
+context-specific modules:
+
+    extraction          — Learning/diary extraction
+    memory_router       — Memory routing logic
+    routing_logic       — Prompt routing
+    router_prompt       — Router prompt construction
+    section_loader      — Memory section loading
+    project_identity    — Project identity resolution
+    transcript_distiller — Transcript distillation
+    transcript_helper   — Transcript helpers
 """

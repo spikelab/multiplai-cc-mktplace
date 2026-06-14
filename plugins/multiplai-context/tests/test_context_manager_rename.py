@@ -49,7 +49,7 @@ def _make_memory_dir(tmp_path: Path, files: dict[str, str] | None = None) -> Pat
 
 def _import_context_manager():
     """Dynamically import context_manager module."""
-    from lib.paths import _reset_cache
+    from multiplai_core.paths import _reset_cache
     _reset_cache()
     spec = importlib.util.spec_from_file_location("context_manager", CONTEXT_MANAGER_PATH)
     if spec is None or spec.loader is None:
@@ -456,32 +456,34 @@ class TestNoFunctionalChange:
 
 
 class TestVenvGuardPreserved:
-    """The venv guard preamble must be preserved in context_manager.py."""
+    """Post-uv-migration: context_manager.py runs via `uv run --no-project`
+    with PEP 723 inline metadata; the old venv guard preamble is gone and
+    core imports resolve through multiplai_core."""
 
-    def test_has_venv_guard_import(self):
+    def test_has_pep723_header(self):
         """WHEN context_manager.py is inspected
-        THEN it imports venv_guard."""
+        THEN it carries a PEP 723 inline-metadata header."""
         text = CONTEXT_MANAGER_PATH.read_text()
-        assert "venv_guard" in text, \
-            "context_manager.py must import venv_guard"
+        assert "# /// script" in text, \
+            "context_manager.py must carry a PEP 723 header"
 
-    def test_has_ensure_venv_python_call(self):
+    def test_no_venv_guard(self):
         """WHEN context_manager.py is inspected
-        THEN it calls ensure_venv_python()."""
+        THEN the retired venv guard preamble is gone."""
         text = CONTEXT_MANAGER_PATH.read_text()
-        assert "ensure_venv_python" in text, \
-            "context_manager.py must call ensure_venv_python()"
+        assert "venv_guard" not in text and "ensure_venv_python" not in text, \
+            "context_manager.py must not reference the retired venv guard"
 
-    def test_uses_lib_paths(self):
+    def test_uses_core_paths(self):
         """WHEN context_manager.py is inspected
-        THEN it imports from lib.paths."""
+        THEN it imports from multiplai_core.paths."""
         text = CONTEXT_MANAGER_PATH.read_text()
-        assert "from lib.paths" in text or "lib.paths" in text, \
-            "context_manager.py must import from lib.paths"
+        assert "from multiplai_core.paths" in text or "multiplai_core.paths" in text, \
+            "context_manager.py must import from multiplai_core.paths"
 
-    def test_uses_lib_model_client(self):
+    def test_uses_core_model_client(self):
         """WHEN context_manager.py is inspected
-        THEN it imports from lib.model_client."""
+        THEN it imports from multiplai_core.model_client."""
         text = CONTEXT_MANAGER_PATH.read_text()
         assert "model_client" in text, \
             "context_manager.py must reference model_client"

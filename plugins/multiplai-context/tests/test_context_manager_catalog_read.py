@@ -57,7 +57,7 @@ def plugin_data_env(tmp_path, monkeypatch):
     catalogs_dir.mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
     # Reset the paths cache so it picks up the new env
-    from lib.paths import _reset_cache
+    from multiplai_core.paths import _reset_cache
     _reset_cache()
     yield catalogs_dir
     _reset_cache()
@@ -1192,7 +1192,7 @@ class TestEdgeCases:
         THEN should fall back gracefully, not crash with FileNotFoundError.
         """
         import context_manager
-        from lib.paths import _reset_cache
+        from multiplai_core.paths import _reset_cache
 
         # Point to a data dir with no catalogs subdirectory
         data_dir = tmp_path / "no_catalogs_here"

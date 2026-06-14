@@ -135,20 +135,35 @@ class TestPluginJsonFullWiring:
 
     def test_user_config_fields_correspond_to_env_vars(self):
         """WHEN userConfig fields are declared in plugin.json
-        THEN some scripts/ module reads the corresponding CLAUDE_PLUGIN_OPTION_* env var."""
-        # Collect source text from lib/ and generators/ — the two locations
-        # where plugin config env vars are consumed
+        THEN some module reads the corresponding CLAUDE_PLUGIN_OPTION_* env var.
+
+        Config consumption is split across two locations: the plugin's own
+        context modules (scripts/lib, scripts/generators) and the extracted
+        multiplai_core package (which owns path/config/model-client resolution
+        and therefore the path + api-key + catalog-model env vars)."""
         source_dirs = [SCRIPTS_DIR / "lib", SCRIPTS_DIR / "generators"]
-        all_sources = {}
+        all_sources = []
         for src_dir in source_dirs:
             for py_file in src_dir.glob("*.py"):
-                all_sources[py_file.name] = py_file.read_text()
-        all_source_text = "\n".join(all_sources.values())
+                all_sources.append(py_file.read_text())
+
+        # Include multiplai_core's installed source: path/config/model_client
+        # resolution (and their env vars) moved there during extraction.
+        try:
+            import multiplai_core
+            core_dir = Path(multiplai_core.__file__).parent
+            for py_file in core_dir.glob("*.py"):
+                all_sources.append(py_file.read_text())
+        except Exception:  # pragma: no cover - core always present in CI
+            pass
+
+        all_source_text = "\n".join(all_sources)
 
         for field_name in self.plugin.get("userConfig", {}):
             env_var = f"CLAUDE_PLUGIN_OPTION_{field_name}"
             assert env_var in all_source_text, \
-                f"userConfig field '{field_name}' has no corresponding {env_var} in any scripts/ module"
+                f"userConfig field '{field_name}' has no corresponding {env_var} " \
+                "in any plugin or multiplai_core module"
 
     def test_hooks_scripts_all_exist_and_are_python(self):
         """WHEN every hook script path in hooks.json is checked
@@ -171,20 +186,18 @@ class TestPluginJsonFullWiring:
             assert hook["timeout"] > 0, \
                 f"Hook timeout must be positive: {hook['event']}"
 
-    def test_session_start_venv_bootstrap_is_first(self):
+    def test_session_start_has_no_venv_bootstrap(self):
         """WHEN SessionStart hooks are listed
-        THEN venv_bootstrap.py appears before session_start.py."""
+        THEN the retired venv_bootstrap.py hook is gone and session_start.py
+        is the sole SessionStart command."""
         session_start_hooks = [h for h in self.hooks["hooks"]
                                if h["event"] == "SessionStart"]
         scripts = [h["script"] for h in session_start_hooks]
         assert scripts, "No SessionStart hooks found"
-        # parse_hooks preserves declaration order — bootstrap must run first.
-        assert scripts[0].endswith("venv_bootstrap.py"), \
-            f"First SessionStart command must be venv_bootstrap.py, got {scripts[0]}"
-        if "scripts/session_start.py" in scripts:
-            assert scripts.index("scripts/venv_bootstrap.py") < \
-                scripts.index("scripts/session_start.py"), \
-                "venv_bootstrap.py must appear before session_start.py"
+        assert not any(s.endswith("venv_bootstrap.py") for s in scripts), \
+            "venv_bootstrap.py hook must be removed (uv migration)"
+        assert "scripts/session_start.py" in scripts, \
+            "session_start.py must remain the SessionStart hook"
 
 
 # ===========================================================================
@@ -192,37 +205,48 @@ class TestPluginJsonFullWiring:
 # ===========================================================================
 
 class TestAfterFieldAndBootstrapFallback:
-    """Verify hooks.json `after` field handling and inline-bootstrap fallback.
+    """Verify hooks are launched via uv with PEP 723 inline metadata.
 
-    R3 risk: if Claude Code doesn't support `after` field, session_start.py
-    could execute before venv is ready. Mitigation: re-exec pattern (D4).
+    The managed-venv re-exec preamble (R3 mitigation) was retired: every hook
+    command runs through `uv run --no-project`, which provisions deps from each
+    script's inline PEP 723 block.
     """
 
     @pytest.fixture(autouse=True)
     def load_hooks(self):
         self.hooks = _load_hooks_json()
 
-    def test_session_start_script_has_venv_guard(self):
+    def test_session_start_has_pep723_metadata(self):
         """WHEN session_start.py is inspected
-        THEN it imports and calls ensure_venv_python() as fallback for R3."""
+        THEN it carries PEP 723 inline metadata and no retired venv guard."""
         text = (SCRIPTS_DIR / "session_start.py").read_text()
-        assert "ensure_venv_python" in text, \
-            "session_start.py must have venv_guard fallback (R3 mitigation)"
+        assert "# /// script" in text, \
+            "session_start.py must carry PEP 723 inline metadata"
+        assert "ensure_venv_python" not in text, \
+            "session_start.py must not reference the retired venv guard"
 
-    def test_all_non_bootstrap_hooks_have_venv_guard(self):
-        """WHEN any hook script that isn't venv_bootstrap.py is inspected
-        THEN it has the re-exec venv guard pattern."""
+    def test_all_hook_scripts_have_pep723_metadata(self):
+        """WHEN any hook script is inspected
+        THEN it carries PEP 723 inline metadata (and no venv guard)."""
         for hook in self.hooks["hooks"]:
-            if "venv_bootstrap" in hook["script"]:
-                continue
             script_path = PLUGIN_ROOT / hook["script"]
             if script_path.exists():
                 text = script_path.read_text()
-                has_guard = ("ensure_venv_python" in text or
-                             "venv_guard" in text or
-                             "venv" in text and "execv" in text)
-                assert has_guard, \
-                    f"{hook['script']} missing venv re-exec guard (R3 fallback)"
+                assert "# /// script" in text, \
+                    f"{hook['script']} missing PEP 723 inline metadata"
+                assert "venv_guard" not in text and "ensure_venv_python" not in text, \
+                    f"{hook['script']} still references the retired venv guard"
+
+    def test_all_hook_commands_use_uv_run(self):
+        """WHEN any hook command is inspected
+        THEN it is launched via `uv run --no-project` rather than `python`."""
+        parsed = json.loads(HOOKS_JSON.read_text())
+        for event, groups in parsed["hooks"].items():
+            for group in groups:
+                for entry in group["hooks"]:
+                    cmd = entry["command"]
+                    assert cmd.startswith("uv run --no-project "), \
+                        f"{event} command must use 'uv run --no-project', got: {cmd}"
 
     def test_hooks_json_valid_official_nested_schema(self):
         """WHEN hooks/hooks.json is parsed
@@ -241,13 +265,6 @@ class TestAfterFieldAndBootstrapFallback:
                     assert entry.get("type") == "command"
                     assert isinstance(entry.get("command"), str) and entry["command"]
 
-    def test_venv_guard_handles_missing_venv_gracefully(self):
-        """WHEN ensure_venv_python() is called but no venv exists
-        THEN it returns without crashing (no-op, since venv_python doesn't exist)."""
-        guard_source = (SCRIPTS_DIR / "lib" / "venv_guard.py").read_text()
-        # The guard must check venv_python.exists() before execv
-        assert "exists()" in guard_source, \
-            "venv_guard must check if venv python exists before execv"
 
 
 # ===========================================================================
@@ -521,7 +538,14 @@ class TestGrepAuditHardcodedPaths:
                 text = fp.read_text(errors="replace")
             except (OSError, UnicodeDecodeError):
                 continue
-            if "spikelab" in text.lower():
+            # The 'spikelab' org legitimately appears in the multiplai-core
+            # git URL inside PEP 723 inline metadata — that's infrastructure,
+            # not a leaked personal reference. Ignore those lines.
+            offending = [
+                ln for ln in text.lower().splitlines()
+                if "spikelab" in ln and "multiplai-core" not in ln
+            ]
+            if offending:
                 rel = fp.relative_to(PLUGIN_ROOT)
                 violations.append(str(rel))
 
@@ -534,63 +558,38 @@ class TestGrepAuditHardcodedPaths:
 # ===========================================================================
 
 class TestMinimalDependencies:
-    """Verify requirements.txt stays minimal: anthropic, pyyaml, and a
-    pinned claude-agent-sdk. The SDK was originally omitted (host
-    injection + --system-site-packages) but that broke standalone /
-    skill-invoked SDK scripts; it is now a normal pinned venv dep. No
-    other packages, no transitive trees pulled in explicitly."""
+    """Verify runtime deps moved out of requirements.txt and into per-script
+    PEP 723 inline metadata + multiplai-core.
 
-    def test_three_dependencies(self):
+    anthropic / claude-agent-sdk / pyyaml are no longer pinned in
+    requirements.txt; entry-point scripts declare their deps inline and
+    `uv run` provisions them (the SDK arrives transitively via multiplai-core)."""
+
+    def test_requirements_has_no_runtime_pins(self):
         """WHEN requirements.txt is parsed
-        THEN it contains exactly 3 non-comment, non-empty lines."""
+        THEN it contains no runtime dependency lines (comments only)."""
         text = (PLUGIN_ROOT / "requirements.txt").read_text()
         deps = [line.strip() for line in text.splitlines()
                 if line.strip() and not line.strip().startswith("#")]
-        assert len(deps) == 3, \
-            f"requirements.txt must have exactly 3 deps, got {len(deps)}: {deps}"
+        assert deps == [], \
+            f"requirements.txt must declare no runtime deps, got: {deps}"
 
-    def test_anthropic_present_with_version(self):
+    def test_no_pinned_runtime_deps(self):
         """WHEN requirements.txt is inspected
-        THEN anthropic is pinned (== or >=) at version >=0.40.0."""
+        THEN the retired runtime pins are absent."""
         text = (PLUGIN_ROOT / "requirements.txt").read_text()
-        m = re.search(r"anthropic\s*(==|>=)\s*(\d+)\.(\d+)\.(\d+)", text)
-        assert m, "requirements.txt must declare anthropic with a version pin"
-        major, minor, patch = int(m.group(2)), int(m.group(3)), int(m.group(4))
-        assert (major, minor, patch) >= (0, 40, 0), \
-            f"anthropic version must be >=0.40.0, got {major}.{minor}.{patch}"
+        for pin in ("anthropic==", "claude-agent-sdk==", "pyyaml>="):
+            assert pin not in text, \
+                f"requirements.txt must not pin {pin!r} (moved to PEP 723 + multiplai-core)"
 
-    def test_pyyaml_present_with_version(self):
-        """WHEN requirements.txt is inspected
-        THEN pyyaml>=6.0 is declared."""
-        text = (PLUGIN_ROOT / "requirements.txt").read_text().lower()
-        assert re.search(r"pyyaml\s*>=\s*6\.0", text), \
-            "requirements.txt must declare pyyaml>=6.0"
-
-    def test_claude_agent_sdk_pinned_in_requirements(self):
-        """WHEN requirements.txt is inspected
-        THEN claude-agent-sdk is declared and pinned (==).
-
-        Installed into the plugin venv so SDK features work for
-        standalone/skill runs, not only host-injected hooks. Pinned so
-        it can't drift from the version the runtime expects."""
-        text = (PLUGIN_ROOT / "requirements.txt").read_text().lower()
-        assert re.search(r"claude-agent-sdk\s*==", text), \
-            "requirements.txt must declare claude-agent-sdk== (pinned)"
-
-    def test_no_extra_dependencies_snuck_in(self):
-        """WHEN requirements.txt dependency names are extracted
-        THEN they are only anthropic, pyyaml, and claude-agent-sdk."""
-        text = (PLUGIN_ROOT / "requirements.txt").read_text()
-        deps = []
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            # Extract package name before version specifier
-            name = re.split(r'[>=<!\[\s]', line)[0].strip().lower()
-            deps.append(name)
-        assert set(deps) == {"anthropic", "pyyaml", "claude-agent-sdk"}, \
-            f"Only anthropic, pyyaml, claude-agent-sdk allowed, got: {deps}"
+    def test_entry_points_declare_multiplai_core(self):
+        """WHEN entry-point scripts are inspected
+        THEN each carries PEP 723 metadata depending on multiplai-core."""
+        for name in ("session_start.py", "context_manager.py", "dream.py",
+                     "extract_learnings.py", "generate_catalog.py"):
+            text = (SCRIPTS_DIR / name).read_text()
+            assert "# /// script" in text, f"{name} missing PEP 723 header"
+            assert "multiplai-core" in text, f"{name} missing multiplai-core dependency"
 
 
 # ===========================================================================
@@ -600,19 +599,19 @@ class TestMinimalDependencies:
 class TestCrossModuleWiring:
     """Verify all modules reference each other correctly and consistently."""
 
-    def test_all_hook_scripts_import_lib_paths(self):
+    def test_all_hook_scripts_import_core_paths(self):
         """WHEN each hook script is inspected
-        THEN it imports from lib.paths (directly or via venv_guard)."""
+        THEN it imports the path resolver from multiplai_core.paths."""
         hooks = _load_hooks_json()
         for hook in hooks["hooks"]:
             script_path = PLUGIN_ROOT / hook["script"]
             if not script_path.exists():
                 continue
             text = script_path.read_text()
-            has_paths = ("from lib.paths" in text or "lib.paths" in text
-                         or "from lib.venv_guard" in text)
+            has_paths = ("from multiplai_core.paths" in text
+                         or "multiplai_core.paths" in text)
             assert has_paths, \
-                f"{hook['script']} doesn't import lib.paths or lib.venv_guard"
+                f"{hook['script']} doesn't import multiplai_core.paths"
 
     def test_lib_package_has_init(self):
         """WHEN scripts/lib/__init__.py is checked
@@ -642,14 +641,12 @@ class TestCrossModuleWiring:
                                 "should be deferred to function scope"
                             )
 
-    def test_venv_guard_module_exists_and_exports_ensure(self):
-        """WHEN scripts/lib/venv_guard.py is inspected
-        THEN it defines ensure_venv_python function."""
+    def test_venv_guard_module_removed(self):
+        """WHEN scripts/lib/ is inspected
+        THEN the retired venv_guard.py is gone (uv migration)."""
         guard_path = SCRIPTS_DIR / "lib" / "venv_guard.py"
-        assert guard_path.is_file(), "venv_guard.py must exist"
-        text = guard_path.read_text()
-        assert "def ensure_venv_python" in text, \
-            "venv_guard.py must define ensure_venv_python()"
+        assert not guard_path.exists(), \
+            "venv_guard.py must be removed (replaced by uv run + PEP 723)"
 
     def test_all_scripts_add_parent_to_sys_path(self):
         """WHEN each script in scripts/ is inspected
@@ -659,87 +656,6 @@ class TestCrossModuleWiring:
             has_path_setup = ("sys.path" in text or "from lib." in text)
             assert has_path_setup, \
                 f"{script.name} doesn't set up sys.path for lib imports"
-
-
-# ===========================================================================
-# 7. Venv Bootstrap Integration
-# ===========================================================================
-
-class TestVenvBootstrapIntegration:
-    """Verify venv bootstrap creates a working environment."""
-
-    def test_bootstrap_creates_marker_on_success(self, tmp_path):
-        """WHEN venv_bootstrap.py runs successfully
-        THEN it writes .bootstrap-complete marker with requirements hash."""
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        env = {
-            "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-        }
-        result = _run_plugin_script(
-            "scripts/venv_bootstrap.py",
-            env_overrides=env,
-            timeout=120,
-        )
-        if result.returncode == 0:
-            venv_dir = data_dir / "venv"
-            marker = venv_dir / ".bootstrap-complete"
-            assert marker.exists(), "Bootstrap should create .bootstrap-complete marker"
-            # Marker should contain hash of requirements.txt
-            req_hash = hashlib.sha256(
-                (PLUGIN_ROOT / "requirements.txt").read_bytes()
-            ).hexdigest()
-            assert marker.read_text().strip() == req_hash, \
-                "Marker should contain SHA-256 of requirements.txt"
-
-    def test_bootstrap_is_idempotent(self, tmp_path):
-        """WHEN venv_bootstrap.py runs twice
-        THEN the second run is a fast no-op (< 2 seconds)."""
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        env = {
-            "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
-            "CLAUDE_PLUGIN_DATA": str(data_dir),
-        }
-        # First run: creates venv
-        result1 = _run_plugin_script(
-            "scripts/venv_bootstrap.py",
-            env_overrides=env,
-            timeout=120,
-        )
-        if result1.returncode != 0:
-            pytest.skip(f"First bootstrap failed: {result1.stderr[:200]}")
-
-        # Second run: should be fast no-op
-        t0 = time.monotonic()
-        result2 = _run_plugin_script(
-            "scripts/venv_bootstrap.py",
-            env_overrides=env,
-            timeout=10,
-        )
-        elapsed = time.monotonic() - t0
-
-        assert result2.returncode == 0, \
-            f"Second bootstrap run failed: {result2.stderr[:200]}"
-        assert elapsed < 5.0, \
-            f"Idempotent bootstrap should be fast, took {elapsed:.1f}s"
-
-    def test_bootstrap_rerun_on_requirements_change(self, tmp_path):
-        """WHEN requirements.txt hash changes
-        THEN bootstrap re-runs pip install."""
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        venv_dir = data_dir / "venv"
-        venv_dir.mkdir(parents=True)
-        marker = venv_dir / ".bootstrap-complete"
-        # Write a stale marker (wrong hash)
-        marker.write_text("stale-hash-that-does-not-match")
-
-        # The bootstrap should detect the mismatch
-        source = (SCRIPTS_DIR / "venv_bootstrap.py").read_text()
-        assert "sha256" in source.lower() or "hash" in source.lower(), \
-            "venv_bootstrap.py must use hash comparison for idempotency"
 
 
 # ===========================================================================
@@ -821,7 +737,7 @@ class TestPluginScriptValidity:
         THEN they load without ImportError or SyntaxError."""
         # paths.py should be importable (it's already on sys.path via conftest)
         try:
-            from lib import paths
+            from multiplai_core import paths
             assert hasattr(paths, "get_paths")
             assert hasattr(paths, "Paths")
         except ImportError:
@@ -831,7 +747,7 @@ class TestPluginScriptValidity:
         """WHEN lib.model_client is imported without claude_agent_sdk
         THEN the module loads successfully (SDK import is deferred)."""
         try:
-            from lib import model_client
+            from multiplai_core import model_client
             assert hasattr(model_client, "ModelClient")
             assert hasattr(model_client, "create_client")
             assert hasattr(model_client, "AgentSDKClient")
@@ -852,7 +768,7 @@ class TestModelClientFactoryWiring:
     def test_create_client_raises_without_sdk_or_key(self):
         """WHEN create_client() is called with no SDK and no API key
         THEN it raises RuntimeError."""
-        from lib.model_client import create_client
+        from multiplai_core.model_client import create_client
         from unittest.mock import patch
         import builtins
 
@@ -881,7 +797,7 @@ class TestModelClientFactoryWiring:
     def test_create_client_returns_anthropic_with_key(self):
         """WHEN create_client() is called with an API key and no SDK
         THEN it returns AnthropicAPIClient."""
-        from lib.model_client import create_client, AnthropicAPIClient
+        from multiplai_core.model_client import create_client, AnthropicAPIClient
         from unittest.mock import patch
         import builtins
 
@@ -906,33 +822,33 @@ class TestModelClientFactoryWiring:
     def test_anthropic_client_rejects_empty_key(self):
         """WHEN AnthropicAPIClient is instantiated with empty key
         THEN it raises ValueError."""
-        from lib.model_client import AnthropicAPIClient
+        from multiplai_core.model_client import AnthropicAPIClient
         with pytest.raises(ValueError, match="(?i)api key.*required"):
             AnthropicAPIClient("")
 
     def test_anthropic_client_rejects_none_key(self):
         """WHEN AnthropicAPIClient is instantiated with None key
         THEN it raises ValueError."""
-        from lib.model_client import AnthropicAPIClient
+        from multiplai_core.model_client import AnthropicAPIClient
         with pytest.raises(ValueError, match="(?i)api key.*required"):
             AnthropicAPIClient(None)
 
     def test_default_model_is_correct(self):
         """WHEN DEFAULT_MODEL is inspected
         THEN it matches claude-sonnet-4-6."""
-        from lib.model_client import DEFAULT_MODEL
+        from multiplai_core.model_client import DEFAULT_MODEL
         assert DEFAULT_MODEL == "claude-sonnet-4-6"
 
     def test_default_max_tokens_is_4096(self):
         """WHEN DEFAULT_MAX_TOKENS is inspected
         THEN it equals 4096."""
-        from lib.model_client import DEFAULT_MAX_TOKENS
+        from multiplai_core.model_client import DEFAULT_MAX_TOKENS
         assert DEFAULT_MAX_TOKENS == 4096
 
     def test_detect_client_type_returns_string(self):
         """WHEN detect_client_type() is called
         THEN it returns a non-empty string."""
-        from lib.model_client import detect_client_type
+        from multiplai_core.model_client import detect_client_type
         result = detect_client_type()
         assert isinstance(result, str)
         assert len(result) > 0
@@ -953,7 +869,7 @@ class TestPathResolverIntegration:
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_memory_dir", raising=False)
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
 
-        from lib.paths import Paths
+        from multiplai_core.paths import Paths
         p = Paths.resolve()
         assert p.is_plugin_mode() is True
         assert str(p.plugin_root) == "/tmp/test-plugin"
@@ -966,7 +882,7 @@ class TestPathResolverIntegration:
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_memory_dir", raising=False)
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
 
-        from lib.paths import Paths
+        from multiplai_core.paths import Paths
         p = Paths.resolve()
         assert p.is_plugin_mode() is False
         assert ".multiplai" in str(p.memory_dir)
@@ -977,7 +893,7 @@ class TestPathResolverIntegration:
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "")
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
 
-        from lib.paths import Paths
+        from multiplai_core.paths import Paths
         p = Paths.resolve()
         assert p.is_plugin_mode() is False
 
@@ -989,7 +905,7 @@ class TestPathResolverIntegration:
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
 
-        from lib.paths import Paths
+        from multiplai_core.paths import Paths
         p = Paths.resolve()
         assert str(p.memory_dir) == "/custom/mem"
 
@@ -1001,7 +917,7 @@ class TestPathResolverIntegration:
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_memory_dir", raising=False)
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
 
-        from lib.paths import Paths
+        from multiplai_core.paths import Paths
         p = Paths.resolve()
         assert str(p.venv_dir) == "/tmp/data/venv"
         assert str(p.catalogs_dir) == "/tmp/data/catalogs"
@@ -1014,7 +930,7 @@ class TestPathResolverIntegration:
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_memory_dir", raising=False)
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
 
-        from lib.paths import Paths
+        from multiplai_core.paths import Paths
         p = Paths.resolve()
 
         for accessor_name in ["plugin_root", "data_dir", "memory_dir",
@@ -1042,7 +958,7 @@ class TestPathResolverIntegration:
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
 
-        from lib.paths import Paths
+        from multiplai_core.paths import Paths
         p = Paths.resolve()
         mem_dir = p.memory_dir
         if callable(mem_dir) and not isinstance(mem_dir, Path):
@@ -1058,7 +974,7 @@ class TestPathResolverIntegration:
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
 
-        from lib.paths import get_paths, _reset_cache
+        from multiplai_core.paths import get_paths, _reset_cache
         _reset_cache()
         p1 = get_paths()
 
@@ -1212,43 +1128,9 @@ class TestNoDirectSDKImportsAnywhere:
         assert len(violations) == 0, \
             f"Direct anthropic imports found in: {violations}"
 
-    def test_model_client_is_sole_sdk_interface(self):
-        """WHEN lib/model_client.py is inspected
-        THEN it IS the only file that imports anthropic and claude_agent_sdk."""
-        mc_text = (SCRIPTS_DIR / "lib" / "model_client.py").read_text()
-        assert "claude_agent_sdk" in mc_text, \
-            "model_client.py must be the Agent SDK interface"
-        assert "anthropic" in mc_text, \
-            "model_client.py must be the Anthropic API interface"
-
-
-# ===========================================================================
-# 14. Log Utils Integration
-# ===========================================================================
-
-class TestLogUtilsIntegration:
-    """Verify log_utils.py resolves paths correctly and creates directories."""
-
-    def test_log_utils_uses_paths_module(self):
-        """WHEN lib/log_utils.py source is inspected
-        THEN it imports and uses the paths module for log directory."""
-        text = (SCRIPTS_DIR / "lib" / "log_utils.py").read_text()
-        assert "paths" in text, "log_utils.py must use paths module"
-
-    def test_log_utils_creates_directory_if_missing(self):
-        """WHEN log_utils.py is inspected
-        THEN it contains logic to create log directory (mkdir parents)."""
-        text = (SCRIPTS_DIR / "lib" / "log_utils.py").read_text()
-        assert "mkdir" in text or "makedirs" in text, \
-            "log_utils.py must create log directory if missing"
-
-    def test_no_hardcoded_log_paths(self):
-        """WHEN lib/log_utils.py is scanned for hardcoded paths
-        THEN zero are found."""
-        text = (SCRIPTS_DIR / "lib" / "log_utils.py").read_text()
-        assert "~/.multiplai" not in text
-        assert "/home/" not in text
-        assert "/Users/" not in text
+    # NOTE: model_client.py and log_utils.py were extracted into the
+    # standalone multiplai_core package; their dedicated unit tests live
+    # there. The in-tree SDK-import scans above still guard plugin scripts.
 
 
 # ===========================================================================
@@ -1265,9 +1147,9 @@ class TestGenerateCatalogPort:
 
     def test_uses_path_resolver(self):
         """WHEN generate_catalog.py source is inspected
-        THEN it uses lib.paths for output location."""
+        THEN it uses multiplai_core.paths for output location."""
         text = (SCRIPTS_DIR / "generate_catalog.py").read_text()
-        assert "from lib.paths" in text or "lib.paths" in text
+        assert "from multiplai_core.paths" in text or "multiplai_core.paths" in text
 
     def test_no_skill_resource_catalog(self):
         """WHEN generate_catalog.py is inspected

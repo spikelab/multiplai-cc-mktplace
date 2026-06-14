@@ -1,3 +1,10 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.1",
+#     "pyyaml",
+# ]
+# ///
 """Health check script for multiplai plugin.
 
 Audits memory files, diary entries, learnings, and plugin data directories.
@@ -15,11 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib.venv_guard import ensure_venv_python
-ensure_venv_python()
-
-from lib.paths import get_paths
-from lib.model_client import detect_client_type
+from multiplai_core.paths import get_paths
+from multiplai_core.model_client import detect_client_type
 from lib.memory_router import resolve_strategy
 
 # Machine-readable routing line emitted by context_manager:

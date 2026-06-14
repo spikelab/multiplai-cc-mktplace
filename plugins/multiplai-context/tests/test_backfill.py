@@ -41,7 +41,7 @@ def _user_record(text: str, *, cwd: str = "/work/proj", offset: int = 0) -> dict
 
 
 def _mock_client(diary_entry: str = "Did work."):
-    from lib.model_client import ModelResponse
+    from multiplai_core.model_client import ModelResponse
     response = json.dumps({
         "units": [{"timestamp": _ts(), "diary_entry": diary_entry, "learnings": []}]
     })
@@ -165,7 +165,7 @@ class TestBackfillDryRun:
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_dir", str(tmp_path / "diary"))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_learnings_dir", str(tmp_path / "learnings"))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(tmp_path / "memory"))
-        from lib.paths import _reset_cache
+        from multiplai_core.paths import _reset_cache
         _reset_cache()
 
         since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
@@ -187,7 +187,7 @@ class TestBackfillDryRun:
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_dir", str(tmp_path / "diary"))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_learnings_dir", str(tmp_path / "learnings"))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(tmp_path / "memory"))
-        from lib.paths import _reset_cache
+        from multiplai_core.paths import _reset_cache
         _reset_cache()
 
         since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
@@ -213,7 +213,7 @@ class TestBackfillRealRun:
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_dir", str(tmp_path / "diary"))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_learnings_dir", str(tmp_path / "learnings"))
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(tmp_path / "memory"))
-        from lib.paths import _reset_cache
+        from multiplai_core.paths import _reset_cache
         _reset_cache()
         return t
 
@@ -232,7 +232,7 @@ class TestBackfillRealRun:
             ))
 
         diary_files = list((tmp_path / "diary").glob("*.md"))
-        from lib.paths import _reset_cache
+        from multiplai_core.paths import _reset_cache
         _reset_cache()
 
     def test_skips_already_processed(self, tmp_path, monkeypatch):
@@ -257,7 +257,7 @@ class TestBackfillRealRun:
 
         assert summary["skipped"] >= 1
         client.query.assert_not_awaited()
-        from lib.paths import _reset_cache
+        from multiplai_core.paths import _reset_cache
         _reset_cache()
 
     def test_post_pass_failure_non_fatal(self, tmp_path, monkeypatch):
@@ -277,5 +277,5 @@ class TestBackfillRealRun:
                     ))
         # Should complete without raising
         assert "errored" in summary
-        from lib.paths import _reset_cache
+        from multiplai_core.paths import _reset_cache
         _reset_cache()

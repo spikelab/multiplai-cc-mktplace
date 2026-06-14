@@ -152,8 +152,8 @@ def resolve_project(cwd: str, config: Optional[dict[str, Any]] = None) -> Option
 def load_project_map() -> dict[str, Any]:
     """Load ``project-map.yaml`` from the workspace root; ``{}`` if absent."""
     try:
-        from lib.paths import get_paths
-        from lib.config import load_yaml
+        from multiplai_core.paths import get_paths
+        from multiplai_core.config import load_yaml
 
         return load_yaml(get_paths().project_map_file())
     except Exception:

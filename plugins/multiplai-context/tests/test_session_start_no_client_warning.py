@@ -41,7 +41,7 @@ def test_warning_suppressed_when_marker_exists(tmp_path):
 
 def test_detect_client_type_none_string_format():
     """The warning trigger relies on client_type.startswith('none')."""
-    from lib.model_client import detect_client_type
+    from multiplai_core.model_client import detect_client_type
     import os
     saved_sdk = sys.modules.pop("claude_agent_sdk", None)
     saved_key = os.environ.pop("CLAUDE_PLUGIN_OPTION_anthropic_api_key", None)
