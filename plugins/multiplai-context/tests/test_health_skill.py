@@ -171,12 +171,12 @@ class TestDetectClientTypeFunction:
 
     def test_detect_client_type_exists(self):
         """model_client module must expose detect_client_type()."""
-        from lib.model_client import detect_client_type
+        from multiplai_core.model_client import detect_client_type
         assert callable(detect_client_type)
 
     def test_detect_client_type_returns_string(self):
         """detect_client_type() must return a human-readable string."""
-        from lib.model_client import detect_client_type
+        from multiplai_core.model_client import detect_client_type
         result = detect_client_type()
         assert isinstance(result, str)
         assert len(result) > 0
@@ -187,7 +187,7 @@ class TestDetectClientTypeFunction:
             # Remove API key if present
             os.environ.pop("CLAUDE_PLUGIN_OPTION_anthropic_api_key", None)
             import importlib
-            import lib.model_client as mc
+            import multiplai_core.model_client as mc
             # Mock claude_agent_sdk import to fail
             with patch.dict("sys.modules", {"claude_agent_sdk": None}):
                 with patch("builtins.__import__", side_effect=lambda name, *a, **kw: (_ for _ in ()).throw(ImportError()) if name == "claude_agent_sdk" else importlib.__import__(name, *a, **kw)):
@@ -199,7 +199,7 @@ class TestDetectClientTypeFunction:
         """When API key is set, reports AnthropicAPIClient."""
         with patch.dict(os.environ, {"CLAUDE_PLUGIN_OPTION_anthropic_api_key": "sk-test"}):
             import importlib
-            import lib.model_client as mc
+            import multiplai_core.model_client as mc
             # Mock claude_agent_sdk import to fail so API key fallback is tested
             with patch.dict("sys.modules", {"claude_agent_sdk": None}):
                 with patch("builtins.__import__", side_effect=lambda name, *a, **kw: (_ for _ in ()).throw(ImportError()) if name == "claude_agent_sdk" else importlib.__import__(name, *a, **kw)):
@@ -244,7 +244,7 @@ class TestHealthCheckUsesPathResolver:
 
     def test_imports_path_resolver(self):
         """health_check.py must import from the paths module."""
-        assert re.search(r"from\s+lib\.paths\s+import", self.source)
+        assert re.search(r"from\s+multiplai_core\.paths\s+import", self.source)
 
     def test_no_hardcoded_paths(self):
         """health_check.py must not contain hardcoded directory paths."""
@@ -270,7 +270,7 @@ class TestHealthCheckUsesModelClient:
     def test_imports_model_client(self):
         """health_check.py must import from the model_client module."""
         assert re.search(
-            r"from\s+lib\.model_client\s+import",
+            r"from\s+multiplai_core\.model_client\s+import",
             self.source,
         )
 

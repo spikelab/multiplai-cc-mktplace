@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.1"]
+# ///
 """Session start hook for multiplai plugin.
 
 Logs client selection, records the session start timestamp, initializes
@@ -29,12 +33,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib.venv_guard import ensure_venv_python
-ensure_venv_python()
-
-from lib.paths import get_paths
-from lib.config import load_yaml
-from lib.log_utils import setup_logging, log_event
+from multiplai_core.paths import get_paths
+from multiplai_core.config import load_yaml
+from multiplai_core.log_utils import setup_logging, log_event
 
 logger = setup_logging("session_start")
 
@@ -53,7 +54,7 @@ def _log_client_selection() -> str:
     Uses the model_client module's detect_client_type() to determine
     which backend will be used (AgentSDK vs API key fallback).
     """
-    from lib.model_client import detect_client_type
+    from multiplai_core.model_client import detect_client_type
     client_type = detect_client_type()
     logger.info("Model client selected: %s", client_type)
     return client_type
@@ -216,7 +217,7 @@ def _process_deferred_extractions(data_dir: Path, extract_script: Path) -> int:
 
         try:
             proc = subprocess.Popen(
-                [sys.executable, str(extract_script)],
+                ["uv", "run", "--no-project", str(extract_script)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

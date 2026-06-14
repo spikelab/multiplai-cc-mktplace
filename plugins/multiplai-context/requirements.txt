@@ -1,3 +1,8 @@
-anthropic==0.102.0
-pyyaml>=6.0
-claude-agent-sdk==0.1.56
+# Runtime dependencies are no longer pinned here.
+#
+# Each entry-point script under scripts/ declares its own dependencies inline
+# via PEP 723 ("# /// script" blocks) and is launched with `uv run --no-project`.
+# The shared core (anthropic, claude-agent-sdk, pyyaml) arrives transitively
+# through the `multiplai-core` package referenced in those inline metadata blocks.
+#
+# See requirements-dev.txt for the test/dev toolchain.

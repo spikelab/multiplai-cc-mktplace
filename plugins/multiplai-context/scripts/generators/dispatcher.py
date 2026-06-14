@@ -10,7 +10,7 @@ a fixed order, with support for filtering, force mode, and dry-run mode.
 import logging
 from dataclasses import dataclass
 
-from lib.paths import Paths
+from multiplai_core.paths import Paths
 from generators.base import GenerationResult
 from generators.config import CatalogConfig
 from generators.diary import DiaryGenerator
@@ -143,7 +143,7 @@ async def generate_catalogs(
 async def _create_model_client():
     """Create a model client, with graceful fallback for test environments."""
     try:
-        from lib.model_client import create_client
+        from multiplai_core.model_client import create_client
         return await create_client()
     except Exception:
         logger.debug("Could not create model client, using stub")

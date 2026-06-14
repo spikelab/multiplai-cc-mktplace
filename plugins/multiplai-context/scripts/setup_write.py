@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.1"]
+# ///
 """Write memory files from templates during onboarding.
 
 Copies template files to the user's memory directory, skipping any
@@ -17,8 +21,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib.config import TEMPLATE_FILENAMES
-from lib.paths import get_paths
+from multiplai_core.config import TEMPLATE_FILENAMES
+from multiplai_core.paths import get_paths
 
 
 def write_memory_files(force: bool = False) -> dict:

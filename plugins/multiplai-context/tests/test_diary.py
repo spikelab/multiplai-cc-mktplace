@@ -52,7 +52,7 @@ _SAMPLE_LLM_RESPONSE = json.dumps({
 
 def _make_mock_client(response_content=None):
     """Create an AsyncMock model client that returns the given content."""
-    from lib.model_client import ModelResponse
+    from multiplai_core.model_client import ModelResponse
 
     if response_content is None:
         response_content = _SAMPLE_LLM_RESPONSE
@@ -1101,7 +1101,7 @@ class TestLLMFailureHandling:
         """WHEN the LLM fails for one day but succeeds for others
         THEN successful entries are in the catalog and failed one is absent.
         """
-        from lib.model_client import ModelResponse
+        from multiplai_core.model_client import ModelResponse
 
         call_count = 0
         fail_on = 1  # fail on second call

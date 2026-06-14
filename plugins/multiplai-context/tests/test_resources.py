@@ -44,7 +44,7 @@ _SAMPLE_RESOURCES_LLM_RESPONSE = json.dumps({
 
 def _make_mock_client(response_content=None):
     """Create an AsyncMock model client that returns the given content."""
-    from lib.model_client import ModelResponse
+    from multiplai_core.model_client import ModelResponse
 
     if response_content is None:
         response_content = _SAMPLE_RESOURCES_LLM_RESPONSE
@@ -797,7 +797,7 @@ class TestResourcesLLMFailureHandling:
         """When LLM fails for 1 of 3 resources, catalog has 2 entries."""
         from generators.config import CatalogConfig
         from generators.resources import ResourcesGenerator
-        from lib.model_client import ModelResponse
+        from multiplai_core.model_client import ModelResponse
 
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
         resources_dir = tmp_path / "resources"

@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.1"]
+# ///
 """PreCompact hook for multiplai plugin.
 
 Conversation context is about to be compacted, so the full transcript
@@ -16,12 +20,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib.venv_guard import ensure_venv_python
-ensure_venv_python()
-
-from lib.config import read_session_state, write_session_state
-from lib.paths import get_paths
-from lib.log_utils import setup_logging, log_event
+from multiplai_core.config import read_session_state, write_session_state
+from multiplai_core.paths import get_paths
+from multiplai_core.log_utils import setup_logging, log_event
 
 logger = setup_logging("pre_compact")
 

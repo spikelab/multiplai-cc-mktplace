@@ -151,7 +151,7 @@ class TestAutodreamUsesPathResolver:
 
     def test_imports_path_resolver(self):
         """dream.py must import from the paths module."""
-        assert re.search(r"from\s+lib\.paths\s+import", self.source)
+        assert re.search(r"from\s+multiplai_core\.paths\s+import", self.source)
 
     def test_no_hardcoded_paths(self):
         """dream.py must not contain hardcoded directory paths."""
@@ -176,7 +176,7 @@ class TestAutodreamUsesModelClient:
 
     def test_imports_model_client(self):
         """dream.py must import from the model_client module."""
-        assert re.search(r"from\s+lib\.model_client\s+import", self.source)
+        assert re.search(r"from\s+multiplai_core\.model_client\s+import", self.source)
 
     def test_no_direct_sdk_imports(self):
         """dream.py must not directly import claude_agent_sdk or anthropic."""

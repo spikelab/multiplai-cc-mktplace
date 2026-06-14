@@ -31,7 +31,7 @@ MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 
 # Maps Claude Code hook event names to the plugin script each invokes.
 EXPECTED_HOOK_SCRIPTS = {
-    "SessionStart": ["scripts/venv_bootstrap.py", "scripts/session_start.py"],
+    "SessionStart": ["scripts/session_start.py"],
     "UserPromptSubmit": ["scripts/context_manager.py"],
     "Stop": ["scripts/session_stop.py"],
     "SessionEnd": ["scripts/session_end.py"],
@@ -139,7 +139,7 @@ def plugin_env(monkeypatch):
 
 @pytest.fixture
 def reset_paths_cache():
-    from lib.paths import _reset_cache
+    from multiplai_core.paths import _reset_cache
     _reset_cache()
     yield
     _reset_cache()

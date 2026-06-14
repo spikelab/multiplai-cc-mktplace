@@ -51,7 +51,7 @@ def _git_log_count(dir_path: Path) -> int:
 
 def _load_dream_module(alias: str):
     """Load dream.py as an isolated module (fresh paths cache) per test."""
-    from lib.paths import _reset_cache
+    from multiplai_core.paths import _reset_cache
     _reset_cache()
     spec = importlib.util.spec_from_file_location(alias, SCRIPTS_DIR / "dream.py")
     mod = importlib.util.module_from_spec(spec)
@@ -77,7 +77,7 @@ def dream_env(tmp_path, monkeypatch):
 
     # Ensure pending learnings exist so dream has work to do.
     # paths.learnings_file() resolves to learnings_dir / "{today}.md".
-    from lib.paths import _reset_cache, get_paths
+    from multiplai_core.paths import _reset_cache, get_paths
     _reset_cache()
     paths = get_paths()
     learnings_today = paths.learnings_file()
@@ -118,7 +118,7 @@ class TestDreamAutoCommit:
         assert initial_commits == 1
 
         with patch("generators.dispatcher.generate_catalogs", new=AsyncMock(return_value=[])), \
-             patch("lib.model_client.create_client", new=AsyncMock(return_value=_mocked_client_context())):
+             patch("multiplai_core.model_client.create_client", new=AsyncMock(return_value=_mocked_client_context())):
             mod = _load_dream_module("dream_commit")
             asyncio.run(mod.dream_auto())
 
@@ -141,7 +141,7 @@ class TestDreamAutoCommit:
         assert not (memory_dir / ".git").exists()
 
         with patch("generators.dispatcher.generate_catalogs", new=AsyncMock(return_value=[])), \
-             patch("lib.model_client.create_client", new=AsyncMock(return_value=_mocked_client_context())):
+             patch("multiplai_core.model_client.create_client", new=AsyncMock(return_value=_mocked_client_context())):
             mod = _load_dream_module("dream_nogit")
             with caplog.at_level("WARNING", logger="dream"):
                 asyncio.run(mod.dream_auto())
@@ -160,7 +160,7 @@ class TestDreamAutoCommit:
         # Wipe pending learnings BEFORE the initial commit so the tracked
         # state matches what dream will observe — otherwise the empty-write
         # itself becomes a tracked change and gets committed.
-        from lib.paths import get_paths
+        from multiplai_core.paths import get_paths
         get_paths().learnings_file().write_text("")
         _init_git(memory_dir)
         subprocess.run(["git", "-C", str(memory_dir), "add", "-A"], check=True)
@@ -171,7 +171,7 @@ class TestDreamAutoCommit:
         initial_commits = _git_log_count(memory_dir)
 
         with patch("generators.dispatcher.generate_catalogs", new=AsyncMock(return_value=[])), \
-             patch("lib.model_client.create_client", new=AsyncMock(return_value=_mocked_client_context())):
+             patch("multiplai_core.model_client.create_client", new=AsyncMock(return_value=_mocked_client_context())):
             mod = _load_dream_module("dream_noop")
             asyncio.run(mod.dream_auto())
 

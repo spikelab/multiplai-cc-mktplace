@@ -22,7 +22,7 @@ Check `.multiplai/dreams/` for a file matching `processed-learnings-*.md`, most 
 - **Found:** load it, report its date and summary line to the user, proceed to Step 3.
 - **Not found:** tell the user "No pre-generated proposal found — generating one now" and run:
   ```
-  python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
+  uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
   ```
   This can run for many minutes, past the Bash tool's 600s max timeout. You **MUST**
   invoke it via the Bash tool with **`run_in_background: true`** (no `&`, no `nohup`).
@@ -125,7 +125,7 @@ nudging — the report-only `/dream` and this skill otherwise never record that 
 consolidation happened, leaving the gate permanently "due".
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --stamp \
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --stamp \
   --files-updated <M> --learnings-processed <N>
 ```
 
@@ -139,7 +139,7 @@ applied. Skip only when the user chose `none` (nothing was applied).
 After memory files have been updated, run:
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"
 ```
 
 Skip this step if no memory files were actually modified.

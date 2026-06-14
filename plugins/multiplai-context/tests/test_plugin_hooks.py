@@ -61,19 +61,19 @@ class TestStopHookNoGit:
 
 
 class TestVenvPythonUsage:
-    """Verify hook scripts use venv Python."""
+    """Verify hook scripts carry PEP 723 metadata (launched via `uv run`)."""
 
     def _get_hook_scripts(self):
         return [PLUGIN_ROOT / h["script"] for h in parse_hooks()]
 
-    def test_non_bootstrap_scripts_have_reexec(self):
+    def test_scripts_have_pep723_metadata(self):
         for script_path in self._get_hook_scripts():
-            if "venv_bootstrap" in script_path.name:
-                continue
             if script_path.is_file():
                 text = script_path.read_text()
-                has_venv_ref = "venv" in text and ("python" in text or "execv" in text)
-                assert has_venv_ref, f"{script_path.name} missing venv re-exec pattern"
+                assert "# /// script" in text, \
+                    f"{script_path.name} missing PEP 723 inline metadata"
+                assert "venv_guard" not in text and "ensure_venv_python" not in text, \
+                    f"{script_path.name} still references the retired venv guard"
 
 
 class TestPathResolverImports:
@@ -84,7 +84,10 @@ class TestPathResolverImports:
             script_path = PLUGIN_ROOT / hook["script"]
             if script_path.is_file():
                 text = script_path.read_text()
-                has_paths_import = "from lib.paths" in text or "lib.paths" in text
+                has_paths_import = (
+                    "from multiplai_core.paths" in text
+                    or "multiplai_core.paths" in text
+                )
                 assert has_paths_import, f"{script_path.name} missing path resolver import"
 
     def test_no_hardcoded_paths_in_scripts(self):

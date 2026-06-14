@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.1"]
+# ///
 """Dream consolidation script for multiplai plugin.
 
 Default mode (no flags): generates a human-readable change proposal and writes it
@@ -15,13 +19,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib.venv_guard import ensure_venv_python
-ensure_venv_python()
-
-from lib.paths import get_paths
-from lib.model_client import create_client
-from lib.config import load_yaml, save_yaml
-from lib.log_utils import setup_logging
+from multiplai_core.paths import get_paths
+from multiplai_core.model_client import create_client
+from multiplai_core.config import load_yaml, save_yaml
+from multiplai_core.log_utils import setup_logging
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
 

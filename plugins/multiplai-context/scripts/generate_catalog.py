@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.1"]
+# ///
 """Generate catalog script for multiplai plugin.
 
 Unified entry point for catalog generation. Invokes the catalog dispatcher
@@ -18,11 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib.venv_guard import ensure_venv_python
-ensure_venv_python()
-
-from lib.paths import get_paths
-from lib.log_utils import setup_logging, log_event
+from multiplai_core.paths import get_paths
+from multiplai_core.log_utils import setup_logging, log_event
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
 

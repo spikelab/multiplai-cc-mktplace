@@ -11,7 +11,7 @@ merge_entry() override.
 from pathlib import Path
 from typing import Any
 
-from lib.paths import Paths
+from multiplai_core.paths import Paths
 from generators.base import GeneratorBase
 
 # Hand-authored fields preserved during merge. intent_domains and

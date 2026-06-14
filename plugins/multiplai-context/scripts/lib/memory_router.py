@@ -604,7 +604,7 @@ class LLMRouter:
         catalog_entries: list[dict],
         known_filenames: set[str],
     ) -> list[str]:
-        from lib.model_client import create_client
+        from multiplai_core.model_client import create_client
 
         client = await create_client()
         user_msg = build_user_message(
@@ -631,7 +631,7 @@ class LLMRouter:
         corpora: dict[str, list[dict]],
         known_per_corpus: dict[str, set[str]],
     ) -> dict[str, list[str]]:
-        from lib.model_client import create_client
+        from multiplai_core.model_client import create_client
 
         client = await create_client()
         user_msg = build_user_message(prompt, last_response, corpora)
@@ -691,7 +691,7 @@ def create_router(strategy: str | None = None) -> CorpusRouter:
         # (no Agent SDK host, no API key) — otherwise LLMRouter would
         # silently return empty picks every prompt.
         try:
-            from lib.model_client import detect_client_type
+            from multiplai_core.model_client import detect_client_type
             client = detect_client_type()
         except Exception:
             client = "none"

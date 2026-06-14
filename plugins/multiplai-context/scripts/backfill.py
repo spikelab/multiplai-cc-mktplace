@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.1"]
+# ///
 """Backfill learnings and diary from existing Claude Code session transcripts.
 
 Discovers JSONL transcripts in ``$CLAUDE_CONFIG_DIR/projects/``, distills
@@ -31,12 +35,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib.venv_guard import ensure_venv_python
-ensure_venv_python()
-
-from lib.paths import get_paths
-from lib.model_client import create_client
-from lib.log_utils import setup_logging
+from multiplai_core.paths import get_paths
+from multiplai_core.model_client import create_client
+from multiplai_core.log_utils import setup_logging
 from lib.extraction import extract_units, write_diary_entries, append_learnings
 from lib.transcript_distiller import distill, estimate_tokens
 

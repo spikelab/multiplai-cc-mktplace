@@ -5,12 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/venv_bootstrap.py\"",
-            "timeout": 30
-          },
-          {
-            "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/session_start.py\"",
+            "command": "uv run --no-project \"${CLAUDE_PLUGIN_ROOT}/scripts/session_start.py\"",
             "timeout": 10
           }
         ]
@@ -21,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/context_manager.py\"",
+            "command": "uv run --no-project \"${CLAUDE_PLUGIN_ROOT}/scripts/context_manager.py\"",
             "timeout": 30
           }
         ]
@@ -32,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/session_stop.py\"",
+            "command": "uv run --no-project \"${CLAUDE_PLUGIN_ROOT}/scripts/session_stop.py\"",
             "timeout": 15
           }
         ]
@@ -43,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/session_end.py\"",
+            "command": "uv run --no-project \"${CLAUDE_PLUGIN_ROOT}/scripts/session_end.py\"",
             "timeout": 20
           }
         ]
@@ -54,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/pre_compact.py\"",
+            "command": "uv run --no-project \"${CLAUDE_PLUGIN_ROOT}/scripts/pre_compact.py\"",
             "timeout": 10
           }
         ]

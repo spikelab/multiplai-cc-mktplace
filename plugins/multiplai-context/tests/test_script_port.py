@@ -12,7 +12,6 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 EXPECTED_SCRIPTS = [
     "session_start.py",
-    "venv_bootstrap.py",
     "context_manager.py",
     "session_stop.py",
     "session_end.py",
@@ -113,7 +112,7 @@ class TestContextManagerPort:
         assert "resource-catalog" not in self.text
 
     def test_uses_path_resolver(self):
-        assert "from lib.paths" in self.text or "lib.paths" in self.text
+        assert "from multiplai_core.paths" in self.text or "multiplai_core.paths" in self.text
 
 
 class TestSessionLifecyclePort:
@@ -121,11 +120,11 @@ class TestSessionLifecyclePort:
 
     def test_session_start_uses_paths(self):
         text = (SCRIPTS_DIR / "session_start.py").read_text()
-        assert "from lib.paths" in text or "lib.paths" in text
+        assert "from multiplai_core.paths" in text or "multiplai_core.paths" in text
 
     def test_session_end_uses_paths(self):
         text = (SCRIPTS_DIR / "session_end.py").read_text()
-        assert "from lib.paths" in text or "lib.paths" in text
+        assert "from multiplai_core.paths" in text or "multiplai_core.paths" in text
 
     def test_no_auto_commit_in_session_start(self):
         text = (SCRIPTS_DIR / "session_start.py").read_text()
@@ -148,10 +147,10 @@ class TestExtractLearningsPort:
         self.text = (SCRIPTS_DIR / "extract_learnings.py").read_text()
 
     def test_uses_path_resolver(self):
-        assert "from lib.paths" in self.text or "lib.paths" in self.text
+        assert "from multiplai_core.paths" in self.text or "multiplai_core.paths" in self.text
 
     def test_uses_model_client(self):
-        assert "from lib.model_client" in self.text or "model_client" in self.text
+        assert "from multiplai_core.model_client" in self.text or "model_client" in self.text
 
     def test_no_git_stage(self):
         assert "git_stage" not in self.text
@@ -166,10 +165,10 @@ class TestAutodreamPort:
         self.text = (SCRIPTS_DIR / "dream.py").read_text()
 
     def test_uses_path_resolver(self):
-        assert "from lib.paths" in self.text or "lib.paths" in self.text
+        assert "from multiplai_core.paths" in self.text or "multiplai_core.paths" in self.text
 
     def test_uses_model_client(self):
-        assert "from lib.model_client" in self.text or "model_client" in self.text
+        assert "from multiplai_core.model_client" in self.text or "model_client" in self.text
 
 
 class TestSynthesizeNowPort:
@@ -180,10 +179,10 @@ class TestSynthesizeNowPort:
         self.text = (SCRIPTS_DIR / "synthesize_now.py").read_text()
 
     def test_uses_path_resolver(self):
-        assert "from lib.paths" in self.text or "lib.paths" in self.text
+        assert "from multiplai_core.paths" in self.text or "multiplai_core.paths" in self.text
 
     def test_uses_model_client(self):
-        assert "from lib.model_client" in self.text or "model_client" in self.text
+        assert "from multiplai_core.model_client" in self.text or "model_client" in self.text
 
 
 class TestGenerateCatalogPort:
@@ -194,23 +193,8 @@ class TestGenerateCatalogPort:
         self.text = (SCRIPTS_DIR / "generate_catalog.py").read_text()
 
     def test_uses_path_resolver(self):
-        assert "from lib.paths" in self.text or "lib.paths" in self.text
+        assert "from multiplai_core.paths" in self.text or "multiplai_core.paths" in self.text
 
     def test_no_skill_catalog(self):
         assert "skill-catalog" not in self.text
         assert "resource-catalog" not in self.text
-
-
-class TestLogUtilsPort:
-    """Verify log utils port specifics."""
-
-    @pytest.fixture(autouse=True)
-    def load_script(self):
-        self.text = (SCRIPTS_DIR / "lib" / "log_utils.py").read_text()
-
-    def test_uses_path_resolver(self):
-        assert "paths" in self.text
-
-    def test_no_hardcoded_log_paths(self):
-        assert "~/.multiplai/logs" not in self.text
-        assert "/home/" not in self.text

@@ -32,7 +32,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 # ---------------------------------------------------------------------------
 
 def _make_mock_client(content: str):
-    from lib.model_client import ModelResponse
+    from multiplai_core.model_client import ModelResponse
     client = AsyncMock()
     client.query = AsyncMock(return_value=ModelResponse(content=content))
     return client

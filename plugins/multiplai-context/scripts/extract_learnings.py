@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.1"]
+# ///
 """Structured learning extraction (Stop hook).
 
 Decomposes the session transcript into logical units of work, writes a
@@ -17,12 +21,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lib.venv_guard import ensure_venv_python
-ensure_venv_python()
-
-from lib.paths import get_paths
-from lib.model_client import create_client
-from lib.log_utils import setup_logging, log_event
+from multiplai_core.paths import get_paths
+from multiplai_core.model_client import create_client
+from multiplai_core.log_utils import setup_logging, log_event
 from lib.extraction import extract_units, write_diary_entries, append_learnings
 from lib.transcript_distiller import distill
 
