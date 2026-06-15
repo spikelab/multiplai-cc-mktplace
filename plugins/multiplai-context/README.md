@@ -51,9 +51,11 @@ For local development, point Claude Code at the plugin directory:
 claude --plugin-dir ./plugins/multiplai-context
 ```
 
-On first run a `SessionStart` hook bootstraps an isolated virtualenv for
-the plugin's Python dependencies (`uv` if available, else `python -m venv`
-+ `pip`). No manual install step.
+No manual install step for Python dependencies. Each plugin script
+declares its own dependencies inline (PEP 723) and is launched via
+`uv run --no-project`, which resolves and caches them on first run. There
+is no shared virtualenv to bootstrap or maintain — `uv` provisions an
+ephemeral, per-script environment on demand.
 
 ## Configuration
 
@@ -153,7 +155,7 @@ Everything stays on your machine under `<workspace>/.multiplai/`
 | `diary/YYYY-MM-DD/` | One file per session — a narrative of what happened. |
 | `learnings/` | Extracted insights pending consolidation. |
 | `now/` | Per-project current-state summaries. |
-| `data/` | Runtime state — catalogs, logs, plugin venv. Disposable; recreated as needed. |
+| `data/` | Runtime state — catalogs, logs, session state. Disposable; recreated as needed. |
 
 Delete any of these any time; the plugin recreates what it needs. If
 `.multiplai/` lives inside a git repo and you don't want diary/learnings
@@ -188,7 +190,7 @@ with a log warning and everything else keeps working.
 
 | Event | Script | Role |
 |-------|--------|------|
-| `SessionStart` | `venv_bootstrap.py`, `session_start.py` | Bootstrap venv; init session state; drain deferred extractions; emit the dream-due nudge. **Does not** dump memory into context. |
+| `SessionStart` | `session_start.py` | Init session state; drain deferred extractions; emit the dream-due nudge. **Does not** dump memory into context. |
 | `UserPromptSubmit` | `context_manager.py` | Route the prompt against catalogs and inject only the relevant memory. |
 | `Stop` | `session_stop.py` | Lightweight checkpoint (extraction is deferred, not run here). |
 | `SessionEnd` | `session_end.py` | Write a deferred-extraction marker for the next session to process. |
@@ -200,12 +202,16 @@ the next `SessionStart`.
 
 ### Key libraries
 
-- **`scripts/lib/paths.py`** — single source of truth for path
+- **`multiplai_core.paths`** — single source of truth for path
   resolution (plugin env → workspace fallback → `~/.multiplai`). All
-  runtime state resolves through here.
-- **`scripts/lib/model_client.py`** — LLM abstraction: Agent SDK
-  (zero-config) with an Anthropic API-key fallback.
-- **`scripts/venv_bootstrap.py`** — first-run virtualenv setup.
+  runtime state resolves through here. Provided by the external
+  `multiplai-core` package (declared as a PEP 723 dependency by each
+  script that needs it).
+- **`multiplai_core.model_client`** — LLM abstraction: Agent SDK
+  (zero-config) with an Anthropic API-key fallback. Also from
+  `multiplai-core`.
+- **`scripts/lib/`** — plugin-local shared modules shipped with the
+  plugin (`extraction.py`, `memory_router.py`, `project_identity.py`, …).
 
 ### Learning lifecycle
 
@@ -241,7 +247,7 @@ the next `SessionStart`.
 ## Observability
 
 The plugin is not a black box — every meaningful action is logged. All
-runtime state (logs, catalogs, venv, dream state) lives with the
+runtime state (logs, catalogs, session state, dream state) lives with the
 workspace, beside memory/diary/learnings:
 
 ```
@@ -406,7 +412,7 @@ MULTIPLAI_LOG_LEVEL=WARNING claude # quieter
 ```
 
 `MULTIPLAI_DEBUG=1` makes every hook and script (context routing, diary,
-learnings, catalog rebuilds, venv bootstrap) emit DEBUG detail to its
+learnings, catalog rebuilds, session lifecycle) emit DEBUG detail to its
 per-component log **and** stderr — visible under `claude --debug`.
 
 ### Log layout & retention

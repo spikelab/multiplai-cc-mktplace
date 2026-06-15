@@ -1,7 +1,8 @@
 {
   "name": "multiplai",
   "owner": {
-    "name": "Filippo Spike Morelli"
+    "name": "Spike",
+    "email": "fsm@spikelab.org"
   },
   "description": "Multiplai — a suite of Claude Code plugins for memory, context, and workflow. Context manager is the first; more plugins follow.",
   "plugins": [
@@ -11,7 +12,8 @@
       "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
       "version": "0.3.0",
       "author": {
-        "name": "Filippo Spike Morelli"
+        "name": "Spike",
+        "email": "fsm@spikelab.org"
       },
       "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
       "repository": "https://github.com/spikelab/multiplai-cc-mktplace",

@@ -18,7 +18,7 @@ Reconstruct diary entries and learnings from existing Claude Code session transc
 1. **Scope the run** — decide the window:
    - Default: last 7 days (`--days 7`)
    - Extend: `--days 30`, `--since 2026-04-01`, or `--all` (entire history)
-   - Scope to project: `--projects multiplai-plugin,dolcebot`
+   - Scope to project: `--projects my-app,my-lib`
 
 2. **Dry-run first** to see what will be processed:
 
