@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.1"]
+# dependencies = ["multiplai-core @ file:///Users/spike/Documents/knowhere/PROJECTS/multiplai-core"]
 # ///
 """Per-project status synthesis for multiplai plugin.
 
