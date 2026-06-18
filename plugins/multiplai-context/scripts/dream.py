@@ -99,9 +99,16 @@ items). A learning that only says "X happened" / "we decided Y" / "fixed Z" is d
 it unless it contains a general lesson you can lift out.
 
 The MEMORY-vs-ACTION-ITEM cut: if a learning says the system *should be changed* ("split these
-files", "delete this orphan", "this script should also check X"), it is an ACTION ITEM, even
-if a general principle could be abstracted from it. Route it to Action Items; do NOT also store
-the principle as memory. Memory is for knowledge that informs work, not a backlog of refactors.
+files", "delete this orphan", "this script should also check X"), the change is an ACTION ITEM.
+Then ask whether it ALSO carries a general principle that outlives the change — one that would
+guide a DIFFERENT future situation after this task is done and forgotten:
+- NO — the "principle" is just the action restated ("split by domain" ≈ "go split these files")
+  -> Action Item only, no memory.
+- YES — e.g. "before making ANY repo public, scrub+rotate secrets and strip employer content"
+  (still useful for the next repo) -> BOTH: the principle as a memory entry AND the concrete
+  change as an action item.
+Memory is for knowledge that informs work, not a backlog of refactors — but a durable principle
+earns its memory place even when it also spawns a task.
 
 ## Generalization transform (apply to every candidate)
 
@@ -154,10 +161,17 @@ remote — local tracking refs go stale."
 
 RAW: "Memory files covering multiple domains (career facts + career strategy) degrade
 routing precision — split memory files by retrieval domain, not topic affinity."
-ACTION ITEM: "Split mixed-domain memory files by retrieval domain (e.g. career facts vs
+ACTION ITEM only: "Split mixed-domain memory files by retrieval domain (e.g. career facts vs
 career strategy) so routing can select cleanly."
-(This asks the system to restructure its own files — it's work to do, not memory. Do NOT
-also add a "split by domain" memory entry.)
+(Asks the system to restructure its own files — work to do, not memory. The "principle" is
+just the action restated, so NO memory entry.)
+
+RAW: "Decision: scrub gho_ token from kit history + rotate before going public; remove
+scalestack skill (employer content)."
+BOTH — ACTION ITEMS: "Scrub gho_ token from kit history and rotate it"; "Remove scalestack
+skill from the public kit". PLUS MEMORY (general principle, outlives these one-time tasks):
+"Before making any repo public, scrub secrets from git history AND rotate them, and strip
+employer-specific content."
 
 ## Output format
 
@@ -219,9 +233,12 @@ Title markers (prefix the {short_title}, none in the normal case):
   **[warning low confidence]** instead of dropping it.
 - Filter out: diary/event-only entries, finished-task residue, already-applied facts,
   one-time fixes with no general pattern, entries with no clear target file.
-- Route to Action Items (not memory) any learning that calls for the toolchain to change its
-  own code/config/file-structure. An action item is work to do; never mirror it as a memory
-  entry too. Use the `A{N}` numbering and a **Source:** line, same provenance rules.
+- Route to Action Items any learning that calls for the toolchain to change its own
+  code/config/file-structure (A{N} numbering, **Source:** line, same provenance rules). Do NOT
+  mirror it as a memory entry UNLESS it also carries a general principle that outlives the
+  change (one that would guide a different future situation) — then keep BOTH: the principle as
+  memory, the concrete change as the action item. If the principle is just the action restated,
+  action only.
 - Omit the Action Items section entirely if there are none.
 - Keep proposed text concise — one-line bullets over paragraphs. Memory costs tokens.
 - Never invent changes not supported by the learnings.
@@ -304,9 +321,12 @@ work. The target is records of things that HAPPENED or were DECIDED at a point i
 
 If a memory '### N.' entry is really a change-request to the TOOLCHAIN's own code / config /
 file-structure ("split these files", "delete this orphan", "this script should also check X"),
-it is NOT memory — MOVE it to the '## Action Items' section (create the section if absent),
-reformat as `### A{N}.` with **What:** / **Why:** / **Source:** lines, and do NOT leave a
-memory copy behind. Do not move general knowledge that merely mentions the system.
+the change belongs in '## Action Items' — MOVE it there (create the section if absent),
+reformat as `### A{N}.` with **What:** / **Why:** / **Source:** lines. Leave a memory copy
+behind ONLY if the entry also states a general principle that outlives the change (would guide
+a different future situation); then keep the principle as the memory entry AND the concrete
+change as the action item. If the principle is just the action restated, no memory copy. Do not
+move general knowledge that merely mentions the system.
 
 NEVER alter the **Source:** provenance line — it cites `filename:line` for traceability and
 must stay exact. Strip residue from the entry's generalized text only, never from its Source.
