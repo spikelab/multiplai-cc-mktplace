@@ -235,10 +235,13 @@ async def _generate_proposal(
 # it enforces the strip the few-shot examples can't guarantee.
 _CRITIC_SYSTEM = """\
 You are a strict editor doing a SECOND PASS over an already-drafted memory proposal. The
-analyst that drafted it generalizes most things well but still leaves point-in-time residue
-on some KEEP entries. Your ONLY job is to enforce the strip — not to re-judge or rewrite.
+analyst that drafted it generalizes most things well but still (a) leaves point-in-time
+residue on some KEEP entries and (b) keeps whole past-event records because they embed a
+useful fragment. Your job is to enforce both fixes — be decisive.
 
-For every '### N.' update entry, surgically remove any residual:
+## 1. Strip residue (every '### N.' entry)
+
+Surgically remove any residual:
 - commit hashes / SHAs ("committed as abc1234", "fixed in def5678")
 - dated-decision framing ("Decision (2026-06-15):", "as of <date>", "(decided <date>)")
 - finished-task imperatives ("update file X", "remove Y now", "... accordingly")
@@ -246,9 +249,25 @@ For every '### N.' update entry, surgically remove any residual:
   genuinely scoped to that project and useless elsewhere
 Keep the transferable rule, phrased as guidance.
 
-If, after stripping, an entry has NO transferable content left (it only recorded that
-something happened / was decided / was done), MOVE it to the 'Filtered Out' section with a
-one-line reason.
+## 2. Demote past-event records (be bold)
+
+An entry that is fundamentally a record of a PAST EVENT — a dated decision, a completed
+checklist/migration/cutover, a "we did/decided/shipped X" status — is DIARY, even when it
+embeds a reusable fragment. Do NOT keep the event in order to save the fragment. Instead:
+- If a genuine general rule can be lifted out, REPLACE the entry's text with that rule alone
+  (strip ALL event scaffolding: dates, specific repo/project names, the checklist itself,
+  what was done) and keep the entry with its Source line. Example: "Decision: repos A/B/C go
+  public; pre-public: scrub gho_ token, remove scalestack skill, secret scan" →
+  "Before making any repo public: scrub secrets from git history AND rotate them, and strip
+  employer-specific content."
+- Otherwise MOVE the whole entry to 'Filtered Out' with a one-line reason.
+When unsure whether something is a durable rule or a one-time event, treat it as an EVENT:
+extract any rule, filter the rest. Memory is guidance that changes future action — not a log
+of what happened.
+
+DO keep durable reference facts — how a system is configured, stable identifiers (regions,
+instance/secret names, ports), standing preferences. Those are not events; they inform future
+work. The target is records of things that HAPPENED or were DECIDED at a point in time.
 
 NEVER alter the **Source:** provenance line — it cites `filename:line` for traceability and
 must stay exact. Strip residue from the entry's generalized text only, never from its Source.
