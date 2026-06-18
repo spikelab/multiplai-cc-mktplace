@@ -85,6 +85,8 @@ Target: CLAUDE.md — {section}
 Proposed rule:
 > {exact text}
 
+Source: {learnings_file}:{line-number(s)}
+
 Apply this rule? (yes / no / modify)
 ```
 
