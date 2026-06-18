@@ -85,9 +85,6 @@ Target: CLAUDE.md — {section}
 Proposed rule:
 > {exact text}
 
-Source: {learnings file}
-Trust: {level}
-
 Apply this rule? (yes / no / modify)
 ```
 
