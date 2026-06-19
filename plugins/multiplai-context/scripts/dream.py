@@ -102,11 +102,12 @@ The MEMORY-vs-ACTION-ITEM cut: if a learning says the system *should be changed*
 files", "delete this orphan", "this script should also check X"), the change is an ACTION ITEM.
 Then ask whether it ALSO carries a general principle that outlives the change — one that would
 guide a DIFFERENT future situation after this task is done and forgotten:
-- NO — the "principle" is just the action restated ("split by domain" ≈ "go split these files")
-  -> Action Item only, no memory.
+- NO — pure cleanup with no transferable rule (e.g. "delete this stale orphan file", "remove
+  this dead catalog reference") -> Action Item only, no memory.
 - YES — e.g. "before making ANY repo public, scrub+rotate secrets and strip employer content"
-  (still useful for the next repo) -> BOTH: the principle as a memory entry AND the concrete
-  change as an action item.
+  (useful for the next repo), or "split memory files by retrieval domain, not topic affinity"
+  (a design heuristic for the next file) -> BOTH: the principle as a memory entry AND the
+  concrete change as an action item.
 Memory is for knowledge that informs work, not a backlog of refactors — but a durable principle
 earns its memory place even when it also spawns a task.
 
@@ -161,10 +162,15 @@ remote — local tracking refs go stale."
 
 RAW: "Memory files covering multiple domains (career facts + career strategy) degrade
 routing precision — split memory files by retrieval domain, not topic affinity."
-ACTION ITEM only: "Split mixed-domain memory files by retrieval domain (e.g. career facts vs
-career strategy) so routing can select cleanly."
-(Asks the system to restructure its own files — work to do, not memory. The "principle" is
-just the action restated, so NO memory entry.)
+ACTION ITEM only: "Delete the stale `.multiplai/memory/memory-catalog.json` orphan (the live
+catalog is `.multiplai/data/catalogs/memory.json`)."
+(Pure cleanup — no rule that outlives the deletion, so NO memory entry.)
+
+RAW: "Mixed-domain memory files (career facts + career strategy) degrade routing precision —
+split memory files by retrieval domain, not topic affinity."
+BOTH — ACTION ITEM: "Split career-history vs career-strategy by retrieval domain." PLUS MEMORY
+(design heuristic, guides the next file too): "Split memory files by retrieval domain, not
+topic affinity — mixed-domain files degrade routing precision."
 
 RAW: "Decision: scrub gho_ token from kit history + rotate before going public; remove
 scalestack skill (employer content)."
