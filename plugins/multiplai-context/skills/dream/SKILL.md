@@ -6,8 +6,14 @@ description: "Generate a processed-learnings proposal from the pending backlog a
 # Multiplai Dream — Generate Learnings Proposal
 
 Runs the Dream analysis pipeline: reads all pending learnings from `.multiplai/learnings/`,
-calls the LLM to deduplicate and draft a structured change proposal, and writes it to
-`.multiplai/dreams/processed-learnings-YYYY-MM-DD.md`.
+distills them into a structured proposal (a two-pass generate-then-critic flow), and writes
+it to `.multiplai/dreams/processed-learnings-YYYY-MM-DD.md`.
+
+The proposal sorts every learning into one of three dispositions:
+- **Memory updates** — generalized, reusable lessons, grouped by target memory file.
+- **Action Items** — change-requests to the toolchain itself (code/config/structure);
+  `/multiplai-context:dream-remember` writes approved ones to `PLANS/dream-actions-{date}.md`.
+- **Filtered Out** — one-off events / diary material, with a reason.
 
 **No memory files are modified.** The proposal is for review only.
 Run `/multiplai-context:dream-remember` to load the proposal and apply approved changes.
@@ -44,6 +50,7 @@ Run `/multiplai-context:dream-remember` to load the proposal and apply approved 
 3. **Report results:**
    - Path to the proposal file in `.multiplai/dreams/`
    - Number of source files and approximate learnings count
+   - Counts by disposition: memory updates, action items, filtered out
    - Remind: run `/multiplai-context:dream-remember` to review and apply
 
 ---

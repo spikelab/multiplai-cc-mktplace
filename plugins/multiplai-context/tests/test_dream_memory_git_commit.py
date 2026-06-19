@@ -93,11 +93,22 @@ def dream_env(tmp_path, monkeypatch):
 
 
 def _mocked_client_context():
-    """Patch create_client to return an AsyncMock producing deterministic updates."""
+    """Patch create_client to return an AsyncMock producing deterministic updates.
+
+    dream_auto is two-stage: stage 1 (_generate_proposal) must return a proposal the
+    splitter can parse into a target file; stage 2 (_apply_proposal_to_file) returns the
+    rewritten file. The same content serves both — it names `technical-pref.md` as a
+    target, and writing it back changes the file (so a commit lands).
+    """
     client = AsyncMock()
-    # _update_memory_file reads .content off the response object.
     response = MagicMock()
-    response.content = "# Technical Preferences\n\nAuto-updated by dream.\n"
+    response.content = (
+        "# Processed Learnings — test\n\n"
+        "## Updates for `technical-pref.md`\n\n"
+        "### 1. [verified] a generalized lesson\n"
+        "**Change:** add\n> Auto-updated by dream.\n\n"
+        "## Filtered Out (0 items)\n"
+    )
     client.query = AsyncMock(return_value=response)
     return client
 
