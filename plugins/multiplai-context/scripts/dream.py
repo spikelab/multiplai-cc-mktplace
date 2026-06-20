@@ -74,6 +74,35 @@ def _extract_headers(content: str) -> str:
     return "\n".join(headers) if headers else content[:300]
 
 
+def _load_memory_catalog(catalogs_dir: Path) -> dict[str, dict]:
+    """Return {filename: {summary, intent_domains}} from the memory catalog.
+
+    The catalog (built by the router) carries each memory file's domain — its
+    summary and intent_domains. Routing by that domain is far more reliable than
+    guessing from section-header names, which makes broadly-named files (e.g.
+    ai-agent-patterns.md) act as catch-alls. Returns {} if the catalog is absent
+    or unreadable — the proposal then falls back to headers-only routing.
+    """
+    import json
+
+    catalog_file = catalogs_dir / "memory.json"
+    if not catalog_file.exists():
+        return {}
+    try:
+        data = json.loads(catalog_file.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+    out: dict[str, dict] = {}
+    for entry in data.get("entries", []):
+        src = entry.get("source")
+        if src:
+            out[src] = {
+                "summary": entry.get("summary", ""),
+                "intent_domains": entry.get("intent_domains", []),
+            }
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Report mode (default)
 # ---------------------------------------------------------------------------
@@ -140,7 +169,7 @@ KEEP: "Claude Code is no longer installed via npm; official method is
 (Dropped "update the Dockerfile" — a one-time task, now done.)
 
 RAW: "pluginConfigs key must be plugin@marketplace compound form; wrong key silently
-falls back to ~/.multiplai defaults with no error. Sideloaded plugins ignore
+falls back to the home-directory defaults with no error. Sideloaded plugins ignore
 pluginConfigs — use CLAUDE_PLUGIN_OPTION_* env vars. Committed as a8cbec9."
 KEEP: "`pluginConfigs` keys use the compound `plugin@marketplace` form; a wrong key
 fails silently (falls back to defaults, no error). Sideloaded plugins (`--plugin-dir`)
@@ -221,6 +250,27 @@ Title markers (prefix the {short_title}, none in the normal case):
 - **[RULE-PROPOSAL]** — a change to CLAUDE.md behavioral rules; requires individual approval.
 - **[warning low confidence]** — an item you are including despite weak/unverified support.
 
+## Routing — pick the target file by DOMAIN, not by header keyword
+
+Each candidate file is shown with PURPOSE and OWNS DOMAINS. Route each entry to the file whose
+domain actually owns the learning's SUBJECT, then pick a section within it. The headers only
+choose the section — never the file.
+- Match on subject domain: general/language-agnostic software & data-engineering patterns
+  (data transformation & validation, migration/cutover correctness, defensive scripting, testing
+  strategy, debugging methodology) → the dev-patterns file; GCP/Docker/Terraform/deploy/IAM/
+  networking → the infra file; git → the git file; Python-language gotchas → the Python file;
+  tooling/workflow preferences → the technical-preferences file.
+- `ai-agent-patterns.md` is NOT a catch-all. Put something there ONLY if its subject is
+  genuinely LLM inference, agent design, the Claude Agent SDK, RAG, or memory/retrieval-system
+  design — not just because an agent happened to run the script. "A migration is run by an
+  agent" does NOT make it an agent pattern — it's a data/dev pattern → the dev-patterns file.
+- The dev-patterns vs infra cut: an abstract engineering principle that would hold on any
+  platform (e.g. "data converters must hard-fail on zero transformations", "supplement parity
+  hashes with absolute assertions") → dev-patterns. A platform-specific fact (a GCP/Docker/
+  Terraform behavior, a specific service's quirk) → infra.
+- If no file's domain fits, say so (propose a new file or filter) — do not force-fit into the
+  nearest broadly-named file.
+
 ## Rules
 
 - Group updates by target memory file. Do NOT print per-file learning counts, "seen Nx"
@@ -261,10 +311,21 @@ async def _generate_proposal(
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     source_names = ", ".join(f.name for f in source_files)
 
-    memory_context = "\n\n".join(
-        f"### {name} (structure):\n{_extract_headers(content)}"
-        for name, content in memory_contents.items()
-    )
+    # Each file's catalog domain (summary + intent_domains) drives routing; the
+    # headers only pick the section WITHIN the chosen file.
+    catalog = _load_memory_catalog(get_paths().catalogs_dir())
+
+    blocks = []
+    for name, content in memory_contents.items():
+        meta = catalog.get(name, {})
+        lines = [f"### {name}"]
+        if meta.get("summary"):
+            lines.append(f"PURPOSE: {meta['summary']}")
+        if meta.get("intent_domains"):
+            lines.append("OWNS DOMAINS: " + "; ".join(meta["intent_domains"]))
+        lines.append(f"SECTIONS:\n{_extract_headers(content)}")
+        blocks.append("\n".join(lines))
+    memory_context = "\n\n".join(blocks)
 
     messages = [
         {
@@ -333,6 +394,16 @@ behind ONLY if the entry also states a general principle that outlives the chang
 a different future situation); then keep the principle as the memory entry AND the concrete
 change as the action item. If the principle is just the action restated, no memory copy. Do not
 move general knowledge that merely mentions the system.
+
+## 4. Fix catch-all mis-routing
+
+`ai-agent-patterns.md` is not a catch-all. If an entry filed under it is really about general
+software / data-engineering patterns (data transformation & validation, migration/cutover
+correctness, defensive scripting, testing, debugging methodology), MOVE it to the dev-patterns
+file. If it's about a specific platform (GCP/Docker/Terraform), git, or a Python-language gotcha,
+move it to the infra / git / Python file respectively. An agent running a script does not make
+the script an agent pattern. Only move on a clear subject mismatch; do not reshuffle borderline
+entries.
 
 NEVER alter the **Source:** provenance line — it cites `filename:line` for traceability and
 must stay exact. Strip residue from the entry's generalized text only, never from its Source.
