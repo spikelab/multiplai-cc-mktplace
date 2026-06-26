@@ -8,12 +8,23 @@ to .multiplai/dreams/ for review. Run /multiplai-context:dream-remember to apply
 """
 
 import asyncio
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Dream runs over a large backlog (40+ learnings, 20+ memory files) regularly
+# exceed model_client's 600s default per-call ceiling and time out (observed
+# repeatedly through 2026-06-26), forcing a manual env override each run. dream
+# is a separate, long-lived process from the per-prompt hooks, so a generous
+# 30-min default is safe here without loosening the global 600s default that
+# keeps interactive callers (context_manager, session_start) snappy. setdefault
+# preserves an explicit override. Must run before model_client is imported —
+# the timeout is read into a module constant at import time.
+os.environ.setdefault("MULTIPLAI_SDK_CALL_TIMEOUT_S", "1800")
 
 from lib.venv_guard import ensure_venv_python
 ensure_venv_python()
@@ -55,6 +66,28 @@ def _read_all_learnings(learnings_dir: Path) -> tuple[str, list[Path]]:
         parts.append(f"### File: {f.name}\n\n{numbered}")
     combined = "\n\n---\n\n".join(parts)
     return combined, files
+
+
+def _proposal_output_path(dreams_dir: Path, today: str) -> Path:
+    """Return a non-colliding path for today's proposal.
+
+    A same-day dream run (scheduled, or kicked off in parallel) must never
+    silently overwrite a proposal that may be mid-review in dream-remember —
+    that's silent data loss and forces a full re-generation (observed
+    2026-06-21). If the base name is free, use it; otherwise append an
+    incrementing counter so the prior proposal survives untouched.
+    dream-remember globs `processed-learnings-*.md` and takes the most recent
+    by mtime, so the versioned name is still discovered first.
+    """
+    base = dreams_dir / f"processed-learnings-{today}.md"
+    if not base.exists():
+        return base
+    n = 2
+    while True:
+        candidate = dreams_dir / f"processed-learnings-{today}-{n}.md"
+        if not candidate.exists():
+            return candidate
+        n += 1
 
 
 def _read_memory_files(memory_dir: Path) -> dict[str, str]:
@@ -491,7 +524,7 @@ async def dream_report() -> None:
 
     dreams_dir.mkdir(parents=True, exist_ok=True)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    output_file = dreams_dir / f"processed-learnings-{today}.md"
+    output_file = _proposal_output_path(dreams_dir, today)
     output_file.write_text(proposal)
     logger.info("Proposal written to %s", output_file)
 
@@ -650,11 +683,12 @@ async def dream_auto() -> None:
                 client, all_learnings, memory_contents, source_files
             )
 
-            # Audit trail: write the same proposal artifact report mode would.
+            # Audit trail: write the same proposal artifact report mode would,
+            # without clobbering a prior same-day artifact.
             dreams_dir = paths.dreams_dir()
             dreams_dir.mkdir(parents=True, exist_ok=True)
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            (dreams_dir / f"processed-learnings-{today}.md").write_text(proposal)
+            _proposal_output_path(dreams_dir, today).write_text(proposal)
 
             # Stage 2 — mechanically apply each file's slice of the proposal.
             # Files are independent, so apply them concurrently.
