@@ -17,7 +17,9 @@ applies approved changes.
 
 ## Step 1: Locate the Proposal
 
-Check `.multiplai/dreams/` for a file matching `processed-learnings-*.md`, most recent first.
+Check `.multiplai/dreams/` for a file matching `processed-learnings-*.md`, taking the **most
+recently modified** (newest mtime — not lexical name order; a same-day re-run writes a
+`-2`, `-3`, … suffixed file that is newer but sorts *before* the base name).
 
 - **Found:** load it, report its date and summary line to the user, proceed to Step 3.
 - **Not found:** tell the user "No pre-generated proposal found — generating one now" and run:
