@@ -60,8 +60,9 @@ _SDK_MAX_TURNS = 6
 # critic pass, 2026-06-20). asyncio.wait_for turns a stall into a TimeoutError
 # that the existing retry loop catches and, after _SDK_MAX_ATTEMPTS, surfaces as
 # SDKQueryError — callers that tolerate failure (e.g. dream's critic pass) then
-# degrade gracefully instead of hanging. Generous default; tunable for slow
-# backlogs via env.
+# degrade gracefully instead of hanging. Default keeps interactive callers
+# (context_manager, session_start) snappy; long-running batch callers raise it
+# via env — dream.py sets MULTIPLAI_SDK_CALL_TIMEOUT_S=1800 before import.
 _SDK_CALL_TIMEOUT_S = float(os.environ.get("MULTIPLAI_SDK_CALL_TIMEOUT_S", "600"))
 _DISALLOWED_TOOLS = [
     "Bash", "BashOutput", "KillShell", "Edit", "Write", "NotebookEdit",

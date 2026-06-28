@@ -296,3 +296,67 @@ class TestDreamNoGitOperations:
     def test_dream_no_git_commit(self):
         """dream.py must not contain git commit calls."""
         assert not re.search(r'git\s+commit\b', self.dream_source)
+
+
+# ---------------------------------------------------------------------------
+# Proposal filename versioning — no silent same-day overwrite
+# ---------------------------------------------------------------------------
+
+
+def _load_dream_module():
+    """Import dream.py as an isolated module (the venv guard no-ops in-venv)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("dream_under_test", SCRIPTS_DIR / "dream.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestProposalOutputPath:
+    """`_proposal_output_path` must never clobber an existing same-day proposal."""
+
+    @pytest.fixture(autouse=True)
+    def load(self):
+        self.dream = _load_dream_module()
+
+    def test_uses_base_name_when_free(self, tmp_path):
+        p = self.dream._proposal_output_path(tmp_path, "2026-06-26")
+        assert p == tmp_path / "processed-learnings-2026-06-26.md"
+
+    def test_versions_when_base_exists(self, tmp_path):
+        (tmp_path / "processed-learnings-2026-06-26.md").write_text("first")
+        p = self.dream._proposal_output_path(tmp_path, "2026-06-26")
+        assert p == tmp_path / "processed-learnings-2026-06-26-2.md"
+
+    def test_increments_past_existing_versions(self, tmp_path):
+        (tmp_path / "processed-learnings-2026-06-26.md").write_text("first")
+        (tmp_path / "processed-learnings-2026-06-26-2.md").write_text("second")
+        p = self.dream._proposal_output_path(tmp_path, "2026-06-26")
+        assert p == tmp_path / "processed-learnings-2026-06-26-3.md"
+
+    def test_never_returns_an_existing_path(self, tmp_path):
+        # Whatever the state, the returned path must not already exist.
+        for name in ("processed-learnings-2026-06-26.md",
+                     "processed-learnings-2026-06-26-2.md"):
+            (tmp_path / name).write_text("x")
+        p = self.dream._proposal_output_path(tmp_path, "2026-06-26")
+        assert not p.exists()
+
+
+class TestDreamTimeoutDefault:
+    """dream.py raises the SDK call timeout for long batch runs before import."""
+
+    @pytest.fixture(autouse=True)
+    def load_source(self):
+        self.source = (SCRIPTS_DIR / "dream.py").read_text()
+
+    def test_sets_1800s_default(self):
+        assert re.search(
+            r'os\.environ\.setdefault\(\s*["\']MULTIPLAI_SDK_CALL_TIMEOUT_S["\']\s*,\s*["\']1800["\']',
+            self.source,
+        )
+
+    def test_set_before_model_client_import(self):
+        setdefault_idx = self.source.index("MULTIPLAI_SDK_CALL_TIMEOUT_S")
+        import_idx = self.source.index("from lib.model_client import")
+        assert setdefault_idx < import_idx
