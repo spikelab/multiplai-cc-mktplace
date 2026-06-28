@@ -160,7 +160,7 @@ class TestAgentSDKClient:
         mock_sdk = _make_mock_sdk(["ok"])
 
         with patch.dict(sys.modules, {"claude_agent_sdk": mock_sdk}):
-            from lib.model_client import AgentSDKClient
+            from lib.model_client import AgentSDKClient, _NO_TOOLS_SUFFIX
             client = AgentSDKClient()
 
             messages = [{"role": "user", "content": "test"}]
@@ -174,7 +174,9 @@ class TestAgentSDKClient:
                 call = mock_sdk.query.call_args
                 assert call.kwargs["prompt"] == "test"
                 opts = call.kwargs["options"]
-                assert opts.system_prompt == "system prompt"
+                # query() appends the no-tools directive to the caller's system
+                # prompt before forwarding it to the SDK.
+                assert opts.system_prompt == "system prompt" + _NO_TOOLS_SUFFIX
                 assert opts.model == "claude-opus-4-20250514"
 
             asyncio.run(_test())
