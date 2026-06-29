@@ -15,7 +15,7 @@ By default (no arguments), all enabled catalogs are regenerated using state-awar
 
 - **`--force`** — Force regeneration of all enabled catalogs, bypassing state-aware skipping. Ignores content hash state and regenerates regardless of whether sources have changed. Pass `--force` flag through to the dispatcher.
 - **`--dry-run`** — Preview mode. Reports what catalogs would be regenerated or skipped without writing any files, modifying `.generation-state.json`, or making LLM calls. Dry-run output shows which generators would run and which would be skipped. No side effects.
-- **`--only <generators>`** — Selectively regenerate specific catalogs. Provide a comma-separated list of generator names: `memory`, `diary`, `skills`, `resources`. Example: `--only memory,diary` runs only those two generators.
+- **`--only <generators>`** — Selectively regenerate specific catalogs. Provide a comma-separated list of generator names: `memory`, `diary`, `skills`, `resources`. Example: `--only memory,diary` runs only those two generators. **`--only` is an explicit override: a generator named here runs even if its `enable_*` config flag is off** (e.g. `--only resources` rebuilds the resources catalog while `enable_resources` stays `false`, so you can keep a fresh index without turning on injection). The only hard requirement that still applies is `resources_dir` — `--only resources` no-ops if no resources directory is configured.
 
 ### Combinations
 
@@ -55,3 +55,10 @@ The dispatcher respects these `plugin.json` userConfig settings:
 - `enable_skills` — Whether to include the skills catalog generator (default: false)
 - `enable_resources` — Whether to include the resources catalog generator (default: false)
 - `resources_dir` — Directory to scan for resources (required when enable_resources is true)
+
+## Operational Notes
+
+- **Interpreter:** `generate_catalog.py` re-execs itself into the managed venv (`$CLAUDE_PLUGIN_DATA/venv/bin/python`, which carries `claude-agent-sdk`) via `venv_guard`. Invoke it with plain `python` and let it self-route — do not force a project/uv venv, which lacks the SDK and fails with "model client unavailable".
+- **Exit code 1 means partial errors, not total failure.** The catalog is still written for every source that succeeded; re-run to fill gaps. A common per-file error is a `429 "usage credits are required for long context requests"` on very large files — trim/split those or re-run when credits allow.
+- **Do not background-detach or pattern-kill the run.** It spawns bounded `claude` CLI subprocesses (concurrency = `catalog_concurrency`, default 5), which is fine in-container. `pkill -f generate_catalog` will also match the calling shell and kill the job — kill the specific python PID if you must stop it.
+- **Concurrency:** raise/lower with the `catalog_concurrency` userConfig (default 5) if you hit rate limits or want faster throughput.

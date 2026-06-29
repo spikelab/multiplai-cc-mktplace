@@ -233,8 +233,14 @@ class GeneratorBase:
 
     # ---- Template method ----
 
-    async def run(self, *, force: bool = False, dry_run: bool = False) -> GenerationResult:
+    async def run(
+        self, *, force: bool = False, dry_run: bool = False, force_enable: bool = False
+    ) -> GenerationResult:
         """Orchestrate the full generation lifecycle.
+
+        ``force_enable`` is accepted for uniform dispatch and ignored here;
+        config-gated generators (skills, resources) override ``run`` and use
+        it to bypass their ``enable_*`` flag when explicitly selected.
 
         1. Ensure catalogs directory exists
         2. Load state and existing catalog
