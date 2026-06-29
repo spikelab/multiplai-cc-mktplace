@@ -113,7 +113,7 @@ over the anchor:
 | `router_model` | `claude-haiku-4-5` | Model for the `llm` router. Haiku by default — routing is cheap classification, so the smallest/fastest model keeps per-prompt latency down. Ignored under `token_overlap`. |
 | `recommend_cooldown_turns` | `4` | After a file is injected, suppress re-injecting it for this many turns (it's already in the conversation). `0` disables. See [Re-recommendation cooldown](#re-recommendation-cooldown). |
 | `enable_skills` / `skills_dir` | `false` / `~/.claude/skills` | Optionally catalog skills for routing |
-| `enable_resources` / `resources_dir` | `false` / `""` | Optionally catalog a research/reference corpus |
+| `enable_resources` / `resources_dir` | `false` / `""` | Optionally catalog a research/reference corpus. The flag gates *injection*; you can still refresh the catalog while it's off via `refresh-catalogs --only resources` (needs `resources_dir` set). Only `.md`/`.markdown` files are indexed. |
 
 #### Router latency
 
@@ -143,7 +143,7 @@ All commands are namespaced under `/multiplai-context:`.
 | `/multiplai-context:dream-remember` | Review the proposal (generating one if needed), approve/reject memory edits and action items, apply approved edits, write approved action items to `PLANS/dream-actions-{date}.md`, clean up processed learnings. |
 | `/multiplai-context:health` | **Is it broken?** Mechanical infrastructure check (deterministic script): active model client, directories present, memory-file freshness by mtime, diary/learnings/dream counts. Fast, cheap, run anytime. |
 | `/multiplai-context:memory-health-audit` | **Is it good?** Analytical effectiveness audit — cross-correlates retrieval logs, diary, learnings, and memory structure to find what's useful, what's wasted, and what to restructure. Slower; run ~monthly. |
-| `/multiplai-context:refresh-catalogs` | Regenerate catalog indexes. Supports `--force`, `--dry-run`, `--only`. |
+| `/multiplai-context:refresh-catalogs` | Regenerate catalog indexes. Supports `--force`, `--dry-run`, `--only`. `--only <gen>` is an explicit override — it runs even if that generator's `enable_*` flag is off (e.g. `--only resources` refreshes the resources catalog while `enable_resources` stays `false`). |
 | `/multiplai-context:backfill` | Reconstruct learnings/diary/now summaries from existing Claude Code transcripts. Default window 7 days; `--days N`, `--since DATE`, `--all`. |
 
 ## Where your data lives
