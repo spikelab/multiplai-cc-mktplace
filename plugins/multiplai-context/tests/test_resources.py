@@ -1068,3 +1068,81 @@ class TestResourcesLargeFileHandling:
         # The text file should be processed at minimum
         # Binary file may be skipped or produce a minimal entry
         assert result.total_sources >= 1
+
+
+# ---------------------------------------------------------------------------
+# force_enable — explicit --only bypasses the enable_resources gate
+# ---------------------------------------------------------------------------
+
+
+class TestResourcesForceEnable:
+    """force_enable lets an explicit selection run despite enable_resources=false.
+
+    The resources_dir requirement is NOT bypassed — there is nothing to
+    scan without a directory.
+    """
+
+    def test_force_enable_runs_when_flag_disabled(self, tmp_path, monkeypatch):
+        from generators.config import CatalogConfig
+        from generators.resources import ResourcesGenerator
+
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        resources_dir = tmp_path / "resources"
+        resources_dir.mkdir()
+        catalogs_dir = tmp_path / "catalogs"
+        catalogs_dir.mkdir()
+        _write_resource_file(resources_dir, "api.md", "# API")
+
+        config = CatalogConfig(enable_resources=False, resources_dir=str(resources_dir))
+        client = _make_mock_client()
+        gen = ResourcesGenerator(config=config, model_client=client)
+
+        result = asyncio.run(gen.run(force_enable=True))
+
+        assert result.total_sources == 1
+        assert result.generated == 1
+        assert (catalogs_dir / "resources.json").exists()
+
+    def test_force_enable_still_requires_resources_dir(self, tmp_path, monkeypatch):
+        from generators.config import CatalogConfig
+        from generators.resources import ResourcesGenerator
+
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        config = CatalogConfig(enable_resources=False, resources_dir="")
+        client = _make_mock_client()
+        gen = ResourcesGenerator(config=config, model_client=client)
+
+        result = asyncio.run(gen.run(force_enable=True))
+
+        assert result.total_sources == 0
+        client.query.assert_not_called()
+
+
+class TestResourcesDispatcherOverride:
+    """`--only resources` regenerates even when enable_resources is false."""
+
+    def test_only_filter_runs_disabled_resources(self, tmp_path, monkeypatch):
+        from generators.config import CatalogConfig
+        from generators.dispatcher import generate_catalogs
+
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        resources_dir = tmp_path / "resources"
+        resources_dir.mkdir()
+        (tmp_path / "catalogs").mkdir()
+        _write_resource_file(resources_dir, "api.md", "# API")
+
+        config = CatalogConfig(enable_resources=False, resources_dir=str(resources_dir))
+
+        import generators.dispatcher as disp
+        monkeypatch.setattr(disp, "_create_model_client",
+                            lambda: _async_return(_make_mock_client()))
+
+        results = asyncio.run(
+            generate_catalogs(config=config, generators=["resources"])
+        )
+        res = [r for r in results if r.generator == "resources"][0]
+        assert res.generated == 1
+
+
+async def _async_return(value):
+    return value
