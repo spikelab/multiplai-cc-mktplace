@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed
+- **`refresh-catalogs --only <gen>` now honors its override contract.** An
+  explicit `--only` filter has always been documented as running a generator
+  regardless of config gating, but each generator's `run()` still re-checked
+  its own `enable_*` flag and silently no-op'd — so `--only resources` did
+  nothing when `enable_resources=false`. The dispatcher now threads a
+  `force_enable` signal into the gated generators, so an explicitly-named
+  generator runs even with its flag off (the `resources_dir` requirement is
+  still enforced). This lets you keep a catalog fresh without turning on
+  injection. Documented in the `refresh-catalogs` skill and README, with
+  operational notes (managed-venv self-routing, `exit 1` = partial errors,
+  don't `pkill -f generate_catalog`).
+- **Resources catalog indexes Markdown only.** `ResourcesGenerator.discover_sources()`
+  now allowlists `.md`/`.markdown` and skips dotfiles and binaries (PDFs,
+  images, archives, scripts, raw `.txt`), so the routing surface is no longer
+  diluted by placeholder "binary file" entries.
+
 ### Added
 - **Action Items — a third dream disposition.** A learning that asks the
   toolchain to change its own code/config/file-structure ("split these files",
