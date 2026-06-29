@@ -19,6 +19,12 @@ _HAND_AUTHORED_FIELDS = (
     "anti_domains",
 )
 
+# Only Markdown holds injectable prose. Everything else under the
+# resources dir (PDFs, images, archives, scripts, raw .txt dumps,
+# data files) is skipped so the catalog stays a clean routing surface
+# — binaries can't be injected usefully and only dilute matching.
+_INDEXABLE_SUFFIXES = frozenset({".md", ".markdown"})
+
 
 class ResourcesGenerator(GeneratorBase):
     """Catalog generator for resource files.
@@ -45,9 +51,16 @@ class ResourcesGenerator(GeneratorBase):
 
         sources = {}
         for path in sorted(resources_dir.rglob("*")):
-            if path.is_file():
-                rel_path = str(path.relative_to(resources_dir))
-                sources[rel_path] = path
+            if not path.is_file():
+                continue
+            # Skip hidden files (.DS_Store, lock files) and any file
+            # whose extension isn't injectable prose.
+            if path.name.startswith("."):
+                continue
+            if path.suffix.lower() not in _INDEXABLE_SUFFIXES:
+                continue
+            rel_path = str(path.relative_to(resources_dir))
+            sources[rel_path] = path
         return sources
 
     def build_prompt(self, source: Path) -> str:
