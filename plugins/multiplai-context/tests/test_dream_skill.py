@@ -358,5 +358,5 @@ class TestDreamTimeoutDefault:
 
     def test_set_before_model_client_import(self):
         setdefault_idx = self.source.index("MULTIPLAI_SDK_CALL_TIMEOUT_S")
-        import_idx = self.source.index("from lib.model_client import")
+        import_idx = self.source.index("from multiplai_core.model_client import")
         assert setdefault_idx < import_idx
