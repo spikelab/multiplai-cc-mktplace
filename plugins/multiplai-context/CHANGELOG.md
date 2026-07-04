@@ -2,7 +2,57 @@
 
 ## Unreleased
 
+### Changed
+- **`refresh-catalogs --only <gen>` now honors its override contract.** An
+  explicit `--only` filter has always been documented as running a generator
+  regardless of config gating, but each generator's `run()` still re-checked
+  its own `enable_*` flag and silently no-op'd — so `--only resources` did
+  nothing when `enable_resources=false`. The dispatcher now threads a
+  `force_enable` signal into the gated generators, so an explicitly-named
+  generator runs even with its flag off (the `resources_dir` requirement is
+  still enforced). This lets you keep a catalog fresh without turning on
+  injection. Documented in the `refresh-catalogs` skill and README, with
+  operational notes (managed-venv self-routing, `exit 1` = partial errors,
+  don't `pkill -f generate_catalog`).
+- **Resources catalog indexes Markdown only.** `ResourcesGenerator.discover_sources()`
+  now allowlists `.md`/`.markdown` and skips dotfiles and binaries (PDFs,
+  images, archives, scripts, raw `.txt`), so the routing surface is no longer
+  diluted by placeholder "binary file" entries.
+
 ### Added
+- **Action Items — a third dream disposition.** A learning that asks the
+  toolchain to change its own code/config/file-structure ("split these files",
+  "delete this orphan", "use install.sh in the Dockerfile") is no longer
+  mis-filed as memory. The dream proposal now has a `## Action Items` section
+  (`A{N}` numbering, What/Why/Source). On approval, `/multiplai-context:dream-remember`
+  writes them to `PLANS/dream-actions-{date}.md` as unchecked tasks, so they
+  survive the learnings cleanup and become durable work. A learning that
+  carries a durable general *principle* alongside the change keeps **both** —
+  the principle as memory and the change as an action item.
+- **Bounded critic second pass over the dream proposal.** After the draft, a
+  cheap second LLM pass (over the proposal only, not the raw backlog)
+  surgically strips point-in-time residue (commit SHAs, `Decision (date):`
+  framing, finished-task imperatives, one-off paths), demotes past-event
+  records to Filtered Out, and reroutes mis-filed action items. Falls back to
+  the raw draft on failure.
+- **`filename:line` provenance.** Each proposal entry ends with a `**Source:**`
+  line citing the learnings file and line number it was distilled from
+  (pending learnings are now fed to the model with line-number prefixes so the
+  citation is accurate, not guessed) — so a report is traceable on re-processing.
+
+### Changed
+- **Dream now distills generalized, reusable knowledge — not a session log.**
+  The proposal prompt is built around an explicit DIARY-vs-MEMORY distinction:
+  the diary already records what happened; memory holds guidance that changes a
+  *future, different* task. Entries are generalized ("when X, do Y"), with the
+  point-in-time scaffolding stripped. Report noise removed: no per-file
+  learning counts, `seen Nx` notes, or trust labels (weak items get a
+  `[warning low confidence]` marker instead).
+- **`/multiplai-context:dream --auto` uses the same generalization pass as
+  report mode.** Auto mode previously ran a thin per-file prompt with none of
+  the above discipline. It now generates the same proposal (same prompt +
+  critic), writes it to `.multiplai/dreams/` for audit, then mechanically
+  applies each file's slice concurrently.
 - **`router_model` option for the `llm` router** (default `claude-haiku-4-5`).
   The LLM router now forwards a model to the client; Haiku keeps the
   per-prompt classification cheap. The `UserPromptSubmit` hook timeout is

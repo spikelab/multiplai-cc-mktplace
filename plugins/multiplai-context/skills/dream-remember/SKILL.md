@@ -17,7 +17,9 @@ applies approved changes.
 
 ## Step 1: Locate the Proposal
 
-Check `.multiplai/dreams/` for a file matching `processed-learnings-*.md`, most recent first.
+Check `.multiplai/dreams/` for a file matching `processed-learnings-*.md`, taking the **most
+recently modified** (newest mtime — not lexical name order; a same-day re-run writes a
+`-2`, `-3`, … suffixed file that is newer but sorts *before* the base name).
 
 - **Found:** load it, report its date and summary line to the user, proceed to Step 3.
 - **Not found:** tell the user "No pre-generated proposal found — generating one now" and run:
@@ -58,10 +60,15 @@ If `dream.py` is unavailable and you need to generate manually:
 Read the proposal file in full. Then tell the user:
 
 - The source file path and date
-- A one-line summary: e.g. "17 proposed updates across 5 files from 8 learnings files"
-- **"Review the file and tell me: `all` / `none` / numbers like `1,3,5` or `1-12,16-20` / or `modify`"**
+- A one-line summary: e.g. "17 proposed updates across 5 files, plus 3 action items, from 8 learnings files"
+- If the proposal has a `## Action Items` section, mention the count — these are NOT memory;
+  approved ones get written to `PLANS/dream-actions-{date}.md` (handled in Step 4b).
+- **"Review the file and tell me: `all` / `none` / numbers like `1,3,5` or `1-12,16-20` / `A1,A3` for action items / or `modify`"**
 
 Do NOT dump the full proposal into chat. Tell the user where the file is so they can open it.
+
+Memory updates are numbered `N`; action items are numbered `A{N}`. The user can approve each
+set independently (e.g. `all` for memory, `A1,A2` for action items).
 
 ---
 
@@ -85,8 +92,7 @@ Target: CLAUDE.md — {section}
 Proposed rule:
 > {exact text}
 
-Source: {learnings file}
-Trust: {level}
+Source: {learnings_file}:{line-number(s)}
 
 Apply this rule? (yes / no / modify)
 ```
@@ -103,6 +109,31 @@ For each approved update:
 3. Apply with the Edit tool — one edit at a time per file, in order.
 4. Update "Last Updated" date if present.
 5. Confirm each edit was applied.
+
+---
+
+## Step 4b: Write Approved Action Items to PLANS/
+
+If the proposal has a `## Action Items` section, handle the user's approved `A{N}` items
+(`all`, an explicit `A1,A3` list, or `none`). Action items are NOT memory — they are work
+the toolchain should do, and must survive the Step 5 learnings cleanup, so they go to a
+tracked file.
+
+For each approved action item, append to `PLANS/dream-actions-{YYYY-MM-DD}.md` (create it if
+absent, today's date). Each entry as an unchecked task:
+
+```
+## Dream action items — {date}
+
+- [ ] {short imperative title}
+  - What: {concrete change}
+  - Why: {problem it fixes}
+  - Source: {learnings_file}:{line-number(s)}
+```
+
+If the file already exists for today, append new items under the same heading (don't
+duplicate the heading). Report the path and count to the user. Skip this step if there are no
+action items or the user approved `none`.
 
 ---
 
@@ -154,9 +185,12 @@ Print a brief summary:
 ✓ Applied N updates across M files
   - technical-pref.md: N updates
   - preferences.md: N updates
+✓ Wrote N action items to PLANS/dream-actions-{date}.md
 ✓ Deleted N learnings files
 ⊘ Skipped N updates (items #X, #Y — not approved)
 ```
+
+Omit the action-items line if there were none.
 
 ---
 

@@ -19,6 +19,12 @@ _HAND_AUTHORED_FIELDS = (
     "anti_domains",
 )
 
+# Only Markdown holds injectable prose. Everything else under the
+# resources dir (PDFs, images, archives, scripts, raw .txt dumps,
+# data files) is skipped so the catalog stays a clean routing surface
+# — binaries can't be injected usefully and only dilute matching.
+_INDEXABLE_SUFFIXES = frozenset({".md", ".markdown"})
+
 
 class ResourcesGenerator(GeneratorBase):
     """Catalog generator for resource files.
@@ -45,9 +51,16 @@ class ResourcesGenerator(GeneratorBase):
 
         sources = {}
         for path in sorted(resources_dir.rglob("*")):
-            if path.is_file():
-                rel_path = str(path.relative_to(resources_dir))
-                sources[rel_path] = path
+            if not path.is_file():
+                continue
+            # Skip hidden files (.DS_Store, lock files) and any file
+            # whose extension isn't injectable prose.
+            if path.name.startswith("."):
+                continue
+            if path.suffix.lower() not in _INDEXABLE_SUFFIXES:
+                continue
+            rel_path = str(path.relative_to(resources_dir))
+            sources[rel_path] = path
         return sources
 
     def build_prompt(self, source: Path) -> str:
@@ -91,13 +104,22 @@ class ResourcesGenerator(GeneratorBase):
                 merged[field] = existing[field]
         return merged
 
-    async def run(self, *, force: bool = False, dry_run: bool = False) -> GenerationResult:
+    async def run(
+        self, *, force: bool = False, dry_run: bool = False, force_enable: bool = False
+    ) -> GenerationResult:
         """Override run to gate on enable_resources and resources_dir config.
 
         When enable_resources is false or resources_dir is not set,
         returns early with zero work and does not write any files.
+
+        ``force_enable`` (set by the dispatcher when this generator is
+        explicitly named in an ``--only`` filter) bypasses the
+        enable_resources flag, but never the resources_dir requirement —
+        there is nothing to scan without a directory.
         """
-        if not self._config.enable_resources or not self._config.resources_dir.strip():
+        if not self._config.resources_dir.strip():
+            return self._disabled_result(dry_run=dry_run)
+        if not force_enable and not self._config.enable_resources:
             return self._disabled_result(dry_run=dry_run)
 
         return await super().run(force=force, dry_run=dry_run)
