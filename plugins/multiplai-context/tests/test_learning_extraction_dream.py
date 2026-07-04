@@ -844,13 +844,37 @@ class TestNoBashWrappers:
     @pytest.mark.parametrize("script_path", ALL_SCRIPTS, ids=ALL_SCRIPT_NAMES)
     def test_no_subprocess_calls_to_bash(self, script_path):
         """WHEN ported scripts are searched for subprocess calls
-        THEN none invoke .sh or .bash scripts."""
+        THEN none invoke .sh or .bash scripts.
+
+        Inspect actual subprocess call arguments via AST rather than raw substring —
+        prose/prompt text that merely mentions a ``.sh`` URL (e.g. an install command in
+        a documentation string) is not a shell-wrapper invocation and must not trip this.
+        """
+        import ast
+
         source = _read_source(script_path)
-        if "subprocess" in source:
-            # Check for shell script invocations
-            assert ".sh" not in source or "ssh" in source.lower(), (
-                f"{script_path.name} must not call .sh bash wrapper scripts"
-            )
+        if "subprocess" not in source:
+            return
+
+        tree = ast.parse(source)
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            # Match subprocess.run/Popen/call/check_output(...) and bare run(...).
+            name = getattr(func, "attr", None) or getattr(func, "id", None)
+            if name not in {"run", "Popen", "call", "check_call", "check_output"}:
+                continue
+            # Scan only the string-literal arguments of the call itself.
+            for arg in ast.walk(node):
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    if ".sh" in arg.value or ".bash" in arg.value:
+                        offenders.append(arg.value)
+        assert not offenders, (
+            f"{script_path.name} must not call .sh/.bash wrapper scripts via "
+            f"subprocess; offending args: {offenders}"
+        )
 
 
 # ===================================================================

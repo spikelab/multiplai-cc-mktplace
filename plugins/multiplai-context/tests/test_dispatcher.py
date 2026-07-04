@@ -131,7 +131,7 @@ class TestSequentialExecution:
 
         invocation_order = []
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             invocation_order.append(self.name)
             return GenerationResult(
@@ -159,7 +159,7 @@ class TestSequentialExecution:
 
         orders = []
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             orders.append(self.name)
             return GenerationResult(
@@ -187,7 +187,7 @@ class TestSequentialExecution:
 
         call_counts = {"memory": 0, "diary": 0, "skills": 0, "resources": 0}
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             call_counts[self.name] += 1
             return GenerationResult(
@@ -227,7 +227,7 @@ class TestGeneratorFiltering:
         config = CatalogConfig()
         invoked = []
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             invoked.append(self.name)
             return GenerationResult(
@@ -254,7 +254,7 @@ class TestGeneratorFiltering:
         config = CatalogConfig()
         invoked = []
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             invoked.append(self.name)
             return GenerationResult(
@@ -320,7 +320,7 @@ class TestConfigGatedGenerators:
         config = CatalogConfig(enable_skills=False)
         invoked = []
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             invoked.append(self.name)
             return GenerationResult(
@@ -356,7 +356,7 @@ class TestConfigGatedGenerators:
         config = CatalogConfig(enable_resources=False)
         invoked = []
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             invoked.append(self.name)
             return GenerationResult(
@@ -386,7 +386,7 @@ class TestConfigGatedGenerators:
         config = CatalogConfig(enable_resources=True, resources_dir="")
         invoked = []
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             invoked.append(self.name)
             return GenerationResult(
@@ -415,7 +415,7 @@ class TestConfigGatedGenerators:
         config = CatalogConfig(enable_skills=False, enable_resources=False)
         invoked = []
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             invoked.append(self.name)
             return GenerationResult(
@@ -454,7 +454,7 @@ class TestForceMode:
         config = CatalogConfig()
         force_values = {}
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             force_values[self.name] = force
             return GenerationResult(
@@ -493,7 +493,7 @@ class TestDryRunMode:
         config = CatalogConfig()
         dry_run_values = {}
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             dry_run_values[self.name] = dry_run
             return GenerationResult(
@@ -519,7 +519,7 @@ class TestDryRunMode:
 
         config = CatalogConfig()
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             return GenerationResult(
                 generator=self.name, total_sources=0, skipped=0,
@@ -560,14 +560,14 @@ class TestFailureIsolation:
 
         config = CatalogConfig(enable_skills=True, enable_resources=True, resources_dir="/tmp/res")
 
-        async def mock_run_success(self, *, force=False, dry_run=False):
+        async def mock_run_success(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             return GenerationResult(
                 generator=self.name, total_sources=1, skipped=0,
                 generated=1, pruned=0, errors=[], dry_run=dry_run,
             )
 
-        async def mock_run_fail(self, *, force=False, dry_run=False):
+        async def mock_run_fail(self, *, force=False, dry_run=False, force_enable=False):
             raise RuntimeError("Skills LLM call failed")
 
         with patch("generators.memory.MemoryGenerator.run", mock_run_success), \
@@ -596,7 +596,7 @@ class TestFailureIsolation:
 
         config = CatalogConfig()
 
-        async def mock_run_fail(self, *, force=False, dry_run=False):
+        async def mock_run_fail(self, *, force=False, dry_run=False, force_enable=False):
             raise RuntimeError(f"{self.name} failed")
 
         with patch("generators.memory.MemoryGenerator.run", mock_run_fail), \
@@ -622,7 +622,7 @@ class TestFailureIsolation:
 
         config = CatalogConfig()
 
-        async def mock_run_partial(self, *, force=False, dry_run=False):
+        async def mock_run_partial(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             return GenerationResult(
                 generator=self.name, total_sources=3, skipped=1,
@@ -631,7 +631,7 @@ class TestFailureIsolation:
                 dry_run=dry_run,
             )
 
-        async def mock_run_ok(self, *, force=False, dry_run=False):
+        async def mock_run_ok(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             return GenerationResult(
                 generator=self.name, total_sources=0, skipped=0,
@@ -670,7 +670,7 @@ class TestResultAggregation:
 
         config = CatalogConfig()
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             return GenerationResult(
                 generator=self.name, total_sources=0, skipped=0,
                 generated=0, pruned=0, errors=[], dry_run=dry_run,
@@ -696,7 +696,7 @@ class TestResultAggregation:
 
         config = CatalogConfig(enable_skills=True, enable_resources=True, resources_dir="/tmp/r")
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             return GenerationResult(
                 generator=self.name, total_sources=0, skipped=0,
                 generated=0, pruned=0, errors=[], dry_run=dry_run,
@@ -720,7 +720,7 @@ class TestResultAggregation:
 
         config = CatalogConfig()
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             return GenerationResult(
                 generator=self.name, total_sources=0, skipped=0,
                 generated=0, pruned=0, errors=[], dry_run=dry_run,
@@ -756,7 +756,7 @@ class TestCatalogsDirectoryCreation:
 
         config = CatalogConfig()
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             return GenerationResult(
                 generator=self.name, total_sources=0, skipped=0,
@@ -785,7 +785,7 @@ class TestCatalogsDirectoryCreation:
 
         config = CatalogConfig()
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             return GenerationResult(
                 generator=self.name, total_sources=0, skipped=0,
@@ -818,7 +818,7 @@ class TestProgressLogging:
 
         config = CatalogConfig()
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             return GenerationResult(
                 generator=self.name, total_sources=0, skipped=0,
@@ -847,14 +847,14 @@ class TestProgressLogging:
 
         config = CatalogConfig()
 
-        async def mock_run_ok(self, *, force=False, dry_run=False):
+        async def mock_run_ok(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             return GenerationResult(
                 generator=self.name, total_sources=0, skipped=0,
                 generated=0, pruned=0, errors=[], dry_run=dry_run,
             )
 
-        async def mock_run_fail(self, *, force=False, dry_run=False):
+        async def mock_run_fail(self, *, force=False, dry_run=False, force_enable=False):
             raise RuntimeError("Simulated failure")
 
         import logging
@@ -893,10 +893,10 @@ class TestErrorClassification:
 
         config = CatalogConfig()
 
-        async def mock_run_critical(self, *, force=False, dry_run=False):
+        async def mock_run_critical(self, *, force=False, dry_run=False, force_enable=False):
             raise OSError("Permission denied writing state file")
 
-        async def mock_run_ok(self, *, force=False, dry_run=False):
+        async def mock_run_ok(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             return GenerationResult(
                 generator=self.name, total_sources=0, skipped=0,
@@ -922,7 +922,7 @@ class TestErrorClassification:
 
         config = CatalogConfig()
 
-        async def mock_run_with_errors(self, *, force=False, dry_run=False):
+        async def mock_run_with_errors(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             return GenerationResult(
                 generator=self.name, total_sources=5, skipped=2,
@@ -931,7 +931,7 @@ class TestErrorClassification:
                 dry_run=dry_run,
             )
 
-        async def mock_run_ok(self, *, force=False, dry_run=False):
+        async def mock_run_ok(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             return GenerationResult(
                 generator=self.name, total_sources=0, skipped=0,
@@ -970,7 +970,7 @@ class TestConfigPassthrough:
 
         original_init = None
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             configs_seen[self.name] = self._config
             return GenerationResult(
@@ -1027,7 +1027,7 @@ class TestModelClientPassthrough:
         config = CatalogConfig()
         clients_seen = {}
 
-        async def mock_run(self, *, force=False, dry_run=False):
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
             from generators.base import GenerationResult
             clients_seen[self.name] = self._model_client
             return GenerationResult(

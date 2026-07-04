@@ -85,13 +85,19 @@ class SkillsGenerator(GeneratorBase):
                 merged[field] = existing[field]
         return merged
 
-    async def run(self, *, force: bool = False, dry_run: bool = False) -> GenerationResult:
+    async def run(
+        self, *, force: bool = False, dry_run: bool = False, force_enable: bool = False
+    ) -> GenerationResult:
         """Override run to gate on enable_skills config.
 
         When enable_skills is false, returns early with zero work
         and does not write any catalog or state files.
+
+        ``force_enable`` (set by the dispatcher when this generator is
+        explicitly named in an ``--only`` filter) bypasses the
+        enable_skills flag so an explicit request runs regardless.
         """
-        if not self._config.enable_skills:
+        if not force_enable and not self._config.enable_skills:
             return self._disabled_result(dry_run=dry_run)
 
         return await super().run(force=force, dry_run=dry_run)

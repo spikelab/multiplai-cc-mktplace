@@ -126,12 +126,20 @@ async def generate_catalogs(
     model_client = await _create_model_client()
     names_to_run = _resolve_generators(config, generators)
 
+    # An explicit filter is an override: per this module's contract, a
+    # generator named in `generators` runs even if its enable_* flag is off
+    # (e.g. `--only resources` with enable_resources=false). Signal that
+    # intent so the generator's own enable-gate yields to the filter.
+    explicitly_filtered = generators is not None
+
     results: list[GenerationResult] = []
     for name in names_to_run:
         logger.info("Running %s catalog generator", name)
         gen = GENERATOR_CLASSES[name](config=config, model_client=model_client)
         try:
-            result = await gen.run(force=force, dry_run=dry_run)
+            result = await gen.run(
+                force=force, dry_run=dry_run, force_enable=explicitly_filtered
+            )
             results.append(result)
         except Exception as e:
             logger.error("Generator %s failed: %s", name, e, exc_info=True)
