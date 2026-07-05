@@ -80,7 +80,7 @@ changes via `/multiplai-context:dream-remember`.)
 
 ## Constraints
 - Never invoke `--auto` unless the user explicitly requests autonomous operation.
-- The default (`python dream.py`) is always report mode — safe to run anytime.
+- The default invocation (`uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"`, no flags) is always report mode — safe to run anytime.
 - The dream script uses the path resolver for all file locations — never hardcode paths.
 - All LLM calls go through the model client abstraction — never import the SDK directly.
 - If catalog generation fails or errors occur, the dream cycle still completes successfully. Catalog failures are logged but do not block or prevent the dream from finishing.
