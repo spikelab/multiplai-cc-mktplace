@@ -58,7 +58,7 @@ The dispatcher respects these `plugin.json` userConfig settings:
 
 ## Operational Notes
 
-- **Interpreter:** `generate_catalog.py` re-execs itself into the managed venv (`$CLAUDE_PLUGIN_DATA/venv/bin/python`, which carries `claude-agent-sdk`) via `venv_guard`. Invoke it with plain `python` and let it self-route — do not force a project/uv venv, which lacks the SDK and fails with "model client unavailable".
+- **Interpreter:** ALWAYS invoke via `uv run --no-project` exactly as shown above — the script's PEP 723 header declares its dependencies (`multiplai-core`, `claude-agent-sdk`) and uv resolves them on the fly. There is no managed venv anymore; bare `python`/`python3` fails with `ModuleNotFoundError: multiplai_core`.
 - **Exit code 1 means partial errors, not total failure.** The catalog is still written for every source that succeeded; re-run to fill gaps. A common per-file error is a `429 "usage credits are required for long context requests"` on very large files — trim/split those or re-run when credits allow.
 - **Do not background-detach or pattern-kill the run.** It spawns bounded `claude` CLI subprocesses (concurrency = `catalog_concurrency`, default 5), which is fine in-container. `pkill -f generate_catalog` will also match the calling shell and kill the job — kill the specific python PID if you must stop it.
 - **Concurrency:** raise/lower with the `catalog_concurrency` userConfig (default 5) if you hit rate limits or want faster throughput.

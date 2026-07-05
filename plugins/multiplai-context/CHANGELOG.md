@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1 — 2026-07-05
+
+### Fixed
+- **refresh-catalogs skill doc contradicted the uv migration** — an Operational
+  Note still told the session to invoke `generate_catalog.py` with bare
+  `python` via the removed managed-venv self-routing, causing
+  `ModuleNotFoundError: multiplai_core`. All skill docs now consistently
+  mandate `uv run --no-project`. Also scrubbed stale `venv_dir`/`python
+  dream.py` references from the health and dream skill docs.
+
 ## 0.4.0 — 2026-07-05
 
 ### Changed

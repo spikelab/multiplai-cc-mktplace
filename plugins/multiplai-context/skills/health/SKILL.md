@@ -25,7 +25,7 @@ You are the multiplai health audit skill. Your job is to check the completeness 
        - The eval scores whatever `strategy` it last ran with (normally `token_overlap`, the default). If `last_eval.strategy` differs from `effective_strategy`, the numbers don't describe what's running — say so.
        - If `last_eval` is null or `age_days` > 30, recommend re-running `uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/eval_router.py"` (zero LLM cost under `token_overlap`).
 
-   - **Directory Validation**: For each Paths field (`memory_dir`, `diary_dir`, `data_dir`, `venv_dir`), report whether the directory exists on disk or is missing.
+   - **Directory Validation**: For each Paths field (`memory_dir`, `diary_dir`, `data_dir`), report whether the directory exists on disk or is missing.
 
    - **Memory Files**: The script scans the **entire** memory dir (`memory_dir.glob("*.md")`), not a fixed list. Use `memory_summary` (`total`, `fresh`, `stale`, `required_missing`) for the headline (e.g. "21/27 fresh"). Then enumerate explicitly **only** the files that need attention — anything in `required_missing` and any entry with `"stale": true` (show size + age_days, oldest first). Do **not** dump a row for every healthy file; collapse those to the fresh count. `required_missing` lists only absent starter-template files (`me.md`, `technical-pref.md`, `preferences.md`); a missing non-starter file is not flagged as an error.
 
