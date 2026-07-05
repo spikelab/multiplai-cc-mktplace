@@ -1,12 +1,22 @@
 {
   "name": "multiplai-context",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Claude Code plugin for context routing, continuous learning, session awareness, and memory management.",
-  "author": {"name": "Spike", "email": "fsm@spikelab.org"},
+  "author": {
+    "name": "Spike",
+    "email": "fsm@spikelab.org"
+  },
   "license": "MIT",
   "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
   "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
-  "keywords": ["memory", "context", "diary", "learnings", "session", "persistence"],
+  "keywords": [
+    "memory",
+    "context",
+    "diary",
+    "learnings",
+    "session",
+    "persistence"
+  ],
   "userConfig": {
     "workspace_dir": {
       "type": "string",
@@ -41,7 +51,7 @@
     "data_dir": {
       "type": "string",
       "title": "Runtime Data Directory",
-      "description": "Runtime state directory for logs, catalogs, and dream state. Defaults to <workspace_dir>/.multiplai/data if workspace_dir is set, else ~/.multiplai/data. Not CLAUDE_PLUGIN_DATA — runtime state stays with the workspace.",
+      "description": "Runtime state directory for logs, catalogs, and dream state. Defaults to <workspace_dir>/.multiplai/data if workspace_dir is set, else ~/.multiplai/data. Not CLAUDE_PLUGIN_DATA \u2014 runtime state stays with the workspace.",
       "default": ""
     },
     "anthropic_api_key": {
@@ -113,7 +123,7 @@
     "router_model": {
       "type": "string",
       "title": "Router Model (llm strategy)",
-      "description": "Model used by the 'llm' memory_router. Defaults to Haiku — routing is a cheap classification, so the smallest/fastest model keeps the per-prompt hook latency tolerable. Ignored under 'token_overlap'.",
+      "description": "Model used by the 'llm' memory_router. Defaults to Haiku \u2014 routing is a cheap classification, so the smallest/fastest model keeps the per-prompt hook latency tolerable. Ignored under 'token_overlap'.",
       "default": "claude-haiku-4-5"
     },
     "recommend_cooldown_turns": {

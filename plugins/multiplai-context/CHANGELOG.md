@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-07-05
+
+### Changed
+- **uv + PEP 723 runtime.** The managed plugin venv (`venv_bootstrap`/`venv_guard`)
+  is gone. Every entry-point script carries inline dependency metadata and runs
+  via `uv run --no-project`. Shared modules (`paths`, `config`, `log_utils`,
+  `model_client`) moved to the `multiplai-core` package, consumed as
+  `git+https://github.com/spikelab/multiplai-core@v0.2`.
+
+### Added
+- **Installed-plugin skill discovery.** The skills catalog now also indexes
+  skills shipped by installed Claude Code plugins (the themed Multiplai packs:
+  pm, writing, research, dev, media) via `installed_plugins.json`, in addition
+  to `skills_dir`. New `plugins_dir` option (empty = `$CLAUDE_CONFIG_DIR/plugins`).
+
 
 ### Changed
 - **`refresh-catalogs --only <gen>` now honors its override contract.** An
