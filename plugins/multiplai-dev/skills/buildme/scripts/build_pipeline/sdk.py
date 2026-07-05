@@ -26,6 +26,9 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from multiplai_core.aio import hard_timeout, swallow_task_result as _swallow_task_result  # noqa: F401
+from multiplai_core.text import extract_json  # noqa: F401
+
 from .models import AgentResult
 
 log = logging.getLogger(__name__)
@@ -44,38 +47,6 @@ def _hook_session_dir() -> Path:
     d = cfg / "hook-sessions"
     d.mkdir(exist_ok=True)
     return d
-
-
-def _swallow_task_result(task: asyncio.Task) -> None:
-    """Consume a cancelled/failed background task's result so asyncio doesn't
-    log 'Task exception was never retrieved'."""
-    try:
-        task.result()
-    except (asyncio.CancelledError, Exception):
-        pass
-
-
-async def hard_timeout(coro, timeout_s: float):
-    """Run ``coro`` with a wall-clock timeout that ALWAYS returns control.
-
-    Drop-in replacement for ``asyncio.wait_for`` with one critical difference:
-    on timeout it cancels the task fire-and-forget and returns immediately
-    instead of awaiting the cancellation. ``asyncio.wait_for`` awaits the
-    cancellation it triggers, so if the claude-agent-sdk CLI subprocess is
-    wedged and its transport teardown never finishes, wait_for hangs forever
-    (the multi-hour ~0-CPU hang deep-research hit). ``asyncio.wait`` returns
-    (done, pending) at the deadline and does NOT await pending tasks, so a
-    wedged subprocess can leak in the background but never stalls the build.
-
-    Raises ``asyncio.TimeoutError`` on timeout (same contract as wait_for).
-    """
-    task = asyncio.ensure_future(coro)
-    done, _ = await asyncio.wait({task}, timeout=timeout_s)
-    if task not in done:
-        task.cancel()  # best-effort; do NOT await — cancellation may block
-        task.add_done_callback(_swallow_task_result)
-        raise asyncio.TimeoutError()
-    return task.result()
 
 
 async def _safe_query(*, prompt, options):
@@ -390,50 +361,4 @@ async def llm_call_structured(
     raise LLMCallError(f"Structured output validation failed after {max_retries + 1} attempts: {last_error}")
 
 
-def extract_json(text: str) -> dict | list:
-    """Extract JSON object/array from a model response."""
-    if not text or not text.strip():
-        raise ValueError("Empty response")
-
-    # Fenced code blocks
-    fence_match = re.search(r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL)
-    if fence_match:
-        return json.loads(fence_match.group(1).strip())
-
-    # Bracket balancing
-    stripped = text.strip()
-    start = None
-    for i, ch in enumerate(stripped):
-        if ch in "{[":
-            start = i
-            break
-    if start is None:
-        raise ValueError("No JSON object/array found")
-
-    open_ch = stripped[start]
-    close_ch = "}" if open_ch == "{" else "]"
-    depth = 0
-    in_str = False
-    escape = False
-
-    for i in range(start, len(stripped)):
-        ch = stripped[i]
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"' and not escape:
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch == open_ch:
-            depth += 1
-        elif ch == close_ch:
-            depth -= 1
-            if depth == 0:
-                return json.loads(stripped[start : i + 1])
-
-    raise ValueError("Unbalanced JSON in response")
+# extract_json now lives in multiplai_core.text (imported at top of module).

@@ -24,6 +24,9 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from multiplai_core.aio import hard_timeout, swallow_task_result as _swallow_task_result  # noqa: F401
+from multiplai_core.text import extract_json  # noqa: F401
+
 log = logging.getLogger(__name__)
 
 
@@ -184,40 +187,8 @@ class LLMCallTimeoutError(LLMCallError):
     """Raised when an LLM call exceeds its timeout."""
 
 
-def _swallow_task_result(task: "asyncio.Task") -> None:
-    """Retrieve and discard a task's result/exception so the event loop does
-    not log 'Task exception was never retrieved' for abandoned tasks."""
-    try:
-        task.result()
-    except BaseException:  # noqa: BLE001 — includes CancelledError; we discard all
-        pass
-
-
-async def hard_timeout(coro, timeout_s: float):
-    """Run ``coro`` with a wall-clock timeout that ALWAYS returns control.
-
-    Drop-in replacement for ``asyncio.wait_for`` with one critical difference:
-    on timeout it cancels the task **fire-and-forget** and returns immediately,
-    instead of awaiting the cancellation to complete.
-
-    Why this matters: ``asyncio.wait_for`` awaits the cancellation it triggers.
-    If the inner coroutine's cleanup blocks — e.g. the claude-agent-sdk CLI
-    subprocess is wedged and its transport teardown never finishes — then the
-    cancellation never completes and ``wait_for`` hangs forever (observed: a
-    7-hour, ~0-CPU hang that defeated all three nested wait_for layers). This
-    helper uses ``asyncio.wait``, which returns (done, pending) when the timeout
-    elapses and does NOT await pending tasks, so a wedged subprocess can leak in
-    the background but can never stall the pipeline.
-
-    Raises ``asyncio.TimeoutError`` on timeout (same contract as wait_for).
-    """
-    task = asyncio.ensure_future(coro)
-    done, _ = await asyncio.wait({task}, timeout=timeout_s)
-    if task not in done:
-        task.cancel()  # best-effort; do NOT await — cancellation may block
-        task.add_done_callback(_swallow_task_result)
-        raise asyncio.TimeoutError()
-    return task.result()
+# hard_timeout / swallow_task_result now live in multiplai_core.aio
+# (imported at the top of this module).
 
 
 async def llm_call(
@@ -475,63 +446,4 @@ async def llm_call_structured(
 # ---------------------------------------------------------------------------
 
 
-def extract_json(text: str) -> dict | list:
-    """Extract a JSON object or array from a model response.
-
-    Handles:
-    - ```json ... ``` fenced code blocks
-    - Plain JSON with surrounding prose
-    - Multi-line JSON objects
-    """
-    if not text or not text.strip():
-        raise ValueError("Empty response")
-
-    # 1. Fenced code blocks
-    fence_match = re.search(r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL)
-    if fence_match:
-        candidate = fence_match.group(1).strip()
-        return json.loads(candidate)
-
-    # 2. First complete JSON object/array via bracket balancing
-    stripped = text.strip()
-    start = None
-    for i, ch in enumerate(stripped):
-        if ch in "{[":
-            start = i
-            break
-    if start is None:
-        raise ValueError("No JSON object/array found in response")
-
-    # Track brackets to find matching close
-    open_ch = stripped[start]
-    close_ch = "}" if open_ch == "{" else "]"
-    depth = 0
-    in_str = False
-    escape = False
-    end = None
-
-    for i in range(start, len(stripped)):
-        ch = stripped[i]
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"' and not escape:
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch == open_ch:
-            depth += 1
-        elif ch == close_ch:
-            depth -= 1
-            if depth == 0:
-                end = i
-                break
-
-    if end is None:
-        raise ValueError("Unbalanced JSON in response")
-
-    return json.loads(stripped[start : end + 1])
+# extract_json now lives in multiplai_core.text (imported at top of module).
