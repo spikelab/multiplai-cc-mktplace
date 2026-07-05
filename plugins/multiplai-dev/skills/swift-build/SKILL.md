@@ -7,7 +7,7 @@ description: |
 triggers:
   - "swift build"
   - "swift test"
-  - "run tests" (in a Swift project context)
+  - 'run tests (in a Swift project context)'
   - "simulator"
   - "xcodebuild"
 model: opus

@@ -12,11 +12,11 @@ triggers:
   - "google cloud"
   - "cloud run"
   - "cloud sql"
-  - "terraform" (in a GCP context)
-  - "iam policy" / "service account" (GCP context)
-  - "cloud logging" / "cloud monitoring"
+  - 'terraform (in a GCP context)'
+  - 'iam policy / service account (GCP context)'
+  - 'cloud logging / cloud monitoring'
   - "artifact registry"
-  - "workload identity federation" / "WIF"
+  - 'workload identity federation / WIF'
 model: opus
 effort: high
 ---
