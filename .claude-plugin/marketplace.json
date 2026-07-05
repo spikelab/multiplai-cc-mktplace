@@ -4,7 +4,7 @@
     "name": "Spike",
     "email": "fsm@spikelab.org"
   },
-  "description": "Multiplai — a suite of Claude Code plugins for memory, context, and workflow. Context manager is the first; more plugins follow.",
+  "description": "Multiplai \u2014 a suite of Claude Code plugins for memory, context, and workflow. Context manager is the first; more plugins follow.",
   "plugins": [
     {
       "name": "multiplai-context",
@@ -18,7 +18,79 @@
       "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
       "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
       "license": "MIT",
-      "keywords": ["memory", "context", "diary", "learnings", "session", "persistence"]
+      "keywords": [
+        "memory",
+        "context",
+        "diary",
+        "learnings",
+        "session",
+        "persistence"
+      ]
+    },
+    {
+      "name": "multiplai-pm",
+      "source": "./plugins/multiplai-pm",
+      "description": "Product-management skill pack: JTBD synthesis, persona codification, PR/FAQ, strategy memos, job applications, landing pages.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Spike",
+        "email": "fsm@spikelab.org"
+      },
+      "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "license": "MIT"
+    },
+    {
+      "name": "multiplai-writing",
+      "source": "./plugins/multiplai-writing",
+      "description": "Content creation toolkit: briefs, drafts, copy editing, LinkedIn posts, image prompts.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Spike",
+        "email": "fsm@spikelab.org"
+      },
+      "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "license": "MIT"
+    },
+    {
+      "name": "multiplai-research",
+      "source": "./plugins/multiplai-research",
+      "description": "Research skill pack: code-driven deep research pipeline, insight extraction, structured interviewing.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Spike",
+        "email": "fsm@spikelab.org"
+      },
+      "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "license": "MIT"
+    },
+    {
+      "name": "multiplai-dev",
+      "source": "./plugins/multiplai-dev",
+      "description": "Developer skill pack: spec-driven builds, code/security review, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Spike",
+        "email": "fsm@spikelab.org"
+      },
+      "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "license": "MIT"
+    },
+    {
+      "name": "multiplai-media",
+      "source": "./plugins/multiplai-media",
+      "description": "Media skill pack: audio transcription, YouTube transcripts, screen-recording demo videos, diagrams, host-browser automation.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Spike",
+        "email": "fsm@spikelab.org"
+      },
+      "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "license": "MIT"
     }
   ]
 }
