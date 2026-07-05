@@ -1,0 +1,53 @@
+{
+  "repo": "knowhere/PROJECTS/multiplai",
+  "generated_at": "2026-05-21T10:30:00+00:00",
+  "candidates": [
+    {
+      "title": "Collapse the Order intake pipeline",
+      "files": [
+        "src/order/handler.py",
+        "src/order/validator.py",
+        "src/order/enricher.py",
+        "src/order/persister.py"
+      ],
+      "problem": "Order intake module is shallow — interface nearly matches the implementation.",
+      "solution": "Deepen: one interface, one place to test.",
+      "wins": [
+        "locality: bugs concentrate in one module",
+        "leverage: one interface, N call sites",
+        "delete 4 shallow wrappers"
+      ],
+      "strength": "Strong",
+      "dependency_category": "in-process",
+      "diagram": {
+        "kind": "mermaid",
+        "before": "flowchart LR\n  A[OrderHandler] --> B[OrderValidator]\n  B --> C[OrderEnricher]\n  C --> D[OrderPersister]",
+        "after":  "flowchart LR\n  A[Caller] --> O[OrderIntake]"
+      },
+      "adr_callout": null
+    },
+    {
+      "title": "Promote PricingPort to a real seam",
+      "files": ["src/pricing/client.py", "src/order/intake.py"],
+      "problem": "Pricing leaks across the seam mid-business-logic.",
+      "solution": "Two adapters justify the seam: HTTP in prod, in-memory in tests.",
+      "wins": [
+        "interface shrinks; implementation absorbs the wrappers",
+        "tests run without network",
+        "PricingPort named in CONTEXT.md"
+      ],
+      "strength": "Worth exploring",
+      "dependency_category": "ports-and-adapters",
+      "diagram": {
+        "kind": "mermaid",
+        "before": "flowchart LR\n  I[OrderIntake] -.leak.-> P[PricingClient]\n  classDef leak stroke:#dc2626,stroke-width:2px;\n  class P leak",
+        "after":  "flowchart LR\n  I[OrderIntake] --> Port((PricingPort))\n  Port --> H[HttpPricingAdapter]\n  Port --> M[InMemoryPricingAdapter]"
+      },
+      "adr_callout": "Contradicts ADR-0007 — worth reopening because the seam is now untested."
+    }
+  ],
+  "top_recommendation": {
+    "index": 0,
+    "why": "Highest locality gain, no ADR conflict, no cross-seam dependencies."
+  }
+}
