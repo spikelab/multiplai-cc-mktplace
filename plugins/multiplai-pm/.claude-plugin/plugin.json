@@ -1,0 +1,9 @@
+{
+  "name": "multiplai-pm",
+  "version": "0.1.0",
+  "description": "Product-management skill pack: JTBD synthesis, persona codification, PR/FAQ, strategy memos, job applications, landing pages.",
+  "author": {"name": "Spike", "email": "fsm@spikelab.org"},
+  "license": "MIT",
+  "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
+  "repository": "https://github.com/spikelab/multiplai-cc-mktplace"
+}
