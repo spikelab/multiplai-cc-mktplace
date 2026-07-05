@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Claude Code plugin for context routing, continuous learning, session awareness, and memory management.",
   "author": {
     "name": "Spike",

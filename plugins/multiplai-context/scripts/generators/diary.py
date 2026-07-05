@@ -111,10 +111,14 @@ class DiaryGenerator(GeneratorBase):
         """Parse LLM response into a diary catalog entry dict."""
         return self._parse_json_response(raw)
 
-    async def run(self, *, force: bool = False, dry_run: bool = False):
+    async def run(
+        self, *, force: bool = False, dry_run: bool = False, force_enable: bool = False
+    ):
         """Override run to inject word_count and date into generated entries.
 
         word_count is computed from source content, not LLM output.
+        ``force_enable`` is part of the dispatcher's uniform run() contract
+        (every generator receives it); diary is not gated, so it's ignored.
         """
         result = await super().run(force=force, dry_run=dry_run)
 

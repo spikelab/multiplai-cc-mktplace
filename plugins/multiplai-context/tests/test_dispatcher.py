@@ -1046,3 +1046,28 @@ class TestModelClientPassthrough:
             assert clients_seen[name] is not None, (
                 f"{name} generator's model_client is None"
             )
+
+
+class TestRunSignatureContract:
+    """The dispatcher passes force_enable to EVERY generator's run().
+
+    Regression for 0.4.1: DiaryGenerator overrode run() without the
+    force_enable kwarg and every dispatcher invocation crashed it with
+    TypeError. Any generator override must accept the full contract.
+    """
+
+    def test_all_registered_generators_accept_force_enable(self):
+        import inspect
+
+        from generators.dispatcher import GENERATOR_CLASSES
+
+        for name, cls in GENERATOR_CLASSES.items():
+            sig = inspect.signature(cls.run)
+            has_kwargs = any(
+                p.kind is inspect.Parameter.VAR_KEYWORD
+                for p in sig.parameters.values()
+            )
+            assert "force_enable" in sig.parameters or has_kwargs, (
+                f"{name} generator's run() must accept force_enable "
+                f"(dispatcher passes it unconditionally); got {sig}"
+            )

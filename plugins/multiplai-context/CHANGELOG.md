@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.2 — 2026-07-05
+
+### Fixed
+- **Every dispatcher run crashed the diary generator** — the 0.3.x
+  `--only`-override feature made the dispatcher pass `force_enable` to every
+  generator, but `DiaryGenerator.run()` still had the old signature
+  (`TypeError: unexpected keyword argument`). Signature updated; a new
+  contract test asserts every registered generator accepts the dispatcher's
+  full run() contract, so future overrides can't regress this.
+
 ## 0.4.1 — 2026-07-05
 
 ### Fixed
