@@ -7,6 +7,7 @@ that the pipeline uses to decide recovery strategy.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -14,6 +15,14 @@ from pathlib import Path
 from .models import GateResult, ReviewResult
 
 log = logging.getLogger(__name__)
+
+
+def _repo_trusted() -> bool:
+    """Mirror of sdk._repo_is_trusted (kept dependency-free here). Gates that run
+    the repo's own test_command / conftest.py must not execute against a repo the
+    user has not vouched for — the test command is arbitrary argv and pytest runs
+    any conftest.py in the tree at collection time (CWE-94)."""
+    return os.environ.get("BUILDME_TRUST_REPO", "").strip().lower() in ("1", "true", "yes")
 
 
 def feasibility_gate(project_dir: Path, stack: str, dependencies: list[str]) -> GateResult:
@@ -93,6 +102,13 @@ def baseline_test_gate(test_command: str, project_dir: Path) -> GateResult:
     """Run the test suite and check it passes before TDD starts."""
     if not test_command:
         return GateResult(passed=True, reason="No test command configured — skipping baseline")
+    if not _repo_trusted():
+        return GateResult(
+            passed=False,
+            reason="Repo not trusted — refusing to run its test_command/conftest.py "
+                   "(set --trust-repo or BUILDME_TRUST_REPO=1).",
+            action="fix_tests",
+        )
     try:
         result = subprocess.run(
             test_command.split(),
@@ -118,6 +134,12 @@ def integration_gate(test_command: str, project_dir: Path) -> GateResult:
     """Run the full test suite after a block completes."""
     if not test_command:
         return GateResult(passed=True, reason="No test command — skipping integration gate")
+    if not _repo_trusted():
+        return GateResult(
+            passed=False,
+            reason="Repo not trusted — refusing to run its test_command/conftest.py "
+                   "(set --trust-repo or BUILDME_TRUST_REPO=1).",
+        )
     try:
         result = subprocess.run(
             test_command.split(),

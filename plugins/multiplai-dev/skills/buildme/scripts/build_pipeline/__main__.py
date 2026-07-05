@@ -13,7 +13,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
+
+
+def _add_trust_repo_flag(p: argparse.ArgumentParser) -> None:
+    """Opt-in gate for commands that spawn auto-approving (bypassPermissions)
+    agents. Without it, agent_call refuses to run (see sdk._repo_is_trusted)."""
+    p.add_argument(
+        "--trust-repo",
+        action="store_true",
+        help="Confirm you trust this repo's specs/ before running auto-approving "
+             "build agents. Required for build/spec-generate/tdd/apply on any "
+             "repo you did not author (equivalent to BUILDME_TRUST_REPO=1).",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,6 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--skip-research", action="store_true", help="Skip research phase")
     build.add_argument("--interview-summary", default="", help="Pre-gathered interview summary")
     build.add_argument("--context-files", nargs="*", default=[], help="Brief/context file paths")
+    _add_trust_repo_flag(build)
 
     # --- spec-generate ---
     spec = sub.add_parser("spec-generate", help="Artifact generation pipeline")
@@ -42,18 +56,21 @@ def build_parser() -> argparse.ArgumentParser:
     spec.add_argument("--project-dir", default=".", help="Project directory")
     spec.add_argument("--interview-summary", default="", help="Interview summary text")
     spec.add_argument("--research-path", default="", help="Path to research output")
+    _add_trust_repo_flag(spec)
 
     # --- tdd ---
     tdd = sub.add_parser("tdd", help="TDD implementation engine")
     tdd.add_argument("--change", required=True, help="Change name")
     tdd.add_argument("--project-dir", default=".", help="Project directory")
     tdd.add_argument("--block", type=int, help="Start from specific block number")
+    _add_trust_repo_flag(tdd)
 
     # --- apply ---
     apply_ = sub.add_parser("apply", help="Manual single-agent change application")
     apply_.add_argument("--change", default="", help="Change name (auto-selects if only one)")
     apply_.add_argument("--project-dir", default=".", help="Project directory")
     apply_.add_argument("--block", type=int, help="Start from specific block number")
+    _add_trust_repo_flag(apply_)
 
     # --- archive ---
     archive = sub.add_parser("archive", help="Archive a completed change")
@@ -72,6 +89,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Propagate the repo-trust opt-in to the agent layer (sdk._repo_is_trusted).
+    if getattr(args, "trust_repo", False):
+        os.environ["BUILDME_TRUST_REPO"] = "1"
 
     from .config import BuildConfig
     from .env import load_env

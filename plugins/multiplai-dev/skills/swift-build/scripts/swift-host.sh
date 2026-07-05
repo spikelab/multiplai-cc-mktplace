@@ -43,7 +43,7 @@ run_on_host() {
       echo "ERROR: No SSH key found. Set SWIFT_BUILD_KEY or place key at ~/.ssh/build_key" >&2
       exit 1
     fi
-    ssh -q -o StrictHostKeyChecking=no -o BatchMode=yes \
+    ssh -q -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
       -i "$SWIFT_BUILD_KEY" \
       "${SWIFT_BUILD_USER}@${SWIFT_BUILD_HOST}" \
       "$1"
