@@ -84,26 +84,44 @@ class TestWiringTaskGate:
         assert "wiring" in result.reason.lower()
 
 
+@pytest.fixture
+def trust_repo(monkeypatch):
+    """Gates that execute the repo's test_command require an explicit trust opt-in."""
+    monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+
+
 class TestBaselineTestGate:
     def test_no_test_command_passes(self, tmp_path):
         result = baseline_test_gate("", tmp_path)
         assert result.passed
 
-    def test_passing_tests(self, tmp_path):
+    def test_passing_tests(self, tmp_path, trust_repo):
         result = baseline_test_gate("true", tmp_path)  # 'true' command always exits 0
         assert result.passed
 
-    def test_failing_tests(self, tmp_path):
+    def test_failing_tests(self, tmp_path, trust_repo):
         result = baseline_test_gate("false", tmp_path)  # 'false' command always exits 1
         assert not result.passed
 
+    def test_untrusted_repo_refuses_to_run(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("BUILDME_TRUST_REPO", raising=False)
+        result = baseline_test_gate("true", tmp_path)
+        assert not result.passed
+        assert "not trusted" in result.reason
+
 
 class TestIntegrationGate:
-    def test_passing(self, tmp_path):
+    def test_passing(self, tmp_path, trust_repo):
         result = integration_gate("true", tmp_path)
         assert result.passed
 
-    def test_failing(self, tmp_path):
+    def test_failing(self, tmp_path, trust_repo):
         result = integration_gate("false", tmp_path)
         assert not result.passed
         assert result.action == "spawn_fix_agent"
+
+    def test_untrusted_repo_refuses_to_run(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("BUILDME_TRUST_REPO", raising=False)
+        result = integration_gate("true", tmp_path)
+        assert not result.passed
+        assert "not trusted" in result.reason

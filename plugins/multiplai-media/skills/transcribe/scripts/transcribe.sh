@@ -38,19 +38,27 @@ if [ "$(uname -s)" != "Darwin" ]; then
   IS_CONTAINER=true
 fi
 
+# Run a command given as an argv array (NOT a shell string). Locally we exec the
+# argv directly — no eval, so an attacker-controlled path/filename cannot inject
+# shell (CWE-78). Over SSH we shell-quote every arg with printf '%q' and let the
+# remote shell re-parse it as literal data.
 run_on_host() {
   if [ "$IS_CONTAINER" = "false" ]; then
-    eval "$1"
+    "$@"
   else
     if [ -z "$TRANSCRIBE_KEY" ]; then
       echo "ERROR: No SSH key found. Set TRANSCRIBE_KEY or place key at ~/.ssh/build_key" >&2
       echo "MLX Whisper requires macOS Metal GPU — cannot run in container." >&2
       exit 1
     fi
-    ssh -q -o StrictHostKeyChecking=no -o BatchMode=yes \
+    local remote_cmd="" a
+    for a in "$@"; do
+      remote_cmd+=" $(printf '%q' "$a")"
+    done
+    ssh -q -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
       -i "$TRANSCRIBE_KEY" \
       "${TRANSCRIBE_USER}@${TRANSCRIBE_HOST}" \
-      "$1"
+      "$remote_cmd"
   fi
 }
 
@@ -140,13 +148,13 @@ OUT_STEM="${OUT_BASENAME%.*}"
 OUT_EXT="${OUT_BASENAME##*.}"
 [[ "$OUT_EXT" == "$OUT_BASENAME" ]] && OUT_EXT="txt"  # no extension → default .txt
 
-# Build mlx_whisper command with optional flags
-MLX_CMD="mlx_whisper --model \"$MODEL\" --output-dir \"$OUT_DIR\" --output-name \"$OUT_STEM\" --output-format txt"
-[[ -n "$TASK" ]] && MLX_CMD="$MLX_CMD --task \"$TASK\""
-[[ -n "$LANGUAGE" ]] && MLX_CMD="$MLX_CMD --language \"$LANGUAGE\""
-MLX_CMD="$MLX_CMD \"$AUDIO_FILE\""
+# Build mlx_whisper command as an argv array (no shell string, no eval).
+MLX_ARGS=(mlx_whisper --model "$MODEL" --output-dir "$OUT_DIR" --output-name "$OUT_STEM" --output-format txt)
+[[ -n "$TASK" ]] && MLX_ARGS+=(--task "$TASK")
+[[ -n "$LANGUAGE" ]] && MLX_ARGS+=(--language "$LANGUAGE")
+MLX_ARGS+=("$AUDIO_FILE")
 
-run_on_host "$MLX_CMD"
+run_on_host "${MLX_ARGS[@]}"
 
 # mlx_whisper always writes <stem>.txt; rename if user requested a different extension.
 GENERATED="$OUT_DIR/$OUT_STEM.txt"

@@ -34,19 +34,28 @@ if [ "$(uname -s)" != "Darwin" ]; then
   IS_CONTAINER=true
 fi
 
+# Run a command given as an argv array (NOT a shell string). Locally we exec the
+# argv directly — no eval, so an attacker-controlled arg (e.g. a video title)
+# cannot inject shell (CWE-78). Over SSH the transport forces a single string, so
+# we shell-quote every arg with printf '%q' (the same discipline as the `ab`
+# wrapper) and let the remote shell re-parse it as literal data.
 run_on_host() {
   if [ "$IS_CONTAINER" = "false" ]; then
-    eval "$1"
+    "$@"
   else
     if [ -z "$TRANSCRIBE_KEY" ]; then
       echo "ERROR: No SSH key found. Set TRANSCRIBE_KEY or place key at ~/.ssh/build_key" >&2
       echo "MLX Whisper requires macOS Metal GPU — cannot run in container." >&2
       exit 1
     fi
-    ssh -q -o StrictHostKeyChecking=no -o BatchMode=yes \
+    local remote_cmd="" a
+    for a in "$@"; do
+      remote_cmd+=" $(printf '%q' "$a")"
+    done
+    ssh -q -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
       -i "$TRANSCRIBE_KEY" \
       "${TRANSCRIBE_USER}@${TRANSCRIBE_HOST}" \
-      "$1"
+      "$remote_cmd"
   fi
 }
 
@@ -205,7 +214,7 @@ import sys
 seen = []
 seen_set = set()
 
-with open('$VTT_FILE', 'r', encoding='utf-8') as f:
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
     for line in f:
         line = line.strip()
 
@@ -233,7 +242,7 @@ with open('$VTT_FILE', 'r', encoding='utf-8') as f:
 
 # Join into flowing text (one line per caption segment)
 print('\n'.join(seen))
-" > "$OUTPUT_FILE"
+" "$VTT_FILE" > "$OUTPUT_FILE"
 
     LINES=$(wc -l < "$OUTPUT_FILE" | tr -d ' ')
     echo "[yt-transcript] Done. Saved $LINES lines to: $OUTPUT_FILE"
@@ -291,13 +300,13 @@ else
     MODEL="mlx-community/whisper-medium.en-mlx-8bit"
 fi
 
-# Build mlx-whisper command with optional flags
-MLX_CMD="mlx-whisper --model \"$MODEL\""
-[[ -n "$TASK" ]] && MLX_CMD="$MLX_CMD --task \"$TASK\""
-[[ -n "$LANGUAGE" ]] && MLX_CMD="$MLX_CMD --language \"$LANGUAGE\""
-MLX_CMD="$MLX_CMD --output-name \"$OUTPUT_FILE\" \"$AUDIO_FILE\""
+# Build mlx-whisper command as an argv array (no shell string, no eval).
+MLX_ARGS=(mlx-whisper --model "$MODEL")
+[[ -n "$TASK" ]] && MLX_ARGS+=(--task "$TASK")
+[[ -n "$LANGUAGE" ]] && MLX_ARGS+=(--language "$LANGUAGE")
+MLX_ARGS+=(--output-name "$OUTPUT_FILE" "$AUDIO_FILE")
 
-run_on_host "$MLX_CMD" || {
+run_on_host "${MLX_ARGS[@]}" || {
     echo "Error: Transcription failed." >&2
     exit 1
 }

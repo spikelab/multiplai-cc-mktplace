@@ -151,7 +151,7 @@ def _transcribe(audio: Path, dst_stem: Path, prompt_hint: str = "") -> Path:
     parts.append(str(audio))
     remote_cmd = " ".join(_sh_quote(p) for p in parts)
     ssh_cmd = [
-        "ssh", "-q", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
+        "ssh", "-q", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
         "-i", str(SSH_KEY), f"{SSH_USER}@{SSH_HOST}", remote_cmd,
     ]
     subprocess.run(ssh_cmd, check=True)
