@@ -1,7 +1,10 @@
 # multiplai
 
-A Claude Code **plugin marketplace** — a growing suite of plugins for
-memory, context, and workflow.
+A Claude Code **plugin marketplace** — memory, context, and a themed skill
+library for a full working environment. Pairs with
+[`multiplai-kit`](https://github.com/spikelab/multiplai-kit) (launcher +
+sandboxed container + workspace conventions), but every plugin also works in
+a plain Claude Code install.
 
 ## Add the marketplace
 
@@ -9,22 +12,28 @@ memory, context, and workflow.
 /plugin marketplace add spikelab/multiplai-cc-mktplace
 ```
 
-Then install any plugin from it:
+Then install the plugins you want:
 
 ```
 /plugin install multiplai-context@multiplai
+/plugin install multiplai-dev@multiplai
 ```
 
 ## Plugins
 
-| Plugin | Status | Description |
-|--------|--------|-------------|
-| [`multiplai-context`](plugins/multiplai-context) | **Available** | Context routing, continuous learning, session awareness, and memory management. |
-| `multiplai-container` | Planned | Containerized execution environment. |
-| `multiplai-deepresearch` | Planned | Multi-source deep-research pipeline. |
+| Plugin | Description |
+|--------|-------------|
+| [`multiplai-context`](plugins/multiplai-context) | Context routing, continuous learning, session awareness, and memory management. The heart of the system. |
+| [`multiplai-pm`](plugins/multiplai-pm) | Product-management pack: JTBD synthesis, persona codification, PR/FAQ, strategy memos, job applications, landing pages. |
+| [`multiplai-writing`](plugins/multiplai-writing) | Content creation toolkit: briefs, drafts, copy editing, LinkedIn posts, image prompts. |
+| [`multiplai-research`](plugins/multiplai-research) | Code-driven deep-research pipeline, insight extraction, structured interviewing. |
+| [`multiplai-dev`](plugins/multiplai-dev) | Developer pack: spec-driven builds (buildme), code/security review, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring. |
+| [`multiplai-media`](plugins/multiplai-media) | Transcription, YouTube transcripts, screen-recording demo videos, diagrams, host-browser automation. |
 
-Each plugin is self-contained under `plugins/`. The marketplace manifest
-is `.claude-plugin/marketplace.json`.
+Skill-by-skill index: see each plugin's `skills/` directory. Some
+`multiplai-media`/`multiplai-dev` skills (transcribe, screen-demo,
+swift-build, host-browser) bridge to a macOS host over SSH and are designed
+for the `multiplai-kit` container environment.
 
 ## Repository layout
 
@@ -33,11 +42,12 @@ is `.claude-plugin/marketplace.json`.
 ├── .claude-plugin/
 │   └── marketplace.json          # marketplace manifest (lists plugins)
 ├── plugins/
-│   └── multiplai-context/    # the context-manager plugin
-│       ├── .claude-plugin/plugin.json
-│       ├── hooks/  scripts/  skills/  templates/  tests/
-│       ├── README.md             # plugin docs
-│       └── CHANGELOG.md
+│   ├── multiplai-context/        # hooks/ scripts/ skills/ templates/ tests/
+│   ├── multiplai-pm/             # .claude-plugin/plugin.json + skills/
+│   ├── multiplai-writing/
+│   ├── multiplai-research/
+│   ├── multiplai-dev/
+│   └── multiplai-media/
 ├── LICENSE
 └── README.md                     # this file
 ```
@@ -45,7 +55,10 @@ is `.claude-plugin/marketplace.json`.
 ## Development
 
 See [`plugins/multiplai-context/README.md`](plugins/multiplai-context/README.md)
-for plugin-specific setup, configuration, and the test suite.
+for plugin-specific setup, configuration, and the test suite. Shared Python
+infrastructure (paths, config, logging, model client) lives in
+[`multiplai-core`](https://github.com/spikelab/multiplai-core), consumed via
+PEP 723 inline metadata (`uv run --no-project`).
 
 ## License
 
