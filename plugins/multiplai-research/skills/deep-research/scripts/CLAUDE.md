@@ -52,11 +52,6 @@ All tests use stubs/mocks — no real API calls. Run in milliseconds.
 - `ResearchConfig.prefer_claude_tools` (default True) — `--no-claude-tools` to disable
 - `ResearchConfig.allow_paid_fallback` (default False) — `--allow-paid-fallback` to enable (only unlocks Serper beyond free tier; Tavily/Exa/Brave are capped at free tier always)
 
-**PoC validation scripts** (standalone, NOT in pytest — they make live calls):
-- `poc_sdk_cancellation.py` — validates asyncio.wait_for kills hung SDK queries
-- `poc_fetch_strategies.py` — compares Strategy A/B/C for token efficiency
-
-Full PoC data: `RESOURCES/dev/claude-agent-sdk-web-tools-poc-2026-04-05.md`
 Full provider comparison: `references/search-engines.md`
 
 ## Provider Cost Tiers

@@ -28,23 +28,29 @@ def find_project_root(start: Path | None = None) -> Path | None:
     return None
 
 
-def load_env() -> bool:
-    """Load .env from the project root. Existing env vars are NOT overridden.
-
-    $CLAUDE_MULTIPLAI_HOME (the kit root, exported by claude.sh) wins over the
-    walk-up: when this skill ships inside a plugin, the install dir may live
-    outside the kit tree, so walking up from the script can't find the kit .env.
-    """
+def _env_candidates() -> list[Path]:
+    """Ordered .env locations, most explicit first — covers a plain plugin
+    install with no kit tree (explicit override, kit home, cwd, marker walk-up)."""
+    candidates: list[Path] = []
+    explicit = os.environ.get("MULTIPLAI_ENV_FILE")
+    if explicit:
+        candidates.append(Path(explicit))
     home = os.environ.get("CLAUDE_MULTIPLAI_HOME")
-    if home and (Path(home) / ".env").exists():
-        env_file = Path(home) / ".env"
-    else:
-        root = find_project_root()
-        if root is None:
-            log.debug("No project root found — skipping .env load")
-            return False
-        env_file = root / ".env"
-    if not env_file.exists():
+    if home:
+        candidates.append(Path(home) / ".env")
+    candidates.append(Path.cwd() / ".env")
+    root = find_project_root()
+    if root is not None:
+        candidates.append(root / ".env")
+    return candidates
+
+
+def load_env() -> bool:
+    """Load .env into os.environ from the first candidate that exists.
+    Existing env vars are NOT overridden."""
+    env_file = next((p for p in _env_candidates() if p.exists()), None)
+    if env_file is None:
+        log.debug("No .env found in any candidate location — skipping")
         return False
     try:
         from dotenv import load_dotenv

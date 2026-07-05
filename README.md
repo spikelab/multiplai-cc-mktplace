@@ -1,10 +1,18 @@
 # multiplai
 
 A Claude Code **plugin marketplace** — memory, context, and a themed skill
-library for a full working environment. Pairs with
+library for a full working environment. Designed to pair with
 [`multiplai-kit`](https://github.com/spikelab/multiplai-kit) (launcher +
-sandboxed container + workspace conventions), but every plugin also works in
-a plain Claude Code install.
+sandboxed container + workspace conventions).
+
+**Requirements & compatibility.** The context-plugin hooks and the
+Python-backed skills (buildme, deep-research, render_report) run via
+[`uv`](https://docs.astral.sh/uv/) — install it first. Many skills assume the
+kit's workspace layout (`INBOX/`, `RESOURCES/`, `PROJECTS/plans/`, the memory
+files); those work best inside a kit workspace. Skills that bridge to a macOS
+host over SSH (transcribe, screen-demo, swift-build, host-browser) need the
+`multiplai-kit` container environment. The rest work in a plain Claude Code
+install.
 
 ## Add the marketplace
 

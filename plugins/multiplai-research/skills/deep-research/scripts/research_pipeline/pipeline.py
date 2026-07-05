@@ -129,13 +129,20 @@ def _setup_logging(session_id: str = "") -> None:
     )
 
 
-async def run_pipeline(config: ResearchConfig) -> int:
-    """Main pipeline entry point. Returns process exit code."""
+async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> int:
+    """Main pipeline entry point. Returns process exit code.
+
+    ``reset_usage`` is False when this runs as one of several concurrent
+    sub-pipelines (parallel mode) — the process-global usage/concurrency
+    counters are shared, so each sub-pipeline resetting them would clobber the
+    others' accounting. The parallel orchestrator resets once up front instead.
+    """
     from .sdk import get_accumulated_usage, reset_accumulated_usage, reset_sdk_concurrency_stats
 
     _setup_logging(session_id=config.session_id)
-    reset_accumulated_usage()
-    reset_sdk_concurrency_stats()
+    if reset_usage:
+        reset_accumulated_usage()
+        reset_sdk_concurrency_stats()
 
     # 0. Load .env from project root (idempotent — existing env vars win)
     load_env()
@@ -613,6 +620,15 @@ async def run_parallel(config: ResearchConfig) -> int:
     """Run N sub-pipelines concurrently and merge via synthesis."""
     log.info("PARALLEL MODE: decomposing query")
 
+    # Reset the shared usage/concurrency counters ONCE here; sub-pipelines run
+    # with reset_usage=False so their token/cost accounting accumulates.
+    # NOTE: the on-disk quota store (quotas.json) is still shared and written
+    # concurrently by the sub-pipelines' routers — a known v1 limitation of
+    # parallel mode; quota accounting may undercount under heavy contention.
+    from .sdk import reset_accumulated_usage, reset_sdk_concurrency_stats
+    reset_accumulated_usage()
+    reset_sdk_concurrency_stats()
+
     # Build initial plan with sub-topic decomposition
     planning_config = replace(config, parallel=False)  # plan alone, no recursion
     state = ResearchState.new(
@@ -682,7 +698,10 @@ async def _run_sub_pipeline(
     so paths differ between agents as long as their sub-topic queries differ.
     """
     sub_config.output_dir.mkdir(parents=True, exist_ok=True)
-    rc = await run_pipeline(replace(sub_config, parallel=False))
+    # Don't reset the shared usage/concurrency counters — the parallel
+    # orchestrator did that once before launching all sub-pipelines, so their
+    # token/cost accounting accumulates instead of clobbering each other.
+    rc = await run_pipeline(replace(sub_config, parallel=False), reset_usage=False)
     if rc == 0:
         return sub_config.output_file_path()
     return None

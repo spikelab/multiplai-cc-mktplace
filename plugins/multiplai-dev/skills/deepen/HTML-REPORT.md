@@ -8,7 +8,7 @@ This file is the **spec for the JSON contract** and the **editorial guide** for 
 
 ```json
 {
-  "repo": "knowhere/PROJECTS/multiplai",
+  "repo": "my-app",
   "generated_at": "2026-05-21T10:30:00Z",
   "candidates": [
     {

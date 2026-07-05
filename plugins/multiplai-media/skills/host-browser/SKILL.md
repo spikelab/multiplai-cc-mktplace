@@ -45,8 +45,8 @@ Idempotent. It probes CDP 9222, binds the daemon to the real Chrome, and
 an automated instance). Expected tail: `✓ Attached to real Chrome … (webdriver=false)`.
 
 If it exits with "No Chrome DevTools endpoint on 9222", the user must run
-`chrome-agent` once on the Mac (suggest he type `! ` … no — it's a host alias;
-tell him to run `chrome-agent` in a Mac terminal). Then re-run.
+`chrome-agent` once on the Mac (it's a host alias, not a container command;
+ask them to run `chrome-agent` in a Mac terminal). Then re-run.
 
 ## Step 1 — Drive with `hb` (human-paced)
 

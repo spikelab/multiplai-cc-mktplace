@@ -6,11 +6,26 @@ by write_diary_entries() and append_learnings().
 """
 
 import fcntl
+import hashlib
 import json
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+
+def _lock_path(target: Path) -> Path:
+    """Return a flock file path for *target*, kept in a temp dir rather than
+    beside the target. The lock files used to be written into the user's diary/
+    learnings dirs and never removed, littering their (often git-tracked)
+    workspace. A deterministic per-target path in the temp dir preserves the
+    mutual-exclusion semantics without polluting the content dirs.
+    """
+    lock_dir = Path(tempfile.gettempdir()) / "multiplai-locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(str(target.resolve()).encode("utf-8")).hexdigest()[:16]
+    return lock_dir / f"{target.name}.{digest}.lock"
 
 
 EXTRACTION_PROMPT = """\
@@ -170,7 +185,7 @@ def write_diary_entries(
 
     diary_dir.mkdir(parents=True, exist_ok=True)
     diary_file = diary_dir / f"{date_str}.md"
-    lock_file = diary_dir / f".{diary_file.name}.lock"
+    lock_file = _lock_path(diary_file)
 
     with open(lock_file, "w") as lock_fd:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
@@ -223,7 +238,7 @@ def append_learnings(
     Returns True if anything was written.
     """
     learnings_file.parent.mkdir(parents=True, exist_ok=True)
-    lock_file = learnings_file.parent / f".{learnings_file.name}.lock"
+    lock_file = _lock_path(learnings_file)
 
     with open(lock_file, "w") as lock_fd:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
