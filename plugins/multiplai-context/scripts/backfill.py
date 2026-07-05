@@ -61,35 +61,60 @@ def _find_transcripts(claude_config_dir: Path) -> list[Path]:
     return sorted(projects_dir.glob("**/*.jsonl"))
 
 
-def _transcript_timestamp(jsonl_path: Path) -> datetime | None:
-    """Return the first parseable timestamp from a transcript file.
+def _parse_ts(record: dict) -> datetime | None:
+    ts = record.get("timestamp")
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
-    Falls back to file mtime if no timestamp found in first 50 lines.
+
+def _transcript_time_bounds(jsonl_path: Path) -> tuple[datetime | None, datetime | None]:
+    """Return (first, last) parseable timestamps from a transcript.
+
+    Scans the head for the first and the tail for the last so a long session
+    that spans the window boundary is judged by its full extent, not just its
+    start. Falls back to file mtime for both when no timestamp is found.
     """
+    first = last = None
     try:
         lines = jsonl_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        for line in lines[:50]:
-            line = line.strip()
-            if not line:
-                continue
+        nonblank = [ln.strip() for ln in lines if ln.strip()]
+        for line in nonblank[:50]:
             try:
-                record = json.loads(line)
-                ts = record.get("timestamp")
-                if ts:
-                    dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    return dt
+                dt = _parse_ts(json.loads(line))
             except (json.JSONDecodeError, ValueError):
                 continue
+            if dt is not None:
+                first = dt
+                break
+        for line in reversed(nonblank[-50:]):
+            try:
+                dt = _parse_ts(json.loads(line))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if dt is not None:
+                last = dt
+                break
     except OSError:
         pass
 
-    try:
-        mtime = jsonl_path.stat().st_mtime
-        return datetime.fromtimestamp(mtime, tz=timezone.utc)
-    except OSError:
-        return None
+    if first is None or last is None:
+        try:
+            mtime = datetime.fromtimestamp(jsonl_path.stat().st_mtime, tz=timezone.utc)
+        except OSError:
+            mtime = None
+        first = first or mtime
+        last = last or first or mtime
+    return first, last
+
+
+def _transcript_timestamp(jsonl_path: Path) -> datetime | None:
+    """Return the first parseable timestamp (or mtime fallback)."""
+    return _transcript_time_bounds(jsonl_path)[0]
 
 
 def _session_id_from_path(jsonl_path: Path) -> str:
@@ -223,13 +248,17 @@ async def backfill(
     claude_config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
     all_transcripts = _find_transcripts(claude_config_dir)
 
-    # Filter by window
+    # Filter by window using the session's full [first, last] extent so a long
+    # session that started before `since` but continued into the window is not
+    # wholly excluded.
     in_window = []
     for t in all_transcripts:
-        ts = _transcript_timestamp(t)
-        if ts is None or ts < since:
+        first, last = _transcript_time_bounds(t)
+        if last is None:
             continue
-        if until and ts > until:
+        if last < since:
+            continue
+        if until and (first or last) > until:
             continue
         in_window.append(t)
 
@@ -263,8 +292,12 @@ async def backfill(
     tasks = []
     for jsonl_path in sorted(in_window):
         session_id = _session_id_from_path(jsonl_path)
-        ts = _transcript_timestamp(jsonl_path)
-        date_str = ts.strftime("%Y-%m-%d") if ts else None
+        # Key the learnings file by the session's LAST timestamp (stop date) to
+        # match the live pipeline, which extracts at SessionEnd — otherwise a
+        # session crossing UTC midnight lands in a different day file than the
+        # live run and gets double-extracted.
+        _, last_ts = _transcript_time_bounds(jsonl_path)
+        date_str = last_ts.strftime("%Y-%m-%d") if last_ts else None
         learnings_file = paths.learnings_file(date_str)
         tasks.append(_process_session(
             jsonl_path, session_id, since, until,

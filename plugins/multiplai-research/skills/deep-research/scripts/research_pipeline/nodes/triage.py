@@ -131,7 +131,7 @@ def select_obvious_sources(
 ) -> tuple[list[SearchResult], list[SearchResult]]:
     """Split results into (auto-include, needs-scoring).
 
-    Sources matching authority_domains are tagged with _is_authority=True
+    Sources matching authority_domains are tagged with is_authority=True
     so the READ node can give them guaranteed fetch budget.
     """
     obvious: list[SearchResult] = []
@@ -143,7 +143,7 @@ def select_obvious_sources(
             _host_matches_domain(r.url, ad) for ad in _authority_domains
         )
         # Tag for downstream budget reservation
-        setattr(r, "_is_authority", is_authority)
+        r.is_authority = is_authority
 
         # Authoritative sources auto-include
         if reputation == ReputationTier.AUTHORITATIVE:
@@ -229,13 +229,11 @@ async def triage(
             reputation=_reputation_for_domain(r.url),
             source_api=r.source_api,
             published_date=r.published_date,
+            is_authority=r.is_authority,
         )
-        # Propagate authority flag for READ budget reservation
-        if getattr(r, "_is_authority", False):
-            setattr(s, "_is_authority", True)
         sources.append(s)
 
-    authority_count = sum(1 for s in sources if getattr(s, "_is_authority", False))
+    authority_count = sum(1 for s in sources if s.is_authority)
     log.info("TRIAGE: %d sources selected (obvious=%d, borderline=%d, authority=%d)",
              len(sources), len(obvious), len(selected_borderline), authority_count)
     return sources

@@ -25,6 +25,9 @@ class SearchResult(BaseModel):
     source_api: str  # "tavily" | "exa" | "serper" | "you" | ...
     score: float | None = None  # provider-specific relevance score if available
     published_date: str | None = None
+    # Set by triage when the URL matches an authority domain. A declared field
+    # (not a private attr) so it survives model_dump / checkpoint / resume.
+    is_authority: bool = False
 
 
 class ReputationTier(str, Enum):
@@ -55,6 +58,9 @@ class Source(BaseModel):
     error: str | None = None  # populated when status=FAILED
     extracted_content: str | None = None  # markdown from trafilatura
     published_date: str | None = None
+    # Carried from the SearchResult; a declared field so the authority-budget
+    # reservation in READ survives checkpoint/resume.
+    is_authority: bool = False
 
 
 # ---------------------------------------------------------------------------

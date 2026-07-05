@@ -32,6 +32,12 @@ if [ -z "$SWIFT_BUILD_KEY" ]; then
   done
 fi
 
+# Shell-quote a value for safe interpolation into a command string that
+# run_on_host later re-parses (via `eval` locally or the remote ssh shell).
+# Without this, a scheme/path/filter containing spaces or shell metacharacters
+# would break the command or inject (CWE-78).
+q() { printf '%q' "$1"; }
+
 # --- Environment detection ---
 run_on_host() {
   if [ "$(uname -s)" = "Darwin" ]; then
@@ -68,7 +74,7 @@ detect_project() {
 # --- Xcode scheme discovery ---
 discover_scheme() {
   local list_output
-  list_output=$(run_on_host "cd $(pwd) && xcodebuild -list -quiet 2>/dev/null") || true
+  list_output=$(run_on_host "cd $(q "$(pwd)") && xcodebuild -list -quiet 2>/dev/null") || true
   echo "$list_output" | sed -n '/Schemes:/,/^$/p' | grep -v 'Schemes:' | head -1 | xargs
 }
 
@@ -107,7 +113,7 @@ build_remote_cmd() {
   fi
 
   if [ "$use_cd" = "true" ]; then
-    echo "cd $(pwd) && ${base_cmd}${xcsift_suffix}"
+    echo "cd $(q "$(pwd)") && ${base_cmd}${xcsift_suffix}"
   else
     echo "${base_cmd}${xcsift_suffix}"
   fi
@@ -123,7 +129,7 @@ cmd_build() {
       if [ "$(uname -s)" = "Darwin" ]; then
         build_cmd="swift build"
       else
-        build_cmd="swift build --package-path $(pwd)"
+        build_cmd="swift build --package-path $(q "$(pwd)")"
       fi
       ;;
     xcode)
@@ -134,7 +140,7 @@ cmd_build() {
         echo "ERROR: Could not discover Xcode scheme" >&2
         exit 1
       fi
-      build_cmd="xcodebuild -scheme $scheme -sdk iphonesimulator build"
+      build_cmd="xcodebuild -scheme $(q "$scheme") -sdk iphonesimulator build"
       ;;
   esac
 
@@ -156,12 +162,12 @@ cmd_test() {
       if [ "$(uname -s)" = "Darwin" ]; then
         test_cmd="swift test"
         if [ -n "$filter" ]; then
-          test_cmd="swift test --filter $filter"
+          test_cmd="swift test --filter $(q "$filter")"
         fi
       else
-        test_cmd="swift test --package-path $(pwd)"
+        test_cmd="swift test --package-path $(q "$(pwd)")"
         if [ -n "$filter" ]; then
-          test_cmd="swift test --package-path $(pwd) --filter $filter"
+          test_cmd="swift test --package-path $(q "$(pwd)") --filter $(q "$filter")"
         fi
       fi
       ;;
@@ -173,9 +179,9 @@ cmd_test() {
         echo "ERROR: Could not discover Xcode scheme" >&2
         exit 1
       fi
-      test_cmd="xcodebuild -scheme $scheme -sdk iphonesimulator test"
+      test_cmd="xcodebuild -scheme $(q "$scheme") -sdk iphonesimulator test"
       if [ -n "$filter" ]; then
-        test_cmd="$test_cmd -only-testing:$filter"
+        test_cmd="$test_cmd -only-testing:$(q "$filter")"
       fi
       ;;
   esac

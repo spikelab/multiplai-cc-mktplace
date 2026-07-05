@@ -95,4 +95,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # A hook must never crash the user's session — log and exit cleanly.
+        try:
+            logger.exception("pre_compact hook failed; exiting cleanly")
+        except Exception:
+            pass
+        sys.exit(0)

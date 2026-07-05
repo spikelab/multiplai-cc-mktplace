@@ -421,4 +421,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # A hook must never crash the user's session (e.g. disk full, corrupt
+        # state) — log and exit cleanly.
+        try:
+            logger.exception("session_start hook failed; exiting cleanly")
+        except Exception:
+            pass
+        sys.exit(0)

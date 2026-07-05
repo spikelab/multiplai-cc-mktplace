@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from ..claude_agent_fetcher import ClaudeAgentFetcher, FetcherProtocol, HttpxFetcher
 from ..config import ResearchConfig
-from ..models import FetchResult, Finding, ReputationTier, Source
+from ..models import FetchResult, Finding, ReputationTier, Source, SourceStatus
 from ..prompts.extract import EXTRACT_PROMPT
 from ..search_router import SearchRouter
 from ..sdk import llm_call_structured
@@ -90,8 +90,8 @@ async def read(
 
     # Separate authority sources (guaranteed budget) from regular sources.
     # Authority sources are never blocked by fetch budget exhaustion.
-    regular = [s for s in pending if not getattr(s, "_is_authority", False)]
-    authority = [s for s in pending if getattr(s, "_is_authority", False)]
+    regular = [s for s in pending if not s.is_authority]
+    authority = [s for s in pending if s.is_authority]
     if authority:
         log.info(
             "READ: %d authority sources with guaranteed budget, %d regular",
@@ -103,7 +103,7 @@ async def read(
 
     for batch_start in range(0, len(ordered), DEFAULT_BATCH_SIZE):
         batch = ordered[batch_start : batch_start + DEFAULT_BATCH_SIZE]
-        batch_has_authority = any(getattr(s, "_is_authority", False) for s in batch)
+        batch_has_authority = any(s.is_authority for s in batch)
 
         if (
             state.total_fetches >= config.preset.max_total_fetches
@@ -119,7 +119,7 @@ async def read(
         # If budget is exhausted but batch has authority sources, fetch only the
         # authority sources from this batch
         if state.total_fetches >= config.preset.max_total_fetches:
-            batch = [s for s in batch if getattr(s, "_is_authority", False)]
+            batch = [s for s in batch if s.is_authority]
             log.info(
                 "READ: budget exhausted, fetching %d authority sources from batch",
                 len(batch),
@@ -365,7 +365,12 @@ async def _follow_links(
             title=f"(link from {parent.title[:40]})",
             snippet="",
             reputation=parent.reputation,
+            status=SourceStatus.EXTRACTED,
         )
+        # Track link-derived sources in state so findings that cite them
+        # resolve to a real entry (and appear in the bibliography), instead of
+        # referencing a source that was never recorded.
+        state.sources.append(link_source)
         pre_extracted = getattr(result, "_pre_extracted_findings", None)
         if pre_extracted:
             _store_pre_extracted(config, link_source, result, pre_extracted, state)

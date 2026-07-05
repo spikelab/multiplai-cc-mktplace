@@ -120,19 +120,41 @@ def _read_memory_files(memory_dir: Path) -> dict[str, str]:
     return result
 
 
-def _read_top_memory_files(memory_dir: Path, *, max_files: int = 10) -> dict[str, str]:
+def _read_top_memory_files(
+    memory_dir: Path,
+    *,
+    max_files: int = 5,
+    max_bytes: int = 40_000,
+    exclude: set[str] | None = None,
+) -> dict[str, str]:
     """Rank memory files by metadata, then read only the top candidates.
 
     This is the key R2 mitigation: avoid reading all files to stay under
-    the 5-second timeout on large memory sets.
+    the 5-second timeout on large memory sets. Two additional guards keep the
+    recency fallback (which fires on every prompt when no catalog exists yet)
+    from dumping the whole memory corpus each turn:
+      - ``exclude`` skips files still within the re-recommendation cooldown,
+        so the fallback doesn't re-inject what a recent turn already sent.
+      - ``max_bytes`` caps the total injected payload.
     """
+    exclude = exclude or set()
     ranked = _rank_memory_files(memory_dir)
     result: dict[str, str] = {}
-    for item in ranked[:max_files]:
+    total = 0
+    for item in ranked:
+        if len(result) >= max_files:
+            break
+        if item.path.name in exclude:
+            continue
         try:
-            result[item.path.name] = item.path.read_text()
+            content = item.path.read_text()
         except Exception:
             logger.warning("Failed to read ranked memory file: %s", item.path)
+            continue
+        if total + len(content.encode("utf-8")) > max_bytes and result:
+            break
+        result[item.path.name] = content
+        total += len(content.encode("utf-8"))
     return result
 
 
@@ -619,7 +641,15 @@ def main() -> None:
     router_abstained = router_ran and not router_picked["memory"]
     mem_on_cooldown = bool(cooldown_suppressed.get("memory")) and not memory_content
     if not memory_content and not router_abstained and not mem_on_cooldown:
-        memory_content = _read_top_memory_files(memory_dir)
+        # Don't re-inject files still within the cooldown window, and cap the
+        # payload — the recency fallback fires every prompt when no catalog
+        # exists yet, so an unbounded dump would flood each turn.
+        _mem_recent = recent.get("memory") if isinstance(recent.get("memory"), dict) else {}
+        on_cooldown = {
+            name for name, t in _mem_recent.items()
+            if isinstance(t, int) and (turn_index - t) <= cooldown
+        }
+        memory_content = _read_top_memory_files(memory_dir, exclude=on_cooldown)
         if memory_content:
             used_fallback = True
             logger.info("FALLBACK memory=%s", json.dumps(sorted(memory_content.keys())))
