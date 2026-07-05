@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>[YOUR_NAME] - Application for {COMPANY}</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 10pt;
+            line-height: 1.4;
+            color: #000;
+            padding: 0.2in;
+        }
+
+        .cover-letter {
+            page-break-after: always;
+            padding-bottom: 1in;
+        }
+
+        .cover-letter h1 {
+            font-size: 16pt;
+            font-weight: 700;
+            margin-bottom: 0.5em;
+        }
+
+        .cover-letter .contact {
+            font-size: 11pt;
+            margin-bottom: 1.5em;
+        }
+
+        .cover-letter .date {
+            font-size: 10pt;
+            margin-bottom: 1.5em;
+        }
+
+        .cover-letter p {
+            margin-bottom: 1em;
+            text-align: justify;
+        }
+
+        .cover-letter .signature {
+            margin-top: 1.5em;
+        }
+
+        .cv-page {
+            page-break-before: always;
+        }
+
+        h1 {
+            font-size: 16pt;
+            font-weight: 700;
+            margin-bottom: 0.3em;
+        }
+
+        .contact {
+            font-size: 9pt;
+            margin-bottom: 1em;
+        }
+
+        hr {
+            border: none;
+            border-top: 0.4pt solid #000;
+            margin: 0.8em 0;
+        }
+
+        .summary {
+            margin-bottom: 1em;
+        }
+
+        .competencies {
+            margin-bottom: 1em;
+        }
+
+        .competencies strong {
+            font-weight: 600;
+        }
+
+        .experience {
+            margin-bottom: 1.5em;
+        }
+
+        .job-header {
+            font-weight: 700;
+            margin-bottom: 0.3em;
+        }
+
+        .job-meta {
+            font-size: 9pt;
+            color: #333;
+            font-style: italic;
+        }
+
+        ul {
+            margin-left: 1.2em;
+            margin-top: 0.3em;
+        }
+
+        li {
+            margin-bottom: 0.2em;
+        }
+
+        .education-section {
+            margin-top: 1em;
+        }
+
+        .education-table {
+            width: 100%;
+            font-size: 9pt;
+        }
+
+        .education-table td {
+            vertical-align: top;
+            padding: 0.15em 0.5em 0.15em 0;
+        }
+
+        .education-table td:first-child {
+            width: 48%;
+        }
+
+        .education-table strong {
+            font-weight: 600;
+        }
+
+        .education-table em {
+            font-style: italic;
+        }
+
+        @page {
+            size: letter;
+            margin: 0.5in;
+        }
+
+        @media print {
+            body {
+                padding: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="cover-letter">
+        <!-- IMPORTANT: No name header on cover letter page. Start directly with letter content. -->
+        <!-- Convert cover-letter.md content to <p> tags -->
+        <!-- End with: <div class="signature">Best,<br>[YOUR_NAME]</div> -->
+    </div>
+
+    <div class="cv-page">
+        <!-- Convert resume.md to HTML using semantic classes:
+             - h1 for name/title (format: "[YOUR_NAME_UPPER] / Short Title" - MUST fit on one line)
+             - .contact for contact info (format: "email / phone / linkedin" with clickable https:// link)
+             - .summary for summary paragraph
+             - .competencies for core competencies
+             - .experience for each role
+             - .job-header for role title + company
+             - .job-meta for dates/location
+             - ul/li for bullets
+             - .education-section with .education-table for education (two-column table with headers)
+        -->
+
+        <!-- Example structure:
+        <h1>[YOUR_NAME_UPPER] / Senior Product Manager</h1>
+        <div class="contact">[YOUR_EMAIL] / [YOUR_PHONE] / <a href="https://linkedin.com/in/[YOUR_LINKEDIN]" style="color: #000; text-decoration: none;">linkedin.com/in/[YOUR_LINKEDIN]</a></div>
+
+        <hr>
+
+        <div class="summary">
+            <p>[Summary paragraph]</p>
+        </div>
+
+        <div class="competencies">
+            <p><strong>Core Competencies:</strong> Skill 1 | Skill 2 | Skill 3</p>
+        </div>
+
+        <hr>
+
+        [Experience sections...]
+
+        <hr>
+
+        <div class="education-section">
+            <table class="education-table">
+                <tr>
+                    <td><strong>Education</strong></td>
+                    <td><strong>Certificates</strong></td>
+                </tr>
+                <tr>
+                    <td>[SCHOOL]</td>
+                    <td><em>Certification Name</em> - Issuer</td>
+                </tr>
+                <tr>
+                    <td>[SCHOOL] <em>BS, Comp Sci</em></td>
+                    <td><em>Other certification or achievement</em></td>
+                </tr>
+            </table>
+        </div>
+        -->
+    </div>
+</body>
+</html>
