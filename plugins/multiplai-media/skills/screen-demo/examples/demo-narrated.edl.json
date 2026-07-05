@@ -1,0 +1,35 @@
+{
+  "source": "demo.mov",
+  "title": {
+    "line1": "My App + Claude",
+    "line2": "Building a workflow, narrated",
+    "duration": 2.5
+  },
+  "segments": [
+    {"src_start":   0.0, "src_end":  14.0, "speed": 1.4},
+    {"src_start":  41.7, "src_end":  69.0, "speed": 4.0},
+    {"src_start":  69.0, "src_end":  78.0, "speed": 1.2},
+    {"src_start":  78.0, "src_end": 688.0, "speed": 50.0},
+    {"src_start": 700.0, "src_end": 720.0, "speed": 1.0},
+    {"src_start": 752.0, "src_end": 905.0, "speed": 30.0},
+    {"src_start": 909.0, "src_end": 921.0, "speed": 1.0, "zoom": {"scale": 1.25, "x": 0.5, "y": 0.5}},
+    {"src_start": 921.0, "src_end": 963.0, "speed": 20.0},
+    {"src_start": 970.0, "src_end": 985.0, "speed": 1.0, "zoom": {"scale": 1.2, "x": 0.6, "y": 0.5}}
+  ],
+  "transitions": [
+    {"after": 0, "duration": 0.4},
+    {"after": 1, "duration": 0.4},
+    {"after": 2, "duration": 0.4},
+    {"after": 3, "duration": 0.4},
+    {"after": 4, "duration": 0.4},
+    {"after": 5, "duration": 0.4},
+    {"after": 6, "duration": 0.4},
+    {"after": 7, "duration": 0.4}
+  ],
+  "output": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "crf": 22
+  }
+}
