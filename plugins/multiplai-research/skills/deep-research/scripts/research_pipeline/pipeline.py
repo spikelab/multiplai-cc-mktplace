@@ -119,14 +119,13 @@ def validate_api_keys(prefer_claude_tools: bool = True) -> list[str]:
 
 
 def _setup_logging(session_id: str = "") -> None:
-    """Set up logging via shared log_utils + stderr for subprocess visibility."""
-    from log_utils import setup_logging
+    """Set up logging via shared multiplai_core.log_utils (always attaches a
+    stderr handler for subprocess visibility)."""
+    from multiplai_core.log_utils import setup_logging
 
     setup_logging(
         "deep-research",
         session_id=session_id,
-        stderr=True,
-        package="research_pipeline",
     )
 
 

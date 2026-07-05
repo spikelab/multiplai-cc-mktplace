@@ -167,7 +167,7 @@ async def _map_reduce_synthesize(
 
 def _chunk_findings(findings: list[Finding], budget_bytes: int) -> list[list[Finding]]:
     """Split findings into chunks that each fit within budget_bytes when formatted."""
-    _confidence_rank = {"high": 0, "likely": 1, "unverified": 2}
+    _confidence_rank = {"high": 0, "medium": 1, "low": 2}  # matches Confidence enum
     ranked = sorted(findings, key=lambda f: _confidence_rank.get(f.confidence.value, 99))
 
     chunks: list[list[Finding]] = []
@@ -205,7 +205,7 @@ def _format_single_finding(f: Finding, index: int) -> str:
 
 def _format_findings(findings: list[Finding]) -> str:
     """Format all findings as numbered lines, sorted by confidence."""
-    _confidence_rank = {"high": 0, "likely": 1, "unverified": 2}
+    _confidence_rank = {"high": 0, "medium": 1, "low": 2}  # matches Confidence enum
     ranked = sorted(findings, key=lambda f: _confidence_rank.get(f.confidence.value, 99))
     return "\n".join(_format_single_finding(f, i) for i, f in enumerate(ranked))
 

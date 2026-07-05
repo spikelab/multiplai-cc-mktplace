@@ -140,6 +140,25 @@ class TestMultiCorpusOutput:
         assert "## writing.md" in out["context"]
         assert "Writing guide" in out["context"]
 
+    def test_injects_via_hook_specific_output(self, env_setup):
+        # Claude Code only injects UserPromptSubmit context from
+        # hookSpecificOutput.additionalContext; a bare {"context": ...} key is
+        # ignored. This guards the flagship routing from silently no-op'ing.
+        (env_setup["memory_dir"] / "writing.md").write_text("# Writing guide")
+        _write_catalog(
+            env_setup["catalogs_dir"],
+            "memory.json",
+            [{"source": "writing.md", "summary": "guide", "intent_domains": ["writing a blog post"]}],
+        )
+
+        out = _run_hook(env_setup, prompt="help me write a blog post")
+        hso = out.get("hookSpecificOutput")
+        assert hso is not None, "must emit hookSpecificOutput"
+        assert hso["hookEventName"] == "UserPromptSubmit"
+        # The injected context must equal the assembled corpus, not be empty.
+        assert hso["additionalContext"] == out["context"]
+        assert "Writing guide" in hso["additionalContext"]
+
     def test_skills_corpus_loaded_when_enabled(self, env_setup):
         # Skills are surfaced as lightweight recommendations built from
         # the catalog (summary + /<name> invocation hint), NOT by reading

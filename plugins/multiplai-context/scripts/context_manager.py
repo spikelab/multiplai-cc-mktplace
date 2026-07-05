@@ -418,6 +418,24 @@ def _persist_turn_state(
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _emit_result(context: str, result: dict) -> None:
+    """Write the hook result to stdout in the shape Claude Code actually reads.
+
+    UserPromptSubmit only injects context from ``hookSpecificOutput.
+    additionalContext`` (or plain stdout text) — a bare ``{"context": ...}``
+    key is silently ignored, which made routed memory a no-op. We emit
+    ``additionalContext`` for Claude Code AND keep the legacy ``context`` /
+    ``*_files`` keys (extra keys are ignored by the harness) so existing
+    consumers and tests still read the same fields.
+    """
+    payload = dict(result)
+    payload["hookSpecificOutput"] = {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": context,
+    }
+    print(json.dumps(payload))
+
+
 def main() -> None:
     """Context manager main: read stdin, route context, write JSON to stdout."""
     paths = get_paths()
@@ -636,7 +654,7 @@ def main() -> None:
         if cooldown_active:
             _persist_turn_state(session_state, turn_index, recent, {}, cooldown)
         result = {"context": "", "memory_files": 0}
-        print(json.dumps(result))
+        _emit_result("", result)
         return
 
     parts: list[str] = []
@@ -735,7 +753,7 @@ def main() -> None:
         "resources_files": corpus_counts["resources"],
         "corpus_counts": corpus_counts,
     }
-    print(json.dumps(result))
+    _emit_result(session_context, result)
 
 
 if __name__ == "__main__":
@@ -748,11 +766,11 @@ if __name__ == "__main__":
             logger.exception("context_manager hook failed; emitting empty context")
         except Exception:
             pass
-        print(json.dumps({
+        _emit_result("", {
             "context": "",
             "memory_files": 0,
             "skills_files": 0,
             "resources_files": 0,
             "corpus_counts": {"memory": 0, "skills": 0, "resources": 0},
-        }))
+        })
         sys.exit(0)

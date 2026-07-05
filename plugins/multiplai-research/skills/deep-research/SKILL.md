@@ -53,11 +53,11 @@ Cap this at 2-3 tool calls. If nothing relevant, set prior knowledge to "none".
 
 ### Step 4: Plan review (skip if `--auto`)
 
-Invoke the pipeline in `--plan-only` mode. The pipeline is a Python module — there is no shell wrapper. Always `cd` into the scripts dir first so `python -m research_pipeline` can resolve the package:
+Invoke the pipeline in `--plan-only` mode. It's a Python module run via `uv run --directory`, which resolves the package and installs its dependencies (declared in `scripts/pyproject.toml`, including `multiplai-core`) into an ephemeral env — no manual venv or `PYTHONPATH` setup:
 
 ```bash
-export PYTHONPATH="$CLAUDE_CONFIG_DIR/hooks:${PYTHONPATH:-}"
-cd "${CLAUDE_PLUGIN_ROOT}/skills/deep-research/scripts" && python3 -m research_pipeline \
+uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/deep-research/scripts" \
+  python -m research_pipeline \
   --query "{query}" \
   --preset {preset} \
   --research-type {research_type} \
@@ -97,8 +97,8 @@ Run the pipeline with the approved plan (if reviewed) or directly (if `--auto`):
 
 ```bash
 # Interactive (with approved plan):
-export PYTHONPATH="$CLAUDE_CONFIG_DIR/hooks:${PYTHONPATH:-}"
-cd "${CLAUDE_PLUGIN_ROOT}/skills/deep-research/scripts" && python3 -m research_pipeline \
+uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/deep-research/scripts" \
+  python -m research_pipeline \
   --query "{query}" \
   --output "{output_dir}" \
   --preset {preset} \
@@ -111,8 +111,8 @@ cd "${CLAUDE_PLUGIN_ROOT}/skills/deep-research/scripts" && python3 -m research_p
   [--parallel] [--agents N] [--deep] [--challenge|--no-challenge]
 
 # Auto:
-export PYTHONPATH="$CLAUDE_CONFIG_DIR/hooks:${PYTHONPATH:-}"
-cd "${CLAUDE_PLUGIN_ROOT}/skills/deep-research/scripts" && python3 -m research_pipeline \
+uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/deep-research/scripts" \
+  python -m research_pipeline \
   --query "{query}" \
   --output "{output_dir}" \
   --preset {preset} \
@@ -178,9 +178,11 @@ See the previous version of this flow for detailed memory triage rules — the l
 - `--no-claude-tools` — disable Claude Agent, use external APIs only
 - `--allow-paid-fallback` — use providers beyond their free tier (only needed when all free-tier quota is exhausted; providers with remaining free quota are used automatically)
 
-**Python deps** (installed in the project root venv via `requirements.txt`):
+**Python deps** are declared in `scripts/pyproject.toml` and resolved
+automatically by `uv run --directory`:
 
-- `httpx`, `trafilatura`, `tavily-python`, `exa-py`, `pydantic`, `python-dotenv`, `claude-agent-sdk`
+- `multiplai-core`, `httpx`, `trafilatura`, `tavily-python`, `exa-py`, `pydantic`, `python-dotenv`, `claude-agent-sdk`
+- optional `[browser]` extra: `playwright` (JS-rendered fetch fallback; run `playwright install chromium` after installing)
 
 ## Architecture
 

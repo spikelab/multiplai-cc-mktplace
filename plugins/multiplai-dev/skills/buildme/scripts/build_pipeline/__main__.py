@@ -96,15 +96,15 @@ def main(argv: list[str] | None = None) -> int:
 
     from .config import BuildConfig
     from .env import load_env
-    from log_utils import setup_logging
+    from multiplai_core.log_utils import setup_logging
 
     load_env()
     session_id = getattr(args, "session_id", "") or ""
+    # setup_logging always attaches a stderr handler and derives the log file
+    # from the component name.
     logger = setup_logging(
         "build-pipeline",
         session_id=session_id,
-        stderr=True,
-        package="build_pipeline",
     )
 
     if args.command == "build":

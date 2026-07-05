@@ -3,13 +3,13 @@
 This directory contains the Python pipeline that backs the `deep-research` skill. It's invoked by `../SKILL.md` as a subprocess:
 
 ```bash
-python3 -m research_pipeline --query "..." [options]
+uv run --directory <this-dir> python -m research_pipeline --query "..." [options]
 ```
 
 ## Architecture
 
 - **Code drives orchestration** (`pipeline.py`), LLM handles reasoning at specific nodes.
-- **No per-skill venv.** Dependencies live in the project root `requirements.txt` and are installed in the knowhere root venv.
+- **Dependencies** are declared in `pyproject.toml` (this dir); `uv run --directory` resolves them into an ephemeral env — no shared root venv, no PYTHONPATH.
 - **Stateless LLM calls** via `sdk.llm_call()` — no `ClaudeSDKClient`, no conversations, no tools.
 - **Strict timeouts** everywhere network touches the wire. `asyncio.wait_for` is mandatory, not optional.
 
@@ -34,8 +34,7 @@ python3 -m research_pipeline --query "..." [options]
 ## Running Tests
 
 ```bash
-cd dotfiles/skills/deep-research/scripts
-uv run --no-project python -m pytest tests/ -q
+uv run --directory <this-dir> --extra dev python -m pytest tests/ -q
 ```
 
 All tests use stubs/mocks — no real API calls. Run in milliseconds.
@@ -95,7 +94,7 @@ Full provider comparison: `references/search-engines.md`
 
 ## Common Pitfalls
 
-**Pyright false positives on relative imports.** The `..config` imports in `nodes/` confuse Pyright because there's no `setup.py` or `pyproject.toml`. The `pyrightconfig.json` silences these — runtime is fine (verified by the tests).
+**Pyright false positives on relative imports.** The `..config` imports in `nodes/` can confuse Pyright depending on how the package root is resolved. The `pyrightconfig.json` silences these — runtime is fine (verified by the tests).
 
 **Don't bypass the SearchRouter.** Direct `tavily-python` or `exa-py` calls skip quota tracking and the circuit breaker.
 
