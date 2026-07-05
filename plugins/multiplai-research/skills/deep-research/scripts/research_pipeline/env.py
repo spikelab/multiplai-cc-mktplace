@@ -1,4 +1,4 @@
-"""Load .env from the claude-code-multiplai project root.
+"""Load .env from the multiplai-kit project root.
 
 The convention for this project is a single .env at the repo root, gitignored,
 shared across all skills that need secrets. This module finds it by walking up
@@ -19,10 +19,10 @@ log = logging.getLogger(__name__)
 
 
 def find_project_root(start: Path | None = None) -> Path | None:
-    """Walk upward from `start` looking for the claude-code-multiplai root.
+    """Walk upward from `start` looking for the multiplai-kit root.
 
     A directory qualifies as the project root if it contains both a
-    `.env.example` AND a `dotfiles/` directory (matches claude-code-multiplai
+    `.env.example` AND a `dotfiles/` directory (matches multiplai-kit
     layout). Falls back to the first ancestor with a `.env` file.
     """
     current = (start or Path(__file__)).resolve()

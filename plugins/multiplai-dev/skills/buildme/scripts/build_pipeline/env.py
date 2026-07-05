@@ -1,4 +1,4 @@
-"""Load .env and multiplai.conf from the claude-code-multiplai project root.
+"""Load .env and multiplai.conf from the multiplai-kit project root.
 
 Ported from deep-research pipeline — same project root detection and env loading.
 """
@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 
 
 def find_project_root(start: Path | None = None) -> Path | None:
-    """Walk upward from `start` looking for the claude-code-multiplai root.
+    """Walk upward from `start` looking for the multiplai-kit root.
 
     A directory qualifies if it contains both `.env.example` AND `dotfiles/`.
     Falls back to the first ancestor with a `.env` file.

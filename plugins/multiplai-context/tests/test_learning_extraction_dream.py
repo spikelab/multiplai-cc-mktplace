@@ -1,6 +1,6 @@
 """Tests for Block 7: Learning Extraction & Dream (plugin port).
 
-Covers the four plugin scripts ported from claude-code-multiplai-context:
+Covers the four plugin scripts ported from the kit-era context hooks:
   - scripts/extract_learnings.py — Extract learnings with path/SDK/stripping transforms
   - scripts/dream.py — Dream consolidation with async model client
   - scripts/synthesize_now.py — Manual dream trigger
