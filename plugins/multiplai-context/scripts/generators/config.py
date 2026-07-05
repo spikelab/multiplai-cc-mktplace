@@ -34,6 +34,7 @@ class CatalogConfig:
     diary_catalog_days: int = DEFAULT_DIARY_CATALOG_DAYS
     enable_skills: bool = False
     skills_dir: str = DEFAULT_SKILLS_DIR
+    plugins_dir: str = ""  # empty → derived from $CLAUDE_CONFIG_DIR/plugins at use time
     enable_resources: bool = False
     resources_dir: str = ""
     catalog_concurrency: int = DEFAULT_CATALOG_CONCURRENCY
@@ -99,6 +100,7 @@ def load_catalog_config() -> CatalogConfig:
         os.environ.get("CLAUDE_PLUGIN_OPTION_enable_skills", "false")
     )
     skills_dir = os.environ.get("CLAUDE_PLUGIN_OPTION_skills_dir", DEFAULT_SKILLS_DIR)
+    plugins_dir = os.environ.get("CLAUDE_PLUGIN_OPTION_plugins_dir", "")
     enable_resources = _parse_bool(
         os.environ.get("CLAUDE_PLUGIN_OPTION_enable_resources", "false")
     )
@@ -125,6 +127,7 @@ def load_catalog_config() -> CatalogConfig:
         diary_catalog_days=diary_catalog_days,
         enable_skills=enable_skills,
         skills_dir=skills_dir,
+        plugins_dir=plugins_dir,
         enable_resources=enable_resources,
         resources_dir=resources_dir,
         catalog_concurrency=catalog_concurrency,

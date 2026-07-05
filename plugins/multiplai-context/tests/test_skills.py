@@ -32,6 +32,14 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_plugins_discovery(tmp_path, monkeypatch):
+    """Plugin-skill discovery derives from $CLAUDE_CONFIG_DIR/plugins when
+    plugins_dir is unset — point it at an empty tmp dir so tests never pick
+    up the real environment's installed plugins."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "_ccfg"))
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1187,3 +1195,118 @@ class TestSkillsBaseClassIntegration:
         assert state["generators"]["memory"]["source_hashes"]["memory.md"] == "abc123"
         # Skills namespace added
         assert "skills" in state["generators"]
+
+
+class TestPluginSkillsDiscovery:
+    """Requirement: skills shipped by installed plugins are discovered.
+
+    The generator reads <plugins_dir>/installed_plugins.json (v2 layout) and
+    globs <installPath>/skills/*/SKILL.md for every install record. Explicit
+    skills_dir entries win name collisions; malformed/missing manifests are
+    silently ignored.
+    """
+
+    def _write_manifest(self, plugins_dir: Path, records: dict) -> None:
+        plugins_dir.mkdir(parents=True, exist_ok=True)
+        (plugins_dir / "installed_plugins.json").write_text(
+            json.dumps({"version": 2, "plugins": records}), encoding="utf-8"
+        )
+
+    def _make_installed_plugin(self, tmp_path: Path, plugin: str, skills: list) -> str:
+        install = tmp_path / "cache" / plugin / "0.1.0"
+        for s in skills:
+            d = install / "skills" / s
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "SKILL.md").write_text(f"# {s}", encoding="utf-8")
+        return str(install)
+
+    def test_discovers_installed_plugin_skills(self, tmp_path, monkeypatch):
+        from generators.config import CatalogConfig
+        from generators.skills import SkillsGenerator
+
+        plugins_dir = tmp_path / "plugins"
+        p1 = self._make_installed_plugin(tmp_path, "multiplai-writing", ["writing"])
+        p2 = self._make_installed_plugin(tmp_path, "multiplai-media", ["transcribe", "excalidraw"])
+        self._write_manifest(plugins_dir, {
+            "multiplai-writing@multiplai": [{"installPath": p1}],
+            "multiplai-media@multiplai": [{"installPath": p2}],
+        })
+
+        config = CatalogConfig(
+            enable_skills=True,
+            skills_dir=str(tmp_path / "no-such-skills-dir"),
+            plugins_dir=str(plugins_dir),
+        )
+        gen = SkillsGenerator(config=config, model_client=_make_mock_client())
+        sources = gen.discover_sources()
+        assert set(sources) == {"writing", "transcribe", "excalidraw"}
+        assert all(str(p).endswith("SKILL.md") for p in sources.values())
+
+    def test_skills_dir_wins_name_collision(self, tmp_path, monkeypatch):
+        from generators.config import CatalogConfig
+        from generators.skills import SkillsGenerator
+
+        skills_dir = tmp_path / "skills"
+        local = skills_dir / "writing"
+        local.mkdir(parents=True)
+        (local / "SKILL.md").write_text("# local writing", encoding="utf-8")
+
+        plugins_dir = tmp_path / "plugins"
+        p1 = self._make_installed_plugin(tmp_path, "multiplai-writing", ["writing"])
+        self._write_manifest(plugins_dir, {
+            "multiplai-writing@multiplai": [{"installPath": p1}],
+        })
+
+        config = CatalogConfig(
+            enable_skills=True, skills_dir=str(skills_dir), plugins_dir=str(plugins_dir)
+        )
+        gen = SkillsGenerator(config=config, model_client=_make_mock_client())
+        sources = gen.discover_sources()
+        assert len(sources) == 1
+        assert sources["writing"] == local / "SKILL.md"
+
+    def test_missing_manifest_yields_no_plugin_skills(self, tmp_path):
+        from generators.config import CatalogConfig
+        from generators.skills import SkillsGenerator
+
+        config = CatalogConfig(
+            enable_skills=True,
+            skills_dir=str(tmp_path / "no-skills"),
+            plugins_dir=str(tmp_path / "no-plugins"),
+        )
+        gen = SkillsGenerator(config=config, model_client=_make_mock_client())
+        assert gen.discover_sources() == {}
+
+    def test_malformed_manifest_is_ignored(self, tmp_path):
+        from generators.config import CatalogConfig
+        from generators.skills import SkillsGenerator
+
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir(parents=True)
+        (plugins_dir / "installed_plugins.json").write_text("{not json", encoding="utf-8")
+
+        config = CatalogConfig(
+            enable_skills=True,
+            skills_dir=str(tmp_path / "no-skills"),
+            plugins_dir=str(plugins_dir),
+        )
+        gen = SkillsGenerator(config=config, model_client=_make_mock_client())
+        assert gen.discover_sources() == {}
+
+    def test_derives_plugins_dir_from_claude_config_dir(self, tmp_path, monkeypatch):
+        """Empty plugins_dir derives $CLAUDE_CONFIG_DIR/plugins."""
+        from generators.config import CatalogConfig
+        from generators.skills import SkillsGenerator
+
+        ccfg = tmp_path / "ccfg"
+        p1 = self._make_installed_plugin(tmp_path, "multiplai-pm", ["landing-page"])
+        self._write_manifest(ccfg / "plugins", {
+            "multiplai-pm@multiplai": [{"installPath": p1}],
+        })
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(ccfg))
+
+        config = CatalogConfig(
+            enable_skills=True, skills_dir=str(tmp_path / "no-skills"), plugins_dir=""
+        )
+        gen = SkillsGenerator(config=config, model_client=_make_mock_client())
+        assert set(gen.discover_sources()) == {"landing-page"}
