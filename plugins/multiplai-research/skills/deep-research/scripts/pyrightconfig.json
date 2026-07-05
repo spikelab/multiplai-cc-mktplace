@@ -1,0 +1,8 @@
+{
+  "include": ["research_pipeline", "tests"],
+  "extraPaths": ["."],
+  "pythonVersion": "3.12",
+  "reportMissingImports": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportUnusedImport": "warning"
+}
