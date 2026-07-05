@@ -63,14 +63,19 @@ def _load_cases(paths: list[Path]) -> list[dict]:
 
 
 def _default_case_paths() -> list[Path]:
-    """Locate the canonical personal + holdout golden sets.
+    """Locate golden case sets in the user's eval directory.
 
-    Walks up from the workspace data dir to find the sibling
-    MULTIPLAI-RUNTIME eval sets. Kept by-path (not copied) so there is
-    one source of truth for the labels.
+    Looks in ``$MULTIPLAI_ROUTER_EVALS_DIR`` if set, else ``<workspace>/evals``.
+    The eval sets are user-supplied (this is a diagnostic harness, not a
+    shipped dataset), so an empty result is normal — the caller then asks for
+    ``--cases`` explicitly.
     """
-    workspace = get_paths().data_dir().parent.parent  # .multiplai/data -> workspace
-    base = workspace / "MULTIPLAI-RUNTIME" / "evals"
+    env_dir = os.environ.get("MULTIPLAI_ROUTER_EVALS_DIR")
+    if env_dir:
+        base = Path(env_dir)
+    else:
+        workspace = get_paths().data_dir().parent.parent  # .multiplai/data -> workspace
+        base = workspace / "evals"
     found = [
         base / "memory-retrieval-cases.jsonl",
         base / "memory-retrieval-holdout-cases.jsonl",
@@ -265,7 +270,10 @@ def main() -> None:
     case_files = args.cases or _default_case_paths()
     if not case_files:
         raise SystemExit(
-            "no case files found — pass --cases, or ensure MULTIPLAI-RUNTIME/evals/*.jsonl exist"
+            "no golden case files found. This is a diagnostic harness that needs "
+            "user-supplied cases: pass --cases <file.jsonl> [...], or place "
+            "memory-retrieval-cases.jsonl under <workspace>/evals/ (or set "
+            "MULTIPLAI_ROUTER_EVALS_DIR)."
         )
     cases = _load_cases(case_files)
 

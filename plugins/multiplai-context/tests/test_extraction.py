@@ -120,9 +120,19 @@ class TestExtractUnits:
         call_kwargs = client.query.call_args
         assert call_kwargs.kwargs.get("system") or (call_kwargs.args and "system" in str(call_kwargs))
 
-    def test_returns_empty_on_invalid_json(self):
-        from lib.extraction import extract_units
+    def test_raises_on_invalid_json(self):
+        # An unparseable response must NOT be silently treated as "empty" —
+        # that would drop the session's extraction marker as if nothing
+        # happened. It raises so the caller retains the marker for retry.
+        from lib.extraction import extract_units, ExtractionParseError
         client = _make_mock_client("not json at all")
+        with pytest.raises(ExtractionParseError):
+            asyncio.run(extract_units("t", valid_targets=[], client=client))
+
+    def test_returns_empty_on_valid_empty_units(self):
+        # A well-formed response with no units IS a genuine empty extraction.
+        from lib.extraction import extract_units
+        client = _make_mock_client(json.dumps({"units": []}))
         result = asyncio.run(extract_units("t", valid_targets=[], client=client))
         assert result == []
 

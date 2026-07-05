@@ -403,14 +403,22 @@ def run_health_check() -> dict:
             "is available, so routing fell back to token_overlap. Unset "
             "the option to use the default, or provide a model client."
         )
+    # eval_router needs user-supplied golden cases; only recommend it when some
+    # are actually discoverable, otherwise the suggested command just SystemExits.
+    try:
+        from eval_router import _default_case_paths
+        _have_eval_cases = bool(_default_case_paths())
+    except Exception:
+        _have_eval_cases = False
+
     last_eval = routing.get("last_eval")
-    if last_eval is None:
+    if last_eval is None and _have_eval_cases:
         recommendations.append(
             "No router eval snapshot. Run "
             'python "${CLAUDE_PLUGIN_ROOT}/scripts/eval_router.py" '
             "(zero LLM cost under token_overlap) to baseline routing quality."
         )
-    elif (last_eval.get("age_days") or 0) > 30:
+    elif last_eval is not None and (last_eval.get("age_days") or 0) > 30 and _have_eval_cases:
         recommendations.append(
             f"Router eval is {last_eval['age_days']} days old. Re-run "
             'python "${CLAUDE_PLUGIN_ROOT}/scripts/eval_router.py".'

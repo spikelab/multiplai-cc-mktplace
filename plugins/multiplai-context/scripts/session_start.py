@@ -87,11 +87,17 @@ def _dream_gate_open(dream_state_file: Path) -> bool:
     return datetime.now(timezone.utc) - last_dt >= timedelta(hours=_DREAM_GATE_HOURS)
 
 
-def _learnings_pending(learnings_file: Path, dream_state_file: Path) -> bool:
-    """Return True if learnings.md has content newer than the last dream run."""
-    if not learnings_file.exists():
+def _learnings_pending(learnings_dir: Path, dream_state_file: Path) -> bool:
+    """Return True if any learnings file has content newer than the last dream run.
+
+    Learnings are stored per-day (``learnings_dir/YYYY-MM-DD.md``), so checking
+    only today's file misses a multi-day backlog that accrued while dream
+    wasn't run. Scan every non-empty ``*.md`` in the directory.
+    """
+    if not learnings_dir.exists():
         return False
-    if learnings_file.stat().st_size == 0:
+    files = [f for f in learnings_dir.glob("*.md") if f.stat().st_size > 0]
+    if not files:
         return False
 
     try:
@@ -110,10 +116,10 @@ def _learnings_pending(learnings_file: Path, dream_state_file: Path) -> bool:
     if last_dt.tzinfo is None:
         last_dt = last_dt.replace(tzinfo=timezone.utc)
 
-    learnings_mtime = datetime.fromtimestamp(
-        learnings_file.stat().st_mtime, tz=timezone.utc,
+    newest = max(
+        datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc) for f in files
     )
-    return learnings_mtime > last_dt
+    return newest > last_dt
 
 
 def _recover_stale_processing(processing_dir: Path, pending_dir: Path) -> None:
@@ -387,10 +393,10 @@ def main() -> None:
     # the actual dream still runs via /multiplai-context:dream when the user
     # chooses.
     dream_state_file = paths.dream_state_file()
-    learnings_file = paths.learnings_file()
+    learnings_dir = paths.learnings_dir
     if (
         _dream_gate_open(dream_state_file)
-        and _learnings_pending(learnings_file, dream_state_file)
+        and _learnings_pending(learnings_dir, dream_state_file)
     ):
         logger.info("Dream gate open with pending learnings; emitting nudge")
         log_event(

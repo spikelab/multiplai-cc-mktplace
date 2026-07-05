@@ -90,11 +90,14 @@ The candidates are written as JSON, then rendered to HTML by `scripts/render_rep
 3. Run the renderer:
 
    ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/skills/deepen/scripts/render_report.py \
+   uv run ${CLAUDE_PLUGIN_ROOT}/skills/deepen/scripts/render_report.py \
      --in <path-to-candidates.json> \
      --repo <repo-name> \
      --open
    ```
+
+   (`uv run` reads the script's inline PEP 723 header and provides `jinja2`
+   in an ephemeral env — no manual install.)
 
    The script writes `architecture-review-<timestamp>.html` to the same temp dir and opens it (`xdg-open` / `open` / `start`). Tell the user the absolute path.
 

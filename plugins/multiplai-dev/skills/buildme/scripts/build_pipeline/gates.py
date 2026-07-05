@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -35,10 +36,16 @@ def feasibility_gate(project_dir: Path, stack: str, dependencies: list[str]) -> 
         missing = []
         for dep in dependencies:
             pkg = dep.split(">=")[0].split("==")[0].split("[")[0].strip()
-            result = subprocess.run(
-                ["pip", "index", "versions", pkg],
-                capture_output=True, text=True, timeout=30,
-            )
+            try:
+                result = subprocess.run(
+                    ["pip", "index", "versions", pkg],
+                    capture_output=True, text=True, timeout=30,
+                )
+            except FileNotFoundError:
+                # No `pip` on the PATH (uv-only machine) — can't check PyPI,
+                # so skip the gate rather than crashing the orchestrator.
+                log.warning("pip not found; skipping PyPI availability gate")
+                return GateResult(passed=True, reason="pip unavailable — skipped PyPI check")
             if result.returncode != 0:
                 missing.append(pkg)
         if missing:
@@ -111,7 +118,7 @@ def baseline_test_gate(test_command: str, project_dir: Path) -> GateResult:
         )
     try:
         result = subprocess.run(
-            test_command.split(),
+            shlex.split(test_command),
             capture_output=True, text=True, cwd=project_dir, timeout=300,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
@@ -142,7 +149,7 @@ def integration_gate(test_command: str, project_dir: Path) -> GateResult:
         )
     try:
         result = subprocess.run(
-            test_command.split(),
+            shlex.split(test_command),
             capture_output=True, text=True, cwd=project_dir, timeout=300,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:

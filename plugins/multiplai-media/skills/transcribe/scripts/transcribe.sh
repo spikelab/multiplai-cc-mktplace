@@ -17,7 +17,7 @@ TRANSCRIBE_HOST="${TRANSCRIBE_HOST:-host.docker.internal}"
 TRANSCRIBE_USER="${TRANSCRIBE_USER:-${SSH_BUILD_USER:-}}"
 if [ -z "$TRANSCRIBE_USER" ]; then
   echo "Error: no SSH user for the container→host bridge." >&2
-  echo "  Set SSH_BUILD_USER (or TRANSCRIBE_USER) in .env — see .env.example." >&2
+  echo "  Set SSH_BUILD_USER (or TRANSCRIBE_USER) in your kit root .env." >&2
   exit 1
 fi
 TRANSCRIBE_KEY="${TRANSCRIBE_KEY:-${SSH_BUILD_KEY:-}}"

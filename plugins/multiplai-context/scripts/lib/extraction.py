@@ -75,6 +75,15 @@ Return ONLY valid JSON (no markdown fences, no explanation):
 """
 
 
+class ExtractionParseError(ValueError):
+    """The model's response could not be parsed into the expected shape.
+
+    Distinct from a genuinely empty extraction (valid JSON, ``units: []``):
+    a parse failure means we don't KNOW whether the session had learnings, so
+    the caller must retain the marker and retry rather than dropping it.
+    """
+
+
 def _parse_units(raw: str) -> list[dict]:
     text = raw.strip()
     match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
@@ -82,13 +91,16 @@ def _parse_units(raw: str) -> list[dict]:
         text = match.group(1).strip()
     try:
         parsed = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return []
+    except (json.JSONDecodeError, ValueError) as e:
+        raise ExtractionParseError(f"response was not valid JSON: {e}") from e
     if not isinstance(parsed, dict):
-        return []
+        raise ExtractionParseError(f"response JSON was {type(parsed).__name__}, not an object")
     units = parsed.get("units")
-    if not isinstance(units, list):
+    if units is None:
+        # Well-formed object without a units key — treat as genuinely empty.
         return []
+    if not isinstance(units, list):
+        raise ExtractionParseError(f"'units' was {type(units).__name__}, not a list")
     return [u for u in units if isinstance(u, dict)]
 
 

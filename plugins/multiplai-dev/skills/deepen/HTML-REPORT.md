@@ -1,6 +1,6 @@
 # HTML Report Format
 
-The architectural review is rendered as a single self-contained HTML file in the OS temp directory. The LLM produces a JSON file; `scripts/render_report.py` turns it into HTML using a Jinja2 template (`scripts/templates/report.html.j2`) and opens it via `scripts/open_report.py`. Tailwind and Mermaid come from CDNs.
+The architectural review is rendered as a single self-contained HTML file in the OS temp directory. The LLM produces a JSON file; `scripts/render_report.py` turns it into HTML using a Jinja2 template (`scripts/templates/report.html.j2`) and, with `--open`, opens it in the default browser. Tailwind and Mermaid come from CDNs.
 
 This file is the **spec for the JSON contract** and the **editorial guide** for what each card should contain. The Jinja template is the single source of truth for the HTML.
 

@@ -384,6 +384,12 @@ class ChangeManager:
                     rf"(?=### Requirement:|\Z)",
                     re.DOTALL,
                 )
-                main = pattern.sub(req.strip() + "\n\n", main)
+                # Use a function replacement so backslash sequences in the
+                # requirement text (e.g. a regex like `\d+` or `\1` in a BDD
+                # scenario) are inserted literally instead of being interpreted
+                # as regex backreferences (which would raise re.error or corrupt
+                # the output).
+                replacement = req.strip() + "\n\n"
+                main = pattern.sub(lambda _m: replacement, main)
 
         return main.strip() + "\n"

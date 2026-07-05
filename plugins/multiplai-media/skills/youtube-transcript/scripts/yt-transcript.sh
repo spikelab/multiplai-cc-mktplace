@@ -13,7 +13,7 @@ TRANSCRIBE_HOST="${TRANSCRIBE_HOST:-host.docker.internal}"
 TRANSCRIBE_USER="${TRANSCRIBE_USER:-${SSH_BUILD_USER:-}}"
 if [ -z "$TRANSCRIBE_USER" ]; then
   echo "Error: no SSH user for the container→host bridge." >&2
-  echo "  Set SSH_BUILD_USER (or TRANSCRIBE_USER) in .env — see .env.example." >&2
+  echo "  Set SSH_BUILD_USER (or TRANSCRIBE_USER) in your kit root .env." >&2
   exit 1
 fi
 TRANSCRIBE_KEY="${TRANSCRIBE_KEY:-}"
@@ -300,11 +300,19 @@ else
     MODEL="mlx-community/whisper-medium.en-mlx-8bit"
 fi
 
+# mlx-whisper's --output-name is a STEM (it appends .txt) and it writes to
+# --output-dir (default: cwd). Passing the full "name.txt" as the stem with no
+# output-dir produced "name.txt.txt" in $HOME. Split OUTPUT_FILE into dir+stem
+# so the result lands exactly at OUTPUT_FILE.
+OUTPUT_DIR="$(dirname "$OUTPUT_FILE")"
+OUTPUT_STEM="$(basename "$OUTPUT_FILE")"
+OUTPUT_STEM="${OUTPUT_STEM%.txt}"
+
 # Build mlx-whisper command as an argv array (no shell string, no eval).
 MLX_ARGS=(mlx-whisper --model "$MODEL")
 [[ -n "$TASK" ]] && MLX_ARGS+=(--task "$TASK")
 [[ -n "$LANGUAGE" ]] && MLX_ARGS+=(--language "$LANGUAGE")
-MLX_ARGS+=(--output-name "$OUTPUT_FILE" "$AUDIO_FILE")
+MLX_ARGS+=(--output-format txt --output-dir "$OUTPUT_DIR" --output-name "$OUTPUT_STEM" "$AUDIO_FILE")
 
 run_on_host "${MLX_ARGS[@]}" || {
     echo "Error: Transcription failed." >&2

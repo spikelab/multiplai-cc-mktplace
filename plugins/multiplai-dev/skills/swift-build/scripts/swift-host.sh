@@ -17,7 +17,7 @@ SWIFT_BUILD_HOST="${SWIFT_BUILD_HOST:-host.docker.internal}"
 SWIFT_BUILD_USER="${SWIFT_BUILD_USER:-${SSH_BUILD_USER:-}}"
 if [ -z "$SWIFT_BUILD_USER" ]; then
   echo "Error: no SSH user for the container→host bridge." >&2
-  echo "  Set SSH_BUILD_USER (or SWIFT_BUILD_USER) in .env — see .env.example." >&2
+  echo "  Set SSH_BUILD_USER (or SWIFT_BUILD_USER) in your kit root .env." >&2
   exit 1
 fi
 SWIFT_BUILD_KEY="${SWIFT_BUILD_KEY:-}"
