@@ -1,0 +1,9 @@
+{
+  "name": "multiplai-writing",
+  "version": "0.1.0",
+  "description": "Content creation toolkit: briefs, drafts, copy editing, LinkedIn posts, image prompts.",
+  "author": {"name": "Spike", "email": "fsm@spikelab.org"},
+  "license": "MIT",
+  "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
+  "repository": "https://github.com/spikelab/multiplai-cc-mktplace"
+}
