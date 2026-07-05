@@ -324,10 +324,12 @@ class GeneratorBase:
             current_hash = self.hash_source(source)
             batch.hashes[key] = current_hash
 
-            if self._should_skip(key, current_hash, stored_hashes, force):
+            if self._should_skip(
+                key, current_hash, stored_hashes, force,
+                has_existing_entry=key in existing_by_key,
+            ):
                 batch.skipped += 1
-                if key in existing_by_key:
-                    batch.entries[key] = existing_by_key[key]
+                batch.entries[key] = existing_by_key[key]
                 continue
 
             if dry_run:
@@ -382,10 +384,20 @@ class GeneratorBase:
 
     @staticmethod
     def _should_skip(
-        key: str, current_hash: str, stored_hashes: dict[str, str], force: bool
+        key: str, current_hash: str, stored_hashes: dict[str, str], force: bool,
+        *, has_existing_entry: bool,
     ) -> bool:
-        """Determine whether a source should be skipped (unchanged hash)."""
+        """Determine whether a source should be skipped (unchanged hash).
+
+        Only skip when the hash is unchanged AND there is an existing catalog
+        entry to preserve. Without that second condition, a deleted or corrupt
+        catalog (whose sources are unchanged) would be "skipped" with nothing
+        to carry forward, persisting an empty catalog and locking routing to
+        nothing until someone runs --force.
+        """
         if force:
+            return False
+        if not has_existing_entry:
             return False
         stored_hash = stored_hashes.get(key)
         return stored_hash is not None and stored_hash == current_hash

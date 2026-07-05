@@ -45,7 +45,12 @@ def _save_deferred_marker(
     pending_dir = data_dir / "pending_extractions"
     pending_dir.mkdir(parents=True, exist_ok=True)
 
-    session_id = session_state.get("session_id") or hook_input.get("session_id") or "unknown"
+    # The hook input's session_id is authoritative for which session is
+    # ending. The shared session_state.json may currently hold a *different*
+    # concurrent session's id (last writer wins), so trusting it here would
+    # file this session's marker under the wrong id — clobbering the other
+    # session's marker and losing this one's diary/learnings extraction.
+    session_id = hook_input.get("session_id") or session_state.get("session_id") or "unknown"
     marker = {
         "session_id": session_id,
         "transcript_path": hook_input.get("transcript_path", ""),

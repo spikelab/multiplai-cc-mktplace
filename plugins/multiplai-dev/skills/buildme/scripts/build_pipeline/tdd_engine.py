@@ -299,6 +299,7 @@ async def run_block_tdd(
     except LLMCallTimeoutError:
         log.error("FAIL block=%d name=%s phase=TEST_WRITE reason=timeout", block.number, block.name)
         progress.log_agent("TestWriter", block.name, "TIMEOUT")
+        block.timed_out = True
         state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
         return False
 
@@ -344,6 +345,7 @@ async def run_block_tdd(
     except LLMCallTimeoutError:
         log.error("FAIL block=%d name=%s phase=IMPLEMENT reason=timeout", block.number, block.name)
         progress.log_agent("Implementer", block.name, "TIMEOUT")
+        block.timed_out = True
         state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
         return False
 
@@ -591,8 +593,10 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
         # Run TDD phases
         tdd_ok = await run_block_tdd(block, config, state, progress)
         if not tdd_ok:
-            if block.status == BlockStatus.FAILED:
-                # Check for timeout
+            # Only report a timeout when the block actually timed out; every
+            # failure path sets status=FAILED, so the status alone can't tell
+            # a timeout from an ordinary build failure.
+            if block.timed_out:
                 return EXIT_AGENT_TIMEOUT
             return EXIT_BUILD_FAILURE
 

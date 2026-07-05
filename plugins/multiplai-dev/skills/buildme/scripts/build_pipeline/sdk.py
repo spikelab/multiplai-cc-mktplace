@@ -46,6 +46,38 @@ def _hook_session_dir() -> Path:
     return d
 
 
+def _swallow_task_result(task: asyncio.Task) -> None:
+    """Consume a cancelled/failed background task's result so asyncio doesn't
+    log 'Task exception was never retrieved'."""
+    try:
+        task.result()
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
+async def hard_timeout(coro, timeout_s: float):
+    """Run ``coro`` with a wall-clock timeout that ALWAYS returns control.
+
+    Drop-in replacement for ``asyncio.wait_for`` with one critical difference:
+    on timeout it cancels the task fire-and-forget and returns immediately
+    instead of awaiting the cancellation. ``asyncio.wait_for`` awaits the
+    cancellation it triggers, so if the claude-agent-sdk CLI subprocess is
+    wedged and its transport teardown never finishes, wait_for hangs forever
+    (the multi-hour ~0-CPU hang deep-research hit). ``asyncio.wait`` returns
+    (done, pending) at the deadline and does NOT await pending tasks, so a
+    wedged subprocess can leak in the background but never stalls the build.
+
+    Raises ``asyncio.TimeoutError`` on timeout (same contract as wait_for).
+    """
+    task = asyncio.ensure_future(coro)
+    done, _ = await asyncio.wait({task}, timeout=timeout_s)
+    if task not in done:
+        task.cancel()  # best-effort; do NOT await — cancellation may block
+        task.add_done_callback(_swallow_task_result)
+        raise asyncio.TimeoutError()
+    return task.result()
+
+
 async def _safe_query(*, prompt, options):
     """Wrap SDK query() to skip unknown message types (e.g. rate_limit_event).
 
@@ -165,7 +197,7 @@ async def llm_call(
                             if isinstance(block, TextBlock):
                                 chunks.append(block.text)
 
-            await asyncio.wait_for(_run(), timeout=call_timeout)
+            await hard_timeout(_run(), call_timeout)
         except asyncio.TimeoutError:
             captured = "\n".join(stderr_lines[-2000:])
             log.error("FAIL sdk_call=llm reason=timeout after %.0fs\n--- CLI stderr (last 2000 lines) ---\n%s",
@@ -280,7 +312,7 @@ async def agent_call(
                                     if fp and fp not in files_changed:
                                         files_changed.append(fp)
 
-            await asyncio.wait_for(_run(), timeout=call_timeout)
+            await hard_timeout(_run(), call_timeout)
         except asyncio.TimeoutError:
             elapsed = time.monotonic() - start
             captured = "\n".join(stderr_lines[-2000:])

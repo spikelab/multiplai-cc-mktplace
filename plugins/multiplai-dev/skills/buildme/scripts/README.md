@@ -45,16 +45,20 @@ The pipeline detects the running model tier and adapts:
 
 ## Dependencies
 
+Declared in `pyproject.toml` (multiplai-core, claude-agent-sdk, pydantic,
+pyyaml, python-dotenv) and resolved automatically by `uv run --directory` —
+no manual install step. The pipeline is invoked as:
+
 ```bash
-uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts pip install -e .
-# Or just: pip install claude-code-sdk pydantic pyyaml python-dotenv
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
+  python -m build_pipeline --help
 ```
 
 ## Testing
 
 ```bash
-cd dotfiles/skills/buildme/scripts
-PYTHONPATH=. python -m pytest tests/ -xvs   # 167 tests, ~0.2s
+uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
+  --extra dev python -m pytest tests/ -xvs   # ~167 tests, ~0.2s
 ```
 
 ## Key Design Decisions

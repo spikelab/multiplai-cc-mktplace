@@ -58,9 +58,12 @@ def main() -> None:
         logger.info("PreCompact: no transcript_path in payload — nothing to defer")
         return
 
+    # Prefer the hook input's session_id: the shared session_state.json may
+    # hold a different concurrent session's id, which would misattribute this
+    # marker (see session_end.py for the same fix).
     session_id = (
-        session_state.get("session_id")
-        or hook_input.get("session_id")
+        hook_input.get("session_id")
+        or session_state.get("session_id")
         or "unknown"
     )
     marker = {

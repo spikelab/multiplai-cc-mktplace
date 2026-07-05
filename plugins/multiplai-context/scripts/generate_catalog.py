@@ -30,7 +30,7 @@ from generators.dispatcher import generate_catalogs
 logger = setup_logging("generate_catalog")
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Catalog generation dispatcher")
@@ -50,7 +50,9 @@ def main() -> None:
         default=None,
         help="Comma-separated list of generators to run (e.g., memory,diary)",
     )
-    args = parser.parse_args()
+    # argv defaults to None -> argparse reads sys.argv; callers (e.g. backfill)
+    # pass an explicit list like ["--only", "diary"].
+    args = parser.parse_args(argv)
 
     paths = get_paths()
     catalogs_dir = paths.catalogs_dir()

@@ -508,7 +508,7 @@ async def dream_report() -> None:
     proposal_lines = proposal.splitlines()
     target_files = [
         l.split("`")[1] for l in proposal_lines
-        if l.startswith("## Updates for `") and "`" in l[15:]
+        if l.startswith("## Updates for `") and "`" in l[16:]
     ]
     has_filtered = any(l.startswith("## Filtered Out") for l in proposal_lines)
     logger.info(
@@ -568,17 +568,23 @@ def _commit_memory_changes(memory_dir: Path) -> bool:
             ["git", "-C", str(memory_dir), "add", "--", "*.md"],
             check=True, timeout=15, capture_output=True,
         )
+        # Check for staged changes scoped to the *.md pathspec only — otherwise
+        # anything the user had pre-staged elsewhere would make this look
+        # "dirty" and fire a snapshot that sweeps those unrelated files in.
         diff = subprocess.run(
-            ["git", "-C", str(memory_dir), "diff", "--cached", "--quiet"],
+            ["git", "-C", str(memory_dir), "diff", "--cached", "--quiet", "--", "*.md"],
             timeout=10, capture_output=True,
         )
         if diff.returncode == 0:
-            logger.info("Memory auto-commit skipped — no changes to commit")
+            logger.info("Memory auto-commit skipped — no changes to record")
             return False
 
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # Restrict the snapshot to the *.md pathspec: passing the pathspec
+        # records just those paths and leaves any other staged files untouched.
         subprocess.run(
-            ["git", "-C", str(memory_dir), "commit", "-m", f"dream: consolidate {today}"],
+            ["git", "-C", str(memory_dir), "commit",
+             "-m", f"dream: consolidate {today}", "--", "*.md"],
             check=True, timeout=30, capture_output=True,
         )
         logger.info("Memory auto-committed in %s", memory_dir)
@@ -621,7 +627,7 @@ def _split_proposal_by_file(proposal: str) -> dict[str, str]:
             sections[current_file] = "\n".join(buf).strip()
 
     for line in proposal.splitlines():
-        if line.startswith("## Updates for `") and "`" in line[15:]:
+        if line.startswith("## Updates for `") and "`" in line[16:]:
             _flush()
             current_file = line.split("`")[1]
             buf = [line]
@@ -636,8 +642,33 @@ def _split_proposal_by_file(proposal: str) -> dict[str, str]:
     return sections
 
 
+def _is_safe_memory_update(current: str, new: str) -> bool:
+    """Guard against an applier response that would destroy a memory file.
+
+    A consolidation rewrites the file in full, so a truncated response or a
+    refusal preamble ("I'm sorry, I can't…") would silently overwrite good
+    content with garbage. Consolidation only adds or lightly edits, so the
+    result should never collapse to a fraction of the original. Reject an
+    empty/whitespace result or one that lost more than 40% of the original
+    length — the caller then keeps the existing file and the learnings so the
+    run can be retried.
+    """
+    stripped = new.strip()
+    if not stripped:
+        return False
+    # A memory file is prose+markdown; a bare apology/refusal is not a valid
+    # rewrite. Cheap heuristic on the opening.
+    head = stripped[:80].lower()
+    if head.startswith(("i'm sorry", "i am sorry", "i cannot", "i can't", "sorry,")):
+        return False
+    if len(current.strip()) >= 200 and len(stripped) < 0.6 * len(current.strip()):
+        return False
+    return True
+
+
 async def _apply_proposal_to_file(client, memory_file: Path, proposal_section: str) -> str | None:
-    """Apply one file's slice of the proposal to that memory file. Returns new content."""
+    """Apply one file's slice of the proposal. Returns validated new content,
+    or None if the call failed or the result looks unsafe to write."""
     if not memory_file.exists():
         return None
 
@@ -654,10 +685,17 @@ async def _apply_proposal_to_file(client, memory_file: Path, proposal_section: s
 
     try:
         response = await client.query(system=_APPLIER_SYSTEM, messages=messages)
-        return response.content
     except Exception:
         logger.exception("Failed to apply updates to %s", memory_file.name)
         return None
+
+    if not _is_safe_memory_update(current_content, response.content):
+        logger.error(
+            "Rejected unsafe applier output for %s (%d chars -> %d); keeping original",
+            memory_file.name, len(current_content), len(response.content.strip()),
+        )
+        return None
+    return response.content
 
 
 async def dream_auto() -> None:
@@ -711,16 +749,29 @@ async def dream_auto() -> None:
             ))
 
             updated_count = 0
+            failed_count = 0
             for (filename, memory_file, _), updated_content in zip(targets, results):
                 if updated_content:
                     memory_file.write_text(updated_content)
                     updated_count += 1
                     logger.info("Applied updates to %s", filename)
+                else:
+                    failed_count += 1
 
-            # Delete processed learnings files
-            for f in source_files:
-                f.unlink(missing_ok=True)
-                logger.info("Deleted processed learnings: %s", f.name)
+            # Only delete the raw learnings once every target that was supposed
+            # to change actually did. If any apply failed (API outage, unsafe
+            # output), keep the backlog so the next run can retry — deleting it
+            # here would lose the source insights with nothing persisted.
+            if failed_count == 0:
+                for f in source_files:
+                    f.unlink(missing_ok=True)
+                    logger.info("Deleted processed learnings: %s", f.name)
+            else:
+                logger.warning(
+                    "Kept %d learnings file(s): %d/%d targets failed to apply — "
+                    "will retry next run",
+                    len(source_files), failed_count, len(targets),
+                )
 
             state = load_yaml(dream_state_file)
             state["last_run"] = datetime.now(timezone.utc).isoformat()

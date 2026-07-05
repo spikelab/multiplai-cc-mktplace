@@ -105,6 +105,10 @@ class BlockInfo(BaseModel):
     description: str
     satisfies: list[str] = Field(default_factory=list)
     status: BlockStatus = BlockStatus.PENDING
+    # True when the block failed specifically because an agent LLM call timed
+    # out (vs an ordinary build/test failure) — lets the orchestrator return
+    # EXIT_AGENT_TIMEOUT only for real timeouts.
+    timed_out: bool = False
     test_commit: str | None = None
     impl_commit: str | None = None
     review_scores: ReviewResult | None = None
