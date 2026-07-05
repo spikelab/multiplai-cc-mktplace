@@ -1,0 +1,23 @@
+{
+  "source": "demo.mov",
+  "title": {
+    "line1": "My App on Claude",
+    "line2": "Building a workflow in 30s",
+    "duration": 3.0
+  },
+  "segments": [
+    {"src_start": 0.0,   "src_end": 10.0},
+    {"src_start": 27.0,  "src_end": 42.0},
+    {"src_start": 781.0, "src_end": 796.0}
+  ],
+  "transitions": [
+    {"after": 0, "kind": "fade", "duration": 0.5},
+    {"after": 1, "kind": "fade", "duration": 0.5}
+  ],
+  "output": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "crf": 22
+  }
+}

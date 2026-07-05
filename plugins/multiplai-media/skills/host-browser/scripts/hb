@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+# hb — human-paced wrapper around `ab` (agent-browser on the host).
+#
+# Drop-in for `ab`: any verb `ab` understands, `hb` forwards verbatim, so you
+# can use `hb snapshot -i`, `hb get url`, etc. On top of that it adds a few
+# verbs that defeat behavioural bot-detection (instant fills / zero think-time
+# are the giveaways once webdriver=false removes the static tells):
+#
+#   hb think [MIN_MS] [MAX_MS]      sleep a randomized human pause (default 400-1400)
+#   hb humantype <sel> <text>      clear, then type in jittered word-chunks
+#   hb humanclick <sel>            hover, micro-pause, then click
+#   hb fillform <sel> <text> ...   humantype across alternating sel/text pairs
+#
+# Everything else: `hb <args...>` == `ab <args...>`.
+set -euo pipefail
+
+ab() { command ab "$@"; }
+
+# random int in [$1,$2]
+rnd() { echo $(( $1 + RANDOM % ($2 - $1 + 1) )); }
+# sleep a random number of milliseconds in [$1,$2]
+napms() { local ms; ms="$(rnd "$1" "$2")"; sleep "$(awk "BEGIN{printf \"%.3f\", $ms/1000}")"; }
+
+think() { napms "${1:-400}" "${2:-1400}"; }
+
+# Type text the way a person does: focus, clear, then emit small chunks with
+# inter-chunk jitter and the occasional longer "thinking" pause. agent-browser
+# `type` already sends real per-char keydown/press/up events; chunking + sleeps
+# add the human cadence on top.
+humantype() {
+  local sel="$1"; shift
+  local text="$*"
+  ab focus "$sel" >/dev/null 2>&1 || true
+  napms 120 320
+  ab fill "$sel" "" >/dev/null 2>&1 || true   # clear existing value
+  napms 80 220
+  local i=0 n=${#text} chunk len
+  while [ $i -lt $n ]; do
+    len="$(rnd 2 5)"
+    chunk="${text:$i:$len}"
+    ab type "$sel" "$chunk" >/dev/null
+    i=$((i + len))
+    # mostly fast keystroke gaps, occasionally a longer pause
+    if [ "$(rnd 1 100)" -le 12 ]; then napms 280 720; else napms 45 160; fi
+  done
+}
+
+humanclick() {
+  local sel="$1"
+  ab hover "$sel" >/dev/null 2>&1 || true
+  napms 140 460
+  ab click "$sel"
+}
+
+# fillform @e1 "user@x.com" @e2 "secret" ...
+fillform() {
+  while [ $# -ge 2 ]; do
+    humantype "$1" "$2"
+    shift 2
+    think 350 1100
+  done
+}
+
+# dismiss [maxRounds] — what a human does on landing: accept the cookie banner
+# and close blocking pop-ups so the page is usable. A JS scanner (run via
+# `ab eval`) finds the single best dismiss target — cookie-ACCEPT first
+# (multilingual, defaults to "accept all" like a real user), then modal CLOSE
+# scoped to dialogs/high-z overlays — tags it, and agent-browser does a real
+# click on it. Loops to peel stacked overlays. Safe: weak labels (bare
+# "accept"/"ok") only fire inside a cookie/consent context; close only inside a
+# dialog/overlay — so it won't click "Accept booking" or a content "X".
+dismiss() {
+  local max="${1:-4}" i=0 acted=0 res label kind
+  while [ "$i" -lt "$max" ]; do
+    i=$((i+1))
+    res="$(ab eval --stdin <<'JS'
+(() => {
+  const norm = s => (s||'').replace(/\s+/g,' ').trim().toLowerCase();
+  const vis = el => { if(!el) return false; const r = el.getBoundingClientRect();
+    if(r.width<2||r.height<2) return false; const st = getComputedStyle(el);
+    return !(st.visibility==='hidden'||st.display==='none'||+st.opacity===0); };
+  const ctxText = el => { let c=el; for(let d=0; d<8 && c.parentElement; d++) c=c.parentElement;
+    return norm(c.innerText||''); };
+  const inOverlay = el => { if(el.closest('[role=dialog],[aria-modal="true"]')) return true;
+    let c=el; for(let d=0; d<9 && c; d++){ const st=getComputedStyle(c);
+      if((st.position==='fixed'||st.position==='sticky') && (+st.zIndex>=100)) return true; c=c.parentElement; }
+    return false; };
+  const ACCEPT = ['accept all cookies','accept all','accept all & continue','accetta tutti','accetta tutto',
+    'tout accepter','alle akzeptieren','aceptar todo','aceptar todas','accept cookies','allow all cookies',
+    'allow all','i accept','accept & continue','agree and continue','consent to all'];
+  const ACCEPT_WEAK = ['accept','agree','ok','okay','got it','ok, got it','consent','allow','i agree','continue'];
+  const CLOSE = ['close','chiudi','dismiss','schließen','schliessen','cerrar','fermer','×','✕','✖','x','no thanks','not now','maybe later'];
+  const cookieCtx = t => /(cookie|consent|privacy|gdpr|preferenz|tracking|esperienza d.uso|utilizziamo|we use)/.test(t);
+  const sel = 'button,a[role=button],[role=button],input[type=button],input[type=submit]';
+  let best=null, bestScore=0;
+  for(const el of document.querySelectorAll(sel)){
+    if(!vis(el)) continue;
+    const label = norm(el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title'));
+    if(!label || label.length>40) continue;
+    const ctx = ctxText(el);
+    let score=0, kind='';
+    if(ACCEPT.includes(label)){ score = 100 + (cookieCtx(ctx)?20:0); kind='accept'; }
+    else if(ACCEPT_WEAK.includes(label) && cookieCtx(ctx)){ score = 70; kind='accept'; }
+    else if(CLOSE.includes(label) && inOverlay(el)){ score = 50; kind='close'; }
+    if(score>bestScore){ bestScore=score; best={el,label,kind}; }
+  }
+  if(!best) return '';
+  document.querySelectorAll('[data-hb-dismiss]').forEach(e=>e.removeAttribute('data-hb-dismiss'));
+  best.el.setAttribute('data-hb-dismiss','1');
+  return best.kind + '::' + best.label;   // plain string; eval just wraps it in quotes
+})()
+JS
+)"
+    # eval returns a JSON-encoded string -> strip the surrounding quotes
+    res="${res%\"}"; res="${res#\"}"
+    if [ -z "$res" ] || [ "$res" = "null" ]; then
+      [ "$i" -eq 1 ] && echo "no overlay to dismiss"
+      break
+    fi
+    kind="${res%%::*}"; label="${res#*::}"
+    napms 250 650
+    ab click '[data-hb-dismiss="1"]' >/dev/null 2>&1 || true
+    echo "dismissed [$kind]: $label"
+    acted=$((acted+1))
+    napms 600 1200
+  done
+  [ "$acted" -gt 0 ] && echo "cleared $acted overlay(s)"
+  return 0
+}
+
+# goto <url> — navigate the way a human arrives: open, let it settle, then
+# accept cookies / close pop-ups before doing anything else. Use this instead of
+# bare `open` for any real site, so overlays never block your first interaction.
+goto() {
+  ab open "$1" >/dev/null 2>&1 || ab open "$1"
+  think 1500 2800
+  ab wait --load networkidle >/dev/null 2>&1 || true
+  dismiss
+  echo "→ $(ab get url 2>&1)"
+}
+
+# challenged — precise verdict for risk-scored walls (DataDome/PerimeterX/etc.).
+# CRITICAL: the anti-bot SCRIPT being present in the HTML is NOT a block — that
+# only means scoring is active. A block is a *visible* captcha-delivery iframe /
+# interstitial with no real page content. Prints "ok: …" (exit 0) or
+# "blocked: …" (exit 1) so you can branch: `hb challenged && extract...`.
+challenged() {
+  local res
+  res="$(ab eval --stdin <<'JS'
+(() => {
+  const u = location.href;
+  const vis = el => { if(!el) return false; const r=el.getBoundingClientRect(); return r.width>2&&r.height>2; };
+  const ddIframe = document.querySelector('iframe[src*="captcha-delivery"],iframe[src*="geo.captcha-delivery"]');
+  const body = (document.body.innerText||'');
+  const interstitial = /verifying you are human|are you a human|please verify you are a human|enable javascript and cookies to continue|geo\.captcha/i.test(body.toLowerCase());
+  const hasContent = !!document.querySelector('h1') && body.length > 800;
+  if (/\/(captcha|interstitial|blocked)(\/|\?|$)/i.test(u)) return 'blocked::redirected to ' + u;
+  if (vis(ddIframe)) return 'blocked::visible captcha-delivery iframe';
+  if (interstitial && !hasContent) return 'blocked::interstitial text, no content';
+  return 'ok::content ' + (hasContent ? 'present' : 'thin (re-check after load)');
+})()
+JS
+)"
+  res="${res%\"}"; res="${res#\"}"
+  echo "${res/::/: }"
+  case "$res" in blocked*) return 1;; *) return 0;; esac
+}
+
+# data [list|next|nuxt|apollo|ld|initial] — dump a page's EMBEDDED STATE instead
+# of scraping the DOM. Modern SPAs render lazy/virtualized lists (often only ~2
+# rows in the DOM at once — scraping them silently undercounts), but ship the
+# FULL dataset in a JSON blob: Next.js `__NEXT_DATA__`, Nuxt `window.__NUXT__`,
+# Apollo `__APOLLO_STATE__`, JSON-LD, or `__INITIAL_STATE__`. These also carry
+# fields the DOM never shows. Returns clean JSON (eval re-serializes the object;
+# returning an OBJECT — not a stringified one — avoids double-encoding).
+#   hb data list                 # which blobs exist + sizes
+#   hb data next > /tmp/nd.json  # dump __NEXT_DATA__, then filter with jq
+data() {
+  case "${1:-list}" in
+    list)
+      ab eval --stdin <<'JS'
+(() => { const r={};
+  const nd=document.getElementById('__NEXT_DATA__'); if(nd) r.next=nd.textContent.length;
+  if(window.__NUXT__) r.nuxt=true;
+  if(window.__APOLLO_STATE__) r.apollo=true;
+  if(window.__INITIAL_STATE__) r.initial=true;
+  const ld=document.querySelectorAll('script[type="application/ld+json"]'); if(ld.length) r.ld=ld.length;
+  return r; })()
+JS
+      ;;
+    next)    printf '(()=>{const n=document.getElementById("__NEXT_DATA__");return n?JSON.parse(n.textContent):null})()' | ab eval --stdin ;;
+    nuxt)    printf 'window.__NUXT__ || null'         | ab eval --stdin ;;
+    apollo)  printf 'window.__APOLLO_STATE__ || null' | ab eval --stdin ;;
+    initial) printf 'window.__INITIAL_STATE__ || null'| ab eval --stdin ;;
+    ld)      printf '[...document.querySelectorAll(%s)].map(s=>{try{return JSON.parse(s.textContent)}catch(e){return null}}).filter(Boolean)' "'script[type=\"application/ld+json\"]'" | ab eval --stdin ;;
+    *) echo "usage: hb data [list|next|nuxt|apollo|ld|initial]" >&2; return 2 ;;
+  esac
+}
+
+case "${1:-}" in
+  think)     shift; think "$@" ;;
+  humantype) shift; humantype "$@" ;;
+  humanclick)shift; humanclick "$@" ;;
+  fillform)  shift; fillform "$@" ;;
+  dismiss)   shift; dismiss "$@" ;;
+  challenged)shift; challenged "$@" ;;
+  data)      shift; data "$@" ;;
+  goto)      shift; goto "$@" ;;
+  "")        ab ;;                 # no args -> ab help
+  *)         ab "$@" ;;            # pass-through
+esac
