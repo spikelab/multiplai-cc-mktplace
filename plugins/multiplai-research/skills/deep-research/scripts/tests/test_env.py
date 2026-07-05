@@ -142,3 +142,48 @@ class TestLoadEnv:
     def test_no_project_root_returns_false(self) -> None:
         with patch("research_pipeline.env.find_project_root", return_value=None):
             assert load_env() is False
+
+
+class TestConfigSections:
+    """INI-style [section] parsing in load_multiplai_conf.
+
+    Relocated from the kit's evals when env.py moved into this plugin.
+    """
+
+    def _load(self, tmp_path, monkeypatch, conf_text: str):
+        from research_pipeline.env import load_multiplai_conf
+
+        kit_root = tmp_path / "kit"
+        (kit_root / "dotfiles").mkdir(parents=True)
+        (kit_root / "multiplai.conf").write_text(conf_text)
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(kit_root / "dotfiles"))
+        monkeypatch.setenv("CLAUDE_MULTIPLAI_HOME", str(kit_root))
+        return load_multiplai_conf()
+
+    def test_sections_parsed(self, tmp_path, monkeypatch):
+        conf = self._load(tmp_path, monkeypatch,
+                          'MULTIPLAI_MODEL="claude-sonnet-4-6"\n\n[deep-research]\nMODEL=opus\n')
+        assert conf["_sections"]["deep-research"]["MODEL"] == "opus"
+
+    def test_sections_dont_pollute_globals(self, tmp_path, monkeypatch):
+        conf = self._load(tmp_path, monkeypatch,
+                          'MULTIPLAI_MODEL="claude-sonnet-4-6"\n[deep-research]\nMODEL=opus\nEFFORT=max\n')
+        assert "MODEL" not in conf
+        assert "EFFORT" not in conf
+        assert conf["MULTIPLAI_MODEL"] == "claude-sonnet-4-6"
+
+    def test_empty_section(self, tmp_path, monkeypatch):
+        conf = self._load(tmp_path, monkeypatch, "[empty]\n")
+        assert conf["_sections"]["empty"] == {}
+
+    def test_multiple_sections(self, tmp_path, monkeypatch):
+        conf = self._load(tmp_path, monkeypatch,
+                          "[deep-research]\nMODEL=opus\n\n[buildme]\nEFFORT=low\n")
+        assert conf["_sections"]["deep-research"] == {"MODEL": "opus"}
+        assert conf["_sections"]["buildme"] == {"EFFORT": "low"}
+
+    def test_global_after_section(self, tmp_path, monkeypatch):
+        conf = self._load(tmp_path, monkeypatch,
+                          'MULTIPLAI_MODEL="claude-sonnet-4-6"\n[deep-research]\nMODEL=opus\nEXTRA_KEY=val\n')
+        assert "EXTRA_KEY" not in conf
+        assert conf["_sections"]["deep-research"]["EXTRA_KEY"] == "val"
