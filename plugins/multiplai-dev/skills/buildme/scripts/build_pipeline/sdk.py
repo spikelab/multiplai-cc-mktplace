@@ -1,16 +1,16 @@
 """SDK wrapper for LLM calls — single-turn and multi-turn with file tools.
 
-Extends the deep-research pattern with agent_call() for TDD agents that need
-to read/write files, run tests, and iterate over multiple turns.
-
-Two call patterns:
+Three call patterns:
 - llm_call(): Single-turn, no tools, returns text. For reviews, rubric scoring, etc.
 - agent_call(): Multi-turn with file tools, returns AgentResult. For TDD agents.
 - llm_call_structured(): Single-turn, returns Pydantic model. For structured output.
 
-Isolation: every SDK invocation disables parent-session setting/hook inheritance
-via setting_sources=[] + extra_args={"setting-sources": ""} (SDK bug workaround)
-and marks itself with _HOOK_CHILD_SESSION=1 so any hook that still loads skips work.
+The SDK machinery (isolation flags, hard timeout, stderr capture, big-prompt
+tempfile fallback, unknown-message skip) lives in multiplai_core.agent_runner —
+this module keeps only what is buildme-specific: the repo trust gate, the
+AgentResult mapping (including degrade-to-partial-output on failure), the
+concurrency semaphore, structured-output validation, and the LLMCallError
+taxonomy.
 """
 
 from __future__ import annotations
@@ -19,13 +19,17 @@ import asyncio
 import json
 import logging
 import os
-import re
-import tempfile
-from pathlib import Path
+import time
 from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from multiplai_core.agent_runner import (
+    MAX_PROMPT_BYTES,  # noqa: F401 — re-exported (E2BIG threshold lives in core now)
+    AgentRunError,
+    AgentRunTimeout,
+    run_agent,
+)
 from multiplai_core.aio import hard_timeout, swallow_task_result as _swallow_task_result  # noqa: F401
 from multiplai_core.text import extract_json  # noqa: F401
 
@@ -37,38 +41,7 @@ T = TypeVar("T", bound=BaseModel)
 
 DEFAULT_LLM_CALL_TIMEOUT_S = 600.0
 DEFAULT_AGENT_CALL_TIMEOUT_S = 1800.0  # 30 min for implementation agents
-MAX_PROMPT_BYTES = 80_000
 MAX_CONCURRENT_SDK_CALLS = 10
-
-
-def _hook_session_dir() -> Path:
-    """Directory used as cwd for no-tool SDK calls — prevents project settings.json pickup."""
-    cfg = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
-    d = cfg / "hook-sessions"
-    d.mkdir(exist_ok=True)
-    return d
-
-
-async def _safe_query(*, prompt, options):
-    """Wrap SDK query() to skip unknown message types (e.g. rate_limit_event).
-
-    The SDK message parser raises MessageParseError for message types
-    it doesn't recognize. This wrapper catches those and continues iteration.
-    """
-    from claude_agent_sdk import query as raw_query
-
-    gen = raw_query(prompt=prompt, options=options).__aiter__()
-    while True:
-        try:
-            message = await gen.__anext__()
-            yield message
-        except StopAsyncIteration:
-            break
-        except Exception as e:
-            if "Unknown message type" in str(e):
-                log.debug("Skipping unknown SDK message type: %s", e)
-                continue
-            raise
 
 _sdk_semaphore: asyncio.Semaphore | None = None
 
@@ -78,6 +51,14 @@ def _get_semaphore() -> asyncio.Semaphore:
     if _sdk_semaphore is None:
         _sdk_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SDK_CALLS)
     return _sdk_semaphore
+
+
+def _require_sdk() -> None:
+    """Fail with the buildme error taxonomy when the SDK is absent."""
+    try:
+        import claude_agent_sdk  # noqa: F401
+    except ImportError as e:
+        raise LLMCallError("claude-agent-sdk not installed") from e
 
 
 class LLMCallError(Exception):
@@ -117,79 +98,36 @@ async def llm_call(
     call_timeout: float = DEFAULT_LLM_CALL_TIMEOUT_S,
 ) -> str:
     """Single-turn LLM call. Returns text response. No tools by default."""
-    try:
-        from claude_agent_sdk import ClaudeAgentOptions
-        from claude_agent_sdk import AssistantMessage, TextBlock
-    except ImportError as e:
-        raise LLMCallError("claude-agent-sdk not installed") from e
-
-    prompt_file: str | None = None
-    effective_tools = list(allowed_tools or [])
-    subagent_env: dict[str, str] = {"_HOOK_CHILD_SESSION": "1"}
-
-    if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
-        log.info("Prompt too large (%d bytes), writing to temp file", len(prompt.encode("utf-8")))
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", prefix="build_prompt_", delete=False) as f:
-            f.write(prompt)
-            prompt_file = f.name
-        prompt = (
-            f"Read the file {prompt_file} using the Read tool. "
-            f"It contains your complete instructions and data. "
-            f"After reading, follow those instructions exactly."
-        )
-        if "Read" not in effective_tools:
-            effective_tools.append("Read")
-        max_turns = max(max_turns, 3)
-        subagent_env["CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS"] = "100000"
-
-    stderr_lines: list[str] = []
-    options = ClaudeAgentOptions(
-        allowed_tools=effective_tools,
-        max_turns=max_turns,
-        permission_mode="bypassPermissions",
-        system_prompt=system_prompt,
-        model=model,
-        env=subagent_env,
-        cwd=str(_hook_session_dir()),
-        setting_sources=[],
-        extra_args={"setting-sources": "", "debug-to-stderr": None},
-        stderr=lambda line: stderr_lines.append(line),
-    )
+    _require_sdk()
 
     log.info("START sdk_call=llm prompt_bytes=%d model=%s timeout=%.0fs",
              len(prompt.encode("utf-8")), model or "default", call_timeout)
-    chunks: list[str] = []
     async with _get_semaphore():
         try:
-            async def _run():
-                async for message in _safe_query(prompt=prompt, options=options):
-                    if isinstance(message, AssistantMessage):
-                        for block in message.content:
-                            if isinstance(block, TextBlock):
-                                chunks.append(block.text)
+            result = await run_agent(
+                prompt,
+                system_prompt=system_prompt,
+                allowed_tools=allowed_tools,
+                max_turns=max_turns,
+                model=model,
+                timeout_s=call_timeout,
+                label="llm",
+            )
+        except AgentRunTimeout as e:
+            log.error("FAIL sdk_call=llm reason=timeout after %.0fs\n--- CLI stderr ---\n%s",
+                      call_timeout, e.stderr_tail)
+            raise LLMCallTimeoutError(
+                f"LLM call exceeded {call_timeout:.0f}s timeout"
+            ) from e
+        except AgentRunError as e:
+            log.error("FAIL sdk_call=llm error=%s\n--- CLI stderr ---\n%s",
+                      e.reason, e.stderr_tail)
+            raise LLMCallError(
+                f"SDK query failed: {e.reason}\n--- CLI stderr ---\n{e.stderr_tail}"
+            ) from e
 
-            await hard_timeout(_run(), call_timeout)
-        except asyncio.TimeoutError:
-            captured = "\n".join(stderr_lines[-2000:])
-            log.error("FAIL sdk_call=llm reason=timeout after %.0fs\n--- CLI stderr (last 2000 lines) ---\n%s",
-                      call_timeout, captured)
-            raise LLMCallTimeoutError(f"LLM call exceeded {call_timeout:.0f}s timeout")
-        except LLMCallTimeoutError:
-            raise
-        except Exception as e:
-            captured = "\n".join(stderr_lines[-2000:])
-            log.error("FAIL sdk_call=llm error=%s\n--- CLI stderr (last 2000 lines) ---\n%s", e, captured)
-            raise LLMCallError(f"SDK query failed: {e}\n--- CLI stderr ---\n{captured}") from e
-        finally:
-            if prompt_file:
-                try:
-                    os.unlink(prompt_file)
-                except OSError:
-                    pass
-
-    result = "".join(chunks).strip()
-    log.info("DONE sdk_call=llm result_chars=%d", len(result))
-    return result
+    log.info("DONE sdk_call=llm result_chars=%d", len(result.text))
+    return result.text
 
 
 async def agent_call(
@@ -206,13 +144,7 @@ async def agent_call(
     The agent can read/write files, run commands, and iterate until done.
     Returns AgentResult with success status, output, and file changes.
     """
-    import time
-
-    try:
-        from claude_agent_sdk import ClaudeAgentOptions
-        from claude_agent_sdk import AssistantMessage, TextBlock, ToolUseBlock
-    except ImportError as e:
-        raise LLMCallError("claude-agent-sdk not installed") from e
+    _require_sdk()
 
     # Fail closed: these agents auto-approve every tool call (bypassPermissions)
     # and act on instructions drawn from the target repo's specs/. Refuse unless
@@ -228,104 +160,53 @@ async def agent_call(
             "(or set BUILDME_TRUST_REPO=1)."
         )
 
-    prompt_file: str | None = None
-    effective_tools = list(allowed_tools)
-    subagent_env: dict[str, str] = {"_HOOK_CHILD_SESSION": "1"}
-
-    if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
-        log.info("Agent prompt too large (%d bytes), writing to temp file", len(prompt.encode("utf-8")))
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", prefix="agent_prompt_", delete=False) as f:
-            f.write(prompt)
-            prompt_file = f.name
-        prompt = (
-            f"Read the file {prompt_file} using the Read tool. "
-            f"It contains your complete instructions. "
-            f"After reading, follow those instructions exactly."
-        )
-        if "Read" not in effective_tools:
-            effective_tools.append("Read")
-        max_turns = max(max_turns, 5)
-        subagent_env["CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS"] = "100000"
-
-    stderr_lines: list[str] = []
-    options = ClaudeAgentOptions(
-        allowed_tools=effective_tools,
-        max_turns=max_turns,
-        permission_mode="bypassPermissions",
-        model=model,
-        env=subagent_env,
-        cwd=cwd if cwd else str(_hook_session_dir()),
-        setting_sources=[],
-        extra_args={"setting-sources": "", "debug-to-stderr": None},
-        stderr=lambda line: stderr_lines.append(line),
-    )
-
     log.info("START sdk_call=agent tools=%s model=%s max_turns=%d timeout=%.0fs",
-             effective_tools, model or "default", max_turns, call_timeout)
-    chunks: list[str] = []
-    turns = 0
-    files_changed: list[str] = []
+             allowed_tools, model or "default", max_turns, call_timeout)
     start = time.monotonic()
 
     async with _get_semaphore():
         try:
-            async def _run():
-                nonlocal turns
-                async for message in _safe_query(prompt=prompt, options=options):
-                    if isinstance(message, AssistantMessage):
-                        turns += 1
-                        for block in message.content:
-                            if isinstance(block, TextBlock):
-                                chunks.append(block.text)
-                            elif isinstance(block, ToolUseBlock):
-                                if block.name in ("Write", "Edit") and hasattr(block, "input"):
-                                    fp = block.input.get("file_path", "")
-                                    if fp and fp not in files_changed:
-                                        files_changed.append(fp)
-
-            await hard_timeout(_run(), call_timeout)
-        except asyncio.TimeoutError:
+            result = await run_agent(
+                prompt,
+                allowed_tools=allowed_tools,
+                max_turns=max_turns,
+                model=model,
+                cwd=cwd,  # None → run_agent's isolated hook-sessions dir
+                timeout_s=call_timeout,
+                label="agent",
+            )
+        except AgentRunError as e:
+            # Degrade to partial output instead of raising — the TDD engine
+            # decides whether a failed agent aborts the block or retries.
             elapsed = time.monotonic() - start
-            captured = "\n".join(stderr_lines[-2000:])
-            log.error("FAIL sdk_call=agent reason=timeout elapsed=%.0fs turns=%d\n--- CLI stderr (last 2000 lines) ---\n%s",
-                      elapsed, turns, captured)
+            partial = e.partial
+            timed_out = isinstance(e, AgentRunTimeout)
+            log.error("FAIL sdk_call=agent reason=%s elapsed=%.0fs turns=%d\n--- CLI stderr ---\n%s",
+                      "timeout" if timed_out else e.reason, elapsed,
+                      partial.turns if partial else 0, e.stderr_tail)
+            error_msg = (
+                f"Agent timed out after {elapsed:.0f}s\nCLI stderr:\n{e.stderr_tail}"
+                if timed_out
+                else f"{e.reason}\nCLI stderr:\n{e.stderr_tail}"
+            )
             return AgentResult(
                 success=False,
-                output="".join(chunks).strip(),
-                error=f"Agent timed out after {elapsed:.0f}s\nCLI stderr:\n{captured}",
-                turns_used=turns,
+                output=partial.text if partial else "",
+                error=error_msg,
+                turns_used=partial.turns if partial else 0,
                 elapsed_seconds=elapsed,
-                files_changed=files_changed,
+                files_changed=partial.files_changed if partial else [],
             )
-        except Exception as e:
-            elapsed = time.monotonic() - start
-            captured = "\n".join(stderr_lines[-2000:])
-            log.error("FAIL sdk_call=agent error=%s elapsed=%.0fs turns=%d\n--- CLI stderr (last 2000 lines) ---\n%s",
-                      e, elapsed, turns, captured)
-            return AgentResult(
-                success=False,
-                output="".join(chunks).strip(),
-                error=f"{e}\nCLI stderr:\n{captured}",
-                turns_used=turns,
-                elapsed_seconds=elapsed,
-                files_changed=files_changed,
-            )
-        finally:
-            if prompt_file:
-                try:
-                    os.unlink(prompt_file)
-                except OSError:
-                    pass
 
     elapsed = time.monotonic() - start
     log.info("DONE sdk_call=agent turns=%d elapsed=%.0fs files_changed=%d",
-             turns, elapsed, len(files_changed))
+             result.turns, elapsed, len(result.files_changed))
     return AgentResult(
         success=True,
-        output="".join(chunks).strip(),
-        turns_used=turns,
+        output=result.text,
+        turns_used=result.turns,
         elapsed_seconds=elapsed,
-        files_changed=files_changed,
+        files_changed=result.files_changed,
     )
 
 
@@ -359,6 +240,3 @@ async def llm_call_structured(
                 )
 
     raise LLMCallError(f"Structured output validation failed after {max_retries + 1} attempts: {last_error}")
-
-
-# extract_json now lives in multiplai_core.text (imported at top of module).

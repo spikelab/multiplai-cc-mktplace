@@ -1,13 +1,15 @@
-"""Thin wrapper around claude_agent_sdk.query() for LLM reasoning nodes.
+"""Thin adapter over multiplai_core.run_agent() for LLM reasoning nodes.
 
 Each LLM node in the pipeline calls llm_call() with a focused prompt and
 (optionally) a Pydantic model class for structured output validation. On
 validation failure, the wrapper retries once with an error message appended
 to the prompt indicating the expected format.
 
-All SDK calls are wrapped in asyncio.wait_for with a configurable timeout
-(default 10 minutes) to prevent indefinite hangs from rate-limit stalls,
-slow model responses, or SDK subprocess issues.
+The SDK machinery (isolation flags, hard timeout, stderr capture, big-prompt
+tempfile fallback, unknown-message skip) lives in multiplai_core.agent_runner
+— this module keeps only what is research-specific: the per-run usage/cost
+accumulator, the concurrency semaphore + tracking, structured-output
+validation, and the pipeline's LLMCallError taxonomy.
 """
 
 from __future__ import annotations
@@ -15,15 +17,20 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import re
 import threading
+import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from multiplai_core.agent_runner import (
+    MAX_PROMPT_BYTES,  # noqa: F401 — re-exported (E2BIG threshold lives in core now)
+    AgentRunError,
+    AgentRunResult,
+    AgentRunTimeout,
+    run_agent,
+)
 from multiplai_core.aio import hard_timeout, swallow_task_result as _swallow_task_result  # noqa: F401
 from multiplai_core.text import extract_json  # noqa: F401
 
@@ -90,11 +97,6 @@ def _record_usage(usage: LLMCallUsage) -> None:
 # take 3-5 minutes; REASSESS is lighter. Adjust per-node via call_timeout kwarg.
 DEFAULT_LLM_CALL_TIMEOUT_S = 600.0
 
-# Max prompt size in bytes before triggering E2BIG workaround.
-# The SDK passes prompts as CLI args; Linux ARG_MAX is typically 128KB
-# but we stay conservative to leave room for other args/env.
-MAX_PROMPT_BYTES = 80_000
-
 # Concurrency limit for SDK subprocess calls. Benchmarked: 10 concurrent calls
 # succeed with ~28% wall-clock overhead vs sequential. Above 10, subprocess
 # spawning pressure increases without proportional throughput gain.
@@ -147,30 +149,6 @@ def get_sdk_peak_concurrency() -> int:
         return _sdk_peak_calls
 
 
-async def _safe_query(*, prompt, options):
-    """Wrap SDK query() to skip unknown message types (e.g. rate_limit_event).
-
-    The SDK message parser raises MessageParseError for message types it doesn't
-    recognize. With `debug-to-stderr` enabled the CLI emits additional internal
-    message types that the bundled SDK parser doesn't know about — without this
-    wrapper they crash the call. Mirrors buildme's _safe_query.
-    """
-    from claude_agent_sdk import query as raw_query
-
-    gen = raw_query(prompt=prompt, options=options).__aiter__()
-    while True:
-        try:
-            message = await gen.__anext__()
-            yield message
-        except StopAsyncIteration:
-            break
-        except Exception as e:  # noqa: BLE001
-            if "Unknown message type" in str(e):
-                log.debug("Skipping unknown SDK message type: %s", e)
-                continue
-            raise
-
-
 def reset_sdk_concurrency_stats() -> None:
     """Reset concurrency tracking (call at pipeline start)."""
     global _sdk_active_calls, _sdk_peak_calls
@@ -216,171 +194,64 @@ async def llm_call(
     Default timeout is 10 minutes — long enough for synthesis on large finding
     sets, short enough to prevent indefinite hangs from API stalls.
     """
-    try:
-        from claude_agent_sdk import ClaudeAgentOptions  # type: ignore
-        from claude_agent_sdk import AssistantMessage, TextBlock  # type: ignore
-    except ImportError as e:
-        raise LLMCallError(
-            "claude-agent-sdk not installed. Run: pip install claude-agent-sdk"
-        ) from e
-
-    try:
-        from claude_agent_sdk import ResultMessage  # type: ignore
-    except ImportError:
-        ResultMessage = None  # type: ignore[assignment,misc]
-
-    # The SDK passes the prompt as a CLI argument to a subprocess. If the
-    # prompt exceeds ~100KB, the OS rejects it with E2BIG. Instead of
-    # truncating (which discards findings), we write the full prompt to a
-    # temp file and tell Claude to read it via the Read tool. No data loss.
-    import tempfile
-
-    prompt_file: str | None = None
-    effective_tools = list(allowed_tools or [])
-
-    # Environment overrides for SDK subagents. The parent session may have
-    # settings (e.g., large Read output tokens) that subagents don't inherit
-    # since they're fresh CLI processes without the parent's settings.json.
-    subagent_env: dict[str, str] = {}
-
-    prompt_bytes = len(prompt.encode("utf-8"))
     log.info(
         "SDK call [%s] prompt=%d bytes tools=%s timeout=%.0fs",
-        label, prompt_bytes, effective_tools or "none", call_timeout,
+        label, len(prompt.encode("utf-8")), allowed_tools or "none", call_timeout,
     )
 
-    if prompt_bytes > MAX_PROMPT_BYTES:
-        log.info(
-            "Prompt too large for CLI arg (%d bytes), writing to temp file",
-            prompt_bytes,
-        )
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", prefix="research_prompt_", delete=False
-        ) as f:
-            f.write(prompt)
-            prompt_file = f.name
-        log.info("Prompt written to temp file: %s", prompt_file)
+    def _capture_usage(into: LLMCallUsage, result: AgentRunResult | None) -> None:
+        if result is None:
+            return
+        into.input_tokens = result.usage.input_tokens
+        into.output_tokens = result.usage.output_tokens
+        into.cache_creation_tokens = result.usage.cache_creation_tokens
+        into.cache_read_tokens = result.usage.cache_read_tokens
+        into.cost_usd = result.usage.cost_usd
 
-        # Replace the prompt with a directive to read the file.
-        # IMPORTANT: The prompt must not encourage "thinking out loud" —
-        # any text the agent emits before reading gets captured as output.
-        prompt = (
-            f"Read the file {prompt_file} using the Read tool. "
-            f"It contains your complete instructions and data. "
-            f"After reading, follow those instructions exactly and produce "
-            f"the requested output. Do not describe what you are doing — "
-            f"just read the file and produce the output directly."
-        )
-        # Grant Read tool access so the agent can read the prompt file
-        if "Read" not in effective_tools:
-            effective_tools.append("Read")
-        # Agent needs at least 3 turns: read the file, then produce output.
-        # With max_turns=1, the agent reads but has no turn left to respond.
-        max_turns = max(max_turns, 3)
-        # Ensure the subagent can read the full file without truncation.
-        # Default Read limit is 2000 lines — insufficient for large prompts.
-        subagent_env["CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS"] = "100000"
-
-    # Use a dedicated session dir so SDK subagent sessions don't pollute
-    # the user's session history, and disable settings.json hook loading
-    # to prevent re-entry cascades.
-    _config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
-    _session_dir = _config_dir / "hook-sessions"
-    _session_dir.mkdir(exist_ok=True)
-
-    # Capture stderr from the CLI subprocess so SDK errors are diagnosable.
-    # The SDK hardcodes ProcessError stderr to "Check stderr output for details" —
-    # without this callback the real error never surfaces. debug-to-stderr forces
-    # the CLI to emit verbose output we can attach to exceptions on failure.
-    stderr_lines: list[str] = []
-
-    opts_kwargs: dict = dict(
-        allowed_tools=effective_tools,
-        max_turns=max_turns,
-        permission_mode="bypassPermissions",
-        system_prompt=system_prompt,
-        model=model,
-        env={**subagent_env, "_HOOK_CHILD_SESSION": "1"},  # Tell hooks to skip
-        cwd=_session_dir,
-        setting_sources=[],
-        stderr=lambda line: stderr_lines.append(line),
-        # Both setting_sources=[] AND extra_args={"setting-sources": ""} are
-        # required when debug-to-stderr is on — without setting_sources=[]
-        # the parent agent spawns runaway agent:builtin:Explore subagents
-        # that loop until the CLI gives up and exits 1 (verified 2026-04-20).
-        extra_args={"setting-sources": "", "debug-to-stderr": None},
-    )
-    if effort is not None:
-        opts_kwargs["effort"] = effort
-    options = ClaudeAgentOptions(**opts_kwargs)
-
-    import time as _time
-
-    chunks: list[str] = []
     call_usage = LLMCallUsage(num_calls=1)
-    call_start = _time.monotonic()
+    call_start = time.monotonic()
     async with _get_semaphore():
         _track_call_start(label)
         call_ok = False
         try:
-            async def _run_query() -> None:
-                async for message in _safe_query(prompt=prompt, options=options):
-                    if isinstance(message, AssistantMessage):
-                        for block in message.content:
-                            if isinstance(block, TextBlock):
-                                chunks.append(block.text)
-                    elif ResultMessage is not None and isinstance(message, ResultMessage):
-                        usage = getattr(message, "usage", None) or {}
-                        call_usage.input_tokens = usage.get("input_tokens", 0) or 0
-                        call_usage.output_tokens = usage.get("output_tokens", 0) or 0
-                        call_usage.cache_creation_tokens = (
-                            usage.get("cache_creation_input_tokens", 0) or 0
-                        )
-                        call_usage.cache_read_tokens = (
-                            usage.get("cache_read_input_tokens", 0) or 0
-                        )
-                        call_usage.cost_usd = getattr(message, "total_cost_usd", 0.0) or 0.0
-
-            try:
-                # hard_timeout (not asyncio.wait_for): a wedged CLI subprocess
-                # can make cancellation block indefinitely, which would hang
-                # wait_for forever. hard_timeout returns on timeout regardless.
-                await hard_timeout(_run_query(), call_timeout)
-                call_ok = True
-            except asyncio.TimeoutError:
-                captured = "\n".join(stderr_lines[-2000:])
-                log.error(
-                    "FAIL llm_call [%s] reason=timeout after %.0fs\n--- CLI stderr (last 2000 lines) ---\n%s",
-                    label, call_timeout, captured,
-                )
-                raise LLMCallTimeoutError(
-                    f"LLM call [{label}] exceeded {call_timeout:.0f}s timeout\n"
-                    f"--- CLI stderr ---\n{captured}"
-                )
-        except LLMCallTimeoutError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            captured = "\n".join(stderr_lines[-2000:])
+            result = await run_agent(
+                prompt,
+                system_prompt=system_prompt,
+                allowed_tools=allowed_tools,
+                max_turns=max_turns,
+                model=model,
+                effort=effort,
+                timeout_s=call_timeout,
+                label=label,
+            )
+            call_ok = True
+            _capture_usage(call_usage, result)
+            return result.text
+        except AgentRunTimeout as e:
+            _capture_usage(call_usage, e.partial)
             log.error(
-                "FAIL llm_call [%s] error=%s\n--- CLI stderr (last 2000 lines) ---\n%s",
-                label, e, captured,
+                "FAIL llm_call [%s] reason=timeout after %.0fs\n--- CLI stderr ---\n%s",
+                label, call_timeout, e.stderr_tail,
+            )
+            raise LLMCallTimeoutError(
+                f"LLM call [{label}] exceeded {call_timeout:.0f}s timeout\n"
+                f"--- CLI stderr ---\n{e.stderr_tail}"
+            ) from e
+        except AgentRunError as e:
+            _capture_usage(call_usage, e.partial)
+            log.error(
+                "FAIL llm_call [%s] error=%s\n--- CLI stderr ---\n%s",
+                label, e.reason, e.stderr_tail,
             )
             raise LLMCallError(
-                f"SDK query failed [{label}]: {e}\n--- CLI stderr ---\n{captured}"
+                f"SDK query failed [{label}]: {e.reason}\n"
+                f"--- CLI stderr ---\n{e.stderr_tail}"
             ) from e
         finally:
-            elapsed = _time.monotonic() - call_start
+            elapsed = time.monotonic() - call_start
             _track_call_end(label, elapsed=elapsed, ok=call_ok)
             # Record usage even on failure (partial tokens still billed)
             _record_usage(call_usage)
-            # Clean up temp file if we created one
-            if prompt_file:
-                try:
-                    os.unlink(prompt_file)
-                except OSError:
-                    pass
-
-    return "".join(chunks).strip()
 
 
 async def llm_call_structured(
