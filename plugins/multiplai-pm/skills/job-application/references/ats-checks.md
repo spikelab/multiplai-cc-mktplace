@@ -26,17 +26,16 @@ When applying for Senior PM with Director title history:
 - De-emphasize team size: Move "managed X people" to last bullet or remove
 - Lead with building: "Designed architecture" > "Led org of 20"
 
-**Cover Letter Opening (honest AND effective):**
+**Cover Letter Opening (honest AND effective) — example shape, fill with your own facts:**
 ```
-After designing agentic AI platforms at [COMPANY], I'm looking for my next
-role at a company known for product excellence. Here's why I'm targeting Senior PM
-despite Director titles on my resume: I jumped into leadership too fast. I've spent
-years coaching entrepreneurs ([REDACTED]), building
-teams, and enabling people—I thrive in that work. But I moved into Director roles
-at companies that didn't do product management well, and I never got the IC-level
-reps of shipping products at a company that does it right. I want to strengthen
-those foundations before returning to leadership.
+After [building X at COMPANY], I'm looking for my next role at a company known for
+[what you value]. Here's why I'm targeting [target level] despite [higher] titles on
+my resume: [the honest, non-defensive reason — e.g. "I moved into leadership before
+getting the IC reps of shipping at a company that does product well, and I want to
+strengthen those foundations first"].
 ```
+The point of the example: name the apparent mismatch and reframe it truthfully as a
+deliberate choice, without apology or self-deprecation.
 
 ## 2. Opening Sentence Complexity
 
@@ -51,7 +50,7 @@ those foundations before returning to leadership.
 ## 3. Unknown Company Context
 
 **Checks:**
-- [ ] Every unknown company gets translated: "[COMPANY] (enterprise messaging platform serving Fortune 500s)"
+- [ ] Every unknown company gets translated: "COMPANY (one-line description: what it does, who it serves)"
 - [ ] Industry jargon explained on first use
 - [ ] Context before achievement
 
@@ -72,7 +71,7 @@ those foundations before returning to leadership.
 - [ ] DO NOT mention visa requirement in cover letter or resume
 - [ ] DO mention "relocating to [city]" to show commitment
 - [ ] DO mention local ties if they exist
-- [ ] If asked in form: "Have successfully secured sponsorship at previous roles (Google, [COMPANY]). [REDACTED]."
+- [ ] If asked in form, state it factually and positively: "Have successfully secured sponsorship at previous roles. [Citizenship/work-authorization status]."
 
 **Exception:** If JD says "We sponsor visas", mention neutrally.
 
@@ -87,7 +86,7 @@ those foundations before returning to leadership.
 ## 7. Career Narrative Coherence
 
 **Checks:**
-- [ ] Career arc has clear through-line: "Systems → DevOps → Product → AI Product Leadership"
+- [ ] Career arc has clear through-line (e.g. "Systems → DevOps → Product → Product Leadership")
 - [ ] Each transition explained if non-obvious
 - [ ] No unexplained gaps >6 months
 - [ ] Recent roles show PROGRESSION
