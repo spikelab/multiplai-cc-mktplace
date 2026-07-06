@@ -42,13 +42,21 @@ Generates PDF from existing resume.md and cover-letter.md in an application dire
 
 ## Content Sources (Load Before Writing)
 
-Before drafting, load these memory files:
+Before drafting, load these memory files if they exist:
 
 - `$CLAUDE_CONFIG_DIR/memory/career-history.md` — Source material (NEVER fabricate beyond this)
 - `$CLAUDE_CONFIG_DIR/memory/core-voice.md` — Voice fingerprint
 - `$CLAUDE_CONFIG_DIR/memory/professional-voice-guide.md` — Professional overlay for cover letters
 - `$CLAUDE_CONFIG_DIR/memory/write-like-a-human.md` — AI-tell prevention
 - `$CLAUDE_CONFIG_DIR/memory/how-to-write-well.md` — Clarity rules
+
+**Fallback (vanilla install — these files are personal and won't exist):** if
+`career-history.md` is absent, ask the user for their career history (roles,
+achievements, skills) and use their answer as the sole source material — still
+never fabricate beyond what they provide. If the voice-overlay files
+(`core-voice.md`, `professional-voice-guide.md`, `write-like-a-human.md`,
+`how-to-write-well.md`) are absent, skip them and write in a clear, professional
+default voice.
 
 ## Workflow
 
@@ -68,7 +76,7 @@ Flag callback triggers: recognizable companies, quantified achievements, rare sk
 
 Read `references/drafting-guide.md` for structure, authenticity constraints, and AI-tell detection.
 
-Output directory: `PROJECTS/jobs/applications/{company-name}/` (relative to workspace root)
+Output directory: `./INBOX/applications/{company-name}/` if an `INBOX/` exists, else `./applications/{company-name}/` in the current directory (or ask the user where to write).
 
 Save:
 - `resume.md`
@@ -82,12 +90,18 @@ If any check fails: report failures, fix, then save. Do not save failing applica
 
 ### Step 4: Generate PDF (full and pdf modes)
 
+**Dependency:** the PDF step requires `weasyprint` (`pip install weasyprint`) plus
+its system libraries (Pango, Cairo, GDK-PixBuf — e.g. `brew install pango` on
+macOS, `apt install libpango-1.0-0 libpangocairo-1.0-0` on Debian/Ubuntu). If
+`weasyprint` isn't available, skip PDF generation, tell the user the drafted
+`.md`/`.html` files are ready, and note "the PDF step requires weasyprint".
+
 1. Read resume.md and cover-letter.md from application directory
 2. Read the HTML template from `assets/application-template.html`
 3. Generate `application.html`:
    - Page 1: cover letter (NO name header — starts with letter body)
    - Page 2: resume (semantic HTML classes from template)
-4. Run: `weasyprint application.html "Resume - {Applicant Name} - {Company} {Year}.pdf"` (use the applicant's name from their memory profile)
+4. Run: `weasyprint application.html "Resume - {Applicant Name} - {Company} {Year}.pdf"` (use the applicant's name if known, else ask)
 5. Keep application.html for future style edits
 
 ### Step 5: Terminal Summary

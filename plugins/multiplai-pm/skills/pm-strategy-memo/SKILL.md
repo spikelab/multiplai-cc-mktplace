@@ -1,6 +1,6 @@
 ---
 name: pm-strategy-memo
-description: Draft leadership-grade strategy memos using Minto Pyramid (single governing thought → 3-5 supporting arguments → evidence) with a Working Backwards stress-test and a fresh-Claude reader-test before finalizing. Designed for product strategy memos, exec alignment docs, decision memos, positioning memos, and any document that must move a leadership team to a decision. Triggers on "strategy memo", "leadership memo", "exec doc", "alignment doc", "decision memo", "positioning memo", "exec memo", "memo to leadership", "draft a memo", or when the user has a brief, transcript, or thesis and wants to turn it into a memo executives would read. Composes downstream of `interviewer` (context-gather), `extract-insights` (turn a transcript into a brief), and `pm-jtbd-synthesis` / `pm-persona-codifier` (when the memo needs to reference discovery evidence or personas).
+description: Draft leadership-grade strategy memos using Minto Pyramid (single governing thought → 3-5 supporting arguments → evidence) with a Working Backwards stress-test and a fresh-Claude reader-test before finalizing. Designed for product strategy memos, exec alignment docs, decision memos, positioning memos, and any document that must move a leadership team to a decision. Triggers on "strategy memo", "leadership memo", "exec doc", "alignment doc", "decision memo", "positioning memo", "exec memo", "memo to leadership", "draft a memo", or when the user has a brief, transcript, or thesis and wants to turn it into a memo executives would read. Composes downstream of `interviewer` (context-gather) and `extract-insights` (turn a transcript into a brief) — both from the multiplai-research plugin — and `pm-jtbd-synthesis` / `pm-persona-codifier` (when the memo needs to reference discovery evidence or personas).
 user_invocable: true
 model: opus
 effort: high
@@ -139,9 +139,9 @@ After revision, run the reader-test ONE more time. If it still fails, escalate t
 
 ## Output Location
 
-Write the final memo to `INBOX/strategy-memo-<slug>-YYYY-MM-DD.md`.
+Write the final memo to `strategy-memo-<slug>-YYYY-MM-DD.md` under `./INBOX/` if it exists, else the current directory (or ask the user where).
 
-If the memo went through significant revision, also write `INBOX/strategy-memo-<slug>-YYYY-MM-DD-method.md` containing:
+If the memo went through significant revision, also write `strategy-memo-<slug>-YYYY-MM-DD-method.md` (same location) containing:
 - The pyramid sketch
 - The stress-test grid (10 questions + grades)
 - The reader-test transcript (sub-agent's 3 answers + your read)
@@ -164,7 +164,7 @@ This second file is for the user's reference; they can delete it if not needed.
 
 7. **Reader-test is not optional.** Skip it only when the user explicitly passes `--skip-reader-test true` and acknowledges the risk.
 
-8. **Output to INBOX/ only.** The user promotes.
+8. **Output to `./INBOX/` if it exists, else the current directory** (or wherever the user specifies). In a curated workspace, write only to `INBOX/` and let the user promote.
 
 9. **Match the audience's altitude.** A board memo and a team memo differ in what they assume the reader already knows. Don't write up or down — match.
 
@@ -172,6 +172,6 @@ This second file is for the user's reference; they can delete it if not needed.
 
 ## Composing With Other Skills
 
-- **Upstream**: `interviewer` for the context gather if the user is stuck on Step 1. `extract-insights` to turn a transcript into a brief if no brief exists yet.
+- **Upstream** (both require the **multiplai-research** plugin): `interviewer` for the context gather if the user is stuck on Step 1; `extract-insights` to turn a transcript into a brief if no brief exists yet.
 - **Sideways**: `pm-jtbd-synthesis` and `pm-persona-codifier` provide the evidence base that fills Step 3 sections.
-- **Downstream**: A locked strategy memo is the input for `pm-pr-faq` (when the strategy implies a launch narrative), `pm-prd` (when it implies specific product work), and `pm-roadmap`.
+- **Downstream**: A locked strategy memo is the input for `pm-pr-faq` (when the strategy implies a launch narrative). (A PRD skill and a roadmap skill are planned but not yet shipped.)

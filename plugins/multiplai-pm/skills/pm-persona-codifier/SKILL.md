@@ -48,7 +48,7 @@ Personas that share 3+ axes should be merged. Personas with only 1 shared axis a
 
 ### Step 3 — Fill the 9-section template per persona
 
-See `references/persona-template.md` for the canonical schema. Each persona file uses the exact same structure so downstream skills can grep specific sections (e.g. "what are the jobs across personas?").
+See `references/persona-template.md` for the canonical schema and section-by-section guidance. For a bare fill-in scaffold to copy into each persona file, use `assets/persona-template.md`. Each persona file uses the exact same structure so downstream skills can grep specific sections (e.g. "what are the jobs across personas?").
 
 Sections:
 1. Snapshot (3 sentences max)
@@ -74,12 +74,12 @@ After all personas are drafted, run these checks:
 
 ### Step 5 — Emit artifacts
 
-Write to `INBOX/`:
+Write to `./INBOX/personas/` if an `INBOX/` exists, else `./personas/` in the current directory (or ask the user where):
 
-- **`INBOX/personas/persona-<slug>.md`** — one per persona (use kebab-case slugs, e.g. `persona-flow-builder.md`)
-- **`INBOX/personas/INDEX.md`** — table of personas with the snapshot row from each, plus a "tensions and notes" section flagging cross-persona contradictions
+- **`persona-<slug>.md`** — one per persona (use kebab-case slugs, e.g. `persona-flow-builder.md`)
+- **`INDEX.md`** — table of personas with the snapshot row from each, plus a "tensions and notes" section flagging cross-persona contradictions
 
-Yes, create the `INBOX/personas/` subdirectory if it doesn't exist.
+Create the `personas/` subdirectory if it doesn't exist.
 
 ## YAML Frontmatter (required on every persona file)
 
@@ -116,12 +116,12 @@ last_updated: YYYY-MM-DD
 
 8. **The "what they actually want" section is the highest-leverage one.** Customers usually ask for the thing one level removed from what they actually want. ("I want a builder UI" → actual want: control / trust / proof.) Force yourself to do that translation, with source evidence.
 
-9. **Output goes to INBOX/personas/ only.** The user promotes.
+9. **Output goes to the `personas/` directory** (under `./INBOX/` if it exists, else the current directory). In a curated workspace, write only to `INBOX/` and let the user promote.
 
 10. **If you can't reach 3 quotes for a persona, flag it.** A persona with 1 quote is a hypothesis, not a persona. Say so in Open Questions and the INDEX.
 
 ## Composing With Other Skills
 
 - **Upstream**: `pm-jtbd-synthesis` is the canonical input. If JTBD output exists, read both the synthesis report and the OST stub before clustering — job clusters often map 1:1 to personas, or they map N-to-1 (multiple jobs per persona), but rarely 1-to-N.
-- **Sideways**: `interviewer` for when context-gather requires deeper user probing.
-- **Downstream**: All document-producing PM skills reference personas by ID. Notably `pm-prd` (target persona section), `pm-strategy-memo` (audience and ICP language), `pm-pr-faq` (the fictional customer in the PR is a persona).
+- **Sideways**: `interviewer` (requires the **multiplai-research** plugin) for when context-gather requires deeper user probing.
+- **Downstream**: Document-producing PM skills reference personas by ID — `pm-strategy-memo` (audience and ICP language) and `pm-pr-faq` (the fictional customer in the PR is a persona). (A PRD skill with a target-persona section is planned but not yet shipped.)

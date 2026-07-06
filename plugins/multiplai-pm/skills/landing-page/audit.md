@@ -10,7 +10,7 @@ Load the following files:
 1. **`references/voice-calibration.md`** — landing page voice overlay
 2. **`references/conversion-principles.md`** — data-backed conversion rules
 3. **`references/page-anatomy.md`** — the ideal 8-section structure
-4. **`$CLAUDE_CONFIG_DIR/memory/write-like-a-human.md`** — AI-tell detection
+4. **`$CLAUDE_CONFIG_DIR/memory/write-like-a-human.md`** — AI-tell detection (personal file; skip if it doesn't exist)
 
 ---
 

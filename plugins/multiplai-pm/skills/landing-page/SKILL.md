@@ -3,7 +3,7 @@ name: landing-page
 description: |
   Landing page copy creation and optimization. Three modes: create (full creation from scratch),
   audit (CRO review of existing page), iterate (generate copy variations for specific sections).
-  Uses interviewer for discovery, applies evidence-based conversion frameworks.
+  Uses the interviewer skill (multiplai-research) for discovery when available, applies evidence-based conversion frameworks.
   Triggers on "landing page", "create a landing page", "landing page copy",
   "review this landing page", "optimize this landing page", "landing page audit".
 user_invocable: true
@@ -41,6 +41,6 @@ Modes:
 
 Examples:
   /landing-page create
-  /landing-page audit PROJECTS/multiplai/landing-page.html
-  /landing-page iterate PROJECTS/multiplai/landing-page.html
+  /landing-page audit ./landing-page.html
+  /landing-page iterate ./landing-page.html
 ```

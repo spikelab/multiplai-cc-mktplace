@@ -12,13 +12,15 @@ Load the following files in order:
 2. **`$CLAUDE_CONFIG_DIR/memory/core-voice.md`** — the user's canonical voice. Read it for awareness, but the voice-calibration overlay takes precedence where they conflict.
 3. **`$CLAUDE_CONFIG_DIR/memory/write-like-a-human.md`** — AI-tell avoidance. Applies fully to landing page copy.
 
+The `$CLAUDE_CONFIG_DIR/memory/*` files are personal and may not exist on a vanilla install — if either is absent, skip it and rely on the bundled `voice-calibration.md` overlay.
+
 **Key principle:** Landing page copy permits persuasive CTAs, benefit-driven headlines, and second-person address ("you"). But it inherits the bans on buzzwords, hype, AI vocabulary, and LinkedIn patterns. Persuasion through specificity and clarity, never through empty hype.
 
 ---
 
 ## PHASE 1: DISCOVERY
 
-Use the Skill tool to invoke `/interviewer` with args focused on landing page context. The interviewer should surface:
+Use the Skill tool to invoke `/interviewer` (from the **multiplai-research** plugin) with args focused on landing page context. If multiplai-research isn't installed, gather the context below by asking the user directly. The discovery should surface:
 
 ### Required Context (must have all before proceeding)
 

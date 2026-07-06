@@ -28,7 +28,7 @@ When writing landing page copy, this overlay takes precedence over core-voice.md
 - **No LinkedIn copywriting patterns** — manufactured hooks, self-congratulatory bridges, clever punchlines
 - **Active voice** — "We built X" not "X was built"
 - **Contractions** — "You'll", "We've", "It's" — keeps copy conversational
-- **British spelling** — colour, realise, behaviour, organisation (the user's standard)
+- **Spelling** — match your brand's convention consistently; if your brand uses British spelling, prefer colour, realise, behaviour, organisation
 - **No AI vocabulary** — crucial, pivotal, robust, comprehensive, dynamic, leveraging, fostering, delving, tapestry, testament, interplay
 - **Em dash limit** — max 2-3 per page. Default to commas, colons, or full stops.
 
@@ -144,7 +144,7 @@ Set during discovery. These calibrate the copy tone:
 | **Technical** | accessible ↔ deep | How much mechanism you explain vs. just outcomes |
 | **Warmth** | professional ↔ personal | Use of "I/we" vs. company name, founder story inclusion |
 
-**Default for the user's projects:** casual, calm-to-moderate energy, accessible with technical depth available, personal.
+**A common starting default** (adjust to your brand): casual, calm-to-moderate energy, accessible with technical depth available, personal.
 
 ---
 

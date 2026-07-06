@@ -122,7 +122,7 @@ If any of 1, 2, 3 is FAIL, revise before delivering. Surface the stress-test gri
 
 ## Output
 
-Write to `INBOX/pr-faq-<slug>-YYYY-MM-DD.md`. Single file containing both PR and FAQ, in that order. Stress-test grid at the bottom under a "Method Notes" section.
+Write to `pr-faq-<slug>-YYYY-MM-DD.md` under `./INBOX/` if it exists, else the current directory (or ask the user where). Single file containing both PR and FAQ, in that order. Stress-test grid at the bottom under a "Method Notes" section.
 
 ```markdown
 # PR-FAQ: [Slug]
@@ -185,12 +185,12 @@ Write to `INBOX/pr-faq-<slug>-YYYY-MM-DD.md`. Single file containing both PR and
 
 6. **The "Problem" paragraph is load-bearing.** A weak problem paragraph means a weak initiative. Surface the weakness — don't paper over it.
 
-7. **Output to INBOX/ only.** The user promotes.
+7. **Output to `./INBOX/` if it exists, else the current directory** (or wherever the user specifies). In a curated workspace, write only to `INBOX/` and let the user promote.
 
 8. **If the underlying initiative can't sustain a credible PR-FAQ, say so.** "This PR is dangerously thin in the Problem paragraph — recommend more discovery before committing to the launch narrative" is the honest output when warranted.
 
 ## Composing With Other Skills
 
 - **Upstream**: `pm-strategy-memo` provides the strategic case for the launch; the PR-FAQ is the future-state translation of that case. `pm-persona-codifier` provides the persona for the fictional customer.
-- **Sideways**: `interviewer` for the context gather if the user is stuck on what the future state actually is.
-- **Downstream**: A locked PR-FAQ is the input for `pm-prd` (the FAQ surfaces the requirements; the PR sets the experience targets) and `pm-roadmap` (the launch date constrains sequencing).
+- **Sideways**: `interviewer` (requires the **multiplai-research** plugin) for the context gather if the user is stuck on what the future state actually is.
+- **Downstream**: A locked PR-FAQ feeds product planning — the FAQ surfaces requirements and the PR sets experience targets. (A PRD skill and a roadmap skill that would consume it are planned but not yet shipped.)

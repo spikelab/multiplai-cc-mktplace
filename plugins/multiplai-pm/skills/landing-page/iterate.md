@@ -9,7 +9,7 @@ Your job is to take an existing section (headline, CTA, benefit block, etc.) and
 Load from this skill's directory:
 1. **`references/conversion-principles.md`** — formulas, levers, data
 2. **`references/voice-calibration.md`** — voice rules for landing pages
-3. **`$CLAUDE_CONFIG_DIR/memory/write-like-a-human.md`** — AI-tell avoidance
+3. **`$CLAUDE_CONFIG_DIR/memory/write-like-a-human.md`** — AI-tell avoidance (personal file; skip if it doesn't exist)
 
 ---
 

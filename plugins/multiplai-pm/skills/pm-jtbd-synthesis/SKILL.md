@@ -1,6 +1,6 @@
 ---
 name: pm-jtbd-synthesis
-description: Synthesize Jobs-to-be-Done from one or more customer interview transcripts. Extracts Forces of Progress (push, pull, anxiety, habit) with verbatim quote + line-number attribution, clusters jobs across transcripts, and emits three artifacts — a full synthesis report, job stories in canonical When/I-want/So-I-can format, and an Opportunity-Solution Tree stub. Triggers on "synthesize calls", "synthesize interviews", "jtbd", "jobs to be done", "discovery synthesis", "what did customers say", "interview synthesis", "forces of progress", or when the user points at a folder of call transcripts and asks for product insight. Composes downstream of `transcribe` (audio → text) and `extract-insights` (general extraction); composes upstream of `pm-persona-codifier`, `pm-opportunity-tree`, and `pm-prd`.
+description: Synthesize Jobs-to-be-Done from one or more customer interview transcripts. Extracts Forces of Progress (push, pull, anxiety, habit) with verbatim quote + line-number attribution, clusters jobs across transcripts, and emits three artifacts — a full synthesis report, job stories in canonical When/I-want/So-I-can format, and an Opportunity-Solution Tree stub. Triggers on "synthesize calls", "synthesize interviews", "jtbd", "jobs to be done", "discovery synthesis", "what did customers say", "interview synthesis", "forces of progress", or when the user points at a folder of call transcripts and asks for product insight. Composes downstream of `transcribe` (audio → text, multiplai-media plugin) and `extract-insights` (general extraction, multiplai-research plugin); composes upstream of `pm-persona-codifier`.
 user_invocable: true
 model: opus
 effort: high
@@ -22,7 +22,7 @@ If the user gives a folder, glob all `*.txt`, `*.md`, `*.vtt`, `*.srt` files ins
 
 ## Input Handling
 
-1. If `--audio true`, route each audio file through the `transcribe` skill first; save transcripts to a sibling folder; then proceed.
+1. If `--audio true`, route each audio file through the `transcribe` skill first (ships in the **multiplai-media** plugin — if it isn't installed, ask the user to provide text transcripts); save transcripts to a sibling folder; then proceed.
 2. Read each transcript with the Read tool so you get line-numbered output. Line numbers are mandatory anchors in the output — without them the synthesis is un-verifiable.
 3. If a transcript is over ~2000 lines, read it in chunks and track the line offset.
 4. If there are multiple speakers, identify which speaker is the customer/interviewee. Apply forces extraction only to customer utterances. Interviewer questions are context, not signal.
@@ -65,7 +65,7 @@ Cap final cluster count at 7. If you have more, the clusters are too granular.
 
 ### Pass 3 — Emit artifacts
 
-Produce **three files**, all to `INBOX/`, all date-stamped:
+Produce **three files**, all date-stamped, written to `./INBOX/` if it exists, else the current directory (or ask the user where):
 
 1. **`INBOX/jtbd-synthesis-YYYY-MM-DD.md`** — the full report (template below)
 2. **`INBOX/job-stories-YYYY-MM-DD.md`** — job stories in canonical format. See `references/job-stories-format.md`.
@@ -179,12 +179,12 @@ See `references/opportunity-solution-tree.md`. Stub means: outcome at top, top 3
 
 8. **Tensions section is high-value. Do not skip it to save time.** If you found no tensions, say "No cross-customer tensions surfaced in this sample" explicitly — silence is ambiguous.
 
-9. **Output goes to INBOX/ only.** Never write to RESOURCES/ or PLANS/. The user promotes.
+9. **Output goes to `./INBOX/` if it exists, else the current directory** (or wherever the user specifies). In a curated workspace with `RESOURCES/` and `PLANS/`, write only to `INBOX/` and let the user promote.
 
 10. **If the input is thin, say so.** "Three transcripts is not enough to call any of these clusters high-confidence" is the honest output when warranted.
 
 ## Composing With Other Skills
 
-- **Upstream**: If inputs are audio, invoke `transcribe` first.
-- **Sideways**: `extract-insights` is the general version of forces extraction — use it if the user wants insights from non-customer content (e.g. analyst reports). For customer interviews specifically, this skill is sharper.
-- **Downstream**: The output of this skill is the canonical input for `pm-persona-codifier` (cluster jobs → persona archetypes), `pm-opportunity-tree` (job clusters → outcomes → opportunities), and `pm-prd` (jobs as the "value risk" evidence base in Cagan's 4 risks).
+- **Upstream**: If inputs are audio, invoke `transcribe` first (requires the **multiplai-media** plugin).
+- **Sideways**: `extract-insights` (requires the **multiplai-research** plugin) is the general version of forces extraction — use it if the user wants insights from non-customer content (e.g. analyst reports). For customer interviews specifically, this skill is sharper.
+- **Downstream**: The output of this skill is the canonical input for `pm-persona-codifier` (cluster jobs → persona archetypes). (Planned, not yet shipped: an opportunity-solution-tree skill and a PRD skill would consume these clusters next — for now the OST stub this skill emits is the hand-off.)
