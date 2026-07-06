@@ -229,8 +229,53 @@ class TestPendingMarker:
         # …and a genuinely new session still finds it.
         assert cp.consume_pending_marker(tmp_path, cwd, "sess-b", self.CFG) is not None
 
+    def test_same_session_allowed_after_compact(self, tmp_path):
+        """source=compact rebuild: same session id, marker must be consumable."""
+        cwd = str(tmp_path / "myproj")
+        cp.write_pending_marker(tmp_path, cwd, "sess-a", 210_000)
+        payload = cp.consume_pending_marker(
+            tmp_path, cwd, "sess-a", self.CFG, allow_same_session=True
+        )
+        assert payload is not None and payload["session_id"] == "sess-a"
+
     def test_no_marker(self, tmp_path):
         assert cp.consume_pending_marker(tmp_path, "/x", "s", self.CFG) is None
+
+
+class TestAutoCompactSteering:
+    def test_unset_returns_none(self, monkeypatch):
+        monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
+        assert cp.autocompact_trigger_tokens() is None
+
+    def test_window_with_pct(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "80")
+        assert cp.autocompact_trigger_tokens() == 200_000
+
+    def test_window_default_pct(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "200000")
+        monkeypatch.delenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", raising=False)
+        assert cp.autocompact_trigger_tokens() == 180_000  # 90% default
+
+    def test_malformed_returns_none(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "lots")
+        assert cp.autocompact_trigger_tokens() is None
+
+
+class TestResetSessionCounters:
+    def test_resets_bands_keeps_ts(self, tmp_path):
+        cp.save_state(tmp_path, "s1", {
+            "last_band_idx": 2,
+            "last_checkpoint_tokens": 210_000,
+            "last_checkpoint_ts": "2026-07-06T12:00:00+00:00",
+        })
+        (cp.session_dir(tmp_path, "s1") / "nudge.json").write_text("{}")
+        cp.reset_session_counters(tmp_path, "s1")
+        state = cp.load_state(tmp_path, "s1")
+        assert state["last_band_idx"] == 0
+        assert state["last_checkpoint_tokens"] == 0
+        assert state["last_checkpoint_ts"] == "2026-07-06T12:00:00+00:00"
+        assert not (cp.session_dir(tmp_path, "s1") / "nudge.json").exists()
 
 
 # ---------------------------------------------------------------------------

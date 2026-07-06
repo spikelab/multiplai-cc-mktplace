@@ -310,15 +310,25 @@ def _emit_dream_nudge() -> None:
     )
 
 
-def _inject_checkpoint_recovery(data_dir, cwd: str, session_id: str) -> bool:
-    """Rebuild injection: seed a fresh session from a pending checkpoint.
+def _inject_checkpoint_recovery(
+    data_dir, cwd: str, session_id: str, source: str = ""
+) -> bool:
+    """Rebuild injection: seed a fresh context window from a pending checkpoint.
 
-    When a previous session in this project crossed the handoff threshold,
-    the Stop-hook pipeline left a pending marker pointing at its
-    ``checkpoint.md``. Consume it (one-shot, TTL-gated) and emit the
-    checkpoint as additionalContext so this session resumes that work.
-    Best-effort: any failure means "no recovery", never a broken start.
-    Returns True when a rebuild seed was injected.
+    Two paths land here:
+
+    * **Automatic (source="compact")** — the runtime steers native
+      auto-compaction to fire near the handoff threshold (see README:
+      ``CLAUDE_CODE_AUTO_COMPACT_WINDOW`` / ``CLAUDE_AUTOCOMPACT_PCT_OVERRIDE``).
+      The session id is unchanged, so same-session marker consumption is
+      allowed, and the checkpoint lands right after the compaction summary —
+      no user action at all.
+    * **Manual (source="clear"/"startup")** — a fresh session in the same
+      project consumes the marker left by the handed-off one.
+
+    After injecting, per-session band counters reset so the new physical
+    window checkpoints again. Best-effort: any failure means "no recovery",
+    never a broken start. Returns True when a rebuild seed was injected.
     """
     try:
         from lib import checkpoint as cp
@@ -326,7 +336,10 @@ def _inject_checkpoint_recovery(data_dir, cwd: str, session_id: str) -> bool:
         cfg = cp.load_config()
         if not cfg.enabled or not cwd:
             return False
-        payload = cp.consume_pending_marker(data_dir, cwd, session_id, cfg)
+        payload = cp.consume_pending_marker(
+            data_dir, cwd, session_id, cfg,
+            allow_same_session=(source == "compact"),
+        )
         if not payload:
             return False
         checkpoint_path = Path(str(payload.get("checkpoint_path") or ""))
@@ -338,14 +351,19 @@ def _inject_checkpoint_recovery(data_dir, cwd: str, session_id: str) -> bool:
             return False
         tokens = int(payload.get("tokens") or 0)
         print("\n" + cp.build_rebuild_context(text, tokens))
+        # The new physical window must checkpoint again from scratch.
+        cp.reset_session_counters(data_dir, session_id)
+        old_session = payload.get("session_id", "")
+        if old_session and old_session != session_id:
+            cp.reset_session_counters(data_dir, old_session)
         logger.info(
-            "Injected checkpoint rebuild from session %s (%d tokens)",
-            payload.get("session_id"), tokens,
+            "Injected checkpoint rebuild from session %s (%d tokens, source=%s)",
+            payload.get("session_id"), tokens, source or "startup",
         )
         log_event(
             "checkpoint", "rebuild",
             f"session rebuilt from checkpoint of {payload.get('session_id', '?')} "
-            f"({tokens:,} tokens)",
+            f"({tokens:,} tokens, {'automatic via compact' if source == 'compact' else 'manual'})",
             session_id=session_id,
             source_session=payload.get("session_id", ""),
             tokens=tokens,
@@ -416,9 +434,12 @@ def main() -> None:
     # One-time per-project "now" snapshot injection (additionalContext).
     _inject_project_state(paths.now_dir(), cwd)
 
-    # Context-rebuild injection: if a previous session in this project handed
-    # off at the context ceiling, seed this one from its checkpoint.
-    _inject_checkpoint_recovery(data_dir, cwd, session_id)
+    # Context-rebuild injection: if this project handed off at the context
+    # ceiling, seed this window from its checkpoint. source="compact" is the
+    # fully-automatic path (steered auto-compaction, same session id).
+    _inject_checkpoint_recovery(
+        data_dir, cwd, session_id, hook_input.get("source", "")
+    )
 
     # Drain any deferred extraction markers left by previous session_end
     # hooks. SessionEnd is kill-within-seconds, so the heavy LLM

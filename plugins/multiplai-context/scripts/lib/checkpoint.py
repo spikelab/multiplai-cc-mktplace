@@ -394,13 +394,22 @@ def write_pending_marker(
 
 
 def consume_pending_marker(
-    data_dir: Path, cwd: str, new_session_id: str, cfg: CheckpointConfig
+    data_dir: Path,
+    cwd: str,
+    new_session_id: str,
+    cfg: CheckpointConfig,
+    *,
+    allow_same_session: bool = False,
 ) -> dict | None:
     """Claim-and-return the pending marker for *cwd*'s project, if fresh.
 
     The marker is removed on claim (atomic rename — two racing SessionStarts
-    can't both inject). Expired (> ``ttl_hours``) or self-referential markers
-    (same session id — a resumed session, not a rebuild) are discarded.
+    can't both inject). Expired (> ``ttl_hours``) markers are discarded.
+    Self-referential markers (same session id) are normally put back — a
+    *resumed* session is not a rebuild — EXCEPT when ``allow_same_session``
+    is set: after auto-compaction (SessionStart source="compact") the session
+    id is unchanged but the context genuinely restarted, and injecting the
+    checkpoint there is exactly the automatic rebuild.
     Returns the marker payload or None.
     """
     marker = _pending_dir(data_dir) / f"{_project_key(cwd)}.json"
@@ -417,7 +426,7 @@ def consume_pending_marker(
         payload = json.loads(claimed.read_text())
         if not isinstance(payload, dict):
             return None
-        if payload.get("session_id") == new_session_id:
+        if payload.get("session_id") == new_session_id and not allow_same_session:
             # Same session resuming — put the marker back for a real rebuild.
             os.replace(str(claimed), str(marker))
             return None
@@ -433,6 +442,61 @@ def consume_pending_marker(
         return None
     finally:
         claimed.unlink(missing_ok=True)
+
+
+def reset_session_counters(data_dir: Path, session_id: str) -> None:
+    """Reset band/token counters after a rebuild so the NEW physical window
+    checkpoints again from scratch.
+
+    Keeps ``last_checkpoint_ts`` (the writer stays incremental — old turns
+    are already merged into checkpoint.md) and the checkpoint file itself.
+    Also clears nudge cooldowns.
+    """
+    state = load_state(data_dir, session_id)
+    if state:
+        state["last_band_idx"] = 0
+        state["last_checkpoint_tokens"] = 0
+        try:
+            save_state(data_dir, session_id, state)
+        except OSError:
+            pass
+    sdir = session_dir(data_dir, session_id)
+    for name in ("nudge.json", "claude_nudge.json"):
+        (sdir / name).unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Auto-compact steering (the fully-automatic rebuild path)
+# ---------------------------------------------------------------------------
+
+def autocompact_trigger_tokens() -> int | None:
+    """Expected auto-compaction trigger, when the host steers it via env.
+
+    Claude Code exposes ``CLAUDE_CODE_AUTO_COMPACT_WINDOW`` (capacity the
+    monitor assumes) and ``CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`` (1-100, default
+    ~90). When the runtime sets these so compaction fires near our handoff
+    threshold, the rebuild is fully automatic: native auto-compact resets
+    the window mid-session, then SessionStart(source="compact") re-injects
+    the checkpoint. Returns the estimated trigger in tokens, or None when
+    the window var is unset (auto mode not configured).
+
+    Hooks inherit the Claude Code process env, so this is readable here.
+    """
+    raw_window = os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "").strip()
+    if not raw_window:
+        return None
+    try:
+        window = int(raw_window)
+    except ValueError:
+        return None
+    raw_pct = os.environ.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "").strip()
+    try:
+        pct = int(raw_pct) if raw_pct else 90
+    except ValueError:
+        pct = 90
+    if window <= 0 or not (0 < pct <= 100):
+        return None
+    return int(window * pct / 100)
 
 
 # ---------------------------------------------------------------------------

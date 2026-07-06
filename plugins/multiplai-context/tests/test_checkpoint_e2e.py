@@ -286,6 +286,64 @@ class TestLongHorizonChat:
             cp.checkpoints_root(data_env).iterdir()
         )
 
+    def test_automatic_compact_rebuild_cycle(self, tmp_path, data_env, monkeypatch, capsys):
+        """The fully-automatic path: steered auto-compaction fires near the
+        handoff threshold, SessionStart(source=compact) re-injects the
+        checkpoint into the SAME session (id unchanged, /goal hooks survive),
+        counters reset, and the next window checkpoints again. No user
+        action anywhere in the loop."""
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "80")  # trigger 200K
+        model_calls: list[str] = []
+        harness = LongChatHarness(
+            tmp_path, data_env, monkeypatch, capsys,
+            _fake_run_agent_factory(model_calls),
+        )
+        session_id = "auto-sess"
+        transcript = tmp_path / "transcripts" / f"{session_id}.jsonl"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text("")
+
+        total = 0
+        # Three compact cycles, same session id throughout.
+        for cycle in range(1, 4):
+            for turn_idx, ctx in enumerate(TURN_TOKENS, start=1):
+                harness.append_turn(
+                    transcript, f"work item {cycle}-{turn_idx}", ctx
+                )
+                out = harness.run_stop_hook(session_id, transcript)
+                # AUTO MODE: no /clear nagging, ever — compaction handles it.
+                assert "systemMessage" not in out
+                total += ctx
+
+            # Native auto-compaction fires (~200K); Claude Code then runs
+            # SessionStart with source="compact" and the SAME session id.
+            injected = session_start._inject_checkpoint_recovery(
+                data_env, harness.cwd, session_id, source="compact"
+            )
+            seed = capsys.readouterr().out
+            assert injected, f"cycle {cycle}: compact rebuild did not inject"
+            assert "CONTEXT REBUILD" in seed
+            for earlier in range(1, cycle + 1):
+                assert f"work item {earlier}-2" in seed, (
+                    f"cycle {cycle}: lost breadcrumb of cycle {earlier}"
+                )
+            # Post-compact, the same-session window restarts small; mirror
+            # the injected seed into the transcript like Claude Code does.
+            with transcript.open("a") as f:
+                f.write(json.dumps({
+                    "type": "user",
+                    "timestamp": harness._tick(),
+                    "cwd": harness.cwd,
+                    "message": {"role": "user", "content": seed},
+                }) + "\n")
+
+        assert total > 700_000, total
+        # Counters reset each cycle → every cycle re-checkpoints both bands.
+        assert len(harness.spawned) == 3 * 2
+        for out in harness.stop_outputs:
+            assert '"decision"' not in out
+
     def test_marathon_goal_session_keeps_checkpoint_fresh(
         self, tmp_path, data_env, monkeypatch, capsys
     ):

@@ -69,6 +69,13 @@ def main() -> None:
     if tokens < cfg.handoff_tokens:
         return
 
+    # Auto mode: steered auto-compaction + SessionStart(compact) re-injection
+    # handles the rebuild with no action from Claude or the user. Stay silent
+    # unless compaction is overdue (misconfigured/disabled).
+    auto_trigger = cp.autocompact_trigger_tokens()
+    if auto_trigger is not None and tokens < auto_trigger + cfg.refresh_tokens:
+        return
+
     data_dir = get_paths().plugin_data()
     if not _cooldown_ok(data_dir, session_id, tokens, cfg.refresh_tokens):
         return
@@ -79,14 +86,24 @@ def main() -> None:
         if has_checkpoint
         else "A checkpoint of this session's state is being written"
     )
+    if auto_trigger is not None:
+        advice = (
+            "Auto-compaction should have rebuilt this context by now but has "
+            "not fired. Finish the current piece of work cleanly, then run "
+            "/compact (the checkpoint re-injects automatically afterwards) "
+            "and mention the auto-compact env vars may be misconfigured."
+        )
+    else:
+        advice = (
+            "After /clear or /compact this project's context is re-seeded "
+            "from it. Finish the current piece of work cleanly, then suggest "
+            "the user run /clear at the next natural stopping point."
+        )
     print(
         f"--- CONTEXT BUDGET ---\n"
         f"This session is at {tokens:,} context tokens (handoff threshold: "
-        f"{cfg.handoff_tokens:,}). {state}; after /clear the next session in "
-        f"this project is re-seeded from it. Finish the current piece of work "
-        f"cleanly, then suggest the user run /clear at the next natural "
-        f"stopping point. Do not abandon or rush in-flight work because of "
-        f"this notice."
+        f"{cfg.handoff_tokens:,}). {state}. {advice} Do not abandon or rush "
+        f"in-flight work because of this notice."
     )
     logger.info("Handoff nudge emitted at %d tokens for %s", tokens, session_id)
 

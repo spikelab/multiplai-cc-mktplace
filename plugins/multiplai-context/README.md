@@ -150,14 +150,47 @@ Long sessions degrade as the context window fills. The checkpoint system
    into the previous checkpoint. Above the handoff threshold the checkpoint
    auto-refreshes every `checkpoint_refresh_tokens`, so marathon /goal
    sessions always have a current one.
-3. **Handoff** — at/above the handoff threshold (default **200K**) the user
-   sees a `systemMessage` advising `/clear`, and Claude gets a one-line
-   per-prompt notice (finish cleanly, suggest /clear at a natural boundary).
-   A pending marker is written for the session's project.
-4. **Rebuild** — the next session in that project (after `/clear` or a fresh
-   start, within `checkpoint_ttl_hours`) consumes the marker and injects the
-   checkpoint as additionalContext: the new session resumes with task tree,
-   next action, and file list intact.
+3. **Handoff** — at/above the handoff threshold (default **200K**) a pending
+   marker is written for the session's project.
+4. **Rebuild** — the checkpoint is injected into the fresh context window as
+   additionalContext (task tree, next action, file list intact). Two paths:
+   - **Automatic (recommended):** steer native auto-compaction to fire near
+     the handoff threshold (see *Activation* below). Compaction resets the
+     window mid-session — same session id, same terminal, `/goal` loops and
+     session-scoped hooks survive — and `SessionStart(source="compact")`
+     injects the checkpoint right after the compaction summary. Zero user
+     action, works unattended in autonomous sessions.
+   - **Manual fallback:** without the auto-compact steering, the user sees a
+     `systemMessage` advising `/clear` or `/compact` (one command, no
+     restart), and Claude gets a per-prompt notice to finish cleanly and
+     suggest it at a natural boundary. The next session/window in the
+     project (within `checkpoint_ttl_hours`) consumes the marker.
+
+### Activation: fully-automatic rebuild
+
+Add to `settings.json` (or export in your launcher) so native auto-compaction
+fires at ~200K instead of near the model window limit:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "250000",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80"
+  }
+}
+```
+
+(250000 × 80% = trigger ≈ 200K, matching `checkpoint_handoff_tokens`.) The
+hooks detect these vars and suppress all `/clear` nagging — the loop becomes:
+checkpoint at 100K → refresh → auto-compact ≈200K → checkpoint auto-injected →
+repeat. If compaction is overdue (vars set but it never fired), the hooks
+resume warning the user.
+
+Why compaction (not `/clear`) is the automatic path: hooks cannot invoke
+slash commands, so a hook-triggered `/clear` is impossible — but the
+auto-compact *threshold* is steerable via env, and compaction both preserves
+the session (id, session-scoped hooks, terminal) and fires SessionStart with
+`source="compact"`, which is a supported context-injection point.
 
 Safety properties, by construction:
 

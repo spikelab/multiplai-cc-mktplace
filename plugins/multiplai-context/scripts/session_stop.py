@@ -142,19 +142,38 @@ def _checkpoint_pass(hook_input: dict, data_dir: Path) -> str | None:
                 reason=reason,
             )
 
-    if tokens >= cfg.handoff_tokens and _should_nudge(data_dir, session_id, tokens, cfg):
-        has_checkpoint = cp.checkpoint_file(data_dir, session_id).exists()
-        status = (
-            "work state is checkpointed and will restore automatically"
-            if has_checkpoint
-            else "a checkpoint is being written now"
-        )
+    if tokens < cfg.handoff_tokens:
+        return None
+
+    # Auto mode: when the runtime steers native auto-compaction to fire near
+    # the handoff threshold, the rebuild is fully automatic (compaction +
+    # SessionStart source="compact" re-injection) — don't nag the user.
+    # Only speak up if we've sailed PAST the expected trigger (compaction
+    # disabled or misconfigured) by a full refresh step.
+    auto_trigger = cp.autocompact_trigger_tokens()
+    if auto_trigger is not None and tokens < auto_trigger + cfg.refresh_tokens:
+        return None
+
+    if not _should_nudge(data_dir, session_id, tokens, cfg):
+        return None
+    has_checkpoint = cp.checkpoint_file(data_dir, session_id).exists()
+    status = (
+        "work state is checkpointed and will restore automatically"
+        if has_checkpoint
+        else "a checkpoint is being written now"
+    )
+    if auto_trigger is not None:
         return (
-            f"[multiplai] Context at {tokens:,} tokens (handoff threshold "
-            f"{cfg.handoff_tokens:,}). Run /clear when convenient — {status} "
-            f"in the next session for this project."
+            f"[multiplai] Context at {tokens:,} tokens but auto-compaction "
+            f"(expected near {auto_trigger:,}) hasn't fired — check "
+            f"CLAUDE_CODE_AUTO_COMPACT_WINDOW/CLAUDE_AUTOCOMPACT_PCT_OVERRIDE "
+            f"or run /compact; {status}."
         )
-    return None
+    return (
+        f"[multiplai] Context at {tokens:,} tokens (handoff threshold "
+        f"{cfg.handoff_tokens:,}). Run /clear or /compact when convenient — "
+        f"{status} in the rebuilt context for this project."
+    )
 
 
 def main() -> None:

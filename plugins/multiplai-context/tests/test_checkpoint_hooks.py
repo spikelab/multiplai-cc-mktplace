@@ -225,3 +225,65 @@ class TestSessionStartRecovery:
         cwd = str(tmp_path / "proj")
         cp.write_pending_marker(data_env, cwd, "old-sess", 214_000)  # no checkpoint.md
         assert session_start._inject_checkpoint_recovery(data_env, cwd, "new") is False
+
+    def test_compact_source_injects_same_session(self, tmp_path, data_env, capsys):
+        """Automatic rebuild: auto-compaction keeps the session id; the
+        SessionStart(compact) hook must still consume the marker and inject."""
+        cwd = str(tmp_path / "proj")
+        cp.write_checkpoint_file(data_env, "sess-a", VALID_CHECKPOINT)
+        cp.write_pending_marker(data_env, cwd, "sess-a", 214_000)
+        cp.save_state(data_env, "sess-a", {
+            "last_band_idx": 2, "last_checkpoint_tokens": 214_000,
+            "last_checkpoint_ts": "2026-07-06T12:00:00+00:00",
+        })
+
+        ok = session_start._inject_checkpoint_recovery(
+            data_env, cwd, "sess-a", source="compact"
+        )
+        assert ok is True
+        assert "CONTEXT REBUILD" in capsys.readouterr().out
+        # Counters reset so the post-compact window checkpoints again
+        state = cp.load_state(data_env, "sess-a")
+        assert state["last_band_idx"] == 0
+        assert state["last_checkpoint_tokens"] == 0
+        assert state["last_checkpoint_ts"] == "2026-07-06T12:00:00+00:00"
+
+    def test_startup_source_still_blocks_same_session(self, tmp_path, data_env, capsys):
+        """A plain resume of the SAME session must not self-inject."""
+        cwd = str(tmp_path / "proj")
+        cp.write_checkpoint_file(data_env, "sess-a", VALID_CHECKPOINT)
+        cp.write_pending_marker(data_env, cwd, "sess-a", 214_000)
+        ok = session_start._inject_checkpoint_recovery(
+            data_env, cwd, "sess-a", source="resume"
+        )
+        assert ok is False
+
+
+class TestAutoModeNudgeSuppression:
+    """With steered auto-compaction configured, the hooks stay quiet and let
+    the automatic rebuild happen — no /clear nagging."""
+
+    def test_stop_hook_silent_in_auto_mode(self, tmp_path, data_env, monkeypatch, capsys):
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "80")  # trigger 200K
+        monkeypatch.setattr(session_stop, "_spawn_writer", _SpawnRecorder())
+        out = _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 210_000))
+        assert out.strip() == ""  # compaction imminent — no nag
+
+    def test_stop_hook_warns_when_compaction_overdue(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "80")
+        monkeypatch.setattr(session_stop, "_spawn_writer", _SpawnRecorder())
+        out = _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 240_000))
+        frame = json.loads(out)
+        assert "auto-compaction" in frame["systemMessage"]
+        assert "decision" not in frame
+
+    def test_claude_nudge_silent_in_auto_mode(self, tmp_path, data_env, monkeypatch, capsys):
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "80")
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_stop_payload(tmp_path, 210_000))))
+        checkpoint_nudge.main()
+        assert capsys.readouterr().out.strip() == ""
