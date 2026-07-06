@@ -218,7 +218,7 @@ class TestLLMRouter:
         mock_client = MagicMock()
         mock_client.query = AsyncMock(return_value=mock_response)
 
-        async def _fake_create_client():
+        async def _fake_create_client(**kwargs):
             return mock_client
 
         with patch("multiplai_core.model_client.create_client", _fake_create_client):
@@ -234,7 +234,7 @@ class TestLLMRouter:
         mock_client = MagicMock()
         mock_client.query = AsyncMock(return_value=mock_response)
 
-        async def _fake_create_client():
+        async def _fake_create_client(**kwargs):
             return mock_client
 
         with patch("multiplai_core.model_client.create_client", _fake_create_client):
@@ -249,7 +249,7 @@ class TestLLMRouter:
         mock_client = MagicMock()
         mock_client.query = AsyncMock(return_value=mock_response)
 
-        async def _fake_create_client():
+        async def _fake_create_client(**kwargs):
             return mock_client
 
         with patch("multiplai_core.model_client.create_client", _fake_create_client):
@@ -264,7 +264,7 @@ class TestLLMRouter:
         mock_client = MagicMock()
         mock_client.query = AsyncMock(return_value=mock_response)
 
-        async def _fake_create_client():
+        async def _fake_create_client(**kwargs):
             return mock_client
 
         with patch("multiplai_core.model_client.create_client", _fake_create_client):
@@ -520,7 +520,7 @@ class TestLLMRouterMultiCorpus:
         mock_client = MagicMock()
         mock_client.query = AsyncMock(return_value=mock_response)
 
-        async def _fake_create():
+        async def _fake_create(**kwargs):
             return mock_client
 
         return _fake_create, mock_client

@@ -606,7 +606,7 @@ class LLMRouter:
     ) -> list[str]:
         from multiplai_core.model_client import create_client
 
-        client = await create_client()
+        client = await create_client(component="memory-router")
         user_msg = build_user_message(
             prompt, None, {"memory": catalog_entries, "skills": [], "resources": []}
         )
@@ -633,7 +633,7 @@ class LLMRouter:
     ) -> dict[str, list[str]]:
         from multiplai_core.model_client import create_client
 
-        client = await create_client()
+        client = await create_client(component="memory-router")
         user_msg = build_user_message(prompt, last_response, corpora)
         try:
             response = await asyncio.wait_for(

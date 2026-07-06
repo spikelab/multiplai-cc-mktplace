@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.5.1"]
+# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.6.0"]
 # ///
 """Dream consolidation script for multiplai plugin.
 
@@ -492,7 +492,7 @@ async def dream_report() -> None:
         ", ".join(f.name for f in source_files),
     )
 
-    client = await create_client()
+    client = await create_client(component="dream")
     logger.info("Dream using %s", type(client).__name__)
 
     memory_contents = _read_memory_files(memory_dir)
@@ -710,7 +710,7 @@ async def dream_auto() -> None:
         logger.info("No pending learnings to consolidate")
     else:
         try:
-            client = await create_client()
+            client = await create_client(component="dream")
             logger.info("Dream (auto) using %s", type(client).__name__)
 
             # Stage 1 — generalize. IDENTICAL to report mode: same _PROPOSAL_SYSTEM,
