@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Context checkpointing & rebuild (MiMo-style long-horizon support).** One
+  logical chat can now span many physical context windows. The Stop hook
+  measures real context footprint from the transcript tail and spawns a
+  detached `checkpoint_writer.py` at token bands (default 100K/200K, tuned
+  for 1M-window models) producing an incremental 11-field `checkpoint.md`;
+  above the handoff threshold (200K) the checkpoint auto-refreshes every
+  25K tokens, the user is advised to `/clear` via `systemMessage`, and a new
+  `checkpoint_nudge.py` UserPromptSubmit hook tells Claude to wind down at a
+  natural boundary. SessionStart consumes a TTL-gated pending marker and
+  re-seeds the fresh session from the checkpoint. Goal-safe by construction:
+  no `decision` output ever (cannot block /goal loops), child/subagent
+  sessions fully excluded, writer failure never blocks the session. New
+  `lib/checkpoint.py` core + config via `checkpoint_*` options; docs in
+  README ("Context checkpointing"). Verified by a simulated >700K-token
+  multi-rebuild E2E suite plus a live hook-subprocess smoke run.
+
 ## 0.4.3 — 2026-07-06
 
 ### Changed

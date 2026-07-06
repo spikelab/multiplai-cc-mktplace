@@ -134,6 +134,59 @@ that holds a warm model connection (no per-call cold-start), or a
 direct-API path (needs an API key with credits, which bypasses the SDK
 subprocess). Until then, prefer `token_overlap` for daily use.
 
+## Context checkpointing (long sessions)
+
+Long sessions degrade as the context window fills. The checkpoint system
+(MiMo-style) lets one *logical* chat span many *physical* context windows:
+
+1. **Measure** — after every assistant turn, the Stop hook reads the real
+   context footprint from the transcript tail (`input + cache_read +
+   cache_creation` tokens of the last main-chain assistant message).
+2. **Checkpoint** — crossing a token band (default **100K / 200K**) spawns a
+   detached writer that distills the transcript and produces a structured
+   11-field `checkpoint.md` (intent, next action, constraints, task tree,
+   current work, involved files, errors+fixes, discoveries, runtime state,
+   decisions, notes). Incremental: later writes merge only the new turns
+   into the previous checkpoint. Above the handoff threshold the checkpoint
+   auto-refreshes every `checkpoint_refresh_tokens`, so marathon /goal
+   sessions always have a current one.
+3. **Handoff** — at/above the handoff threshold (default **200K**) the user
+   sees a `systemMessage` advising `/clear`, and Claude gets a one-line
+   per-prompt notice (finish cleanly, suggest /clear at a natural boundary).
+   A pending marker is written for the session's project.
+4. **Rebuild** — the next session in that project (after `/clear` or a fresh
+   start, within `checkpoint_ttl_hours`) consumes the marker and injects the
+   checkpoint as additionalContext: the new session resumes with task tree,
+   next action, and file list intact.
+
+Safety properties, by construction:
+
+- The Stop hook **never emits a `decision`** — it cannot block a Stop, so
+  `/goal` loops and other Stop hooks are unaffected.
+- Child sessions (subagents, nested hook sessions) are excluded — a research
+  subagent's own giant context never triggers checkpoints, and its sidechain
+  usage records are ignored when measuring the main session.
+- The writer runs detached with the standard isolation bundle
+  (`setting_sources=[]`, `strict-mcp-config`, `_HOOK_CHILD_SESSION=1`) — it
+  can't recurse into hooks or goals.
+- Writer failure leaves the previous checkpoint in place; checkpointing is
+  always best-effort and never blocks the session.
+
+| Option | Default | Purpose |
+|--------|---------|---------|
+| `checkpoint_enabled` | `true` | Master switch for the checkpoint system |
+| `checkpoint_tokens` | `100000,200000` | Comma-separated checkpoint bands (absolute tokens) |
+| `checkpoint_handoff_tokens` | last band | Threshold where handoff advice + pending marker kick in (clamped to ≥ last band) |
+| `checkpoint_refresh_tokens` | `25000` | Above the handoff threshold, re-checkpoint every this many tokens of growth |
+| `checkpoint_ttl_hours` | `6` | Pending rebuild marker expiry |
+| `checkpoint_timeout_s` | `240` | Writer model-call timeout |
+| `checkpoint_model` | plugin default model | Model for the checkpoint writer |
+
+Defaults are tuned for a 1M-token window with the quality knee well below
+it: checkpoint early (100K), hand off at 200K, keep every physical window
+under ~300K. State lives in `<data_dir>/checkpoints/`; rebuild events are
+logged to the activity stream as `[checkpoint]` entries.
+
 ## Skills
 
 All commands are namespaced under `/multiplai-context:`.

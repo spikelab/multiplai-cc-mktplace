@@ -310,6 +310,52 @@ def _emit_dream_nudge() -> None:
     )
 
 
+def _inject_checkpoint_recovery(data_dir, cwd: str, session_id: str) -> bool:
+    """Rebuild injection: seed a fresh session from a pending checkpoint.
+
+    When a previous session in this project crossed the handoff threshold,
+    the Stop-hook pipeline left a pending marker pointing at its
+    ``checkpoint.md``. Consume it (one-shot, TTL-gated) and emit the
+    checkpoint as additionalContext so this session resumes that work.
+    Best-effort: any failure means "no recovery", never a broken start.
+    Returns True when a rebuild seed was injected.
+    """
+    try:
+        from lib import checkpoint as cp
+
+        cfg = cp.load_config()
+        if not cfg.enabled or not cwd:
+            return False
+        payload = cp.consume_pending_marker(data_dir, cwd, session_id, cfg)
+        if not payload:
+            return False
+        checkpoint_path = Path(str(payload.get("checkpoint_path") or ""))
+        if not checkpoint_path.exists():
+            return False
+        text = checkpoint_path.read_text(encoding="utf-8").strip()
+        if not cp.validate_checkpoint(text):
+            logger.warning("Pending checkpoint failed validation; not injecting")
+            return False
+        tokens = int(payload.get("tokens") or 0)
+        print("\n" + cp.build_rebuild_context(text, tokens))
+        logger.info(
+            "Injected checkpoint rebuild from session %s (%d tokens)",
+            payload.get("session_id"), tokens,
+        )
+        log_event(
+            "checkpoint", "rebuild",
+            f"session rebuilt from checkpoint of {payload.get('session_id', '?')} "
+            f"({tokens:,} tokens)",
+            session_id=session_id,
+            source_session=payload.get("session_id", ""),
+            tokens=tokens,
+        )
+        return True
+    except Exception:
+        logger.warning("Checkpoint recovery injection failed", exc_info=True)
+        return False
+
+
 def main() -> None:
     # SessionStart hook input carries the session cwd; we use it to pick the
     # project's now-snapshot to inject. Read defensively — a missing/garbage
@@ -369,6 +415,10 @@ def main() -> None:
 
     # One-time per-project "now" snapshot injection (additionalContext).
     _inject_project_state(paths.now_dir(), cwd)
+
+    # Context-rebuild injection: if a previous session in this project handed
+    # off at the context ceiling, seed this one from its checkpoint.
+    _inject_checkpoint_recovery(data_dir, cwd, session_id)
 
     # Drain any deferred extraction markers left by previous session_end
     # hooks. SessionEnd is kill-within-seconds, so the heavy LLM
