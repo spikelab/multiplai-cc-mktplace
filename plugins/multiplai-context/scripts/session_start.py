@@ -323,8 +323,15 @@ def _inject_checkpoint_recovery(
       The session id is unchanged, so same-session marker consumption is
       allowed, and the checkpoint lands right after the compaction summary —
       no user action at all.
-    * **Manual (source="clear"/"startup")** — a fresh session in the same
-      project consumes the marker left by the handed-off one.
+    * **Manual (source="clear")** — the user deliberately continued via
+      /clear; the fresh session consumes the marker left by the handed-off
+      one.
+
+    Any other source (startup, resume) does NOT inject — a brand-new
+    session in the project starts clean rather than inheriting parked work
+    (decided 2026-07-06 after live testing surprised with a
+    startup-inherited seed; the now/ project-state injection covers soft
+    continuity for fresh sessions).
 
     After injecting, per-session band counters reset so the new physical
     window checkpoints again. Best-effort: any failure means "no recovery",
@@ -341,6 +348,8 @@ def _inject_checkpoint_recovery(
 
         cfg = cp.load_config()
         if not cfg.enabled or not cwd:
+            return False
+        if source not in ("clear", "compact"):
             return False
         payload = cp.consume_pending_marker(
             data_dir, cwd, session_id, cfg,

@@ -163,8 +163,11 @@ Long sessions degrade as the context window fills. The checkpoint system
    - **Manual fallback:** without the auto-compact steering, the user sees a
      `systemMessage` advising `/clear` or `/compact` (one command, no
      restart), and Claude gets a per-prompt notice to finish cleanly and
-     suggest it at a natural boundary. The next session/window in the
-     project (within `checkpoint_ttl_hours`) consumes the marker.
+     suggest it at a natural boundary. The `/clear`-created session (within
+     `checkpoint_ttl_hours`) consumes the marker. Deliberate continuations
+     only: a plain NEW session in the project (source `startup`/`resume`)
+     never inherits the parked checkpoint — soft continuity for those comes
+     from the `now/` project-state injection instead.
 
 ### Activation: fully-automatic rebuild
 

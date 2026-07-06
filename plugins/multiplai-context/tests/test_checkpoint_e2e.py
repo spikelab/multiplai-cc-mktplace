@@ -181,13 +181,15 @@ class LongChatHarness:
         self.stop_outputs.append(out)
         return out
 
-    def run_session_start(self, session_id, transcript):
+    def run_session_start(self, session_id, transcript, source="clear"):
         """Only the rebuild-injection step (the rest of SessionStart is
-        orthogonal to checkpointing and needs live infra). Like Claude Code,
-        the injected additionalContext becomes part of the new session's
-        context — mirrored here by appending it to the transcript."""
+        orthogonal to checkpointing and needs live infra). Simulates the
+        user continuing via /clear (source="clear" — the only manual source
+        that inherits the parked checkpoint). Like Claude Code, the injected
+        additionalContext becomes part of the new session's context —
+        mirrored here by appending it to the transcript."""
         injected = session_start._inject_checkpoint_recovery(
-            self.data_dir, self.cwd, session_id
+            self.data_dir, self.cwd, session_id, source=source
         )
         out = self.capsys.readouterr().out
         if injected:

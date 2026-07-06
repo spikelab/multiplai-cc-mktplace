@@ -193,22 +193,42 @@ class TestCheckpointNudge:
 
 
 class TestSessionStartRecovery:
-    def test_injects_pending_checkpoint(self, tmp_path, data_env, capsys):
+    def test_clear_injects_pending_checkpoint(self, tmp_path, data_env, capsys):
         cwd = str(tmp_path / "proj")
         cp.write_checkpoint_file(data_env, "old-sess", VALID_CHECKPOINT)
         cp.write_pending_marker(data_env, cwd, "old-sess", 214_000)
 
-        ok = session_start._inject_checkpoint_recovery(data_env, cwd, "new-sess")
+        ok = session_start._inject_checkpoint_recovery(
+            data_env, cwd, "new-sess", source="clear"
+        )
         out = capsys.readouterr().out
         assert ok is True
         assert "CONTEXT REBUILD" in out
         assert "## Current intent" in out
-        # Marker consumed — a second start gets nothing
-        assert session_start._inject_checkpoint_recovery(data_env, cwd, "newer") is False
+        # Marker consumed — a second /clear gets nothing
+        assert session_start._inject_checkpoint_recovery(
+            data_env, cwd, "newer", source="clear"
+        ) is False
+
+    def test_plain_startup_never_inherits(self, tmp_path, data_env, capsys):
+        """Decided 2026-07-06: a brand-new session (source=startup) starts
+        clean — only /clear and compact inherit the parked checkpoint."""
+        cwd = str(tmp_path / "proj")
+        cp.write_checkpoint_file(data_env, "old-sess", VALID_CHECKPOINT)
+        cp.write_pending_marker(data_env, cwd, "old-sess", 214_000)
+        for source in ("startup", "resume", ""):
+            assert session_start._inject_checkpoint_recovery(
+                data_env, cwd, "new-sess", source=source
+            ) is False
+        assert capsys.readouterr().out.strip() == ""
+        # Marker survives for a later deliberate /clear
+        assert session_start._inject_checkpoint_recovery(
+            data_env, cwd, "new-sess", source="clear"
+        ) is True
 
     def test_no_marker_no_injection(self, tmp_path, data_env, capsys):
         ok = session_start._inject_checkpoint_recovery(
-            data_env, str(tmp_path / "proj"), "new-sess"
+            data_env, str(tmp_path / "proj"), "new-sess", source="clear"
         )
         assert ok is False
         assert capsys.readouterr().out.strip() == ""
@@ -217,14 +237,18 @@ class TestSessionStartRecovery:
         cwd = str(tmp_path / "proj")
         cp.write_checkpoint_file(data_env, "old-sess", "junk output")
         cp.write_pending_marker(data_env, cwd, "old-sess", 214_000)
-        ok = session_start._inject_checkpoint_recovery(data_env, cwd, "new-sess")
+        ok = session_start._inject_checkpoint_recovery(
+            data_env, cwd, "new-sess", source="clear"
+        )
         assert ok is False
         assert "CONTEXT REBUILD" not in capsys.readouterr().out
 
     def test_missing_checkpoint_file(self, tmp_path, data_env, capsys):
         cwd = str(tmp_path / "proj")
         cp.write_pending_marker(data_env, cwd, "old-sess", 214_000)  # no checkpoint.md
-        assert session_start._inject_checkpoint_recovery(data_env, cwd, "new") is False
+        assert session_start._inject_checkpoint_recovery(
+            data_env, cwd, "new", source="clear"
+        ) is False
 
     def test_compact_source_injects_same_session(self, tmp_path, data_env, capsys):
         """Automatic rebuild: auto-compaction keeps the session id; the

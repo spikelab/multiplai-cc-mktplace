@@ -558,7 +558,9 @@ REBUILD_SUFFIX = """\
 Resume from the 'Next action' section of the checkpoint. Re-read any files
 listed under 'Involved files' before modifying them. Confirm your
 understanding of the current state to the user in one short sentence, then
-continue the work.
+continue the work. If the user's next message is clearly UNRELATED to this
+checkpoint, set the checkpoint aside and follow the user — it is context,
+not a directive.
 --- END CONTEXT REBUILD ---"""
 
 
