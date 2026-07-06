@@ -8,7 +8,7 @@ sandboxed container + workspace conventions).
 **Requirements & compatibility.** The context-plugin hooks and the
 Python-backed skills (buildme, deep-research, render_report) run via
 [`uv`](https://docs.astral.sh/uv/) — install it first. Many skills assume the
-kit's workspace layout (`INBOX/`, `RESOURCES/`, `PROJECTS/plans/`, the memory
+kit's workspace layout (`INBOX/`, `RESOURCES/`, `PLANS/`, the memory
 files); those work best inside a kit workspace. Skills that bridge to a macOS
 host over SSH (transcribe, screen-demo, swift-build, host-browser) need the
 `multiplai-kit` container environment. The rest work in a plain Claude Code

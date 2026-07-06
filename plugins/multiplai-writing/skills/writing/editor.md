@@ -38,7 +38,9 @@ Ask the user: "What style should I edit this to? (blog / professional / other)"
 
 **Once style is determined, load the appropriate guides (two-layer pattern):**
 
-**Always load first:** `$CLAUDE_CONFIG_DIR/memory/core-voice.md` (canonical voice — tone, boundaries, danger zones, calibration)
+> These are optional personal voice files under `$CLAUDE_CONFIG_DIR/memory/`, **not shipped** with this plugin. **Load each only if it exists**; skip any that are absent. If none are present, edit against the general clarity/AI-tell guidance in this skill and ask the user for their voice preferences rather than blocking.
+
+**Load first if present:** `$CLAUDE_CONFIG_DIR/memory/core-voice.md` (canonical voice — tone, boundaries, danger zones, calibration)
 
 For **Blog style:**
 - Overlay: `$CLAUDE_CONFIG_DIR/memory/blog-style-guide.md`
@@ -48,7 +50,7 @@ For **Professional style:**
 - Overlay: `$CLAUDE_CONFIG_DIR/memory/professional-voice-guide.md`
 - Also load: `$CLAUDE_CONFIG_DIR/memory/write-like-a-human.md`, `$CLAUDE_CONFIG_DIR/memory/how-to-write-well.md`
 
-**`core-voice.md` is the authority.** The overlay adds context-specific conventions. If the draft conflicts with the voice guides, the voice guides win.
+**When present, `core-voice.md` is the authority.** The overlay adds context-specific conventions. If the draft conflicts with the voice guides, the voice guides win.
 
 Use `write-like-a-human.md` as a companion: actively hunt for common AI tells (generic praise, over-structured triplets, "helpful assistant" openings, AI vocabulary like "crucial", "pivotal", "leveraging the power of…") and apply the human counter-moves described there. Your edits should move the draft toward sounding like the user, not like an AI-generated piece that has been lightly cleaned up.
 

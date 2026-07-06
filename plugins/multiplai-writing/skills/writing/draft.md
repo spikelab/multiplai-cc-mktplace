@@ -16,7 +16,9 @@ Ask the user: "What style should this draft use? (blog / professional / other)"
 
 **Once style is determined, load the appropriate guides (two-layer pattern):**
 
-**Always load first:** `$CLAUDE_CONFIG_DIR/memory/core-voice.md` (canonical voice — tone, boundaries, danger zones, calibration)
+> These are optional personal voice files under `$CLAUDE_CONFIG_DIR/memory/`. They are **not shipped** with this plugin — you author them (or generate them via `/multiplai-context:setup`). **Load each only if it exists**; silently skip any that are absent. If `core-voice.md` in particular is missing, ask the user for a few lines on their preferred voice (tone, what to avoid) and proceed with that plus the general clarity guidance below — never block on a missing file.
+
+**Load first if present:** `$CLAUDE_CONFIG_DIR/memory/core-voice.md` (canonical voice — tone, boundaries, danger zones, calibration)
 
 For **Blog style:**
 - Overlay: `$CLAUDE_CONFIG_DIR/memory/blog-style-guide.md`
@@ -26,7 +28,7 @@ For **Professional style:**
 - Overlay: `$CLAUDE_CONFIG_DIR/memory/professional-voice-guide.md`
 - Also load: `$CLAUDE_CONFIG_DIR/memory/write-like-a-human.md`, `$CLAUDE_CONFIG_DIR/memory/how-to-write-well.md`
 
-**`core-voice.md` is the single source of truth for tone, structure, and rhythm.** The overlay adds context-specific conventions. If there is ever a conflict between generic writing best practices and the voice guides, follow the voice guides.
+**When present, `core-voice.md` is the single source of truth for tone, structure, and rhythm.** The overlay adds context-specific conventions. If there is ever a conflict between generic writing best practices and the voice guides, follow the voice guides.
 
 The `write-like-a-human.md` guide lists common AI writing tells and concrete counter-moves. Use it as a final pass on any draft: remove AI-ish glue words, generic praise, and "helpful assistant" tone so the result reads like the user, not like a tool.
 
