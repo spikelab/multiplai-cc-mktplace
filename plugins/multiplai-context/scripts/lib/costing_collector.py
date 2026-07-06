@@ -7,10 +7,16 @@ API call. Designed to run repeatedly and cheaply:
 - **Incremental**: a state file records per-transcript byte offsets; a pass
   reads only bytes appended since the last one. A shrunken file (session
   rewrite) is rescanned from zero.
-- **Idempotent**: records are deduped against the ledger's ``session→msg_id``
-  index, so rescans and the 2-3× duplicated entries that streaming rewrites
-  leave in transcripts never double-bill. Duplicate entries are byte-identical
-  in usage (verified 2026-07-06), so first-wins is exact.
+- **Idempotent**: records are deduped against the ledger's global msg_id
+  index, so rescans never double-bill. Transcripts contain duplicated
+  assistant entries (streaming snapshots of one API call) whose
+  ``output_tokens`` *grow* across occurrences — within a pass the snapshot
+  with the largest output wins, so one record carries the call's final
+  usage. Message ids are globally unique, so dedup is global (a resumed or
+  forked session copies history lines into a new file; those are not new
+  API calls). Known edge: if a collection pass runs while a message is
+  still streaming, the ledger keeps that message's snapshot-so-far and
+  later, larger snapshots are dropped — bounded to the one live turn.
 - **Attributed**: a span tracker follows Skill / Agent (Task) / Workflow
   ``tool_use`` blocks and ``<command-name>`` slash invocations, so records
   carry the skill/agent context they were generated under. Sidechain entries
@@ -25,6 +31,7 @@ nested spans get ``span.confidence = "approx"``.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -63,6 +70,41 @@ def find_transcripts(config_dir: Path) -> list[Path]:
     if not projects.is_dir():
         return []
     return sorted(projects.glob("**/*.jsonl"))
+
+
+def classify_transcript(projects_dir: Path, path: Path) -> dict:
+    """Classify a transcript path into project/session/attribution context.
+
+    Layout (optionally under a ``projects_migration_tmp/`` prefix)::
+
+        <proj>/<sess>.jsonl                                       main session
+        <proj>/<sess>/subagents/agent-<id>.jsonl                  subagent
+        <proj>/<sess>/subagents/workflows/wf_<id>/agent-*.jsonl   workflow agent
+
+    Nested files are subagent traffic: ``sidechain`` is forced true and
+    ``base_span`` carries the agent/workflow identity (agent name read from
+    the ``agent-<id>.meta.json`` sidecar when present).
+    """
+    parts = path.relative_to(projects_dir).parts
+    if "subagents" in parts[:-1]:
+        idx = parts.index("subagents")
+        session = parts[idx - 1] if idx >= 1 else path.stem
+        project = parts[idx - 2] if idx >= 2 else ""
+        rest = parts[idx + 1:-1]  # dirs between subagents/ and the file
+        if rest and rest[0] == "workflows" and len(rest) > 1 and rest[1].startswith("wf_"):
+            span = {"kind": "workflow", "name": rest[1]}
+        else:
+            name = path.stem
+            meta = path.with_suffix(".meta.json")
+            try:
+                name = json.loads(meta.read_text()).get("agentType") or name
+            except (OSError, json.JSONDecodeError):
+                pass
+            span = {"kind": "agent", "name": name}
+        return {"project": project, "session": session,
+                "sidechain": True, "base_span": span}
+    return {"project": parts[-2] if len(parts) >= 2 else "",
+            "session": path.stem, "sidechain": False, "base_span": None}
 
 
 # ----------------------------------------------------------------------
@@ -190,21 +232,28 @@ def collect_file(
     project: str,
     known_ids: set[str],
     file_state: dict | None = None,
+    session: str | None = None,
+    sidechain: bool = False,
+    base_span: dict | None = None,
 ) -> tuple[list[dict], dict]:
     """Collect new cost records from one transcript.
 
-    Returns ``(records, new_file_state)``. *known_ids* is the set of msg_ids
-    already in the ledger for this session — mutated in place as records are
-    emitted so intra-pass duplicates dedup too.
+    Returns ``(records, new_file_state)``. *known_ids* is the global set of
+    msg_ids already in the ledger — mutated in place as records are emitted.
+    Within the pass, duplicate snapshots of one message keep the occurrence
+    with the largest ``output_tokens`` (first occurrence's attribution).
+    *sidechain*/*base_span* set the attribution context for nested
+    subagent/workflow files (see :func:`classify_transcript`); main files
+    track spans live instead.
     """
-    session = path.stem
+    session = session or path.stem
     size = path.stat().st_size
     offset = 0
     tracker = SpanTracker()
     if file_state and 0 < file_state.get("offset", 0) <= size:
         offset = file_state["offset"]
         tracker.stack = list(file_state.get("spans") or [])
-    records: list[dict] = []
+    pending: dict[str, dict] = {}  # msg_id -> best record this pass
 
     with path.open("rb") as fh:
         fh.seek(offset)
@@ -224,8 +273,8 @@ def collect_file(
             if etype != "assistant":
                 continue
             message = entry.get("message") or {}
-            sidechain = bool(entry.get("isSidechain"))
-            if not sidechain:
+            entry_sidechain = sidechain or bool(entry.get("isSidechain"))
+            if not entry_sidechain:
                 tracker.on_assistant(message)
             usage = message.get("usage")
             model = message.get("model") or ""
@@ -234,18 +283,35 @@ def collect_file(
                 continue
             if msg_id in known_ids:
                 continue
-            known_ids.add(msg_id)
-            records.append(build_record(
-                ts=entry.get("timestamp") or "",
-                source="transcript",
-                session=session,
-                project=project,
-                model=model,
-                msg_id=msg_id,
-                sidechain=sidechain,
-                span=tracker.current(sidechain=sidechain),
-                tokens=_tokens_from_usage(usage),
-            ))
+            tokens = _tokens_from_usage(usage)
+            prior = pending.get(msg_id)
+            if prior is not None:
+                # Streaming snapshot of a message already seen this pass —
+                # keep the larger (later) output count, first attribution.
+                if tokens.output > prior["tokens"].output:
+                    prior["tokens"] = dataclasses.replace(
+                        prior["tokens"], output=tokens.output
+                    )
+                continue
+            span = base_span if base_span is not None else tracker.current(
+                sidechain=entry_sidechain
+            )
+            pending[msg_id] = {
+                "ts": entry.get("timestamp") or "",
+                "model": model,
+                "sidechain": entry_sidechain,
+                "span": dict(span) if span else None,
+                "tokens": tokens,
+            }
+
+    records: list[dict] = []
+    for msg_id, p in pending.items():
+        known_ids.add(msg_id)
+        records.append(build_record(
+            ts=p["ts"], source="transcript", session=session, project=project,
+            model=p["model"], msg_id=msg_id, sidechain=p["sidechain"],
+            span=p["span"], tokens=p["tokens"],
+        ))
 
     return records, {"size": size, "offset": offset, "spans": tracker.stack}
 
@@ -259,7 +325,11 @@ def run_collect(
     """One collection pass over every transcript. Returns summary stats."""
     state = load_state(state_path)
     files_state: dict[str, dict] = state["files"]
-    known = session_msg_index()
+    # Message ids are globally unique — one global dedup set (a resumed or
+    # forked session copies history lines into a new session file).
+    known: set[str] = set()
+    for ids in session_msg_index().values():
+        known.update(ids)
     stats = {"files_seen": 0, "files_read": 0, "records": 0, "cost_usd": 0.0}
 
     for path in find_transcripts(config_dir):
@@ -272,11 +342,14 @@ def run_collect(
             continue
         if prior and prior.get("offset") == size and prior.get("size") == size:
             continue  # nothing new
-        session = path.stem
+        ctx = classify_transcript(config_dir / "projects", path)
         records, new_state = collect_file(
             path,
-            project=path.parent.name,
-            known_ids=known.setdefault(session, set()),
+            project=ctx["project"],
+            session=ctx["session"],
+            sidechain=ctx["sidechain"],
+            base_span=ctx["base_span"],
+            known_ids=known,
             file_state=prior,
         )
         stats["files_read"] += 1

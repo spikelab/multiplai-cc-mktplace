@@ -288,3 +288,110 @@ def test_run_collect_dry_run_writes_nothing(config_dir, tmp_path):
     assert stats["records"] == 1
     assert not state_path.exists()
     assert list(iter_ledger()) == []
+
+
+# ----------------------------------------------------------------------
+# Transcript path classification (nested subagent/workflow files)
+# ----------------------------------------------------------------------
+
+class TestClassifyTranscript:
+    def _projects(self, tmp_path):
+        p = tmp_path / "projects"
+        p.mkdir(exist_ok=True)
+        return p
+
+    def test_main_session_file(self, tmp_path):
+        projects = self._projects(tmp_path)
+        f = projects / "-Users-x-proj" / "abc-123.jsonl"
+        f.parent.mkdir(parents=True)
+        f.touch()
+        ctx = cc.classify_transcript(projects, f)
+        assert ctx == {"project": "-Users-x-proj", "session": "abc-123",
+                       "sidechain": False, "base_span": None}
+
+    def test_subagent_file_reads_meta_sidecar(self, tmp_path):
+        projects = self._projects(tmp_path)
+        d = projects / "-Users-x-proj" / "sess-1" / "subagents"
+        d.mkdir(parents=True)
+        f = d / "agent-a1b2.jsonl"
+        f.touch()
+        (d / "agent-a1b2.meta.json").write_text('{"agentType": "Explore"}')
+        ctx = cc.classify_transcript(projects, f)
+        assert ctx["project"] == "-Users-x-proj"
+        assert ctx["session"] == "sess-1"
+        assert ctx["sidechain"] is True
+        assert ctx["base_span"] == {"kind": "agent", "name": "Explore"}
+
+    def test_subagent_file_without_meta_uses_stem(self, tmp_path):
+        projects = self._projects(tmp_path)
+        d = projects / "proj" / "sess-1" / "subagents"
+        d.mkdir(parents=True)
+        f = d / "agent-a1b2.jsonl"
+        f.touch()
+        ctx = cc.classify_transcript(projects, f)
+        assert ctx["base_span"] == {"kind": "agent", "name": "agent-a1b2"}
+
+    def test_workflow_agent_file(self, tmp_path):
+        projects = self._projects(tmp_path)
+        d = projects / "proj" / "sess-1" / "subagents" / "workflows" / "wf_38f6e617"
+        d.mkdir(parents=True)
+        f = d / "agent-a2c.jsonl"
+        f.touch()
+        ctx = cc.classify_transcript(projects, f)
+        assert ctx["session"] == "sess-1"
+        assert ctx["project"] == "proj"
+        assert ctx["base_span"] == {"kind": "workflow", "name": "wf_38f6e617"}
+
+    def test_migration_tmp_prefix(self, tmp_path):
+        projects = self._projects(tmp_path)
+        d = projects / "projects_migration_tmp" / "old-proj" / "sess-9" / "subagents"
+        d.mkdir(parents=True)
+        f = d / "agent-a9.jsonl"
+        f.touch()
+        ctx = cc.classify_transcript(projects, f)
+        assert ctx["project"] == "old-proj"
+        assert ctx["session"] == "sess-9"
+
+
+def test_run_collect_attributes_nested_subagent_costs(config_dir, tmp_path):
+    proj = config_dir / "projects" / "-Users-x-proj"
+    _write(proj / "sess-1.jsonl", [_user("go"), _assistant("m1")])
+    sub = proj / "sess-1" / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-a1.meta.json").write_text('{"agentType": "Explore"}')
+    _write(sub / "agent-a1.jsonl", [_assistant("s1"), _assistant("s2")])
+
+    stats = cc.run_collect(config_dir, tmp_path / "state.json")
+    assert stats["records"] == 3
+    recs = {r["msg_id"]: r for r in iter_ledger()}
+    assert recs["s1"]["session"] == "sess-1"          # same session as main
+    assert recs["s1"]["project"] == "-Users-x-proj"   # not "subagents"
+    assert recs["s1"]["sidechain"] is True
+    assert recs["s1"]["span"] == {"kind": "agent", "name": "Explore"}
+    assert recs["m1"]["sidechain"] is False
+
+
+def test_streaming_snapshots_keep_max_output(config_dir):
+    """Duplicate entries of one message are streaming snapshots whose
+    output_tokens grow — the final (largest) count must win."""
+    f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
+    _write(f, [
+        _assistant("m1", usage=_usage(inp=100, out=50)),
+        _assistant("m1", usage=_usage(inp=100, out=700)),   # later snapshot
+        _assistant("m1", usage=_usage(inp=100, out=1388)),  # final
+    ])
+    records, _ = cc.collect_file(f, project="p", known_ids=set())
+    assert len(records) == 1
+    assert records[0]["tokens"]["out"] == 1388
+    expected = (100 * 5 + 1388 * 25) / 1e6
+    assert records[0]["cost_usd"] == pytest.approx(expected, abs=1e-6)
+
+
+def test_history_copied_to_forked_session_not_double_billed(config_dir, tmp_path):
+    """A resumed/forked session copies history lines into a new file — the
+    same msg_id across files must be billed once (global dedup)."""
+    proj = config_dir / "projects" / "-Users-x-proj"
+    _write(proj / "sess-1.jsonl", [_assistant("m1"), _assistant("m2")])
+    _write(proj / "sess-2.jsonl", [_assistant("m1"), _assistant("m3")])  # fork
+    stats = cc.run_collect(config_dir, tmp_path / "state.json")
+    assert stats["records"] == 3  # m1 once, m2, m3
