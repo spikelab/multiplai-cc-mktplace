@@ -295,7 +295,7 @@ class TestLongHorizonChat:
         counters reset, and the next window checkpoints again. No user
         action anywhere in the loop."""
         monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
-        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "80")  # trigger 200K
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")  # trigger 207K
         model_calls: list[str] = []
         harness = LongChatHarness(
             tmp_path, data_env, monkeypatch, capsys,

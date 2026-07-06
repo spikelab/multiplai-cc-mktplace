@@ -189,11 +189,20 @@ checkpoint at 100K → refresh → auto-compact ≈200K → checkpoint auto-inje
 repeat. If compaction is overdue (vars set but it never fired), the hooks
 resume warning the user.
 
-Bounds (verified against Claude Code v2.1.201): the window value is clamped
-to **[100000, 1000000]** — values below 100K silently don't apply. The PCT
-override is an unclamped test hook; for low-threshold testing keep the
-window at 100000 and shrink the percentage instead (e.g. `30` → ≈30K
-trigger).
+Native semantics (extracted from Claude Code v2.1.201 and field-verified;
+re-check on CLI major upgrades):
+
+- Window clamped to **[100000, 1000000]**, and — the sharp edge — an
+  env-configured window **below 200000 silently DISABLES soft auto-compact**
+  instead of lowering the trigger.
+- Actual trigger = `min(usable × pct/100, usable − 13000)`, with
+  `usable = window − min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000)`.
+- The recommended production pair (250000 / 90) → trigger ≈210K.
+- Lowest reliable test trigger: window `200000` + pct `45` → ≈83K.
+
+`autocompact_trigger_tokens()` in `lib/checkpoint.py` mirrors this formula
+(including the 200K disable gate, reported as "auto mode off") so the
+overdue warning and nudge suppression track native behavior exactly.
 
 **Minimizing the native summary.** The built-in compactor can't be replaced
 (and disabling it via `DISABLE_AUTO_COMPACT` would remove the automatic

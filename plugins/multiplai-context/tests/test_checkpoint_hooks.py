@@ -316,7 +316,7 @@ class TestAutoModeNudgeSuppression:
 
     def test_stop_hook_silent_in_auto_mode(self, tmp_path, data_env, monkeypatch, capsys):
         monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
-        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "80")  # trigger 200K
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")  # trigger 207K
         monkeypatch.setattr(session_stop, "_spawn_writer", _SpawnRecorder())
         out = _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 210_000))
         assert out.strip() == ""  # compaction imminent — no nag
@@ -325,7 +325,7 @@ class TestAutoModeNudgeSuppression:
         self, tmp_path, data_env, monkeypatch, capsys
     ):
         monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
-        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "80")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
         monkeypatch.setattr(session_stop, "_spawn_writer", _SpawnRecorder())
         out = _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 240_000))
         frame = json.loads(out)
@@ -334,7 +334,7 @@ class TestAutoModeNudgeSuppression:
 
     def test_claude_nudge_silent_in_auto_mode(self, tmp_path, data_env, monkeypatch, capsys):
         monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
-        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "80")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_stop_payload(tmp_path, 210_000))))
         checkpoint_nudge.main()
         assert capsys.readouterr().out.strip() == ""

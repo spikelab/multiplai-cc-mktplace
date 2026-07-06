@@ -263,19 +263,47 @@ class TestPendingMarker:
 
 
 class TestAutoCompactSteering:
-    def test_unset_returns_none(self, monkeypatch):
-        monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
+    """Mirrors the native formula (binary v2.1.201):
+    usable = clamp(window) − min(maxOutput, 20000);
+    trigger = min(usable × pct/100, usable − 13000);
+    windows configured below the 200K fire gate DISABLE auto-compact."""
+
+    @pytest.fixture(autouse=True)
+    def _no_ambient(self, monkeypatch):
+        for var in (
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_unset_returns_none(self):
         assert cp.autocompact_trigger_tokens() is None
 
     def test_window_with_pct(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
-        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "80")
-        assert cp.autocompact_trigger_tokens() == 200_000
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
+        # usable = 250000 − 20000 = 230000; min(207000, 217000) = 207000
+        assert cp.autocompact_trigger_tokens() == 207_000
 
-    def test_window_default_pct(self, monkeypatch):
+    def test_below_fire_gate_disables(self, monkeypatch):
+        """Field-verified: a 100K env window doesn't lower the trigger —
+        it hard-disables soft auto-compact (Ire gate)."""
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "100000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "30")
+        assert cp.autocompact_trigger_tokens() is None
+
+    def test_window_default_pct_uses_margin(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "200000")
-        monkeypatch.delenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", raising=False)
-        assert cp.autocompact_trigger_tokens() == 180_000  # 90% default
+        # usable = 180000; trigger = 180000 − 13000
+        assert cp.autocompact_trigger_tokens() == 167_000
+
+    def test_output_reserve_from_env(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "200000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "45")
+        monkeypatch.setenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "16384")
+        # usable = 200000 − 16384 = 183616; min(82627, 170616) = 82627
+        assert cp.autocompact_trigger_tokens() == 82_627
 
     def test_malformed_returns_none(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "lots")

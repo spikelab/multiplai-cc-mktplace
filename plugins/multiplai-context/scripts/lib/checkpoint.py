@@ -503,18 +503,34 @@ def reset_session_counters(data_dir: Path, session_id: str) -> None:
 # Auto-compact steering (the fully-automatic rebuild path)
 # ---------------------------------------------------------------------------
 
+# Native auto-compact constants, mirrored from the Claude Code binary
+# (v2.1.201, functions E4/Sza/Lar/Yie; re-verify on CLI major bumps):
+#   window clamp [1e5, 1e6]; env-configured windows BELOW 200K hard-disable
+#   soft auto-compact (Ire gate); usable = window − min(maxOutput, 20000);
+#   trigger = min(usable × pct/100, usable − 13000).
+_NATIVE_WINDOW_MIN = 100_000
+_NATIVE_WINDOW_MAX = 1_000_000
+_NATIVE_FIRE_GATE = 200_000
+_NATIVE_OUTPUT_RESERVE_CAP = 20_000
+_NATIVE_THRESHOLD_MARGIN = 13_000
+
+
 def autocompact_trigger_tokens() -> int | None:
-    """Expected auto-compaction trigger, when the host steers it via env.
+    """Expected native auto-compaction trigger, when steered via env.
 
-    Claude Code exposes ``CLAUDE_CODE_AUTO_COMPACT_WINDOW`` (capacity the
-    monitor assumes) and ``CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`` (1-100, default
-    ~90). When the runtime sets these so compaction fires near our handoff
-    threshold, the rebuild is fully automatic: native auto-compact resets
-    the window mid-session, then SessionStart(source="compact") re-injects
-    the checkpoint. Returns the estimated trigger in tokens, or None when
-    the window var is unset (auto mode not configured).
+    Mirrors the binary's actual formula (see constants above) so the
+    "compaction overdue" warning doesn't cry wolf. Two behaviors verified
+    in the field (2026-07-06):
 
-    Hooks inherit the Claude Code process env, so this is readable here.
+    * A configured window below the 200K fire gate does NOT lower the
+      trigger — it silently DISABLES soft auto-compact. We return None
+      (manual mode: the /clear nudges take over), which is the truthful
+      state.
+    * The trigger applies pct to the USABLE window (window minus the
+      output reserve), capped at usable − 13000.
+
+    Returns the estimated trigger in tokens, or None when auto mode isn't
+    effectively configured. Hooks inherit the Claude Code process env.
     """
     raw_window = os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "").strip()
     if not raw_window:
@@ -523,14 +539,28 @@ def autocompact_trigger_tokens() -> int | None:
         window = int(raw_window)
     except ValueError:
         return None
+    if window <= 0:
+        return None
+    window = max(_NATIVE_WINDOW_MIN, min(_NATIVE_WINDOW_MAX, window))
+    if window < _NATIVE_FIRE_GATE:
+        return None  # native soft auto-compact is hard-disabled below 200K
+
+    try:
+        max_out = int(os.environ.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "") or 0)
+    except ValueError:
+        max_out = 0
+    reserve = min(max_out, _NATIVE_OUTPUT_RESERVE_CAP) if max_out > 0 else _NATIVE_OUTPUT_RESERVE_CAP
+    usable = window - reserve
+
     raw_pct = os.environ.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "").strip()
     try:
-        pct = int(raw_pct) if raw_pct else 90
+        pct = float(raw_pct) if raw_pct else 0.0
     except ValueError:
-        pct = 90
-    if window <= 0 or not (0 < pct <= 100):
-        return None
-    return int(window * pct / 100)
+        pct = 0.0
+    default_trigger = usable - _NATIVE_THRESHOLD_MARGIN
+    if 0 < pct <= 100:
+        return min(int(usable * pct / 100), default_trigger)
+    return default_trigger
 
 
 # ---------------------------------------------------------------------------
