@@ -14,6 +14,33 @@ single biggest anti-bot win: `navigator.webdriver` stays `false`, the UA /
 plugins / `languages` / profile cookies are all genuine, and there's no
 "controlled by automated software" infobar.
 
+## Prerequisites (this skill targets the container→host bridge)
+
+This skill does not ship a browser. It drives Chrome on a **macOS host** through
+the **agent-browser** bridge, and assumes a container→host setup:
+
+- **`ab`** — the agent-browser CLI, exposed as `~/.local/bin/ab` (a thin SSH
+  wrapper that runs `agent-browser <args>` on the Mac). `agent-browser` must be
+  installed on the host, and `ab` must be on your PATH in the container.
+- **An SSH bridge** from the container to the host (`host.docker.internal`, or
+  set `AB_HOST`), with a host gateway that allowlists `agent-browser …`.
+- **`chrome-agent`** — a host alias that launches the real Chrome with CDP on
+  `127.0.0.1:9222`. Run it once on the Mac before connecting.
+
+Without `ab` + the bridge, `hb-connect.sh` exits with a clear message telling you
+which piece is missing. If you're on the Mac directly (no container), `ab`/CDP
+must still be reachable locally on the port.
+
+**`hb` is not on PATH** — it's this skill's script. Either call it by full path,
+or alias it once per session:
+
+```bash
+alias hb="${CLAUDE_PLUGIN_ROOT}/skills/host-browser/scripts/hb"
+```
+
+The examples below use bare `hb`; they assume that alias (or substitute the full
+`${CLAUDE_PLUGIN_ROOT}/skills/host-browser/scripts/hb` path).
+
 ## Architecture (know this before you touch anything)
 
 ```

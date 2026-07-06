@@ -9,13 +9,11 @@
 set -euo pipefail
 
 # --- SSH Configuration (for container → host bridge) ---
+# Only consulted when running inside a container and the SSH bridge is actually
+# used (see run_on_host). Subtitle-only downloads and local macOS transcription
+# never need these.
 TRANSCRIBE_HOST="${TRANSCRIBE_HOST:-host.docker.internal}"
 TRANSCRIBE_USER="${TRANSCRIBE_USER:-${SSH_BUILD_USER:-}}"
-if [ -z "$TRANSCRIBE_USER" ]; then
-  echo "Error: no SSH user for the container→host bridge." >&2
-  echo "  Set SSH_BUILD_USER (or TRANSCRIBE_USER) in your kit root .env." >&2
-  exit 1
-fi
 TRANSCRIBE_KEY="${TRANSCRIBE_KEY:-}"
 
 # Key discovery (same pattern as swift-host.sh)
@@ -43,6 +41,11 @@ run_on_host() {
   if [ "$IS_CONTAINER" = "false" ]; then
     "$@"
   else
+    if [ -z "$TRANSCRIBE_USER" ]; then
+      echo "Error: no SSH user for the container→host bridge." >&2
+      echo "  Set SSH_BUILD_USER or TRANSCRIBE_USER when using the container→host bridge." >&2
+      exit 1
+    fi
     if [ -z "$TRANSCRIBE_KEY" ]; then
       echo "ERROR: No SSH key found. Set TRANSCRIBE_KEY or place key at ~/.ssh/build_key" >&2
       echo "MLX Whisper requires macOS Metal GPU — cannot run in container." >&2
@@ -70,6 +73,8 @@ LANGUAGE=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --timestamps|-t)
+            # NOTE: not yet implemented — parsed for forward-compat but the
+            # output is currently always de-timestamped flowing text.
             TIMESTAMPS=true
             shift
             ;;
@@ -111,8 +116,9 @@ if [[ -z "$URL" ]]; then
     exit 1
 fi
 
-# Basic URL validation — must look like a YouTube URL or video ID
-if ! echo "$URL" | grep -qE '(youtube\.com|youtu\.be|^[a-zA-Z0-9_-]{11}$)'; then
+# Basic URL validation — the host must be a youtube.com / youtu.be domain (not
+# merely a string that contains "youtube.com" somewhere), or a bare 11-char ID.
+if ! echo "$URL" | grep -qiE '^(https?://)?([a-z0-9-]+\.)*(youtube\.com|youtu\.be)([/?]|$)|^[a-zA-Z0-9_-]{11}$'; then
     echo "Error: Does not look like a YouTube URL or video ID: $URL" >&2
     exit 1
 fi

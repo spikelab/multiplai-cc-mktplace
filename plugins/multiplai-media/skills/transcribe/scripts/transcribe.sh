@@ -11,15 +11,13 @@ DEFAULT_MODEL_EN="mlx-community/whisper-medium.en-mlx-8bit"
 DEFAULT_MODEL_MULTI="mlx-community/whisper-medium-mlx"
 
 # --- SSH Configuration (for container → host bridge) ---
+# Only consulted when running inside a container and the SSH bridge is actually
+# used (see run_on_host). A fresh macOS user with mlx_whisper installed runs
+# everything locally and never needs these.
 TRANSCRIBE_HOST="${TRANSCRIBE_HOST:-host.docker.internal}"
 # Default to the build-bridge user, not $USER ($USER is empty in-container, which
 # produces a malformed "@host" ssh destination). Mirrors swift-host.sh.
 TRANSCRIBE_USER="${TRANSCRIBE_USER:-${SSH_BUILD_USER:-}}"
-if [ -z "$TRANSCRIBE_USER" ]; then
-  echo "Error: no SSH user for the container→host bridge." >&2
-  echo "  Set SSH_BUILD_USER (or TRANSCRIBE_USER) in your kit root .env." >&2
-  exit 1
-fi
 TRANSCRIBE_KEY="${TRANSCRIBE_KEY:-${SSH_BUILD_KEY:-}}"
 
 # Key discovery (same pattern as swift-host.sh)
@@ -38,6 +36,14 @@ if [ "$(uname -s)" != "Darwin" ]; then
   IS_CONTAINER=true
 fi
 
+# Running locally, we need mlx_whisper on PATH. (mlx-whisper is Apple-Silicon-only;
+# in a container it runs on the macOS host via the SSH bridge, checked below.)
+if [ "$IS_CONTAINER" = "false" ] && ! command -v mlx_whisper &>/dev/null; then
+  echo "Error: mlx_whisper is not installed (required to transcribe locally)." >&2
+  echo "Install with: pip install mlx-whisper  (Apple Silicon macOS only)" >&2
+  exit 1
+fi
+
 # Run a command given as an argv array (NOT a shell string). Locally we exec the
 # argv directly — no eval, so an attacker-controlled path/filename cannot inject
 # shell (CWE-78). Over SSH we shell-quote every arg with printf '%q' and let the
@@ -46,6 +52,11 @@ run_on_host() {
   if [ "$IS_CONTAINER" = "false" ]; then
     "$@"
   else
+    if [ -z "$TRANSCRIBE_USER" ]; then
+      echo "Error: no SSH user for the container→host bridge." >&2
+      echo "  Set SSH_BUILD_USER or TRANSCRIBE_USER when using the container→host bridge." >&2
+      exit 1
+    fi
     if [ -z "$TRANSCRIBE_KEY" ]; then
       echo "ERROR: No SSH key found. Set TRANSCRIBE_KEY or place key at ~/.ssh/build_key" >&2
       echo "MLX Whisper requires macOS Metal GPU — cannot run in container." >&2

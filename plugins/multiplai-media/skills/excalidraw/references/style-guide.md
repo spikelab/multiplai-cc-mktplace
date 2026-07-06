@@ -1,6 +1,8 @@
 # Excalidraw Style Guide — Vintage-Tech Dark Teal
 
-Derived from `MEMORY/visual-style-guide.md` ([YOUR_BRAND] brand). Adapted for Excalidraw's element model.
+A default palette for Excalidraw's element model. Replace the colors below with
+your own brand's if you have a visual style guide (e.g. swap the teal accent and
+dark charcoal background for your brand colors).
 
 ---
 

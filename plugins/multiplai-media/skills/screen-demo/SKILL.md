@@ -16,14 +16,14 @@ Typical: "make a demo video from `/path/to/recording.mov` — keep it 90s, hook 
 ### 1. Bootstrap (first run only)
 
 ```bash
-bash scripts/bootstrap.sh
+bash ${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/bootstrap.sh
 ```
 Builds whisper.cpp, fetches the small.en model (~466 MB), installs PySceneDetect. Idempotent — skip if `vendor/whisper.cpp/build/bin/whisper-cli` already exists.
 
 ### 2. Prep
 
 ```bash
-python3 scripts/pipeline.py prep <source.mov> --prompt-hint "Proper Noun, Other Name"
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/pipeline.py prep <source.mov> --prompt-hint "Proper Noun, Other Name"
 ```
 Builds a 720p proxy, extracts 16 kHz audio, transcribes with whisper.cpp, runs silencedetect + scenedetect. Caches everything under `~/.cache/screen-demo/<source-hash>/` so re-runs are instant. **Output: prints `CONTEXT: <path>` — that's the file you need to read next.**
 
@@ -44,7 +44,7 @@ Write the EDL to a sensible location (e.g. `~/.cache/screen-demo/<key>/edl.json`
 ### 4. Render
 
 ```bash
-python3 scripts/pipeline.py render <edl.json> \
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/pipeline.py render <edl.json> \
   --out <output.mp4> \
   --music-file <path>          # or --music-url <url>
   --music-volume-db -22         # optional, default -18
@@ -106,5 +106,3 @@ Recommended sources:
 | Transcription | whisper.cpp + ggml-small.en | MIT |
 | Music fetching (URL path) | yt-dlp | Unlicense |
 | Music generation (optional, Mac/GPU only) | ACE-Step / ACE-Step-1.5 | Apache-2.0 / MIT |
-
-Spec + empirical timings on 17-min 4K source: `INBOX/screen-demo-skill-spec-2026-05-28.md`.

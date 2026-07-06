@@ -1,11 +1,42 @@
 from __future__ import annotations
+import os
 import shlex
 import subprocess
+import tempfile
 from pathlib import Path
 from stages.edl import EDL
 
-FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FONT_REG = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+def _find_font(bold: bool) -> str:
+    """Locate a usable TTF/TTC for ffmpeg drawtext across platforms.
+
+    Honors $SCREEN_DEMO_FONT (applied to both weights). Otherwise probes a
+    candidate list covering Linux (DejaVu) and macOS (Helvetica/Arial).
+    """
+    override = os.environ.get("SCREEN_DEMO_FONT")
+    if override:
+        return override
+    candidates = (
+        [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+        ]
+        if bold
+        else [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+        ]
+    )
+    for c in candidates:
+        if Path(c).exists():
+            return c
+    raise RuntimeError(
+        "No usable font found for title cards. Set $SCREEN_DEMO_FONT to a "
+        ".ttf/.ttc path (checked DejaVu on Linux and Helvetica/Arial on macOS)."
+    )
 
 POSITIONS = {
     "br": "x=W-w-{m}:y=H-h-{m}",
@@ -100,13 +131,15 @@ def _render_title(edl: EDL, work: Path) -> Path | None:
         return None
     p = work / "title.mp4"
     w, h, fps = edl.output.width, edl.output.height, edl.output.fps
+    font_bold = _find_font(bold=True)
+    font_reg = _find_font(bold=False)
     drawtext = [
-        f"drawtext=fontfile={FONT_BOLD}:text={_esc(edl.title.line1)}:fontcolor=white:"
+        f"drawtext=fontfile={font_bold}:text={_esc(edl.title.line1)}:fontcolor=white:"
         f"fontsize={int(h*0.08)}:x=(w-tw)/2:y=(h-th)/2-{int(h*0.05)}",
     ]
     if edl.title.line2:
         drawtext.append(
-            f"drawtext=fontfile={FONT_REG}:text={_esc(edl.title.line2)}:fontcolor=#9ca3af:"
+            f"drawtext=fontfile={font_reg}:text={_esc(edl.title.line2)}:fontcolor=#9ca3af:"
             f"fontsize={int(h*0.036)}:x=(w-tw)/2:y=(h-th)/2+{int(h*0.055)}"
         )
     vf = ",".join(drawtext)
@@ -164,7 +197,11 @@ def build_filter_complex(
     audio_parts = []
     last_a = "0:a"
     for i in range(n - 1):
-        xfade_dur = 0.5
+        # Match the audio crossfade to the corresponding video transition. When a
+        # title card leads the inputs, audio input i aligns with video segment i;
+        # otherwise it aligns with segment i+1.
+        seg_idx = i if title else i + 1
+        xfade_dur = _xfade_duration_for(edl, seg_idx)
         a_out = f"ax{i}"
         if i == 0:
             audio_parts.append(f"[0:a][{i+1}:a]acrossfade=d={xfade_dur}[{a_out}]")
@@ -206,7 +243,7 @@ def _xfade_duration_for(edl: EDL, segment_index: int) -> float:
 
 
 def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
-    work = work_dir or Path("/tmp/screen-demo-work")
+    work = work_dir or Path(tempfile.mkdtemp(prefix="screen-demo-work-"))
     work.mkdir(parents=True, exist_ok=True)
 
     clips = _cut_segments(edl, work)

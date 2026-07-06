@@ -25,7 +25,11 @@ fi
 # 2. Python deps
 if ! python3 -c "import scenedetect" 2>/dev/null; then
   echo "→ installing PySceneDetect"
-  python3 -m pip install --quiet scenedetect opencv-python-headless
+  # Prefer a plain install; fall back to --user on PEP 668 externally-managed
+  # environments. In a managed venv/uv env, activate it first and this just works.
+  python3 -m pip install --quiet scenedetect opencv-python-headless \
+    || python3 -m pip install --quiet --user scenedetect opencv-python-headless \
+    || { echo "  pip install failed (PEP 668?). Install into a venv/uv env: uv pip install scenedetect opencv-python-headless"; exit 1; }
 fi
 
 echo "✓ bootstrap complete"

@@ -20,7 +20,7 @@ def _resolve_music_arg(file: str | None, url: str | None, synth: str | None,
                        volume_db: float | None) -> Music | None:
     if not file and not url and not synth:
         return None
-    default_vol = -10.0 if volume_db is None else volume_db
+    default_vol = -18.0 if volume_db is None else volume_db
     if file:
         resolved = music_stage.resolve(file, None)
         return Music(file=str(resolved), volume_db=default_vol)

@@ -22,14 +22,14 @@ Generate `.excalidraw` JSON files that open in the VS Code Excalidraw extension.
 |-----|-------------|---------|
 | **description** | What to diagram (rest of invocation text) | *(required)* |
 | `--type` | `architecture`, `flow`, `sequence`, `mindmap`, `er`, `custom` | Auto-detect |
-| `--output` | File path for output | `INBOX/{slug}.excalidraw` |
+| `--output` | File path for output | `./{slug}.excalidraw` (current directory) |
 | `--layout` | `vertical`, `horizontal`, `hub-spoke` | Auto-detect from type |
 
 ---
 
 ## Setup
 
-On first invocation, load `references/style-guide.md` for color palette, spacing rules, element defaults, and JSON templates. The style guide derives from `MEMORY/visual-style-guide.md` (Vintage-Tech Dark Teal brand).
+On first invocation, load `references/style-guide.md` for color palette, spacing rules, element defaults, and JSON templates. The style guide ships a default "Vintage-Tech Dark Teal" palette — swap the colors for your own brand if you have one.
 
 ---
 
@@ -53,7 +53,7 @@ On first invocation, load `references/style-guide.md` for color palette, spacing
 - Use `label` property for text in shapes — do NOT create separate text elements
 - Grid-based layout: all coordinates as multiples of 20px
 - Cap at **20 elements**. If more are needed, suggest splitting into multiple diagrams.
-- Write to the output path (default: `INBOX/{slug}.excalidraw`)
+- Write to the output path (default: `./{slug}.excalidraw` in the current directory)
 
 ### 3. PRESENT
 
