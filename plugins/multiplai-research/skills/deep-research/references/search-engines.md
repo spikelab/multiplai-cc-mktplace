@@ -166,5 +166,5 @@ YOU_API_KEY="..."
 
 ## PoC Validation Data
 
-Full PoC results (cancellation + strategy comparison + rate limit probe) are documented in:
-`RESOURCES/dev/claude-agent-sdk-web-tools-poc-2026-04-05.md`
+The provider ranking above was validated with a proof-of-concept covering SDK
+cancellation, strategy comparison, and rate-limit probing.

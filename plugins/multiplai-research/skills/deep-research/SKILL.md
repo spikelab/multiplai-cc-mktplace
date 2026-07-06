@@ -15,9 +15,9 @@ Parse the user's invocation for:
 | Arg | Description | Default |
 |-----|-------------|---------|
 | **query** | The research topic/question | *(required)* |
-| `--output <path>` | Directory to write results | `$WORKSPACE/INBOX` |
+| `--output <path>` | Directory to write results | `./INBOX` if it exists, else cwd |
 | `--auto` | Skip discovery and plan review | off (interactive) |
-| `--preset <name>` | `quick`, `standard`, `thorough` | `standard` |
+| `--preset <name>` | `micro`, `quick`, `standard`, `thorough` | `standard` |
 | `--parallel` | Run N parallel sub-topic pipelines | off |
 | `--agents <N>` | Number of parallel agents (2-5) | auto |
 | `--deep` | Don't downscale preset for parallel sub-agents | off |
@@ -28,7 +28,7 @@ Parse the user's invocation for:
 
 **Auto-detection of `--auto`:** phrases like "just go ahead", "don't ask me", "run unattended", "full auto" all imply `--auto`.
 
-**Output directory rule:** When no `--output` is specified, always use `$WORKSPACE/INBOX` (the workspace root's INBOX directory, NOT CWD). If the user explicitly passes `--output`, respect their choice. Resolve `$WORKSPACE` from the workspace root (the directory containing this session's `CLAUDE.md`). Always pass the absolute path to `--output` when invoking the pipeline.
+**Output directory rule:** When no `--output` is specified, default to `./INBOX` if that directory exists (a curated workspace), otherwise the current working directory. If the user explicitly passes `--output`, respect their choice. Always pass an absolute path to `--output` when invoking the pipeline. (The pipeline itself also defaults `--output` to cwd if omitted, so it works either way.)
 
 ## Flow
 
@@ -38,18 +38,18 @@ Use the Skill tool to invoke `/interviewer` with args: `"about their research ne
 
 ### Step 2: Personal context injection
 
-If the query touches anything personal (immigration, jobs, finance, health, relocation, education), check the user's memory files via the Memory File Index in CLAUDE.md. Extract facts that should constrain or expand the research. Carry these facts forward as `personal_context` — they're injected into the pipeline via `--personal-context`.
+If the query touches anything personal (immigration, jobs, finance, health, relocation, education), check the user's memory files via the Memory File Index in CLAUDE.md (skip this step if there's no memory index / memory files — e.g. a vanilla install). Extract facts that should constrain or expand the research. Carry these facts forward as `personal_context` — they're injected into the pipeline via `--personal-context`.
 
 ### Step 3: Prior knowledge scanning
 
-Scan for existing research in the workspace:
+Scan for existing research in the workspace (skip any directory that doesn't exist):
 1. `RESOURCES/` — glob for topic-relevant files
 2. `INBOX/` — recent research dumps
 3. Previous deep research outputs (files with YAML appendix)
 
 Skim matches for known facts, sources already consulted, and open gaps. Format as a summary for `--prior-knowledge`.
 
-Cap this at 2-3 tool calls. If nothing relevant, set prior knowledge to "none".
+Cap this at 2-3 tool calls. If none of those directories exist or nothing is relevant, set prior knowledge to "none".
 
 ### Step 4: Plan review (skip if `--auto`)
 
@@ -68,7 +68,7 @@ uv run --directory "${CLAUDE_PLUGIN_ROOT}/skills/deep-research/scripts" \
   --plan-only
 ```
 
-**Important:** Always pass `--session-id` with the current session ID for log correlation. The session ID is available from the SessionStart hook output.
+**Important:** Pass `--session-id` with the current session ID for log correlation when it's known (the multiplai-context SessionStart hook prints it). If you don't have a session ID, omit `--session-id` — it's optional.
 
 The pipeline outputs the generated plan as JSON. Present it to the user as human-readable prose:
 
@@ -164,7 +164,7 @@ See the previous version of this flow for detailed memory triage rules — the l
 
 ## Requirements
 
-**Default (Claude Max subscription — $200/mo):** No setup needed. The pipeline uses Claude Code's built-in WebSearch and WebFetch via the SDK. Zero external API cost.
+**Default (a Claude subscription with web tools — e.g. Claude Max, $100 or $200/mo tier):** No setup needed. The pipeline uses Claude Code's built-in WebSearch and WebFetch via the SDK. Zero external API cost.
 
 **Without Claude Max (`--no-claude-tools`):** External API keys required. Loaded from `.env` at the project root:
 
@@ -186,4 +186,4 @@ automatically by `uv run --directory`:
 
 ## Architecture
 
-The pipeline is a Python asyncio script with strict timeouts and per-source state checkpointing. It cannot hang on a WebFetch the way prompt-driven workflows can — `asyncio.wait_for` enforces hard kills at 15s per request, 30s per batch. See `scripts/research_pipeline/` for the implementation. See `scripts/README.md` for setup and extension notes.
+The pipeline is a Python asyncio script with strict timeouts and per-source state checkpointing. It cannot hang on a WebFetch the way prompt-driven workflows can — `asyncio.wait_for` enforces hard kills at 15s per request, 30s per batch. See `scripts/research_pipeline/` for the implementation. See `README.md` (skill root) for setup and `scripts/CLAUDE.md` for extension notes.

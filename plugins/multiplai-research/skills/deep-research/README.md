@@ -17,27 +17,34 @@ Split is roughly **55% code / 45% LLM** (following Tunguz's hybrid state machine
 
 ## Setup
 
-**1. Install dependencies** (one-time, from the kit root):
+**Prerequisite: `uv`** (https://docs.astral.sh/uv/). That's the only setup. The
+pipeline is invoked with `uv run --directory`, which reads `scripts/pyproject.toml`
+and resolves every Python dependency (`httpx`, `trafilatura`, `tavily-python`,
+`exa-py`, `pydantic`, `python-dotenv`, `claude-agent-sdk`, `multiplai-core`) into
+an ephemeral environment. No manual `pip install`, no shared venv, no `PYTHONPATH`:
 
 ```bash
-cd "$WORKSPACE/multiplai-runtime"
-uv pip install -r requirements.txt
+uv run --directory <path-to>/skills/deep-research/scripts \
+  python -m research_pipeline --query "..."
 ```
 
-This installs `httpx`, `trafilatura`, `tavily-python`, `exa-py`, `pydantic`, `python-dotenv`, and `claude-agent-sdk` into the knowhere root venv.
+(The `SKILL.md` dispatcher uses `${CLAUDE_PLUGIN_ROOT}` for that path.)
 
-**2. Configure search providers:**
+**Search providers:**
 
-**Default (Claude Max):** No configuration needed. The pipeline uses Claude Code's built-in WebSearch and WebFetch via the SDK. Zero external API cost.
+**Default (a Claude subscription with web tools):** No configuration needed. The
+pipeline uses Claude Code's built-in WebSearch and WebFetch via the SDK. Zero
+external API cost.
 
-**Fallback API keys** (loaded from `.env`). When Claude Agent SDK fails, the pipeline automatically falls back to providers with remaining free-tier quota — no `--allow-paid-fallback` flag needed:
+**Optional fallback API keys:** `.env` is optional — only needed for the
+`--no-claude-tools` path or when Claude Agent tools are unavailable. Place a
+`.env` file next to `pyproject.toml` (in `scripts/`); the pipeline auto-loads it
+via `python-dotenv`. Shell-exported variables take precedence, so you can
+override a single key inline:
 
-```bash
-# From the kit project root
-cp .env.example .env   # first-run only; .env is gitignored
-# Then edit .env:
-#   TAVILY_API_KEY="tvly-..."
-#   EXA_API_KEY="..."
+```
+TAVILY_API_KEY="tvly-..."
+EXA_API_KEY="..."
 ```
 
 Get keys from:
@@ -47,35 +54,14 @@ Get keys from:
 - **Serper** (optional) — 50K one-time free credits, $1/1K paid (cheapest). Only provider used beyond free tier. https://serper.dev
 - **You.com** (optional) — $100 one-time credit. https://api.you.com
 
-The pipeline auto-loads `.env` on startup via `python-dotenv`. Shell-exported environment variables (if set) take precedence over `.env`, so you can override a single key inline without editing the file:
-
-```bash
-TAVILY_API_KEY=override-key python3 -m research_pipeline --query "..."
-```
-
-**3. Verify setup:**
-
-```bash
-cd dotfiles/skills/deep-research/scripts
-python3 -c "
-from research_pipeline.env import load_env
-from research_pipeline.pipeline import validate_api_keys
-load_env()
-errors = validate_api_keys()
-print('OK' if not errors else '\n'.join(errors))
-"
-```
-
-Expected: `OK` (always passes when Claude Agent is the default — no external keys needed).
-
-**New CLI flags:**
+**Relevant CLI flags:**
 
 ```bash
 # Force external APIs only (requires TAVILY_API_KEY + EXA_API_KEY in .env)
-python3 -m research_pipeline --query "..." --no-claude-tools
+uv run --directory <...>/scripts python -m research_pipeline --query "..." --no-claude-tools
 
-# Allow silent fallback to paid APIs if Claude Agent fails
-python3 -m research_pipeline --query "..." --allow-paid-fallback
+# Allow fallback to paid APIs if free-tier quota is exhausted
+uv run --directory <...>/scripts python -m research_pipeline --query "..." --allow-paid-fallback
 ```
 
 See `references/search-engines.md` for the full provider comparison and ranking rationale.
@@ -138,6 +124,7 @@ deep-research/
 
 | Preset | Trigger | Sources | Links | Output |
 |--------|---------|---------|-------|--------|
+| **micro** | "one quick fact", smallest scope | 3 | No | gist |
 | **quick** | "quick check", "briefly" | 10 | No | gist |
 | **standard** | "research", "look into" | 20 | 1 level | structured |
 | **thorough** | "deep dive", "comprehensive" | 30 | 2 levels | detailed |
@@ -257,15 +244,7 @@ Uses Task tool to spawn subagents for parallel web fetching, significantly reduc
 
 See `references/research-types.md` for detailed configurations.
 
-## File Structure
-
-```
-deep-research/
-├── SKILL.md                    # Core instructions + parameters
-├── README.md                   # This file (design documentation)
-└── references/
-    └── research-types.md       # Per-type domain configs + staleness rules
-```
+(For the full file layout, see the **File Structure** section above.)
 
 ## Changelog
 

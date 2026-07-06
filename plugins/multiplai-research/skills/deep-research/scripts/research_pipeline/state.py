@@ -74,7 +74,7 @@ class ResearchState(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     reassessment: ReassessResult | None = None
     total_fetches: int = 0  # cumulative count across READ + link follows
-    tavily_fallback_count: int = 0  # Tavily content fallbacks used (max 5 per run)
+    tavily_fallback_count: int = 0  # Tavily content fallbacks used (max 10 per run)
 
     # Parallel mode
     sub_state_files: list[str] = Field(default_factory=list)

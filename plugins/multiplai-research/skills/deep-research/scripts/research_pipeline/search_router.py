@@ -436,7 +436,7 @@ class SearchRouter:
         a critical source. Searches for the source's domain + title to find
         alternative pages with the same content.
 
-        Budget: max MAX_TAVILY_FALLBACKS (5) per pipeline run, tracked on the
+        Budget: max MAX_TAVILY_FALLBACKS (10) per pipeline run, tracked on the
         router instance. Only called for AUTHORITATIVE reputation sources.
         """
         if self._tavily_fallback_count >= MAX_TAVILY_FALLBACKS:

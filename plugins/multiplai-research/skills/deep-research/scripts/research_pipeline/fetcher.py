@@ -132,7 +132,7 @@ MIN_EXTRACTED_CONTENT_CHARS = 200
 
 USER_AGENT = (
     "Mozilla/5.0 (compatible; DeepResearchPipeline/0.1; "
-    "+https://github.com/spikelab/multiplai-kit)"
+    "+https://github.com/spikelab/multiplai-cc-mktplace)"
 )
 
 

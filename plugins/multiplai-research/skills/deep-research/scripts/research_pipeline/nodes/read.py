@@ -73,7 +73,7 @@ async def read(
     Three-tier fallback chain:
     1. Primary fetcher (ClaudeAgentFetcher or HttpxFetcher based on config)
     2. HttpxFetcher fallback (when primary is ClaudeAgent)
-    3. Tavily content search (AUTHORITATIVE sources only, max 5 per run)
+    3. Tavily content search (AUTHORITATIVE sources only, max 10 per run)
     """
     pending = state.pending_sources()
     if not pending:
