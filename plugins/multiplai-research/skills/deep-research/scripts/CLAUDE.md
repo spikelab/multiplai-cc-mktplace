@@ -24,7 +24,7 @@ uv run --directory <this-dir> python -m research_pipeline --query "..." [options
 | `gates.py` | Query diversity, min sources, coverage, reassess — pure functions |
 | `search_router.py` | Multi-API routing with quota tracking and circuit breaker |
 | `fetcher.py` | httpx + trafilatura with hard timeouts, retry, batch isolation |
-| `sdk.py` | `claude_agent_sdk.query()` wrapper with structured output validation |
+| `sdk.py` | Adapter over `multiplai_core.run_agent()` — usage tracking, semaphore, structured output validation |
 | `progress.py` | Human-readable progress file writer (tail-able) |
 | `research_types.py` | Loads `../references/research-types.md` for type-specific guidance |
 | `eval.py` | Quality scoring harness + dataset builder from existing research outputs |

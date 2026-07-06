@@ -14,7 +14,7 @@
 | `state.py` | BuildState with checkpoint/resume | No |
 | `models.py` | Pydantic models for all structured data | No |
 | `gates.py` | Quality gate assertions (pure code) | No |
-| `sdk.py` | `llm_call()` + `agent_call()` wrappers | Yes (SDK) |
+| `sdk.py` | `llm_call()` + `agent_call()` adapters over `multiplai_core.run_agent()` | Yes (SDK) |
 | `rubric.py` | Rubric generation and change type detection | Via sdk |
 | _(logging)_ | Uses shared `log_utils.setup_logging()` from hooks/ | No |
 | `env.py` | .env loading, multiplai.conf parsing, model resolution | No |
