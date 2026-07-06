@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.3 — 2026-07-06
+
+### Changed
+- **Bumped `multiplai-core` pin to `@v0.4.0`.** Picks up the library's security
+  fix (the no-tools SDK client now also blocks Read/WebFetch/etc. under
+  `bypassPermissions`, closing a prompt-injection exfiltration path) plus
+  correctness fixes (malformed-timeout env var no longer crashes at import,
+  atomic state writes, robust JSON extraction). All entry-point scripts and
+  `requirements*.txt` updated.
+
 ## 0.4.2 — 2026-07-05
 
 ### Fixed
