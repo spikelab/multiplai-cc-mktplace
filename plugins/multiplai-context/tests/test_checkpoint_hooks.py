@@ -258,6 +258,33 @@ class TestSessionStartRecovery:
         )
         assert ok is False
 
+    def test_compact_without_marker_falls_back_to_own_checkpoint(
+        self, tmp_path, data_env, capsys
+    ):
+        """Race guard: compaction fires while the writer is in flight (no
+        pending marker yet) — the compact-path injection must fall back to
+        the session's own checkpoint.md."""
+        cwd = str(tmp_path / "proj")
+        cp.write_checkpoint_file(data_env, "sess-a", VALID_CHECKPOINT)
+        cp.save_state(data_env, "sess-a", {"last_checkpoint_tokens": 31_000})
+        # No pending marker on purpose.
+        ok = session_start._inject_checkpoint_recovery(
+            data_env, cwd, "sess-a", source="compact"
+        )
+        out = capsys.readouterr().out
+        assert ok is True
+        assert "CONTEXT REBUILD" in out
+        assert "31,000" in out
+
+    def test_compact_without_marker_or_checkpoint_is_silent(
+        self, tmp_path, data_env, capsys
+    ):
+        ok = session_start._inject_checkpoint_recovery(
+            data_env, str(tmp_path / "proj"), "sess-a", source="compact"
+        )
+        assert ok is False
+        assert capsys.readouterr().out.strip() == ""
+
 
 class TestAutoModeNudgeSuppression:
     """With steered auto-compaction configured, the hooks stay quiet and let

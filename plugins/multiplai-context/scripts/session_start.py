@@ -329,6 +329,12 @@ def _inject_checkpoint_recovery(
     After injecting, per-session band counters reset so the new physical
     window checkpoints again. Best-effort: any failure means "no recovery",
     never a broken start. Returns True when a rebuild seed was injected.
+
+    Compact-path fallback: compaction can fire while the checkpoint writer
+    is still in flight (or after a startup injection already consumed the
+    marker), so on ``source="compact"`` a missing marker falls back to the
+    session's OWN latest ``checkpoint.md`` — the session id is unchanged
+    across compaction, so that file is exactly this conversation's state.
     """
     try:
         from lib import checkpoint as cp
@@ -340,6 +346,15 @@ def _inject_checkpoint_recovery(
             data_dir, cwd, session_id, cfg,
             allow_same_session=(source == "compact"),
         )
+        if not payload and source == "compact":
+            own = cp.checkpoint_file(data_dir, session_id)
+            if own.exists():
+                state = cp.load_state(data_dir, session_id)
+                payload = {
+                    "session_id": session_id,
+                    "checkpoint_path": str(own),
+                    "tokens": int(state.get("last_checkpoint_tokens") or 0),
+                }
         if not payload:
             return False
         checkpoint_path = Path(str(payload.get("checkpoint_path") or ""))
