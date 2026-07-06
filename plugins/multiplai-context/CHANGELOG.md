@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`/log-doctor` skill + `scripts/log_doctor.py`.** Scans the runtime logs
+  directory (`paths.logs_dir()`), clusters ERROR/WARNING/INFO entries by
+  normalized signature (with traceback tails, first/last seen, counts), runs
+  cross-cutting health checks (oversized append-only logs, format drift,
+  missing session ids), and supports per-subsystem focus (`--subsystem`),
+  recency windows (`--days`), and JSON output. The skill guides root-cause
+  verification against source code before writing a fix-recommendation
+  report to `INBOX/`. Read-only; the scanner has no LLM dependency.
+
 ## 0.5.1 — 2026-07-07
 
 ### Fixed
@@ -54,7 +66,6 @@
   compact path; band counters reset after every rebuild so each new physical
   window re-checkpoints. In auto mode the `/clear` nudges are suppressed
   (they return only if compaction is overdue/misconfigured).
-
 ## 0.4.3 — 2026-07-06
 
 ### Changed
