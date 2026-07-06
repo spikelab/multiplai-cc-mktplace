@@ -26,6 +26,8 @@ def _repo_trusted() -> bool:
     return os.environ.get("BUILDME_TRUST_REPO", "").strip().lower() in ("1", "true", "yes")
 
 
+# NOTE: not currently wired into the pipeline. No caller invokes an implementation
+# feasibility gate; kept for a future explicit feasibility check.
 def feasibility_gate(project_dir: Path, stack: str, dependencies: list[str]) -> GateResult:
     """Check if dependencies can be resolved for the detected stack."""
     if not dependencies:

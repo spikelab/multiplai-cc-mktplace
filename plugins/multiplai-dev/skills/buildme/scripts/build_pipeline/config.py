@@ -25,6 +25,10 @@ def detect_tier() -> tuple[Tier, str]:
     Returns (tier, model_name). Defaults to 'standard' if unset or unknown.
     """
     model = os.environ.get("CLAUDE_MODEL", "")
+    # NOTE: this is an explicit allowlist of known high-capability models. A model
+    # newer than the ones listed (or any non-Opus model) falls through to the
+    # 'standard' path — safe degradation, not a crash. Extend this list when a new
+    # advanced-tier model ships.
     if any(x in model for x in ["opus-4-5", "opus-4-6", "opus-5", "opus-6"]):
         return "advanced", model
     return "standard", model or "unknown"
@@ -39,6 +43,9 @@ DEFAULT_MODEL = resolve_model("claude-opus-4-6", ceiling=_MODEL_CEILING)
 @dataclass
 class GateToggles:
     """Per-gate on/off switches from config.yaml."""
+    # RESERVED / not yet wired: no code path consults these two. The active
+    # per-block review is an inline prompt in tdd_engine._run_quality_review;
+    # there is no separate code-review or security-review gate to toggle yet.
     code_review_per_block: bool = True
     security_review_per_block: bool = True
     test_quality_enabled: bool = True

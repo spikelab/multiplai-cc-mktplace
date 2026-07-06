@@ -8,6 +8,8 @@ disable-model-invocation: true
 
 # Memory Retrieval Analysis
 
+> **Requires the `multiplai-context` plugin.** This skill analyzes that plugin's runtime artifacts — the `context-router-*.log` retrieval logs, `context-router.py` hook, and `memory-catalog.json`. Without multiplai-context installed and active, there are no logs to analyze.
+
 Analyze the memory retrieval log files to assess routing quality, identify failure modes, and track improvement over time. Uses a watermark file to partition pre/post-fix data so metrics reflect only the current system behavior.
 
 ## Key Files

@@ -5,6 +5,15 @@ BuildMe is a deterministic Python pipeline that orchestrates the journey from id
 **Entry point:** `/buildme` (Claude Code skill)  
 **Pipeline:** `scripts/build_pipeline/` (Python, invoked as subprocess)
 
+## Prerequisites
+
+- **`uv`** (https://docs.astral.sh/uv/) — the pipeline is invoked via `uv run`.
+- **Network + git on first run** — the first invocation fetches the
+  `multiplai-core` dependency.
+- **Optional: the `multiplai-research` plugin** — the Interview and Research
+  phases invoke `/interviewer` and `/deep-research` from that plugin. Without it,
+  gather requirements inline and skip research (`--skip-research`).
+
 ## How It Works
 
 BuildMe has two paths depending on task scale:
@@ -49,10 +58,13 @@ Each artifact is a focused LLM call with the right context. If generation is int
 
 ### Phase 4: Design Audit
 
-Three parallel analysis agents check for gaps:
-1. **Spec coverage** — missing edge cases
-2. **Design consistency** — architectural mismatches
-3. **Implementation feasibility** — dependency/tool issues
+A single adversarial audit call reviews the generated artifacts (proposal, specs,
+design, tasks) and returns a list of gaps — missing edge cases and design
+inconsistencies — which are surfaced as warnings before the build.
+
+> Note: a separate multi-agent codebase-analysis step and an implementation
+> feasibility gate exist in the code (`run_codebase_analysis`, `feasibility_gate`)
+> but are **not currently wired into the pipeline**.
 
 ### Phase 5: Review Checkpoint
 
@@ -387,10 +399,14 @@ Gates are pure functions (no LLM calls) that return pass/fail decisions:
 |------|------|-------------|
 | Baseline test | Before block 1 | Abort (existing tests broken) |
 | Weak test detection | After test writer | Retry with feedback |
-| Code review | After implementer | Retry implementation (max 3) |
-| Security review | After implementer | Warn + continue |
+| Quality review (inline, scored) | After implementer | Retry implementation (max 3) |
 | Integration | After block done | Integration fix agent (max 2) |
 | Entry point | Post-TDD | Warn (manual step needed) |
+
+The per-block review is a single scored quality review (inline in
+`tdd_engine._run_quality_review`) checked against the rubric. A separate
+security-review step exists in the code (`run_security_review`) but is **not
+currently wired** — there is no distinct security gate.
 
 ## State & Recovery
 
@@ -437,7 +453,7 @@ If the build crashes, restarting with the same `--change` name loads state and s
 | `env.py` | .env loading, model resolution | No |
 | `llm_steps/spec_steps.py` | Artifact generation, design audit | Yes |
 | `llm_steps/tdd_steps.py` | Test writer, implementer, refactorer | Yes |
-| `llm_steps/review_steps.py` | Code review, security review | Yes |
+| `llm_steps/review_steps.py` | Code/security review helpers (reserved — not wired) | Yes |
 | `prompts/*.py` | Prompt templates with `{placeholders}` | — |
 
 ## Testing

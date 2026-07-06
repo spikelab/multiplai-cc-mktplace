@@ -15,6 +15,9 @@ from ..sdk import llm_call, llm_call_structured, agent_call, LLMCallError
 log = logging.getLogger(__name__)
 
 
+# NOTE: not currently wired into the pipeline. The active per-block review is an
+# inline prompt in tdd_engine._run_quality_review. Kept for a future explicit
+# review gate.
 async def run_code_review(
     diff: str,
     rubric: str,
@@ -55,6 +58,8 @@ async def run_code_review(
     return result
 
 
+# NOTE: not currently wired into the pipeline. No caller invokes a dedicated
+# security review; there is no active security gate.
 async def run_security_review(
     diff: str,
     rubric: str,
@@ -90,6 +95,8 @@ async def run_security_review(
     return result
 
 
+# NOTE: not currently wired into the pipeline (pairs with run_code_review /
+# run_security_review, which are also not wired).
 async def run_review_fix(
     issues: list[dict],
     diff: str,

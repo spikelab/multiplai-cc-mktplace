@@ -197,6 +197,8 @@ async def run_design_audit(change_dir: Path, config) -> list[dict]:
         return []
 
 
+# NOTE: not currently wired into the pipeline. No caller runs the parallel
+# codebase-analysis agents; kept for a future spec-grounding step.
 async def run_codebase_analysis(project_dir: Path, config) -> str:
     """Spawn parallel explore agents to analyze the existing codebase.
 

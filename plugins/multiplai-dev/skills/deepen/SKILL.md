@@ -7,6 +7,8 @@ description: Find deepening opportunities in a codebase — places where shallow
 
 Surface architectural friction and propose **deepening opportunities** — refactors that turn shallow modules into deep ones. The aim is testability and AI-navigability.
 
+> **Prerequisites:** the HTML report renderer runs via `uv` (https://docs.astral.sh/uv/) — `uv run` reads the script's inline PEP 723 header and fetches its deps (network needed on first run). The analysis itself needs no network.
+
 Ported from Matt Pocock's `improve-codebase-architecture` skill; the vocabulary and process are his. The localization adds per-language idiom packs and moves the HTML report into a tested Python renderer.
 
 ## Glossary

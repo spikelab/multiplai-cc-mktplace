@@ -8,6 +8,8 @@ disable-model-invocation: true
 
 # Propose Skill
 
+> **Best with the `multiplai-context` plugin.** Steps below read that plugin's runtime artifacts (`.multiplai/diary/` and `.multiplai/learnings/`). Without it, rely on the current conversation context alone.
+
 Detect repeating patterns in the current session and draft a skill proposal.
 
 ---

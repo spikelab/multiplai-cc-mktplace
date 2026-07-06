@@ -16,6 +16,16 @@ effort: xhigh
 Orchestrate the complete journey from idea to working code via a deterministic
 Python pipeline. Interview → Research → Specs → Design Audit → TDD Build.
 
+## Prerequisites
+
+- **`uv`** (https://docs.astral.sh/uv/) — the pipeline runs via `uv run`.
+- **Network + git on first run** — the first invocation fetches the
+  `multiplai-core` dependency.
+- **Optional: the `multiplai-research` plugin** — the **Interview** and
+  **Research** phases invoke `/interviewer` and `/deep-research`, which ship in
+  `multiplai-research`. Without it, gather requirements inline (ask the user
+  directly) and skip deep research (or run with `--skip-research`).
+
 ## Modes
 
 | Mode | Trigger | Flow |
@@ -50,9 +60,9 @@ mistakes before you write code.
 
 ### Small path (Plan → Build)
 
-1. Use `EnterPlanMode` to create a plan covering: file structure, key design decisions,
+1. Enter plan mode and create a plan covering: file structure, key design decisions,
    integration points, and what "done" looks like.
-2. Present plan for review.
+2. Present the plan for review.
 3. Build directly (no pipeline subprocess needed).
 4. Commit incrementally.
 
@@ -77,25 +87,27 @@ Options:
 
 ### Step 2: Run interactive phases (if needed)
 
-**Interview** (From Scratch / From Brief):
+**Interview** (From Scratch / From Brief) — requires the `multiplai-research` plugin:
 ```
 Invoke the interviewer skill.
 "Interview me about what I want to build."
 ```
+If `multiplai-research` isn't installed, gather requirements inline by asking
+the user directly, then summarize.
 
 After interview, summarize the requirements.
 
-**Research** (unless --skip-research):
+**Research** (unless --skip-research) — requires the `multiplai-research` plugin:
 ```
 Invoke /deep-research with topics from the interview.
 Use --auto for autonomous mode, --quick for lightweight research.
 Example: /deep-research --auto --preset standard "implementation patterns for [topic]"
 ```
+If `multiplai-research` isn't installed, skip this phase (equivalent to `--skip-research`).
 
 ### Step 3: Invoke the pipeline
 
 ```bash
-export PYTHONPATH="$CLAUDE_CONFIG_DIR/hooks:${PYTHONPATH:-}"
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
   python -m build_pipeline --session-id "{session_id}" build \
   --mode {scratch|brief|only} \

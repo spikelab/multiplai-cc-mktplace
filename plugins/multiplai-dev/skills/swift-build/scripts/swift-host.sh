@@ -207,11 +207,11 @@ cmd_sim() {
         echo "ERROR: sim boot requires a device name" >&2
         exit 1
       fi
-      run_on_host "xcrun simctl boot '$name'"
+      run_on_host "xcrun simctl boot $(q "$name")"
       ;;
     screenshot)
       local path="${1:-/tmp/simulator-screenshot.png}"
-      run_on_host "xcrun simctl io booted screenshot '$path'"
+      run_on_host "xcrun simctl io booted screenshot $(q "$path")"
       echo "Screenshot saved to: $path"
       ;;
     open)
@@ -225,7 +225,7 @@ cmd_sim() {
         echo "ERROR: sim install requires an app path (.app bundle)" >&2
         exit 1
       fi
-      run_on_host "xcrun simctl install booted '$app_path'"
+      run_on_host "xcrun simctl install booted $(q "$app_path")"
       echo "Installed: $app_path"
       ;;
     launch)
@@ -234,12 +234,12 @@ cmd_sim() {
         echo "ERROR: sim launch requires a bundle identifier" >&2
         exit 1
       fi
-      run_on_host "xcrun simctl launch booted '$bundle_id'"
+      run_on_host "xcrun simctl launch booted $(q "$bundle_id")"
       echo "Launched: $bundle_id"
       ;;
     shutdown)
       local name="${1:-booted}"
-      run_on_host "xcrun simctl shutdown '$name'"
+      run_on_host "xcrun simctl shutdown $(q "$name")"
       echo "Shutdown: $name"
       ;;
     *)
