@@ -128,6 +128,26 @@ class TestReadContextTokens:
         assert t.stat().st_size > 512_000  # forces the tail-seek path
         assert cp.read_context_tokens(t) == 50_000
 
+    def test_after_ts_ignores_stale_pre_compact_usage(self, tmp_path):
+        """Post-rebuild, the tail still ends in pre-compact usage — must
+        read as 0 (no fresh usage), not as the stale huge number."""
+        t = tmp_path / "t.jsonl"
+        _write_transcript(t, [_assistant_record(input_tokens=1_500, cache_read=42_500)])
+        assert cp.read_context_tokens(t) == 44_000
+        future = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
+        assert cp.read_context_tokens(t, after_ts=future) == 0
+
+    def test_after_ts_accepts_fresh_usage(self, tmp_path):
+        t = tmp_path / "t.jsonl"
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        _write_transcript(t, [_assistant_record(input_tokens=9_000)])
+        assert cp.read_context_tokens(t, after_ts=past) == 9_000
+
+    def test_after_ts_malformed_ignored(self, tmp_path):
+        t = tmp_path / "t.jsonl"
+        _write_transcript(t, [_assistant_record(input_tokens=9_000)])
+        assert cp.read_context_tokens(t, after_ts="not-a-date") == 9_000
+
 
 class TestChildSessionGuard:
     def test_env_guard(self, monkeypatch):

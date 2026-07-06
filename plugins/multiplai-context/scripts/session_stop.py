@@ -109,11 +109,11 @@ def _checkpoint_pass(hook_input: dict, data_dir: Path) -> str | None:
     if cp.is_child_session(transcript_path):
         return None
 
-    tokens = cp.read_context_tokens(transcript_path)
+    state = cp.load_state(data_dir, session_id)
+    tokens = cp.read_context_tokens(transcript_path, after_ts=state.get("rebuild_ts"))
     if tokens <= 0:
         return None
 
-    state = cp.load_state(data_dir, session_id)
     reason = cp.checkpoint_trigger(tokens, state, cfg)
 
     if reason and not cp.writer_inflight(data_dir, session_id):

@@ -192,6 +192,21 @@ override is an unclamped test hook; for low-threshold testing keep the
 window at 100000 and shrink the percentage instead (e.g. `30` → ≈30K
 trigger).
 
+**Minimizing the native summary.** The built-in compactor can't be replaced
+(and disabling it via `DISABLE_AUTO_COMPACT` would remove the automatic
+trigger this design rides on), but its output can be shrunk so the injected
+checkpoint is the real state carrier. Add to your workspace `CLAUDE.md`:
+
+```markdown
+# Compact Instructions
+
+When compacting, produce the SHORTEST possible summary — a single short
+paragraph. A structured checkpoint (task tree, next action, involved files,
+decisions, errors/fixes) is injected automatically right after compaction;
+do NOT duplicate any of that. Preserve only the user's current request
+verbatim and any constraints stated in the most recent turns.
+```
+
 Why compaction (not `/clear`) is the automatic path: hooks cannot invoke
 slash commands, so a hook-triggered `/clear` is impossible — but the
 auto-compact *threshold* is steerable via env, and compaction both preserves

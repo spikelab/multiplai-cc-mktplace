@@ -65,7 +65,9 @@ def main() -> None:
     if cp.is_child_session(transcript_path):
         return
 
-    tokens = cp.read_context_tokens(transcript_path)
+    data_dir = get_paths().plugin_data()
+    state = cp.load_state(data_dir, session_id)
+    tokens = cp.read_context_tokens(transcript_path, after_ts=state.get("rebuild_ts"))
     if tokens < cfg.handoff_tokens:
         return
 
@@ -76,7 +78,6 @@ def main() -> None:
     if auto_trigger is not None and tokens < auto_trigger + cfg.refresh_tokens:
         return
 
-    data_dir = get_paths().plugin_data()
     if not _cooldown_ok(data_dir, session_id, tokens, cfg.refresh_tokens):
         return
 

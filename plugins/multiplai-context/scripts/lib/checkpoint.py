@@ -228,7 +228,9 @@ def write_checkpoint_file(data_dir: Path, session_id: str, content: str) -> Path
 # Context-size measurement
 # ---------------------------------------------------------------------------
 
-def read_context_tokens(transcript_path: str | Path) -> int:
+def read_context_tokens(
+    transcript_path: str | Path, after_ts: str | None = None
+) -> int:
     """Return the current context size (tokens) from a session transcript.
 
     Scans the transcript tail (last ``_TAIL_BYTES``) backwards for the most
@@ -237,9 +239,17 @@ def read_context_tokens(transcript_path: str | Path) -> int:
     — the real context footprint. ``input_tokens`` alone badly undercounts
     under prompt caching, which is the normal steady state.
 
+    ``after_ts`` (ISO timestamp): only records strictly newer count. Set to
+    the last rebuild time so that right after a compaction — when the tail
+    still ends in PRE-compact usage records — the stale (huge) numbers are
+    ignored instead of instantly re-triggering bands/handoff. Verified in
+    the field: without this, every compaction caused one spurious
+    checkpoint cycle five seconds after the rebuild.
+
     Returns 0 when the transcript is missing, unreadable, or carries no
-    usage records yet. Sidechain (subagent) records are skipped — their
-    usage describes a different context window.
+    (fresh enough) usage records — callers treat 0 as "no action".
+    Sidechain (subagent) records are skipped — their usage describes a
+    different context window.
     """
     path = Path(transcript_path)
     try:
@@ -251,6 +261,15 @@ def read_context_tokens(transcript_path: str | Path) -> int:
             tail = f.read().decode("utf-8", errors="replace")
     except OSError:
         return 0
+
+    cutoff: datetime | None = None
+    if after_ts:
+        try:
+            cutoff = datetime.fromisoformat(str(after_ts))
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            cutoff = None
 
     for line in reversed(tail.splitlines()):
         line = line.strip()
@@ -267,6 +286,18 @@ def read_context_tokens(transcript_path: str | Path) -> int:
         usage = (record.get("message") or {}).get("usage") or {}
         if not isinstance(usage, dict) or "input_tokens" not in usage:
             continue
+        if cutoff is not None:
+            try:
+                ts = datetime.fromisoformat(
+                    str(record.get("timestamp")).replace("Z", "+00:00")
+                )
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                continue  # freshness unverifiable — don't act on it
+            if ts <= cutoff:
+                # Reached pre-rebuild records; nothing newer carries usage.
+                return 0
         return (
             (usage.get("input_tokens") or 0)
             + (usage.get("cache_read_input_tokens") or 0)
@@ -453,13 +484,16 @@ def reset_session_counters(data_dir: Path, session_id: str) -> None:
     Also clears nudge cooldowns.
     """
     state = load_state(data_dir, session_id)
-    if state:
-        state["last_band_idx"] = 0
-        state["last_checkpoint_tokens"] = 0
-        try:
-            save_state(data_dir, session_id, state)
-        except OSError:
-            pass
+    state["last_band_idx"] = 0
+    state["last_checkpoint_tokens"] = 0
+    # Stale-usage guard: token reads ignore transcript records older than
+    # this, so the pre-compact usage still sitting at the transcript tail
+    # can't re-trigger bands right after the rebuild.
+    state["rebuild_ts"] = datetime.now(timezone.utc).isoformat()
+    try:
+        save_state(data_dir, session_id, state)
+    except OSError:
+        pass
     sdir = session_dir(data_dir, session_id)
     for name in ("nudge.json", "claude_nudge.json"):
         (sdir / name).unlink(missing_ok=True)
