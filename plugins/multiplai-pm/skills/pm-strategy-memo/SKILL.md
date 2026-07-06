@@ -1,7 +1,6 @@
 ---
 name: pm-strategy-memo
 description: Draft leadership-grade strategy memos using Minto Pyramid (single governing thought → 3-5 supporting arguments → evidence) with a Working Backwards stress-test and a fresh-Claude reader-test before finalizing. Designed for product strategy memos, exec alignment docs, decision memos, positioning memos, and any document that must move a leadership team to a decision. Triggers on "strategy memo", "leadership memo", "exec doc", "alignment doc", "decision memo", "positioning memo", "exec memo", "memo to leadership", "draft a memo", or when the user has a brief, transcript, or thesis and wants to turn it into a memo executives would read. Composes downstream of `interviewer` (context-gather) and `extract-insights` (turn a transcript into a brief) — both from the multiplai-research plugin — and `pm-jtbd-synthesis` / `pm-persona-codifier` (when the memo needs to reference discovery evidence or personas).
-user_invocable: true
 model: opus
 effort: high
 ---

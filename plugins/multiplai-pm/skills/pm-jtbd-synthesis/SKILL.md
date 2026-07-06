@@ -1,7 +1,6 @@
 ---
 name: pm-jtbd-synthesis
 description: Synthesize Jobs-to-be-Done from one or more customer interview transcripts. Extracts Forces of Progress (push, pull, anxiety, habit) with verbatim quote + line-number attribution, clusters jobs across transcripts, and emits three artifacts — a full synthesis report, job stories in canonical When/I-want/So-I-can format, and an Opportunity-Solution Tree stub. Triggers on "synthesize calls", "synthesize interviews", "jtbd", "jobs to be done", "discovery synthesis", "what did customers say", "interview synthesis", "forces of progress", or when the user points at a folder of call transcripts and asks for product insight. Composes downstream of `transcribe` (audio → text, multiplai-media plugin) and `extract-insights` (general extraction, multiplai-research plugin); composes upstream of `pm-persona-codifier`.
-user_invocable: true
 model: opus
 effort: high
 ---

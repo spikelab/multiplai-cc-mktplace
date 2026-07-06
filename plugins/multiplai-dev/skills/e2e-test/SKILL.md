@@ -1,13 +1,7 @@
 ---
 name: e2e-test
 description: End-to-end testing for web applications. Supports frontend (browser-based) and backend (API) testing modes. Spec-aware — reads OpenSpec artifacts when available, falls back to codebase discovery. Use when the user wants to validate that an application actually works, not just that tests pass.
-triggers:
-  - "e2e test"
-  - "end to end test"
-  - "smoke test the app"
-  - "test the app"
-  - "validate the build"
-  - "/e2e-test"
+when_to_use: 'Triggers: e2e test, end to end test, smoke test the app, test the app, validate the build, /e2e-test'
 model: opus
 effort: high
 disable-model-invocation: true

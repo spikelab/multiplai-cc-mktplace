@@ -1,7 +1,6 @@
 ---
 name: extract-insights
 description: Extract deep insights and nuances from articles, research papers, transcripts, or any long-form content. NOT summarization — decomposes content into core thesis, argument chain, key claims with evidence, rhetorical emphasis signals, and non-obvious implications. Strips filler. Surfaces what the author is driving home and the building blocks they use to get there. Triggers on "extract insights from", "what are the key insights in", "distill this", "what's this really saying", "extract the signal", or when user provides content and wants more than a summary.
-user_invocable: true
 model: opus
 effort: high
 ---

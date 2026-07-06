@@ -1,7 +1,6 @@
 ---
 name: pm-pr-faq
 description: Draft Amazon-style Working Backwards documents — a fictional press release dated at launch plus an internal FAQ. Forces clarity on customer benefit, target persona, and tradeoffs *before* the team commits to building. Includes an adversarial FAQ generator (if the user provides fewer than 10 hard questions, the skill generates the rest as a skeptical investor / exec) and a stress-test pass. Triggers on "pr/faq", "pr faq", "6-pager", "six-pager", "working backwards", "launch narrative", "investor memo", "future-state narrative", "press release for", "fictional press release", "Amazon-style memo", or when the user wants to pressure-test a not-yet-built initiative by writing as if it had already shipped. Composes downstream of `pm-strategy-memo` (when strategy implies a launch) and `pm-persona-codifier` (the PR's fictional customer is a persona).
-user_invocable: true
 model: opus
 effort: high
 ---

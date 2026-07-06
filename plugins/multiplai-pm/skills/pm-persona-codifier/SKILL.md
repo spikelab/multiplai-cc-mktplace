@@ -1,7 +1,6 @@
 ---
 name: pm-persona-codifier
 description: Codify customer/user personas into canonical, source-attributed persona docs that serve as stable references for downstream product work. Takes raw archetype notes, interview transcripts, JTBD synthesis output, or stated archetype hypotheses; clusters signals into N personas; fills a 9-section template per persona with quote-level source attribution; cross-checks for overlap and contradiction; emits one file per persona plus an INDEX. Triggers on "codify personas", "persona doc", "persona definitions", "who are our customers", "customer archetypes", "user archetypes", "buyer personas", "ICP definition", or when the user has raw persona notes and wants them turned into proper artifacts. Composes downstream of `pm-jtbd-synthesis` (job clusters → persona archetypes); the JTBD output is the strongest possible input but not required.
-user_invocable: true
 model: opus
 effort: medium
 ---

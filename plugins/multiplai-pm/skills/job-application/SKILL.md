@@ -1,7 +1,6 @@
 ---
 name: job-application
 description: Draft tailored resumes and cover letters, then generate PDF applications. Use when the user wants to apply for a job, create a resume, write a cover letter, generate an application PDF, or mentions a job description to apply for. Triggers on "apply for", "draft application", "job application", "resume", "cover letter", paste of a job description, or explicit /job-application invocation.
-user_invocable: true
 model: opus
 effort: medium
 disable-model-invocation: false

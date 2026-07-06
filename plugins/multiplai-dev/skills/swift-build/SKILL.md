@@ -4,12 +4,7 @@ description: |
   Build, test, and manage iOS/macOS projects from any environment.
   Handles the SSH bridge when running inside a Docker container —
   Claude calls the script, reads structured output, never touches SSH directly.
-triggers:
-  - "swift build"
-  - "swift test"
-  - 'run tests (in a Swift project context)'
-  - "simulator"
-  - "xcodebuild"
+when_to_use: 'Triggers: swift build, swift test, run tests (Swift project context), simulator, xcodebuild'
 model: opus
 effort: high
 disable-model-invocation: true
