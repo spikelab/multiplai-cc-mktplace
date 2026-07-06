@@ -55,7 +55,7 @@
           {
             "type": "command",
             "command": "uv run --no-project \"${CLAUDE_PLUGIN_ROOT}/scripts/pre_compact.py\"",
-            "timeout": 10
+            "timeout": 300
           }
         ]
       }
