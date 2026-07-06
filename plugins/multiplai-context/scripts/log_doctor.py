@@ -79,6 +79,8 @@ class Entry:
     level: str
     session: str
     msg: str
+    component: str = ""  # parsed [component] field; falls back to subsystem.
+    # Differs from subsystem for aggregate files like hook-errors.log.
     detail_lines: int = 0  # continuation lines (e.g. traceback depth)
     detail_tail: str = ""  # last continuation line (usually the exception)
 
@@ -134,12 +136,16 @@ def discover(logs_dir: Path, subsystems: list | None = None) -> dict:
     return found
 
 
-def parse_file(path: Path, subsystem: str, file_date: date | None):
+def parse_file(path: Path, subsystem: str, file_date: date | None, offset: int = 0):
+    """Parse a log file; with ``offset`` (bytes), only content appended after it."""
     stat = FileStat(path=path, subsystem=subsystem, size=path.stat().st_size)
     entries: list[Entry] = []
     is_jsonl = path.suffix == ".jsonl"
     try:
-        text = path.read_text(errors="replace")
+        with path.open("rb") as fh:
+            if offset:
+                fh.seek(offset)
+            text = fh.read().decode(errors="replace")
     except OSError as err:
         logger.warning("SKIP file=%s reason=%s", path, err)
         return entries, stat
@@ -160,6 +166,7 @@ def parse_file(path: Path, subsystem: str, file_date: date | None):
                     level=m.group("level"),
                     session=m.group("session") or "--------",
                     msg=m.group("msg"),
+                    component=m.group("component"),
                 )
             else:
                 m = ACTIVITY_LINE_RE.match(line)
@@ -174,6 +181,7 @@ def parse_file(path: Path, subsystem: str, file_date: date | None):
                         level="INFO",
                         session=m.group("session"),
                         msg=f"[{m.group('component')}] {m.group('msg')}",
+                        component=m.group("component"),
                     )
         if entry is not None:
             entries.append(entry)
@@ -207,6 +215,7 @@ def _parse_jsonl_line(line: str, subsystem: str, filename: str) -> Entry | None:
         session=str(obj.get("session", "--------")),
         msg=str(obj.get("msg", ""))
         or f"{obj.get('component', '?')}:{obj.get('event', '?')}",
+        component=str(obj.get("component", "")),
     )
 
 
@@ -292,6 +301,206 @@ def scan(
         ]
     notes = health_checks(stats, all_entries)
     return cluster(all_entries), stats, notes, files_by_subsystem
+
+
+# ---------------------------------------------------------------------------
+# Probe mode — exercise a functionality, then assert its logs appeared
+# ---------------------------------------------------------------------------
+
+# Scenario registry. Each expectation is (subsystem-or-component, LEVEL or "*",
+# regex). Patterns are grounded in observed log output; ERROR/CRITICAL entries
+# from the involved subsystems fail the probe unless --allow-errors is given.
+SCENARIOS = {
+    "session-start": {
+        "trigger": "Start a new Claude Code session (e.g. `claude -p 'say hi'` from the workspace root).",
+        "subsystems": ["session_start", "activity"],
+        "expect": [
+            ("session_start", "INFO", r"Session started: [0-9a-f-]+"),
+            ("session_start", "INFO", r"Model client selected:"),
+        ],
+    },
+    "session-end": {
+        "trigger": "Let a session end (a `claude -p` one-shot ends immediately after replying).",
+        "subsystems": ["session_end", "activity"],
+        "expect": [
+            ("session_end", "INFO", r"Wrote deferred extraction marker|[Ss]ession ended"),
+        ],
+    },
+    "session-stop": {
+        "trigger": "Complete any turn in a session (the Stop hook fires when Claude finishes replying).",
+        "subsystems": ["session_stop"],
+        "expect": [
+            ("session_stop", "INFO", r"Stop hook completed for session"),
+        ],
+    },
+    "routing": {
+        "trigger": "Submit any substantive prompt in a session (the UserPromptSubmit hook routes it).",
+        "subsystems": ["context_manager", "activity"],
+        "expect": [
+            ("context_manager", "INFO", r"ROUTING "),
+            ("context", "INFO", r"injected \d+ memory|router abstained|router matched nothing"),
+        ],
+    },
+    "extract-learnings": {
+        "trigger": "End a session with substantive work in it, or run the backfill skill on one transcript.",
+        "subsystems": ["extract_learnings"],
+        "expect": [
+            ("extract_learnings", "INFO", r"Extract learnings using \w+|No actionable content found"),
+        ],
+    },
+    "generate-catalog": {
+        "trigger": "Run `/multiplai-context:refresh-catalogs` (or the generate_catalog.py script, e.g. with --dry-run).",
+        "subsystems": ["generate_catalog"],
+        "expect": [
+            ("generate_catalog", "INFO", r"complete \(sources=|Catalog generation complete|dry.run"),
+        ],
+    },
+    "synthesize-now": {
+        "trigger": "Run `/multiplai-context:now` (or complete an extraction that refreshes now/).",
+        "subsystems": ["synthesize_now"],
+        "expect": [
+            ("synthesize_now", "INFO", r"Synthesize now using \w+|Synthesized|Refreshed now/"),
+        ],
+    },
+    "backfill": {
+        "trigger": "Run `/multiplai-context:backfill` (add --days 1 to keep it small).",
+        "subsystems": ["backfill"],
+        "expect": [
+            ("backfill", "INFO", r"Backfill using \w+"),
+        ],
+    },
+    "dream": {
+        "trigger": "Run `/multiplai-context:dream`.",
+        "subsystems": ["dream"],
+        "expect": [
+            ("dream", "INFO", r"Dream using \w+|Source learnings:"),
+        ],
+    },
+    "deep-research": {
+        "trigger": "Run the deep-research skill with a tiny question (per the logging standard it must log START/DONE stages).",
+        "subsystems": ["deep-research", "deep_research"],
+        "expect": [
+            ("deep-research", "*", r"START |DONE |SDK call"),
+        ],
+    },
+}
+
+
+def default_state_file(logs_dir: Path) -> Path:
+    return logs_dir / "state" / "log-doctor-probe.json"
+
+
+def probe_snapshot(logs_dir: Path) -> dict:
+    """Record current byte size of every log file (the probe baseline)."""
+    files = {
+        p.name: p.stat().st_size
+        for p in logs_dir.iterdir()
+        if p.is_file() and FILENAME_RE.match(p.name)
+    }
+    return {"taken_at": datetime.now().isoformat(timespec="seconds"), "files": files}
+
+
+def probe_new_entries(logs_dir: Path, snapshot: dict) -> list:
+    """Parse only log content appended (or files created) since the snapshot."""
+    baseline = snapshot.get("files", {})
+    entries: list[Entry] = []
+    for name, paths in discover(logs_dir).items():
+        for path in paths:
+            offset = baseline.get(path.name, 0)
+            size = path.stat().st_size
+            if size < offset:
+                offset = 0  # file was rotated/truncated — read it all
+            if size == offset:
+                continue
+            m = FILENAME_RE.match(path.name)
+            file_date = (
+                date.fromisoformat(m.group("date"))
+                if m and m.group("date")
+                else date.today()
+            )
+            new, _ = parse_file(path, name, file_date, offset=offset)
+            entries.extend(new)
+    return entries
+
+
+def parse_expect_spec(spec: str):
+    """Parse an ad-hoc expectation: SUBSYSTEM:LEVEL:REGEX (LEVEL may be *)."""
+    parts = spec.split(":", 2)
+    if len(parts) != 3:
+        raise ValueError(
+            f"bad --expect spec {spec!r} — format is SUBSYSTEM:LEVEL:REGEX (LEVEL may be *)"
+        )
+    subsystem, level, pattern = parts
+    re.compile(pattern)  # fail fast on a bad regex
+    return (subsystem, level.upper() or "*", pattern)
+
+
+def _entry_matches(e: Entry, subsystem: str, level: str, pattern: str) -> bool:
+    if subsystem not in (e.subsystem, e.component):
+        return False
+    if level != "*" and e.level != level:
+        return False
+    return re.search(pattern, e.msg) is not None
+
+
+def probe_check(entries: list, expectations: list, forbid_subsystems: list,
+                allow_errors: bool = False) -> dict:
+    """Evaluate expectations against new entries. Returns a verdict dict."""
+    results = []
+    for subsystem, level, pattern in expectations:
+        matches = [e for e in entries if _entry_matches(e, subsystem, level, pattern)]
+        results.append({
+            "subsystem": subsystem,
+            "level": level,
+            "pattern": pattern,
+            "matched": len(matches),
+            "sample": matches[0].msg[:200] if matches else None,
+            "ok": bool(matches),
+        })
+    unexpected = []
+    if not allow_errors:
+        unexpected = [
+            {"subsystem": e.subsystem, "component": e.component, "level": e.level,
+             "msg": e.msg[:200], "traceback_tail": e.detail_tail[:200]}
+            for e in entries
+            if e.level in ("ERROR", "CRITICAL")
+            and (not forbid_subsystems
+                 or e.subsystem in forbid_subsystems
+                 or e.component in forbid_subsystems)
+        ]
+    passed = all(r["ok"] for r in results) and not unexpected
+    return {
+        "passed": passed,
+        "new_entries": len(entries),
+        "expectations": results,
+        "unexpected_errors": unexpected,
+    }
+
+
+def render_probe_markdown(verdict: dict) -> str:
+    out = [f"# Probe {'PASSED' if verdict['passed'] else 'FAILED'}", ""]
+    out.append(f"New log entries since baseline: {verdict['new_entries']}")
+    out.append("")
+    out.append("## Expectations")
+    out.append("")
+    for r in verdict["expectations"]:
+        mark = "✅" if r["ok"] else "❌"
+        out.append(
+            f"- {mark} `{r['subsystem']}` [{r['level']}] /{r['pattern']}/ — "
+            f"{r['matched']} match(es)"
+        )
+        if r["sample"]:
+            out.append(f"  - sample: `{r['sample']}`")
+    if verdict["unexpected_errors"]:
+        out.append("")
+        out.append("## Unexpected errors during probe")
+        out.append("")
+        for u in verdict["unexpected_errors"]:
+            comp = u["component"] or u["subsystem"]
+            out.append(f"- ❌ [{u['level']}] `{comp}`: `{u['msg']}`")
+            if u["traceback_tail"]:
+                out.append(f"  - traceback tail: `{u['traceback_tail']}`")
+    return "\n".join(out)
 
 
 def render_markdown(clusters, stats, notes, max_clusters: int) -> str:
@@ -398,7 +607,42 @@ def main(argv: list | None = None) -> int:
     parser.add_argument(
         "--list", action="store_true", help="list available subsystems and exit"
     )
+    probe = parser.add_argument_group("probe mode")
+    probe.add_argument(
+        "--probe-start", action="store_true",
+        help="snapshot the logs as a baseline, then exercise the functionality",
+    )
+    probe.add_argument(
+        "--probe-check", action="store_true",
+        help="verify expected log entries appeared since --probe-start",
+    )
+    probe.add_argument(
+        "--scenario", help="named scenario for --probe-check (see --scenarios)"
+    )
+    probe.add_argument(
+        "--expect", action="append", default=[],
+        help="ad-hoc expectation SUBSYSTEM:LEVEL:REGEX (repeatable; LEVEL may be *)",
+    )
+    probe.add_argument(
+        "--scenarios", action="store_true",
+        help="list probe scenarios with their trigger instructions and exit",
+    )
+    probe.add_argument(
+        "--state", help="probe state file (default: <logs>/state/log-doctor-probe.json)"
+    )
+    probe.add_argument(
+        "--allow-errors", action="store_true",
+        help="don't fail the probe on ERROR entries from involved subsystems",
+    )
     args = parser.parse_args(argv)
+
+    if args.scenarios:
+        for name, sc in SCENARIOS.items():
+            print(f"{name}")
+            print(f"  trigger: {sc['trigger']}")
+            for sub, lvl, pat in sc["expect"]:
+                print(f"  expect:  {sub} [{lvl}] /{pat}/")
+        return 0
 
     logs_dir = (
         Path(args.logs_dir).expanduser() if args.logs_dir else get_paths().logs_dir()
@@ -406,6 +650,51 @@ def main(argv: list | None = None) -> int:
     if not logs_dir.is_dir():
         print(f"logs directory not found: {logs_dir}", file=sys.stderr)
         return 2
+
+    if args.probe_start or args.probe_check:
+        state_file = (
+            Path(args.state).expanduser() if args.state else default_state_file(logs_dir)
+        )
+        if args.probe_start:
+            snap = probe_snapshot(logs_dir)
+            state_file.parent.mkdir(parents=True, exist_ok=True)
+            state_file.write_text(json.dumps(snap, indent=2))
+            logger.info("START probe baseline files=%d state=%s",
+                        len(snap["files"]), state_file)
+            print(f"Probe baseline recorded ({len(snap['files'])} files): {state_file}")
+            print("Now exercise the functionality, then run --probe-check.")
+            return 0
+        # --probe-check
+        if not state_file.is_file():
+            print(f"no probe baseline at {state_file} — run --probe-start first",
+                  file=sys.stderr)
+            return 2
+        expectations, forbid = [], []
+        if args.scenario:
+            sc = SCENARIOS.get(args.scenario)
+            if sc is None:
+                print(f"unknown scenario {args.scenario!r} — see --scenarios",
+                      file=sys.stderr)
+                return 2
+            expectations += sc["expect"]
+            forbid += sc["subsystems"]
+        for spec in args.expect:
+            exp = parse_expect_spec(spec)
+            expectations.append(exp)
+            forbid.append(exp[0])
+        if not expectations:
+            print("nothing to check — pass --scenario and/or --expect",
+                  file=sys.stderr)
+            return 2
+        snap = json.loads(state_file.read_text())
+        entries = probe_new_entries(logs_dir, snap)
+        verdict = probe_check(entries, expectations, forbid,
+                              allow_errors=args.allow_errors)
+        print(json.dumps(verdict, indent=2) if args.json
+              else render_probe_markdown(verdict))
+        logger.info("DONE probe scenario=%s passed=%s new_entries=%d",
+                    args.scenario or "ad-hoc", verdict["passed"], len(entries))
+        return 0 if verdict["passed"] else 1
 
     subsystems = (
         [s.strip() for s in args.subsystem.split(",") if s.strip()]

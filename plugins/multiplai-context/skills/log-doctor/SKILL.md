@@ -1,12 +1,18 @@
 ---
 name: log-doctor
-description: Analyze the multiplai runtime logs to find failures, anomalies, and degradation across subsystems (context_manager, extract_learnings, backfill, dream, session lifecycle hooks, etc.), verify root causes against source code, and produce a fix-recommendation report. Can focus on a single subsystem. Triggers on "check the logs", "why is X failing", "log doctor", "analyze multiplai logs", "what's broken in multiplai", "log health report".
+description: Analyze the multiplai runtime logs to find failures, anomalies, and degradation across subsystems (context_manager, extract_learnings, backfill, dream, session lifecycle hooks, etc.), verify root causes against source code, and produce a fix-recommendation report. Can focus on a single subsystem, and can actively exercise a functionality (probe mode) to verify its expected logs appear. Triggers on "check the logs", "why is X failing", "log doctor", "analyze multiplai logs", "what's broken in multiplai", "log health report", "verify X logs correctly", "exercise X and check the logs".
 ---
 
 # log-doctor
 
-Turn the multiplai log directory into an actionable fix report: scan → cluster →
-verify against source → recommend.
+Two modes:
+
+- **Passive scan** (default) — turn the log directory into an actionable fix
+  report: scan → cluster → verify against source → recommend.
+- **Probe** — actively exercise a functionality (start a session, run
+  deep-research, regenerate catalogs, …) and assert its expected log entries
+  appeared. Use when the user asks to "verify X logs correctly" or "exercise
+  X and check the logs".
 
 ## Step 1 — Run the scanner
 
@@ -84,6 +90,59 @@ Clusters triaged out, one line each with reason.
 
 Reply in the console with a 3-line summary and the report path. Do not paste
 the whole report into the console.
+
+## Probe mode — exercise a functionality, verify its logs
+
+Three steps: baseline → trigger → check.
+
+```bash
+# 1. Baseline: snapshot current log sizes
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/log_doctor.py" --probe-start
+
+# 2. Trigger the functionality (see below)
+
+# 3. Check: only entries appended since the baseline are evaluated
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/log_doctor.py" \
+  --probe-check --scenario <name>        # exit 0 = passed, 1 = failed
+```
+
+Run `--scenarios` to list the built-in scenarios; each includes its trigger
+instruction. Available: `session-start`, `session-end`, `session-stop`,
+`routing`, `extract-learnings`, `generate-catalog`, `synthesize-now`,
+`backfill`, `dream`, `deep-research`.
+
+**How to trigger, by scenario:**
+
+- `session-start` / `session-end` / `session-stop` / `routing` /
+  `extract-learnings`: run a one-shot nested session from the workspace root —
+  `claude -p "say hi"` — which fires the whole lifecycle (SessionStart,
+  UserPromptSubmit routing, Stop, SessionEnd). Check each scenario afterwards.
+- `generate-catalog`: run the refresh-catalogs skill or
+  `uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --dry-run`
+  (dry-run: no writes, no LLM calls).
+- `backfill` / `dream` / `synthesize-now`: invoke the corresponding skill
+  (keep it small, e.g. backfill `--days 1`).
+- `deep-research`: invoke the deep-research skill with a trivial one-source
+  question.
+
+For functionality without a built-in scenario, pass ad-hoc expectations
+(repeatable): `--expect 'SUBSYSTEM:LEVEL:REGEX'` (LEVEL may be `*`; subsystem
+matches the log-file basename or the `[component]` field, so components that
+only appear in `hook-errors.log` are still attributable).
+
+**Interpreting results:**
+
+- A failed expectation means the functionality ran but didn't log what the
+  logging standard / its own contract says it should — that's a finding
+  (missing logging is a bug too), unless the trigger itself failed. Verify the
+  trigger actually ran before blaming the logging.
+- Any ERROR/CRITICAL from the involved subsystems during the probe fails it
+  (override with `--allow-errors` when the error is a known, separate issue).
+- Probe failures feed the same report format as passive findings — evidence
+  is the probe verdict instead of a cluster.
+- The baseline lives at `<logs>/state/log-doctor-probe.json`; re-running
+  `--probe-start` overwrites it. Probing is still read-only with respect to
+  the logs themselves.
 
 ## Notes
 

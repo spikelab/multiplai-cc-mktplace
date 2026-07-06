@@ -22,7 +22,18 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from log_doctor import cluster, discover, normalize, parse_file, scan  # noqa: E402
+from log_doctor import (  # noqa: E402
+    SCENARIOS,
+    cluster,
+    discover,
+    normalize,
+    parse_expect_spec,
+    parse_file,
+    probe_check,
+    probe_new_entries,
+    probe_snapshot,
+    scan,
+)
 
 STANDARD_LOG = textwrap.dedent("""\
     [2026-07-05T10:00:00Z] [backfill] [session:--------] INFO: Backfill using AsyncMock
@@ -138,3 +149,105 @@ class TestScan:
             logs_dir, subsystems=["backfill"], since=date(2026, 7, 6)
         )
         assert sum(s.entries for s in stats) == 0
+
+
+NEW_SESSION_LINES = (
+    "[2026-07-06T12:00:00Z] [session_start] [session:abcd1234] INFO: Model client selected: AgentSDKClient\n"
+    "[2026-07-06T12:00:01Z] [session_start] [session:abcd1234] INFO: Session started: 756ff009-4dfa-4f31-b2af-6be4e6ca413f\n"
+)
+
+
+class TestProbe:
+    def test_snapshot_records_log_files_only(self, logs_dir):
+        snap = probe_snapshot(logs_dir)
+        assert "backfill-2026-07-05.log" in snap["files"]
+        assert "notalog.txt" not in snap["files"]
+
+    def test_new_entries_sees_only_appended_content(self, logs_dir):
+        snap = probe_snapshot(logs_dir)
+        f = logs_dir / "session_start.log"
+        f.write_text(NEW_SESSION_LINES)  # new file
+        with (logs_dir / "backfill-2026-07-05.log").open("a") as fh:
+            fh.write(
+                "[2026-07-06T12:00:02Z] [backfill] [session:abcd1234] "
+                "INFO: Backfill using AgentSDKClient\n"
+            )
+        entries = probe_new_entries(logs_dir, snap)
+        msgs = [e.msg for e in entries]
+        assert len(entries) == 3
+        assert any("Session started" in m for m in msgs)
+        assert any("Backfill using AgentSDKClient" in m for m in msgs)
+        # pre-existing content is not re-read
+        assert not any("AsyncMock" in m for m in msgs)
+
+    def test_new_entries_rereads_rotated_file(self, logs_dir):
+        snap = probe_snapshot(logs_dir)
+        # simulate rotation: file truncated and rewritten smaller
+        (logs_dir / "backfill-2026-07-05.log").write_text(
+            "[2026-07-06T12:00:00Z] [backfill] [session:--------] INFO: fresh after rotation\n"
+        )
+        entries = probe_new_entries(logs_dir, snap)
+        assert [e.msg for e in entries] == ["fresh after rotation"]
+
+    def test_check_passes_on_expected_lines(self, logs_dir):
+        snap = probe_snapshot(logs_dir)
+        (logs_dir / "session_start.log").write_text(NEW_SESSION_LINES)
+        entries = probe_new_entries(logs_dir, snap)
+        verdict = probe_check(
+            entries, SCENARIOS["session-start"]["expect"],
+            SCENARIOS["session-start"]["subsystems"],
+        )
+        assert verdict["passed"]
+        assert all(r["ok"] for r in verdict["expectations"])
+
+    def test_check_fails_when_expected_line_missing(self, logs_dir):
+        snap = probe_snapshot(logs_dir)
+        entries = probe_new_entries(logs_dir, snap)  # nothing happened
+        verdict = probe_check(
+            entries, SCENARIOS["session-start"]["expect"],
+            SCENARIOS["session-start"]["subsystems"],
+        )
+        assert not verdict["passed"]
+
+    def test_check_fails_on_unexpected_error(self, logs_dir):
+        snap = probe_snapshot(logs_dir)
+        (logs_dir / "session_start.log").write_text(
+            NEW_SESSION_LINES
+            + "[2026-07-06T12:00:02Z] [session_start] [session:abcd1234] ERROR: boom\n"
+        )
+        entries = probe_new_entries(logs_dir, snap)
+        expect = SCENARIOS["session-start"]["expect"]
+        forbid = SCENARIOS["session-start"]["subsystems"]
+        assert not probe_check(entries, expect, forbid)["passed"]
+        assert probe_check(entries, expect, forbid, allow_errors=True)["passed"]
+
+    def test_check_matches_component_in_aggregate_log(self, logs_dir):
+        snap = probe_snapshot(logs_dir)
+        with (logs_dir / "hook-errors.log").open("a") as fh:
+            fh.write(
+                "\n[2026-07-06T12:00:00Z] [extract_learnings] [session:--------] "
+                "ERROR: Could not create model client for extraction\n"
+            )
+        entries = probe_new_entries(logs_dir, snap)
+        # forbid list names the component; the file-level subsystem is hook-errors
+        verdict = probe_check(
+            entries, [("extract_learnings", "ERROR", "model client")],
+            ["extract_learnings"], allow_errors=True,
+        )
+        assert verdict["passed"]
+
+    def test_parse_expect_spec(self):
+        assert parse_expect_spec("dream:INFO:Dream using") == (
+            "dream", "INFO", "Dream using"
+        )
+        assert parse_expect_spec("x:*:a:b")[2] == "a:b"  # regex may contain colons
+        with pytest.raises(ValueError):
+            parse_expect_spec("no-level-no-pattern")
+
+    def test_scenario_registry_is_well_formed(self):
+        import re as _re
+        for name, sc in SCENARIOS.items():
+            assert sc["trigger"] and sc["subsystems"], name
+            for sub, lvl, pat in sc["expect"]:
+                assert sub and lvl, name
+                _re.compile(pat)

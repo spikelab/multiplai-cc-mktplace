@@ -11,6 +11,15 @@
   recency windows (`--days`), and JSON output. The skill guides root-cause
   verification against source code before writing a fix-recommendation
   report to `INBOX/`. Read-only; the scanner has no LLM dependency.
+- **log-doctor probe mode.** Exercise a functionality and assert its expected
+  log entries appeared: `--probe-start` snapshots per-file byte offsets,
+  `--probe-check --scenario <name>` evaluates only content appended since the
+  baseline. Ships grounded scenarios (session-start/end/stop, routing,
+  extract-learnings, generate-catalog, synthesize-now, backfill, dream,
+  deep-research) plus ad-hoc `--expect SUBSYSTEM:LEVEL:REGEX` expectations;
+  unexpected ERRORs from the involved subsystems fail the probe (exit 1).
+  Entries now carry their parsed `[component]`, so errors that only surface
+  in `hook-errors.log` are attributed to the right subsystem.
 
 ## 0.5.1 — 2026-07-07
 
