@@ -186,6 +186,12 @@ checkpoint at 100K → refresh → auto-compact ≈200K → checkpoint auto-inje
 repeat. If compaction is overdue (vars set but it never fired), the hooks
 resume warning the user.
 
+Bounds (verified against Claude Code v2.1.201): the window value is clamped
+to **[100000, 1000000]** — values below 100K silently don't apply. The PCT
+override is an unclamped test hook; for low-threshold testing keep the
+window at 100000 and shrink the percentage instead (e.g. `30` → ≈30K
+trigger).
+
 Why compaction (not `/clear`) is the automatic path: hooks cannot invoke
 slash commands, so a hook-triggered `/clear` is impossible — but the
 auto-compact *threshold* is steerable via env, and compaction both preserves
