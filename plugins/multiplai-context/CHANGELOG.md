@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`/log-doctor` skill + `scripts/log_doctor.py`.** Scans the runtime logs
+  directory (`paths.logs_dir()`), clusters ERROR/WARNING/INFO entries by
+  normalized signature (with traceback tails, first/last seen, counts), runs
+  cross-cutting health checks (oversized append-only logs, format drift,
+  missing session ids), and supports per-subsystem focus (`--subsystem`),
+  recency windows (`--days`), and JSON output. The skill guides root-cause
+  verification against source code before writing a fix-recommendation
+  report to `INBOX/`. Read-only; the scanner has no LLM dependency.
+- **log-doctor probe mode.** Exercise a functionality and assert its expected
+  log entries appeared: `--probe-start` snapshots per-file byte offsets,
+  `--probe-check --scenario <name>` evaluates only content appended since the
+  baseline. Ships grounded scenarios (session-start/end/stop, routing,
+  extract-learnings, generate-catalog, synthesize-now, backfill, dream,
+  deep-research) plus ad-hoc `--expect SUBSYSTEM:LEVEL:REGEX` expectations;
+  unexpected ERRORs from the involved subsystems fail the probe (exit 1).
+  Entries now carry their parsed `[component]`, so errors that only surface
+  in `hook-errors.log` are attributed to the right subsystem.
+- **log-doctor injection forensics (`--injections`).** Reconstructs each
+  context-routing decision by joining `context_manager` ROUTING_SCORES /
+  COOLDOWN lines with `activity.jsonl` inject events: per-file
+  picked/injected/suppressed counts with score stats, cap-hit and abstain
+  rates, and `--trace N` full decision traces (`--file X` to focus on one
+  file). Explains "why did it inject that" cases — e.g. cooldown suppressing
+  the top scorers so near-floor files fill the slots.
+
 ## 0.5.1 — 2026-07-07
 
 ### Fixed
@@ -54,7 +82,6 @@
   compact path; band counters reset after every rebuild so each new physical
   window re-checkpoints. In auto mode the `/clear` nudges are suppressed
   (they return only if compaction is overdue/misconfigured).
-
 ## 0.4.3 — 2026-07-06
 
 ### Changed
