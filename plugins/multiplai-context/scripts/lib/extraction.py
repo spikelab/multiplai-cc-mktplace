@@ -7,12 +7,14 @@ by write_diary_entries() and append_learnings().
 
 import fcntl
 import hashlib
-import json
+import logging
 import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _lock_path(target: Path) -> Path:
@@ -28,6 +30,14 @@ def _lock_path(target: Path) -> Path:
     return lock_dir / f"{target.name}.{digest}.lock"
 
 
+# Tag-delimited output, NOT JSON. diary_entry is long prose full of quotes,
+# backslashes, newlines and code snippets; asking the model to escape that
+# inside JSON strings failed strict json.loads on 5/8 real backfill sessions
+# (unescaped \escape, unterminated string, missing delimiter), and
+# json-repair fallbacks silently dropped ~half the units on a real broken
+# sample. Prose between tags needs no escaping, and a truncated response
+# still yields every completed <unit> block instead of losing everything.
+# Bake-off on the 4 failed sessions, 2026-07-07: tags 12/12 clean.
 EXTRACTION_PROMPT = """\
 You are analyzing a conversation transcript between a user and an AI \
 assistant ("Claude"). Extract diary entries and learnings grouped by \
@@ -41,21 +51,30 @@ Group by logical coherence, not by message boundaries.
 
 ## Output format
 
-A JSON object with a "units" array. Each unit has:
-- "timestamp": ISO timestamp closest to the unit (or "" if unknown)
-- "diary_entry": rich narrative of what happened — what was attempted, \
-built, or decided; the key decisions made and their rationale; how the \
-work evolved; what changed. Write 1-3 substantive paragraphs. This is \
-the PRIMARY output — invest most effort here.
-- "learnings": array of things worth remembering across sessions (can be [])
+Emit one <unit> block per unit of work, using EXACTLY this structure:
 
-Each learning object:
-- "trust": "verified" (confirmed via code/logs/tests) | "high" (strong \
+<unit>
+<timestamp>ISO timestamp closest to the unit, or empty</timestamp>
+<diary>
+Rich narrative of what happened — what was attempted, built, or decided; \
+the key decisions made and their rationale; how the work evolved; what \
+changed. Write 1-3 substantive paragraphs. This is the PRIMARY output — \
+invest most effort here. Plain prose; no escaping needed.
+</diary>
+<learning>
+trust: verified | high | medium
+type: OBSERVATION | PREFERENCE | CORRECTION | PATTERN | RULE-PROPOSAL
+target: one valid memory file name from the list below
+description: concise but complete (one sentence, single line)
+action: what to add/change in that file (one sentence, single line)
+</learning>
+</unit>
+
+- Repeat <learning>...</learning> inside a unit for each learning; omit \
+it entirely if the unit has none (diary-only units are valid).
+- trust: "verified" (confirmed via code/logs/tests) | "high" (strong \
 evidence) | "medium" (inference)
-- "type": OBSERVATION | PREFERENCE | CORRECTION | PATTERN | RULE-PROPOSAL
-- "description": concise but complete (one sentence)
-- "target": one of the valid memory file names below
-- "action": what to add/change in that file (one sentence)
+- If the entire session is trivial, output exactly: <no-units/>
 
 ## Valid target files
 
@@ -72,12 +91,11 @@ Corrections are highest priority — they prevent recurring mistakes.
 
 ## Rules
 
-- diary_entry is PRIMARY — learnings are a projection of it
+- diary is PRIMARY — learnings are a projection of it
 - A unit with 0 learnings is fine (diary-only is valid)
 - Deduplicate: emit each insight ONCE, even if it spans multiple units
 - If something was CORRECTED later, output only the final corrected version
 - Skip trivial exchanges, greetings, routine tool usage
-- If the entire session is trivial, return {"units": []}
 
 ## Transcript
 
@@ -85,38 +103,78 @@ Corrections are highest priority — they prevent recurring mistakes.
 
 ## Output
 
-Return ONLY valid JSON (no markdown fences, no explanation):
-{"units": [{"timestamp": "...", "diary_entry": "...", "learnings": [...]}]}
+Output ONLY <unit> blocks (or <no-units/>) — no markdown fences, no explanation.
 """
 
 
 class ExtractionParseError(ValueError):
     """The model's response could not be parsed into the expected shape.
 
-    Distinct from a genuinely empty extraction (valid JSON, ``units: []``):
-    a parse failure means we don't KNOW whether the session had learnings, so
-    the caller must retain the marker and retry rather than dropping it.
+    Distinct from a genuinely empty extraction (an explicit ``<no-units/>``
+    marker): a parse failure means we don't KNOW whether the session had
+    learnings, so the caller must retain the marker and retry rather than
+    dropping it.
     """
 
 
+_UNIT_RE = re.compile(r"<unit>(.*?)</unit>", re.DOTALL)
+_TIMESTAMP_RE = re.compile(r"<timestamp>(.*?)</timestamp>", re.DOTALL)
+_DIARY_RE = re.compile(r"<diary>\n?(.*?)\n?</diary>", re.DOTALL)
+_LEARNING_RE = re.compile(r"<learning>(.*?)</learning>", re.DOTALL)
+_LEARNING_KEYS = frozenset({"trust", "type", "target", "description", "action"})
+_NO_UNITS_MARKER = "<no-units/>"
+
+
+def _parse_learning(block: str) -> Optional[dict]:
+    """Parse one <learning> body of ``key: value`` lines.
+
+    Unknown keys and lines without a colon are ignored (values are
+    single-line by prompt contract). A learning without a description
+    carries no signal — drop it.
+    """
+    entry: dict = {}
+    for line in block.strip().splitlines():
+        key, sep, value = line.partition(":")
+        if not sep:
+            continue
+        key = key.strip().lower()
+        if key in _LEARNING_KEYS:
+            entry[key] = value.strip()
+    return entry if entry.get("description") else None
+
+
 def _parse_units(raw: str) -> list[dict]:
+    """Parse tag-delimited model output into unit dicts.
+
+    Non-greedy block matching means a response truncated mid-unit still
+    yields every completed <unit> — partial salvage instead of total loss.
+    """
     text = raw.strip()
-    match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+    match = re.search(r"```[a-z]*\s*\n?(.*?)\n?```", text, re.DOTALL)
     if match:
         text = match.group(1).strip()
-    try:
-        parsed = json.loads(text)
-    except (json.JSONDecodeError, ValueError) as e:
-        raise ExtractionParseError(f"response was not valid JSON: {e}") from e
-    if not isinstance(parsed, dict):
-        raise ExtractionParseError(f"response JSON was {type(parsed).__name__}, not an object")
-    units = parsed.get("units")
-    if units is None:
-        # Well-formed object without a units key — treat as genuinely empty.
+    units: list[dict] = []
+    for block in _UNIT_RE.findall(text):
+        ts_match = _TIMESTAMP_RE.search(block)
+        diary_match = _DIARY_RE.search(block)
+        learnings = [
+            entry
+            for lblock in _LEARNING_RE.findall(block)
+            if (entry := _parse_learning(lblock)) is not None
+        ]
+        units.append({
+            "timestamp": ts_match.group(1).strip() if ts_match else "",
+            "diary_entry": diary_match.group(1).strip() if diary_match else "",
+            "learnings": learnings,
+        })
+    if units:
+        return units
+    if _NO_UNITS_MARKER in text:
+        # Explicit trivial-session marker — genuinely empty extraction.
         return []
-    if not isinstance(units, list):
-        raise ExtractionParseError(f"'units' was {type(units).__name__}, not a list")
-    return [u for u in units if isinstance(u, dict)]
+    raise ExtractionParseError(
+        "response contained no <unit> blocks and no <no-units/> marker"
+    )
 
 
 async def extract_units(
@@ -141,14 +199,28 @@ async def extract_units(
         .replace("{valid_targets}", targets_block)
         .replace("{transcript}", text)
     )
-    response = await client.query(
-        system="You are a learnings extractor. Output ONLY valid JSON.",
-        messages=[{
-            "role": "user",
-            "content": prompt,
-        }],
-    )
-    return _parse_units(response.content)
+    # Parse failures are stochastic (a fresh sample of the same prompt
+    # usually parses), so retry once with the identical prompt rather
+    # than surfacing the first bad roll to the caller.
+    last_error: Optional[ExtractionParseError] = None
+    for attempt in range(2):
+        response = await client.query(
+            system=(
+                "You are a learnings extractor. Output ONLY the "
+                "tag-delimited format requested."
+            ),
+            messages=[{
+                "role": "user",
+                "content": prompt,
+            }],
+        )
+        try:
+            return _parse_units(response.content)
+        except ExtractionParseError as e:
+            last_error = e
+            logger.warning("extraction parse failed (attempt %d): %s", attempt + 1, e)
+    assert last_error is not None  # loop either returned or set last_error
+    raise last_error
 
 
 def write_diary_entries(
