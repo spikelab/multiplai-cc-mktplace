@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-07-07
 
 ### Added
 - **Context checkpointing & rebuild (MiMo-style long-horizon support).** One
