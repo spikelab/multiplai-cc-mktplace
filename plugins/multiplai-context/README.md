@@ -134,6 +134,125 @@ that holds a warm model connection (no per-call cold-start), or a
 direct-API path (needs an API key with credits, which bypasses the SDK
 subprocess). Until then, prefer `token_overlap` for daily use.
 
+## Context checkpointing (long sessions)
+
+Long sessions degrade as the context window fills. The checkpoint system
+(MiMo-style) lets one *logical* chat span many *physical* context windows:
+
+1. **Measure** — after every assistant turn, the Stop hook reads the real
+   context footprint from the transcript tail (`input + cache_read +
+   cache_creation` tokens of the last main-chain assistant message).
+2. **Checkpoint** — crossing a token band (default **100K / 200K**) spawns a
+   detached writer that distills the transcript and produces a structured
+   11-field `checkpoint.md` (intent, next action, constraints, task tree,
+   current work, involved files, errors+fixes, discoveries, runtime state,
+   decisions, notes). Incremental: later writes merge only the new turns
+   into the previous checkpoint. Above the handoff threshold the checkpoint
+   auto-refreshes every `checkpoint_refresh_tokens`, so marathon /goal
+   sessions always have a current one.
+3. **Handoff** — at/above the handoff threshold (default **200K**) a pending
+   marker is written for the session's project.
+4. **Rebuild** — the checkpoint is injected into the fresh context window as
+   additionalContext (task tree, next action, file list intact). Two paths:
+   - **Automatic (recommended):** steer native auto-compaction to fire near
+     the handoff threshold (see *Activation* below). Compaction resets the
+     window mid-session — same session id, same terminal, `/goal` loops and
+     session-scoped hooks survive — and `SessionStart(source="compact")`
+     injects the checkpoint right after the compaction summary. Zero user
+     action, works unattended in autonomous sessions.
+   - **Manual fallback:** without the auto-compact steering, the user sees a
+     `systemMessage` advising `/clear` or `/compact` (one command, no
+     restart), and Claude gets a per-prompt notice to finish cleanly and
+     suggest it at a natural boundary. The `/clear`-created session (within
+     `checkpoint_ttl_hours`) consumes the marker. Deliberate continuations
+     only: a plain NEW session in the project (source `startup`/`resume`)
+     never inherits the parked checkpoint — soft continuity for those comes
+     from the `now/` project-state injection instead.
+
+### Activation: fully-automatic rebuild
+
+Add to `settings.json` (or export in your launcher) so native auto-compaction
+fires at ~200K instead of near the model window limit:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "250000",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80"
+  }
+}
+```
+
+(250000 × 80% = trigger ≈ 200K, matching `checkpoint_handoff_tokens`.) The
+hooks detect these vars and suppress all `/clear` nagging — the loop becomes:
+checkpoint at 100K → refresh → auto-compact ≈200K → checkpoint auto-injected →
+repeat. If compaction is overdue (vars set but it never fired), the hooks
+resume warning the user.
+
+Native semantics (extracted from Claude Code v2.1.201 and field-verified;
+re-check on CLI major upgrades):
+
+- Window clamped to **[100000, 1000000]**, and — the sharp edge — an
+  env-configured window **below 200000 silently DISABLES soft auto-compact**
+  instead of lowering the trigger.
+- Actual trigger = `min(usable × pct/100, usable − 13000)`, with
+  `usable = window − min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000)`.
+- The recommended production pair (250000 / 90) → trigger ≈210K.
+- Lowest reliable test trigger: window `200000` + pct `45` → ≈83K.
+
+`autocompact_trigger_tokens()` in `lib/checkpoint.py` mirrors this formula
+(including the 200K disable gate, reported as "auto mode off") so the
+overdue warning and nudge suppression track native behavior exactly.
+
+**Minimizing the native summary.** The built-in compactor can't be replaced
+(and disabling it via `DISABLE_AUTO_COMPACT` would remove the automatic
+trigger this design rides on), but its output can be shrunk so the injected
+checkpoint is the real state carrier. Add to your workspace `CLAUDE.md`:
+
+```markdown
+# Compact Instructions
+
+When compacting, produce the SHORTEST possible summary — a single short
+paragraph. A structured checkpoint (task tree, next action, involved files,
+decisions, errors/fixes) is injected automatically right after compaction;
+do NOT duplicate any of that. Preserve only the user's current request
+verbatim and any constraints stated in the most recent turns.
+```
+
+Why compaction (not `/clear`) is the automatic path: hooks cannot invoke
+slash commands, so a hook-triggered `/clear` is impossible — but the
+auto-compact *threshold* is steerable via env, and compaction both preserves
+the session (id, session-scoped hooks, terminal) and fires SessionStart with
+`source="compact"`, which is a supported context-injection point.
+
+Safety properties, by construction:
+
+- The Stop hook **never emits a `decision`** — it cannot block a Stop, so
+  `/goal` loops and other Stop hooks are unaffected.
+- Child sessions (subagents, nested hook sessions) are excluded — a research
+  subagent's own giant context never triggers checkpoints, and its sidechain
+  usage records are ignored when measuring the main session.
+- The writer runs detached with the standard isolation bundle
+  (`setting_sources=[]`, `strict-mcp-config`, `_HOOK_CHILD_SESSION=1`) — it
+  can't recurse into hooks or goals.
+- Writer failure leaves the previous checkpoint in place; checkpointing is
+  always best-effort and never blocks the session.
+
+| Option | Default | Purpose |
+|--------|---------|---------|
+| `checkpoint_enabled` | `true` | Master switch for the checkpoint system |
+| `checkpoint_tokens` | `100000,200000` | Comma-separated checkpoint bands (absolute tokens) |
+| `checkpoint_handoff_tokens` | last band | Threshold where handoff advice + pending marker kick in (clamped to ≥ last band) |
+| `checkpoint_refresh_tokens` | `25000` | Above the handoff threshold, re-checkpoint every this many tokens of growth |
+| `checkpoint_ttl_hours` | `6` | Pending rebuild marker expiry |
+| `checkpoint_timeout_s` | `240` | Writer model-call timeout |
+| `checkpoint_model` | plugin default model | Model for the checkpoint writer |
+
+Defaults are tuned for a 1M-token window with the quality knee well below
+it: checkpoint early (100K), hand off at 200K, keep every physical window
+under ~300K. State lives in `<data_dir>/checkpoints/`; rebuild events are
+logged to the activity stream as `[checkpoint]` entries.
+
 ## Skills
 
 All commands are namespaced under `/multiplai-context:`.

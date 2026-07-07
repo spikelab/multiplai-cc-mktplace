@@ -32,7 +32,7 @@ MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 # Maps Claude Code hook event names to the plugin script each invokes.
 EXPECTED_HOOK_SCRIPTS = {
     "SessionStart": ["scripts/session_start.py"],
-    "UserPromptSubmit": ["scripts/context_manager.py"],
+    "UserPromptSubmit": ["scripts/context_manager.py", "scripts/checkpoint_nudge.py"],
     "Stop": ["scripts/session_stop.py"],
     "SessionEnd": ["scripts/session_end.py"],
     "PreCompact": ["scripts/pre_compact.py"],

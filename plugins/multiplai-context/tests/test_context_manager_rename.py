@@ -642,15 +642,17 @@ class TestHookExecutionAfterRename:
     """The hook must still execute correctly after the rename."""
 
     def test_hook_script_path_matches_actual_file(self):
-        """WHEN hooks.json declares a UserPromptSubmit script
-        THEN the script path resolves to an actual file on disk."""
-        for h in parse_hooks():
-            if h["event"] == "UserPromptSubmit":
-                script_path = PLUGIN_ROOT / h["script"]
-                assert script_path.is_file(), \
-                    f"Hook script does not exist: {h['script']}"
-                assert "context_manager" in h["script"], \
-                    f"UserPromptSubmit hook must reference context_manager, got: {h['script']}"
+        """WHEN hooks.json declares UserPromptSubmit scripts
+        THEN each path resolves to an actual file, and the renamed
+        context_manager.py is among them (checkpoint_nudge.py also runs
+        on this event since the checkpoint feature)."""
+        ups = [h for h in parse_hooks() if h["event"] == "UserPromptSubmit"]
+        for h in ups:
+            script_path = PLUGIN_ROOT / h["script"]
+            assert script_path.is_file(), \
+                f"Hook script does not exist: {h['script']}"
+        assert any("context_manager" in h["script"] for h in ups), \
+            "UserPromptSubmit hooks must include context_manager"
 
     def test_stdin_json_accepted(self, tmp_path, monkeypatch, reset_paths_cache):
         """WHEN context_manager.py receives valid JSON on stdin

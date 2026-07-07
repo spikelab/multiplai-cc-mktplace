@@ -1066,16 +1066,24 @@ class TestPreCompactBehavior:
             "Currently only logs a message without preserving any context."
         )
 
-    def test_does_not_block_compaction(self):
+    def test_blocking_is_time_bounded(self):
         """WHEN pre_compact runs
-        THEN it should not import heavy modules that would slow compaction."""
+        THEN any blocking work must be time-bounded, never open-ended.
+
+        The contract changed 2026-07-06: pre_compact now deliberately blocks
+        to write a synchronous checkpoint — it's the last chance to capture
+        session state before compaction summarizes it away (the "truly
+        necessary for context preservation" exception). What must still
+        hold: every wait is bounded by a deadline/timeout so compaction can
+        never hang indefinitely.
+        """
         source = _read_source(PRE_COMPACT)
-        # PreCompact should be fast — should not do heavy LLM calls inline
-        # unless it's truly necessary for context preservation
-        if "asyncio.run" not in source:
-            # If it's synchronous, it should be lightweight
-            assert "time.sleep" not in source, (
-                "pre_compact.py must not block with sleep calls"
+        if "time.sleep" in source or "subprocess.run" in source:
+            assert "deadline" in source and (
+                "timeout" in source or "TimeoutExpired" in source
+            ), (
+                "pre_compact.py blocks — it must bound the wait with a "
+                "deadline/timeout so compaction cannot hang"
             )
 
 
