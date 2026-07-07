@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.3 — 2026-07-07
 
 ### Fixed
 - **Post-cooldown relevance re-floor — weak co-picks no longer injected once
