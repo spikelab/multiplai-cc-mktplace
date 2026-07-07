@@ -375,6 +375,24 @@ def _render_corpus_section(label: str, files: dict[str, str]) -> str:
     return "\n\n".join(parts)
 
 
+# Max chars of user prompt echoed on ROUTING_SCORES lines. The prompt
+# is already session context (per the logging standard's PII rule);
+# truncation just bounds log growth.
+_PROMPT_LOG_MAX_CHARS = 80
+
+
+def _prompt_for_log(prompt: str, max_chars: int = _PROMPT_LOG_MAX_CHARS) -> str:
+    """Whitespace-collapsed, truncated prompt for log attribution.
+
+    Collapsing keeps the log line single-line (newlines in a prompt
+    would otherwise split it and break line-oriented parsers).
+    """
+    collapsed = " ".join(prompt.split())
+    if len(collapsed) > max_chars:
+        return collapsed[:max_chars] + "…"
+    return collapsed
+
+
 # ---------------------------------------------------------------------------
 # Re-recommendation cooldown (turn-based dedup)
 # ---------------------------------------------------------------------------
@@ -399,6 +417,56 @@ def _filter_cooldown(
         else:
             kept.append(pick)
     return kept, suppressed
+
+
+# Post-cooldown relevance re-check. _apply_policy admits everything
+# within KEEP_RATIO (20%) of the corpus's top score, so weak entries
+# ride in as companions of a strong top match. When cooldown then
+# suppresses that top scorer, the survivors lose the anchor that
+# justified them — they were only "relevant" relative to a file already
+# in the conversation. Survivors must re-clear a bar derived from the
+# suppressed top score, or nothing is injected: noise is worse than
+# silence. 0.5 = "at least half as relevant as what's already in
+# context". The alternative design (running cooldown *before* the
+# floor/cap pick) was rejected: the surviving weak tail then forms a
+# fresh ranking whose top can still clear the absolute MIN_SIGNAL
+# floor — exactly the observed failure (life.md at 3.335 injected
+# after the 10.8/9.9 top scorers were suppressed).
+POST_COOLDOWN_KEEP_RATIO = 0.5
+
+
+def _refloor_after_cooldown(
+    kept: list[str],
+    suppressed: list[str],
+    scored: list,
+) -> tuple[list[str], list[str]]:
+    """Re-check cooldown survivors against a post-suppression bar.
+
+    Fires only when the corpus's top-ranked entry was itself suppressed
+    (the ranking anchor is gone); if the top pick is still going in,
+    the original relevance contract holds and nothing changes.
+    Survivors scoring below ``POST_COOLDOWN_KEEP_RATIO × top score``
+    are dropped. Picks without a score (bundle / co_retrieve expansion)
+    are kept — they were pulled in by metadata, not ranking. ``scored``
+    is the router's ``(score, filename)`` ranking; without it (LLM
+    router) behavior is unchanged. Returns ``(kept, dropped)``.
+    """
+    if not kept or not suppressed or not scored:
+        return kept, []
+    top_score, top_name = scored[0]
+    if top_name not in set(suppressed):
+        return kept, []
+    score_by_name = {name: s for s, name in scored}
+    bar = POST_COOLDOWN_KEEP_RATIO * top_score
+    survivors: list[str] = []
+    dropped: list[str] = []
+    for name in kept:
+        score = score_by_name.get(name)
+        if score is None or score >= bar:
+            survivors.append(name)
+        else:
+            dropped.append(name)
+    return survivors, dropped
 
 
 def _persist_turn_state(
@@ -535,31 +603,44 @@ def main() -> None:
             # by the eval harness and the /health Routing Quality check.
             router_diag = getattr(router, "last_scores", None) or None
             if router_diag:
-                _mem = router_diag.get("memory") or {}
-                _scored = _mem.get("scored") or []
-                _cap = _mem.get("cap", 10)
-                # _apply_policy keeps a contiguous top prefix, so the
-                # set actually injected is scored[:n_picked]. Emit that
-                # — NOT scored[:cap], the raw candidate pool — so
-                # /health's live top/floor describe what was injected,
-                # not an excluded candidate (the conflation that made
-                # the live floor read artificially low).
-                _np = _mem.get("n_picked", 0)
-                logger.info(
-                    "ROUTING_SCORES memory=%s",
-                    json.dumps({
-                        "picked": [[fn, round(s, 3)] for s, fn in _scored[:_np]],
-                        "cap": _cap,
-                        "n_candidates": _mem.get("n_candidates", len(_scored)),
-                        "n_picked": _np,
-                        "capped": _mem.get("capped", False),
-                        "floor_excluded": (
-                            round(_scored[_np][0], 3)
-                            if len(_scored) > _np
-                            else None
-                        ),
-                    }),
-                )
+                # Score→prompt attribution lives in the line itself so
+                # forensics don't require digging through transcripts.
+                # It's a JSON key (not a trailing key=value) so parsers
+                # anchored on `memory=({...})$` keep working.
+                _plog = _prompt_for_log(prompt)
+                for _ct in ("memory", "skills", "resources"):
+                    # memory always logs (the /health contract); skills /
+                    # resources log when their corpus is enabled so those
+                    # injections leave a score trail too.
+                    if _ct != "memory" and not corpora.get(_ct):
+                        continue
+                    _d = router_diag.get(_ct) or {}
+                    _scored = _d.get("scored") or []
+                    _cap = _d.get("cap", 10)
+                    # _apply_policy keeps a contiguous top prefix, so the
+                    # set actually injected is scored[:n_picked]. Emit that
+                    # — NOT scored[:cap], the raw candidate pool — so
+                    # /health's live top/floor describe what was injected,
+                    # not an excluded candidate (the conflation that made
+                    # the live floor read artificially low).
+                    _np = _d.get("n_picked", 0)
+                    logger.info(
+                        "ROUTING_SCORES %s=%s",
+                        _ct,
+                        json.dumps({
+                            "picked": [[fn, round(s, 3)] for s, fn in _scored[:_np]],
+                            "cap": _cap,
+                            "n_candidates": _d.get("n_candidates", len(_scored)),
+                            "n_picked": _np,
+                            "capped": _d.get("capped", False),
+                            "floor_excluded": (
+                                round(_scored[_np][0], 3)
+                                if len(_scored) > _np
+                                else None
+                            ),
+                            "prompt": _plog,
+                        }),
+                    )
         except NotImplementedError as e:
             logger.warning("Router misconfigured: %s", e)
         except Exception:
@@ -592,6 +673,7 @@ def main() -> None:
     turn_index = 0
     recent: dict = {}
     cooldown_suppressed: dict[str, list[str]] = {}
+    refloor_dropped: dict[str, list[str]] = {}
     # Capture what the router actually picked, before cooldown trims it,
     # so the fallback can tell genuine abstention from cooldown removal.
     router_picked = {ct: bool(picks_by_corpus.get(ct)) for ct in ("memory", "skills", "resources")}
@@ -610,6 +692,11 @@ def main() -> None:
                 recent.get(corpus_type) or {},
                 turn_index, cooldown,
             )
+            if suppressed and kept:
+                _scored = ((router_diag or {}).get(corpus_type) or {}).get("scored") or []
+                kept, dropped = _refloor_after_cooldown(kept, suppressed, _scored)
+                if dropped:
+                    refloor_dropped[corpus_type] = dropped
             picks_by_corpus[corpus_type] = kept
             if suppressed:
                 cooldown_suppressed[corpus_type] = suppressed
@@ -618,6 +705,12 @@ def main() -> None:
                 "COOLDOWN turn=%d window=%d suppressed=%s",
                 turn_index, cooldown,
                 json.dumps({k: sorted(v) for k, v in cooldown_suppressed.items()}),
+            )
+        if any(refloor_dropped.values()):
+            logger.info(
+                "COOLDOWN_REFLOOR turn=%d ratio=%s dropped=%s",
+                turn_index, POST_COOLDOWN_KEEP_RATIO,
+                json.dumps({k: sorted(v) for k, v in refloor_dropped.items()}),
             )
 
     # Load content per corpus
@@ -670,10 +763,18 @@ def main() -> None:
         _skip_msg = "no context matched this prompt"
         if any(cooldown_suppressed.values()) and not router_abstained:
             _n = sum(len(v) for v in cooldown_suppressed.values())
-            _skip_msg = (
-                f"all {_n} matched file(s) injected within the last "
-                f"{cooldown} turns — on cooldown, nothing injected"
-            )
+            _nd = sum(len(v) for v in refloor_dropped.values())
+            if _nd:
+                _skip_msg = (
+                    f"top {_n} matched file(s) on cooldown; {_nd} weak "
+                    f"co-pick(s) dropped below the post-cooldown relevance "
+                    f"bar — nothing injected"
+                )
+            else:
+                _skip_msg = (
+                    f"all {_n} matched file(s) injected within the last "
+                    f"{cooldown} turns — on cooldown, nothing injected"
+                )
         elif router_abstained:
             _dm = (router_diag or {}).get("memory") or {}
             _ds = _dm.get("scored") or []

@@ -448,6 +448,128 @@ class TestRoutingScoresEmission:
         scores = [s for _, s in rec["picked"]]
         assert scores == sorted(scores, reverse=True)
 
+    def test_scores_line_carries_truncated_prompt(self, env_setup):
+        """ROUTING_SCORES embeds a sanitized ~80-char prompt so
+        score→prompt attribution doesn't require transcript digging."""
+        (env_setup["memory_dir"] / "strong.md").write_text("# strong\nbody")
+        _write_catalog(
+            env_setup["catalogs_dir"],
+            "memory.json",
+            [{"source": "strong.md",
+              "intent_domains": ["italian tax filing and FBAR"]}],
+        )
+
+        long_prompt = (
+            "help with my italian tax filing and FBAR "
+            "plus a very long tail " * 5
+        )
+        _run_hook(
+            env_setup, prompt=long_prompt,
+            extra_env={"MULTIPLAI_LOG_LEVEL": "INFO"},
+        )
+        logs = list(env_setup["data_dir"].rglob("context_manager.log"))
+        assert logs, "context_manager.log not written"
+        line = next(
+            (ln for ln in logs[0].read_text().splitlines()
+             if "ROUTING_SCORES memory=" in ln),
+            None,
+        )
+        assert line, "no ROUTING_SCORES line emitted"
+        rec = json.loads(line.split("ROUTING_SCORES memory=", 1)[1])
+        collapsed = " ".join(long_prompt.split())
+        assert rec["prompt"] == collapsed[:80] + "…"
+
+    def test_skills_corpus_emits_scores_line(self, env_setup):
+        """Skill routing must leave a score trail, not just memory."""
+        (env_setup["memory_dir"] / "voice.md").write_text("# Voice")
+        skill_dir = env_setup["skills_dir"] / "writing"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# Writing skill body")
+        _write_catalog(
+            env_setup["catalogs_dir"],
+            "memory.json",
+            [{"source": "voice.md", "intent_domains": ["writing"]}],
+        )
+        _write_catalog(
+            env_setup["catalogs_dir"],
+            "skills.json",
+            [{"source": "writing", "name": "writing",
+              "summary": "Drafts and edits blog posts",
+              "intent_domains": ["writing a blog post"]}],
+        )
+
+        prompt = "writing a blog post"
+        out = _run_hook(
+            env_setup, prompt=prompt,
+            extra_env={
+                "CLAUDE_PLUGIN_OPTION_enable_skills": "true",
+                "MULTIPLAI_LOG_LEVEL": "INFO",
+            },
+        )
+        assert out["skills_files"] >= 1
+        logs = list(env_setup["data_dir"].rglob("context_manager.log"))
+        assert logs, "context_manager.log not written"
+        line = next(
+            (ln for ln in logs[0].read_text().splitlines()
+             if "ROUTING_SCORES skills=" in ln),
+            None,
+        )
+        assert line, "no ROUTING_SCORES skills= line emitted"
+        rec = json.loads(line.split("ROUTING_SCORES skills=", 1)[1])
+        assert "writing" in [fn for fn, _ in rec["picked"]]
+        assert rec["n_picked"] >= 1
+        assert rec["prompt"] == prompt
+
+
+# ---------------------------------------------------------------------------
+# Post-cooldown re-floor helper (unit level)
+# ---------------------------------------------------------------------------
+
+
+class TestRefloorHelper:
+    def test_no_change_when_top_pick_survives(self):
+        from context_manager import _refloor_after_cooldown
+        scored = [(10.0, "top.md"), (6.0, "mid.md"), (3.0, "weak.md")]
+        kept, dropped = _refloor_after_cooldown(
+            ["top.md", "weak.md"], ["mid.md"], scored
+        )
+        assert kept == ["top.md", "weak.md"]
+        assert dropped == []
+
+    def test_drops_below_bar_when_top_suppressed(self):
+        from context_manager import _refloor_after_cooldown
+        scored = [(10.0, "top.md"), (6.0, "mid.md"), (3.0, "weak.md")]
+        kept, dropped = _refloor_after_cooldown(
+            ["mid.md", "weak.md"], ["top.md"], scored
+        )
+        # bar = 0.5 × 10.0: mid (6.0) clears, weak (3.0) doesn't.
+        assert kept == ["mid.md"]
+        assert dropped == ["weak.md"]
+
+    def test_unscored_expansion_picks_are_kept(self):
+        from context_manager import _refloor_after_cooldown
+        scored = [(10.0, "top.md"), (3.0, "weak.md")]
+        kept, dropped = _refloor_after_cooldown(
+            ["weak.md", "bundle-sibling.md"], ["top.md"], scored
+        )
+        # bundle-sibling.md has no score (metadata expansion) → kept.
+        assert kept == ["bundle-sibling.md"]
+        assert dropped == ["weak.md"]
+
+    def test_no_scores_means_no_change(self):
+        from context_manager import _refloor_after_cooldown
+        kept, dropped = _refloor_after_cooldown(["a.md"], ["b.md"], [])
+        assert kept == ["a.md"]
+        assert dropped == []
+
+    def test_prompt_for_log_collapses_and_truncates(self):
+        from context_manager import _prompt_for_log
+        assert _prompt_for_log("hello\n  world") == "hello world"
+        long = "x" * 200
+        out = _prompt_for_log(long)
+        assert len(out) == 81
+        assert out.endswith("…")
+
 
 # ---------------------------------------------------------------------------
 # Empty-everything case
@@ -521,6 +643,71 @@ class TestRecommendationCooldown:
         assert state["turn_index"] == 1
         assert "python.md" in state["recently_injected"]["memory"]
         assert state["recently_injected"]["memory"]["python.md"] == 1
+
+    def test_weak_survivor_dropped_when_anchor_on_cooldown(self, env_setup):
+        """Post-cooldown re-floor (regression, session 351388d2): weak
+        co-picks that only cleared the relevance cutoff relative to a
+        strong top match must not be injected once cooldown suppresses
+        that anchor — prefer nothing over noise."""
+        (env_setup["memory_dir"] / "strong.md").write_text("# Strong")
+        (env_setup["memory_dir"] / "weak.md").write_text("# Weak")
+        _write_catalog(
+            env_setup["catalogs_dir"], "memory.json",
+            [
+                {"source": "strong.md",
+                 "intent_domains": ["debugging python async concurrency event loop"]},
+                {"source": "weak.md", "intent_domains": ["python tooling"]},
+            ],
+        )
+        env = {
+            "CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns": "4",
+            "MULTIPLAI_LOG_LEVEL": "INFO",
+        }
+        # Turn 1: only the strong anchor matches → injected.
+        first = _run_hook(
+            env_setup, prompt="debugging async concurrency event loop",
+            extra_env=env,
+        )
+        assert first["memory_files"] == 1
+        assert "strong.md" in first["context"]
+        # Turn 2: both match; strong is on cooldown. weak.md clears the
+        # absolute MIN_SIGNAL floor (~2.4) but sits at ~30% of the
+        # suppressed top score (~8.0) — the old pipeline injected it
+        # alone; the re-floor drops it and nothing is injected.
+        second = _run_hook(
+            env_setup,
+            prompt="debugging python async concurrency event loop tooling",
+            extra_env=env,
+        )
+        assert second["memory_files"] == 0
+        assert "weak.md" not in second["context"]
+        assert second["context"] == ""
+        logs = list(env_setup["data_dir"].rglob("context_manager.log"))
+        assert logs and any(
+            "COOLDOWN_REFLOOR" in ln and "weak.md" in ln
+            for ln in logs[0].read_text().splitlines()
+        ), "COOLDOWN_REFLOOR line not emitted"
+
+    def test_weak_copick_still_injected_when_anchor_survives(self, env_setup):
+        """No behavior change while the top scorer is NOT suppressed:
+        weak co-picks still ride in with their anchor."""
+        (env_setup["memory_dir"] / "strong.md").write_text("# Strong")
+        (env_setup["memory_dir"] / "weak.md").write_text("# Weak")
+        _write_catalog(
+            env_setup["catalogs_dir"], "memory.json",
+            [
+                {"source": "strong.md",
+                 "intent_domains": ["debugging python async concurrency event loop"]},
+                {"source": "weak.md", "intent_domains": ["python tooling"]},
+            ],
+        )
+        out = _run_hook(
+            env_setup,
+            prompt="debugging python async concurrency event loop tooling",
+            extra_env={"CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns": "4"},
+        )
+        assert out["memory_files"] == 2
+        assert "weak.md" in out["context"]
 
     def test_precompact_clears_cooldown_map(self, env_setup):
         """PreCompact resets recently_injected so post-compaction every
