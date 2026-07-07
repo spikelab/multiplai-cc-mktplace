@@ -20,6 +20,13 @@
   unexpected ERRORs from the involved subsystems fail the probe (exit 1).
   Entries now carry their parsed `[component]`, so errors that only surface
   in `hook-errors.log` are attributed to the right subsystem.
+- **log-doctor injection forensics (`--injections`).** Reconstructs each
+  context-routing decision by joining `context_manager` ROUTING_SCORES /
+  COOLDOWN lines with `activity.jsonl` inject events: per-file
+  picked/injected/suppressed counts with score stats, cap-hit and abstain
+  rates, and `--trace N` full decision traces (`--file X` to focus on one
+  file). Explains "why did it inject that" cases — e.g. cooldown suppressing
+  the top scorers so near-floor files fill the slots.
 
 ## 0.5.1 — 2026-07-07
 

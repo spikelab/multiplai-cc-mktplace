@@ -26,6 +26,8 @@ from log_doctor import (  # noqa: E402
     SCENARIOS,
     cluster,
     discover,
+    injection_stats,
+    load_routing_decisions,
     normalize,
     parse_expect_spec,
     parse_file,
@@ -251,3 +253,63 @@ class TestProbe:
             for sub, lvl, pat in sc["expect"]:
                 assert sub and lvl, name
                 _re.compile(pat)
+
+
+CM_LOG = (
+    "[2026-07-06T07:46:18Z] [context_manager] [session:--------] INFO: "
+    'ROUTING_SCORES memory={"picked": [["prompt-eng-guide.md", 10.806], '
+    '["CLAUDE.md", 9.931], ["life.md", 3.335]], "cap": 10, '
+    '"n_candidates": 12, "n_picked": 3, "capped": false, "floor_excluded": 1.0}\n'
+    "[2026-07-06T07:46:18Z] [context_manager] [session:--------] INFO: "
+    'COOLDOWN turn=4 window=4 suppressed={"memory": ["prompt-eng-guide.md", "CLAUDE.md"]}\n'
+    "[2026-07-06T07:50:00Z] [context_manager] [session:--------] INFO: "
+    'ROUTING_SCORES memory={"picked": [["dolcebot.md", 5.0]], "cap": 10, '
+    '"n_candidates": 3, "n_picked": 1, "capped": true, "floor_excluded": 2.0}\n'
+)
+
+ACTIVITY_INJECT_JSONL = (
+    '{"ts": "2026-07-06T07:46:18Z", "component": "context", "event": "inject",'
+    ' "level": "INFO", "session": "351388d2", "msg": "injected 1 memory",'
+    ' "files": ["life.md"], "bytes": 20648}\n'
+    '{"ts": "2026-07-06T07:51:00Z", "component": "context", "event": "skip",'
+    ' "level": "INFO", "session": "351388d2",'
+    ' "msg": "router abstained \\u2014 no memory matched, nothing injected"}\n'
+)
+
+
+class TestInjections:
+    @pytest.fixture
+    def routing_logs(self, tmp_path):
+        (tmp_path / "context_manager.log").write_text(CM_LOG)
+        (tmp_path / "activity.jsonl").write_text(ACTIVITY_INJECT_JSONL)
+        return tmp_path
+
+    def test_joins_scores_cooldown_and_inject_event(self, routing_logs):
+        decisions = load_routing_decisions(routing_logs)
+        d = next(x for x in decisions if x.event == "inject")
+        assert d.session == "351388d2"
+        assert d.injected == ["life.md"]
+        assert d.bytes == 20648
+        picked = dict(d.scores["memory"]["picked"])
+        assert picked["life.md"] == 3.335
+        assert "prompt-eng-guide.md" in d.suppressed["memory"]
+
+    def test_counts_abstains_and_cap_hits(self, routing_logs):
+        stats = injection_stats(load_routing_decisions(routing_logs))
+        assert stats["injects"] == 1
+        assert stats["abstains"] == 1
+        assert stats["cap_hits"] == 1
+
+    def test_per_file_stats(self, routing_logs):
+        stats = injection_stats(load_routing_decisions(routing_logs))
+        rows = {r["file"]: r for r in stats["files"]}
+        assert rows["life.md"]["injected"] == 1
+        assert rows["life.md"]["picked"] == 1
+        assert rows["prompt-eng-guide.md"]["suppressed"] == 1
+        assert rows["prompt-eng-guide.md"]["injected"] == 0
+
+    def test_file_filter(self, routing_logs):
+        stats = injection_stats(
+            load_routing_decisions(routing_logs), file_filter="life.md"
+        )
+        assert [r["file"] for r in stats["files"]] == ["life.md"]

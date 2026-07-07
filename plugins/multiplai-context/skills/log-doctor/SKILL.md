@@ -91,6 +91,44 @@ Clusters triaged out, one line each with reason.
 Reply in the console with a 3-line summary and the report path. Do not paste
 the whole report into the console.
 
+## Injection forensics — "why did it inject that?"
+
+When the user questions a context injection (wrong files, irrelevant memory,
+"why did X get injected"), use `--injections`. It reconstructs each routing
+decision by joining `context_manager` logs (candidate scores, cap/floor,
+cooldown suppressions) with `activity.jsonl` inject events (session id, final
+files, bytes) on timestamp.
+
+```bash
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/log_doctor.py" --injections \
+  [--file life.md] [--trace 5] [--days N] [--json]
+```
+
+- Aggregate table: per file — times picked by the router, times actually
+  injected, times cooldown-suppressed, avg/max score. High `injected` with low
+  `avg_score` = a file that rides in near the floor; high `suppressed` = a
+  file the router wants constantly.
+- `--trace N` shows the last N full decisions: every candidate with its score,
+  what cooldown removed, what was finally injected.
+
+**Interpreting a "makes no sense" injection — check in this order:**
+
+1. **Cooldown survivor:** the top scorers were suppressed (recently injected),
+   so near-floor files filled the slots. Visible in the trace: injected files
+   have low scores while suppressed ones scored high. This is a router-design
+   issue, not a scoring bug.
+2. **Low floor:** the file scored just above `floor_excluded` — weak token
+   overlap admitted it. Recurring low-score injections of the same file
+   suggest raising the floor or improving that file's routing keywords.
+3. **Prompt attribution:** prompts are NOT logged, so to see what the tokens
+   matched against, take the session id + timestamp from the trace and find
+   the user message in the session transcript
+   (`$CLAUDE_CONFIG_DIR/projects/<project>/<session>.jsonl`).
+
+Diagnosability gaps worth reporting as findings when they bite: the router
+logs no prompt text (even truncated) and logs `ROUTING_SCORES` only for the
+memory corpus — skills/resources injections leave no score trail.
+
 ## Probe mode — exercise a functionality, verify its logs
 
 Three steps: baseline → trigger → check.

@@ -304,6 +304,215 @@ def scan(
 
 
 # ---------------------------------------------------------------------------
+# Injection forensics — why did the router inject what it injected?
+# ---------------------------------------------------------------------------
+#
+# Joins two sources per prompt event (matched by timestamp, second precision):
+#   context_manager*.log  ROUTING_SCORES (candidates + scores, cap, floor),
+#                         COOLDOWN (suppressed files), Context assembled
+#   activity*.jsonl       inject/fallback/skip events (session id, final
+#                         injected files, bytes)
+
+ROUTING_SCORES_RE = re.compile(r"ROUTING_SCORES (?P<corpus>\w+)=(?P<payload>\{.*\})\s*$")
+COOLDOWN_RE = re.compile(r"COOLDOWN turn=\d+ window=\d+ suppressed=(?P<payload>\{.*\})\s*$")
+
+
+@dataclass
+class RoutingDecision:
+    ts: datetime
+    scores: dict = field(default_factory=dict)      # corpus → ROUTING_SCORES payload
+    suppressed: dict = field(default_factory=dict)  # corpus → [files] (cooldown)
+    session: str = ""
+    event: str = ""          # inject | fallback | skip | (blank if no activity match)
+    injected: list = field(default_factory=list)
+    bytes: int = 0
+    msg: str = ""
+
+
+def load_routing_decisions(logs_dir: Path, since: date | None = None) -> list:
+    """Reconstruct per-prompt routing decisions from context_manager + activity logs."""
+    decisions: dict[datetime, RoutingDecision] = {}
+
+    def at(ts: datetime | None) -> RoutingDecision | None:
+        if ts is None:
+            return None
+        if since and ts.date() < since:
+            return None
+        return decisions.setdefault(ts, RoutingDecision(ts=ts))
+
+    for name, paths in discover(logs_dir, ["context_manager"]).items():
+        for path in paths:
+            entries, _ = parse_file(path, name, None)
+            for e in entries:
+                d = at(e.ts)
+                if d is None:
+                    continue
+                m = ROUTING_SCORES_RE.search(e.msg)
+                if m:
+                    try:
+                        d.scores[m.group("corpus")] = json.loads(m.group("payload"))
+                    except json.JSONDecodeError:
+                        pass
+                    continue
+                m = COOLDOWN_RE.search(e.msg)
+                if m:
+                    try:
+                        d.suppressed = json.loads(m.group("payload"))
+                    except json.JSONDecodeError:
+                        pass
+
+    for _, paths in discover(logs_dir, ["activity"]).items():
+        for path in paths:
+            if path.suffix != ".jsonl":
+                continue
+            for line in path.read_text(errors="replace").splitlines():
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict) or obj.get("component") != "context":
+                    continue
+                msg = str(obj.get("msg", ""))
+                is_inject = obj.get("event") == "inject" or msg.startswith("injected")
+                is_fallback = obj.get("event") == "fallback" or "fell back" in msg
+                is_abstain = "abstained" in msg or "matched nothing" in msg
+                if not (is_inject or is_fallback or is_abstain):
+                    continue
+                ts = _parse_ts(str(obj.get("ts", "")))
+                # scores land a moment before the inject line — try ts, ts-1s, ts-2s
+                d = None
+                for delta in (0, 1, 2):
+                    cand = decisions.get(ts - timedelta(seconds=delta)) if ts else None
+                    if cand is not None:
+                        d = cand
+                        break
+                if d is None:
+                    d = at(ts)
+                    if d is None:
+                        continue
+                d.session = str(obj.get("session", ""))
+                d.event = "inject" if is_inject else ("fallback" if is_fallback else "abstain")
+                d.msg = msg
+                if is_inject:
+                    d.injected = list(obj.get("files", []))
+                    d.bytes = int(obj.get("bytes", 0) or 0)
+
+    return sorted(decisions.values(), key=lambda d: d.ts)
+
+
+def injection_stats(decisions: list, file_filter: str | None = None) -> dict:
+    """Per-file aggregates across routing decisions."""
+    per_file: dict[str, dict] = {}
+
+    def rec(name: str) -> dict:
+        return per_file.setdefault(
+            name,
+            {"picked": 0, "injected": 0, "suppressed": 0, "scores": []},
+        )
+
+    n_capped = n_inject = n_abstain = n_fallback = 0
+    for d in decisions:
+        if d.event == "inject":
+            n_inject += 1
+        elif d.event == "abstain":
+            n_abstain += 1
+        elif d.event == "fallback":
+            n_fallback += 1
+        for corpus, payload in d.scores.items():
+            if payload.get("capped"):
+                n_capped += 1
+            suppressed = set(d.suppressed.get(corpus, []))
+            for fname, score in payload.get("picked", []):
+                r = rec(fname)
+                r["picked"] += 1
+                r["scores"].append(score)
+                if fname in suppressed:
+                    r["suppressed"] += 1
+        for fname in d.injected:
+            rec(fname)["injected"] += 1
+
+    rows = []
+    for fname, r in per_file.items():
+        if file_filter and fname != file_filter:
+            continue
+        scores = r["scores"]
+        rows.append({
+            "file": fname,
+            "picked": r["picked"],
+            "injected": r["injected"],
+            "suppressed": r["suppressed"],
+            "avg_score": round(sum(scores) / len(scores), 2) if scores else None,
+            "max_score": round(max(scores), 2) if scores else None,
+        })
+    rows.sort(key=lambda r: (-r["injected"], -r["picked"]))
+    return {
+        "decisions": len(decisions),
+        "injects": n_inject,
+        "abstains": n_abstain,
+        "fallbacks": n_fallback,
+        "cap_hits": n_capped,
+        "files": rows,
+    }
+
+
+def render_injections_markdown(stats: dict, decisions: list,
+                               file_filter: str | None, trace: int) -> str:
+    out = ["# Injection forensics", ""]
+    out.append(
+        f"Decisions: {stats['decisions']} · injects: {stats['injects']} · "
+        f"abstains: {stats['abstains']} · fallbacks: {stats['fallbacks']} · "
+        f"cap-hits: {stats['cap_hits']}"
+    )
+    out.append("")
+    out.append("## Per-file stats (sorted by injections)")
+    out.append("")
+    out.append("| File | Picked | Injected | Cooldown-suppressed | Avg score | Max score |")
+    out.append("|---|---|---|---|---|---|")
+    for r in stats["files"]:
+        out.append(
+            f"| {r['file']} | {r['picked']} | {r['injected']} | {r['suppressed']} "
+            f"| {r['avg_score']} | {r['max_score']} |"
+        )
+    out.append("")
+    if trace:
+        shown = [
+            d for d in decisions
+            if not file_filter
+            or file_filter in d.injected
+            or any(file_filter == f for p in d.scores.values()
+                   for f, _ in p.get("picked", []))
+        ][-trace:]
+        out.append(f"## Decision trace (last {len(shown)})")
+        out.append("")
+        for d in shown:
+            sid = d.session or "--------"
+            out.append(f"### {d.ts.isoformat()} · session {sid} · {d.event or 'no-activity-match'}")
+            out.append("")
+            for corpus, p in d.scores.items():
+                picked = ", ".join(f"{f} ({s})" for f, s in p.get("picked", []))
+                out.append(
+                    f"- {corpus} candidates={p.get('n_candidates')} "
+                    f"picked={p.get('n_picked')} cap={p.get('cap')} "
+                    f"capped={p.get('capped')} floor_excluded={p.get('floor_excluded')}"
+                )
+                out.append(f"  - scores: {picked}")
+                sup = d.suppressed.get(corpus)
+                if sup:
+                    out.append(f"  - cooldown-suppressed: {', '.join(sup)}")
+            if d.injected:
+                out.append(f"- **injected:** {', '.join(d.injected)}")
+            elif d.event:
+                out.append(f"- outcome: {d.msg[:200]}")
+            out.append("")
+    out.append(
+        "_Note: prompts are not logged by context_manager, so score→prompt "
+        "attribution needs the session transcript (activity.jsonl has the "
+        "session id; find the user message at the decision timestamp)._"
+    )
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
 # Probe mode — exercise a functionality, then assert its logs appeared
 # ---------------------------------------------------------------------------
 
@@ -607,6 +816,19 @@ def main(argv: list | None = None) -> int:
     parser.add_argument(
         "--list", action="store_true", help="list available subsystems and exit"
     )
+    inj = parser.add_argument_group("injection forensics")
+    inj.add_argument(
+        "--injections", action="store_true",
+        help="analyze context-routing injections (joins context_manager + activity logs)",
+    )
+    inj.add_argument(
+        "--file", dest="inj_file",
+        help="focus on one memory/skill/resource file (e.g. life.md)",
+    )
+    inj.add_argument(
+        "--trace", type=int, nargs="?", const=10, default=0,
+        help="show the last N full decision traces (default 10 when given)",
+    )
     probe = parser.add_argument_group("probe mode")
     probe.add_argument(
         "--probe-start", action="store_true",
@@ -650,6 +872,29 @@ def main(argv: list | None = None) -> int:
     if not logs_dir.is_dir():
         print(f"logs directory not found: {logs_dir}", file=sys.stderr)
         return 2
+
+    if args.injections:
+        since = date.today() - timedelta(days=args.days) if args.days else None
+        decisions = load_routing_decisions(logs_dir, since=since)
+        stats = injection_stats(decisions, file_filter=args.inj_file)
+        if args.json:
+            payload = dict(stats)
+            if args.trace:
+                payload["trace"] = [
+                    {
+                        "ts": d.ts.isoformat(), "session": d.session,
+                        "event": d.event, "injected": d.injected,
+                        "bytes": d.bytes, "scores": d.scores,
+                        "suppressed": d.suppressed,
+                    }
+                    for d in decisions[-args.trace:]
+                ]
+            print(json.dumps(payload, indent=2))
+        else:
+            print(render_injections_markdown(stats, decisions, args.inj_file, args.trace))
+        logger.info("DONE injections decisions=%d file=%s",
+                    len(decisions), args.inj_file or "all")
+        return 0
 
     if args.probe_start or args.probe_check:
         state_file = (
