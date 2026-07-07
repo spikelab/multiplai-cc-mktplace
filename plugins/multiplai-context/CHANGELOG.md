@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.2 — 2026-07-07
 
 ### Added
 - **`/log-doctor` skill + `scripts/log_doctor.py`.** Scans the runtime logs
