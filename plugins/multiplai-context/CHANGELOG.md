@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Post-cooldown relevance re-floor — weak co-picks no longer injected once
+  their anchor is suppressed (injection forensics, session 351388d2).** The
+  router admits everything within `KEEP_RATIO` (20%) of a corpus's top score,
+  so near-floor files ride in as companions of a strong match; when the
+  cooldown then suppressed that top scorer, the weak survivors were injected
+  alone (e.g. life.md at 3.335 after its 10.8/9.9 anchors were suppressed —
+  perceived as "it injected stuff that makes no sense"). Now, when the
+  top-ranked pick is itself cooldown-suppressed, survivors must re-clear
+  `POST_COOLDOWN_KEEP_RATIO` (0.5) × the suppressed top score or nothing is
+  injected; drops are logged as `COOLDOWN_REFLOOR`. Design: chosen over the
+  alternative of running cooldown *before* the floor/cap pick because the
+  surviving weak tail then forms a fresh ranking whose top can still clear
+  the absolute `MIN_SIGNAL` floor — exactly the observed failure. Behavior is
+  unchanged when the top pick survives cooldown, when scores are unavailable
+  (LLM router), and for unscored bundle/co_retrieve expansion picks.
+
+### Added
+- **`ROUTING_SCORES` lines carry the prompt.** Each line's JSON payload now
+  includes a whitespace-collapsed, 80-char-truncated `"prompt"` key so
+  score→prompt attribution no longer requires digging through session
+  transcripts. Embedded in the JSON (not a trailing `key=value`) so existing
+  `memory={...}$`-anchored parsers (/health, log tooling) keep working. The
+  prompt is already session context per the logging standard's PII rule.
+- **`ROUTING_SCORES` emitted for skills and resources corpora.** Previously
+  only `memory=` was logged, leaving skill/resource injections with no score
+  trail. Memory still logs unconditionally (the /health contract); skills and
+  resources log whenever their corpus is enabled.
+
 ## 0.5.2 — 2026-07-07
 
 ### Added
