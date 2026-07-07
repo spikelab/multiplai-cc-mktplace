@@ -12,8 +12,6 @@ Covers:
 """
 
 import asyncio
-import json
-import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +34,30 @@ def _make_mock_client(content: str):
     client = AsyncMock()
     client.query = AsyncMock(return_value=ModelResponse(content=content))
     return client
+
+
+def _tag_response(units: list[dict]) -> str:
+    """Render unit dicts in the tag-delimited model output format."""
+    if not units:
+        return "<no-units/>"
+    blocks = []
+    for u in units:
+        learnings = "".join(
+            "<learning>\n"
+            + "".join(f"{k}: {v}\n" for k, v in l.items())
+            + "</learning>\n"
+            for l in u.get("learnings", [])
+        )
+        blocks.append(
+            "<unit>\n"
+            f"<timestamp>{u.get('timestamp', '')}</timestamp>\n"
+            "<diary>\n"
+            f"{u.get('diary_entry', '')}\n"
+            "</diary>\n"
+            f"{learnings}"
+            "</unit>"
+        )
+    return "\n".join(blocks)
 
 
 def _sample_units():
@@ -66,15 +88,28 @@ def _sample_units():
 # ---------------------------------------------------------------------------
 
 class TestExtractionPrompt:
-    """EXTRACTION_PROMPT must be diary-first."""
+    """EXTRACTION_PROMPT must be diary-first and tag-delimited (not JSON)."""
 
     def test_prompt_imported(self):
         from lib.extraction import EXTRACTION_PROMPT
         assert EXTRACTION_PROMPT
 
-    def test_prompt_asks_for_diary_entry_field(self):
+    def test_prompt_asks_for_diary_block(self):
         from lib.extraction import EXTRACTION_PROMPT
-        assert "diary_entry" in EXTRACTION_PROMPT
+        assert "<diary>" in EXTRACTION_PROMPT
+
+    def test_prompt_is_not_json(self):
+        """Prose-in-JSON-strings broke strict parsing on real sessions —
+        the prompt must not ask for JSON output."""
+        from lib.extraction import EXTRACTION_PROMPT
+        assert "valid JSON" not in EXTRACTION_PROMPT
+        assert '"units"' not in EXTRACTION_PROMPT
+
+    def test_prompt_has_no_units_marker(self):
+        """Trivial sessions need an explicit marker so the parser can
+        distinguish 'genuinely empty' from 'unparseable'."""
+        from lib.extraction import EXTRACTION_PROMPT
+        assert "<no-units/>" in EXTRACTION_PROMPT
 
     def test_prompt_no_max_chars_constraint_on_diary(self):
         """Old prompt had 'max 300 chars' — new one must not."""
@@ -97,51 +132,125 @@ class TestExtractionPrompt:
 class TestExtractUnits:
     def test_returns_units_on_valid_response(self):
         from lib.extraction import extract_units
-        units_json = json.dumps({
-            "units": [
-                {"timestamp": "2026-05-16T14:00:00Z", "diary_entry": "Did X.", "learnings": []}
-            ]
-        })
-        client = _make_mock_client(units_json)
+        response = _tag_response([
+            {"timestamp": "2026-05-16T14:00:00Z", "diary_entry": "Did X.", "learnings": []}
+        ])
+        client = _make_mock_client(response)
         result = asyncio.run(extract_units("some transcript", valid_targets=["technical-pref.md"], client=client))
         assert len(result) == 1
         assert result[0]["diary_entry"] == "Did X."
 
     def test_calls_client_query(self):
         from lib.extraction import extract_units
-        client = _make_mock_client(json.dumps({"units": []}))
+        client = _make_mock_client(_tag_response([]))
         asyncio.run(extract_units("transcript", valid_targets=[], client=client))
         client.query.assert_awaited_once()
 
     def test_passes_system_prompt(self):
         from lib.extraction import extract_units
-        client = _make_mock_client(json.dumps({"units": []}))
+        client = _make_mock_client(_tag_response([]))
         asyncio.run(extract_units("t", valid_targets=[], client=client))
         call_kwargs = client.query.call_args
         assert call_kwargs.kwargs.get("system") or (call_kwargs.args and "system" in str(call_kwargs))
 
-    def test_raises_on_invalid_json(self):
+    def test_raises_on_unparseable_response(self):
         # An unparseable response must NOT be silently treated as "empty" —
         # that would drop the session's extraction marker as if nothing
         # happened. It raises so the caller retains the marker for retry.
         from lib.extraction import extract_units, ExtractionParseError
-        client = _make_mock_client("not json at all")
+        client = _make_mock_client("no tags at all")
         with pytest.raises(ExtractionParseError):
             asyncio.run(extract_units("t", valid_targets=[], client=client))
 
-    def test_returns_empty_on_valid_empty_units(self):
-        # A well-formed response with no units IS a genuine empty extraction.
+    def test_retries_once_then_raises(self):
+        # Parse failures are stochastic — one in-place retry with the same
+        # prompt. Both attempts failing surfaces the error to the caller.
+        from lib.extraction import extract_units, ExtractionParseError
+        client = _make_mock_client("no tags at all")
+        with pytest.raises(ExtractionParseError):
+            asyncio.run(extract_units("t", valid_targets=[], client=client))
+        assert client.query.await_count == 2
+
+    def test_retry_recovers_on_second_attempt(self):
+        from multiplai_core.model_client import ModelResponse
         from lib.extraction import extract_units
-        client = _make_mock_client(json.dumps({"units": []}))
+        client = AsyncMock()
+        good = _tag_response([{"timestamp": "", "diary_entry": "Recovered.", "learnings": []}])
+        client.query = AsyncMock(side_effect=[
+            ModelResponse(content="garbage"),
+            ModelResponse(content=good),
+        ])
+        result = asyncio.run(extract_units("t", valid_targets=[], client=client))
+        assert len(result) == 1
+        assert result[0]["diary_entry"] == "Recovered."
+
+    def test_returns_empty_on_no_units_marker(self):
+        # An explicit <no-units/> IS a genuine empty extraction.
+        from lib.extraction import extract_units
+        client = _make_mock_client("<no-units/>")
         result = asyncio.run(extract_units("t", valid_targets=[], client=client))
         assert result == []
 
     def test_tolerates_fenced_code_block(self):
         from lib.extraction import extract_units
-        fenced = "```json\n" + json.dumps({"units": [{"timestamp": "", "diary_entry": "x", "learnings": []}]}) + "\n```"
+        fenced = "```\n" + _tag_response([{"timestamp": "", "diary_entry": "x", "learnings": []}]) + "\n```"
         client = _make_mock_client(fenced)
         result = asyncio.run(extract_units("t", valid_targets=[], client=client))
         assert len(result) == 1
+
+    def test_prose_with_json_breakers_survives(self):
+        # The whole point of the tag format: quotes, backslashes, newlines
+        # and code snippets in diary prose must round-trip unmodified.
+        from lib.extraction import extract_units
+        prose = 'Fixed "quoting" and C:\\paths\\here.\n\nAdded `json.loads("{...}")` retry.'
+        response = _tag_response([{"timestamp": "", "diary_entry": prose, "learnings": []}])
+        client = _make_mock_client(response)
+        result = asyncio.run(extract_units("t", valid_targets=[], client=client))
+        assert result[0]["diary_entry"] == prose
+
+    def test_parses_learnings_key_value_lines(self):
+        from lib.extraction import extract_units
+        response = _tag_response([{
+            "timestamp": "2026-05-16T14:00:00Z",
+            "diary_entry": "Did X.",
+            "learnings": [{
+                "trust": "verified",
+                "type": "CORRECTION",
+                "target": "technical-pref.md",
+                "description": "Use X not Y: the colon survives",
+                "action": "Add the rule",
+            }],
+        }])
+        client = _make_mock_client(response)
+        result = asyncio.run(extract_units("t", valid_targets=["technical-pref.md"], client=client))
+        learning = result[0]["learnings"][0]
+        assert learning["trust"] == "verified"
+        assert learning["type"] == "CORRECTION"
+        assert learning["target"] == "technical-pref.md"
+        # partition on FIRST colon only — values containing colons survive
+        assert learning["description"] == "Use X not Y: the colon survives"
+        assert learning["action"] == "Add the rule"
+
+    def test_learning_without_description_dropped(self):
+        from lib.extraction import extract_units
+        response = (
+            "<unit>\n<timestamp></timestamp>\n<diary>\nWork.\n</diary>\n"
+            "<learning>\ntrust: high\ntype: OBSERVATION\n</learning>\n</unit>"
+        )
+        client = _make_mock_client(response)
+        result = asyncio.run(extract_units("t", valid_targets=[], client=client))
+        assert result[0]["learnings"] == []
+
+    def test_truncated_response_salvages_completed_units(self):
+        # A response cut off mid-unit still yields every completed unit —
+        # with JSON, the same truncation lost the entire extraction.
+        from lib.extraction import extract_units
+        complete = _tag_response([{"timestamp": "", "diary_entry": "First unit.", "learnings": []}])
+        truncated = complete + "\n<unit>\n<timestamp></timestamp>\n<diary>\nCut off mid-sent"
+        client = _make_mock_client(truncated)
+        result = asyncio.run(extract_units("t", valid_targets=[], client=client))
+        assert len(result) == 1
+        assert result[0]["diary_entry"] == "First unit."
 
 
 # ---------------------------------------------------------------------------

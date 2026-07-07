@@ -42,9 +42,14 @@ def _user_record(text: str, *, cwd: str = "/work/proj", offset: int = 0) -> dict
 
 def _mock_client(diary_entry: str = "Did work."):
     from multiplai_core.model_client import ModelResponse
-    response = json.dumps({
-        "units": [{"timestamp": _ts(), "diary_entry": diary_entry, "learnings": []}]
-    })
+    response = (
+        "<unit>\n"
+        f"<timestamp>{_ts()}</timestamp>\n"
+        "<diary>\n"
+        f"{diary_entry}\n"
+        "</diary>\n"
+        "</unit>"
+    )
     client = AsyncMock()
     client.query = AsyncMock(return_value=ModelResponse(content=response))
     return client
