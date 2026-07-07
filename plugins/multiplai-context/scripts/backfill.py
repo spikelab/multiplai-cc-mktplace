@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.0"]
+# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.5.1"]
 # ///
 """Backfill learnings and diary from existing Claude Code session transcripts.
 
@@ -332,8 +332,14 @@ async def backfill(
 
     if run_catalogs:
         try:
-            from generate_catalog import main as gen_main
-            gen_main(["--only", "diary"])
+            # Call the async API directly — generate_catalog.main() wraps it
+            # in asyncio.run(), which cannot run inside this already-running
+            # event loop.
+            from generators.config import load_catalog_config
+            from generators.dispatcher import generate_catalogs
+            await generate_catalogs(
+                config=load_catalog_config(), generators=["diary"]
+            )
             logger.info("Regenerated diary catalog")
         except Exception as e:
             logger.warning("generate_catalog failed (non-fatal): %s", e)

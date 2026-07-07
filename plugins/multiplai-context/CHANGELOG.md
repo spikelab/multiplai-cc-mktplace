@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.5.1 — 2026-07-07
+
+### Fixed
+- **Learning extraction no longer depends on resolution luck (log-doctor F1).**
+  All scripts that create a model client now declare `multiplai-core[sdk]`
+  in their PEP 723 headers — uv script envs get no host-injected
+  `claude-agent-sdk`, so extraction silently lost every session whenever a
+  re-resolved env happened to omit it. Core pin bumped to v0.5.1 across all
+  scripts (brings in the pytest log-dir guard and hook-errors.log oversize
+  truncation from multiplai-core 0.5.1).
+- **Diary catalog now actually regenerates during backfill (log-doctor F2).**
+  The post-pass called `generate_catalog.main()`, whose `asyncio.run()`
+  always raised `RuntimeError` inside backfill's running event loop — the
+  "Regenerated diary catalog" branch had never executed (failure was logged
+  as a non-fatal warning). Backfill now awaits `generate_catalogs()`
+  directly; regression test added.
+- **Tests can no longer write into real workspace logs (log-doctor F3).**
+  Scripts configure logging at module import, which pytest runs during
+  collection — before any fixture. conftest now pins `WORKSPACE` to a
+  throwaway temp dir at import time and also scrubs
+  `CLAUDE_CODE_AUTO_COMPACT_*` / `CLAUDE_AUTOCOMPACT_*` (ambient
+  autocompact steering flipped checkpoint hooks into silent auto mode,
+  failing 5 checkpoint tests on steered hosts).
+- **Standard-format log lines carry real session ids (log-doctor F5).**
+  Hook entry points re-bind `setup_logging` with the payload's session id
+  instead of leaving `[session:--------]` on every WARNING+ line.
+
 ## 0.5.0 — 2026-07-07
 
 ### Added

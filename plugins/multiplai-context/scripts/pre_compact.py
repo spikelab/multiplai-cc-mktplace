@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.0"]
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.1"]
 # ///
 """PreCompact hook for multiplai plugin.
 
@@ -55,6 +55,7 @@ def _sync_checkpoint(hook_input: dict, data_dir) -> None:
     if not cfg.enabled:
         return
     session_id = hook_input.get("session_id") or ""
+    setup_logging("pre_compact", session_id=session_id)
     transcript_path = hook_input.get("transcript_path") or ""
     if not session_id or not transcript_path:
         return

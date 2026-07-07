@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.0"]
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.1"]
 # ///
 """Stop hook for multiplai plugin.
 
@@ -102,6 +102,7 @@ def _checkpoint_pass(hook_input: dict, data_dir: Path) -> str | None:
         return None
 
     session_id = hook_input.get("session_id") or ""
+    setup_logging("session_stop", session_id=session_id)
     transcript_path = hook_input.get("transcript_path") or ""
     cwd = hook_input.get("cwd") or ""
     if not session_id or not transcript_path:

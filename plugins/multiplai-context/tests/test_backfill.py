@@ -279,3 +279,26 @@ class TestBackfillRealRun:
         assert "errored" in summary
         from multiplai_core.paths import _reset_cache
         _reset_cache()
+
+    def test_diary_catalog_regen_runs_inside_event_loop(self, tmp_path, monkeypatch):
+        """Regression: the catalog post-pass must execute inside backfill's loop.
+
+        The old code called generate_catalog.main(), whose asyncio.run()
+        always raised RuntimeError inside the already-running event loop, so
+        the diary catalog was never regenerated (swallowed as a warning).
+        """
+        from backfill import backfill
+        self._setup_env(tmp_path, monkeypatch)
+
+        client = _mock_client()
+        since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
+        gen_mock = AsyncMock(return_value=[])
+        with patch("backfill.create_client", new_callable=AsyncMock, return_value=client), \
+             patch("generators.config.load_catalog_config", return_value=MagicMock()), \
+             patch("generators.dispatcher.generate_catalogs", gen_mock):
+            asyncio.run(backfill(since, run_catalogs=True, run_now=False))
+
+        gen_mock.assert_awaited_once()
+        assert gen_mock.await_args.kwargs.get("generators") == ["diary"]
+        from multiplai_core.paths import _reset_cache
+        _reset_cache()

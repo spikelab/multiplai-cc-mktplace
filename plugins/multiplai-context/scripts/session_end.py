@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.0"]
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.1"]
 # ///
 """Session end hook for multiplai plugin.
 
@@ -51,6 +51,7 @@ def _save_deferred_marker(
     # file this session's marker under the wrong id — clobbering the other
     # session's marker and losing this one's diary/learnings extraction.
     session_id = hook_input.get("session_id") or session_state.get("session_id") or "unknown"
+    setup_logging("session_end", session_id=session_id)
     marker = {
         "session_id": session_id,
         "transcript_path": hook_input.get("transcript_path", ""),

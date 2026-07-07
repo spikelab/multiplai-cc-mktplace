@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.0"]
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.1"]
 # ///
 """Checkpoint handoff nudge (UserPromptSubmit hook).
 
@@ -59,6 +59,7 @@ def main() -> None:
         return
 
     session_id = hook_input.get("session_id") or ""
+    setup_logging("checkpoint_nudge", session_id=session_id)
     transcript_path = hook_input.get("transcript_path") or ""
     if not session_id or not transcript_path:
         return
