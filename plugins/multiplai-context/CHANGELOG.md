@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.2 — 2026-07-09
+
+### Fixed
+- **log-doctor injection traces use the embedded prompt.** Decision traces
+  now print the `prompt` key that 0.5.3 ROUTING_SCORES payloads carry, and
+  the footer note claiming "prompts are not logged by context_manager" —
+  stale as of 0.5.3 — only appears when the scanned lines actually predate
+  the embedded prompt (and now says so).
+
 ## 0.6.1 — 2026-07-09
 
 ### Added
@@ -56,7 +65,6 @@
   (bun + qmd install, `qmd init`, collection add, index + embed, smoke
   query). Container setups additionally need the qmd allowlist in the
   multiplai-container SSH-bridge gateway.
-
 ## 0.5.3 — 2026-07-07
 
 ### Fixed
