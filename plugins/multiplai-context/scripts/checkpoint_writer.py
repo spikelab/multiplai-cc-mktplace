@@ -251,6 +251,7 @@ def main() -> None:
         return
 
     session_id = payload.get("session_id") or ""
+    setup_logging("checkpoint_writer", session_id=session_id)
     data_dir = get_paths().plugin_data()
     try:
         asyncio.run(write_checkpoint(payload))

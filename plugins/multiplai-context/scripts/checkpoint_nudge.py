@@ -59,6 +59,7 @@ def main() -> None:
         return
 
     session_id = hook_input.get("session_id") or ""
+    setup_logging("checkpoint_nudge", session_id=session_id)
     transcript_path = hook_input.get("transcript_path") or ""
     if not session_id or not transcript_path:
         return

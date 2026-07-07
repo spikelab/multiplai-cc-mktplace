@@ -17,9 +17,41 @@ import json
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
+
+# --- Import-time workspace isolation ---------------------------------------
+# Plugin scripts configure logging at MODULE IMPORT time (e.g.
+# ``logger = setup_logging("backfill")`` at top level), and pytest imports
+# test modules during collection — BEFORE any fixture (including the autouse
+# ``_isolate_env``) runs. Scrubbing env vars in fixtures is therefore too
+# late: with a leaked WORKSPACE the import-time FileHandlers bind to the real
+# workspace logs and tests write into production. Pin the workspace to a
+# throwaway temp dir NOW, at conftest import, which precedes every
+# test-module import. (multiplai_core.log_utils additionally refuses non-tmp
+# log dirs under pytest as defense in depth.)
+def _is_ambient_key(key: str) -> bool:
+    """Env vars that leak host/session state into tests.
+
+    CLAUDE_PLUGIN_* / WORKSPACE anchor runtime paths; the autocompact vars
+    flip the checkpoint hooks into silent "auto mode" (nudge tests then fail
+    on any machine where the launcher steers native auto-compaction).
+    """
+    return (
+        key.startswith("CLAUDE_PLUGIN")
+        or key == "WORKSPACE"
+        or key.startswith("CLAUDE_CODE_AUTO_COMPACT")
+        or key.startswith("CLAUDE_AUTOCOMPACT")
+    )
+
+
+_ISOLATED_WORKSPACE = tempfile.mkdtemp(prefix="multiplai-test-ws-")
+for _key in list(os.environ):
+    if _is_ambient_key(_key):
+        del os.environ[_key]
+os.environ["WORKSPACE"] = _ISOLATED_WORKSPACE
 
 PLUGIN_ROOT = Path(__file__).parent.parent
 REPO_ROOT = PLUGIN_ROOT.parent.parent
@@ -118,16 +150,24 @@ def _isolate_env(monkeypatch):
     ``CLAUDE_PLUGIN_OPTION_workspace_dir``) would point runtime state at
     the real workspace and break isolation. Tests that need these set
     them explicitly via monkeypatch (applied after this autouse fixture).
+    WORKSPACE is deliberately NOT re-pinned here: an explicit workspace
+    outranks CLAUDE_PLUGIN_DATA in data-dir resolution, which would hijack
+    every test that anchors via CLAUDE_PLUGIN_DATA.
+
+    NOTE: this fixture cannot undo import-time state — loggers bound during
+    collection point at the conftest-level pinned temp dir above, and
+    multiplai_core.log_utils refuses non-tmp log dirs under pytest as
+    defense in depth.
     """
     for key in list(os.environ):
-        if key.startswith("CLAUDE_PLUGIN") or key == "WORKSPACE":
+        if _is_ambient_key(key):
             monkeypatch.delenv(key, raising=False)
 
 
 @pytest.fixture
 def clean_env(monkeypatch):
     for key in list(os.environ):
-        if key.startswith("CLAUDE_PLUGIN") or key == "WORKSPACE":
+        if _is_ambient_key(key):
             monkeypatch.delenv(key, raising=False)
 
 

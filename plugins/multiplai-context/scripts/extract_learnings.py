@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.0"]
+# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.5.0"]
 # ///
 """Structured learning extraction (Stop hook).
 
@@ -139,6 +139,7 @@ async def extract() -> bool:
 
     marker_path = _field("marker_path")
     session_id = _field("session_id")
+    setup_logging("extract_learnings", session_id=session_id)
     cwd = _field("cwd")
     transcript_path = _field("transcript_path")
     # Back-compat: a raw transcript may still arrive inline, or as bare

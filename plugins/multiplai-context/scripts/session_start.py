@@ -413,6 +413,7 @@ def main() -> None:
     if not isinstance(hook_input, dict):
         hook_input = {}
     cwd = hook_input.get("cwd", "")
+    setup_logging("session_start", session_id=hook_input.get("session_id") or "")
 
     paths = get_paths()
     data_dir = paths.plugin_data()

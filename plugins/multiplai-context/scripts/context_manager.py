@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.0"]
+# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.5.0"]
 # ///
 """Context manager hook for multiplai plugin.
 
@@ -484,6 +484,7 @@ def main() -> None:
     session_id = (
         input_data.get("session_id") if isinstance(input_data, dict) else None
     )
+    setup_logging("context_manager", session_id=session_id or "")
 
     # Capture the working directory for the diary/now pipeline. UserPromptSubmit
     # reliably carries cwd, so this is the dependable place to record it;
