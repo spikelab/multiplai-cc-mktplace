@@ -91,6 +91,27 @@
       "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
       "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
       "license": "MIT"
+    },
+    {
+      "name": "multiplai-messaging",
+      "source": "./plugins/multiplai-messaging",
+      "description": "Messaging skill pack: read/search/post Slack as yourself, and search/read/draft Gmail (never sends).",
+      "version": "0.1.0",
+      "author": {
+        "name": "Spike",
+        "email": "fsm@spikelab.org"
+      },
+      "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "license": "MIT",
+      "keywords": [
+        "slack",
+        "gmail",
+        "messaging",
+        "chat",
+        "email",
+        "inbox"
+      ]
     }
   ]
 }

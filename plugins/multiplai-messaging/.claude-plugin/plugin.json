@@ -1,0 +1,9 @@
+{
+  "name": "multiplai-messaging",
+  "version": "0.1.0",
+  "description": "Messaging skill pack: read/search/post Slack as yourself, and search/read/draft Gmail (never sends).",
+  "author": {"name": "Spike", "email": "fsm@spikelab.org"},
+  "license": "MIT",
+  "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
+  "repository": "https://github.com/spikelab/multiplai-cc-mktplace"
+}

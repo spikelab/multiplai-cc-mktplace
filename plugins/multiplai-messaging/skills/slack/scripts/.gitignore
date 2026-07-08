@@ -1,0 +1,5 @@
+# Legacy local cache from running the script standalone in its own dir. Real
+# runtime state now lives under the git-ignored $WORKSPACE/.multiplai/data/
+# bucket (resolved by multiplai-core), not here. Never commit messages.
+data/
+__pycache__/
