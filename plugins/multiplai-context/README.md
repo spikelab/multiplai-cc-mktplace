@@ -134,6 +134,52 @@ that holds a warm model connection (no per-call cold-start), or a
 direct-API path (needs an API key with credits, which bypasses the SDK
 subprocess). Until then, prefer `token_overlap` for daily use.
 
+### Resources retrieval via qmd
+
+By default the resources corpus goes through the same catalog+router
+path as memory. For larger corpora (hundreds of documents), set
+`resources_retrieval=qmd` to retrieve through a
+[qmd](https://github.com/tobi/qmd) hybrid index instead: BM25 keyword
+search + vector search fused by reciprocal rank, per prompt, no LLM in
+the loop (~1–2s). Results are injected as path + excerpt entries in the
+`=== RESOURCES ===` section; Claude reads the full file on demand. The
+catalog path is untouched for other users — `catalog` stays the default.
+
+| Option | Default | Purpose |
+|--------|---------|---------|
+| `resources_retrieval` | `catalog` | `qmd` routes resources retrieval through the qmd index |
+| `qmd_mode` | `local` | `local` = qmd on PATH (native installs); `ssh` = qmd runs on the host over the container→host SSH bridge |
+| `qmd_ssh_host` | `host.docker.internal` | Bridge host for `ssh` mode |
+| `qmd_collection` | `resources` | qmd collection holding the index |
+| `qmd_strategy` | `fused` | `fused` (vsearch+BM25 RRF), `hybrid` (`qmd query`: expansion+rerank, slow), `fts` (BM25 only) |
+
+**Host prerequisites** — one-time, run where qmd will execute (the
+machine itself for `local`, the Mac host for `ssh` — llama.cpp needs
+Metal; container CPU is ~50x slower):
+
+```bash
+bash plugins/multiplai-context/skills/qmd-search/scripts/setup_qmd.sh \
+  --workspace /path/to/workspace --resources-dir /path/to/workspace/RESOURCES
+```
+
+The script installs bun + qmd if missing, creates the project-local
+`.qmd/` index at the workspace root, adds the collection, indexes and
+embeds it, and runs a smoke query. The index lives at
+`<workspace>/.qmd/` — for `ssh` mode host and container must see the
+workspace at the **same absolute path** so the container-side hook
+resolves the same index. Add `.qmd/` to the workspace `.gitignore`.
+
+Container setups additionally need the qmd allowlist in the host
+SSH-bridge gateway (`container-build-gateway.sh` from
+multiplai-container) deployed to `~/.local/bin/` on the host.
+
+Retrieval is fail-open (any qmd error, timeout, or missing binary means
+"no resources this turn", never a blocked prompt), and injected files
+respect the same re-recommendation cooldown as router picks. A
+session-start child (`scripts/qmd_refresh.py`, flock-guarded, detached)
+keeps the index incrementally in sync; the `qmd-search` skill covers
+manual/deep searches.
+
 ## Context checkpointing (long sessions)
 
 Long sessions degrade as the context window fills. The checkpoint system
@@ -266,6 +312,7 @@ All commands are namespaced under `/multiplai-context:`.
 | `/multiplai-context:memory-health-audit` | **Is it good?** Analytical effectiveness audit — cross-correlates retrieval logs, diary, learnings, and memory structure to find what's useful, what's wasted, and what to restructure. Slower; run ~monthly. |
 | `/multiplai-context:refresh-catalogs` | Regenerate catalog indexes. Supports `--force`, `--dry-run`, `--only`. `--only <gen>` is an explicit override — it runs even if that generator's `enable_*` flag is off (e.g. `--only resources` refreshes the resources catalog while `enable_resources` stays `false`). |
 | `/multiplai-context:backfill` | Reconstruct learnings/diary/now summaries from existing Claude Code transcripts. Default window 7 days; `--days N`, `--since DATE`, `--all`. |
+| `/multiplai-context:qmd-search` | Manually search the resources knowledge base via qmd (semantic + keyword) — the manual companion to `resources_retrieval=qmd`. |
 
 ## Where your data lives
 

@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.0 — 2026-07-08
+
+### Added
+- **qmd resources retrieval backend (`resources_retrieval=qmd`).** When
+  `enable_resources` is on, resources can now be retrieved through a
+  [qmd](https://github.com/tobi/qmd) hybrid index instead of the
+  catalog+router path: BM25 keyword ladder + vector search fused by
+  reciprocal rank (`scripts/qmd_retrieval.py`), per prompt, no LLM in the
+  loop. Results render as path + excerpt entries in the existing
+  `=== RESOURCES ===` section and respect the re-recommendation cooldown.
+  Fail-open throughout: any qmd error/timeout/missing binary means "no
+  resources this turn", never a blocked prompt. `catalog` remains the
+  default — nothing changes for existing users.
+- **New plugin options** — `resources_retrieval` (`catalog`|`qmd`),
+  `qmd_mode` (`local`|`ssh` for container→host bridge execution),
+  `qmd_ssh_host`, `qmd_collection`, `qmd_strategy`
+  (`fused`|`hybrid`|`fts`).
+- **Incremental index refresh at session start.** When the qmd backend is
+  active, `session_start.py` fires a detached, per-workspace flock-guarded
+  child (`scripts/qmd_refresh.py`): `qmd update` + `qmd embed` retry
+  passes (embedding can die mid-run but is incremental).
+- **`qmd-search` skill** — manual/deep searches against the same index
+  (semantic + keyword + hybrid rerank), config-aware for both `local` and
+  `ssh` modes. Ships `scripts/setup_qmd.sh`, the one-shot host setup
+  (bun + qmd install, `qmd init`, collection add, index + embed, smoke
+  query). Container setups additionally need the qmd allowlist in the
+  multiplai-container SSH-bridge gateway.
+
 ## 0.5.3 — 2026-07-07
 
 ### Fixed

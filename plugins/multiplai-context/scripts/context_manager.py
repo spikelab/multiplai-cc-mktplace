@@ -24,6 +24,11 @@ back to live scanning (fail-open). Warnings emit once per session.
 Memory remains the only corpus with a metadata-fallback path
 (_read_top_memory_files) so prompts still get useful context even
 without a current catalog. Skills and resources are catalog-only.
+
+Resources alternative backend: when ``resources_retrieval == "qmd"``,
+the resources corpus skips the catalog+router path entirely and is
+retrieved per-prompt from a qmd index (scripts/qmd_retrieval.py);
+results render as path+excerpt entries in the same RESOURCES section.
 """
 
 import json
@@ -279,7 +284,13 @@ def _load_corpora(cfg) -> dict[str, list[dict]]:
     }
     if cfg.enable_skills:
         corpora["skills"] = _read_catalog_or_scan("skills")
-    if cfg.enable_resources and cfg.resources_dir.strip():
+    # Under the qmd backend the resources corpus never enters the router:
+    # retrieval happens in _qmd_resources_entries() against the qmd index.
+    if (
+        cfg.enable_resources
+        and cfg.resources_dir.strip()
+        and cfg.resources_retrieval != "qmd"
+    ):
         corpora["resources"] = _read_catalog_or_scan("resources")
     return corpora
 
@@ -367,9 +378,61 @@ def _load_resources_content(cfg, picks: list[str]) -> dict[str, str]:
     return result
 
 
-def _render_corpus_section(label: str, files: dict[str, str]) -> str:
+def _qmd_resources_entries(cfg, prompt: str, cwd: str) -> list[dict]:
+    """Retrieve resources via the qmd backend (``resources_retrieval == "qmd"``).
+
+    Returns ``[{"path", "title", "score", "snippet"}, ...]`` best first.
+    The workspace root (where the project-local ``.qmd/`` index lives) is
+    the session's cwd from the hook payload; when absent, fall back to the
+    parent of ``resources_dir``, which sits at the workspace root in the
+    standard layout. Fail-open: any error means "no resources this turn".
+    """
+    if not prompt or not cfg.enable_resources or not cfg.resources_dir.strip():
+        return []
+    try:
+        import qmd_retrieval
+
+        workspace = cwd or str(Path(cfg.resources_dir).expanduser().parent)
+        target = qmd_retrieval.target_from_config(cfg, workspace)
+        entries = qmd_retrieval.search(prompt, target)
+        if entries:
+            logger.info(
+                "QMD_RETRIEVAL %s",
+                json.dumps({
+                    "mode": target.mode,
+                    "strategy": target.strategy,
+                    "picked": [[e["path"], round(e["score"], 3)] for e in entries],
+                }),
+            )
+        return entries
+    except Exception:
+        logger.exception("qmd resources retrieval failed; skipping resources")
+        return []
+
+
+# Rendered once above qmd-retrieved resource entries: the injected text
+# is excerpts, not full documents, so the model must Read before citing.
+_QMD_RESOURCES_PREAMBLE = (
+    "Files from the resources knowledge base matching this prompt, best "
+    "first (qmd retrieval). Each entry is an excerpt — if one looks "
+    "relevant, Read the full file at its path before answering; ignore "
+    "them if the prompt is unrelated."
+)
+
+
+def _render_qmd_resource(entry: dict) -> str:
+    """Render one qmd entry as the content body under its path heading."""
+    body = f"(score {entry['score']:.2f}) {entry.get('title', '')}".rstrip()
+    if entry.get("snippet"):
+        body += f"\n{entry['snippet']}"
+    return body
+
+
+def _render_corpus_section(label: str, files: dict[str, str], preamble: str = "") -> str:
     """Render one corpus's loaded files as a labeled markdown block."""
     parts = [f"=== {label} ==="]
+    if preamble:
+        parts.append(preamble)
     for name, content in files.items():
         parts.append(f"## {name}\n{content}")
     return "\n\n".join(parts)
@@ -652,6 +715,21 @@ def main() -> None:
         if picks:
             picks_by_corpus[corpus_type] = expand_picks(picks, corpora.get(corpus_type) or [])
 
+    # qmd resources backend: retrieval runs against the qmd index instead
+    # of the router (whose resources corpus was left empty above). Entry
+    # paths become the corpus picks so the cooldown machinery below dedups
+    # qmd injections exactly like router picks.
+    qmd_active = (
+        cfg.enable_resources
+        and cfg.resources_retrieval == "qmd"
+        and bool(cfg.resources_dir.strip())
+    )
+    qmd_entries: dict[str, dict] = {}
+    if qmd_active and prompt:
+        for entry in _qmd_resources_entries(cfg, prompt, cwd):
+            qmd_entries.setdefault(entry["path"], entry)
+        picks_by_corpus["resources"] = list(qmd_entries)
+
     # Log per-file routing decisions (post-expansion) for health audit analytics.
     logger.info(
         "ROUTING memory=%s skills=%s resources=%s",
@@ -718,7 +796,15 @@ def main() -> None:
     skills_content = _build_skills_recommendations(
         cfg, picks_by_corpus.get("skills") or [], corpora.get("skills") or []
     )
-    resources_content = _load_resources_content(cfg, picks_by_corpus.get("resources") or [])
+    if qmd_active:
+        # Cooldown may have trimmed the picks; render only the survivors.
+        resources_content = {
+            path: _render_qmd_resource(qmd_entries[path])
+            for path in picks_by_corpus.get("resources") or []
+            if path in qmd_entries
+        }
+    else:
+        resources_content = _load_resources_content(cfg, picks_by_corpus.get("resources") or [])
 
     # Memory fallback — a safety net for *failure*, not for abstention.
     # A successful router run that returns no memory picks is a
@@ -803,7 +889,10 @@ def main() -> None:
     if skills_content:
         parts.append(_render_corpus_section("SKILLS", skills_content))
     if resources_content:
-        parts.append(_render_corpus_section("RESOURCES", resources_content))
+        parts.append(_render_corpus_section(
+            "RESOURCES", resources_content,
+            preamble=_QMD_RESOURCES_PREAMBLE if qmd_active else "",
+        ))
 
     session_context = "\n\n".join(parts)
 
