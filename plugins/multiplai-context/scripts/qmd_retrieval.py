@@ -197,8 +197,10 @@ def rrf_fuse(
 def results_to_entries(results: list, target: QmdTarget) -> list[dict]:
     """Filter/dedupe raw qmd results into renderable entries.
 
-    Returns ``[{"path", "title", "score", "snippet"}, ...]`` — best
-    first, one entry per file, weak matches dropped.
+    Returns ``[{"path", "title", "score", "snippet"[, "line"]}, ...]`` —
+    best first, one entry per file, weak matches dropped. ``line`` is the
+    start of the best-matching chunk (qmd matches chunks, not whole docs);
+    omitted when qmd doesn't report one.
     """
     seen: set[str] = set()
     entries: list[dict] = []
@@ -214,12 +216,16 @@ def results_to_entries(results: list, target: QmdTarget) -> list[dict]:
         seen.add(path)
         snippet = (item.get("snippet") or item.get("text")
                    or item.get("content") or "").strip()
-        entries.append({
+        entry = {
             "path": path,
             "title": item.get("title") or os.path.basename(path),
             "score": score,
             "snippet": " ".join(snippet.split())[:SNIPPET_CHARS],
-        })
+        }
+        line = item.get("line")
+        if isinstance(line, int) and not isinstance(line, bool) and line > 0:
+            entry["line"] = line
+        entries.append(entry)
     return entries
 
 

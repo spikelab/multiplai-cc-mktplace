@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.3 — 2026-07-09
+
+### Changed
+- **qmd retrieval entries now carry the matching chunk's line number.**
+  qmd matches chunks, not whole documents; injected resource entries
+  render as `(score 0.72, line 5) Title` so the model (and the reader)
+  can jump straight to the matching chunk instead of skimming the whole
+  file. The `qmd-search` skill documents the chunk semantics (`line`,
+  `@@` snippet context headers, best-chunk-per-file dedup, `qmd get`).
+
 ## 0.6.2 — 2026-07-09
 
 ### Fixed

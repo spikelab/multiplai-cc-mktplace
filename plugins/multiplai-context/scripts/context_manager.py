@@ -414,15 +414,17 @@ def _qmd_resources_entries(cfg, prompt: str, cwd: str) -> list[dict]:
 # is excerpts, not full documents, so the model must Read before citing.
 _QMD_RESOURCES_PREAMBLE = (
     "Files from the resources knowledge base matching this prompt, best "
-    "first (qmd retrieval). Each entry is an excerpt — if one looks "
-    "relevant, Read the full file at its path before answering; ignore "
-    "them if the prompt is unrelated."
+    "first (qmd retrieval). Each entry is a chunk-level excerpt — 'line N' "
+    "is where the matching chunk starts in the file. If one looks "
+    "relevant, Read the full file at its path (start near that line) "
+    "before answering; ignore them if the prompt is unrelated."
 )
 
 
 def _render_qmd_resource(entry: dict) -> str:
     """Render one qmd entry as the content body under its path heading."""
-    body = f"(score {entry['score']:.2f}) {entry.get('title', '')}".rstrip()
+    loc = f", line {entry['line']}" if entry.get("line") else ""
+    body = f"(score {entry['score']:.2f}{loc}) {entry.get('title', '')}".rstrip()
     if entry.get("snippet"):
         body += f"\n{entry['snippet']}"
     return body

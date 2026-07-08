@@ -56,6 +56,13 @@ ssh -o BatchMode=yes <qmd_ssh_host> \
 - Result URIs look like `qmd://<collection>/<relpath>` → the file is
   `<resources_dir>/<relpath>`. Read the full file before answering
   from it — search snippets are excerpts, not the document.
+- Results are **chunk-level**, not just document-level: `line` is where
+  the matching chunk starts in the file, and `snippet` shows that chunk
+  with a `@@ -start,count @@ (N before, M after)` context header. To
+  inspect the match, Read the file with `offset` near that line; to pull
+  the whole document through qmd instead, `qmd get qmd://<collection>/<relpath>`
+  (same mode wrapping). Multiple hits in one file = multiple chunks;
+  the automatic retrieval keeps only the best chunk per file.
 - When recall matters, run BOTH `vsearch` and `search` and merge —
   that is what the automatic retrieval does (RRF fusion).
 - `search` (BM25) ANDs its terms: a full natural-language question

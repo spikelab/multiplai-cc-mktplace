@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Claude Code plugin for context routing, continuous learning, session awareness, and memory management.",
   "author": {
     "name": "Spike",
@@ -117,13 +117,13 @@
     "resources_retrieval": {
       "type": "string",
       "title": "Resources Retrieval Backend",
-      "description": "How resources are retrieved when enable_resources is true: 'catalog' (catalog + router, the default) or 'qmd' (hybrid BM25+vector search via a qmd index over resources_dir; see README → qmd retrieval for host prerequisites).",
+      "description": "How resources are retrieved when enable_resources is true: 'catalog' (catalog + router, the default) or 'qmd' (hybrid BM25+vector search via a qmd index over resources_dir; see README \u2192 qmd retrieval for host prerequisites).",
       "default": "catalog"
     },
     "qmd_mode": {
       "type": "string",
       "title": "qmd Execution Mode",
-      "description": "Where qmd runs when resources_retrieval is 'qmd': 'local' (qmd on PATH — native installs) or 'ssh' (qmd on the host reached over the container→host SSH bridge).",
+      "description": "Where qmd runs when resources_retrieval is 'qmd': 'local' (qmd on PATH \u2014 native installs) or 'ssh' (qmd on the host reached over the container\u2192host SSH bridge).",
       "default": "local"
     },
     "qmd_ssh_host": {
