@@ -46,7 +46,12 @@ def cmd_render(args: argparse.Namespace) -> int:
 
 
 def cmd_prep(args: argparse.Namespace) -> int:
-    result = prep_stage.prep(args.source, prompt_hint=args.prompt_hint or "")
+    result = prep_stage.prep(
+        args.source,
+        prompt_hint=args.prompt_hint or "",
+        language=args.language,
+        model=args.model,
+    )
     print(f"\nCONTEXT: {result.context_path}")
     print(f"DURATION: {result.src_duration:.1f}")
     print(f"PROXY: {result.proxy_path}")
@@ -90,6 +95,12 @@ def main() -> int:
     pp.add_argument("source", help="path to screen recording")
     pp.add_argument("--prompt-hint", default=None,
                     help="hint string passed to whisper (proper nouns) e.g. 'My App, Claude'")
+    pp.add_argument("--language", default=None,
+                    help="ISO code of the spoken language (e.g. 'it', 'es'). Omit to auto-detect. "
+                         "Transcription is always multilingual — never English-only.")
+    pp.add_argument("--model", default=None,
+                    help="override the mlx_whisper model (default multilingual "
+                         "mlx-community/whisper-medium-mlx; best quality: mlx-community/whisper-large-v3-mlx)")
     pp.set_defaults(func=cmd_prep)
 
     m = sub.add_parser("make", help="natural-language → reel (orchestrator workflow)")

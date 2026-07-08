@@ -1,6 +1,6 @@
 ---
 name: screen-demo
-description: Turn a raw screen recording (.mov/.mp4) into a polished 1-3 minute landscape product demo video. Free + local — uses ffmpeg, PySceneDetect, whisper.cpp. No SaaS, no API keys, no Mac required. The user provides a recording and a prose description ("keep it 90s, hook in first 10s, money shot at 2:30, lo-fi vibe") plus an optional music file/URL; the orchestrating Claude runs prep, authors an EDL, renders the reel. Triggers on "make a demo video", "edit this screencast", "turn this recording into a demo", "product demo from screen recording", "screen-demo skill".
+description: Turn a raw screen recording (.mov/.mp4) into a polished 1-3 minute landscape product demo video. Free + local — uses ffmpeg + PySceneDetect for editing and mlx_whisper on the macOS host (over the SSH bridge) for multilingual transcription. No SaaS, no API keys. The user provides a recording and a prose description ("keep it 90s, hook in first 10s, money shot at 2:30, lo-fi vibe") plus an optional music file/URL; the orchestrating Claude runs prep, authors an EDL, renders the reel. Triggers on "make a demo video", "edit this screencast", "turn this recording into a demo", "product demo from screen recording", "screen-demo skill".
 ---
 
 # screen-demo
@@ -13,19 +13,54 @@ Typical: "make a demo video from `/path/to/recording.mov` — keep it 90s, hook 
 
 **Run this workflow:**
 
+### 0. Transcription prerequisites (host bridge — read this first)
+
+Transcription runs **exclusively on the macOS host** via `mlx_whisper` (Apple
+Metal GPU). MLX cannot run in the Linux container, so there is **no in-container
+whisper build** (no whisper.cpp, no cmake). From the container, prep bridges to
+the host over SSH. Requirements:
+
+- `mlx_whisper` installed on the host (`pip install mlx-whisper`, Apple Silicon).
+- An SSH key readable in the container (`/home/agent/.ssh/build_key`, or
+  `TRANSCRIBE_KEY` / `SSH_BUILD_KEY`).
+- A bridge user (`SSH_BUILD_USER`, or `TRANSCRIBE_USER`).
+- The host gateway allowlisting `mlx_whisper`.
+
+Preflight (also run by `bootstrap.sh`):
+```bash
+ssh -i /home/agent/.ssh/build_key "$SSH_BUILD_USER@host.docker.internal" 'command -v mlx_whisper'
+```
+If the bridge is down, prep **fails loudly** with a fix-it message — it never
+silently falls back to building anything in the container.
+
 ### 1. Bootstrap (first run only)
 
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/bootstrap.sh
 ```
-Builds whisper.cpp, fetches the small.en model (~466 MB), installs PySceneDetect. Idempotent — skip if `vendor/whisper.cpp/build/bin/whisper-cli` already exists.
+Verifies `ffmpeg`, ensures PySceneDetect + OpenCV are importable (baked into the
+image; else installed into a `uv venv`), and preflights the host transcription
+bridge. Idempotent. **No whisper build, no cmake, no PEP-668 breakage.**
 
 ### 2. Prep
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/pipeline.py prep <source.mov> --prompt-hint "Proper Noun, Other Name"
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/pipeline.py prep <source.mov> \
+  --language it \                     # ISO code; omit to auto-detect. NEVER English-only.
+  --model mlx-community/whisper-large-v3-mlx \  # optional; default whisper-medium-mlx
+  --prompt-hint "Proper Noun, Other Name"
 ```
-Builds a 720p proxy, extracts 16 kHz audio, transcribes with whisper.cpp, runs silencedetect + scenedetect. Caches everything under `~/.cache/screen-demo/<source-hash>/` so re-runs are instant. **Output: prints `CONTEXT: <path>` — that's the file you need to read next.**
+Builds a 720p proxy, extracts 16 kHz audio, transcribes on the host with a
+**multilingual** mlx_whisper model (default `mlx-community/whisper-medium-mlx`),
+runs silencedetect + scenedetect. Caches everything under
+`$WORKSPACE/.screen-demo-cache/<source-hash>/` (or `~/.cache/screen-demo/` when
+no `WORKSPACE`) so re-runs are instant. **Output: prints `CONTEXT: <path>` — that's
+the file you need to read next.**
+
+**Language:** `--language` takes an ISO code (`it`, `es`, `fr`, …). Omit it to let
+mlx_whisper auto-detect. The model is always multilingual — an `.en` model is
+never used, so non-English audio transcribes correctly (no "(speaking in foreign
+language)").
 
 ### 3. Author the EDL
 
@@ -57,10 +92,10 @@ Print the output path and total duration. If quality issues are visible (caption
 ## Architecture
 
 ```
-.cache/screen-demo/<source-hash>/
+$WORKSPACE/.screen-demo-cache/<source-hash>/   (or ~/.cache/screen-demo/ if no $WORKSPACE)
   proxy_720p.mp4    ← 720p proxy
   audio16k.wav      ← 16 kHz mono audio
-  transcript.srt    ← whisper word-timestamps
+  transcript.srt    ← mlx_whisper timestamps (host, multilingual)
   scenes.csv        ← PySceneDetect content-mode output
   cuts.json         ← merged silence_end + scene_change candidates
   context.md        ← human-readable bundle for the orchestrator
@@ -82,7 +117,7 @@ See `examples/demo-narrated.edl.json`. Top-level keys:
 
 ## What it does NOT do
 
-- **Subtitles.** Whisper runs internally for orchestrator context only. No burn-in.
+- **Subtitles.** Transcription runs internally for orchestrator context only. No burn-in.
 - **Cursor zoom-on-click.** Would require a macOS sidecar logger at record time. Out of scope.
 - **AI music generation in this container.** ACE-Step pyproject hard-pins CUDA/MPS wheels — won't install on CPU-only aarch64 Linux. Use `--music-file` or `--music-url`. See `stages/music.py` `GENERATION_NOTE` for Mac/GPU install path if the user wants it there.
 
@@ -103,6 +138,6 @@ Recommended sources:
 |---|---|---|
 | Proxy / composite / encode | ffmpeg | LGPL/GPL |
 | Scene detection | PySceneDetect | BSD-3 |
-| Transcription | whisper.cpp + ggml-small.en | MIT |
+| Transcription (macOS host, multilingual) | mlx_whisper + whisper-medium-mlx | MIT |
 | Music fetching (URL path) | yt-dlp | Unlicense |
 | Music generation (optional, Mac/GPU only) | ACE-Step / ACE-Step-1.5 | Apache-2.0 / MIT |
