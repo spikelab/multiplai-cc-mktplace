@@ -1,0 +1,4 @@
+# Local cache written when the script runs standalone (data lives in
+# $CLAUDE_MULTIPLAI_HOME/runtime/slack in the runtime). Never commit messages.
+data/
+__pycache__/
