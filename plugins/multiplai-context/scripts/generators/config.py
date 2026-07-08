@@ -22,6 +22,18 @@ DEFAULT_RECOMMEND_COOLDOWN_TURNS = 4  # Suppress re-recommending a file for
                                       # (already in conversation context).
                                       # 0 disables the cooldown.
 
+# Resources retrieval backend. "catalog" is the original catalog+router
+# path; "qmd" routes resources retrieval through a qmd index instead
+# (see scripts/qmd_retrieval.py).
+VALID_RESOURCES_RETRIEVAL = ("catalog", "qmd")
+DEFAULT_RESOURCES_RETRIEVAL = "catalog"
+VALID_QMD_MODES = ("local", "ssh")
+DEFAULT_QMD_MODE = "local"
+DEFAULT_QMD_SSH_HOST = "host.docker.internal"
+DEFAULT_QMD_COLLECTION = "resources"
+VALID_QMD_STRATEGIES = ("fused", "hybrid", "fts")
+DEFAULT_QMD_STRATEGY = "fused"
+
 
 @dataclass
 class CatalogConfig:
@@ -37,6 +49,11 @@ class CatalogConfig:
     plugins_dir: str = ""  # empty → derived from $CLAUDE_CONFIG_DIR/plugins at use time
     enable_resources: bool = False
     resources_dir: str = ""
+    resources_retrieval: str = DEFAULT_RESOURCES_RETRIEVAL
+    qmd_mode: str = DEFAULT_QMD_MODE
+    qmd_ssh_host: str = DEFAULT_QMD_SSH_HOST
+    qmd_collection: str = DEFAULT_QMD_COLLECTION
+    qmd_strategy: str = DEFAULT_QMD_STRATEGY
     catalog_concurrency: int = DEFAULT_CATALOG_CONCURRENCY
     recommend_cooldown_turns: int = DEFAULT_RECOMMEND_COOLDOWN_TURNS
 
@@ -58,6 +75,21 @@ class CatalogConfig:
 
         if self.recommend_cooldown_turns < 0:
             self.recommend_cooldown_turns = DEFAULT_RECOMMEND_COOLDOWN_TURNS
+
+        if self.resources_retrieval not in VALID_RESOURCES_RETRIEVAL:
+            self.resources_retrieval = DEFAULT_RESOURCES_RETRIEVAL
+
+        if self.qmd_mode not in VALID_QMD_MODES:
+            self.qmd_mode = DEFAULT_QMD_MODE
+
+        if not self.qmd_ssh_host.strip():
+            self.qmd_ssh_host = DEFAULT_QMD_SSH_HOST
+
+        if not self.qmd_collection.strip():
+            self.qmd_collection = DEFAULT_QMD_COLLECTION
+
+        if self.qmd_strategy not in VALID_QMD_STRATEGIES:
+            self.qmd_strategy = DEFAULT_QMD_STRATEGY
 
     @property
     def effective_diary_model(self) -> str:
@@ -105,6 +137,19 @@ def load_catalog_config() -> CatalogConfig:
         os.environ.get("CLAUDE_PLUGIN_OPTION_enable_resources", "false")
     )
     resources_dir = os.environ.get("CLAUDE_PLUGIN_OPTION_resources_dir", "")
+    resources_retrieval = os.environ.get(
+        "CLAUDE_PLUGIN_OPTION_resources_retrieval", DEFAULT_RESOURCES_RETRIEVAL
+    )
+    qmd_mode = os.environ.get("CLAUDE_PLUGIN_OPTION_qmd_mode", DEFAULT_QMD_MODE)
+    qmd_ssh_host = os.environ.get(
+        "CLAUDE_PLUGIN_OPTION_qmd_ssh_host", DEFAULT_QMD_SSH_HOST
+    )
+    qmd_collection = os.environ.get(
+        "CLAUDE_PLUGIN_OPTION_qmd_collection", DEFAULT_QMD_COLLECTION
+    )
+    qmd_strategy = os.environ.get(
+        "CLAUDE_PLUGIN_OPTION_qmd_strategy", DEFAULT_QMD_STRATEGY
+    )
     catalog_concurrency = _parse_int(
         os.environ.get(
             "CLAUDE_PLUGIN_OPTION_catalog_concurrency", str(DEFAULT_CATALOG_CONCURRENCY)
@@ -130,6 +175,11 @@ def load_catalog_config() -> CatalogConfig:
         plugins_dir=plugins_dir,
         enable_resources=enable_resources,
         resources_dir=resources_dir,
+        resources_retrieval=resources_retrieval,
+        qmd_mode=qmd_mode,
+        qmd_ssh_host=qmd_ssh_host,
+        qmd_collection=qmd_collection,
+        qmd_strategy=qmd_strategy,
         catalog_concurrency=catalog_concurrency,
         recommend_cooldown_turns=recommend_cooldown_turns,
     )

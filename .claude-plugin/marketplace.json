@@ -4,13 +4,13 @@
     "name": "Spike",
     "email": "fsm@spikelab.org"
   },
-  "description": "Multiplai — a suite of Claude Code plugins for memory, context, and workflow. Context manager is the first; more plugins follow.",
+  "description": "Multiplai \u2014 a suite of Claude Code plugins for memory, context, and workflow. Context manager is the first; more plugins follow.",
   "plugins": [
     {
       "name": "multiplai-context",
       "source": "./plugins/multiplai-context",
       "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
-      "version": "0.5.3",
+      "version": "0.6.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"

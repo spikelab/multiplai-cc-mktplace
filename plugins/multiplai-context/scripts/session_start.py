@@ -299,6 +299,44 @@ def _inject_project_state(now_dir: Path, cwd: str) -> bool:
         return False
 
 
+def _launch_qmd_refresh(scripts_dir: Path, cwd: str) -> bool:
+    """Fire the incremental qmd index refresh, detached, when the qmd
+    resources backend is active.
+
+    The refresh child (scripts/qmd_refresh.py) is flock-guarded per
+    workspace and fully incremental, so launching it on every session
+    start is cheap. Detached (start_new_session) because embedding can
+    take minutes — a SessionStart hook is kill-within-seconds. Returns
+    True when a child was launched. Best-effort: any failure is logged
+    and swallowed.
+    """
+    try:
+        from generators.config import load_catalog_config
+
+        cfg = load_catalog_config()
+        if not (
+            cfg.enable_resources
+            and cfg.resources_retrieval == "qmd"
+            and cfg.resources_dir.strip()
+        ):
+            return False
+        script = scripts_dir / "qmd_refresh.py"
+        if not script.exists():
+            return False
+        workspace = cwd or str(Path(cfg.resources_dir).expanduser().parent)
+        subprocess.Popen(
+            ["uv", "run", "--no-project", str(script), workspace],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        logger.info("Launched detached qmd refresh (workspace=%s)", workspace)
+        return True
+    except Exception:
+        logger.warning("Could not launch qmd refresh", exc_info=True)
+        return False
+
+
 def _emit_dream_nudge() -> None:
     """Print an additionalContext nudge prompting the user to run /multiplai-context:dream."""
     print(
@@ -465,6 +503,10 @@ def main() -> None:
     _inject_checkpoint_recovery(
         data_dir, cwd, session_id, hook_input.get("source", "")
     )
+
+    # Keep the qmd resources index fresh (no-op unless the qmd backend
+    # is active). Detached + flock-guarded, so this never blocks the hook.
+    _launch_qmd_refresh(paths.scripts_dir(), cwd)
 
     # Drain any deferred extraction markers left by previous session_end
     # hooks. SessionEnd is kill-within-seconds, so the heavy LLM
