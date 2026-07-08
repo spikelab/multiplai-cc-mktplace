@@ -22,11 +22,16 @@ the user via an OAuth token scoped to `gmail.compose` + `gmail.readonly` only.
 2. `read` one inbox message (full body)
 3. `draft` a new email or a threaded reply
 
-**What it cannot do** (structural, not policy — the capability is absent from the
-code, so no instruction can invoke it):
-- **Send.** The only write call is `drafts.create`; there is no send code path.
+**What it cannot do** — the boundary is *this script* (what it implements), not
+the OAuth token:
+- **Send.** This script has no send code path; the only write call is
+  `drafts.create`. Honest caveat: the `gmail.compose` credential *does* authorize
+  sending at the API level, and it lives in the container env (`GMAIL_*`), so a
+  process making its own raw Gmail-API call could send. The guarantee is "this
+  script can't send", not "the token can't send". Always review drafts and send
+  manually from Gmail.
 - **Reach outside the inbox.** Every query hard-codes `labelIds=['INBOX']`;
-  archive, sent, spam, trash, and all-mail are unreachable.
+  archive, sent, spam, trash, and all-mail are unreachable *through this script*.
 - On startup it fetches the token's granted scopes and **aborts** if anything
   beyond compose+readonly is present.
 
@@ -72,7 +77,8 @@ reminder.
 ### 3. draft — create a Gmail draft (NEVER sends)
 Recipients/subject/body go in a JSON object passed **via a temp file** (`--input`),
 never as shell arguments — keeps addresses and bodies out of shell history and the
-process list, and lets the audit hook record recipient + subject. Payload:
+process list. (Auditing happens inside the script, so stdin works too; `--input`
+is just the ergonomic default.) Payload:
 ```json
 { "to": "person@example.com", "subject": "Re: contract", "body": "Hi Marco,\n\n..." }
 ```
@@ -106,10 +112,17 @@ it's ready to review and send manually.
 
 ## State & audit
 
-- **Credential**: the three `GMAIL_*` env vars above (or a `GMAIL_TOKEN_FILE`
-  JSON fallback). No secret is stored in the workspace.
-- **Audit log** lives under `$WORKSPACE/.multiplai/data/skills/gmail/audit.log`
-  (git-ignored). A PreToolUse hook (`scripts/audit_hook.py`, wired via the
-  plugin's `hooks/hooks.json`) appends every invocation — verb, timestamp, and
-  for drafts the recipient + subject. It only logs, never blocks. This is why
-  drafts use `--input <file>` (visible to the hook) not stdin.
+- **Credential**: the three `GMAIL_*` env vars above are the default and keep the
+  secret out of the workspace entirely. The optional `GMAIL_TOKEN_FILE` fallback
+  writes a token JSON; its default path is under `$WORKSPACE/.multiplai/data/`,
+  which is git-ignored **by mechanism** — `multiplai-core` drops a `*` `.gitignore`
+  at the data-dir root when the bucket is first created, so the token can never be
+  staged (no reliance on a workspace-level ignore rule).
+- **Audit log**: every invocation is recorded in-script via `multiplai-core`'s
+  `log_event` to the shared activity stream
+  `$WORKSPACE/.multiplai/data/logs/activity.log` (+ `.jsonl` mirror — grep
+  `"component": "gmail"`) — verb, timestamp, and for drafts the recipient +
+  subject (always captured, since the script has the parsed payload). Diagnostics
+  and errors go to `gmail.log` in the same directory. There is **no** PreToolUse
+  hook: auditing lives in the script, so it can't be bypassed by using stdin
+  instead of `--input`, and it adds no per-Bash-call overhead.

@@ -1,4 +1,5 @@
-# Local cache written when the script runs standalone (data lives in
-# $CLAUDE_MULTIPLAI_HOME/runtime/slack in the runtime). Never commit messages.
+# Legacy local cache from running the script standalone in its own dir. Real
+# runtime state now lives under the git-ignored $WORKSPACE/.multiplai/data/
+# bucket (resolved by multiplai-core), not here. Never commit messages.
 data/
 __pycache__/

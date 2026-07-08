@@ -1,28 +1,36 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.9"
+# requires-python = ">=3.11"
 # dependencies = [
 #   "google-api-python-client",
 #   "google-auth[requests]",
+#   "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.2",
 # ]
 # ///
 """gmail.py — the Gmail skill's engine. TODAY it can only: search the inbox,
 read one inbox message, and create a draft. It does NOT send, and reaches
-nothing outside the inbox. Those limits are structural (see below), not policy —
-so no instruction, from anyone, can exceed them.
+nothing outside the inbox. The boundary is THIS SCRIPT — what it does and does
+not implement — not the OAuth token.
 
-Security model (structural, not policy):
+Security model — where the boundary actually is:
 
-  * There is NO send code path in this file. No ``messages.send``, no
-    ``drafts.send``. The only write call is ``users.drafts.create``. Because the
-    capability is absent from the source, no instruction — from the user, from
-    Claude, or from a prompt-injection embedded in a fetched email — can send
-    mail. The word "send" appears in this module only in comments like this one.
+  * This script contains NO send code path. No ``messages.send``, no
+    ``drafts.send``. The only write call is ``users.drafts.create``. So invoking
+    *this script* cannot send mail, however it is driven.
 
-  * Reads are hard-limited to the INBOX. Every list/search query passes
-    ``labelIds=['INBOX']`` and every ``read``/reply target is rejected unless the
-    fetched message actually carries the INBOX label. Gmail has no per-label read
-    OAuth scope, so this boundary lives in the code, not in the token.
+    Honest caveat: the ``gmail.compose`` credential DOES authorize sending at
+    the Google API level, and it is present in the container environment (the
+    ``GMAIL_*`` env vars) — any process that can read those vars and make its
+    own HTTPS call to the Gmail API could send. The guarantee is "this script
+    has no send path", not "the token cannot send". Hardening the token itself
+    (per-skill credential injection) is future work; today the mitigation is
+    keeping raw Gmail-API calls out of the agent's hands (see the kit's
+    permission notes) and reviewing drafts manually before sending.
+
+  * Reads are hard-limited to the INBOX *by this script*. Every list/search
+    query passes ``labelIds=['INBOX']`` and every ``read``/reply target is
+    rejected unless the fetched message actually carries the INBOX label. Gmail
+    has no per-label read OAuth scope, so this boundary lives in the code.
 
   * On startup the granted OAuth scopes are fetched from Google and the process
     refuses to run if anything beyond {gmail.compose, gmail.readonly} is present.
@@ -42,14 +50,16 @@ recipients/bodies stay out of shell history and the process list:
 Credential (preferred): three env vars, like Slack's SLACK_TOKEN but a trio,
 because Google OAuth isn't one static string — GMAIL_CLIENT_ID,
 GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN (mint once with get_token.py). Fallback:
-a JSON token file via GMAIL_TOKEN_FILE. The audit log lives under the workspace's
-git-ignored bucket ``$WORKSPACE/.multiplai/data/skills/gmail/``.
+a JSON token file via GMAIL_TOKEN_FILE. Every invocation is audited to the shared
+activity log ``$WORKSPACE/.multiplai/data/logs/activity.{log,jsonl}`` (grep
+``"component": "gmail"``); diagnostics go to ``gmail.log`` in the same dir.
 """
 from __future__ import annotations
 
 import argparse
 import base64
 import json
+import logging
 import os
 import sys
 import urllib.parse
@@ -57,6 +67,9 @@ import urllib.request
 from email.message import EmailMessage
 from pathlib import Path
 from typing import NoReturn
+
+from multiplai_core.log_utils import log_event, setup_logging
+from multiplai_core.paths import get_paths
 
 # Full-URL scope constants. The granted set must be a subset of these two.
 SCOPE_COMPOSE = "https://www.googleapis.com/auth/gmail.compose"
@@ -66,8 +79,14 @@ ALLOWED_SCOPES = {SCOPE_COMPOSE, SCOPE_READONLY}
 TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
 INBOX = "INBOX"
 
+# Configured in main() via setup_logging("gmail").
+log = logging.getLogger("gmail")
+
 
 def _die(msg: str, code: int = 1) -> NoReturn:
+    # Land the failure in gmail.log + the shared hook-errors.log for later
+    # forensics, then surface it to the user on stderr exactly as before.
+    log.error("%s", msg)
     print(f"gmail: error: {msg}", file=sys.stderr)
     sys.exit(code)
 
@@ -76,16 +95,11 @@ def skill_state_dir() -> Path:
     """Git-ignored per-skill state bucket, shared by host (get_token) and
     container (this script) via the workspace mount.
 
-    Prefer ``$WORKSPACE/.multiplai/data/skills/gmail`` (the kit's regenerable,
-    git-ignored runtime area). Fall back to an XDG per-user dir when the kit
-    layout isn't present, so the shipped plugin still works standalone.
+    Delegates to ``multiplai_core.paths`` — one resolver of the
+    WORKSPACE→``~/.multiplai`` precedence (was hand-rolled here and in two
+    other places), which also git-ignores the whole data bucket by mechanism.
     """
-    ws = os.environ.get("WORKSPACE")
-    if ws and (Path(ws) / ".multiplai").is_dir():
-        return Path(ws) / ".multiplai" / "data" / "skills" / "gmail"
-    xdg = os.environ.get("XDG_DATA_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
-    return base / "multiplai-messaging" / "gmail"
+    return get_paths().skill_state_dir("gmail")
 
 
 def default_token_path() -> Path:
@@ -212,6 +226,8 @@ def cmd_search(svc, query: str, limit: int) -> "None":
     resp = svc.users().messages().list(
         userId="me", q=query, labelIds=[INBOX], maxResults=limit).execute()
     msgs = resp.get("messages", [])
+    log_event("gmail", "search", f"searched inbox: {query!r}",
+              query=query, hits=len(msgs))
     if not msgs:
         print(f"No inbox messages match: {query!r}")
         return
@@ -249,32 +265,38 @@ def _decode_part(part: dict) -> str:
 
 
 def _extract_body(payload: dict) -> str:
-    """Prefer text/plain; walk multipart trees; fall back to any text part."""
-    mime = payload.get("mimeType", "")
-    if mime == "text/plain":
-        return _decode_part(payload)
-    parts = payload.get("parts")
-    if parts:
-        # First pass: look for text/plain anywhere in the tree.
-        for p in parts:
-            body = _extract_body(p)
-            if p.get("mimeType") == "text/plain" and body.strip():
-                return body
-        # Second pass: accept the first non-empty text/* body.
-        for p in parts:
-            if p.get("mimeType", "").startswith("text/"):
-                body = _extract_body(p)
-                if body.strip():
-                    return body
-        # Recurse into nested multiparts.
-        for p in parts:
-            if p.get("mimeType", "").startswith("multipart/"):
-                body = _extract_body(p)
-                if body.strip():
-                    return body
-    if mime.startswith("text/"):
-        return _decode_part(payload)
-    return ""
+    """Return the message body, preferring text/plain.
+
+    One depth-first walk over the MIME tree (replacing the old three passes):
+    the first non-empty ``text/plain`` body found anywhere wins and stops the
+    walk; the first other ``text/*`` body (typically ``text/html``) is remembered
+    and returned only if no ``text/plain`` exists. Each part is decoded at most
+    once. Correctly handles the sibling-order case
+    ``[text/html, multipart/alternative[text/plain]]`` — the plain body still
+    wins even though the html part is encountered first.
+    """
+    fallback = ""
+
+    def walk(part: dict) -> str | None:
+        nonlocal fallback
+        mime = part.get("mimeType", "")
+        if mime.startswith("multipart/") or part.get("parts"):
+            for child in part.get("parts") or []:
+                found = walk(child)
+                if found is not None:
+                    return found  # a text/plain was found in this subtree
+            return None
+        if mime.startswith("text/"):
+            body = _decode_part(part)
+            if body.strip():
+                if mime == "text/plain":
+                    return body  # preferred — short-circuit the whole walk
+                if not fallback:
+                    fallback = body  # first html/other text, kept as backup
+        return None
+
+    plain = walk(payload)
+    return plain if plain is not None else fallback
 
 
 def cmd_read(svc, message_id: str) -> "None":
@@ -283,6 +305,8 @@ def cmd_read(svc, message_id: str) -> "None":
     # Structural inbox gate: refuse to surface anything not currently in INBOX.
     if INBOX not in msg.get("labelIds", []):
         _die(f"message {message_id} is not in the inbox; refusing to read it.")
+    log_event("gmail", "read", f"read inbox message {message_id}",
+              message_id=message_id)
     payload = msg.get("payload", {})
     hdrs = payload.get("headers", [])
     print(f"id:      {message_id}")
@@ -336,7 +360,8 @@ def cmd_draft(svc, reply_to: str, input_file: str | None) -> "None":
     if reply_to and reply_to.lower() != "none":
         orig = svc.users().messages().get(
             userId="me", id=reply_to, format="metadata",
-            metadataHeaders=["Message-ID", "References", "Subject"]).execute()
+            metadataHeaders=["Message-ID", "References", "Subject",
+                             "From", "Reply-To"]).execute()
         # Only reply to messages that are actually in the inbox.
         if INBOX not in orig.get("labelIds", []):
             _die(f"cannot reply to {reply_to}: it is not in the inbox.")
@@ -352,13 +377,20 @@ def cmd_draft(svc, reply_to: str, input_file: str | None) -> "None":
         if not subject and orig_subject:
             subject = orig_subject if orig_subject.lower().startswith("re:") \
                 else f"Re: {orig_subject}"
+        # Set the recipient EXPLICITLY. A threadId alone does NOT make Gmail
+        # infer a "To"; a draft with no recipient is unsendable. Prefer the
+        # original's Reply-To, else its From.
+        if not to:
+            to = (_header(ohdrs, "Reply-To") or _header(ohdrs, "From")).strip()
+            if not to:
+                _die("could not determine reply recipient (original message has "
+                     "no Reply-To or From header); provide 'to' in the payload.")
 
-    if not to and not thread_id:
+    if not to:
         _die("draft payload has no 'to' and no reply target; nothing to address.")
 
     mime = EmailMessage()
-    if to:
-        mime["To"] = to
+    mime["To"] = to
     if subject:
         mime["Subject"] = subject
     if in_reply_to:
@@ -377,10 +409,13 @@ def cmd_draft(svc, reply_to: str, input_file: str | None) -> "None":
         userId="me", body={"message": message}).execute()
 
     draft_id = result.get("id", "?")
+    log_event("gmail", "draft", f"draft created to={to} subject={subject!r}",
+              draft_id=draft_id, reply_to=(reply_to if thread_id else None),
+              mode=("reply" if thread_id else "new"))
     print(f"Draft created (NOT sent). draft_id={draft_id}")
     if thread_id:
         print(f"Threaded onto conversation threadId={thread_id}")
-    print(f"To: {to or '(inherited from thread)'}")
+    print(f"To: {to}")
     print(f"Subject: {subject or '(none)'}")
     print("Review and send it manually from Gmail → Drafts.")
 
@@ -407,6 +442,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list) -> "None":
+    setup_logging("gmail")
     args = build_parser().parse_args(argv)
     creds = _load_credentials()
     _assert_scopes(creds)  # aborts before any API call if scopes are too broad

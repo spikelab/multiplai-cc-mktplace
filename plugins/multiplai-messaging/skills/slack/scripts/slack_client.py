@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.10"
-# dependencies = ["slack_sdk>=3.27"]
+# requires-python = ">=3.11"
+# dependencies = [
+#   "slack_sdk>=3.27",
+#   "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.2",
+# ]
 # ///
 """
 Slack reader — pulls channel history for the channels *you* (the token owner)
@@ -9,8 +12,8 @@ are in, caches everything to a local SQLite DB so it is never re-fetched, saves
 attachments (PDFs etc.) to disk, and remembers a per-channel read-since marker.
 
 Auth: a Slack **user token** (`xoxp-...`) from a custom *internal* app, exported
-as `SLACK_TOKEN` (or `SLACK_USER_TOKEN`). A user token reads every channel you
-are a member of, no bot invites needed. Scopes required on the app:
+as `SLACK_TOKEN`. A user token reads every channel you are a member of, no bot
+invites needed. Scopes required on the app:
   read:  channels:history, groups:history, im:history, mpim:history,
          channels:read, groups:read, users:read
   files: files:read   (to download attachments)
@@ -22,8 +25,11 @@ Run (deps auto-installed by uv):
     uv run slack_client.py sync --channels '#sales,#eng' --full
     uv run slack_client.py export --channel '#sales' --format md
 
-Data (DB + assets) lives in ./data next to this script (override: SLACK_DATA_DIR).
-Nothing is committed — see .gitignore. The token is read from the environment
+Data (DB + assets) lives under the git-ignored runtime bucket
+`$WORKSPACE/.multiplai/data/skills/slack` (or `~/.multiplai/...` standalone),
+resolved via multiplai-core. `SLACK_DATA_DIR`/`--data-dir` override it (advanced:
+the value is a filesystem path that must be valid in whatever context the script
+runs — mind host-vs-container paths). The token is read from the environment
 only; it is never written to disk.
 """
 
@@ -52,29 +58,27 @@ from slack_sdk.http_retry.builtin_handlers import (
     ServerErrorRetryHandler,
 )
 
-log = logging.getLogger("slack_client")
+from multiplai_core.log_utils import log_event, setup_logging
+from multiplai_core.paths import get_paths
+
+# Configured in main() via setup_logging("slack"); until then this is an
+# unconfigured logger, so module-import-time use is a no-op (never crashes).
+log = logging.getLogger("slack")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def default_data_dir() -> Path:
-    """Where the SQLite cache + downloaded assets live, in priority order.
+    """Where the SQLite cache + downloaded assets live.
 
-    Skill-maintained state lives under the workspace's git-ignored kit-runtime
-    bucket: `$WORKSPACE/.multiplai/data/skills/slack`. That keeps message content
-    and downloaded attachments out of git and out of INBOX, alongside other kit
-    state. A shipped plugin can't assume that layout exists, so fall back to an
-    XDG-style per-user dir, then to `data/` next to the script. An explicit
-    `--data-dir`/`SLACK_DATA_DIR` overrides everything.
+    Skill state lives under the git-ignored runtime data bucket resolved by
+    ``multiplai_core.paths`` — ``$WORKSPACE/.multiplai/data/skills/slack`` when
+    a workspace is configured, else ``~/.multiplai/data/skills/slack`` for a
+    standalone install. ``skill_state_dir`` also drops a ``*`` ``.gitignore`` at
+    the data-dir root, so message content and attachments are git-ignored by
+    mechanism. An explicit ``--data-dir``/``SLACK_DATA_DIR`` overrides it.
     """
-    ws = os.environ.get("WORKSPACE")
-    if ws and (Path(ws) / ".multiplai").is_dir():
-        return Path(ws) / ".multiplai" / "data" / "skills" / "slack"
-    xdg = os.environ.get("XDG_DATA_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
-    if base.parent.exists():  # a real HOME / XDG root is available
-        return base / "multiplai-messaging" / "slack"
-    return SCRIPT_DIR / "data"
+    return get_paths().skill_state_dir("slack")
 
 # Channels the token owner is a member of, across all conversation kinds.
 MEMBER_CHANNEL_TYPES = "public_channel,private_channel,mpim,im"
@@ -533,6 +537,7 @@ class SlackReader:
         max_ts = oldest
         cursor = None
         stop = False
+        completed = False
 
         while not stop:
             try:
@@ -543,6 +548,8 @@ class SlackReader:
                     cursor=cursor,
                 )
             except SlackApiError as e:
+                # Leave `completed` False so the marker is NOT advanced: the
+                # unfetched window is retried next run (INSERT OR IGNORE dedups).
                 log.error("history failed for %s (%s): %s", name, cid, e.response.get("error"))
                 break
 
@@ -562,11 +569,28 @@ class SlackReader:
                     break
 
             cursor = (resp.get("response_metadata") or {}).get("next_cursor")
-            if not cursor or stop:
+            if stop:
+                break  # --limit reached mid-window: incomplete, don't advance marker
+            if not cursor:
+                completed = True  # pagination exhausted cleanly
                 break
 
-        self.store.set_marker(cid, max_ts)
-        return {"new": new_count, "files": file_count, "marker": max_ts}
+        # Advance the read-since marker ONLY on a clean, complete pass. On an
+        # early exit (--limit or an API error) the old marker stands, so the
+        # next incremental run refetches the window; the only cost is re-reading
+        # already-stored rows (deduped by INSERT OR IGNORE at insert time).
+        if completed:
+            self.store.set_marker(cid, max_ts)
+        else:
+            log.warning(
+                "%s (%s): sync incomplete — marker not advanced, %d new fetched, "
+                "will refetch on next run", name, cid, new_count)
+        return {
+            "new": new_count,
+            "files": file_count,
+            "marker": max_ts if completed else oldest,
+            "completed": completed,
+        }
 
     def _sync_thread(self, cid: str, name: str, thread_ts: str, fetch_files: bool) -> int:
         """Fetch replies for one thread. Dedup is handled by INSERT OR IGNORE."""
@@ -693,9 +717,9 @@ def parse_permalink(url: str) -> tuple[str, str, str | None] | None:
 
 
 def get_token() -> str:
-    token = os.environ.get("SLACK_TOKEN") or os.environ.get("SLACK_USER_TOKEN")
+    token = os.environ.get("SLACK_TOKEN")
     if not token:
-        sys.exit("error: set SLACK_TOKEN (or SLACK_USER_TOKEN) to your xoxp-... user token")
+        sys.exit("error: set SLACK_TOKEN to your xoxp-... user token")
     if not token.startswith("xoxp-"):
         log.warning("token does not start with xoxp- ; a user token is expected for reading your channels")
     return token
@@ -763,6 +787,12 @@ def cmd_send(args, reader: SlackReader, store: Store) -> None:
     channel = reader.resolve_target(args.to)
     resp = reader.post(channel, args.text, args.thread_ts)
     log.info("sent to %s (channel=%s, ts=%s)", args.to, resp.get("channel"), resp.get("ts"))
+    # Audit the outward-facing action to the shared activity log (mirrors the
+    # gmail draft audit) — closes the "gmail audited, slack send not" gap.
+    log_event(
+        "slack", "send", f"posted to {args.to}",
+        channel_id=resp.get("channel"), ts=resp.get("ts"),
+        threaded=bool(args.thread_ts))
 
 
 def cmd_files(args, reader: SlackReader, store: Store) -> None:
@@ -905,11 +935,18 @@ def cmd_search(args, reader: SlackReader, store: Store) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--data-dir", default=os.environ.get("SLACK_DATA_DIR"), help="override data dir")
+    # Shared flags live on a parent parser so they're accepted at the top
+    # level AND on the `sync` subparser — the latter matters because `sync`
+    # is the implicit default command (re-parsed as `sync <argv>` in main()).
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--data-dir", default=os.environ.get("SLACK_DATA_DIR"), help="override data dir")
+
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[common])
     sub = p.add_subparsers(dest="cmd")
 
-    sync = sub.add_parser("sync", help="fetch new messages for member channels (default command)")
+    sync = sub.add_parser("sync", parents=[common], help="fetch new messages for member channels (default command)")
     sync.add_argument("--channels", help="comma list of #names or IDs (default: all you're in)")
     sync.add_argument("--full", action="store_true", help="ignore read-since marker, refetch history")
     sync.add_argument("--limit", type=int, help="cap new messages per channel this run")
@@ -952,11 +989,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str]) -> None:
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    setup_logging("slack")
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    # Default command is sync when none given.
+    # Default command is sync when none given. Re-parse with the verb
+    # prepended so sync's own defaults (channels, full, limit, …) are set.
+    # --data-dir lives on a shared parent parser attached to BOTH the top
+    # level and the sync subparser, so `slack --data-dir X` (no subcommand)
+    # re-parses to `sync --data-dir X` without the old crash.
     if args.cmd is None:
         args = parser.parse_args(["sync", *argv])
 

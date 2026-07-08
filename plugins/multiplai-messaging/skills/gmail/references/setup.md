@@ -53,7 +53,10 @@ but env vars are the default.)
 - **Refresh-token expiry in Testing mode:** with the user as sole test user, some
   consent-screen configs expire the refresh token after 7 days. If drafting
   suddenly 401s about a week in, re-run `get_token.py --force`.
-- **Adding capability later:** the code refuses any scope beyond compose+readonly.
-  Broadening (e.g. to send) is a deliberate code change here, not just a token
-  re-grant — by design.
+- **Adding capability later:** *this script* implements only search/read/draft
+  and refuses any scope beyond compose+readonly. Note the `gmail.compose` token
+  itself already authorizes sending at the API level — the send boundary is the
+  script's absence of a send path, not the token. Broadening the script is a
+  deliberate code change here; genuinely constraining the *token* (so no process
+  in the container could send) is separate, future work.
 - The token is the only secret. Never commit it; never paste it into chat.

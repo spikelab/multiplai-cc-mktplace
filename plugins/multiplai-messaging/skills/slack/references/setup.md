@@ -1,7 +1,7 @@
 # Slack token & scope setup
 
 The script authenticates as the user with a Slack **user token** (`xoxp-…`),
-read from `$SLACK_TOKEN` (or `$SLACK_USER_TOKEN`). A user token sees exactly the
+read from `$SLACK_TOKEN`. A user token sees exactly the
 channels and DMs the user is in — no bot invites. The token is read from the
 environment only; it is never written to disk.
 

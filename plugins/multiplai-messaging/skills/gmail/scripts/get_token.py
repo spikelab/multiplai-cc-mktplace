@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.9"
+# requires-python = ">=3.11"
 # dependencies = [
 #   "google-auth-oauthlib",
+#   "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.2",
 # ]
 # ///
 """get_token.py — one-time Gmail OAuth consent. RUN ON THE MAC HOST, not the container.
@@ -82,6 +83,14 @@ def main() -> int:
               "https://myaccount.google.com/permissions and re-run.",
               file=sys.stderr)
         return 1
+
+    # Audit the mint to the shared activity log (no secret values recorded).
+    try:
+        from multiplai_core.log_utils import log_event
+        log_event("gmail", "mint", "minted Gmail credential via get_token.py",
+                  scopes=sorted(granted), token_file=bool(args.out))
+    except Exception:  # noqa: BLE001 — never let logging block credential output
+        pass
 
     # Primary output: env vars for .env (mirrors SLACK_TOKEN).
     print("\n# --- Add these to your kit .env (never commit) ---")
