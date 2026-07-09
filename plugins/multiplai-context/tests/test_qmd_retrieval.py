@@ -189,17 +189,56 @@ class TestBuildArgv:
     def test_ssh_mode_shape(self):
         target = qr.QmdTarget(
             workspace="/ws", resources_dir="/ws/R", mode="ssh", ssh_host="hosty",
+            collection="resources",
         )
         argv = qr.build_argv("vsearch", "hello; world", target)
         assert argv[0] == "ssh"
         assert "hosty" in argv
         remote = argv[-1]
-        assert remote.startswith("cd /ws && qmd vsearch 'hello world'")
+        # workspace and collection are single-quoted alongside the query.
+        assert remote.startswith("cd '/ws' && qmd vsearch 'hello world'")
+        assert "-c 'resources'" in remote
         assert ";" not in remote.split("'")[1]
 
     def test_ssh_mode_empty_query_is_none(self):
         target = qr.QmdTarget(workspace="/ws", resources_dir="/ws/R", mode="ssh")
         assert qr.build_argv("search", ";;;", target) is None
+
+    def test_ssh_workspace_with_spaces_is_quoted(self):
+        """A legitimate path with a space survives via single-quoting."""
+        target = qr.QmdTarget(
+            workspace="/home/My Project", resources_dir="/r", mode="ssh",
+        )
+        argv = qr.build_argv("search", "hello", target)
+        assert argv is not None
+        assert argv[-1].startswith("cd '/home/My Project' && ")
+
+    def test_ssh_unsafe_workspace_refused(self):
+        """A workspace with shell metacharacters yields no command (fail-open)."""
+        for bad_ws in ("/ws; rm -rf /", "/ws$(id)", "/ws`whoami`", "/ws'x", "/ws\nx"):
+            target = qr.QmdTarget(workspace=bad_ws, resources_dir="/r", mode="ssh")
+            assert qr.build_argv("search", "hello", target) is None, (
+                f"unsafe workspace must be refused: {bad_ws!r}"
+            )
+
+    def test_ssh_unsafe_collection_refused(self):
+        """A collection with shell metacharacters yields no command."""
+        for bad_col in ("res;rm", "res$(x)", "res`x`", "res'x"):
+            target = qr.QmdTarget(
+                workspace="/ws", resources_dir="/r", mode="ssh", collection=bad_col,
+            )
+            assert qr.build_argv("search", "hello", target) is None, (
+                f"unsafe collection must be refused: {bad_col!r}"
+            )
+
+    def test_gateway_safe_helper(self):
+        assert qr._gateway_safe("/home/user/project")
+        assert qr._gateway_safe("resources")
+        assert qr._gateway_safe("with spaces ok")
+        assert not qr._gateway_safe("has;semicolon")
+        assert not qr._gateway_safe("has$dollar")
+        assert not qr._gateway_safe("has'quote")
+        assert not qr._gateway_safe("has\nnewline")
 
     def test_local_mode_without_qmd_is_none(self, monkeypatch):
         monkeypatch.setenv("PATH", "/nonexistent")

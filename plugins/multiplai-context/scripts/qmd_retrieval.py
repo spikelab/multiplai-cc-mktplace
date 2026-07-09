@@ -111,6 +111,18 @@ def sanitize_query(query: str) -> str:
     return " ".join(q.split())[:MAX_QUERY_CHARS]
 
 
+def _gateway_safe(value: str) -> bool:
+    """True if *value* carries no gateway-rejected metacharacter or newline.
+
+    Used to vet the non-query pieces (workspace path, collection name)
+    before they are interpolated into the SSH remote command string. The
+    query itself is neutralized by :func:`sanitize_query`; these values
+    can't be blindly stripped (a path is meaningful), so we refuse to
+    build a command around an unsafe one instead.
+    """
+    return not _GATEWAY_UNSAFE.search(value)
+
+
 def content_words(text: str) -> list[str]:
     """Deduplicated content words for the BM25 keyword ladder."""
     words = [w.strip(".,;:!?()[]\"'`").lower() for w in text.split()]
@@ -240,7 +252,24 @@ def build_argv(subcmd: str, query: str, target: QmdTarget) -> list[str] | None:
         return None
     tail = f"-c {target.collection} --json -n {MAX_RESULTS}"
     if target.mode == "ssh":
-        remote = f"cd {target.workspace} && qmd {subcmd} '{q}' {tail}"
+        # Everything interpolated into the host-interpreted remote string
+        # must be vetted, not just the query. workspace comes from the hook
+        # cwd and collection from config; a metacharacter in either would
+        # break out of the intended command. Refuse to build the command
+        # rather than risk it (fail-open: no retrieval this turn). Both are
+        # then single-quoted so ordinary spaces survive — and because
+        # _GATEWAY_UNSAFE rejects the single quote itself, a vetted value
+        # cannot close the quoting early.
+        if not (_gateway_safe(target.workspace) and _gateway_safe(target.collection)):
+            logger.warning(
+                "qmd ssh target unsafe (workspace/collection has shell "
+                "metacharacters); skipping retrieval"
+            )
+            return None
+        remote = (
+            f"cd '{target.workspace}' && "
+            f"qmd {subcmd} '{q}' -c '{target.collection}' --json -n {MAX_RESULTS}"
+        )
         return [
             "ssh", "-o", "BatchMode=yes",
             "-o", f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
