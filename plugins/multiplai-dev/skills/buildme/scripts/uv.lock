@@ -73,7 +73,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "claude-agent-sdk", specifier = ">=0.1.0" },
-    { name = "multiplai-core", git = "https://github.com/spikelab/multiplai-core?rev=v0.5.0" },
+    { name = "multiplai-core", git = "https://github.com/spikelab/multiplai-core?rev=v0.7.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
@@ -443,8 +443,8 @@ wheels = [
 
 [[package]]
 name = "multiplai-core"
-version = "0.5.0"
-source = { git = "https://github.com/spikelab/multiplai-core?rev=v0.5.0#fa835d5780774083ceb169179f1428f57bdc913b" }
+version = "0.7.0"
+source = { git = "https://github.com/spikelab/multiplai-core?rev=v0.7.0#fc003acbda9b1f41bd8eea9caaa5281d132fb6e8" }
 dependencies = [
     { name = "anthropic" },
     { name = "pyyaml" },
