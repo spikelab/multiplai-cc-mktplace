@@ -133,6 +133,21 @@ class TestPluginJsonFullWiring:
                 assert (PLUGIN_ROOT / ref).is_file(), \
                     f"Skill {skill_file.name} references non-existent script: {ref}"
 
+    def test_every_skill_has_a_readme_command_row(self):
+        """WHEN a skill exists under skills/
+        THEN README documents it as a /multiplai-context:<name> command row.
+
+        Guards the command table against the drift the 2026-07-08 review
+        caught (now / log-doctor / costs were shipped but undocumented)."""
+        readme = (PLUGIN_ROOT / "README.md").read_text()
+        documented = set(re.findall(r"/multiplai-context:([a-z0-9-]+)", readme))
+        skills = {d.name for d in (PLUGIN_ROOT / "skills").iterdir() if d.is_dir()}
+        missing = skills - documented
+        assert not missing, (
+            "Skills shipped but absent from the README command table: "
+            f"{sorted(missing)}"
+        )
+
     def test_user_config_fields_correspond_to_env_vars(self):
         """WHEN userConfig fields are declared in plugin.json
         THEN some module reads the corresponding CLAUDE_PLUGIN_OPTION_* env var.
