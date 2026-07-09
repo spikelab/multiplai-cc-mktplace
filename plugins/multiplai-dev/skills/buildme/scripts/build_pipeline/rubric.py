@@ -110,23 +110,23 @@ def _gather_text(change_dir: Path) -> str:
         if path.exists():
             parts.append(path.read_text())
 
-    specs_dir = change_dir / "specs"
-    if specs_dir.exists():
-        for spec_file in sorted(specs_dir.glob("*/spec.md")):
-            parts.append(spec_file.read_text())
+    req_dir = change_dir / "requirements"
+    if req_dir.exists():
+        for req_file in sorted(req_dir.glob("*.md")):
+            parts.append(req_file.read_text())
 
     return " ".join(parts)
 
 
 def _gather_spec_summaries(change_dir: Path) -> str:
-    """Gather first few lines of each spec for rubric context."""
-    specs_dir = change_dir / "specs"
-    if not specs_dir.exists():
+    """Gather first few lines of each requirement for rubric context."""
+    req_dir = change_dir / "requirements"
+    if not req_dir.exists():
         return "(no specs)"
     parts = []
-    for spec_file in sorted(specs_dir.glob("*/spec.md")):
-        cap_name = spec_file.parent.name
-        content = spec_file.read_text()
+    for req_file in sorted(req_dir.glob("*.md")):
+        cap_name = req_file.stem
+        content = req_file.read_text()
         # Take first 500 chars as summary
         summary = content[:500] + ("..." if len(content) > 500 else "")
         parts.append(f"### {cap_name}\n{summary}")

@@ -72,18 +72,24 @@ class TestDetectChangeType:
         change_dir.mkdir()
         assert detect_change_type(change_dir) == "backend"
 
-    def test_reads_specs_too(self, tmp_path):
+    def test_reads_requirements_too(self, tmp_path):
+        """Requirement text (not just proposal/design) feeds change-type detection.
+
+        Regression for the legacy specs/ reader: with a neutral proposal, the
+        frontend keywords living only in requirements/*.md must be what tips
+        detection to frontend — proving _gather_text reads requirements/.
+        """
         change_dir = tmp_path / "change"
         change_dir.mkdir()
         (change_dir / "proposal.md").write_text("Some generic proposal")
-        specs_dir = change_dir / "specs" / "auth"
-        specs_dir.mkdir(parents=True)
-        (specs_dir / "spec.md").write_text(
-            "API endpoint for login. Database stores tokens. "
-            "Backend server validates. REST API returns JSON. "
-            "Model schema for sessions."
+        req_dir = change_dir / "requirements"
+        req_dir.mkdir(parents=True)
+        (req_dir / "ui.md").write_text(
+            "React component with Tailwind CSS and page layout. "
+            "Frontend browser UI with form and button components. "
+            "HTML stylesheet renders the DOM."
         )
-        assert detect_change_type(change_dir) == "backend"
+        assert detect_change_type(change_dir) == "frontend"
 
     def test_minor_frontend_presence_stays_backend(self, tmp_path):
         """A single frontend keyword shouldn't flip to frontend/fullstack."""
@@ -156,3 +162,26 @@ class TestRubricHasCoreDimensions:
             call_args = mock_llm.call_args
             prompt = call_args[0][0]
             assert "frontend" in prompt
+
+    @pytest.mark.asyncio
+    async def test_rubric_prompt_includes_requirement_summaries(self, tmp_path):
+        """Requirement text reaches the rubric prompt (regression for _gather_spec_summaries)."""
+        change_dir = tmp_path / "change"
+        change_dir.mkdir()
+        (change_dir / "proposal.md").write_text("Some proposal")
+        (change_dir / "tasks.md").write_text("## 1. Setup")
+        req_dir = change_dir / "requirements"
+        req_dir.mkdir(parents=True)
+        (req_dir / "auth.md").write_text("Requirement: rubric-req-marker for login flow")
+
+        config = MagicMock()
+        config.model = "test-model"
+
+        with patch("build_pipeline.rubric.llm_call", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = "# Rubric\nContent"
+            await generate_rubric(change_dir, config)
+
+        prompt = mock_llm.call_args[0][0]
+        assert "rubric-req-marker" in prompt
+        assert "### auth" in prompt
+        assert "(no specs)" not in prompt
