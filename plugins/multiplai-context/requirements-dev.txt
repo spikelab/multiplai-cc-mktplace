@@ -4,3 +4,6 @@
 multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.6.0
 pytest>=7.0
 pytest-asyncio>=0.21
+# Docstrings and reviewer commands assume `pytest --timeout` works; without
+# this plugin the flag is rejected as unknown.
+pytest-timeout>=2.1
