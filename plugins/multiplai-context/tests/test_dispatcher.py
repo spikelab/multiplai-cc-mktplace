@@ -56,15 +56,32 @@ class TestDispatcherModuleStructure:
 
         assert callable(generate_catalogs)
 
-    def test_generate_catalogs_returns_list(self):
-        """generate_catalogs() must return a list[GenerationResult]."""
+    def test_generate_catalogs_returns_list_of_results(self, tmp_path, monkeypatch):
+        """generate_catalogs() actually returns a list[GenerationResult].
+
+        Behavioral (not signature-introspection): it runs the dispatcher
+        with each generator's run() stubbed and asserts the aggregated
+        return value is a non-empty list of GenerationResult."""
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        from generators.base import GenerationResult
+        from generators.config import CatalogConfig
         from generators.dispatcher import generate_catalogs
 
-        import inspect
-        sig = inspect.signature(generate_catalogs)
-        # Verify it accepts the expected parameters
-        params = set(sig.parameters.keys())
-        assert "config" in params, "generate_catalogs must accept 'config' parameter"
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
+            return GenerationResult(
+                generator=self.name, total_sources=0, skipped=0,
+                generated=0, pruned=0, errors=[], dry_run=dry_run,
+            )
+
+        with patch("generators.memory.MemoryGenerator.run", mock_run), \
+             patch("generators.diary.DiaryGenerator.run", mock_run), \
+             patch("generators.skills.SkillsGenerator.run", mock_run), \
+             patch("generators.resources.ResourcesGenerator.run", mock_run):
+            results = asyncio.run(generate_catalogs(config=CatalogConfig()))
+
+        assert isinstance(results, list)
+        assert results, "the always-on generators must produce results"
+        assert all(isinstance(r, GenerationResult) for r in results)
 
 
 # ---------------------------------------------------------------------------
@@ -73,38 +90,28 @@ class TestDispatcherModuleStructure:
 
 
 class TestDispatcherSignature:
-    """Requirement: generate_catalogs has correct function signature.
+    """Requirement: generate_catalogs has the documented public signature.
 
     Design Decision 6: generate_catalogs(config, generators=None, force=False, dry_run=False)
     """
 
-    def test_has_generators_parameter(self):
-        """generate_catalogs must accept optional 'generators' filter parameter."""
+    def test_optional_params_have_documented_defaults(self):
+        """generators/force/dry_run are optional with their documented defaults.
+
+        One assertion per parameter with the exact expected default —
+        replaces the prior trio of introspection tests (one of which had a
+        tautological ``default is None or ... or default is None`` guard)."""
         import inspect
         from generators.dispatcher import generate_catalogs
 
-        sig = inspect.signature(generate_catalogs)
-        assert "generators" in sig.parameters
-        param = sig.parameters["generators"]
-        assert param.default is None or param.default == inspect.Parameter.empty or param.default is None
-
-    def test_has_force_parameter(self):
-        """generate_catalogs must accept 'force' boolean parameter."""
-        import inspect
-        from generators.dispatcher import generate_catalogs
-
-        sig = inspect.signature(generate_catalogs)
-        assert "force" in sig.parameters
-        assert sig.parameters["force"].default is False
-
-    def test_has_dry_run_parameter(self):
-        """generate_catalogs must accept 'dry_run' boolean parameter."""
-        import inspect
-        from generators.dispatcher import generate_catalogs
-
-        sig = inspect.signature(generate_catalogs)
-        assert "dry_run" in sig.parameters
-        assert sig.parameters["dry_run"].default is False
+        params = inspect.signature(generate_catalogs).parameters
+        expected_defaults = {"generators": None, "force": False, "dry_run": False}
+        for name, expected in expected_defaults.items():
+            assert name in params, f"generate_catalogs must accept '{name}'"
+            assert params[name].default is expected, (
+                f"generate_catalogs '{name}' must default to {expected!r}, "
+                f"got {params[name].default!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1007,7 +1014,7 @@ class TestConfigPassthrough:
         from generators.config import CatalogConfig
         from generators.dispatcher import generate_catalogs
 
-        config = CatalogConfig(model="claude-haiku-4-5", reasoning_effort="low")
+        config = CatalogConfig(model="claude-haiku-4-5", model_diary="claude-opus-4-1")
         configs_seen = {}
 
         original_init = None
@@ -1029,7 +1036,7 @@ class TestConfigPassthrough:
         for name in ("memory", "diary"):
             assert name in configs_seen, f"{name} generator was not invoked"
             assert configs_seen[name].model == "claude-haiku-4-5"
-            assert configs_seen[name].reasoning_effort == "low"
+            assert configs_seen[name].model_diary == "claude-opus-4-1"
 
 
 # ---------------------------------------------------------------------------

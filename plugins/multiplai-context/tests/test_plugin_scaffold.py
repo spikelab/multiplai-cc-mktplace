@@ -161,6 +161,26 @@ class TestMarketplaceJson:
         assert isinstance(plugin["keywords"], list)
         assert len(plugin["keywords"]) > 0
 
+    def test_context_version_matches_plugin_json(self):
+        """marketplace.json's multiplai-context version must match plugin.json.
+
+        These drifted silently once (marketplace lagged at 0.6.1 while
+        plugin.json was 0.6.3); this guard keeps the two manifests in sync
+        so a release can't ship two different version numbers."""
+        plugin_version = json.loads(
+            (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text()
+        )["version"]
+        entries = [
+            p for p in self.manifest["plugins"]
+            if p.get("name") == "multiplai-context"
+        ]
+        assert entries, "marketplace.json must list the multiplai-context plugin"
+        assert entries[0].get("version") == plugin_version, (
+            "marketplace.json multiplai-context version "
+            f"({entries[0].get('version')}) must match plugin.json "
+            f"({plugin_version})"
+        )
+
 
 # ---------------------------------------------------------------------------
 # hooks.json
@@ -301,8 +321,10 @@ class TestNoHardcodedPaths:
 
     @pytest.mark.parametrize("path", SCAFFOLD_FILES, ids=lambda p: p.name)
     def test_no_hardcoded_home_paths(self, path):
-        if not path.exists():
-            pytest.skip(f"{path.name} does not exist")
+        assert path.exists(), (
+            f"scaffold file {path.name} must exist — a renamed/removed "
+            "scaffold file is a real failure, not a skip"
+        )
         text = path.read_text()
         assert "/home/spike" not in text
         assert "/Users/spike" not in text

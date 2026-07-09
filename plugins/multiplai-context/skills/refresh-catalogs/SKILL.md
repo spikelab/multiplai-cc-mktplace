@@ -45,13 +45,13 @@ By default (no arguments), all enabled catalogs are regenerated using state-awar
 - If a generator fails, other generators still run — failures are isolated per catalog.
 - Missing source directories (e.g., diary directory doesn't exist) cause that catalog to be skipped gracefully with a clear message, not a crash.
 - Missing or corrupt `.generation-state.json` triggers full regeneration for all catalogs (equivalent to `--force` for the first run).
-- All LLM calls go through `model_client` using the configured `catalog_model` and `catalog_reasoning_effort` settings. No direct API calls or new external dependencies.
+- All LLM calls go through `model_client` using the configured `catalog_model` (and `catalog_model_diary` for the diary generator). No direct API calls or new external dependencies.
 
 ## Configuration
 
 The dispatcher respects these `plugin.json` userConfig settings:
 - `catalog_model` — Model for LLM-based catalog generation (default: `claude-sonnet-4-6`)
-- `catalog_reasoning_effort` — Reasoning effort level: low, medium, high (default: medium)
+- `catalog_model_diary` — Optional model override for the diary generator (default: inherit `catalog_model`)
 - `enable_skills` — Whether to include the skills catalog generator (default: false)
 - `enable_resources` — Whether to include the resources catalog generator (default: false)
 - `resources_dir` — Directory to scan for resources (required when enable_resources is true)

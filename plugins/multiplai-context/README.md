@@ -82,9 +82,9 @@ Optional, for power users:
 - `enable_skills` + `skills_dir` — index a skills corpus for routing.
 - `enable_resources` + `resources_dir` — index a research/notes corpus.
 
-Everything else (catalog model, TTL, reasoning effort, diary catalog
-window, individual `*_dir` overrides) has sensible defaults — leave
-alone unless you're tuning.
+Everything else (catalog model, TTL, diary catalog window, individual
+`*_dir` overrides) has sensible defaults — leave alone unless you're
+tuning.
 
 ### Directory layout
 
@@ -108,8 +108,7 @@ over the anchor:
 | `anthropic_api_key` | _(unset, sensitive)_ | API key fallback when the Agent SDK is unavailable. Marked sensitive — stored in the system keychain, never logged. |
 | `catalog_model` | `claude-sonnet-4-6` | Model for LLM catalog generation |
 | `catalog_model_diary` | _(inherits)_ | Optional model override for the diary catalog |
-| `catalog_reasoning_effort` | `medium` | Reasoning effort for catalog generation |
-| `catalog_ttl_hours` | `168` | Hours a generated catalog stays valid |
+| `catalog_ttl_hours` | `168` | Hours a generated catalog stays valid before the read path flags it stale (advisory warning only — never regenerates inline) |
 | `diary_catalog_days` | `7` | Days of diary history the diary catalog covers |
 | `memory_router` | `token_overlap` | Context selection strategy: `token_overlap` (offline, fast) or `llm` (one model call per prompt). See [Router latency](#router-latency) before choosing `llm`. |
 | `router_model` | `claude-haiku-4-5` | Model for the `llm` router. Haiku by default — routing is cheap classification, so the smallest/fastest model keeps per-prompt latency down. Ignored under `token_overlap`. |
@@ -310,9 +309,12 @@ All commands are namespaced under `/multiplai-context:`.
 | `/multiplai-context:dream-remember` | Review the proposal (generating one if needed), approve/reject memory edits and action items, apply approved edits, write approved action items to `PLANS/dream-actions-{date}.md`, clean up processed learnings. |
 | `/multiplai-context:health` | **Is it broken?** Mechanical infrastructure check (deterministic script): active model client, directories present, memory-file freshness by mtime, diary/learnings/dream counts. Fast, cheap, run anytime. |
 | `/multiplai-context:memory-health-audit` | **Is it good?** Analytical effectiveness audit — cross-correlates retrieval logs, diary, learnings, and memory structure to find what's useful, what's wasted, and what to restructure. Slower; run ~monthly. |
+| `/multiplai-context:log-doctor` | **Why is it failing?** Analyzes the runtime logs across subsystems (context_manager, extract_learnings, backfill, dream, lifecycle hooks) to surface failures, anomalies, and degradation, verifies root causes against source, and produces a fix-recommendation report. Can focus on one subsystem or actively probe a functionality to confirm its logs appear. |
 | `/multiplai-context:refresh-catalogs` | Regenerate catalog indexes. Supports `--force`, `--dry-run`, `--only`. `--only <gen>` is an explicit override — it runs even if that generator's `enable_*` flag is off (e.g. `--only resources` refreshes the resources catalog while `enable_resources` stays `false`). |
 | `/multiplai-context:backfill` | Reconstruct learnings/diary/now summaries from existing Claude Code transcripts. Default window 7 days; `--days N`, `--since DATE`, `--all`. |
+| `/multiplai-context:now` | Rebuild per-project `now/` status snapshots from recent diary entries. Run after a backfill, or any time the injected project state looks stale. |
 | `/multiplai-context:qmd-search` | Manually search the resources knowledge base via qmd (semantic + keyword) — the manual companion to `resources_retrieval=qmd`. |
+| `/multiplai-context:costs` | Report API-equivalent costs for Claude Code usage — per chat, skill, subagent, project, model, or day. Collects fresh data from session transcripts, then reports from the cost ledger. Requires `enable_costs`. |
 
 ## Where your data lives
 

@@ -521,6 +521,17 @@ class GeneratorBase:
 
     # ---- LLM Client ----
 
+    @property
+    def _call_model(self) -> str:
+        """Model to use for this generator's LLM calls.
+
+        Defaults to the generic catalog model. Subclasses override to opt
+        into a per-generator model (e.g. DiaryGenerator uses
+        ``effective_diary_model`` so diary summaries can run on a cheaper
+        or beefier model than the rest of the catalog).
+        """
+        return self._config.model
+
     async def _call_llm(self, prompt: str) -> str:
         """Call LLM via model_client with retry logic for transient failures.
 
@@ -532,7 +543,7 @@ class GeneratorBase:
                 response = await self._model_client.query(
                     system="You are a catalog generator. Produce structured JSON output.",
                     messages=[{"role": "user", "content": prompt}],
-                    model=self._config.model,
+                    model=self._call_model,
                 )
                 return response.content
             except Exception as e:

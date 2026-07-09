@@ -37,7 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multiplai_core.config import read_session_state
+from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import setup_logging, log_event
 from lib import checkpoint as cp
@@ -197,12 +197,11 @@ def main() -> None:
 
     if session_state:
         session_state["last_stop"] = datetime.now(timezone.utc).isoformat()
-        try:
-            (data_dir / "session_state.json").write_text(
-                json.dumps(session_state, indent=2)
-            )
-        except OSError as e:
-            logger.debug("Could not update session_state.json: %s", e)
+        # Atomic temp+rename (shared with context_manager / session_start) so a
+        # crash mid-write never leaves a half-written state file. session_state
+        # was read-merged above, so turn_index / recently_injected survive.
+        if not write_session_state(data_dir, session_state):
+            logger.debug("Could not update session_state.json")
 
     # Context checkpoint pass — advisory only, never blocks the Stop.
     system_message: str | None = None

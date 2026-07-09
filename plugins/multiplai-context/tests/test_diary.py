@@ -1243,9 +1243,10 @@ class TestSchemaVersioning:
 
 
 class TestModelConfiguration:
-    """Requirement: Configurable model and reasoning effort.
+    """Requirement: Configurable model.
 
-    Generator respects plugin.json config for model and effort.
+    Generator respects plugin.json config for the catalog model and the
+    diary-specific model override.
     """
 
     @pytest.mark.asyncio
@@ -1269,7 +1270,11 @@ class TestModelConfiguration:
 
     @pytest.mark.asyncio
     async def test_uses_diary_specific_model_when_set(self, tmp_path):
-        """WHEN model_diary is set, diary generator uses it over the general model."""
+        """WHEN model_diary is set, the diary LLM call uses it over the general model.
+
+        Proves the wiring, not just the config property: the diary-specific
+        model must actually reach ``client.query(model=...)``.
+        """
         from generators.config import CatalogConfig
 
         client = _make_mock_client()
@@ -1281,8 +1286,33 @@ class TestModelConfiguration:
 
         await gen.run()
 
-        # The diary generator should use effective_diary_model
-        assert config.effective_diary_model == "claude-haiku-4-5"
+        call = client.query.call_args
+        assert call is not None, "diary generator must have called the LLM"
+        model_used = call.kwargs.get("model", (call[1] or {}).get("model"))
+        assert model_used == "claude-haiku-4-5", (
+            f"diary LLM call must use model_diary, got {model_used!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_catalog_model_when_diary_unset(self, tmp_path):
+        """WHEN model_diary is unset, the diary LLM call uses catalog_model."""
+        from generators.config import CatalogConfig
+
+        client = _make_mock_client()
+        config = CatalogConfig(model="claude-sonnet-4-6")  # model_diary defaults to ""
+        gen, catalogs_dir, diary_dir = _make_diary_generator(
+            tmp_path, client=client, config=config
+        )
+        _make_day_dir(diary_dir, _date_str_days_ago(0))
+
+        await gen.run()
+
+        call = client.query.call_args
+        assert call is not None
+        model_used = call.kwargs.get("model", (call[1] or {}).get("model"))
+        assert model_used == "claude-sonnet-4-6", (
+            f"diary LLM call must fall back to catalog_model, got {model_used!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

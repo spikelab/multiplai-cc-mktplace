@@ -34,7 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.paths import get_paths
-from multiplai_core.config import load_yaml
+from multiplai_core.config import load_yaml, read_session_state, write_session_state
 from multiplai_core.log_utils import setup_logging, log_event
 
 logger = setup_logging("session_start")
@@ -514,7 +514,7 @@ def main() -> None:
     # followable end-to-end. The random fallback only applies when the hook
     # input omits it (older clients / tests).
     session_id = hook_input.get("session_id") or str(uuid.uuid4())[:8]
-    session_state = {
+    session_identity = {
         "session_id": session_id,
         "start_time": datetime.now(timezone.utc).isoformat(),
         "plugin_mode": paths.is_plugin_mode(),
@@ -526,8 +526,17 @@ def main() -> None:
         "cwd": cwd,
     }
 
-    state_file = data_dir / "session_state.json"
-    state_file.write_text(json.dumps(session_state, indent=2))
+    # Read-merge-write, not wholesale rewrite: session_state.json is a single
+    # file shared across sessions running against the same plugin-data dir. A
+    # blind overwrite here would drop turn_index / recently_injected and clear
+    # a *concurrent* session's re-recommendation cooldown map. Merging our
+    # identity keys over the existing state preserves that bookkeeping. Write
+    # is atomic (temp+rename) via the shared core helper — see the
+    # known-limitation note in context_manager._persist_turn_state.
+    session_state = read_session_state(data_dir) or {}
+    session_state.update(session_identity)
+    if not write_session_state(data_dir, session_state):
+        logger.warning("Could not write session_state.json")
 
     # One-time per-project "now" snapshot injection (additionalContext).
     _inject_project_state(paths.now_dir(), cwd)

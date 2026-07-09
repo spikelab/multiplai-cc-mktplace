@@ -140,18 +140,19 @@ class TestContextRouterModelClient:
         assert "import anthropic" not in text
         assert "from anthropic" not in text
 
-    def test_uses_model_client_for_llm_calls(self):
-        """WHEN the context-router needs to make an LLM call
-        THEN it uses ModelClient / create_client from lib.model_client."""
+    def test_uses_router_abstraction_for_llm_calls(self):
+        """WHEN the context-router needs an LLM call
+        THEN it delegates to the router abstraction (``create_router`` in
+        ``lib.memory_router``) rather than importing the model client
+        directly — the model_client is used *by* the router, off the hot
+        hook path."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        # The context router should reference the model client when it makes LLM calls
-        has_model_client = (
-            "from lib.model_client" in text
-            or "model_client" in text
-            or "create_client" in text
-        )
-        assert has_model_client, \
-            "Context router must use model_client abstraction for LLM calls"
+        # context_manager reaches the model client via create_router, not
+        # a direct model_client/create_client import (which would wrongly
+        # imply an inline LLM call on the per-prompt hook path).
+        has_router = "create_router" in text or "memory_router" in text
+        assert has_router, \
+            "Context router must delegate LLM routing to lib.memory_router"
 
 
 # ===========================================================================

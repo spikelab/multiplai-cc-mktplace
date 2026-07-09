@@ -348,7 +348,7 @@ class TestDreamCatalogConfigRespected:
     """Requirement: Catalog regeneration inherits configured model settings.
 
     When triggered from dream, catalog generation must use the model and
-    reasoning effort specified in plugin.json config.
+    model specified in plugin.json config.
     """
 
     @pytest.fixture(autouse=True)

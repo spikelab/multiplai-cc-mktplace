@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.6.4 — 2026-07-09
+
+### Added
+- **Config knobs now do what the README promises.** `catalog_model_diary`
+  is wired: the diary catalog generator runs on its own model
+  (`effective_diary_model`) instead of inheriting the generic
+  `catalog_model`. `catalog_ttl_hours` is wired on the read path:
+  `context_manager` emits a once-per-session advisory staleness warning
+  when a loaded catalog's `generated_at` exceeds the TTL (a cheap
+  timestamp compare — it never regenerates inline; run
+  `/refresh-catalogs` for that).
+- Drift-guard tests: the `multiplai-core` pin is now asserted consistent
+  across every script's PEP 723 metadata and `requirements-dev.txt`, and
+  every shipped skill is asserted to have a README command-table row.
+
+### Changed
+- **`session_state.json` writes are atomic and key-preserving.**
+  `session_start` and `session_stop` now go through the atomic
+  temp+rename helper and read-merge rather than overwrite, so a session
+  start/stop no longer drops a concurrent session's `turn_index` /
+  `recently_injected` cooldown state.
+- README command table completed with the `now`, `log-doctor`, and
+  `costs` skills; `marketplace.json` version realigned with `plugin.json`
+  (had silently lagged at 0.6.1).
+
+### Fixed
+- **qmd SSH remote string fully sanitized.** `build_argv` now vets and
+  single-quotes the workspace path (from the hook cwd) and the collection
+  name (from config), not just the query — an unsafe value now yields no
+  command (fail-open) instead of risking shell injection over the bridge.
+
+### Removed
+- **`catalog_reasoning_effort`** config option (and its README/schema
+  entries). It was validated and documented but never consumable: the
+  `multiplai-core` `ModelClient.query()` interface has no reasoning/thinking
+  parameter, so honoring it would require an out-of-scope cross-repo
+  change. Removed rather than left as a false promise.
+
+### Internal
+- Added `pytest-timeout` to the dev toolchain (`--timeout` is assumed by
+  docstrings/reviewer commands). Defused ~12 dormant
+  `pytest.skip("...does not exist yet")` guards for files that now exist —
+  a renamed/removed file now fails loudly. Tidied dispatcher
+  signature-introspection tests (behavioral return-value check; dropped a
+  tautological assertion) and removed a misleading unused `create_client`
+  import from `context_manager`.
+
 ## 0.6.3 — 2026-07-09
 
 ### Changed

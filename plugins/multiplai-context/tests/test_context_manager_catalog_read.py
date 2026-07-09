@@ -10,7 +10,9 @@ Covers all scenarios from requirements/context-manager-catalog-read.md:
 - Empty catalog treated as authoritative (no fallback)
 - Optional catalogs (skills, resources) skip silently when missing
 - Catalog read errors isolated per catalog type
-- Catalog read does not block on stale data (TTL is read-side irrelevant)
+- Catalog read does not block on stale data (TTL is advisory on read:
+  a stale catalog is still used, but surfaces a once-per-session warning
+  when catalog_ttl_hours is supplied)
 - Catalog read path transparent to callers (same return shape)
 
 Design Decision 8: Fail-open strategy — missing or corrupt catalogs
@@ -922,7 +924,83 @@ class TestCatalogStalenessIgnored:
         result = context_manager._read_catalog_or_scan("memory")
 
         assert len(result) > 0, (
-            "Old catalog should still be used (TTL is read-side irrelevant)"
+            "Old catalog should still be used (TTL is advisory on read)"
+        )
+
+
+class TestCatalogStalenessWarning:
+    """Requirement: catalog_ttl_hours produces an advisory staleness warning.
+
+    When a TTL is supplied to the read path and the catalog's
+    ``generated_at`` is older than the TTL, a once-per-session warning is
+    logged — but the entries are still returned (fail-open). This is the
+    read-side consumer of the ``catalog_ttl_hours`` config option.
+    """
+
+    def test_stale_catalog_warns_when_ttl_supplied(self, plugin_data_env, caplog):
+        """Scenario: generated_at older than the TTL → advisory warning.
+
+        WHEN ttl_hours is supplied AND generated_at exceeds it
+        THEN a warning naming the catalog as stale is logged, and the
+        entries are still returned.
+        """
+        import context_manager
+
+        catalog = _valid_memory_catalog()
+        catalog["generated_at"] = "2020-01-01T00:00:00Z"  # far past any TTL
+        _write_catalog(plugin_data_env, "memory.json", catalog)
+
+        with caplog.at_level(logging.WARNING):
+            result = context_manager._read_catalog_or_scan("memory", ttl_hours=168)
+
+        assert len(result) > 0, "Stale catalog must still be returned (fail-open)"
+        stale_warnings = [
+            r.message for r in caplog.records
+            if r.levelno >= logging.WARNING and "stale" in r.message.lower()
+        ]
+        assert stale_warnings, (
+            "A stale catalog with ttl_hours supplied must log a staleness warning"
+        )
+
+    def test_fresh_catalog_does_not_warn(self, plugin_data_env, caplog):
+        """Scenario: generated_at within the TTL → no staleness warning."""
+        import context_manager
+        from datetime import datetime, timezone
+
+        catalog = _valid_memory_catalog()
+        catalog["generated_at"] = datetime.now(timezone.utc).isoformat()
+        _write_catalog(plugin_data_env, "memory.json", catalog)
+
+        with caplog.at_level(logging.WARNING):
+            context_manager._read_catalog_or_scan("memory", ttl_hours=168)
+
+        stale_warnings = [
+            r.message for r in caplog.records
+            if r.levelno >= logging.WARNING and "stale" in r.message.lower()
+        ]
+        assert not stale_warnings, "A fresh catalog must not log a staleness warning"
+
+    def test_no_ttl_supplied_skips_staleness_check(self, plugin_data_env, caplog):
+        """Scenario: ttl_hours omitted (None) → staleness check is skipped.
+
+        Preserves the existing default read path (callers that don't pass a
+        TTL, e.g. ad-hoc reads) — no staleness warning even for old data.
+        """
+        import context_manager
+
+        catalog = _valid_memory_catalog()
+        catalog["generated_at"] = "2020-01-01T00:00:00Z"
+        _write_catalog(plugin_data_env, "memory.json", catalog)
+
+        with caplog.at_level(logging.WARNING):
+            context_manager._read_catalog_or_scan("memory")  # no ttl_hours
+
+        stale_warnings = [
+            r.message for r in caplog.records
+            if r.levelno >= logging.WARNING and "stale" in r.message.lower()
+        ]
+        assert not stale_warnings, (
+            "Omitting ttl_hours must skip the staleness check entirely"
         )
 
 

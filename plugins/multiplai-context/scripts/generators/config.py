@@ -7,11 +7,8 @@ settings from CLAUDE_PLUGIN_OPTION_* environment variables with defaults.
 import os
 from dataclasses import dataclass
 
-VALID_REASONING_EFFORTS = ("low", "medium", "high")
-
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_MODEL_DIARY = ""  # empty → inherits DEFAULT_MODEL
-DEFAULT_REASONING_EFFORT = "medium"
 DEFAULT_TTL_HOURS = 168  # 7 days
 DEFAULT_DIARY_CATALOG_DAYS = 7
 DEFAULT_SKILLS_DIR = "~/.claude/skills"
@@ -41,7 +38,6 @@ class CatalogConfig:
 
     model: str = DEFAULT_MODEL
     model_diary: str = DEFAULT_MODEL_DIARY
-    reasoning_effort: str = DEFAULT_REASONING_EFFORT
     ttl_hours: int = DEFAULT_TTL_HOURS
     diary_catalog_days: int = DEFAULT_DIARY_CATALOG_DAYS
     enable_skills: bool = False
@@ -64,9 +60,6 @@ class CatalogConfig:
     def __post_init__(self):
         if not self.model or not self.model.strip():
             self.model = DEFAULT_MODEL
-
-        if self.reasoning_effort not in VALID_REASONING_EFFORTS:
-            self.reasoning_effort = DEFAULT_REASONING_EFFORT
 
         if self.ttl_hours < 0:
             self.ttl_hours = DEFAULT_TTL_HOURS
@@ -119,9 +112,6 @@ def load_catalog_config() -> CatalogConfig:
     """
     model = os.environ.get("CLAUDE_PLUGIN_OPTION_catalog_model", DEFAULT_MODEL)
     model_diary = os.environ.get("CLAUDE_PLUGIN_OPTION_catalog_model_diary", DEFAULT_MODEL_DIARY)
-    reasoning_effort = os.environ.get(
-        "CLAUDE_PLUGIN_OPTION_catalog_reasoning_effort", DEFAULT_REASONING_EFFORT
-    )
     ttl_hours = _parse_int(
         os.environ.get("CLAUDE_PLUGIN_OPTION_catalog_ttl_hours", str(DEFAULT_TTL_HOURS)),
         DEFAULT_TTL_HOURS,
@@ -174,7 +164,6 @@ def load_catalog_config() -> CatalogConfig:
     return CatalogConfig(
         model=model,
         model_diary=model_diary,
-        reasoning_effort=reasoning_effort,
         ttl_hours=ttl_hours,
         diary_catalog_days=diary_catalog_days,
         enable_skills=enable_skills,

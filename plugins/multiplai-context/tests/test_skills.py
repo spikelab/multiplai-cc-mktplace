@@ -9,7 +9,7 @@ Covers all scenarios from requirements/skills-catalog-generator.md:
 - Skills catalog generator performs state-aware regeneration
 - Skills catalog generator prunes deleted skill files
 - Skills catalog generator handles empty skills directory
-- Skills catalog generator uses configured model and reasoning effort
+- Skills catalog generator uses configured model
 - Skills catalog generator handles LLM call failures gracefully
 - Skills catalog generator writes atomic output
 - discover_sources(), build_prompt(), parse_response()
@@ -818,14 +818,13 @@ class TestSkillsDeletionPruning:
 
 
 class TestSkillsModelConfig:
-    """Requirement: Skills catalog generator uses configured model and reasoning effort.
+    """Requirement: Skills catalog generator uses configured model.
 
-    LLM calls must use the model from config, defaulting to claude-sonnet-4-6
-    at medium reasoning effort.
+    LLM calls must use the model from config, defaulting to claude-sonnet-4-6.
     """
 
     def test_default_model_and_effort(self, tmp_path, monkeypatch):
-        """Default model is claude-sonnet-4-6 with medium reasoning effort."""
+        """Default model is claude-sonnet-4-6."""
         from generators.config import CatalogConfig
 
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
