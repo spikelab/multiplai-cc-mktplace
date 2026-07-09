@@ -123,7 +123,12 @@ async def generate_catalogs(
     catalogs_dir = Paths.resolve().catalogs_dir()
     catalogs_dir.mkdir(parents=True, exist_ok=True)
 
-    model_client = await _create_model_client()
+    # Dry-run is documented as making no LLM calls, so it must not
+    # instantiate a real model client — doing so needs credentials and
+    # fails (or stalls) in credential-free environments. Hand generators
+    # the stub: it satisfies the client interface but is never queried on
+    # the dry-run path, which reports intent without generating.
+    model_client = _StubModelClient() if dry_run else await _create_model_client()
     names_to_run = _resolve_generators(config, generators)
 
     # An explicit filter is an override: per this module's contract, a
