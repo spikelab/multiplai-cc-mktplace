@@ -96,7 +96,7 @@
       "name": "multiplai-messaging",
       "source": "./plugins/multiplai-messaging",
       "description": "Messaging skill pack: read/search/post Slack as yourself, and search/read/draft Gmail (never sends).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
