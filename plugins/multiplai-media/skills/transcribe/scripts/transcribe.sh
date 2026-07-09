@@ -144,6 +144,37 @@ if [[ -f "$OUTPUT_FILE" ]] && [[ "$OVERRIDE" != true ]]; then
     exit 1
 fi
 
+# --- Confine host-bridge I/O to the workspace shared mount (defense-in-depth) ---
+# When transcription runs on the host via the SSH bridge, mlx_whisper reads the
+# audio and writes the transcript on the HOST filesystem. Only paths under the
+# workspace shared mount resolve to the same file on both sides — anything else
+# fails to read, or (for --output-dir) silently lands host-side, invisible to the
+# container and outside $WORKSPACE. The bridge gateway allowlists *commands*, not
+# paths, so this confinement is enforced here at the client. A relative OUTPUT_FILE
+# is resolved against the container cwd here (never left to resolve against the
+# host's ssh cwd). Local (macOS) runs touch the real filesystem directly and are
+# exempt. Fail-open only if the workspace marker is unreadable — the host wrapper
+# is the actual enforcement boundary; this is defense-in-depth.
+if [ "$IS_CONTAINER" = "true" ]; then
+    WS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.workspace"
+    WORKSPACE="$(cat "$WS_FILE" 2>/dev/null || true)"
+    if [ -n "$WORKSPACE" ]; then
+        AUDIO_FILE="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$AUDIO_FILE")"
+        OUTPUT_FILE="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$OUTPUT_FILE")"
+        for _p in "$AUDIO_FILE" "$OUTPUT_FILE"; do
+            case "$_p/" in
+                "$WORKSPACE"/*) ;;
+                *)
+                    echo "Error: host-bridge transcription is confined to the workspace." >&2
+                    echo "  Workspace:      $WORKSPACE" >&2
+                    echo "  Offending path: $_p" >&2
+                    echo "  Move the audio and output inside the workspace and retry." >&2
+                    exit 1 ;;
+            esac
+        done
+    fi
+fi
+
 # Run transcription
 echo "Transcribing: $AUDIO_FILE"
 echo "Output: $OUTPUT_FILE"

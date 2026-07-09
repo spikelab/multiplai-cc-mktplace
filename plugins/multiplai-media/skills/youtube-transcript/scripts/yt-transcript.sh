@@ -195,6 +195,26 @@ if [[ -z "$OUTPUT_FILE" ]]; then
     OUTPUT_FILE="${SAFE_TITLE}-transcript.txt"
 fi
 
+# Confine the final transcript to the workspace (defense-in-depth): the container
+# must not write outside $WORKSPACE. Resolve relative names against the container
+# cwd (never leave them to resolve host-side). The host-touching audio I/O already
+# lives under TMPDIR_WORK (INBOX, inside the workspace); this guards the final
+# output path too. Local macOS runs are exempt; fail-open if the marker is missing.
+if [ "$IS_CONTAINER" = "true" ]; then
+    WORKSPACE="$(cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.workspace" 2>/dev/null || true)"
+    if [ -n "$WORKSPACE" ]; then
+        OUTPUT_FILE="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$OUTPUT_FILE")"
+        case "$OUTPUT_FILE/" in
+            "$WORKSPACE"/*) ;;
+            *)
+                echo "Error: transcript output is confined to the workspace." >&2
+                echo "  Workspace:      $WORKSPACE" >&2
+                echo "  Offending path: $OUTPUT_FILE" >&2
+                exit 1 ;;
+        esac
+    fi
+fi
+
 # --- Try subtitle download (manual first, then auto-generated) ---
 SUBS_DOWNLOADED=false
 VTT_FILE=""
