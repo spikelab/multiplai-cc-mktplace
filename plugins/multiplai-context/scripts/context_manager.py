@@ -616,10 +616,16 @@ def _persist_turn_state(
     # session_state.json. Two sessions running concurrently against the same
     # plugin-data dir can race this read-modify-write and clobber each other's
     # cooldown map — a mild degradation (a file may be re-injected a turn early
-    # or suppressed a turn late), not data loss. The severe cross-session bug
-    # (deferred diary/learnings markers filed under the wrong session id) is
-    # fixed separately in session_end.py / pre_compact.py by trusting the
-    # hook-input session id. A full fix here needs per-session state files.
+    # or suppressed a turn late), not data loss. All three writers now
+    # read-merge-write and go through the atomic write_session_state helper
+    # (this function, session_start.main, session_stop.main), so a session
+    # start/stop no longer *drops* a concurrent session's turn_index /
+    # recently_injected — but interleaved read-modify-write cycles can still
+    # lose an update to the cooldown map under true concurrency. The severe
+    # cross-session bug (deferred diary/learnings markers filed under the wrong
+    # session id) is fixed separately in session_end.py / pre_compact.py by
+    # trusting the hook-input session id. A full fix here needs per-session
+    # state files (deliberately out of scope).
     try:
         write_session_state(get_paths().data_dir(), session_state)
     except Exception:

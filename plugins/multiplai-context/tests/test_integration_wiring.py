@@ -382,6 +382,67 @@ class TestEndToEndSessionLifecycle:
         assert "Traceback" not in result.stderr or "venv" in result.stderr.lower(), \
             f"session_stop.py crashed: {result.stderr[:500]}"
 
+    def test_session_start_preserves_cooldown_state(self, plugin_env):
+        """WHEN session_start.py runs against an existing session_state.json
+        THEN it preserves turn_index / recently_injected (a concurrent
+        session's cooldown map) while updating the identity keys.
+
+        Regression guard for the wholesale-rewrite bug: session_start used
+        to blow away the shared state file, clearing another session's
+        re-recommendation cooldown."""
+        data_dir = Path(plugin_env["CLAUDE_PLUGIN_DATA"])
+        state_file = data_dir / "session_state.json"
+        state_file.write_text(json.dumps({
+            "session_id": "OLDSESS",
+            "turn_index": 7,
+            "recently_injected": {"memory": {"voice.md": 5}},
+            "cwd": "/old",
+        }))
+
+        result = _run_plugin_script(
+            "scripts/session_start.py",
+            input_data=json.dumps({
+                "hook_event_name": "SessionStart",
+                "session_id": "NEWSESS",
+                "cwd": "/new",
+            }),
+            env_overrides=plugin_env,
+        )
+        assert result.returncode == 0, result.stderr[:500]
+        state = json.loads(state_file.read_text())
+        # Cooldown bookkeeping from the prior/concurrent session survives.
+        assert state.get("turn_index") == 7, "turn_index must be preserved"
+        assert state.get("recently_injected") == {"memory": {"voice.md": 5}}, \
+            "recently_injected cooldown map must be preserved"
+        # Identity keys reflect the new session.
+        assert state["session_id"] == "NEWSESS"
+        assert state["cwd"] == "/new"
+
+    def test_session_stop_preserves_cooldown_state(self, plugin_env):
+        """WHEN session_stop.py runs THEN it merges last_stop without
+        dropping turn_index / recently_injected, via the atomic writer."""
+        data_dir = Path(plugin_env["CLAUDE_PLUGIN_DATA"])
+        state_file = data_dir / "session_state.json"
+        state_file.write_text(json.dumps({
+            "session_id": "SESS1",
+            "turn_index": 3,
+            "recently_injected": {"skills": {"foo": 2}},
+        }))
+
+        result = _run_plugin_script(
+            "scripts/session_stop.py",
+            input_data=json.dumps({
+                "hook_event_name": "Stop",
+                "session_id": "SESS1",
+            }),
+            env_overrides=plugin_env,
+        )
+        assert result.returncode == 0, result.stderr[:500]
+        state = json.loads(state_file.read_text())
+        assert state.get("turn_index") == 3
+        assert state.get("recently_injected") == {"skills": {"foo": 2}}
+        assert "last_stop" in state, "session_stop must record last_stop"
+
     def test_session_end_accepts_stdin_json(self, plugin_env):
         """WHEN session_end.py receives valid JSON on stdin
         THEN it does not crash."""
