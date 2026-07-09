@@ -538,8 +538,10 @@ class TestSetupCheckContract:
 
     @pytest.fixture(autouse=True)
     def require_script(self):
-        if not SETUP_CHECK_SCRIPT.is_file():
-            pytest.skip("setup_check.py not yet implemented")
+        assert SETUP_CHECK_SCRIPT.is_file(), (
+            "setup_check.py must exist — it has shipped, so a missing script "
+            "is a real failure, not a skip"
+        )
         self.src = SETUP_CHECK_SCRIPT.read_text()
 
     def test_checks_memory_dir(self):
@@ -570,8 +572,10 @@ class TestSetupWriteContract:
 
     @pytest.fixture(autouse=True)
     def require_script(self):
-        if not SETUP_WRITE_SCRIPT.is_file():
-            pytest.skip("setup_write.py not yet implemented")
+        assert SETUP_WRITE_SCRIPT.is_file(), (
+            "setup_write.py must exist — it has shipped, so a missing script "
+            "is a real failure, not a skip"
+        )
         self.src = SETUP_WRITE_SCRIPT.read_text()
 
     def test_reads_templates(self):

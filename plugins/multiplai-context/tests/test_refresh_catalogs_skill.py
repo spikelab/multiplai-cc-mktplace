@@ -87,8 +87,10 @@ class TestRefreshCatalogsSkillContent:
     @pytest.fixture(autouse=True)
     def load_skill(self):
         skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
-        if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
+        assert skill_path.exists(), (
+            "skills/refresh-catalogs/SKILL.md must exist — the skill has "
+            "shipped, so a missing file is a real failure, not a skip"
+        )
         self.text = skill_path.read_text()
 
     def test_has_title_heading(self):
@@ -196,8 +198,10 @@ class TestRefreshCatalogsDefaultInvocation:
     @pytest.fixture(autouse=True)
     def load_skill(self):
         skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
-        if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
+        assert skill_path.exists(), (
+            "skills/refresh-catalogs/SKILL.md must exist — the skill has "
+            "shipped, so a missing file is a real failure, not a skip"
+        )
         self.text = skill_path.read_text()
 
     def test_default_invocation_runs_all_enabled(self):
@@ -239,8 +243,10 @@ class TestRefreshCatalogsForceMode:
     @pytest.fixture(autouse=True)
     def load_skill(self):
         skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
-        if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
+        assert skill_path.exists(), (
+            "skills/refresh-catalogs/SKILL.md must exist — the skill has "
+            "shipped, so a missing file is a real failure, not a skip"
+        )
         self.text = skill_path.read_text()
 
     def test_force_flag_documented(self):
@@ -288,8 +294,10 @@ class TestRefreshCatalogsDryRunMode:
     @pytest.fixture(autouse=True)
     def load_skill(self):
         skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
-        if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
+        assert skill_path.exists(), (
+            "skills/refresh-catalogs/SKILL.md must exist — the skill has "
+            "shipped, so a missing file is a real failure, not a skip"
+        )
         self.text = skill_path.read_text()
 
     def test_dry_run_flag_documented(self):
@@ -339,8 +347,10 @@ class TestRefreshCatalogsSelectiveGenerators:
     @pytest.fixture(autouse=True)
     def load_skill(self):
         skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
-        if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
+        assert skill_path.exists(), (
+            "skills/refresh-catalogs/SKILL.md must exist — the skill has "
+            "shipped, so a missing file is a real failure, not a skip"
+        )
         self.text = skill_path.read_text()
 
     def test_selective_flag_documented(self):
@@ -379,8 +389,10 @@ class TestRefreshCatalogsOutputReporting:
     @pytest.fixture(autouse=True)
     def load_skill(self):
         skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
-        if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
+        assert skill_path.exists(), (
+            "skills/refresh-catalogs/SKILL.md must exist — the skill has "
+            "shipped, so a missing file is a real failure, not a skip"
+        )
         self.text = skill_path.read_text()
 
     def test_reports_per_catalog_status(self):
@@ -433,8 +445,10 @@ class TestRefreshCatalogsDelegatesToDispatcher:
     @pytest.fixture(autouse=True)
     def load_skill(self):
         skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
-        if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
+        assert skill_path.exists(), (
+            "skills/refresh-catalogs/SKILL.md must exist — the skill has "
+            "shipped, so a missing file is a real failure, not a skip"
+        )
         self.text = skill_path.read_text()
 
     def test_invokes_dispatcher_not_individual_generators(self):
@@ -478,8 +492,10 @@ class TestRefreshCatalogsStateFileHandling:
     @pytest.fixture(autouse=True)
     def load_skill(self):
         skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
-        if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
+        assert skill_path.exists(), (
+            "skills/refresh-catalogs/SKILL.md must exist — the skill has "
+            "shipped, so a missing file is a real failure, not a skip"
+        )
         self.text = skill_path.read_text()
 
     def test_handles_missing_state(self):
@@ -511,8 +527,10 @@ class TestRefreshCatalogsMissingDirectories:
     @pytest.fixture(autouse=True)
     def load_skill(self):
         skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
-        if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
+        assert skill_path.exists(), (
+            "skills/refresh-catalogs/SKILL.md must exist — the skill has "
+            "shipped, so a missing file is a real failure, not a skip"
+        )
         self.text = skill_path.read_text()
 
     def test_mentions_directory_handling(self):
@@ -543,8 +561,10 @@ class TestRefreshCatalogsModelConfig:
     @pytest.fixture(autouse=True)
     def load_skill(self):
         skill_path = PLUGIN_ROOT / "skills" / "refresh-catalogs" / "SKILL.md"
-        if not skill_path.exists():
-            pytest.skip("skills/refresh-catalogs/SKILL.md does not exist yet")
+        assert skill_path.exists(), (
+            "skills/refresh-catalogs/SKILL.md must exist — the skill has "
+            "shipped, so a missing file is a real failure, not a skip"
+        )
         self.text = skill_path.read_text()
 
     def test_mentions_model_configuration(self):

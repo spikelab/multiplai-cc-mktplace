@@ -301,8 +301,10 @@ class TestNoHardcodedPaths:
 
     @pytest.mark.parametrize("path", SCAFFOLD_FILES, ids=lambda p: p.name)
     def test_no_hardcoded_home_paths(self, path):
-        if not path.exists():
-            pytest.skip(f"{path.name} does not exist")
+        assert path.exists(), (
+            f"scaffold file {path.name} must exist — a renamed/removed "
+            "scaffold file is a real failure, not a skip"
+        )
         text = path.read_text()
         assert "/home/spike" not in text
         assert "/Users/spike" not in text
