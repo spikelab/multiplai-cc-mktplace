@@ -6,12 +6,15 @@ import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import subprocess
+
 from build_pipeline.tdd_engine import (
     parse_blocks,
     assemble_context,
     run_block_tdd,
     run_test_quality_check,
     run_tdd_engine,
+    _git_commit_block_phase,
     WEAK_TEST_PATTERNS,
     MAX_REVIEW_ITERATIONS,
     EXIT_SUCCESS,
@@ -619,6 +622,26 @@ class TestRunBlockTDD:
         assert block.status == BlockStatus.FAILED
 
     @pytest.mark.asyncio
+    async def test_noncontiguous_block_number_indexed_by_position(self, setup):
+        """Block state is indexed by list position, not block.number - 1.
+
+        With a block numbered 5 living at list index 0, the old block.number-1=4
+        index was out of range for the 1-element list, so mark_block_status
+        silently no-oped and the FAILED status was never recorded.
+        """
+        config, state, progress, _ = setup
+        block = BlockInfo(number=5, name="Block5", description="non-contiguous")
+        state.tdd.blocks = [block]
+        state.tdd.current_block = 0
+        fail_result = AgentResult(success=False, error="crash")
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=fail_result):
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is False
+        assert state.tdd.blocks[0].status == BlockStatus.FAILED
+
+    @pytest.mark.asyncio
     async def test_standard_tier_runs_refactorer(self, setup):
         config, state, progress, block = setup
         config.tier = "standard"
@@ -645,6 +668,52 @@ class TestRunBlockTDD:
 
         assert result is True
         mock_refactor.assert_not_called()
+
+
+class TestGitCommitScoping:
+    """_git_commit_block_phase must not leak buildme bookkeeping into user commits."""
+
+    def _init_repo(self, repo: Path):
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        (repo / ".gitkeep").write_text("")
+        subprocess.run(["git", "add", ".gitkeep"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+    def test_bookkeeping_files_excluded_from_block_commit(self, tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        self._init_repo(project_dir)
+        specs_root = project_dir / "specs"
+        change_dir = specs_root / "changes" / "feat"
+        change_dir.mkdir(parents=True)
+
+        config = BuildConfig(project_dir=project_dir, change_name="feat")
+        config.specs_dir = specs_root
+
+        # A block's real code change, plus buildme's own side-writes.
+        (project_dir / "module.py").write_text("x = 1\n")
+        config.progress_file_path().write_text("# progress\n")
+        config.state_file_path().write_text("{}\n")
+
+        sha = _git_commit_block_phase(config, "impl", BlockInfo(number=1, name="B", description="d"))
+        assert sha is not None
+
+        committed = subprocess.run(
+            ["git", "show", "--name-only", "--pretty=format:", "HEAD"],
+            cwd=project_dir, capture_output=True, text=True, check=True,
+        ).stdout.split()
+        assert "module.py" in committed
+        assert "build-progress.md" not in committed
+        assert not any(".build-state.json" in f for f in committed)
+
+        # The bookkeeping files must remain untracked afterward.
+        tracked = subprocess.run(
+            ["git", "ls-files"], cwd=project_dir, capture_output=True, text=True, check=True,
+        ).stdout
+        assert "build-progress.md" not in tracked
+        assert ".build-state.json" not in tracked
 
 
 class TestExitCodes:

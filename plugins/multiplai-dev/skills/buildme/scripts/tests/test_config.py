@@ -151,3 +151,18 @@ class TestConfigPaths:
         config = BuildConfig(project_dir=tmp_path, change_name="feat")
         config.specs_dir = tmp_path / "specs"
         assert config.tasks_path == tmp_path / "specs" / "changes" / "feat" / "tasks.md"
+
+    def test_change_dir_normalizes_traversal(self, tmp_path):
+        """A --change value that tries to escape specs/changes/ is neutralized,
+        so archive()'s shutil.move can never target an out-of-tree directory."""
+        config = BuildConfig(project_dir=tmp_path, change_name="../../etc/passwd")
+        config.specs_dir = tmp_path / "specs"
+        cd = config.change_dir
+        assert ".." not in cd.parts
+        assert cd.parent == tmp_path / "specs" / "changes"
+        assert cd == tmp_path / "specs" / "changes" / "etcpasswd"
+
+    def test_change_dir_normalizes_case_and_spaces(self, tmp_path):
+        config = BuildConfig(project_dir=tmp_path, change_name="My Feature")
+        config.specs_dir = tmp_path / "specs"
+        assert config.change_dir == tmp_path / "specs" / "changes" / "my-feature"

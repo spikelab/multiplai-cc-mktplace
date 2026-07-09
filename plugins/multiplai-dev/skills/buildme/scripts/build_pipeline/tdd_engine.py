@@ -43,16 +43,28 @@ from .state import BuildState, TDDState
 log = logging.getLogger(__name__)
 
 
-def _git_commit_block_phase(cwd: str, phase: str, block: BlockInfo) -> str | None:
-    """Commit all changes in cwd for the current block phase.
+def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -> str | None:
+    """Commit the block phase's changes in the project repo.
 
     phase: "test" or "impl" (used for conventional-commit prefix).
     Returns short SHA of the new commit, or None if there was nothing to
     commit or the commit failed (logged as warning — never raises).
+
+    Stages everything EXCEPT buildme's own bookkeeping files (build-progress.md
+    and .build-state.json) so they don't leak into the user's per-block commits.
     """
+    cwd = str(config.project_dir)
+    # Exclude the bookkeeping files via :(exclude) pathspecs, relative to the repo.
+    excludes: list[str] = []
+    for bookkeeping in (config.progress_file_path(), config.state_file_path()):
+        try:
+            rel = bookkeeping.relative_to(config.project_dir)
+        except ValueError:
+            continue  # outside the repo — git add under '.' won't touch it anyway
+        excludes.append(f":(exclude){rel}")
     try:
         subprocess.run(
-            ["git", "add", "-A"],
+            ["git", "add", "-A", "--", ".", *excludes],
             cwd=cwd, check=True, capture_output=True, timeout=30,
         )
         status = subprocess.run(
@@ -266,7 +278,10 @@ async def run_block_tdd(
     Advanced tier: test-writer + implementer (clean code)
     Standard tier: test-writer + implementer (minimum) + refactorer
     """
-    block_idx = block.number - 1
+    # Index by list position, not block.number - 1: LLM-generated tasks.md
+    # numbering isn't guaranteed contiguous-from-1. The block being run is
+    # always the one at state.tdd.current_block (see run_tdd_engine's loop).
+    block_idx = state.tdd.current_block if state.tdd else 0
     total = len(state.tdd.blocks) if state.tdd else 0
     cwd = str(config.project_dir)
 
@@ -311,7 +326,7 @@ async def run_block_tdd(
     log.info("DONE block=%d name=%s phase=TEST_WRITE", block.number, block.name)
     progress.log_agent("TestWriter", block.name, "COMPLETE")
 
-    test_sha = _git_commit_block_phase(cwd, "test", block)
+    test_sha = _git_commit_block_phase(config, "test", block)
     if test_sha:
         block.test_commit = test_sha
         state.checkpoint(config.state_file_path())
@@ -354,7 +369,7 @@ async def run_block_tdd(
              block.number, block.name, impl_result.turns_used, impl_result.elapsed_seconds)
     progress.log_agent("Implementer", block.name, "COMPLETE")
 
-    impl_sha = _git_commit_block_phase(cwd, "impl", block)
+    impl_sha = _git_commit_block_phase(config, "impl", block)
     if impl_sha:
         block.impl_commit = impl_sha
         state.checkpoint(config.state_file_path())
@@ -392,7 +407,8 @@ async def _run_integration_and_review(
     progress: ProgressWriter,
 ) -> bool:
     """Run integration gate + review loop for a block. Returns True on success."""
-    block_idx = block.number - 1
+    # Index by list position (see run_block_tdd) — block.number may be non-contiguous.
+    block_idx = state.tdd.current_block if state.tdd else 0
     total = len(state.tdd.blocks) if state.tdd else 0
 
     # --- Integration gate ---

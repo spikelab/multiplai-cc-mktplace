@@ -194,7 +194,11 @@ class BuildConfig:
 
     @property
     def change_dir(self) -> Path:
-        return self.specs_dir / "changes" / self.change_name
+        # Normalize the change name so a hostile/careless --change value
+        # (e.g. '../../foo') can't escape specs/changes/ — archive() will
+        # shutil.move this directory, so an out-of-tree path is dangerous.
+        from .change_manager import normalize_change_name
+        return self.specs_dir / "changes" / normalize_change_name(self.change_name)
 
     @property
     def research_path(self) -> Path:

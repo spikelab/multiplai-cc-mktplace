@@ -32,6 +32,17 @@ from .models import ArtifactInfo, ArtifactStatus, ChangeStatus
 
 log = logging.getLogger(__name__)
 
+
+def normalize_change_name(name: str) -> str:
+    """Normalize a change name to a safe kebab-case slug.
+
+    Strips path separators, dots, and other non-word characters, so a name can
+    never traverse outside specs/changes/ (e.g. '../../foo' → 'foo').
+    """
+    name = re.sub(r"[^\w\s-]", "", name.lower())
+    return re.sub(r"[\s_]+", "-", name).strip("-")
+
+
 # The spec-driven artifact DAG — hardcoded since we only use one schema.
 ARTIFACT_DAG: dict[str, dict] = {
     "proposal": {"generates": "proposal.md", "requires": []},
@@ -307,8 +318,7 @@ class ChangeManager:
 
     def _normalize_name(self, name: str) -> str:
         """Normalize a change name to kebab-case."""
-        name = re.sub(r"[^\w\s-]", "", name.lower())
-        return re.sub(r"[\s_]+", "-", name).strip("-")
+        return normalize_change_name(name)
 
     def _merge_delta_requirements(self, change_dir: Path) -> None:
         """Merge delta requirements from a change into the main registry.
