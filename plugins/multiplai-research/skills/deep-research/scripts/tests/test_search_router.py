@@ -12,8 +12,10 @@ from pathlib import Path
 
 import pytest
 
+from research_pipeline import sdk
 from research_pipeline.models import SearchResult
 from research_pipeline.search_router import (
+    ClaudeAgentSearchProvider,
     ProviderError,
     QuotaExhaustedError,
     RouterConfig,
@@ -153,6 +155,10 @@ class TestQuotaTracking:
 
         for _ in range(5):
             await router.search("test")
+
+        # Quota writes are debounced; flush the pending state to disk (what
+        # SearchRouter.aclose does at run end) before reading the file back.
+        router.quotas.flush()
 
         # Reload quota file
         from research_pipeline.models import QuotaState
@@ -318,3 +324,148 @@ class TestBatchAndTimeout:
 
         # 3 successful queries, each with 1 result
         assert len(results) == 3
+
+
+# ---------------------------------------------------------------------------
+# Failover: empty / parse-failed results must not count as a usable success
+# (RES-1). A non-last provider returning [] or raising a transient error falls
+# through to the next; only an all-empty run returns a clean empty.
+# ---------------------------------------------------------------------------
+
+
+class TestFailover:
+    @pytest.mark.asyncio
+    async def test_empty_primary_falls_through_to_secondary(
+        self, fast_config: RouterConfig
+    ) -> None:
+        # Primary returns [] (empty answer). It must not short-circuit the
+        # query — the secondary should be tried and its results returned.
+        primary = StubProvider("primary", monthly_limit=100, results_per_query=0)
+        secondary = StubProvider("secondary", monthly_limit=100, results_per_query=3)
+        router = SearchRouter([primary, secondary], fast_config)
+
+        results = await router.search("test")
+
+        assert primary.calls == 1
+        assert secondary.calls == 1
+        assert len(results) == 3
+        assert all(r.source_api == "secondary" for r in results)
+
+    @pytest.mark.asyncio
+    async def test_all_providers_empty_returns_clean_empty(
+        self, fast_config: RouterConfig
+    ) -> None:
+        # Every provider succeeds but returns nothing → a legitimate empty
+        # answer. Return [] cleanly rather than raising QuotaExhaustedError.
+        primary = StubProvider("primary", monthly_limit=100, results_per_query=0)
+        secondary = StubProvider("secondary", monthly_limit=100, results_per_query=0)
+        router = SearchRouter([primary, secondary], fast_config)
+
+        results = await router.search("test")
+
+        assert primary.calls == 1
+        assert secondary.calls == 1
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_transient_provider_error_falls_through(
+        self, fast_config: RouterConfig
+    ) -> None:
+        # A transient ProviderError from the primary (e.g. a parse failure)
+        # must fall through to the secondary within the same search() call.
+        primary = StubProvider(
+            "primary", monthly_limit=100, fail_count=1, fail_transient=True
+        )
+        secondary = StubProvider("secondary", monthly_limit=100, results_per_query=3)
+        router = SearchRouter([primary, secondary], fast_config)
+
+        results = await router.search("test")
+
+        assert primary.calls == 1
+        assert secondary.calls == 1
+        assert all(r.source_api == "secondary" for r in results)
+
+    @pytest.mark.asyncio
+    async def test_claude_agent_parse_failure_raises_provider_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The ClaudeAgent provider must raise a transient ProviderError (not
+        # return []) when the model response has no parseable JSON — that's
+        # what lets the router fail over.
+        async def fake_llm_call(*args, **kwargs):
+            return "Sorry, I could not find anything — no JSON here."
+
+        monkeypatch.setattr(sdk, "llm_call", fake_llm_call)
+        provider = ClaudeAgentSearchProvider()
+
+        with pytest.raises(ProviderError) as excinfo:
+            await provider.search("test")
+        assert excinfo.value.transient is True
+
+    @pytest.mark.asyncio
+    async def test_claude_agent_parse_failure_triggers_router_failover(
+        self, tmp_quota_file: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # End-to-end: ClaudeAgent primary returns unparseable text, so the
+        # router falls over to a configured secondary instead of yielding [].
+        async def fake_llm_call(*args, **kwargs):
+            return "no json at all"
+
+        monkeypatch.setattr(sdk, "llm_call", fake_llm_call)
+        config = RouterConfig(
+            quota_file=tmp_quota_file,
+            keyword_priority=["claude_agent", "secondary"],
+            semantic_priority=["secondary"],
+            per_query_timeout=0.5,
+            circuit_failure_threshold=2,
+            circuit_cooldown_minutes=5,
+        )
+        primary = ClaudeAgentSearchProvider()
+        secondary = StubProvider("secondary", monthly_limit=100, results_per_query=3)
+        router = SearchRouter([primary, secondary], config)
+
+        results = await router.search("test")
+
+        assert secondary.calls == 1
+        assert len(results) == 3
+        assert all(r.source_api == "secondary" for r in results)
+
+
+# ---------------------------------------------------------------------------
+# Cleanup: aclose closes provider HTTP clients and flushes debounced quotas
+# ---------------------------------------------------------------------------
+
+
+class TestAclose:
+    @pytest.mark.asyncio
+    async def test_aclose_closes_providers_and_flushes_quotas(
+        self, fast_config: RouterConfig, tmp_quota_file: Path
+    ) -> None:
+        closed: list[str] = []
+
+        class ClosableProvider:
+            name = "primary"
+            monthly_limit: int | None = 100
+            one_time_limit: int | None = None
+
+            async def search(self, query: str, max_results: int = 10):
+                return [
+                    SearchResult(
+                        url="https://x.example/1", title="x", snippet="",
+                        source_api=self.name,
+                    )
+                ]
+
+            async def aclose(self) -> None:
+                closed.append(self.name)
+
+        router = SearchRouter([ClosableProvider()], fast_config)  # type: ignore[list-item]
+        await router.search("q")  # increments quota (debounced, not yet flushed)
+
+        await router.aclose()
+
+        assert closed == ["primary"]  # provider client was closed
+        # Debounced quota write was flushed to disk by aclose.
+        from research_pipeline.models import QuotaState
+        state = QuotaState.model_validate_json(tmp_quota_file.read_text())
+        assert state.quotas["primary"].monthly_count == 1

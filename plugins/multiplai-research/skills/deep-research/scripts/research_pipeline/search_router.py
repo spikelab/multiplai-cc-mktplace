@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -124,11 +125,25 @@ class RouterConfig:
 
 
 class QuotaStore:
-    """Manages per-API quota counters, persisted to JSON."""
+    """Manages per-API quota counters, persisted to JSON.
+
+    Writes are debounced: ``record_success``/``record_failure`` fire inside a
+    per-chunk ``asyncio.gather``, so a blocking whole-file write on every call
+    stalls the event loop. Instead we mark the state dirty and only flush to
+    disk at most once every ``_SAVE_DEBOUNCE_S`` seconds; ``flush()`` forces a
+    final write at phase/run boundaries (see ``SearchRouter.aclose``). Up to a
+    few seconds of counter increments can be lost on hard crash — acceptable,
+    since quota accounting is best-effort and circuits reset each run anyway.
+    """
+
+    # Minimum seconds between blocking disk writes during a burst of updates.
+    _SAVE_DEBOUNCE_S = 5.0
 
     def __init__(self, path: Path):
         self.path = path
         self._state: QuotaState = self._load()
+        self._dirty = False
+        self._last_save = 0.0
 
     def _load(self) -> QuotaState:
         if not self.path.exists():
@@ -139,10 +154,22 @@ class QuotaStore:
             log.warning("Quota file corrupt, starting fresh: %s", self.path)
             return QuotaState()
 
-    def _save(self) -> None:
+    def _save(self, *, force: bool = False) -> None:
+        """Mark state dirty; write to disk only if debounce elapsed or forced."""
+        self._dirty = True
+        if not force and (time.monotonic() - self._last_save) < self._SAVE_DEBOUNCE_S:
+            return
+        self.flush()
+
+    def flush(self) -> None:
+        """Write pending state to disk if dirty. Safe to call any time."""
+        if not self._dirty:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._state.updated_at = datetime.now(timezone.utc).isoformat()
         self.path.write_text(self._state.model_dump_json(indent=2))
+        self._dirty = False
+        self._last_save = time.monotonic()
 
     def get_or_create(self, provider: SearchProvider) -> APIQuota:
         quota = self._state.quotas.get(provider.name)
@@ -229,7 +256,7 @@ class QuotaStore:
                 )
                 quota.circuit_open_until = None
                 quota.consecutive_failures = 0
-        self._save()
+        self._save(force=True)
 
     def record_failure(self, provider: SearchProvider, threshold: int, cooldown_minutes: int) -> None:
         quota = self.get_or_create(provider)
@@ -307,6 +334,7 @@ class SearchRouter:
         """
         priority = self._priority_list(strategy)
         attempted = {}
+        got_empty_success = False
 
         for name in priority:
             provider = self.providers.get(name)
@@ -334,7 +362,15 @@ class SearchRouter:
                     timeout=self.config.per_query_timeout,
                 )
                 self.quotas.record_success(provider)
-                return results
+                if results:
+                    return results
+                # Empty result: the call succeeded but returned nothing (an
+                # empty answer, or a parse-failure that surfaced as []). Don't
+                # let that starve the query — fall through to the next
+                # provider. If no later provider yields anything, we return
+                # this clean empty below (a genuine "no results" answer).
+                got_empty_success = True
+                attempted[name] = "empty result"
             except asyncio.TimeoutError:
                 log.warning("Provider %s timed out for query: %s", name, query[:60])
                 self.quotas.record_failure(
@@ -360,6 +396,11 @@ class SearchRouter:
                 )
                 attempted[name] = f"unexpected: {e}"
 
+        # Every configured provider was tried. If at least one succeeded but
+        # returned no results, that's a legitimate empty answer — return it
+        # rather than raising. Only raise when nothing was reachable at all.
+        if got_empty_success:
+            return []
         raise QuotaExhaustedError(details=attempted)
 
     async def batch_search(
@@ -487,6 +528,27 @@ class SearchRouter:
             self._tavily_fallback_count += 1
             return None
 
+    async def aclose(self) -> None:
+        """Close provider HTTP clients and flush pending quota writes.
+
+        Providers holding httpx AsyncClients (Brave/Serper/You/Tavily) leak
+        their connection pools if never closed. Called from a ``finally`` in
+        ``run_pipeline``; also flushes the debounced quota store so the final
+        counter state hits disk.
+        """
+        for provider in self.providers.values():
+            aclose = getattr(provider, "aclose", None)
+            if aclose is None:
+                continue
+            try:
+                await aclose()
+            except Exception as e:  # noqa: BLE001
+                log.warning(
+                    "Error closing provider %s: %s",
+                    getattr(provider, "name", "?"), e,
+                )
+        self.quotas.flush()
+
 
 # ---------------------------------------------------------------------------
 # Providers
@@ -532,14 +594,17 @@ Return up to {max_results} results. Return ONLY the JSON array in a fenced code 
             raise ProviderError(self.name, str(e), transient=True) from e
 
         try:
-            from .sdk import extract_json
-
             data = extract_json(raw)
             if not isinstance(data, list):
                 data = [data] if isinstance(data, dict) else []
-        except (ValueError, Exception):  # noqa: BLE001
+        except ValueError as e:
+            # A parse failure is transient (the model returned malformed/empty
+            # JSON this call) — raise so the router fails over to the next
+            # provider instead of silently yielding zero results.
             log.warning("ClaudeAgentSearch: failed to parse JSON from response")
-            return []
+            raise ProviderError(
+                self.name, f"JSON parse failure: {e}", transient=True
+            ) from e
 
         results = []
         for item in data[:max_results]:
@@ -593,6 +658,11 @@ class TavilyProvider:
                 )
             )
         return results
+
+    async def aclose(self) -> None:
+        aclose = getattr(self._client, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 class ExaProvider:

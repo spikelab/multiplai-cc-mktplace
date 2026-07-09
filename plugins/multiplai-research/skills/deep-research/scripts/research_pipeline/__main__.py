@@ -137,8 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    # Pipeline orchestration is wired in task 9.6.
-    # For now, just validate args and print the plan.
+    # Build config from CLI args and run the full pipeline to completion.
     from research_pipeline.config import ResearchConfig
     from research_pipeline.pipeline import run_pipeline
 

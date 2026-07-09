@@ -68,7 +68,7 @@ async def quality_check(config: ResearchConfig, state: ResearchState) -> Quality
         result = await llm_call_structured(
             prompt,
             QualityCheckResult,
-            model=config.models.get("quality_check", "sonnet"),
+            model=config.models.get("quality_check"),
             effort="medium",
             label="quality_check",
         )

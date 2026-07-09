@@ -7,6 +7,7 @@ import asyncio
 import httpx
 import pytest
 
+from research_pipeline import fetcher
 from research_pipeline.fetcher import (
     basic_tag_strip,
     extract_content,
@@ -277,3 +278,56 @@ class TestFetchBatch:
             assert r is not None
             assert r.error is not None
             assert r.error.error_type == FetchErrorType.HTTP_5XX
+
+
+# ---------------------------------------------------------------------------
+# Byte-bounded fetch (RES-2) and retry-delay clamping
+# ---------------------------------------------------------------------------
+
+
+class TestBoundedFetch:
+    @pytest.mark.asyncio
+    async def test_response_body_capped_at_max_bytes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A large body is read only up to MAX_RESPONSE_BYTES (not unbounded)."""
+        monkeypatch.setattr(fetcher, "MAX_RESPONSE_BYTES", 1000)
+        big_body = "x" * 50_000
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=big_body)
+
+        async with _make_client_with_handler(handler) as client:
+            response = await fetcher._get_validated(
+                client, "https://big.example/page"
+            )
+
+        # Body was truncated at the ceiling rather than materialized whole.
+        assert len(response.content) <= 1000
+
+    @pytest.mark.asyncio
+    async def test_bounded_fetch_still_returns_content(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The bounded read still yields usable extracted content end-to-end."""
+        monkeypatch.setattr(fetcher, "MAX_RESPONSE_BYTES", 5_000_000)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=ARTICLE_HTML)
+
+        async with _make_client_with_handler(handler) as client:
+            result = await fetch_url("https://ok.example/article", client)
+
+        assert result.success is True
+        assert result.content is not None
+        assert len(result.content) > 100
+
+
+class TestRetryDelayClamp:
+    def test_retry_delay_within_table(self) -> None:
+        assert fetcher._retry_delay(0) == fetcher.RETRY_DELAYS[0]
+        assert fetcher._retry_delay(1) == fetcher.RETRY_DELAYS[1]
+
+    def test_retry_delay_clamps_beyond_table(self) -> None:
+        # max_retries > len(RETRY_DELAYS) must not IndexError — reuse last delay.
+        assert fetcher._retry_delay(5) == fetcher.RETRY_DELAYS[-1]
