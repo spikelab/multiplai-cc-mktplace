@@ -737,8 +737,8 @@ wheels = [
 
 [[package]]
 name = "multiplai-core"
-version = "0.5.0"
-source = { git = "https://github.com/spikelab/multiplai-core?rev=v0.5.0#fa835d5780774083ceb169179f1428f57bdc913b" }
+version = "0.6.0"
+source = { git = "https://github.com/spikelab/multiplai-core?rev=v0.6.0#d8e18af790c2ebff6437b2e93e76a1bc5dfebcd6" }
 dependencies = [
     { name = "anthropic" },
     { name = "pyyaml" },
@@ -1228,7 +1228,7 @@ requires-dist = [
     { name = "claude-agent-sdk", specifier = ">=0.1.0" },
     { name = "exa-py", specifier = ">=1.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "multiplai-core", git = "https://github.com/spikelab/multiplai-core?rev=v0.5.0" },
+    { name = "multiplai-core", git = "https://github.com/spikelab/multiplai-core?rev=v0.6.0" },
     { name = "playwright", marker = "extra == 'browser'", specifier = ">=1.40" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'" },

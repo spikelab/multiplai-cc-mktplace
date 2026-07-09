@@ -276,6 +276,10 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
         print(f"Pipeline failed: {e}", file=sys.stderr)
         print(f"State preserved at: {state_file}", file=sys.stderr)
         return 2
+    finally:
+        # Close provider HTTP clients and flush the debounced quota store on
+        # every exit path (success, abort, or exception).
+        await router.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +414,10 @@ async def _run_main_stages(
             # Search using the uncovered sub-questions as queries directly
             targeted_results = await router.batch_search(
                 uncovered,
-                max_results=config.preset.sources // max(len(uncovered), 1),
+                # Floor at 1: sources // uncovered integer-divides to 0 for
+                # small presets with many uncovered questions (e.g. micro
+                # preset, 4+ uncovered), which would request zero results.
+                max_results=max(config.preset.sources // max(len(uncovered), 1), 1),
                 strategy="keyword",
             )
             if targeted_results:

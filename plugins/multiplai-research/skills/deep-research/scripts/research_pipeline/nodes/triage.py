@@ -218,8 +218,19 @@ async def triage(
     # 5. Pick top scored borderline to fill remaining slots
     selected_borderline = [r for r, _ in scored_borderline[:remaining_slots]]
 
-    # 6. Build Source objects
-    final_results = obvious[:slots] + selected_borderline[: slots - len(obvious)]
+    # 6. Build Source objects.
+    # Authority sources must never be truncated away by the slot cap: READ
+    # reserves a guaranteed fetch budget for is_authority sources, but only
+    # if they survive triage. Keep every authority item; fill the remaining
+    # slots from non-authority obvious sources first, then scored borderline.
+    authority_obvious = [r for r in obvious if r.is_authority]
+    rest_obvious = [r for r in obvious if not r.is_authority]
+    non_authority_slots = max(slots - len(authority_obvious), 0)
+    kept_rest = rest_obvious[:non_authority_slots]
+    remaining_slots = max(non_authority_slots - len(kept_rest), 0)
+    final_results = (
+        authority_obvious + kept_rest + selected_borderline[:remaining_slots]
+    )
     sources = []
     for r in final_results:
         s = Source(

@@ -169,7 +169,7 @@ class ClaudeAgentFetcher:
             data = sdk.extract_json(raw)
             if not isinstance(data, dict):
                 data = {}
-        except (ValueError, Exception):  # noqa: BLE001
+        except ValueError:
             # If JSON parse fails, treat the raw text as content
             data = {"content_markdown": raw, "findings": [], "links": []}
 

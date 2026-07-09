@@ -135,6 +135,7 @@ class ResearchConfig:
             "reassess": DEFAULT_MODEL,
             "synthesize": DEFAULT_MODEL,
             "adversarial": DEFAULT_MODEL,
+            "quality_check": DEFAULT_MODEL,
         }
     )
 

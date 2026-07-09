@@ -107,15 +107,37 @@ async def _assert_safe_url(url: str) -> None:
 
 
 async def _get_validated(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    """GET `url`, following redirects manually and validating every hop."""
+    """GET `url`, following redirects manually and validating every hop.
+
+    The final response body is streamed and read only up to MAX_RESPONSE_BYTES,
+    so a pathologically large page can't materialize unbounded into memory
+    (request_timeout bounds time, not bytes). Redirect hops don't read a body.
+    """
     current = url
     for _ in range(MAX_REDIRECTS + 1):
         await _assert_safe_url(current)
-        response = await client.get(current, follow_redirects=False)
-        if response.status_code in _REDIRECT_STATUS and "location" in response.headers:
-            current = urljoin(current, response.headers["location"])
-            continue
-        return response
+        async with client.stream("GET", current, follow_redirects=False) as response:
+            if (
+                response.status_code in _REDIRECT_STATUS
+                and "location" in response.headers
+            ):
+                current = urljoin(current, response.headers["location"])
+                continue
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                body.extend(chunk)
+                if len(body) >= MAX_RESPONSE_BYTES:
+                    log.warning(
+                        "Truncating oversized body from %s at %d bytes",
+                        current, MAX_RESPONSE_BYTES,
+                    )
+                    break
+            # Populate the response's content from the bounded read so callers
+            # using response.text/.content work after the stream context exits.
+            # (This is exactly what response.read() does internally, minus the
+            # unbounded read we're avoiding.)
+            response._content = bytes(body[:MAX_RESPONSE_BYTES])
+            return response
     raise UnsafeURLError(f"too many redirects (> {MAX_REDIRECTS})")
 
 
@@ -129,6 +151,24 @@ DEFAULT_BATCH_TIMEOUT_S = 30.0
 DEFAULT_MAX_RETRIES = 2
 RETRY_DELAYS = [1.0, 3.0]  # exponential backoff
 MIN_EXTRACTED_CONTENT_CHARS = 200
+
+# Ceiling on the fetched response body. request_timeout bounds *time*, not
+# *bytes* — a pathologically large page could otherwise materialize unbounded
+# into memory before extraction. We stream and stop reading past this.
+MAX_RESPONSE_BYTES = 5 * 1024 * 1024  # 5 MB
+
+
+def _retry_delay(attempt: int) -> float:
+    """Backoff delay for a retry attempt, clamped to the RETRY_DELAYS table.
+
+    max_retries may exceed len(RETRY_DELAYS) (e.g. caller passes max_retries=3);
+    without clamping, RETRY_DELAYS[attempt] would IndexError. The last delay is
+    reused for any attempt beyond the table.
+    """
+    if not RETRY_DELAYS:
+        return 0.0
+    return RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
+
 
 USER_AGENT = (
     "Mozilla/5.0 (compatible; DeepResearchPipeline/0.1; "
@@ -188,7 +228,7 @@ async def fetch_url(
             )
             log.warning("Timeout fetching %s (attempt %d)", url, attempt + 1)
             if attempt < max_retries:
-                await asyncio.sleep(RETRY_DELAYS[attempt])
+                await asyncio.sleep(_retry_delay(attempt))
                 continue
             return FetchResult(url=url, success=False, error=last_error, elapsed_seconds=elapsed)
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError) as e:
@@ -202,7 +242,7 @@ async def fetch_url(
             )
             log.warning("Connection error %s (attempt %d): %s", url, attempt + 1, e)
             if attempt < max_retries:
-                await asyncio.sleep(RETRY_DELAYS[attempt])
+                await asyncio.sleep(_retry_delay(attempt))
                 continue
             return FetchResult(url=url, success=False, error=last_error, elapsed_seconds=elapsed)
         except Exception as e:  # noqa: BLE001
@@ -243,7 +283,7 @@ async def fetch_url(
                 status_code=response.status_code,
             )
             if attempt < max_retries:
-                await asyncio.sleep(RETRY_DELAYS[attempt])
+                await asyncio.sleep(_retry_delay(attempt))
                 continue
             return FetchResult(url=url, success=False, error=last_error, elapsed_seconds=elapsed)
         # 4xx — no retry

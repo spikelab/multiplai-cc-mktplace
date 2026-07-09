@@ -186,4 +186,4 @@ automatically by `uv run --directory`:
 
 ## Architecture
 
-The pipeline is a Python asyncio script with strict timeouts and per-source state checkpointing. It cannot hang on a WebFetch the way prompt-driven workflows can — `asyncio.wait_for` enforces hard kills at 15s per request, 30s per batch. See `scripts/research_pipeline/` for the implementation. See `README.md` (skill root) for setup and `scripts/CLAUDE.md` for extension notes.
+The pipeline is a Python asyncio script with strict timeouts and per-source state checkpointing. It cannot hang on a WebFetch the way prompt-driven workflows can — every network call is under a hard timeout. On the default Claude Agent path (`ClaudeAgentFetcher`) fetches are killed at 60s per request / 180s per batch; the search router kills any single search at 45s (`per_query_timeout`); the legacy httpx fetcher (`--no-claude-tools`) uses 15s per request / 30s per batch. See `scripts/research_pipeline/` for the implementation. See `README.md` (skill root) for setup and `scripts/CLAUDE.md` for extension notes.
