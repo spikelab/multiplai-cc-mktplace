@@ -12,7 +12,7 @@ from typing import Literal
 
 import yaml
 
-from .env import load_multiplai_conf, resolve_model
+from .env import pick_model
 
 log = logging.getLogger(__name__)
 
@@ -21,25 +21,24 @@ Mode = Literal["scratch", "brief", "only"]
 
 
 def detect_tier() -> tuple[Tier, str]:
-    """Detect model tier from the CLAUDE_MODEL environment variable.
+    """Detect model tier from the model buildme will actually run.
 
-    Returns (tier, model_name). Defaults to 'standard' if unset or unknown.
+    Returns (tier, model_name). Derives advanced/standard from ``DEFAULT_MODEL``
+    — the model resolved by ``pick_model`` from the family + ``multiplai.conf``
+    ceiling — rather than the ``CLAUDE_MODEL`` env var.
 
-    KNOWN LIMITATION (verified 2026-07): Claude Code (v2.1.x) does NOT export
-    CLAUDE_MODEL to Bash subprocesses — it exports CLAUDE_EFFORT but not
-    CLAUDE_MODEL — and buildme's SKILL.md invokes this pipeline via a plain
-    `uv run ...` with no `CLAUDE_MODEL=` prefix. So in production CLAUDE_MODEL is
-    empty here and this ALWAYS returns 'standard', regardless of the skill's
-    pinned model (claude-opus-4-7). The version-range logic below is correct in
-    isolation and future-proofs the day the model is plumbed through, but the
-    tier stays inert until the skill propagates the model into the environment
-    (e.g. `CLAUDE_MODEL="{model}" uv run ...`) or the pipeline grows an explicit
-    --tier/--model flag. Do not assume advanced tier runs today.
+    DEV-3 fix: Claude Code (v2.1.x) does NOT export ``CLAUDE_MODEL`` to Bash
+    subprocesses, and buildme's SKILL.md invokes this pipeline via a plain
+    `uv run ...` with no `CLAUDE_MODEL=` prefix, so the old env-based check
+    ALWAYS returned 'standard' in production regardless of the pinned model.
+    Deriving from ``DEFAULT_MODEL`` makes the tier reflect the real model (opus
+    → advanced under an opus ceiling). An explicit ``CLAUDE_MODEL``, if set,
+    still wins as an override.
     """
-    model = os.environ.get("CLAUDE_MODEL", "")
+    model = os.environ.get("CLAUDE_MODEL") or DEFAULT_MODEL
     if _is_advanced_model(model):
         return "advanced", model
-    return "standard", model or "unknown"
+    return "standard", model
 
 
 def _is_advanced_model(model: str) -> bool:
@@ -57,10 +56,11 @@ def _is_advanced_model(model: str) -> bool:
     return (major, minor) >= (4, 5)
 
 
-# Load model ceiling from multiplai.conf
-_conf = load_multiplai_conf()
-_MODEL_CEILING = _conf.get("MULTIPLAI_MODEL", "claude-sonnet-4-6")
-DEFAULT_MODEL = resolve_model("claude-opus-4-6", ceiling=_MODEL_CEILING)
+# Resolve buildme's model from its semantic tier (opus — hard work) capped by
+# the MULTIPLAI_MODEL ceiling. pick_model applies a [buildme] override from
+# multiplai.conf if present; the family→ID map is the single source of truth in
+# multiplai_core.env, so there is no dated model literal to go stale here.
+DEFAULT_MODEL = pick_model("opus", task="buildme")
 
 
 @dataclass
