@@ -14,13 +14,16 @@ SummaryLevel = Literal["gist", "structured", "detailed"]
 Preset = Literal["micro", "quick", "standard", "thorough"]
 ResearchType = Literal["general", "company", "job-market", "fact-check", "theme"]
 
-from .env import load_multiplai_conf, resolve_model
+from .env import pick_model
 
-# Load model ceiling from multiplai.conf. The ceiling constrains all
-# pipeline SDK calls — if the conf says sonnet, no node uses opus.
-_conf = load_multiplai_conf()
-_MODEL_CEILING = _conf.get("MULTIPLAI_MODEL", "claude-sonnet-4-6")
-DEFAULT_MODEL = resolve_model("claude-opus-4-6", ceiling=_MODEL_CEILING)
+# Reasoning nodes run opus (hard work); the high-volume per-source parse nodes
+# (triage, extract) run sonnet (cheap bulk work). Both are resolved from a
+# semantic tier via pick_model and capped by the MULTIPLAI_MODEL ceiling, so a
+# sonnet ceiling still forces every node to sonnet. No dated model literal here —
+# the family→ID map is the single source of truth in multiplai_core.env. Retune
+# per task in multiplai.conf: [deep-research] / [deep-research.parse] MODEL=...
+DEFAULT_MODEL = pick_model("opus", task="deep-research")
+PARSE_MODEL = pick_model("sonnet", task="deep-research.parse")
 
 
 @dataclass
@@ -124,14 +127,15 @@ class ResearchConfig:
     # Effort level for all SDK calls (low/medium/high). None = SDK default.
     effort: str | None = None
 
-    # Per-node model overrides. Defaults to opus for all; override for cost/speed.
+    # Per-node model tiers: opus for reasoning, sonnet for the high-volume
+    # per-source parse nodes (triage, extract). `--model` overrides all nodes.
     models: dict[str, str] = field(
         default_factory=lambda: {
             "plan": DEFAULT_MODEL,
             "diverge": DEFAULT_MODEL,
             "challenge": DEFAULT_MODEL,
-            "triage_relevance": DEFAULT_MODEL,
-            "extract": DEFAULT_MODEL,
+            "triage_relevance": PARSE_MODEL,
+            "extract": PARSE_MODEL,
             "reassess": DEFAULT_MODEL,
             "synthesize": DEFAULT_MODEL,
             "adversarial": DEFAULT_MODEL,

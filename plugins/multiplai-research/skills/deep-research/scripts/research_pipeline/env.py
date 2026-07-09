@@ -12,6 +12,7 @@ from multiplai_core.env import (  # noqa: F401
     find_project_root,
     load_env,
     load_multiplai_conf,
+    pick_model,
     resolve_effort,
     resolve_model,
 )

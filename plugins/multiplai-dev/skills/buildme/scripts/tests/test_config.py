@@ -30,12 +30,25 @@ class TestTierDetection:
             tier, _ = detect_tier()
             assert tier == "standard"
 
-    def test_empty_model_defaults_standard(self):
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("CLAUDE_MODEL", None)
+    def test_no_env_model_derives_from_default_model(self):
+        """DEV-3 fix: with CLAUDE_MODEL unset, tier derives from the resolved
+        DEFAULT_MODEL (the model buildme actually runs), not a hardcoded
+        'standard'/'unknown'. An opus DEFAULT_MODEL → advanced."""
+        import build_pipeline.config as cfg
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(cfg, "DEFAULT_MODEL", "claude-opus-4-8"):
+            tier, name = detect_tier()
+            assert tier == "advanced"
+            assert name == "claude-opus-4-8"
+
+    def test_no_env_model_sonnet_default_is_standard(self):
+        """A sonnet DEFAULT_MODEL (e.g. under a sonnet ceiling) → standard."""
+        import build_pipeline.config as cfg
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(cfg, "DEFAULT_MODEL", "claude-sonnet-5"):
             tier, name = detect_tier()
             assert tier == "standard"
-            assert name == "unknown"
+            assert name == "claude-sonnet-5"
 
     def test_unknown_model_defaults_standard(self):
         with patch.dict(os.environ, {"CLAUDE_MODEL": "gpt-4-turbo"}):
