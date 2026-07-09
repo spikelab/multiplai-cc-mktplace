@@ -195,6 +195,26 @@ if [[ -z "$OUTPUT_FILE" ]]; then
     OUTPUT_FILE="${SAFE_TITLE}-transcript.txt"
 fi
 
+# Confine the final transcript to the workspace (defense-in-depth): the container
+# must not write outside $WORKSPACE. Resolve relative names against the container
+# cwd (never leave them to resolve host-side). The host-touching audio I/O already
+# lives under TMPDIR_WORK (INBOX, inside the workspace); this guards the final
+# output path too. Local macOS runs are exempt; fail-open if the marker is missing.
+if [ "$IS_CONTAINER" = "true" ]; then
+    WORKSPACE="$(cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.workspace" 2>/dev/null || true)"
+    if [ -n "$WORKSPACE" ]; then
+        OUTPUT_FILE="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$OUTPUT_FILE")"
+        case "$OUTPUT_FILE/" in
+            "$WORKSPACE"/*) ;;
+            *)
+                echo "Error: transcript output is confined to the workspace." >&2
+                echo "  Workspace:      $WORKSPACE" >&2
+                echo "  Offending path: $OUTPUT_FILE" >&2
+                exit 1 ;;
+        esac
+    fi
+fi
+
 # --- Try subtitle download (manual first, then auto-generated) ---
 SUBS_DOWNLOADED=false
 VTT_FILE=""
@@ -287,8 +307,8 @@ if ! command -v ffmpeg &>/dev/null; then
 fi
 # In containers, mlx-whisper runs on the host via SSH — skip local check
 if [ "$IS_CONTAINER" = "false" ]; then
-    if ! command -v mlx-whisper &>/dev/null && ! command -v mlx_whisper &>/dev/null; then
-        echo "Error: mlx-whisper is required for audio fallback but not installed." >&2
+    if ! command -v mlx_whisper &>/dev/null; then
+        echo "Error: mlx_whisper is required for audio fallback but not installed." >&2
         echo "Install with: pip install mlx-whisper" >&2
         exit 1
     fi
@@ -321,23 +341,44 @@ else
     MODEL="mlx-community/whisper-medium.en-mlx-8bit"
 fi
 
-# mlx-whisper's --output-name is a STEM (it appends .txt) and it writes to
+# mlx_whisper's --output-name is a STEM (it appends .txt) and it writes to
 # --output-dir (default: cwd). Passing the full "name.txt" as the stem with no
-# output-dir produced "name.txt.txt" in $HOME. Split OUTPUT_FILE into dir+stem
-# so the result lands exactly at OUTPUT_FILE.
-OUTPUT_DIR="$(dirname "$OUTPUT_FILE")"
+# output-dir produced "name.txt.txt" in $HOME.
+#
+# CRUCIAL: mlx_whisper runs on the HOST via run_on_host, so --output-dir resolves
+# on the host filesystem — against the host ssh forced-command cwd, which is NOT
+# the container cwd (verified 2026-07-09: the bridge even denies `pwd`, and its cwd
+# differs from the container's). A relative or non-shared OUTPUT_DIR — and the
+# default OUTPUT_FILE at line ~195 is a bare relative name — would therefore write
+# host-side, invisible to the container, while we print "Saved to". So we stage the
+# transcript into TMPDIR_WORK, which in a container lives under INBOX/ on the shared
+# mount (identical absolute path on both sides — same handling as the audio input
+# above), then move it to OUTPUT_FILE container-side (so OUTPUT_FILE itself need not
+# be on the shared mount).
 OUTPUT_STEM="$(basename "$OUTPUT_FILE")"
 OUTPUT_STEM="${OUTPUT_STEM%.txt}"
 
-# Build mlx-whisper command as an argv array (no shell string, no eval).
-MLX_ARGS=(mlx-whisper --model "$MODEL")
+# Build mlx_whisper command as an argv array (no shell string, no eval).
+MLX_ARGS=(mlx_whisper --model "$MODEL")
 [[ -n "$TASK" ]] && MLX_ARGS+=(--task "$TASK")
 [[ -n "$LANGUAGE" ]] && MLX_ARGS+=(--language "$LANGUAGE")
-MLX_ARGS+=(--output-format txt --output-dir "$OUTPUT_DIR" --output-name "$OUTPUT_STEM" "$AUDIO_FILE")
+MLX_ARGS+=(--output-format txt --output-dir "$TMPDIR_WORK" --output-name "$OUTPUT_STEM" "$AUDIO_FILE")
 
 run_on_host "${MLX_ARGS[@]}" || {
     echo "Error: Transcription failed." >&2
     exit 1
 }
+
+# Bring the staged transcript back to the requested location.
+GENERATED="$TMPDIR_WORK/$OUTPUT_STEM.txt"
+if [[ ! -f "$GENERATED" ]]; then
+    echo "Error: Transcription produced no output at $GENERATED." >&2
+    exit 1
+fi
+OUTPUT_PARENT="$(dirname "$OUTPUT_FILE")"
+mkdir -p "$OUTPUT_PARENT"
+if [[ "$GENERATED" != "$OUTPUT_FILE" ]]; then
+    mv "$GENERATED" "$OUTPUT_FILE"
+fi
 
 echo "[yt-transcript] Done. Saved to: $OUTPUT_FILE"
