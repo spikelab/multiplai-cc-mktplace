@@ -35,6 +35,7 @@ import json
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -42,7 +43,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.paths import get_paths
 from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.log_utils import setup_logging, log_event
-from multiplai_core.model_client import create_client  # D3: LLM calls via ModelClient abstraction
 from lib.memory_router import create_router
 from lib.routing_logic import expand_picks
 from lib.section_loader import load_picked_content, parse_section_ref
@@ -167,7 +167,7 @@ def _read_top_memory_files(
 # Catalog-first read path with fail-open fallback (Decision 8)
 # ---------------------------------------------------------------------------
 
-def _read_catalog_or_scan(catalog_type: str) -> list[dict]:
+def _read_catalog_or_scan(catalog_type: str, ttl_hours: float | None = None) -> list[dict]:
     """Try catalog first. On any failure, fall back to an empty list.
 
     Implements the fail-open read path (Design Decision 8): attempt to
@@ -179,6 +179,9 @@ def _read_catalog_or_scan(catalog_type: str) -> list[dict]:
     Args:
         catalog_type: One of ``"memory"``, ``"diary"``, ``"skills"``,
             or ``"resources"``.
+        ttl_hours: When set (> 0), a catalog older than this is flagged
+            as stale via a once-per-session warning (the entries are
+            still returned — staleness is advisory, not fatal).
 
     Returns:
         Catalog entries on success, or an empty list on any failure.
@@ -196,7 +199,7 @@ def _read_catalog_or_scan(catalog_type: str) -> list[dict]:
             return []
 
         data = json.loads(catalog_file.read_text(encoding="utf-8"))
-        return _validate_catalog(data, catalog_type, warn_key)
+        return _validate_catalog(data, catalog_type, warn_key, ttl_hours)
 
     except json.JSONDecodeError as e:
         _warn_once(warn_key, f"Catalog {catalog_type} contains invalid JSON: {e}")
@@ -219,12 +222,24 @@ def _resolve_catalog_path(catalog_type: str) -> Path:
     return paths.catalogs_dir() / f"{catalog_type}.json"
 
 
-def _validate_catalog(data: object, catalog_type: str, warn_key: str) -> list[dict]:
+def _validate_catalog(
+    data: object,
+    catalog_type: str,
+    warn_key: str,
+    ttl_hours: float | None = None,
+) -> list[dict]:
     """Validate parsed catalog JSON and return entries, or ``[]`` on failure.
 
     Checks that *data* is a dict with a matching ``schema_version`` and
     a list-typed ``entries`` field. Logs a once-per-session warning for
     each distinct validation failure.
+
+    When *ttl_hours* is provided (> 0), a stale catalog — one whose
+    ``generated_at`` timestamp is older than the TTL — is surfaced as a
+    once-per-session warning so ``/health`` and the logs can flag drift.
+    This is a cheap timestamp compare only: a stale catalog is still
+    returned and used (fail-open); regeneration is a separate, explicit
+    action (``/refresh-catalogs``), never inline on the hook path.
     """
     if not isinstance(data, dict):
         _warn_once(warn_key, f"Catalog {catalog_type} is not a JSON object, falling back")
@@ -243,6 +258,9 @@ def _validate_catalog(data: object, catalog_type: str, warn_key: str) -> list[di
         )
         return []
 
+    if ttl_hours:
+        _warn_if_stale(data, catalog_type, warn_key, ttl_hours)
+
     entries = data.get("entries")
     if entries is None:
         return []
@@ -251,6 +269,36 @@ def _validate_catalog(data: object, catalog_type: str, warn_key: str) -> list[di
         return []
 
     return entries
+
+
+def _warn_if_stale(
+    data: dict, catalog_type: str, warn_key: str, ttl_hours: float
+) -> None:
+    """Warn once when a catalog's ``generated_at`` exceeds *ttl_hours*.
+
+    Fail-open: an unparseable/missing timestamp or a negative TTL is
+    silently ignored — staleness reporting must never break the read
+    path. The compare is a single subtraction, safe on the per-prompt
+    hook budget.
+    """
+    if ttl_hours <= 0:
+        return
+    generated_at = data.get("generated_at")
+    if not isinstance(generated_at, str):
+        return
+    try:
+        gen = datetime.fromisoformat(generated_at)
+    except ValueError:
+        return
+    if gen.tzinfo is None:
+        gen = gen.replace(tzinfo=timezone.utc)
+    age_hours = (datetime.now(timezone.utc) - gen).total_seconds() / 3600.0
+    if age_hours > ttl_hours:
+        _warn_once(
+            f"{warn_key}::stale",
+            f"Catalog {catalog_type} is stale: generated {age_hours:.1f}h ago "
+            f"(TTL {ttl_hours:.0f}h). Run /refresh-catalogs to regenerate.",
+        )
 
 
 def _warn_once(warn_key: str, message: str) -> None:
@@ -277,13 +325,14 @@ def _load_corpora(cfg) -> dict[str, list[dict]]:
     respective ``enable_*`` plugin options — when disabled, the corpus
     is treated as empty (no routing, no content loading).
     """
+    ttl_hours = getattr(cfg, "ttl_hours", None)
     corpora: dict[str, list[dict]] = {
-        "memory": _read_catalog_or_scan("memory"),
+        "memory": _read_catalog_or_scan("memory", ttl_hours),
         "skills": [],
         "resources": [],
     }
     if cfg.enable_skills:
-        corpora["skills"] = _read_catalog_or_scan("skills")
+        corpora["skills"] = _read_catalog_or_scan("skills", ttl_hours)
     # Under the qmd backend the resources corpus never enters the router:
     # retrieval happens in _qmd_resources_entries() against the qmd index.
     if (
@@ -291,7 +340,7 @@ def _load_corpora(cfg) -> dict[str, list[dict]]:
         and cfg.resources_dir.strip()
         and cfg.resources_retrieval != "qmd"
     ):
-        corpora["resources"] = _read_catalog_or_scan("resources")
+        corpora["resources"] = _read_catalog_or_scan("resources", ttl_hours)
     return corpora
 
 

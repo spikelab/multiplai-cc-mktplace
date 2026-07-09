@@ -13,7 +13,7 @@ Covers all scenarios from requirements/refresh-catalogs-skill.md:
 - Handles missing or corrupt state file gracefully
 - Handles missing source directories gracefully
 - No new external dependencies
-- Respects configured model and reasoning effort
+- Respects configured model
 """
 
 import asyncio
@@ -529,14 +529,14 @@ class TestRefreshCatalogsMissingDirectories:
 
 
 # ---------------------------------------------------------------------------
-# Model and reasoning effort config
+# Model config
 # ---------------------------------------------------------------------------
 
 
 class TestRefreshCatalogsModelConfig:
-    """Requirement: Respects configured model and reasoning effort.
+    """Requirement: Respects configured model.
 
-    /refresh-catalogs must use catalog model and reasoning effort from
+    /refresh-catalogs must use the catalog model from
     plugin.json userConfig.
     """
 

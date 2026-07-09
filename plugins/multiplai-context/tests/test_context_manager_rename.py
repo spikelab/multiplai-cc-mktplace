@@ -481,12 +481,15 @@ class TestVenvGuardPreserved:
         assert "from multiplai_core.paths" in text or "multiplai_core.paths" in text, \
             "context_manager.py must import from multiplai_core.paths"
 
-    def test_uses_core_model_client(self):
+    def test_delegates_llm_routing_to_router(self):
         """WHEN context_manager.py is inspected
-        THEN it imports from multiplai_core.model_client."""
+        THEN it reaches the model client through the router abstraction
+        (``create_router`` in ``lib.memory_router``), not by importing the
+        model client directly — the LLM call only fires on the ``llm``
+        router path, inside memory_router, never on the hot hook path here."""
         text = CONTEXT_MANAGER_PATH.read_text()
-        assert "model_client" in text, \
-            "context_manager.py must reference model_client"
+        assert "create_router" in text or "memory_router" in text, \
+            "context_manager.py must delegate routing to lib.memory_router"
 
 
 # ===========================================================================

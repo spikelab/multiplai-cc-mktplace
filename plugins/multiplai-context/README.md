@@ -82,9 +82,9 @@ Optional, for power users:
 - `enable_skills` + `skills_dir` — index a skills corpus for routing.
 - `enable_resources` + `resources_dir` — index a research/notes corpus.
 
-Everything else (catalog model, TTL, reasoning effort, diary catalog
-window, individual `*_dir` overrides) has sensible defaults — leave
-alone unless you're tuning.
+Everything else (catalog model, TTL, diary catalog window, individual
+`*_dir` overrides) has sensible defaults — leave alone unless you're
+tuning.
 
 ### Directory layout
 
@@ -108,8 +108,7 @@ over the anchor:
 | `anthropic_api_key` | _(unset, sensitive)_ | API key fallback when the Agent SDK is unavailable. Marked sensitive — stored in the system keychain, never logged. |
 | `catalog_model` | `claude-sonnet-4-6` | Model for LLM catalog generation |
 | `catalog_model_diary` | _(inherits)_ | Optional model override for the diary catalog |
-| `catalog_reasoning_effort` | `medium` | Reasoning effort for catalog generation |
-| `catalog_ttl_hours` | `168` | Hours a generated catalog stays valid |
+| `catalog_ttl_hours` | `168` | Hours a generated catalog stays valid before the read path flags it stale (advisory warning only — never regenerates inline) |
 | `diary_catalog_days` | `7` | Days of diary history the diary catalog covers |
 | `memory_router` | `token_overlap` | Context selection strategy: `token_overlap` (offline, fast) or `llm` (one model call per prompt). See [Router latency](#router-latency) before choosing `llm`. |
 | `router_model` | `claude-haiku-4-5` | Model for the `llm` router. Haiku by default — routing is cheap classification, so the smallest/fastest model keeps per-prompt latency down. Ignored under `token_overlap`. |

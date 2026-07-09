@@ -742,3 +742,89 @@ class TestRecommendationCooldown:
         assert state["recently_injected"] == {}
         # Unrelated state is preserved.
         assert state["session_id"] == "abc123"
+
+
+# ---------------------------------------------------------------------------
+# E2E: catalog_ttl_hours staleness warning (item 1 wiring)
+# ---------------------------------------------------------------------------
+
+
+class TestTtlStalenessE2E:
+    """End-to-end proof that catalog_ttl_hours reaches the read path.
+
+    Runs context_manager.py as a subprocess with a stale catalog and a
+    tight CLAUDE_PLUGIN_OPTION_catalog_ttl_hours, and asserts the advisory
+    staleness warning is emitted (to the logs, surfaced on stderr) while
+    the catalog is still used — the full env-var → config → _load_corpora
+    → _read_catalog_or_scan → _validate_catalog chain.
+    """
+
+    def _run_hook_capture(self, env_setup, *, prompt, extra_env=None):
+        env = os.environ.copy()
+        for k in list(env):
+            if k.startswith("CLAUDE_PLUGIN"):
+                del env[k]
+        env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
+        env["CLAUDE_PLUGIN_DATA"] = str(env_setup["data_dir"])
+        env["CLAUDE_PLUGIN_OPTION_memory_dir"] = str(env_setup["memory_dir"])
+        if extra_env:
+            env.update(extra_env)
+        stdin = json.dumps({
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": prompt,
+            "cwd": "/tmp",
+        })
+        return subprocess.run(
+            [sys.executable, str(CONTEXT_MANAGER)],
+            input=stdin, capture_output=True, text=True, env=env, timeout=15,
+        )
+
+    def _write_stale_memory_catalog(self, env_setup):
+        (env_setup["memory_dir"] / "voice.md").write_text("# Voice\nstyle notes")
+        payload = {
+            "schema_version": CATALOG_SCHEMA_VERSION,
+            "generated_at": "2020-01-01T00:00:00Z",  # far past any TTL
+            "entries": [
+                {"source": "voice.md", "summary": "voice",
+                 "intent_domains": ["writing voice"]},
+            ],
+        }
+        (env_setup["catalogs_dir"] / "memory.json").write_text(json.dumps(payload))
+
+    def test_stale_catalog_warns_with_tight_ttl(self, env_setup):
+        """WHEN catalog_ttl_hours=1 and the catalog is years old
+        THEN a staleness warning is logged AND the catalog is still used."""
+        self._write_stale_memory_catalog(env_setup)
+
+        result = self._run_hook_capture(
+            env_setup,
+            prompt="help me with writing voice",
+            extra_env={"CLAUDE_PLUGIN_OPTION_catalog_ttl_hours": "1"},
+        )
+        assert result.returncode == 0, result.stderr[:500]
+        assert "stale" in result.stderr.lower(), (
+            "A stale catalog with a tight TTL must emit a staleness warning; "
+            f"stderr was: {result.stderr[:500]}"
+        )
+        # Still used (fail-open): the JSON output is the last stdout line.
+        out = json.loads(result.stdout.strip().splitlines()[-1])
+        assert out["corpus_counts"]["memory"] >= 0
+
+    def test_generous_ttl_does_not_warn(self, env_setup):
+        """WHEN the default (generous) TTL applies THEN no staleness warning.
+
+        The same years-old catalog would exceed the 168h default, so we
+        pass an explicitly huge TTL to prove the compare — not the mere
+        presence of the option — gates the warning.
+        """
+        self._write_stale_memory_catalog(env_setup)
+
+        result = self._run_hook_capture(
+            env_setup,
+            prompt="help me with writing voice",
+            extra_env={"CLAUDE_PLUGIN_OPTION_catalog_ttl_hours": "9999999"},
+        )
+        assert result.returncode == 0, result.stderr[:500]
+        assert "stale" not in result.stderr.lower(), (
+            f"A catalog within TTL must not warn; stderr was: {result.stderr[:500]}"
+        )

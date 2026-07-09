@@ -9,7 +9,7 @@ Covers all scenarios from requirements/memory-catalog-generator.md:
 - Preserve hand-authored fields across regeneration (sections, bundle, co_retrieve_for)
 - State-aware skipping of unchanged sources
 - Deletion pruning of removed sources
-- Configurable model and reasoning effort
+- Configurable model
 - Graceful handling of empty or missing memory directory
 - LLM call failure handling with retry
 - Atomic catalog write
@@ -1011,7 +1011,7 @@ class TestLLMFailureHandling:
 
 
 # ---------------------------------------------------------------------------
-# Configurable Model and Reasoning Effort
+# Configurable Model
 # ---------------------------------------------------------------------------
 
 
@@ -1019,7 +1019,7 @@ class TestConfigurableModelAndEffort:
     """Requirement: Respects plugin.json userConfig for model and effort.
 
     MemoryGenerator uses config.model for LLM calls, defaulting to
-    claude-sonnet-4-6 at medium reasoning effort.
+    claude-sonnet-4-6.
     """
 
     @pytest.mark.asyncio

@@ -1007,7 +1007,7 @@ class TestConfigPassthrough:
         from generators.config import CatalogConfig
         from generators.dispatcher import generate_catalogs
 
-        config = CatalogConfig(model="claude-haiku-4-5", reasoning_effort="low")
+        config = CatalogConfig(model="claude-haiku-4-5", model_diary="claude-opus-4-1")
         configs_seen = {}
 
         original_init = None
@@ -1029,7 +1029,7 @@ class TestConfigPassthrough:
         for name in ("memory", "diary"):
             assert name in configs_seen, f"{name} generator was not invoked"
             assert configs_seen[name].model == "claude-haiku-4-5"
-            assert configs_seen[name].reasoning_effort == "low"
+            assert configs_seen[name].model_diary == "claude-opus-4-1"
 
 
 # ---------------------------------------------------------------------------

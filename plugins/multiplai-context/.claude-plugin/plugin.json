@@ -72,12 +72,6 @@
       "description": "Override model for diary catalog generation (volume optimization). Empty = inherit catalog_model.",
       "default": ""
     },
-    "catalog_reasoning_effort": {
-      "type": "string",
-      "title": "Catalog Reasoning Effort",
-      "description": "Reasoning effort level for catalog generation LLM calls (low, medium, high)",
-      "default": "medium"
-    },
     "catalog_ttl_hours": {
       "type": "number",
       "title": "Catalog TTL (Hours)",

@@ -5,7 +5,6 @@ Block 2: Catalog config schema and plugin configuration.
 Covers all scenarios from requirements/catalog-config-surface.md:
 - CatalogConfig dataclass with all fields and defaults
 - Config loading from plugin settings with default fallbacks
-- Validation for enum fields (reasoning_effort)
 - Validation for numeric bounds (ttl_hours, diary_catalog_days)
 - plugin.json userConfig schema entries
 - Config values accessible to generators via config module
@@ -65,33 +64,6 @@ class TestPluginJsonUserConfigSchema:
         entry = self.user_config.get("catalog_model", {})
         assert "description" in entry and entry["description"], (
             "catalog_model must have a non-empty description"
-        )
-
-    def test_catalog_reasoning_effort_entry_exists(self):
-        """Scenario: plugin.json contains catalog_reasoning_effort entry."""
-        assert "catalog_reasoning_effort" in self.user_config, (
-            "plugin.json userConfig must contain 'catalog_reasoning_effort' entry"
-        )
-
-    def test_catalog_reasoning_effort_type_is_string(self):
-        """Scenario: catalog_reasoning_effort has type string."""
-        entry = self.user_config.get("catalog_reasoning_effort", {})
-        assert entry.get("type") == "string", (
-            f"catalog_reasoning_effort type must be 'string', got {entry.get('type')}"
-        )
-
-    def test_catalog_reasoning_effort_default_is_medium(self):
-        """Scenario: Default reasoning effort is medium."""
-        entry = self.user_config.get("catalog_reasoning_effort", {})
-        assert entry.get("default") == "medium", (
-            f"catalog_reasoning_effort default must be 'medium', got {entry.get('default')}"
-        )
-
-    def test_catalog_reasoning_effort_has_description(self):
-        """Scenario: catalog_reasoning_effort has a description field."""
-        entry = self.user_config.get("catalog_reasoning_effort", {})
-        assert "description" in entry and entry["description"], (
-            "catalog_reasoning_effort must have a non-empty description"
         )
 
     def test_catalog_ttl_hours_entry_exists(self):
@@ -234,7 +206,6 @@ class TestPluginJsonUserConfigSchema:
         expected = {
             "catalog_model",
             "catalog_model_diary",
-            "catalog_reasoning_effort",
             "catalog_ttl_hours",
             "diary_catalog_days",
             "enable_skills",
@@ -253,7 +224,6 @@ class TestPluginJsonUserConfigSchema:
         type_map = {
             "catalog_model": "string",
             "catalog_model_diary": "string",
-            "catalog_reasoning_effort": "string",
             "catalog_ttl_hours": "number",
             "diary_catalog_days": "number",
             "enable_skills": "boolean",
@@ -301,15 +271,6 @@ class TestCatalogConfigDataclass:
 
         fields = {f.name for f in dataclasses.fields(CatalogConfig)}
         assert "model" in fields, "CatalogConfig must have a 'model' field"
-
-    def test_catalog_config_has_reasoning_effort_field(self):
-        """CatalogConfig must have a reasoning_effort field."""
-        from generators.config import CatalogConfig
-
-        fields = {f.name for f in dataclasses.fields(CatalogConfig)}
-        assert "reasoning_effort" in fields, (
-            "CatalogConfig must have a 'reasoning_effort' field"
-        )
 
     def test_catalog_config_has_ttl_hours_field(self):
         """CatalogConfig must have a ttl_hours field."""
@@ -376,13 +337,6 @@ class TestCatalogConfigDefaults:
         config = CatalogConfig()
         assert config.model == "claude-sonnet-4-6"
 
-    def test_default_reasoning_effort(self):
-        """Scenario: Default reasoning effort is medium."""
-        from generators.config import CatalogConfig
-
-        config = CatalogConfig()
-        assert config.reasoning_effort == "medium"
-
     def test_default_ttl_hours(self):
         """Scenario: Default TTL is 168 hours (7 days)."""
         from generators.config import CatalogConfig
@@ -445,70 +399,6 @@ class TestCatalogConfigDefaults:
 
         config = CatalogConfig(recommend_cooldown_turns=0)
         assert config.recommend_cooldown_turns == 0
-
-
-# ---------------------------------------------------------------------------
-# CatalogConfig Validation — Reasoning Effort
-# ---------------------------------------------------------------------------
-
-
-class TestReasoningEffortValidation:
-    """Requirement: Validation for enum fields (reasoning_effort).
-
-    reasoning_effort must be one of "low", "medium", "high".
-    Invalid values must be rejected and the default used instead.
-    """
-
-    def test_valid_low_reasoning_effort(self):
-        """Scenario: reasoning_effort 'low' is accepted."""
-        from generators.config import CatalogConfig
-
-        config = CatalogConfig(reasoning_effort="low")
-        assert config.reasoning_effort == "low"
-
-    def test_valid_medium_reasoning_effort(self):
-        """Scenario: reasoning_effort 'medium' is accepted."""
-        from generators.config import CatalogConfig
-
-        config = CatalogConfig(reasoning_effort="medium")
-        assert config.reasoning_effort == "medium"
-
-    def test_valid_high_reasoning_effort(self):
-        """Scenario: reasoning_effort 'high' is accepted."""
-        from generators.config import CatalogConfig
-
-        config = CatalogConfig(reasoning_effort="high")
-        assert config.reasoning_effort == "high"
-
-    def test_invalid_reasoning_effort_uses_default(self):
-        """Scenario: Invalid reasoning effort value falls back to 'medium'."""
-        from generators.config import CatalogConfig
-
-        config = CatalogConfig(reasoning_effort="extreme")
-        assert config.reasoning_effort == "medium", (
-            "Invalid reasoning_effort should fall back to 'medium'"
-        )
-
-    def test_empty_reasoning_effort_uses_default(self):
-        """Scenario: Empty reasoning effort value falls back to 'medium'."""
-        from generators.config import CatalogConfig
-
-        config = CatalogConfig(reasoning_effort="")
-        assert config.reasoning_effort == "medium", (
-            "Empty reasoning_effort should fall back to 'medium'"
-        )
-
-    def test_case_sensitive_reasoning_effort(self):
-        """Scenario: Reasoning effort validation is case-sensitive (or handles case)."""
-        from generators.config import CatalogConfig
-
-        # "Medium" (capitalized) is not one of "low", "medium", "high"
-        # so it should either be lowered or rejected. The spec says the
-        # valid values are lowercase. If rejected, default is used.
-        config = CatalogConfig(reasoning_effort="Medium")
-        assert config.reasoning_effort in ("medium", "Medium"), (
-            "Capitalized reasoning_effort should be normalized or rejected to default"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -685,7 +575,6 @@ class TestConfigLoadingFromPluginSettings:
 
         config = load_catalog_config()
         assert config.model == "claude-sonnet-4-6"
-        assert config.reasoning_effort == "medium"
         assert config.ttl_hours == 168
         assert config.diary_catalog_days == 7
         assert config.enable_skills is False
@@ -701,16 +590,6 @@ class TestConfigLoadingFromPluginSettings:
 
         config = load_catalog_config()
         assert config.model == "claude-haiku-4-5"
-
-    def test_load_respects_reasoning_effort_override(self, monkeypatch):
-        """Scenario: Config module reflects user overrides for reasoning_effort."""
-        monkeypatch.setenv(
-            "CLAUDE_PLUGIN_OPTION_catalog_reasoning_effort", "high"
-        )
-        from generators.config import load_catalog_config
-
-        config = load_catalog_config()
-        assert config.reasoning_effort == "high"
 
     def test_load_respects_ttl_hours_override(self, monkeypatch):
         """Scenario: Config module reflects user overrides for ttl_hours."""
@@ -755,18 +634,6 @@ class TestConfigLoadingFromPluginSettings:
 
         config = load_catalog_config()
         assert config.enable_costs is True
-
-    def test_load_validates_invalid_reasoning_effort(self, monkeypatch):
-        """Scenario: Invalid reasoning effort from env is rejected, default used."""
-        monkeypatch.setenv(
-            "CLAUDE_PLUGIN_OPTION_catalog_reasoning_effort", "ultra"
-        )
-        from generators.config import load_catalog_config
-
-        config = load_catalog_config()
-        assert config.reasoning_effort == "medium", (
-            "Invalid reasoning_effort from env should fall back to 'medium'"
-        )
 
     def test_load_validates_negative_ttl_hours(self, monkeypatch):
         """Scenario: Negative ttl_hours from env is rejected, default used."""
@@ -922,7 +789,6 @@ class TestCatalogConfigConstruction:
 
         config = CatalogConfig(
             model="claude-haiku-4-5",
-            reasoning_effort="low",
             ttl_hours=12,
             diary_catalog_days=7,
             enable_skills=True,
@@ -930,7 +796,6 @@ class TestCatalogConfigConstruction:
             resources_dir="/my/resources",
         )
         assert config.model == "claude-haiku-4-5"
-        assert config.reasoning_effort == "low"
         assert config.ttl_hours == 12
         assert config.diary_catalog_days == 7
         assert config.enable_skills is True
@@ -943,7 +808,6 @@ class TestCatalogConfigConstruction:
 
         config = CatalogConfig(model="claude-haiku-4-5")
         assert config.model == "claude-haiku-4-5"
-        assert config.reasoning_effort == "medium"  # default
         assert config.ttl_hours == 168  # default
         assert config.diary_catalog_days == 7  # default
         assert config.enable_skills is False  # default

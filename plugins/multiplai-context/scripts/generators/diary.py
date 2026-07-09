@@ -56,6 +56,15 @@ class DiaryGenerator(GeneratorBase):
     catalog_filename = "diary.json"
 
     @property
+    def _call_model(self) -> str:
+        """Diary summaries use the diary-specific model when configured.
+
+        Falls back to the generic catalog model when ``catalog_model_diary``
+        is unset (``effective_diary_model`` handles the fallback).
+        """
+        return self._config.effective_diary_model
+
+    @property
     def _diary_dir(self) -> Path:
         """Configured diary directory, resolver-routed.
 
