@@ -38,7 +38,15 @@
       },
       "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
       "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
-      "license": "MIT"
+      "license": "MIT",
+      "keywords": [
+        "product",
+        "jtbd",
+        "personas",
+        "strategy",
+        "pr-faq",
+        "roadmap"
+      ]
     },
     {
       "name": "multiplai-writing",
@@ -51,7 +59,15 @@
       },
       "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
       "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
-      "license": "MIT"
+      "license": "MIT",
+      "keywords": [
+        "writing",
+        "content",
+        "drafts",
+        "editing",
+        "linkedin",
+        "copywriting"
+      ]
     },
     {
       "name": "multiplai-research",
@@ -64,7 +80,15 @@
       },
       "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
       "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
-      "license": "MIT"
+      "license": "MIT",
+      "keywords": [
+        "research",
+        "deep-research",
+        "insights",
+        "interviewing",
+        "synthesis",
+        "web-search"
+      ]
     },
     {
       "name": "multiplai-dev",
@@ -77,7 +101,15 @@
       },
       "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
       "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
-      "license": "MIT"
+      "license": "MIT",
+      "keywords": [
+        "development",
+        "buildme",
+        "code-review",
+        "security",
+        "refactoring",
+        "devops"
+      ]
     },
     {
       "name": "multiplai-media",
@@ -90,7 +122,15 @@
       },
       "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
       "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
-      "license": "MIT"
+      "license": "MIT",
+      "keywords": [
+        "transcription",
+        "youtube",
+        "video",
+        "screen-recording",
+        "diagrams",
+        "browser"
+      ]
     },
     {
       "name": "multiplai-messaging",
