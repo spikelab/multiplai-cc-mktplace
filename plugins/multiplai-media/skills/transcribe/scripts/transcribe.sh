@@ -4,7 +4,7 @@
 # In containers, bridges to macOS host via SSH for Metal GPU access.
 # Usage: transcribe.sh <audio_file> [output_file] [--override] [--model <model_name>]
 
-set -e
+set -euo pipefail
 
 # Default models
 DEFAULT_MODEL_EN="mlx-community/whisper-medium.en-mlx-8bit"
@@ -121,13 +121,13 @@ fi
 
 # Validate audio file
 if [[ -z "$AUDIO_FILE" ]]; then
-    echo "Error: No audio file specified"
-    echo "Usage: transcribe.sh <audio_file> [output_file] [--override] [--model <model_name>]"
+    echo "Error: No audio file specified" >&2
+    echo "Usage: transcribe.sh <audio_file> [output_file] [--override] [--model <model_name>]" >&2
     exit 1
 fi
 
 if [[ ! -f "$AUDIO_FILE" ]]; then
-    echo "Error: Audio file not found: $AUDIO_FILE"
+    echo "Error: Audio file not found: $AUDIO_FILE" >&2
     exit 1
 fi
 
@@ -139,8 +139,8 @@ fi
 
 # Check if output file exists
 if [[ -f "$OUTPUT_FILE" ]] && [[ "$OVERRIDE" != true ]]; then
-    echo "Error: Output file already exists: $OUTPUT_FILE"
-    echo "Use --override flag to overwrite existing file"
+    echo "Error: Output file already exists: $OUTPUT_FILE" >&2
+    echo "Use --override flag to overwrite existing file" >&2
     exit 1
 fi
 
