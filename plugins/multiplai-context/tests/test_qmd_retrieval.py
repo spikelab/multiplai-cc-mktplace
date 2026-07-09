@@ -169,6 +169,16 @@ class TestResultsToEntries:
         (entry,) = qr.results_to_entries([_r("dir/doc.md", 0.9)], TARGET)
         assert entry["title"] == "doc.md"
 
+    def test_chunk_line_included_when_present(self):
+        (entry,) = qr.results_to_entries([dict(_r("a", 0.9), line=42)], TARGET)
+        assert entry["line"] == 42
+
+    def test_chunk_line_omitted_when_missing_or_invalid(self):
+        for item in (_r("a", 0.9), dict(_r("b", 0.9), line="5"),
+                     dict(_r("c", 0.9), line=0), dict(_r("d", 0.9), line=True)):
+            (entry,) = qr.results_to_entries([item], TARGET)
+            assert "line" not in entry
+
 
 # ---------------------------------------------------------------------------
 # build_argv
