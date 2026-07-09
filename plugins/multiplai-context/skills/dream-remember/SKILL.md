@@ -146,6 +146,14 @@ After all approved updates are applied:
    - Rejected items get deleted too — reviewed-and-rejected is done.
 2. Git history preserves originals for forensic review.
 
+**Never bulk-clear the dreams directory.** Cleanup targets `.multiplai/learnings/`
+only — never glob-delete `.multiplai/dreams/processed-learnings-*.md`. A batch or
+recovery run can leave another session's proposal mid-review there; those files are
+not yours to remove, and `dream.py` already writes non-colliding `-2`/`-3` suffixes so
+nothing needs clearing. If you must stop a running `dream.py`/catalog job, kill its
+specific python PID — **never `pkill -f <script>`**, which also matches the calling
+shell and kills your own session.
+
 ---
 
 ## Step 6: Record the Consolidation (stamp dream state)

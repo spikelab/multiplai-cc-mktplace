@@ -272,11 +272,15 @@ class GeneratorBase:
         # auto-create a truthy .is_stub attribute and wrongly skip writes.
         stub = getattr(self._model_client, "is_stub", False) is True
         errors = batch.errors
-        if stub:
+        if stub and not dry_run:
+            # A stub on a real run means no client was available, so nothing
+            # was generated — surface that. On a dry-run the stub is expected
+            # (the dispatcher hands one over deliberately) and no generation
+            # was intended, so it is not an error.
             errors = errors + [
                 "model client unavailable — catalog not generated or persisted"
             ]
-        elif not dry_run:
+        elif not stub and not dry_run:
             self._write_results(state, batch.entries, batch.hashes)
 
         return GenerationResult(

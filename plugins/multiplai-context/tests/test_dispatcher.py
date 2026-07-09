@@ -537,6 +537,48 @@ class TestDryRunMode:
                 f"Result for {result.generator} should have dry_run=True"
             )
 
+    def test_dry_run_does_not_instantiate_model_client(self, tmp_path, monkeypatch):
+        """dry_run=True must not create a real model client.
+
+        A dry run makes no LLM calls, so it must not require credentials —
+        instantiating the real client would fail in credential-free
+        environments. The dispatcher hands generators the stub instead.
+        """
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+
+        from generators.config import CatalogConfig
+        from generators import dispatcher
+        from generators.dispatcher import generate_catalogs, _StubModelClient
+
+        config = CatalogConfig()
+        created = {"real": False}
+
+        async def boom():
+            created["real"] = True
+            raise AssertionError("real model client must not be created on dry-run")
+
+        seen_clients = []
+
+        async def mock_run(self, *, force=False, dry_run=False, force_enable=False):
+            from generators.base import GenerationResult
+            seen_clients.append(self._model_client)
+            return GenerationResult(
+                generator=self.name, total_sources=0, skipped=0,
+                generated=0, pruned=0, errors=[], dry_run=dry_run,
+            )
+
+        monkeypatch.setattr(dispatcher, "_create_model_client", boom)
+        with patch("generators.memory.MemoryGenerator.run", mock_run), \
+             patch("generators.diary.DiaryGenerator.run", mock_run), \
+             patch("generators.skills.SkillsGenerator.run", mock_run), \
+             patch("generators.resources.ResourcesGenerator.run", mock_run):
+            asyncio.run(generate_catalogs(config=config, dry_run=True))
+
+        assert created["real"] is False
+        assert seen_clients and all(
+            isinstance(c, _StubModelClient) for c in seen_clients
+        )
+
 
 # ---------------------------------------------------------------------------
 # Generator Failure Isolation
