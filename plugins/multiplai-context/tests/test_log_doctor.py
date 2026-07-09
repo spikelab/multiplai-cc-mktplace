@@ -34,6 +34,7 @@ from log_doctor import (  # noqa: E402
     probe_check,
     probe_new_entries,
     probe_snapshot,
+    render_injections_markdown,
     scan,
 )
 
@@ -313,3 +314,33 @@ class TestInjections:
             load_routing_decisions(routing_logs), file_filter="life.md"
         )
         assert [r["file"] for r in stats["files"]] == ["life.md"]
+
+    def test_trace_shows_embedded_prompt_and_drops_stale_note(self, tmp_path):
+        """0.5.3+ ROUTING_SCORES payloads embed the prompt: the trace
+        must surface it, and the 'prompts are not logged' note must
+        not appear (it would contradict the traces)."""
+        (tmp_path / "context_manager.log").write_text(
+            "[2026-07-07T10:00:00Z] [context_manager] [session:--------] INFO: "
+            'ROUTING_SCORES memory={"picked": [["life.md", 3.335]], "cap": 10, '
+            '"n_candidates": 3, "n_picked": 1, "capped": false, '
+            '"floor_excluded": null, "prompt": "why does it inject stuff"}\n'
+        )
+        (tmp_path / "activity.jsonl").write_text(ACTIVITY_INJECT_JSONL)
+        decisions = load_routing_decisions(tmp_path)
+        md = render_injections_markdown(
+            injection_stats(decisions), decisions, None, trace=5
+        )
+        assert '- prompt: "why does it inject stuff"' in md
+        assert "predate plugin 0.5.3" not in md
+        assert "needs the session transcript" not in md
+
+    def test_legacy_logs_keep_transcript_note(self, routing_logs):
+        """Pre-0.5.3 lines carry no prompt — the transcript-digging
+        guidance stays, reworded to say why."""
+        decisions = load_routing_decisions(routing_logs)
+        md = render_injections_markdown(
+            injection_stats(decisions), decisions, None, trace=5
+        )
+        assert "- prompt:" not in md
+        assert "predate plugin 0.5.3" in md
+        assert "needs the session transcript" in md

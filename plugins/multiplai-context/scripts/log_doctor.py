@@ -488,6 +488,15 @@ def render_injections_markdown(stats: dict, decisions: list,
             sid = d.session or "--------"
             out.append(f"### {d.ts.isoformat()} · session {sid} · {d.event or 'no-activity-match'}")
             out.append("")
+            # Since plugin 0.5.3 the ROUTING_SCORES payload embeds a
+            # truncated "prompt" key (same value on every corpus line
+            # of a decision — show it once).
+            prompt = next(
+                (p.get("prompt") for p in d.scores.values() if p.get("prompt")),
+                None,
+            )
+            if prompt:
+                out.append(f'- prompt: "{prompt}"')
             for corpus, p in d.scores.items():
                 picked = ", ".join(f"{f} ({s})" for f, s in p.get("picked", []))
                 out.append(
@@ -504,11 +513,17 @@ def render_injections_markdown(stats: dict, decisions: list,
             elif d.event:
                 out.append(f"- outcome: {d.msg[:200]}")
             out.append("")
-    out.append(
-        "_Note: prompts are not logged by context_manager, so score→prompt "
-        "attribution needs the session transcript (activity.jsonl has the "
-        "session id; find the user message at the decision timestamp)._"
-    )
+    # The transcript-digging workaround only applies to pre-0.5.3 log
+    # lines, which have no embedded prompt. Don't emit the note when the
+    # decisions already carry prompts — it would contradict the traces.
+    if not any(p.get("prompt") for d in decisions for p in d.scores.values()):
+        out.append(
+            "_Note: these log lines predate plugin 0.5.3, which embeds a "
+            "truncated `prompt` key in ROUTING_SCORES; score→prompt "
+            "attribution here needs the session transcript (activity.jsonl "
+            "has the session id; find the user message at the decision "
+            "timestamp)._"
+        )
     return "\n".join(out)
 
 
