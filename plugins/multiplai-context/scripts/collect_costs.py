@@ -18,6 +18,7 @@ steady-state passes read only new bytes.
 """
 
 import argparse
+import fcntl
 import sys
 import time
 from pathlib import Path
@@ -29,6 +30,12 @@ from multiplai_core.costing import costs_dir
 from lib.costing_collector import default_config_dir, run_collect
 
 logger = setup_logging("costs")
+
+# Single global collector — the ledger and offset state are shared, so two
+# concurrent writing passes (e.g. racing SessionStart hooks) could double-append
+# records or clobber each other's offsets. A non-blocking exclusive flock makes
+# the second launch a no-op. Dry runs don't write, so they skip the lock.
+_LOCK_PATH = "/tmp/multiplai-costs-collector.lock"
 
 
 def main() -> int:
@@ -43,6 +50,18 @@ def main() -> int:
     if not (config_dir / "projects").is_dir():
         print(f"No transcripts found: {config_dir}/projects does not exist", file=sys.stderr)
         return 1
+
+    # Serialize writing passes across processes (racing SessionStart hooks).
+    # Hold the lock for the whole pass; the fd is released on process exit.
+    lock_fd = None
+    if not args.dry_run:
+        lock_fd = open(_LOCK_PATH, "w")
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logger.info("Another cost-collection pass is running; skipping.")
+            print("Another cost-collection pass is already running — skipping.")
+            return 0
 
     state_path = costs_dir() / "collector-state.json"
     started = time.monotonic()

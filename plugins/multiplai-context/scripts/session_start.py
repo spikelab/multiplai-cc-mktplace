@@ -337,6 +337,41 @@ def _launch_qmd_refresh(scripts_dir: Path, cwd: str) -> bool:
         return False
 
 
+def _launch_cost_collection(scripts_dir: Path) -> bool:
+    """Fire the incremental cost collector, detached, when enabled.
+
+    The collector (scripts/collect_costs.py) prices the session-transcript
+    corpus into the monthly cost ledger. It is offset-checkpointed and
+    dedups against the ledger, so steady-state passes read only new bytes;
+    the first pass over a large corpus is a full backfill (minutes), which
+    is why it runs detached (start_new_session) rather than inline in a
+    kill-within-seconds hook. It self-guards with an flock, so a second
+    launch while one is running is a harmless no-op. Gated on enable_costs.
+    Returns True when a child was launched. Best-effort: any failure is
+    logged and swallowed — cost accounting must never block session start.
+    """
+    try:
+        from generators.config import load_catalog_config
+
+        cfg = load_catalog_config()
+        if not cfg.enable_costs:
+            return False
+        script = scripts_dir / "collect_costs.py"
+        if not script.exists():
+            return False
+        subprocess.Popen(
+            ["uv", "run", "--no-project", str(script)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        logger.info("Launched detached cost collection")
+        return True
+    except Exception:
+        logger.warning("Could not launch cost collection", exc_info=True)
+        return False
+
+
 def _emit_dream_nudge() -> None:
     """Print an additionalContext nudge prompting the user to run /multiplai-context:dream."""
     print(
@@ -507,6 +542,10 @@ def main() -> None:
     # Keep the qmd resources index fresh (no-op unless the qmd backend
     # is active). Detached + flock-guarded, so this never blocks the hook.
     _launch_qmd_refresh(paths.scripts_dir(), cwd)
+
+    # Price the session-transcript corpus into the cost ledger (no-op unless
+    # enable_costs is set). Detached + flock-guarded — never blocks the hook.
+    _launch_cost_collection(paths.scripts_dir())
 
     # Drain any deferred extraction markers left by previous session_end
     # hooks. SessionEnd is kill-within-seconds, so the heavy LLM

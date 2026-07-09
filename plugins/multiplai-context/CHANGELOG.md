@@ -17,6 +17,11 @@
   with `--session` for a per-chat itemized bill and `--json` output.
 - **SDK cost tap.** SDK-driven pipelines tag their runs with a `component`
   (buildme, deep-research, dream) so their spend lands in the same ledger.
+- **Automatic collection at session start.** With the new `enable_costs`
+  option on, `session_start.py` fires the collector detached (like the qmd
+  refresh) so the ledger stays current with no manual step. The collector
+  self-guards with an flock, so racing session starts can't double-append.
+  Opt-in (default off); local-only, nothing leaves the machine.
 
 ### Changed
 - Pinned `multiplai-core` to **v0.6.0** plugin-wide (adds the `costing`
