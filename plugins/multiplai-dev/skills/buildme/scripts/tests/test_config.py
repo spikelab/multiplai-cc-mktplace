@@ -47,6 +47,25 @@ class TestTierDetection:
             tier, _ = detect_tier()
             assert tier == "advanced"
 
+    def test_opus_47_is_advanced(self):
+        """The skill pins claude-opus-4-7 — the version-range check must accept it
+        (the old literal allowlist would have silently downgraded it to standard)."""
+        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-7"}):
+            tier, name = detect_tier()
+            assert tier == "advanced"
+            assert "opus-4-7" in name
+
+    def test_opus_48_is_advanced(self):
+        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-8"}):
+            tier, _ = detect_tier()
+            assert tier == "advanced"
+
+    def test_opus_44_is_standard(self):
+        """Below the 4.5 floor stays standard."""
+        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-4"}):
+            tier, _ = detect_tier()
+            assert tier == "standard"
+
 
 class TestTestCommandDiscovery:
     def test_discovers_pytest(self, tmp_path):
@@ -132,3 +151,18 @@ class TestConfigPaths:
         config = BuildConfig(project_dir=tmp_path, change_name="feat")
         config.specs_dir = tmp_path / "specs"
         assert config.tasks_path == tmp_path / "specs" / "changes" / "feat" / "tasks.md"
+
+    def test_change_dir_normalizes_traversal(self, tmp_path):
+        """A --change value that tries to escape specs/changes/ is neutralized,
+        so archive()'s shutil.move can never target an out-of-tree directory."""
+        config = BuildConfig(project_dir=tmp_path, change_name="../../etc/passwd")
+        config.specs_dir = tmp_path / "specs"
+        cd = config.change_dir
+        assert ".." not in cd.parts
+        assert cd.parent == tmp_path / "specs" / "changes"
+        assert cd == tmp_path / "specs" / "changes" / "etcpasswd"
+
+    def test_change_dir_normalizes_case_and_spaces(self, tmp_path):
+        config = BuildConfig(project_dir=tmp_path, change_name="My Feature")
+        config.specs_dir = tmp_path / "specs"
+        assert config.change_dir == tmp_path / "specs" / "changes" / "my-feature"

@@ -92,6 +92,11 @@ class AgentResult(BaseModel):
     files_changed: list[str] = Field(default_factory=list)
     commit_hash: str | None = None
     error: str | None = None
+    # True when the underlying agent call failed specifically because it timed
+    # out (AgentRunTimeout). agent_call never raises on timeout — it degrades to
+    # a failed AgentResult — so this flag is the only signal a real timeout
+    # happened. The TDD engine propagates it to block.timed_out → EXIT_AGENT_TIMEOUT.
+    timed_out: bool = False
     turns_used: int = 0
     elapsed_seconds: float = 0.0
 

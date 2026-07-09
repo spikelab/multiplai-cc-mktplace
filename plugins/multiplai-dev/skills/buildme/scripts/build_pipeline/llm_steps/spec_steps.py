@@ -92,8 +92,8 @@ def _build_prompt(
             instruction=instruction,
             template=template,
         )
-    elif artifact_id in ("specs", "requirements"):
-        # Specs/requirements generation needs proposal content
+    elif artifact_id == "requirements":
+        # Requirements generation needs proposal content
         proposal_content = _read_dep(context, "proposal", config)
         return SPEC_PROMPT.format(
             project_context=project_context,
@@ -143,14 +143,19 @@ def _read_dep(context: dict, dep_id: str, config) -> str:
 
 
 def _read_specs(config) -> str:
-    """Read all spec files from the change directory."""
-    specs_dir = config.change_dir / "specs"
-    if not specs_dir.exists():
+    """Read all requirement files from the change directory.
+
+    Requirements are written flat as change_dir/requirements/<capability>.md
+    (see spec_generator._generate_requirements). The capability name is the
+    file stem — mirrors tdd_engine.assemble_context.
+    """
+    req_dir = config.change_dir / "requirements"
+    if not req_dir.exists():
         return "(no specs yet)"
     parts = []
-    for spec_file in sorted(specs_dir.glob("*/spec.md")):
-        cap_name = spec_file.parent.name
-        parts.append(f"### {cap_name}\n{spec_file.read_text()}")
+    for req_file in sorted(req_dir.glob("*.md")):
+        cap_name = req_file.stem
+        parts.append(f"### {cap_name}\n{req_file.read_text()}")
     return "\n\n".join(parts) if parts else "(no specs yet)"
 
 
@@ -164,11 +169,11 @@ async def run_design_audit(change_dir: Path, config) -> list[dict]:
     tasks = _read_file(change_dir / "tasks.md")
 
     specs_parts = []
-    specs_dir = change_dir / "specs"
-    if specs_dir.exists():
-        for spec_file in sorted(specs_dir.glob("*/spec.md")):
-            cap_name = spec_file.parent.name
-            specs_parts.append(f"### {cap_name}\n{spec_file.read_text()}")
+    req_dir = change_dir / "requirements"
+    if req_dir.exists():
+        for req_file in sorted(req_dir.glob("*.md")):
+            cap_name = req_file.stem
+            specs_parts.append(f"### {cap_name}\n{req_file.read_text()}")
     specs_content = "\n\n".join(specs_parts) if specs_parts else "(no specs)"
 
     # Detect change type for type-specific audit questions

@@ -37,22 +37,34 @@ from .models import (
     ReviewResult,
 )
 from .progress import ProgressWriter
-from .sdk import LLMCallTimeoutError, llm_call, llm_call_structured
+from .sdk import llm_call, llm_call_structured
 from .state import BuildState, TDDState
 
 log = logging.getLogger(__name__)
 
 
-def _git_commit_block_phase(cwd: str, phase: str, block: BlockInfo) -> str | None:
-    """Commit all changes in cwd for the current block phase.
+def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -> str | None:
+    """Commit the block phase's changes in the project repo.
 
     phase: "test" or "impl" (used for conventional-commit prefix).
     Returns short SHA of the new commit, or None if there was nothing to
     commit or the commit failed (logged as warning — never raises).
+
+    Stages everything EXCEPT buildme's own bookkeeping files (build-progress.md
+    and .build-state.json) so they don't leak into the user's per-block commits.
     """
+    cwd = str(config.project_dir)
+    # Exclude the bookkeeping files via :(exclude) pathspecs, relative to the repo.
+    excludes: list[str] = []
+    for bookkeeping in (config.progress_file_path(), config.state_file_path()):
+        try:
+            rel = bookkeeping.relative_to(config.project_dir)
+        except ValueError:
+            continue  # outside the repo — git add under '.' won't touch it anyway
+        excludes.append(f":(exclude){rel}")
     try:
         subprocess.run(
-            ["git", "add", "-A"],
+            ["git", "add", "-A", "--", ".", *excludes],
             cwd=cwd, check=True, capture_output=True, timeout=30,
         )
         status = subprocess.run(
@@ -266,7 +278,10 @@ async def run_block_tdd(
     Advanced tier: test-writer + implementer (clean code)
     Standard tier: test-writer + implementer (minimum) + refactorer
     """
-    block_idx = block.number - 1
+    # Index by list position, not block.number - 1: LLM-generated tasks.md
+    # numbering isn't guaranteed contiguous-from-1. The block being run is
+    # always the one at state.tdd.current_block (see run_tdd_engine's loop).
+    block_idx = state.tdd.current_block if state.tdd else 0
     total = len(state.tdd.blocks) if state.tdd else 0
     cwd = str(config.project_dir)
 
@@ -286,33 +301,32 @@ async def run_block_tdd(
     context = assemble_context(block, config, "test_writer")
 
     progress.log_agent("TestWriter", block.name, "STARTED")
-    try:
-        test_result = await run_test_writer(
-            block_name=block.name,
-            block_description=block.description,
-            specs=specs,
-            context_bundle=context,
-            test_command=config.test_command,
-            model=config.model,
-            cwd=cwd,
-        )
-    except LLMCallTimeoutError:
-        log.error("FAIL block=%d name=%s phase=TEST_WRITE reason=timeout", block.number, block.name)
-        progress.log_agent("TestWriter", block.name, "TIMEOUT")
-        block.timed_out = True
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
-        return False
+    test_result = await run_test_writer(
+        block_name=block.name,
+        block_description=block.description,
+        specs=specs,
+        context_bundle=context,
+        test_command=config.test_command,
+        model=config.model,
+        cwd=cwd,
+    )
 
     if not test_result.success:
-        log.error("FAIL block=%d name=%s phase=TEST_WRITE error=%s", block.number, block.name, test_result.error)
-        progress.log_agent("TestWriter", block.name, "FAILED")
+        # agent_call degrades a timeout to a failed result (timed_out=True)
+        # rather than raising — propagate that so the orchestrator returns
+        # EXIT_AGENT_TIMEOUT instead of a generic build failure.
+        block.timed_out = test_result.timed_out
+        reason = "timeout" if test_result.timed_out else "error"
+        log.error("FAIL block=%d name=%s phase=TEST_WRITE reason=%s error=%s",
+                  block.number, block.name, reason, test_result.error)
+        progress.log_agent("TestWriter", block.name, "TIMEOUT" if test_result.timed_out else "FAILED")
         state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
         return False
 
     log.info("DONE block=%d name=%s phase=TEST_WRITE", block.number, block.name)
     progress.log_agent("TestWriter", block.name, "COMPLETE")
 
-    test_sha = _git_commit_block_phase(cwd, "test", block)
+    test_sha = _git_commit_block_phase(config, "test", block)
     if test_sha:
         block.test_commit = test_sha
         state.checkpoint(config.state_file_path())
@@ -331,27 +345,23 @@ async def run_block_tdd(
 
     impl_context = assemble_context(block, config, "implementer")
     progress.log_agent("Implementer", block.name, "STARTED")
-    try:
-        impl_result = await run_implementer(
-            block_name=block.name,
-            block_description=block.description,
-            failing_tests=test_result.output,
-            context_bundle=impl_context,
-            test_command=config.test_command,
-            prompt_style=config.implementer_prompt_style,
-            model=config.model,
-            cwd=cwd,
-        )
-    except LLMCallTimeoutError:
-        log.error("FAIL block=%d name=%s phase=IMPLEMENT reason=timeout", block.number, block.name)
-        progress.log_agent("Implementer", block.name, "TIMEOUT")
-        block.timed_out = True
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
-        return False
+    impl_result = await run_implementer(
+        block_name=block.name,
+        block_description=block.description,
+        failing_tests=test_result.output,
+        context_bundle=impl_context,
+        test_command=config.test_command,
+        prompt_style=config.implementer_prompt_style,
+        model=config.model,
+        cwd=cwd,
+    )
 
     if not impl_result.success:
-        log.error("FAIL block=%d name=%s phase=IMPLEMENT error=%s", block.number, block.name, impl_result.error)
-        progress.log_agent("Implementer", block.name, "FAILED")
+        block.timed_out = impl_result.timed_out
+        reason = "timeout" if impl_result.timed_out else "error"
+        log.error("FAIL block=%d name=%s phase=IMPLEMENT reason=%s error=%s",
+                  block.number, block.name, reason, impl_result.error)
+        progress.log_agent("Implementer", block.name, "TIMEOUT" if impl_result.timed_out else "FAILED")
         state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
         return False
 
@@ -359,7 +369,7 @@ async def run_block_tdd(
              block.number, block.name, impl_result.turns_used, impl_result.elapsed_seconds)
     progress.log_agent("Implementer", block.name, "COMPLETE")
 
-    impl_sha = _git_commit_block_phase(cwd, "impl", block)
+    impl_sha = _git_commit_block_phase(config, "impl", block)
     if impl_sha:
         block.impl_commit = impl_sha
         state.checkpoint(config.state_file_path())
@@ -369,23 +379,22 @@ async def run_block_tdd(
         log.info("START block=%d name=%s phase=REFACTOR", block.number, block.name)
         refactor_context = assemble_context(block, config, "refactorer")
         progress.log_agent("Refactorer", block.name, "STARTED")
-        try:
-            refactor_result = await run_refactorer(
-                block_name=block.name,
-                block_description=block.description,
-                context_bundle=refactor_context,
-                test_command=config.test_command,
-                model=config.model,
-                cwd=cwd,
-            )
-        except LLMCallTimeoutError:
-            progress.log_agent("Refactorer", block.name, "TIMEOUT")
-            log.warning("FAIL block=%d name=%s phase=REFACTOR reason=timeout (non-fatal)", block.number, block.name)
+        refactor_result = await run_refactorer(
+            block_name=block.name,
+            block_description=block.description,
+            context_bundle=refactor_context,
+            test_command=config.test_command,
+            model=config.model,
+            cwd=cwd,
+        )
+        # Refactor is non-fatal: a failed or timed-out refactor leaves the
+        # passing implementation intact, so log and move on.
+        if not refactor_result.success:
+            reason = "timeout" if refactor_result.timed_out else refactor_result.error
+            log.warning("FAIL block=%d name=%s phase=REFACTOR reason=%s (non-fatal)", block.number, block.name, reason)
+            progress.log_agent("Refactorer", block.name, "TIMEOUT" if refactor_result.timed_out else "FAILED")
         else:
-            if not refactor_result.success:
-                log.warning("FAIL block=%d name=%s phase=REFACTOR reason=%s (non-fatal)", block.number, block.name, refactor_result.error)
-            else:
-                log.info("DONE block=%d name=%s phase=REFACTOR", block.number, block.name)
+            log.info("DONE block=%d name=%s phase=REFACTOR", block.number, block.name)
             progress.log_agent("Refactorer", block.name, "COMPLETE")
 
     return True
@@ -398,7 +407,8 @@ async def _run_integration_and_review(
     progress: ProgressWriter,
 ) -> bool:
     """Run integration gate + review loop for a block. Returns True on success."""
-    block_idx = block.number - 1
+    # Index by list position (see run_block_tdd) — block.number may be non-contiguous.
+    block_idx = state.tdd.current_block if state.tdd else 0
     total = len(state.tdd.blocks) if state.tdd else 0
 
     # --- Integration gate ---
@@ -410,16 +420,14 @@ async def _run_integration_and_review(
         for attempt in range(MAX_INTEGRATION_FIX_ATTEMPTS):
             log.info("Integration fix attempt %d/%d", attempt + 1, MAX_INTEGRATION_FIX_ATTEMPTS)
             context = assemble_context(block, config, "implementer")
-            try:
-                fix_result = await run_integration_fix(
-                    failure_output=gate.metadata.get("stderr", "") + gate.metadata.get("stdout", ""),
-                    test_command=config.test_command,
-                    context_bundle=context,
-                    model=config.model,
-                    cwd=str(config.project_dir),
-                )
-            except LLMCallTimeoutError:
-                continue
+            fix_result = await run_integration_fix(
+                failure_output=gate.metadata.get("stderr", "") + gate.metadata.get("stdout", ""),
+                test_command=config.test_command,
+                context_bundle=context,
+                model=config.model,
+                cwd=str(config.project_dir),
+            )
+            # A timed-out or failed fix leaves success=False; retry until attempts run out.
             if fix_result.success:
                 gate = integration_gate(config.test_command, config.project_dir)
                 if gate.passed:
@@ -464,18 +472,17 @@ async def _run_integration_and_review(
         log.info("Review iteration %d failed for block %s: %s", iteration + 1, block.name, score_gate.reason)
         # Spawn fix agent for the failing dimensions
         context = assemble_context(block, config, "implementer")
-        try:
-            await run_implementer(
-                block_name=block.name,
-                block_description=f"Fix review issues: {score_gate.reason}",
-                failing_tests=score_gate.reason,
-                context_bundle=context,
-                test_command=config.test_command,
-                prompt_style=config.implementer_prompt_style,
-                model=config.model,
-                cwd=str(config.project_dir),
-            )
-        except LLMCallTimeoutError:
+        fix = await run_implementer(
+            block_name=block.name,
+            block_description=f"Fix review issues: {score_gate.reason}",
+            failing_tests=score_gate.reason,
+            context_bundle=context,
+            test_command=config.test_command,
+            prompt_style=config.implementer_prompt_style,
+            model=config.model,
+            cwd=str(config.project_dir),
+        )
+        if not fix.success and fix.timed_out:
             log.warning("Fix agent timed out during review iteration %d", iteration + 1)
 
     # Mark done regardless of final review outcome (we gave it MAX attempts)
