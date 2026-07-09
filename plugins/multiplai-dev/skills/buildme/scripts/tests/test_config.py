@@ -47,6 +47,25 @@ class TestTierDetection:
             tier, _ = detect_tier()
             assert tier == "advanced"
 
+    def test_opus_47_is_advanced(self):
+        """The skill pins claude-opus-4-7 — the version-range check must accept it
+        (the old literal allowlist would have silently downgraded it to standard)."""
+        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-7"}):
+            tier, name = detect_tier()
+            assert tier == "advanced"
+            assert "opus-4-7" in name
+
+    def test_opus_48_is_advanced(self):
+        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-8"}):
+            tier, _ = detect_tier()
+            assert tier == "advanced"
+
+    def test_opus_44_is_standard(self):
+        """Below the 4.5 floor stays standard."""
+        with patch.dict(os.environ, {"CLAUDE_MODEL": "claude-opus-4-4"}):
+            tier, _ = detect_tier()
+            assert tier == "standard"
+
 
 class TestTestCommandDiscovery:
     def test_discovers_pytest(self, tmp_path):

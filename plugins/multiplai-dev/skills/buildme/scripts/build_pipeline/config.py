@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -20,18 +21,40 @@ Mode = Literal["scratch", "brief", "only"]
 
 
 def detect_tier() -> tuple[Tier, str]:
-    """Detect model tier from CLAUDE_MODEL environment variable.
+    """Detect model tier from the CLAUDE_MODEL environment variable.
 
     Returns (tier, model_name). Defaults to 'standard' if unset or unknown.
+
+    KNOWN LIMITATION (verified 2026-07): Claude Code (v2.1.x) does NOT export
+    CLAUDE_MODEL to Bash subprocesses — it exports CLAUDE_EFFORT but not
+    CLAUDE_MODEL — and buildme's SKILL.md invokes this pipeline via a plain
+    `uv run ...` with no `CLAUDE_MODEL=` prefix. So in production CLAUDE_MODEL is
+    empty here and this ALWAYS returns 'standard', regardless of the skill's
+    pinned model (claude-opus-4-7). The version-range logic below is correct in
+    isolation and future-proofs the day the model is plumbed through, but the
+    tier stays inert until the skill propagates the model into the environment
+    (e.g. `CLAUDE_MODEL="{model}" uv run ...`) or the pipeline grows an explicit
+    --tier/--model flag. Do not assume advanced tier runs today.
     """
     model = os.environ.get("CLAUDE_MODEL", "")
-    # NOTE: this is an explicit allowlist of known high-capability models. A model
-    # newer than the ones listed (or any non-Opus model) falls through to the
-    # 'standard' path — safe degradation, not a crash. Extend this list when a new
-    # advanced-tier model ships.
-    if any(x in model for x in ["opus-4-5", "opus-4-6", "opus-5", "opus-6"]):
+    if _is_advanced_model(model):
         return "advanced", model
     return "standard", model or "unknown"
+
+
+def _is_advanced_model(model: str) -> bool:
+    """Advanced tier = the Opus family at version >= 4.5.
+
+    A version-range check rather than a literal allowlist, so the next Opus bump
+    (4-7, 4-8, 5-0, ...) is recognized automatically instead of silently
+    downgrading to 'standard'. Non-Opus models (sonnet/haiku/other) → False.
+    """
+    m = re.search(r"opus-(\d+)(?:-(\d+))?", model)
+    if not m:
+        return False
+    major = int(m.group(1))
+    minor = int(m.group(2) or 0)
+    return (major, minor) >= (4, 5)
 
 
 # Load model ceiling from multiplai.conf
