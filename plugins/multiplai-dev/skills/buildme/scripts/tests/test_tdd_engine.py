@@ -1,5 +1,6 @@
 """Tests for TDD engine — block parsing, context assembly, agent selection, gates."""
 
+import os
 import re
 import pytest
 from pathlib import Path
@@ -569,17 +570,40 @@ class TestRunBlockTDD:
 
         assert result is False
         assert block.status == BlockStatus.FAILED
+        # An ordinary (non-timeout) failure must NOT set the timeout flag.
+        assert block.timed_out is False
 
     @pytest.mark.asyncio
-    async def test_test_writer_timeout(self, setup):
-        from build_pipeline.sdk import LLMCallTimeoutError
+    async def test_test_writer_timeout_sets_flag(self, setup):
+        """agent_call degrades a timeout to a failed AgentResult(timed_out=True);
+        run_block_tdd must surface that as block.timed_out so the orchestrator
+        can distinguish a real timeout from an ordinary build failure."""
         config, state, progress, block = setup
+        timeout_result = AgentResult(
+            success=False, error="Agent timed out after 1200s", timed_out=True
+        )
 
-        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, side_effect=LLMCallTimeoutError("timeout")):
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=timeout_result):
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is False
         assert block.status == BlockStatus.FAILED
+        assert block.timed_out is True
+
+    @pytest.mark.asyncio
+    async def test_implementer_timeout_sets_flag(self, setup):
+        config, state, progress, block = setup
+        ok_result = AgentResult(success=True, output="Tests written")
+        timeout_result = AgentResult(
+            success=False, error="Agent timed out after 1800s", timed_out=True
+        )
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok_result), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=timeout_result):
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is False
+        assert block.timed_out is True
 
     @pytest.mark.asyncio
     async def test_implementer_failure(self, setup):
@@ -711,3 +735,29 @@ class TestRunTDDEngineEntryPoint:
 
         # State file should exist from the checkpoint
         assert config.state_file_path().exists()
+
+    @pytest.mark.asyncio
+    async def test_agent_timeout_returns_exit_code_3(self, tdd_setup):
+        """A real timeout-shaped AgentResult drives run_tdd_engine to EXIT_AGENT_TIMEOUT."""
+        config, args = tdd_setup
+        timeout_result = AgentResult(
+            success=False, error="Agent timed out after 1200s", timed_out=True
+        )
+
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
+             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=timeout_result):
+            result = await run_tdd_engine(config, args)
+
+        assert result == EXIT_AGENT_TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_agent_plain_failure_returns_build_failure(self, tdd_setup):
+        """A non-timeout agent failure returns EXIT_BUILD_FAILURE, not EXIT_AGENT_TIMEOUT."""
+        config, args = tdd_setup
+        fail_result = AgentResult(success=False, error="agent crashed")
+
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
+             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=fail_result):
+            result = await run_tdd_engine(config, args)
+
+        assert result == EXIT_BUILD_FAILURE

@@ -195,6 +195,7 @@ async def agent_call(
                 success=False,
                 output=partial.text if partial else "",
                 error=error_msg,
+                timed_out=timed_out,
                 turns_used=partial.turns if partial else 0,
                 elapsed_seconds=elapsed,
                 files_changed=partial.files_changed if partial else [],
