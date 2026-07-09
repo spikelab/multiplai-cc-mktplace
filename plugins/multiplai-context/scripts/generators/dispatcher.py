@@ -152,7 +152,7 @@ async def _create_model_client():
     """Create a model client, with graceful fallback for test environments."""
     try:
         from multiplai_core.model_client import create_client
-        return await create_client()
+        return await create_client(component="catalogs")
     except Exception:
         logger.debug("Could not create model client, using stub")
         return _StubModelClient()

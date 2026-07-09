@@ -223,6 +223,7 @@ async def llm_call(
                 effort=effort,
                 timeout_s=call_timeout,
                 label=label,
+                component="deep-research",
             )
             call_ok = True
             _capture_usage(call_usage, result)

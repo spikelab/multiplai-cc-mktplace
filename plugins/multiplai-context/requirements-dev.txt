@@ -1,6 +1,6 @@
 # Test/dev toolchain for the multiplai-context plugin.
 # The test suite imports multiplai_core directly (the scripts get it via their
 # PEP 723 inline metadata at runtime, but pytest needs it installed here).
-multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.0
+multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.6.0
 pytest>=7.0
 pytest-asyncio>=0.21

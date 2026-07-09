@@ -26,7 +26,7 @@ def _skill_frontmatter(skill_file: str) -> dict:
 _EXPECTED_SKILLS = {
     "setup", "dream", "dream-remember", "health",
     "refresh-catalogs", "memory-health-audit", "backfill", "now",
-    "log-doctor", "qmd-search",
+    "log-doctor", "qmd-search", "costs",
 }
 
 _SKILL_FILES = [f"skills/{name}/SKILL.md" for name in sorted(_EXPECTED_SKILLS)]

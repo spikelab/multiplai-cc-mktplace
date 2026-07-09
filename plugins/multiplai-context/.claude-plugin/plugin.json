@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Claude Code plugin for context routing, continuous learning, session awareness, and memory management.",
   "author": {
     "name": "Spike",
@@ -161,6 +161,12 @@
       "title": "Re-recommendation Cooldown (Turns)",
       "description": "After a file is injected, suppress re-recommending it for this many turns (it's already in the conversation). Reset on context compaction. 0 disables the cooldown.",
       "default": 4
+    },
+    "enable_costs": {
+      "type": "boolean",
+      "title": "Enable Cost Collection",
+      "description": "When on, session start fires a detached, flock-guarded collector that prices Claude Code session transcripts into a local monthly cost ledger (queryable via /multiplai-context:costs). Local-only; nothing leaves the machine. Incremental after the first backfill.",
+      "default": false
     }
   }
 }

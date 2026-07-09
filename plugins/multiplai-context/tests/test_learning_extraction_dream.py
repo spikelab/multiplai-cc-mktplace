@@ -746,8 +746,8 @@ class TestModelClientUsage:
         """WHEN the script creates a client
         THEN it awaits create_client() inside an async function."""
         source = _read_source(script_path)
-        assert "await create_client()" in source, (
-            f"{script_name} must 'await create_client()' inside an async function"
+        assert "await create_client(" in source, (
+            f"{script_name} must 'await create_client(...)' inside an async function"
         )
 
     @pytest.mark.parametrize("script_path,script_name", [

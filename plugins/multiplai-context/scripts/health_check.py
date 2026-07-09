@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.1",
+#     "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.6.0",
 #     "pyyaml",
 # ]
 # ///

@@ -202,6 +202,33 @@ class TestPluginJsonUserConfigSchema:
             "enable_resources must have a non-empty description"
         )
 
+    def test_enable_costs_entry_exists(self):
+        """Scenario: plugin.json contains enable_costs entry."""
+        assert "enable_costs" in self.user_config, (
+            "plugin.json userConfig must contain 'enable_costs' entry"
+        )
+
+    def test_enable_costs_type_is_boolean(self):
+        """Scenario: enable_costs has type boolean."""
+        entry = self.user_config.get("enable_costs", {})
+        assert entry.get("type") == "boolean", (
+            f"enable_costs type must be 'boolean', got {entry.get('type')}"
+        )
+
+    def test_enable_costs_default_is_false(self):
+        """Scenario: Cost collection disabled by default."""
+        entry = self.user_config.get("enable_costs", {})
+        assert entry.get("default") is False, (
+            f"enable_costs default must be false, got {entry.get('default')}"
+        )
+
+    def test_enable_costs_has_description(self):
+        """Scenario: enable_costs has a description field."""
+        entry = self.user_config.get("enable_costs", {})
+        assert "description" in entry and entry["description"], (
+            "enable_costs must have a non-empty description"
+        )
+
     def test_all_config_entries_present(self):
         """Scenario: All config entries present in plugin.json."""
         expected = {
@@ -390,6 +417,13 @@ class TestCatalogConfigDefaults:
 
         config = CatalogConfig()
         assert config.resources_dir == ""
+
+    def test_default_enable_costs(self):
+        """Scenario: Cost collection disabled by default (opt-in)."""
+        from generators.config import CatalogConfig
+
+        config = CatalogConfig()
+        assert config.enable_costs is False
 
     def test_default_recommend_cooldown_turns(self):
         """Scenario: Re-recommendation cooldown defaults to 4 turns."""
@@ -713,6 +747,14 @@ class TestConfigLoadingFromPluginSettings:
 
         config = load_catalog_config()
         assert config.enable_resources is True
+
+    def test_load_respects_enable_costs_override(self, monkeypatch):
+        """Scenario: Cost collection enabled via config."""
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_costs", "true")
+        from generators.config import load_catalog_config
+
+        config = load_catalog_config()
+        assert config.enable_costs is True
 
     def test_load_validates_invalid_reasoning_effort(self, monkeypatch):
         """Scenario: Invalid reasoning effort from env is rejected, default used."""

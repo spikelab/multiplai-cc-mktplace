@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.1 — 2026-07-09
+
+### Added
+- **Cost ledger + `/costs` skill.** A new collector
+  (`scripts/collect_costs.py` over `scripts/lib/costing_collector.py`)
+  incrementally scans Claude Code session transcripts, prices every API
+  call (per-model rates + cache tiers, unknown model → fallback), and
+  appends to a monthly append-only JSONL ledger under `<data_dir>/costs/`.
+  Span attribution follows Skill / Agent / Workflow invocations (sidechain
+  subagent traffic flagged and attributed to the innermost agent span;
+  nested/ambiguous spans marked `approx`). Offsets are checkpointed and
+  records dedup by `msg_id`, so re-runs append nothing new.
+- **`costs` skill + `scripts/costs_report.py`** — reports month-to-date
+  totals and breakdowns `--by session|skill|project|model|day|component`,
+  with `--session` for a per-chat itemized bill and `--json` output.
+- **SDK cost tap.** SDK-driven pipelines tag their runs with a `component`
+  (buildme, deep-research, dream) so their spend lands in the same ledger.
+- **Automatic collection at session start.** With the new `enable_costs`
+  option on, `session_start.py` fires the collector detached (like the qmd
+  refresh) so the ledger stays current with no manual step. The collector
+  self-guards with an flock, so racing session starts can't double-append.
+  Opt-in (default off); local-only, nothing leaves the machine.
+
+### Changed
+- Pinned `multiplai-core` to **v0.6.0** plugin-wide (adds the `costing`
+  module and the `component` cost-ledger tap in `run_agent`). The
+  `buildme` and `deep-research` pipeline `pyproject.toml` pins moved to
+  v0.6.0 to match their new `component=` call sites.
+
 ## 0.6.0 — 2026-07-08
 
 ### Added

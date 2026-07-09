@@ -112,6 +112,7 @@ async def llm_call(
                 model=model,
                 timeout_s=call_timeout,
                 label="llm",
+                component="buildme",
             )
         except AgentRunTimeout as e:
             log.error("FAIL sdk_call=llm reason=timeout after %.0fs\n--- CLI stderr ---\n%s",
@@ -174,6 +175,7 @@ async def agent_call(
                 cwd=cwd,  # None → run_agent's isolated hook-sessions dir
                 timeout_s=call_timeout,
                 label="agent",
+                component="buildme",
             )
         except AgentRunError as e:
             # Degrade to partial output instead of raising — the TDD engine

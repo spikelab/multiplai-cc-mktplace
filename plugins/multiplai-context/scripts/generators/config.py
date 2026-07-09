@@ -56,6 +56,10 @@ class CatalogConfig:
     qmd_strategy: str = DEFAULT_QMD_STRATEGY
     catalog_concurrency: int = DEFAULT_CATALOG_CONCURRENCY
     recommend_cooldown_turns: int = DEFAULT_RECOMMEND_COOLDOWN_TURNS
+    # When on, session_start fires a detached, flock-guarded cost collector
+    # that prices the session-transcript corpus into the monthly ledger.
+    # Local-only and cheap in steady state, but opt-in like the other flags.
+    enable_costs: bool = False
 
     def __post_init__(self):
         if not self.model or not self.model.strip():
@@ -163,6 +167,9 @@ def load_catalog_config() -> CatalogConfig:
         ),
         DEFAULT_RECOMMEND_COOLDOWN_TURNS,
     )
+    enable_costs = _parse_bool(
+        os.environ.get("CLAUDE_PLUGIN_OPTION_enable_costs", "false")
+    )
 
     return CatalogConfig(
         model=model,
@@ -182,4 +189,5 @@ def load_catalog_config() -> CatalogConfig:
         qmd_strategy=qmd_strategy,
         catalog_concurrency=catalog_concurrency,
         recommend_cooldown_turns=recommend_cooldown_turns,
+        enable_costs=enable_costs,
     )
