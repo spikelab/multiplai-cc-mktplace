@@ -161,3 +161,15 @@ class TestSendAudit:
         assert args[0] == "slack" and args[1] == "send"
         assert kwargs.get("channel_id") == "C999"
         assert kwargs.get("ts") == "1720000000.000100"
+
+
+# --------------------------------------------------------------------------- #
+# MSG-4 — _safe() never emits an all-dot path component
+# --------------------------------------------------------------------------- #
+class TestSafe:
+    def test_all_dot_labels_collapse(self, slack):
+        assert slack._safe("..") == "_"
+        assert slack._safe(".") == "_"
+
+    def test_normal_dotted_names_preserved(self, slack):
+        assert slack._safe("report.v2.pdf") == "report.v2.pdf"

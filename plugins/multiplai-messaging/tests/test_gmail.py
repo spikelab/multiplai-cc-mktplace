@@ -3,12 +3,19 @@
 Covers Fix 8 (_extract_body single-DFS, text/plain preferred) and Fix 6 (reply
 drafts set the recipient explicitly). No network: a fake Gmail service stands in
 for the discovery client.
+
+Also locks the three guarantees the skill's safety claim rests on (MSG-1):
+scope containment (``_assert_scopes``), the INBOX read/reply gate, and the
+structural absence of any send path in the source. These are tripwires — if a
+future refactor weakens a guard, the matching test goes red instead of the
+weakness shipping silently.
 """
 from __future__ import annotations
 
 import base64
 import email
 import json
+from pathlib import Path
 
 import pytest
 
@@ -228,3 +235,205 @@ class TestReplyRecipient:
         assert args[0] == "gmail" and args[1] == "draft"
         assert kwargs.get("mode") == "reply"
         assert kwargs.get("draft_id") == "draft-xyz"
+
+
+# --------------------------------------------------------------------------- #
+# MSG-1a — scope containment (_assert_scopes)
+# --------------------------------------------------------------------------- #
+class _Creds:
+    """Minimal stand-in for google credentials — _assert_scopes only reads
+    ``.token`` to build the tokeninfo URL."""
+
+    token = "fake-access-token"
+
+
+class _FakeResp:
+    """Context-manager stand-in for urllib.request.urlopen; json.load reads
+    ``.read()``."""
+
+    def __init__(self, raw: bytes):
+        self._raw = raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+    def read(self):
+        return self._raw
+
+
+def _patch_tokeninfo(monkeypatch, gmail, *, scope=None, raw=None, raise_exc=None):
+    """Point gmail's tokeninfo HTTP call at a fake response.
+
+    ``scope`` → a well-formed ``{"scope": "..."}`` JSON body; ``raw`` → arbitrary
+    bytes (e.g. malformed JSON); ``raise_exc`` → urlopen itself blows up
+    (unreachable network).
+    """
+    if raw is None and scope is not None:
+        raw = json.dumps({"scope": scope}).encode("utf-8")
+
+    def fake_urlopen(url, timeout=None):  # noqa: ARG001
+        if raise_exc is not None:
+            raise raise_exc
+        return _FakeResp(raw if raw is not None else b"{}")
+
+    monkeypatch.setattr(gmail.urllib.request, "urlopen", fake_urlopen)
+
+
+class TestAssertScopes:
+    def test_exact_allowed_scopes_proceed(self, gmail, monkeypatch):
+        allowed = f"{gmail.SCOPE_COMPOSE} {gmail.SCOPE_READONLY}"
+        _patch_tokeninfo(monkeypatch, gmail, scope=allowed)
+        # No SystemExit — the guard lets the exact allowed set through.
+        assert gmail._assert_scopes(_Creds()) is None
+
+    def test_only_compose_proceeds(self, gmail, monkeypatch):
+        # A subset of the allowed set is fine (extra = granted - allowed = ∅).
+        _patch_tokeninfo(monkeypatch, gmail, scope=gmail.SCOPE_COMPOSE)
+        assert gmail._assert_scopes(_Creds()) is None
+
+    def test_extra_send_scope_aborts(self, gmail, monkeypatch):
+        broad = (f"{gmail.SCOPE_COMPOSE} {gmail.SCOPE_READONLY} "
+                 "https://www.googleapis.com/auth/gmail.send")
+        _patch_tokeninfo(monkeypatch, gmail, scope=broad)
+        with pytest.raises(SystemExit):
+            gmail._assert_scopes(_Creds())
+
+    def test_extra_modify_scope_aborts(self, gmail, monkeypatch):
+        broad = (f"{gmail.SCOPE_READONLY} "
+                 "https://www.googleapis.com/auth/gmail.modify")
+        _patch_tokeninfo(monkeypatch, gmail, scope=broad)
+        with pytest.raises(SystemExit):
+            gmail._assert_scopes(_Creds())
+
+    def test_empty_scope_fails_closed(self, gmail, monkeypatch):
+        _patch_tokeninfo(monkeypatch, gmail, scope="")
+        with pytest.raises(SystemExit):
+            gmail._assert_scopes(_Creds())
+
+    def test_tokeninfo_unreachable_fails_closed(self, gmail, monkeypatch):
+        _patch_tokeninfo(monkeypatch, gmail, raise_exc=OSError("connection refused"))
+        with pytest.raises(SystemExit):
+            gmail._assert_scopes(_Creds())
+
+    def test_tokeninfo_malformed_fails_closed(self, gmail, monkeypatch):
+        _patch_tokeninfo(monkeypatch, gmail, raw=b"<html>not json</html>")
+        with pytest.raises(SystemExit):
+            gmail._assert_scopes(_Creds())
+
+
+# --------------------------------------------------------------------------- #
+# MSG-1b — INBOX gate (read + reply-draft)
+# --------------------------------------------------------------------------- #
+def _msg(labels, headers=(("From", "marco@example.com"),)) -> dict:
+    """A fetched message with the given labelIds and a minimal text/plain body."""
+    return {
+        "threadId": "T1",
+        "labelIds": list(labels),
+        "payload": {
+            "mimeType": "text/plain",
+            "body": {"data": _b64("hello body")},
+            "headers": [{"name": n, "value": v} for n, v in headers],
+        },
+    }
+
+
+class TestReadInboxGate:
+    def test_inbox_message_is_read(self, gmail, capsys):
+        svc = FakeService(get_result=_msg(["INBOX", "IMPORTANT"]))
+        gmail.cmd_read(svc, "m1")
+        out = capsys.readouterr().out
+        assert "hello body" in out  # reached the body — no refusal
+
+    def test_non_inbox_message_refused(self, gmail):
+        # e.g. a SENT / archived message that is not in the inbox.
+        svc = FakeService(get_result=_msg(["SENT"]))
+        with pytest.raises(SystemExit):
+            gmail.cmd_read(svc, "m1")
+
+    def test_missing_labels_fails_closed(self, gmail):
+        msg = _msg(["INBOX"])
+        del msg["labelIds"]  # no labelIds at all → treated as not-INBOX
+        svc = FakeService(get_result=msg)
+        with pytest.raises(SystemExit):
+            gmail.cmd_read(svc, "m1")
+
+    def test_empty_labels_fails_closed(self, gmail):
+        svc = FakeService(get_result=_msg([]))
+        with pytest.raises(SystemExit):
+            gmail.cmd_read(svc, "m1")
+
+
+class TestReplyInboxGate:
+    def _payload_file(self, tmp_path, payload: dict):
+        p = tmp_path / "payload.json"
+        p.write_text(json.dumps(payload), encoding="utf-8")
+        return str(p)
+
+    def test_reply_to_inbox_message_drafts(self, gmail, tmp_path):
+        sink: dict = {}
+        svc = FakeService(get_result=_msg(["INBOX"]), sink=sink)
+        inp = self._payload_file(tmp_path, {"body": "thanks"})
+        gmail.cmd_draft(svc, reply_to="orig-id", input_file=inp)
+        assert "body" in sink  # a draft was created
+
+    def test_reply_to_non_inbox_refused_before_write(self, gmail, tmp_path):
+        sink: dict = {}
+        svc = FakeService(get_result=_msg(["SENT"]), sink=sink)
+        inp = self._payload_file(tmp_path, {"body": "thanks"})
+        with pytest.raises(SystemExit):
+            gmail.cmd_draft(svc, reply_to="orig-id", input_file=inp)
+        assert "body" not in sink  # never reached drafts.create
+
+    def test_reply_missing_labels_fails_closed_before_write(self, gmail, tmp_path):
+        msg = _msg(["INBOX"])
+        del msg["labelIds"]
+        sink: dict = {}
+        svc = FakeService(get_result=msg, sink=sink)
+        inp = self._payload_file(tmp_path, {"body": "thanks"})
+        with pytest.raises(SystemExit):
+            gmail.cmd_draft(svc, reply_to="orig-id", input_file=inp)
+        assert "body" not in sink
+
+    def test_reply_empty_labels_fails_closed_before_write(self, gmail, tmp_path):
+        sink: dict = {}
+        svc = FakeService(get_result=_msg([]), sink=sink)
+        inp = self._payload_file(tmp_path, {"body": "thanks"})
+        with pytest.raises(SystemExit):
+            gmail.cmd_draft(svc, reply_to="orig-id", input_file=inp)
+        assert "body" not in sink
+
+
+# --------------------------------------------------------------------------- #
+# MSG-1c — send-absence source tripwire
+# --------------------------------------------------------------------------- #
+class TestNoSendPath:
+    """Crude but exact: the review verified by grep that the only write call is
+    ``users.drafts().create`` — no ``messages.send`` / ``drafts.send`` anywhere.
+    Encode that as a source-level assertion so the tripwire fires the moment
+    someone adds a send path."""
+
+    def _source(self, gmail) -> str:
+        return Path(gmail.__file__).read_text(encoding="utf-8")
+
+    def test_no_send_api_calls_in_source(self, gmail):
+        src = self._source(gmail)
+        # Only paren'd call forms — the module docstring documents "No
+        # ``messages.send``, no ``drafts.send``" as prose (no trailing "("),
+        # so it must not trip the guard. An actual send is `.send(` and thus
+        # always matches the catch-all below; the two specific forms make the
+        # failure message point straight at the offending API.
+        forbidden = [
+            "messages().send(",
+            "drafts().send(",
+            ".send(",
+        ]
+        hits = [tok for tok in forbidden if tok in src]
+        assert not hits, f"forbidden send API call(s) present in gmail.py: {hits}"
+
+    def test_draft_create_still_present(self, gmail):
+        # Positive control: the one legitimate write must exist, so the test above
+        # is guarding a real capability rather than an empty file.
+        assert "drafts().create" in self._source(gmail)

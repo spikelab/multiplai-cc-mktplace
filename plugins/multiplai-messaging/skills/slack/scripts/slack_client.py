@@ -676,7 +676,13 @@ def _now() -> str:
 
 
 def _safe(s: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", s or "unknown")[:120]
+    out = re.sub(r"[^A-Za-z0-9._-]+", "_", s or "unknown")[:120]
+    # Separators are already neutralized above (no traversal is possible), but a
+    # store should never emit "." or ".." as a path component: an all-dot label
+    # like ".." would otherwise yield a name that resolves to a directory.
+    if out and set(out) <= {"."}:
+        return "_"
+    return out
 
 
 def _human(n) -> str:
