@@ -56,7 +56,8 @@ for the `multiplai-kit` container environment.
 │   ├── multiplai-writing/
 │   ├── multiplai-research/
 │   ├── multiplai-dev/
-│   └── multiplai-media/
+│   ├── multiplai-media/
+│   └── multiplai-messaging/
 ├── LICENSE
 └── README.md                     # this file
 ```
@@ -68,6 +69,10 @@ for plugin-specific setup, configuration, and the test suite. Shared Python
 infrastructure (paths, config, logging, model client) lives in
 [`multiplai-core`](https://github.com/spikelab/multiplai-core), consumed via
 PEP 723 inline metadata (`uv run --no-project`).
+
+**Versioning.** Every version bump in `.claude-plugin/marketplace.json` gets a
+matching annotated git tag `<plugin>@<version>` (e.g. `multiplai-context@0.6.4`)
+pointing at the commit where that version lands on `main`.
 
 ## License
 
