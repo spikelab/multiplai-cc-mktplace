@@ -32,8 +32,9 @@ def _usage(inp=100, out=50, cw5m=0, cw1h=0, cr=0):
 
 
 def _assistant(msg_id, *, ts="2026-07-01T10:00:00Z", model="claude-opus-4-8",
-               usage=None, content=None, sidechain=False):
-    return {
+               usage=None, content=None, sidechain=False,
+               git_branch=None, cwd=None):
+    entry = {
         "type": "assistant",
         "timestamp": ts,
         "isSidechain": sidechain,
@@ -44,15 +45,25 @@ def _assistant(msg_id, *, ts="2026-07-01T10:00:00Z", model="claude-opus-4-8",
             "content": content if content is not None else [{"type": "text", "text": "hi"}],
         },
     }
+    if git_branch is not None:
+        entry["gitBranch"] = git_branch
+    if cwd is not None:
+        entry["cwd"] = cwd
+    return entry
 
 
-def _user(text=None, *, tool_result=False, meta=False):
+def _user(text=None, *, tool_result=False, meta=False, git_branch=None, cwd=None):
     if tool_result:
         content = [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]
     else:
         content = text or "hello"
-    return {"type": "user", "timestamp": "2026-07-01T10:00:00Z",
-            "isMeta": meta or None, "message": {"content": content}}
+    entry = {"type": "user", "timestamp": "2026-07-01T10:00:00Z",
+             "isMeta": meta or None, "message": {"content": content}}
+    if git_branch is not None:
+        entry["gitBranch"] = git_branch
+    if cwd is not None:
+        entry["cwd"] = cwd
+    return entry
 
 
 def _tool_use(name, inp):
@@ -395,3 +406,152 @@ def test_history_copied_to_forked_session_not_double_billed(config_dir, tmp_path
     _write(proj / "sess-2.jsonl", [_assistant("m1"), _assistant("m3")])  # fork
     stats = cc.run_collect(config_dir, tmp_path / "state.json")
     assert stats["records"] == 3  # m1 once, m2, m3
+
+
+# ----------------------------------------------------------------------
+# Branch / cwd attribution
+# ----------------------------------------------------------------------
+
+def test_record_carries_branch_and_cwd(config_dir):
+    f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
+    _write(f, [
+        _user("go", git_branch="main", cwd="/w/proj"),
+        _assistant("m1", git_branch="main", cwd="/w/proj"),
+    ])
+    records, state = cc.collect_file(f, project="p", known_ids=set())
+    assert records[0]["branch"] == "main"
+    assert records[0]["cwd"] == "/w/proj"
+    assert state["branch"] == "main"
+    assert state["cwd"] == "/w/proj"
+
+
+def test_mid_file_branch_switch_splits_records(config_dir):
+    f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
+    _write(f, [
+        _assistant("m1", git_branch="main", cwd="/w"),
+        _assistant("m2", git_branch="feat/x", cwd="/w"),
+        _assistant("m3", git_branch="feat/x", cwd="/w"),
+    ])
+    records, _ = cc.collect_file(f, project="p", known_ids=set())
+    assert [r["branch"] for r in records] == ["main", "feat/x", "feat/x"]
+
+
+def test_missing_branch_falls_back_to_last_seen(config_dir):
+    f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
+    _write(f, [
+        _assistant("m1", git_branch="main", cwd="/w"),
+        _assistant("m2"),  # old-style entry without the fields
+    ])
+    records, _ = cc.collect_file(f, project="p", known_ids=set())
+    assert records[1]["branch"] == "main"
+    assert records[1]["cwd"] == "/w"
+
+
+def test_no_branch_anywhere_omits_keys(config_dir):
+    f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
+    _write(f, [_user("a"), _assistant("m1")])
+    records, state = cc.collect_file(f, project="p", known_ids=set())
+    assert "branch" not in records[0]
+    assert "cwd" not in records[0]
+    assert state["branch"] == ""
+
+
+def test_fallback_branch_survives_offset_resume(config_dir):
+    f = config_dir / "projects" / "-Users-x-proj" / "sess-1.jsonl"
+    _write(f, [_assistant("m1", git_branch="feat/y", cwd="/w/y")])
+    known: set[str] = set()
+    _, state = cc.collect_file(f, project="p", known_ids=known)
+    assert state["branch"] == "feat/y"
+    with f.open("a") as fh:
+        fh.write(json.dumps(_assistant("m2")) + "\n")  # no gitBranch
+    records, _ = cc.collect_file(f, project="p", known_ids=known, file_state=state)
+    assert records[0]["branch"] == "feat/y"
+    assert records[0]["cwd"] == "/w/y"
+
+
+def test_subagent_file_branch_from_own_entries(config_dir, tmp_path):
+    proj = config_dir / "projects" / "-Users-x-proj"
+    _write(proj / "sess-1.jsonl", [_user("go", git_branch="main"),
+                                   _assistant("m1", git_branch="main")])
+    sub = proj / "sess-1" / "subagents"
+    sub.mkdir(parents=True)
+    _write(sub / "agent-a1.jsonl", [_assistant("s1", git_branch="feat/z", cwd="/w/z")])
+    cc.run_collect(config_dir, tmp_path / "state.json")
+    recs = {r["msg_id"]: r for r in iter_ledger()}
+    assert recs["m1"]["branch"] == "main"
+    assert recs["s1"]["branch"] == "feat/z"
+    assert recs["s1"]["cwd"] == "/w/z"
+
+
+# ----------------------------------------------------------------------
+# --backfill-branches
+# ----------------------------------------------------------------------
+
+def test_backfill_enriches_idempotently(config_dir, tmp_path):
+    from multiplai_core.costing import ledger_file
+
+    proj = config_dir / "projects" / "-Users-x-proj"
+    transcript = [
+        _assistant("m1", git_branch="main", cwd="/w"),
+        _assistant("m2", git_branch="feat/x", cwd="/w"),
+        _assistant("m3"),  # missing fields → falls back to feat/x
+    ]
+    f = proj / "sess-1.jsonl"
+    _write(f, transcript)
+
+    # Simulate a pre-feature ledger: collect, then strip branch/cwd.
+    cc.run_collect(config_dir, tmp_path / "state.json")
+    path = ledger_file("2026-07")
+    stripped = []
+    for line in path.read_text().splitlines():
+        rec = json.loads(line)
+        rec.pop("branch", None)
+        rec.pop("cwd", None)
+        stripped.append(json.dumps(rec, separators=(",", ":")))
+    path.write_text("".join(l + "\n" for l in stripped))
+
+    # Add one record the transcripts can't match (e.g. SDK-sourced).
+    with path.open("a") as fh:
+        fh.write(json.dumps({"ts": "2026-07-01T00:00:00Z", "msg_id": "sdk-1",
+                             "session": "x", "cost_usd": 0.1},
+                            separators=(",", ":")) + "\n")
+
+    stats = cc.run_backfill_branches(config_dir)
+    assert stats["examined"] == 4
+    assert stats["enriched"] == 3
+    assert stats["unmatched"] == 1
+
+    recs = {r["msg_id"]: r for r in iter_ledger()}
+    assert recs["m1"]["branch"] == "main"
+    assert recs["m2"]["branch"] == "feat/x"
+    assert recs["m3"]["branch"] == "feat/x"  # fallback semantics match live path
+    assert recs["m1"]["cwd"] == "/w"
+    assert "branch" not in recs["sdk-1"]
+
+    # Second run: nothing new, already-enriched records untouched.
+    before = path.read_bytes()
+    stats2 = cc.run_backfill_branches(config_dir)
+    assert stats2["enriched"] == 0
+    assert stats2["unmatched"] == 1
+    assert path.read_bytes() == before
+
+
+def test_backfill_ignores_collector_offsets(config_dir, tmp_path):
+    """Backfill reads transcripts from byte 0 even when the collector state
+    says the file was fully consumed — and never touches that state."""
+    proj = config_dir / "projects" / "-Users-x-proj"
+    _write(proj / "sess-1.jsonl", [_assistant("m1", git_branch="main")])
+    state_path = tmp_path / "state.json"
+    cc.run_collect(config_dir, state_path)  # offsets now at EOF
+
+    from multiplai_core.costing import ledger_file
+    path = ledger_file("2026-07")
+    rec = json.loads(path.read_text())
+    rec.pop("branch", None)
+    path.write_text(json.dumps(rec, separators=(",", ":")) + "\n")
+
+    state_before = state_path.read_bytes()
+    stats = cc.run_backfill_branches(config_dir)
+    assert stats["enriched"] == 1
+    assert state_path.read_bytes() == state_before
+    assert json.loads(path.read_text())["branch"] == "main"

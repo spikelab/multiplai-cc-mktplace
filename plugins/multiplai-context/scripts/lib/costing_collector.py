@@ -43,6 +43,7 @@ from multiplai_core.costing import (
     TokenCounts,
     append_records,
     build_record,
+    costs_dir,
     session_msg_index,
 )
 
@@ -245,14 +246,25 @@ def collect_file(
     *sidechain*/*base_span* set the attribution context for nested
     subagent/workflow files (see :func:`classify_transcript`); main files
     track spans live instead.
+
+    Records carry ``branch``/``cwd`` from the entry's ``gitBranch``/``cwd``
+    fields (per-entry, so a mid-session checkout attributes correctly).
+    Entries missing the fields fall back to the last non-empty value seen in
+    the file; that fallback pair is persisted in the file state so an
+    incremental resume mid-file still attributes correctly. No value at all
+    (non-git cwd, ancient transcripts) → key omitted, never guessed.
     """
     session = session or path.stem
     size = path.stat().st_size
     offset = 0
     tracker = SpanTracker()
+    last_branch = ""
+    last_cwd = ""
     if file_state and 0 < file_state.get("offset", 0) <= size:
         offset = file_state["offset"]
         tracker.stack = list(file_state.get("spans") or [])
+        last_branch = file_state.get("branch") or ""
+        last_cwd = file_state.get("cwd") or ""
     pending: dict[str, dict] = {}  # msg_id -> best record this pass
 
     with path.open("rb") as fh:
@@ -265,6 +277,10 @@ def collect_file(
                 entry = json.loads(raw)
             except json.JSONDecodeError:
                 continue
+            if entry.get("gitBranch"):
+                last_branch = entry["gitBranch"]
+            if entry.get("cwd"):
+                last_cwd = entry["cwd"]
             etype = entry.get("type")
             if etype == "user":
                 if not entry.get("isSidechain"):
@@ -302,18 +318,28 @@ def collect_file(
                 "sidechain": entry_sidechain,
                 "span": dict(span) if span else None,
                 "tokens": tokens,
+                "branch": last_branch,
+                "cwd": last_cwd,
             }
 
     records: list[dict] = []
     for msg_id, p in pending.items():
         known_ids.add(msg_id)
-        records.append(build_record(
+        # Stamped here rather than in build_record — the ledger is schemaless
+        # JSONL and reports read with .get(), so no multiplai-core change.
+        rec = build_record(
             ts=p["ts"], source="transcript", session=session, project=project,
             model=p["model"], msg_id=msg_id, sidechain=p["sidechain"],
             span=p["span"], tokens=p["tokens"],
-        ))
+        )
+        if p["branch"]:
+            rec["branch"] = p["branch"]
+        if p["cwd"]:
+            rec["cwd"] = p["cwd"]
+        records.append(rec)
 
-    return records, {"size": size, "offset": offset, "spans": tracker.stack}
+    return records, {"size": size, "offset": offset, "spans": tracker.stack,
+                     "branch": last_branch, "cwd": last_cwd}
 
 
 def run_collect(
@@ -362,4 +388,95 @@ def run_collect(
     if not dry_run:
         save_state(state_path, state)
     stats["cost_usd"] = round(stats["cost_usd"], 4)
+    return stats
+
+
+# ----------------------------------------------------------------------
+# One-time branch backfill
+# ----------------------------------------------------------------------
+
+def build_branch_index(config_dir: Path) -> dict[str, tuple[str, str]]:
+    """``msg_id -> (branch, cwd)`` from every transcript, read from byte 0.
+
+    Ignores collection offsets entirely. Same fallback semantics as
+    :func:`collect_file`: an assistant entry missing ``gitBranch``/``cwd``
+    inherits the last non-empty value seen earlier in its file. First
+    occurrence of a msg_id wins (streaming snapshots share attribution).
+    """
+    index: dict[str, tuple[str, str]] = {}
+    for path in find_transcripts(config_dir):
+        last_branch = ""
+        last_cwd = ""
+        try:
+            fh = path.open("rb")
+        except OSError:
+            continue
+        with fh:
+            for raw in fh:
+                if not raw.endswith(b"\n"):
+                    break
+                try:
+                    entry = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("gitBranch"):
+                    last_branch = entry["gitBranch"]
+                if entry.get("cwd"):
+                    last_cwd = entry["cwd"]
+                if entry.get("type") != "assistant":
+                    continue
+                msg_id = (entry.get("message") or {}).get("id") or ""
+                if not msg_id or (not last_branch and not last_cwd):
+                    continue
+                index.setdefault(msg_id, (last_branch, last_cwd))
+    return index
+
+
+def run_backfill_branches(config_dir: Path) -> dict:
+    """Enrich existing ledger records with ``branch``/``cwd`` in place.
+
+    Rewrites each monthly ledger atomically (``*.tmp`` + ``os.replace``).
+    Appends nothing and never touches the offset state — the caller holds
+    the collector flock to keep writing passes out. Idempotent: records
+    already carrying ``branch`` or ``cwd`` are left byte-identical, as are
+    malformed lines. Returns ``examined/enriched/unmatched`` counts.
+    """
+    index = build_branch_index(config_dir)
+    stats = {"examined": 0, "enriched": 0, "unmatched": 0}
+    directory = costs_dir()
+    if not directory.is_dir():
+        return stats
+    for path in sorted(directory.glob("ledger-*.jsonl")):
+        out_lines: list[str] = []
+        changed = False
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    rec = json.loads(stripped)
+                except json.JSONDecodeError:
+                    out_lines.append(stripped)  # preserve torn lines verbatim
+                    continue
+                stats["examined"] += 1
+                if "branch" not in rec and "cwd" not in rec:
+                    hit = index.get(rec.get("msg_id") or "")
+                    if hit:
+                        branch, cwd = hit
+                        if branch:
+                            rec["branch"] = branch
+                        if cwd:
+                            rec["cwd"] = cwd
+                        stats["enriched"] += 1
+                        changed = True
+                        out_lines.append(json.dumps(rec, separators=(",", ":")))
+                        continue
+                    stats["unmatched"] += 1
+                out_lines.append(stripped)
+        if changed:
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text("".join(l + "\n" for l in out_lines), encoding="utf-8")
+            os.replace(tmp, path)
+            logger.info("backfilled branches into %s", path.name)
     return stats

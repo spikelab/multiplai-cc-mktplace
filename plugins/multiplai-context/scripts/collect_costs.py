@@ -12,9 +12,15 @@ ledger, so a full re-run appends nothing new.
 Usage::
 
     python scripts/collect_costs.py [--config-dir PATH] [--dry-run]
+    python scripts/collect_costs.py --backfill-branches
 
 First run over a large transcript corpus is a full backfill (minutes);
 steady-state passes read only new bytes.
+
+``--backfill-branches`` is a one-time enrichment mode: it re-reads every
+transcript from byte 0 (leaving offsets untouched), maps msg_id → git
+branch/cwd, and rewrites the monthly ledgers in place to add ``branch``/
+``cwd`` to records that lack them. It appends nothing and is idempotent.
 """
 
 import argparse
@@ -27,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.log_utils import setup_logging
 from multiplai_core.costing import costs_dir
-from lib.costing_collector import default_config_dir, run_collect
+from lib.costing_collector import default_config_dir, run_backfill_branches, run_collect
 
 logger = setup_logging("costs")
 
@@ -44,7 +50,12 @@ def main() -> int:
                         help="Claude config dir (default: $CLAUDE_CONFIG_DIR or ~/.claude)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Scan and price, but write neither ledger nor state")
+    parser.add_argument("--backfill-branches", action="store_true",
+                        help="One-time: add branch/cwd to existing ledger records "
+                             "from full transcript re-reads; appends nothing")
     args = parser.parse_args()
+    if args.backfill_branches and args.dry_run:
+        parser.error("--backfill-branches has no dry-run mode")
 
     config_dir = args.config_dir or default_config_dir()
     if not (config_dir / "projects").is_dir():
@@ -62,6 +73,21 @@ def main() -> int:
             logger.info("Another cost-collection pass is running; skipping.")
             print("Another cost-collection pass is already running — skipping.")
             return 0
+
+    if args.backfill_branches:
+        started = time.monotonic()
+        stats = run_backfill_branches(config_dir)
+        elapsed = time.monotonic() - started
+        logger.info(
+            "branch backfill done: %d examined, %d enriched, %d unmatched, %.1fs",
+            stats["examined"], stats["enriched"], stats["unmatched"], elapsed,
+        )
+        print(
+            f"Branch backfill: {stats['examined']} records examined, "
+            f"{stats['enriched']} enriched, {stats['unmatched']} unmatched "
+            f"in {elapsed:.1f}s\nLedger: {costs_dir()}"
+        )
+        return 0
 
     state_path = costs_dir() / "collector-state.json"
     started = time.monotonic()
