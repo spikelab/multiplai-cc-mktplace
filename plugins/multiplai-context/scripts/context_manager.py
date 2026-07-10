@@ -470,6 +470,46 @@ _QMD_RESOURCES_PREAMBLE = (
 )
 
 
+# Rendered once above injected memory. Memory is long-term state and can
+# lag reality; only the model sees the full session context (documents,
+# pasted files, earlier turns), so the model is the only place a
+# memory-vs-session contradiction can be detected. The directive makes
+# surfacing that disagreement mandatory rather than best-effort.
+_MEMORY_CONFLICT_PREAMBLE = (
+    "Long-term memory retrieved for this prompt. Memory can be stale. "
+    "Cross-check it against everything else in this session's context — "
+    "documents, files, other injected context, and user statements. If "
+    "anything below disagrees with another source in the session, you "
+    "MUST surface the disagreement to the user in your reply: name the "
+    "memory file, quote or paraphrase both versions, and say which one "
+    "you are following (prefer the newer or in-session source unless the "
+    "user says otherwise). Never silently pick one side. Each file below "
+    "is stamped with its last-modified date to help judge staleness."
+)
+
+
+def _stamp_memory_dates(
+    memory_dir: Path, memory_content: dict[str, str]
+) -> dict[str, str]:
+    """Prefix each memory file's content with its last-modified date.
+
+    Gives the model a concrete recency signal to weigh memory against
+    in-session sources when the conflict preamble fires. Applied at
+    render time only — ``memory_content`` keys (used by the cooldown
+    bookkeeping) are untouched. Fail-open: a stat error skips the stamp.
+    """
+    stamped: dict[str, str] = {}
+    for name, content in memory_content.items():
+        base, _ = parse_section_ref(name)
+        try:
+            mtime = (memory_dir / base).stat().st_mtime
+            date = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+            stamped[name] = f"(file last modified: {date})\n{content}"
+        except OSError:
+            stamped[name] = content
+    return stamped
+
+
 def _render_qmd_resource(entry: dict) -> str:
     """Render one qmd entry as the content body under its path heading."""
     loc = f", line {entry['line']}" if entry.get("line") else ""
@@ -942,7 +982,11 @@ def main() -> None:
 
     parts: list[str] = []
     if memory_content:
-        parts.append(_render_corpus_section("MEMORY", memory_content))
+        parts.append(_render_corpus_section(
+            "MEMORY",
+            _stamp_memory_dates(memory_dir, memory_content),
+            preamble=_MEMORY_CONFLICT_PREAMBLE,
+        ))
     if skills_content:
         parts.append(_render_corpus_section("SKILLS", skills_content))
     if resources_content:

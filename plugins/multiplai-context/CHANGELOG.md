@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.5 — 2026-07-10
+
+### Added
+- **Memory-vs-session conflict surfacing.** Every injected `=== MEMORY ===`
+  block now opens with a directive requiring the model to cross-check the
+  retrieved memory against the rest of the session's context (documents,
+  pasted files, other injected context, user statements) and, on any
+  disagreement, explicitly surface it to the user — naming the memory
+  file, presenting both versions, and stating which source it follows
+  (newer/in-session wins by default). Each memory file is additionally
+  stamped with its last-modified date so the model has a concrete recency
+  signal to judge staleness. Applies to both injection paths (router
+  picks and the recency fallback). Detection lives in the model rather
+  than the hook because only the model sees the full session context;
+  covered by unit tests plus an opt-in live-LLM E2E test
+  (`MULTIPLAI_E2E_LLM=1`) that demonstrates a stale memory fact being
+  flagged against a contradicting in-session document.
+
 ## 0.6.4 — 2026-07-09
 
 ### Added
