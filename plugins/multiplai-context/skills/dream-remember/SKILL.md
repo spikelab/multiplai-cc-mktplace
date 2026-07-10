@@ -150,13 +150,15 @@ After all approved updates are applied:
 only — never glob-delete `.multiplai/dreams/processed-learnings-*.md`. A batch or
 recovery run can leave another session's proposal mid-review there; those files are
 not yours to remove, and `dream.py` already writes non-colliding `-2`/`-3` suffixes so
-nothing needs clearing. If you must stop a running `dream.py`/catalog job, kill its
+nothing needs clearing. (Moving the ONE proposal file you just applied into
+`dreams/applied/` — Step 6 — is fine and expected; the ban is on globbing files other
+sessions may own.) If you must stop a running `dream.py`/catalog job, kill its
 specific python PID — **never `pkill -f <script>`**, which also matches the calling
 shell and kills your own session.
 
 ---
 
-## Step 6: Record the Consolidation (stamp dream state)
+## Step 6: Record the Consolidation (stamp dream state, archive proposal)
 
 **Always run this after applying updates** (even if the user approved only a subset).
 It writes `last_run` to `dream_state.yaml` so the SessionStart dream gate stops
@@ -170,6 +172,18 @@ uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --stamp \
 
 Where `<M>` = number of memory files actually edited and `<N>` = number of updates
 applied. Skip only when the user chose `none` (nothing was applied).
+
+**Then archive the applied proposal** so `dreams/` holds only pending proposals —
+without this, applied and pending proposals are indistinguishable and pile up:
+
+```bash
+mkdir -p .multiplai/dreams/applied
+mv <the-proposal-file-you-applied> .multiplai/dreams/applied/
+```
+
+Move ONLY the specific proposal file this session just applied (never a glob — see
+the Step 5 warning). If the workspace git tracks `.multiplai/`, use `git mv` instead.
+Archive even on a partial apply (some items approved); skip only on `none`.
 
 ---
 
@@ -195,6 +209,7 @@ Print a brief summary:
   - preferences.md: N updates
 ✓ Wrote N action items to PLANS/dream-actions-{date}.md
 ✓ Deleted N learnings files
+✓ Archived proposal to .multiplai/dreams/applied/
 ⊘ Skipped N updates (items #X, #Y — not approved)
 ```
 
