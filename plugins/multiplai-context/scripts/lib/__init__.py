@@ -5,6 +5,7 @@ the standalone `multiplai_core` package. This package holds the plugin's
 context-specific modules:
 
     extraction          — Learning/diary extraction
+    fsio                — Shared filesystem helpers (atomic writes)
     memory_router       — Memory routing logic
     routing_logic       — Prompt routing
     router_prompt       — Router prompt construction
