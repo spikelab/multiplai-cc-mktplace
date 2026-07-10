@@ -12,9 +12,13 @@ Usage::
     python scripts/costs_report.py                       # month-to-date summary
     python scripts/costs_report.py --month 2026-06
     python scripts/costs_report.py --since 2026-06-15
-    python scripts/costs_report.py --by session|project|model|day|skill|component
+    python scripts/costs_report.py --by session|project|model|day|skill|component|branch
     python scripts/costs_report.py --session <id-prefix>  # itemized chat bill
+    python scripts/costs_report.py --branch <name>        # one branch's bill
     python scripts/costs_report.py --json                 # machine-readable
+
+PR costing stays out of this script by design — resolve the PR's branch via
+``gh`` (see the costs SKILL.md recipe), then ``--branch <that-branch>``.
 """
 
 import argparse
@@ -29,16 +33,24 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.costing import costs_dir, iter_ledger
 
 
-def _load(args) -> list[dict]:
+def _load(args) -> tuple[list[dict], str]:
+    """Records for the selected window, plus a human-readable window label.
+
+    Owns all record scoping (months, ``--since``, ``--branch``) so the
+    report functions never re-filter.
+    """
     months = None
     if args.month:
         months = [args.month]
-    elif not args.since and not args.session and not args.all:
+    elif not args.since and not args.session and not args.branch and not args.all:
         months = [datetime.now(timezone.utc).strftime("%Y-%m")]
+    window = f"since {args.since}" if args.since else (months[0] if months else "all months")
     records = list(iter_ledger(months))
     if args.since:
         records = [r for r in records if r.get("ts", "") >= args.since]
-    return records
+    if args.branch:
+        records = [r for r in records if _GROUPERS["branch"](r) == args.branch]
+    return records, window
 
 
 def _group(records: list[dict], key_fn) -> list[tuple[str, float, int]]:
@@ -60,6 +72,7 @@ _GROUPERS = {
     "day": lambda r: str(r.get("ts", ""))[:10],
     "component": lambda r: r.get("component") or ("interactive" if r.get("source") == "transcript" else "(sdk)"),
     "skill": lambda r: (r.get("span") or {}).get("name") if (r.get("span") or {}).get("kind") == "skill" else None,
+    "branch": lambda r: r.get("branch") or "(none)",
 }
 
 
@@ -73,7 +86,45 @@ def _print_table(rows: list[tuple[str, float, int]], header: str, limit: int = 2
         print(f"{'… ' + str(len(rows) - limit) + ' more':<42} ${rest:>9.2f}")
 
 
-def _session_report(records: list[dict], prefix: str, as_json: bool) -> int:
+def _bill_report(recs: list[dict], kind: str, name: str, as_json: bool,
+                 window: str, tables: tuple[str, ...] = ("model",)) -> int:
+    """Itemized bill for one entity: totals, main/subagent split, spans,
+    plus one grouped table per entry in *tables*."""
+    total = sum(r.get("cost_usd", 0.0) for r in recs)
+    main = sum(r.get("cost_usd", 0.0) for r in recs if not r.get("sidechain"))
+    spans: dict[str, float] = defaultdict(float)
+    for r in recs:
+        span = r.get("span")
+        if span:
+            spans[f"{span.get('kind')}:{span.get('name')}"] += r.get("cost_usd", 0.0)
+    grouped = {t: _group(recs, _GROUPERS[t]) for t in tables}
+
+    if as_json:
+        payload = {
+            kind: name, "records": len(recs), "window": window,
+            "total_usd": round(total, 4), "main_usd": round(main, 4),
+            "subagents_usd": round(total - main, 4),
+            "spans": {k: round(v, 4) for k, v in sorted(spans.items(), key=lambda x: -x[1])},
+        }
+        for t, rows in grouped.items():
+            payload[t + "s"] = {k: round(v, 4) for k, v, _ in rows}
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    print(f"{kind.capitalize()} {name}  [{window}]")
+    print(f"  total:      ${total:.2f}  ({len(recs)} API calls)")
+    print(f"  main:       ${main:.2f}")
+    print(f"  subagents:  ${total - main:.2f}")
+    if spans:
+        print("  spans (approx for skills):")
+        for k, v in sorted(spans.items(), key=lambda x: -x[1]):
+            print(f"    {k:<38} ${v:.2f}")
+    for t, rows in grouped.items():
+        _print_table(rows, t)
+    return 0
+
+
+def _session_report(records: list[dict], prefix: str, as_json: bool, window: str) -> int:
     recs = [r for r in records if r.get("session", "").startswith(prefix)]
     sessions = {r["session"] for r in recs}
     if not sessions:
@@ -83,37 +134,16 @@ def _session_report(records: list[dict], prefix: str, as_json: bool) -> int:
         print(f"Ambiguous prefix — matches: {', '.join(s[:12] for s in sorted(sessions))}",
               file=sys.stderr)
         return 1
+    return _bill_report(recs, "session", sorted(sessions)[0], as_json, window)
 
-    total = sum(r["cost_usd"] for r in recs)
-    main = sum(r["cost_usd"] for r in recs if not r.get("sidechain"))
-    side = total - main
-    spans: dict[str, float] = defaultdict(float)
-    for r in recs:
-        span = r.get("span")
-        if span:
-            spans[f"{span.get('kind')}:{span.get('name')}"] += r["cost_usd"]
-    models = _group(recs, _GROUPERS["model"])
 
-    if as_json:
-        print(json.dumps({
-            "session": sorted(sessions)[0], "records": len(recs),
-            "total_usd": round(total, 4), "main_usd": round(main, 4),
-            "subagents_usd": round(side, 4),
-            "spans": {k: round(v, 4) for k, v in sorted(spans.items(), key=lambda x: -x[1])},
-            "models": {k: round(v, 4) for k, v, _ in models},
-        }, indent=2))
-        return 0
-
-    print(f"Session {sorted(sessions)[0]}")
-    print(f"  total:      ${total:.2f}  ({len(recs)} API calls)")
-    print(f"  main:       ${main:.2f}")
-    print(f"  subagents:  ${side:.2f}")
-    if spans:
-        print("  spans (approx for skills):")
-        for k, v in sorted(spans.items(), key=lambda x: -x[1]):
-            print(f"    {k:<38} ${v:.2f}")
-    _print_table(models, "model")
-    return 0
+def _branch_report(records: list[dict], branch: str, as_json: bool, window: str) -> int:
+    # records arrive pre-filtered to the branch by _load.
+    if not records:
+        print(f"No ledger records for branch {branch!r}", file=sys.stderr)
+        return 1
+    return _bill_report(records, "branch", branch, as_json, window,
+                        tables=("model", "session"))
 
 
 def main() -> int:
@@ -123,12 +153,17 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="Read the entire ledger")
     parser.add_argument("--by", choices=sorted(_GROUPERS), help="Group totals by this key")
     parser.add_argument("--session", help="Itemized bill for one session (id prefix ok)")
+    parser.add_argument("--branch", help='Itemized bill for one git branch ("(none)" for unattributed)')
     parser.add_argument("--json", action="store_true", help="JSON output")
     args = parser.parse_args()
 
-    records = _load(args)
+    records, window = _load(args)
+    # --branch + --session: a session that switched branches gets split
+    # (records arrive branch-filtered from _load).
     if args.session:
-        return _session_report(records, args.session, args.json)
+        return _session_report(records, args.session, args.json, window)
+    if args.branch:
+        return _branch_report(records, args.branch, args.json, window)
     if not records:
         print(f"No ledger records found under {costs_dir()} for the selected window.",
               file=sys.stderr)
@@ -140,7 +175,7 @@ def main() -> int:
         if args.json:
             print(json.dumps({k: round(v, 4) for k, v, _ in rows}, indent=2))
         else:
-            print(f"Total: ${total:.2f} across {len(records)} API calls")
+            print(f"Total: ${total:.2f} across {len(records)} API calls  [{window}]")
             _print_table(rows, args.by)
         return 0
 
@@ -153,7 +188,7 @@ def main() -> int:
         }, indent=2))
         return 0
 
-    print(f"Total: ${total:.2f} across {len(records)} API calls")
+    print(f"Total: ${total:.2f} across {len(records)} API calls  [{window}]")
     _print_table(_group(records, _GROUPERS["model"]), "model", limit=10)
     _print_table(_group(records, _GROUPERS["project"]), "project", limit=10)
     _print_table(_group(records, _GROUPERS["session"]), "session (top)", limit=10)

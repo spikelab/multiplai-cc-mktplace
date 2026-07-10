@@ -17,11 +17,15 @@ applies approved changes.
 
 ## Step 1: Locate the Proposal
 
-Check `.multiplai/dreams/` for a file matching `processed-learnings-*.md`, taking the **most
-recently modified** (newest mtime — not lexical name order; a same-day re-run writes a
-`-2`, `-3`, … suffixed file that is newer but sorts *before* the base name).
+Check `.multiplai/dreams/` for a file matching `processed-learnings-*.md` — top level
+only, skip the `applied/` and `rejected/` subdirectories (those hold already-reviewed
+proposals; never recurse into them). Take the **most recently modified** (newest
+mtime — not lexical name order; a same-day re-run writes a `-2`, `-3`, … suffixed file
+that is newer but sorts *before* the base name).
 
-- **Found:** load it, report its date and summary line to the user, proceed to Step 3.
+- **Found:** load it, report its date and summary line to the user, and **record its
+  exact path — Step 6 archives that exact file; never re-discover it later** (a newer
+  proposal from another session may appear mid-review). Proceed to Step 3.
 - **Not found:** tell the user "No pre-generated proposal found — generating one now" and run:
   ```
   uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
@@ -150,26 +154,42 @@ After all approved updates are applied:
 only — never glob-delete `.multiplai/dreams/processed-learnings-*.md`. A batch or
 recovery run can leave another session's proposal mid-review there; those files are
 not yours to remove, and `dream.py` already writes non-colliding `-2`/`-3` suffixes so
-nothing needs clearing. If you must stop a running `dream.py`/catalog job, kill its
+nothing needs clearing. (Step 6's `--archive` flag moving the ONE proposal file this
+session reviewed into `dreams/applied/` or `dreams/rejected/` is fine and expected —
+dream.py moves the specific path you give it; the ban is on globbing files other
+sessions may own.) If you must stop a running `dream.py`/catalog job, kill its
 specific python PID — **never `pkill -f <script>`**, which also matches the calling
 shell and kills your own session.
 
 ---
 
-## Step 6: Record the Consolidation (stamp dream state)
+## Step 6: Record the Consolidation (stamp dream state, archive proposal)
 
-**Always run this after applying updates** (even if the user approved only a subset).
+**Always run this after the review — including when the user chose `none`.**
 It writes `last_run` to `dream_state.yaml` so the SessionStart dream gate stops
 nudging — the report-only `/dream` and this skill otherwise never record that a
-consolidation happened, leaving the gate permanently "due".
+consolidation happened, leaving the gate permanently "due" — and it archives the
+reviewed proposal so `dreams/` holds only pending proposals (without this, reviewed
+and pending proposals are indistinguishable and pile up).
 
 ```bash
 uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --stamp \
-  --files-updated <M> --learnings-processed <N>
+  --files-updated <M> --learnings-processed <N> \
+  --archive <exact-proposal-path-recorded-in-Step-1>
 ```
 
 Where `<M>` = number of memory files actually edited and `<N>` = number of updates
-applied. Skip only when the user chose `none` (nothing was applied).
+applied. When the user chose `none`, use `--files-updated 0 --learnings-processed 0`
+and add **`--archive-as rejected`** — a fully rejected proposal is reviewed-and-done
+(its learnings are already deleted by Step 5) and must not linger looking pending; it
+lands in `dreams/rejected/` instead of `dreams/applied/`.
+
+Pass the exact path recorded in Step 1 — never re-discover the file here (a newer
+pending proposal from another session may have arrived mid-review; see the Step 5
+warning). dream.py performs the move itself: collision-safe (a same-name file already
+archived gets a `-2`/`-3` suffix, never overwritten) and with a plain rename, so it
+works whether or not the workspace git tracks `.multiplai/`. Archive on partial
+applies too (some items approved).
 
 ---
 
@@ -195,10 +215,13 @@ Print a brief summary:
   - preferences.md: N updates
 ✓ Wrote N action items to PLANS/dream-actions-{date}.md
 ✓ Deleted N learnings files
+✓ Archived proposal to .multiplai/dreams/applied/
 ⊘ Skipped N updates (items #X, #Y — not approved)
 ```
 
-Omit the action-items line if there were none.
+Omit the action-items line if there were none. On a `none` review the archive line
+reads `✓ Archived rejected proposal to .multiplai/dreams/rejected/`; if archiving
+failed or was somehow not performed, say so instead of printing the ✓ line.
 
 ---
 

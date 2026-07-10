@@ -91,6 +91,30 @@ def _proposal_output_path(dreams_dir: Path, today: str) -> Path:
         n += 1
 
 
+def _archive_proposal(proposal_path: Path, dreams_dir: Path, disposition: str = "applied") -> Path:
+    """Move a reviewed proposal out of the dreams root into `applied/` (or
+    `rejected/`), so the root holds only pending proposals.
+
+    Collision-safe: `_proposal_output_path` only checks the dreams root, so a
+    same-day re-run reuses a base name freed by an earlier archive. Archiving
+    that second proposal must not clobber the first — suffix like the root
+    naming does. A plain rename is used even in git-tracked workspaces: git
+    detects the rename at the next commit, and `git mv` would fail on the
+    (typically untracked) freshly generated proposal.
+    """
+    dest_dir = dreams_dir / disposition
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / proposal_path.name
+    if dest.exists():
+        stem, suffix = proposal_path.stem, proposal_path.suffix
+        n = 2
+        while (dest_dir / f"{stem}-{n}{suffix}").exists():
+            n += 1
+        dest = dest_dir / f"{stem}-{n}{suffix}"
+    proposal_path.rename(dest)
+    return dest
+
+
 def _read_memory_files(memory_dir: Path) -> dict[str, str]:
     """Return {filename: content} for all .md files in memory_dir."""
     if not memory_dir.exists():
@@ -727,7 +751,8 @@ async def dream_auto() -> None:
             dreams_dir = paths.dreams_dir()
             dreams_dir.mkdir(parents=True, exist_ok=True)
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            _proposal_output_path(dreams_dir, today).write_text(proposal)
+            proposal_file = _proposal_output_path(dreams_dir, today)
+            proposal_file.write_text(proposal)
 
             # Stage 2 — mechanically apply each file's slice of the proposal.
             # Files are independent, so apply them concurrently.
@@ -766,6 +791,16 @@ async def dream_auto() -> None:
                 for f in source_files:
                     f.unlink(missing_ok=True)
                     logger.info("Deleted processed learnings: %s", f.name)
+                # Fully applied → the audit artifact is no longer pending;
+                # archive it so the dreams root holds only pending proposals
+                # (dream-remember Step 1 must never re-present it). On any
+                # failure it stays put alongside the kept learnings, as a
+                # recovery path for a human review.
+                try:
+                    archived = _archive_proposal(proposal_file, dreams_dir)
+                    logger.info("Archived auto-applied proposal to %s", archived)
+                except OSError:
+                    logger.exception("Could not archive %s — left in dreams root", proposal_file)
             else:
                 logger.warning(
                     "Kept %d learnings file(s): %d/%d targets failed to apply — "
@@ -824,6 +859,19 @@ def main() -> None:
     )
     parser.add_argument("--files-updated", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--learnings-processed", type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--archive",
+        metavar="PROPOSAL_PATH",
+        help="With --stamp: move the reviewed proposal file out of the dreams "
+             "root into applied/ (or rejected/, per --archive-as), so the root "
+             "holds only pending proposals. Collision-safe.",
+    )
+    parser.add_argument(
+        "--archive-as",
+        choices=("applied", "rejected"),
+        default="applied",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
 
     if args.stamp:
@@ -835,6 +883,15 @@ def main() -> None:
         state["learnings_processed"] = args.learnings_processed
         save_yaml(dream_state_file, state)
         print(f"Stamped dream_state: last_run={state['last_run']}")
+        if args.archive:
+            proposal_path = Path(args.archive)
+            if not proposal_path.is_file():
+                print(f"ERROR: --archive path not found: {proposal_path}")
+                sys.exit(1)
+            archived = _archive_proposal(
+                proposal_path, paths.dreams_dir(), args.archive_as
+            )
+            print(f"Archived proposal to {archived}")
         return
 
     if args.check:

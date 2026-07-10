@@ -343,6 +343,82 @@ class TestProposalOutputPath:
         assert not p.exists()
 
 
+class TestArchiveProposal:
+    """`_archive_proposal` moves reviewed proposals out of the dreams root
+    without ever clobbering a previously archived same-name file."""
+
+    @pytest.fixture(autouse=True)
+    def load(self):
+        self.dream = _load_dream_module()
+
+    def _proposal(self, dreams_dir, name="processed-learnings-2026-07-10.md"):
+        p = dreams_dir / name
+        p.write_text("proposal body")
+        return p
+
+    def test_moves_into_applied_by_default(self, tmp_path):
+        p = self._proposal(tmp_path)
+        dest = self.dream._archive_proposal(p, tmp_path)
+        assert dest == tmp_path / "applied" / p.name
+        assert dest.read_text() == "proposal body"
+        assert not p.exists()
+
+    def test_rejected_disposition(self, tmp_path):
+        p = self._proposal(tmp_path)
+        dest = self.dream._archive_proposal(p, tmp_path, "rejected")
+        assert dest == tmp_path / "rejected" / p.name
+        assert not p.exists()
+
+    def test_creates_archive_dir(self, tmp_path):
+        p = self._proposal(tmp_path)
+        assert not (tmp_path / "applied").exists()
+        self.dream._archive_proposal(p, tmp_path)
+        assert (tmp_path / "applied").is_dir()
+
+    def test_same_day_reapply_does_not_clobber_prior_archive(self, tmp_path):
+        # The dreams-root collision check can't see applied/, so a same-day
+        # re-run reuses the freed base name; archiving the second proposal
+        # must suffix, not overwrite the first archived file.
+        first = self._proposal(tmp_path)
+        self.dream._archive_proposal(first, tmp_path)
+        second = self._proposal(tmp_path)
+        second.write_text("second proposal")
+        dest = self.dream._archive_proposal(second, tmp_path)
+        assert dest == tmp_path / "applied" / "processed-learnings-2026-07-10-2.md"
+        assert (tmp_path / "applied" / "processed-learnings-2026-07-10.md").read_text() == "proposal body"
+        assert dest.read_text() == "second proposal"
+
+    def test_suffix_increments_past_existing(self, tmp_path):
+        applied = tmp_path / "applied"
+        applied.mkdir()
+        (applied / "processed-learnings-2026-07-10.md").write_text("1")
+        (applied / "processed-learnings-2026-07-10-2.md").write_text("2")
+        p = self._proposal(tmp_path)
+        dest = self.dream._archive_proposal(p, tmp_path)
+        assert dest == applied / "processed-learnings-2026-07-10-3.md"
+
+
+class TestStampArchiveWiring:
+    """--stamp accepts --archive/--archive-as and dream_auto self-archives."""
+
+    @pytest.fixture(autouse=True)
+    def load_source(self):
+        self.source = (SCRIPTS_DIR / "dream.py").read_text()
+
+    def test_stamp_supports_archive_flag(self):
+        assert '"--archive"' in self.source
+
+    def test_archive_as_restricted_to_dispositions(self):
+        assert re.search(r'choices=\(\s*"applied",\s*"rejected"\s*\)', self.source)
+
+    def test_missing_archive_path_is_an_error(self):
+        assert "--archive path not found" in self.source
+
+    def test_dream_auto_archives_its_proposal(self):
+        auto_body = self.source.split("async def dream_auto")[1].split("\ndef main")[0]
+        assert "_archive_proposal(" in auto_body
+
+
 class TestDreamTimeoutDefault:
     """dream.py raises the SDK call timeout for long batch runs before import."""
 
