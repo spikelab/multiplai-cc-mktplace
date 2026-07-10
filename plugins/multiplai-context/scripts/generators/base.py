@@ -12,15 +12,15 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import re
-import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from multiplai_core.paths import Paths
+
+from lib.fsio import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -41,26 +41,6 @@ CATALOG_SCHEMA_VERSION = "1.2.0"
 
 # Keys used to identify the source key in catalog entries
 _ENTRY_KEY_FIELDS = ("source", "path", "file")
-
-
-def _atomic_write_json(target: Path, data: dict) -> None:
-    """Write JSON data to a file atomically (write-to-temp-then-rename).
-
-    Creates parent directories if needed. On failure, cleans up the
-    temp file and re-raises the exception.
-    """
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp_path, str(target))
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
 
 
 def _entry_key(entry: dict) -> str:
@@ -490,7 +470,7 @@ class GeneratorBase:
             "schema_version": state.schema_version,
             "generators": state.generators,
         }
-        _atomic_write_json(self._state_file, data)
+        atomic_write_json(self._state_file, data)
 
     # ---- Catalog I/O ----
 
@@ -517,7 +497,7 @@ class GeneratorBase:
     def _write_catalog(self, catalog: dict) -> None:
         """Write catalog JSON atomically (write-to-temp-then-rename)."""
         catalog_file = self._catalogs_dir / self.catalog_filename
-        _atomic_write_json(catalog_file, catalog)
+        atomic_write_json(catalog_file, catalog)
 
     # ---- LLM Client ----
 

@@ -38,10 +38,11 @@ import dataclasses
 import json
 import logging
 import os
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from lib.fsio import atomic_write
 
 logger = logging.getLogger("multiplai.checkpoint")
 
@@ -198,29 +199,13 @@ def save_state(data_dir: Path, session_id: str, state: dict) -> None:
     """Atomically persist per-session checkpoint state."""
     sdir = session_dir(data_dir, session_id)
     sdir.mkdir(parents=True, exist_ok=True)
-    _atomic_write(_state_file(data_dir, session_id), json.dumps(state, indent=2))
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    """Write via tempfile + rename so readers never see a partial file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp, str(path))
-    except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write(_state_file(data_dir, session_id), json.dumps(state, indent=2))
 
 
 def write_checkpoint_file(data_dir: Path, session_id: str, content: str) -> Path:
     """Atomically write ``checkpoint.md`` for *session_id*; returns its path."""
     path = checkpoint_file(data_dir, session_id)
-    _atomic_write(path, content)
+    atomic_write(path, content)
     return path
 
 
@@ -420,7 +405,7 @@ def write_pending_marker(
         "checkpoint_path": str(checkpoint_file(data_dir, session_id)),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    _atomic_write(marker, json.dumps(payload, indent=2))
+    atomic_write(marker, json.dumps(payload, indent=2))
     return marker
 
 

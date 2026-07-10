@@ -555,3 +555,26 @@ def test_backfill_ignores_collector_offsets(config_dir, tmp_path):
     assert stats["enriched"] == 1
     assert state_path.read_bytes() == state_before
     assert json.loads(path.read_text())["branch"] == "main"
+
+
+def test_backfill_preserves_torn_tail_verbatim(config_dir, tmp_path):
+    """A torn tail (crashed append, no trailing newline) survives the rewrite
+    byte-identically — the tail copy carries over everything past the last
+    complete line, which is also what protects a concurrent append."""
+    proj = config_dir / "projects" / "-Users-x-proj"
+    _write(proj / "sess-1.jsonl", [_assistant("m1", git_branch="main", cwd="/w")])
+    cc.run_collect(config_dir, tmp_path / "state.json")
+
+    from multiplai_core.costing import ledger_file
+    path = ledger_file("2026-07")
+    rec = json.loads(path.read_text())
+    rec.pop("branch", None)
+    rec.pop("cwd", None)
+    torn = b'{"ts":"2026-07-01T00:00:01Z","msg_id":"half-writ'
+    path.write_bytes(json.dumps(rec, separators=(",", ":")).encode() + b"\n" + torn)
+
+    stats = cc.run_backfill_branches(config_dir)
+    assert stats["enriched"] == 1
+    content = path.read_bytes()
+    assert content.endswith(torn)  # verbatim, no newline appended
+    assert json.loads(content.splitlines()[0])["branch"] == "main"

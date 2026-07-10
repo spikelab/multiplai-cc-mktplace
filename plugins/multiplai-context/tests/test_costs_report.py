@@ -108,3 +108,17 @@ def test_branch_report_text_output(monkeypatch, capsys):
     assert code == 0
     assert "Branch feat/x" in out
     assert "$6.50" in out
+    assert "[all months]" in out  # --branch reads the whole ledger — say so
+
+
+def test_grouped_text_output_names_window(monkeypatch, capsys):
+    """Bare --by branch scopes to the current month while --branch reads all
+    months; both text outputs must name their window so the totals can't be
+    silently contradictory."""
+    _seed()
+    code, out = _run(monkeypatch, capsys, "--all", "--by", "branch")
+    assert code == 0
+    assert "[all months]" in out
+    code, out = _run(monkeypatch, capsys, "--month", "2026-07", "--by", "branch")
+    assert code == 0
+    assert "[2026-07]" in out

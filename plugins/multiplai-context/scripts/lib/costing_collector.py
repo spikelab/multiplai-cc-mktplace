@@ -36,8 +36,10 @@ import json
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterator
 
 from multiplai_core.costing import (
     TokenCounts,
@@ -46,6 +48,8 @@ from multiplai_core.costing import (
     costs_dir,
     session_msg_index,
 )
+
+from lib.fsio import atomic_write
 
 logger = logging.getLogger(__name__)
 
@@ -200,15 +204,38 @@ def load_state(path: Path) -> dict:
 
 
 def save_state(path: Path, state: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, separators=(",", ":")))
-    tmp.replace(path)
+    atomic_write(path, json.dumps(state, separators=(",", ":")))
 
 
 # ----------------------------------------------------------------------
 # Collection
 # ----------------------------------------------------------------------
+
+def _iter_entries(fh) -> Iterator[tuple[bytes, dict | None]]:
+    """Yield ``(raw_line, entry)`` from a binary JSONL handle.
+
+    ``entry`` is ``None`` for unparseable lines (caller still sees the raw
+    bytes for offset bookkeeping). Stops at a torn tail (no trailing
+    newline) so a partially-written last line is re-read next pass.
+    """
+    for raw in fh:
+        if not raw.endswith(b"\n"):
+            break
+        try:
+            entry = json.loads(raw)
+        except json.JSONDecodeError:
+            entry = None
+        yield raw, entry
+
+
+def _entry_branch_cwd(entry: dict, last_branch: str, last_cwd: str) -> tuple[str, str]:
+    """Per-entry ``gitBranch``/``cwd`` with last-non-empty fallback.
+
+    The single definition of the attribution rule — used by both the live
+    collector and the backfill index so the two can never drift.
+    """
+    return entry.get("gitBranch") or last_branch, entry.get("cwd") or last_cwd
+
 
 def _tokens_from_usage(usage: dict) -> TokenCounts:
     cc = usage.get("cache_creation")
@@ -269,18 +296,11 @@ def collect_file(
 
     with path.open("rb") as fh:
         fh.seek(offset)
-        for raw in fh:
-            if not raw.endswith(b"\n"):
-                break  # torn tail — re-read next pass
+        for raw, entry in _iter_entries(fh):
             offset += len(raw)
-            try:
-                entry = json.loads(raw)
-            except json.JSONDecodeError:
+            if entry is None:
                 continue
-            if entry.get("gitBranch"):
-                last_branch = entry["gitBranch"]
-            if entry.get("cwd"):
-                last_cwd = entry["cwd"]
+            last_branch, last_cwd = _entry_branch_cwd(entry, last_branch, last_cwd)
             etype = entry.get("type")
             if etype == "user":
                 if not entry.get("isSidechain"):
@@ -412,17 +432,10 @@ def build_branch_index(config_dir: Path) -> dict[str, tuple[str, str]]:
         except OSError:
             continue
         with fh:
-            for raw in fh:
-                if not raw.endswith(b"\n"):
-                    break
-                try:
-                    entry = json.loads(raw)
-                except json.JSONDecodeError:
+            for _, entry in _iter_entries(fh):
+                if entry is None:
                     continue
-                if entry.get("gitBranch"):
-                    last_branch = entry["gitBranch"]
-                if entry.get("cwd"):
-                    last_cwd = entry["cwd"]
+                last_branch, last_cwd = _entry_branch_cwd(entry, last_branch, last_cwd)
                 if entry.get("type") != "assistant":
                     continue
                 msg_id = (entry.get("message") or {}).get("id") or ""
@@ -436,10 +449,17 @@ def run_backfill_branches(config_dir: Path) -> dict:
     """Enrich existing ledger records with ``branch``/``cwd`` in place.
 
     Rewrites each monthly ledger atomically (``*.tmp`` + ``os.replace``).
-    Appends nothing and never touches the offset state — the caller holds
-    the collector flock to keep writing passes out. Idempotent: records
+    Appends nothing and never touches the offset state. Idempotent: records
     already carrying ``branch`` or ``cwd`` are left byte-identical, as are
-    malformed lines. Returns ``examined/enriched/unmatched`` counts.
+    malformed lines and torn tails. Returns ``examined/enriched/unmatched``
+    counts.
+
+    Concurrency: the caller's collector flock excludes other collection
+    passes, but the SDK tap (``agent_runner``) appends lock-free. To avoid
+    losing a concurrent append to the rewrite, the tail appended after the
+    read is copied into the replacement just before ``os.replace``, and any
+    bytes that land on the old inode in the final instant are recovered onto
+    the new file afterwards (the old file handle keeps the inode alive).
     """
     index = build_branch_index(config_dir)
     stats = {"examined": 0, "enriched": 0, "unmatched": 0}
@@ -447,17 +467,14 @@ def run_backfill_branches(config_dir: Path) -> dict:
     if not directory.is_dir():
         return stats
     for path in sorted(directory.glob("ledger-*.jsonl")):
-        out_lines: list[str] = []
+        out_lines: list[bytes] = []
         changed = False
-        with path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    rec = json.loads(stripped)
-                except json.JSONDecodeError:
-                    out_lines.append(stripped)  # preserve torn lines verbatim
+        consumed = 0  # bytes of `path` represented in out_lines
+        with path.open("rb") as fh:
+            for raw, rec in _iter_entries(fh):
+                consumed += len(raw)
+                if rec is None:
+                    out_lines.append(raw)  # preserve malformed lines verbatim
                     continue
                 stats["examined"] += 1
                 if "branch" not in rec and "cwd" not in rec:
@@ -470,13 +487,29 @@ def run_backfill_branches(config_dir: Path) -> dict:
                             rec["cwd"] = cwd
                         stats["enriched"] += 1
                         changed = True
-                        out_lines.append(json.dumps(rec, separators=(",", ":")))
+                        out_lines.append(
+                            json.dumps(rec, separators=(",", ":")).encode("utf-8") + b"\n"
+                        )
                         continue
                     stats["unmatched"] += 1
-                out_lines.append(stripped)
-        if changed:
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text("".join(l + "\n" for l in out_lines), encoding="utf-8")
+                out_lines.append(raw)
+        if not changed:
+            continue
+        tmp = path.with_suffix(".tmp")
+        with path.open("rb") as src, tmp.open("wb") as out:
+            out.writelines(out_lines)
+            # Copy the torn tail and anything appended since the read.
+            src.seek(consumed)
+            shutil.copyfileobj(src, out)
+            out.flush()
+            copied_end = src.tell()
             os.replace(tmp, path)
-            logger.info("backfilled branches into %s", path.name)
+            # Recover bytes appended to the old inode between the tail copy
+            # and the replace (src still references it).
+            src.seek(0, os.SEEK_END)
+            if src.tell() > copied_end:
+                src.seek(copied_end)
+                with path.open("ab") as new_fh:
+                    shutil.copyfileobj(src, new_fh)
+        logger.info("backfilled branches into %s", path.name)
     return stats
