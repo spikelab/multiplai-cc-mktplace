@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.5 — 2026-07-10
+
+### Added
+- **Reviewed dream proposals are archived out of the dreams root.**
+  `dream.py --stamp` takes `--archive <proposal-path>` (with
+  `--archive-as applied|rejected`, default `applied`): after stamping
+  dream state it moves the reviewed proposal into `dreams/applied/` or
+  `dreams/rejected/`, collision-safe (`-2`/`-3` suffix instead of
+  overwriting a previously archived same-name file) and via plain rename
+  (`git mv` would fail on the typically-untracked fresh proposal).
+  `--auto` runs self-archive their audit-trail proposal after a fully
+  successful apply. Previously applied proposals sat in
+  `.multiplai/dreams/` indistinguishable from pending ones.
+
+### Changed
+- **dream-remember Step 6 runs on every review, including `none`.** The
+  skill now stamps with zero counts and archives the proposal as
+  `rejected` when the user declines everything — a fully rejected
+  proposal was previously left looking pending forever (its source
+  learnings already deleted), so the next run re-presented it. Step 1
+  explicitly scopes proposal discovery to the dreams root (never
+  `applied/`/`rejected/`) and pins the exact proposal path for Step 6 so
+  a concurrent session's newer proposal can't be archived by mistake;
+  the Step 8 summary no longer claims an archive on runs where none
+  happened.
+
 ## 0.6.4 — 2026-07-09
 
 ### Added
