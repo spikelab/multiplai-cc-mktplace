@@ -56,6 +56,10 @@ class CatalogConfig:
     # that prices the session-transcript corpus into the monthly ledger.
     # Local-only and cheap in steady state, but opt-in like the other flags.
     enable_costs: bool = False
+    # Conflict-surfacing directive + last-updated stamps rendered above
+    # every injected MEMORY block. On by default (reliability feature);
+    # opt out to save ~90 tokens per memory-carrying turn.
+    memory_conflict_preamble: bool = True
 
     def __post_init__(self):
         if not self.model or not self.model.strip():
@@ -160,6 +164,9 @@ def load_catalog_config() -> CatalogConfig:
     enable_costs = _parse_bool(
         os.environ.get("CLAUDE_PLUGIN_OPTION_enable_costs", "false")
     )
+    memory_conflict_preamble = _parse_bool(
+        os.environ.get("CLAUDE_PLUGIN_OPTION_memory_conflict_preamble", "true")
+    )
 
     return CatalogConfig(
         model=model,
@@ -179,4 +186,5 @@ def load_catalog_config() -> CatalogConfig:
         catalog_concurrency=catalog_concurrency,
         recommend_cooldown_turns=recommend_cooldown_turns,
         enable_costs=enable_costs,
+        memory_conflict_preamble=memory_conflict_preamble,
     )
