@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0 — 2026-07-10
+
+Semantic model tiers for the buildme pipeline (requires multiplai-core ≥ v0.7.0).
+
+### Changed
+- **buildme now resolves its model from a semantic tier, not a dated literal.**
+  `config.DEFAULT_MODEL` is now `pick_model("opus", task="buildme")` — the model
+  family lives in `multiplai_core.env.CURRENT_MODEL` (one place to bump per
+  quarter), still capped by the `MULTIPLAI_MODEL` ceiling, and retunable per
+  task via a `[buildme] MODEL=...` section in `multiplai.conf` with no code edit.
+
+### Fixed
+- **Tier detection (DEV-3).** `detect_tier()` now derives advanced/standard from
+  the resolved `DEFAULT_MODEL` instead of the `CLAUDE_MODEL` env var, which
+  Claude Code never exports to Bash subprocesses — so the tier was permanently
+  stuck on `standard` in production regardless of the pinned model. buildme now
+  correctly runs the advanced (per-block) TDD path under an opus ceiling.
+
 ## 0.1.1 — 2026-07-09
 
 Correctness fixes for the buildme pipeline from the 2026-07-08 code review.
