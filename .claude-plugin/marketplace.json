@@ -73,7 +73,7 @@
       "name": "multiplai-research",
       "source": "./plugins/multiplai-research",
       "description": "Research skill pack: code-driven deep research pipeline, insight extraction, structured interviewing.",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -94,7 +94,7 @@
       "name": "multiplai-dev",
       "source": "./plugins/multiplai-dev",
       "description": "Developer skill pack: spec-driven builds, code/security review, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring.",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
