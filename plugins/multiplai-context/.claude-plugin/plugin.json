@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",
@@ -161,6 +161,12 @@
       "title": "Enable Cost Collection",
       "description": "When on, session start fires a detached, flock-guarded collector that prices Claude Code session transcripts into a local monthly cost ledger (queryable via /multiplai-context:costs). Local-only; nothing leaves the machine. Incremental after the first backfill.",
       "default": false
+    },
+    "memory_conflict_preamble": {
+      "type": "boolean",
+      "title": "Memory Conflict Surfacing",
+      "description": "Render a conflict-surfacing directive plus per-file last-updated stamps above every injected MEMORY block, making the model flag memory-vs-session disagreements to the user. Costs ~90 tokens per memory-carrying turn; turn off to save them.",
+      "default": true
     }
   }
 }

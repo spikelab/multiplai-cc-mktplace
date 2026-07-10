@@ -113,6 +113,7 @@ over the anchor:
 | `memory_router` | `token_overlap` | Context selection strategy: `token_overlap` (offline, fast) or `llm` (one model call per prompt). See [Router latency](#router-latency) before choosing `llm`. |
 | `router_model` | `claude-haiku-4-5` | Model for the `llm` router. Haiku by default — routing is cheap classification, so the smallest/fastest model keeps per-prompt latency down. Ignored under `token_overlap`. |
 | `recommend_cooldown_turns` | `4` | After a file is injected, suppress re-injecting it for this many turns (it's already in the conversation). `0` disables. See [Re-recommendation cooldown](#re-recommendation-cooldown). |
+| `memory_conflict_preamble` | `true` | Conflict-surfacing directive + per-file last-updated stamps above every injected MEMORY block, so the model flags memory-vs-session disagreements. ~90 tokens per memory-carrying turn; turn off to save them. |
 | `enable_skills` / `skills_dir` | `false` / `~/.claude/skills` | Optionally catalog skills for routing |
 | `enable_resources` / `resources_dir` | `false` / `""` | Optionally catalog a research/reference corpus. The flag gates *injection*; you can still refresh the catalog while it's off via `refresh-catalogs --only resources` (needs `resources_dir` set). Only `.md`/`.markdown` files are indexed. |
 

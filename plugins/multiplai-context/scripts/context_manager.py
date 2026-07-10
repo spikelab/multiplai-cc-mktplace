@@ -32,6 +32,7 @@ results render as path+excerpt entries in the same RESOURCES section.
 """
 
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -483,31 +484,83 @@ _MEMORY_CONFLICT_PREAMBLE = (
     "MUST surface the disagreement to the user in your reply: name the "
     "memory file, quote or paraphrase both versions, and say which one "
     "you are following (prefer the newer or in-session source unless the "
-    "user says otherwise). Never silently pick one side. Each file below "
-    "is stamped with its last-modified date to help judge staleness."
+    "user says otherwise). Never silently pick one side. Files below are "
+    "stamped with their last-updated date, where available, to help "
+    "judge staleness."
 )
+
+
+# In-content freshness header maintained by the dream/dream-remember
+# tooling (each memory apply refreshes it). Preferred over filesystem
+# mtime, which lies whenever files are re-materialized without a
+# content change (git clone/checkout, rsync without -t): every file
+# would then stamp as "today" and teach the model to trust stale facts.
+_LAST_UPDATED_RE = re.compile(
+    r"^\*\*Last Updated:\*\*\s*(\d{4}-\d{2}-\d{2})", re.MULTILINE | re.IGNORECASE
+)
+
+
+def _memory_freshness_date(path: Path) -> str | None:
+    """Best-available last-updated date for a memory file, or None.
+
+    Prefers the ``**Last Updated:**`` header near the top of the file;
+    falls back to filesystem mtime. Fail-open: any read/stat/conversion
+    error yields None (the caller skips the stamp).
+    """
+    try:
+        with path.open(errors="replace") as f:
+            head = f.read(2048)
+        m = _LAST_UPDATED_RE.search(head)
+        if m:
+            return m.group(1)
+        mtime = path.stat().st_mtime
+        return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+    except (OSError, ValueError, OverflowError):
+        # OSError: unreadable/vanished file. ValueError/OverflowError:
+        # mtime outside datetime range — stat() succeeds but
+        # fromtimestamp() raises, and it is NOT an OSError subclass.
+        return None
 
 
 def _stamp_memory_dates(
     memory_dir: Path, memory_content: dict[str, str]
 ) -> dict[str, str]:
-    """Prefix each memory file's content with its last-modified date.
+    """Prefix each memory file's content with its last-updated date.
 
     Gives the model a concrete recency signal to weigh memory against
     in-session sources when the conflict preamble fires. Applied at
     render time only — ``memory_content`` keys (used by the cooldown
-    bookkeeping) are untouched. Fail-open: a stat error skips the stamp.
+    bookkeeping) are untouched. Section slices (``file.md#Section``)
+    carry the base file's date. Files with no obtainable date are
+    passed through unstamped.
     """
+    dates: dict[str, str | None] = {}
     stamped: dict[str, str] = {}
     for name, content in memory_content.items():
         base, _ = parse_section_ref(name)
-        try:
-            mtime = (memory_dir / base).stat().st_mtime
-            date = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
-            stamped[name] = f"(file last modified: {date})\n{content}"
-        except OSError:
-            stamped[name] = content
+        if base not in dates:
+            dates[base] = _memory_freshness_date(memory_dir / base)
+        date = dates[base]
+        stamped[name] = f"(last updated: {date})\n{content}" if date else content
     return stamped
+
+
+def _render_memory_section(
+    memory_dir: Path, memory_content: dict[str, str], conflict_preamble: bool
+) -> str:
+    """Render the MEMORY block, pairing the conflict preamble with stamps.
+
+    The preamble promises date stamps, so the two must never render
+    separately — any injection path goes through here. The config
+    toggle (``memory_conflict_preamble``) disables both together.
+    """
+    if not conflict_preamble:
+        return _render_corpus_section("MEMORY", memory_content)
+    return _render_corpus_section(
+        "MEMORY",
+        _stamp_memory_dates(memory_dir, memory_content),
+        preamble=_MEMORY_CONFLICT_PREAMBLE,
+    )
 
 
 def _render_qmd_resource(entry: dict) -> str:
@@ -982,10 +1035,8 @@ def main() -> None:
 
     parts: list[str] = []
     if memory_content:
-        parts.append(_render_corpus_section(
-            "MEMORY",
-            _stamp_memory_dates(memory_dir, memory_content),
-            preamble=_MEMORY_CONFLICT_PREAMBLE,
+        parts.append(_render_memory_section(
+            memory_dir, memory_content, cfg.memory_conflict_preamble,
         ))
     if skills_content:
         parts.append(_render_corpus_section("SKILLS", skills_content))

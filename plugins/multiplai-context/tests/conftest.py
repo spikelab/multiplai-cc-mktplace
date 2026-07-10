@@ -16,6 +16,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -73,6 +74,8 @@ EXPECTED_HOOK_SCRIPTS = {
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+CONTEXT_MANAGER = SCRIPTS_DIR / "context_manager.py"
+
 
 def parse_hooks():
     """Normalize the official Claude Code hooks/hooks.json schema.
@@ -129,6 +132,101 @@ def import_script(module_name: str, filename: str):
             os.environ.pop(k, None)
         os.environ.update(_saved)
     return mod
+
+
+# --- Shared context_manager E2E harness -------------------------------------
+# One canonical copy of the sandbox layout + subprocess runner. Before
+# this lived here, three test files carried drifting near-copies (one
+# had already dropped an env var, another changed the timeout).
+
+
+@pytest.fixture
+def env_setup(tmp_path):
+    """Sandboxed plugin layout: data, memory, skills, resources, workspace.
+
+    A superset of what any one test file needs — unused dirs are inert
+    (e.g. resources injection stays off unless enable_resources is set).
+    """
+    data_dir = tmp_path / "plugin_data"
+    catalogs_dir = data_dir / "catalogs"
+    memory_dir = tmp_path / "memory"
+    skills_dir = tmp_path / "skills"
+    resources_dir = tmp_path / "resources"
+    workspace = tmp_path / "ws"
+
+    for d in (catalogs_dir, memory_dir, skills_dir, resources_dir, workspace):
+        d.mkdir(parents=True)
+
+    return {
+        "tmp_path": tmp_path,
+        "data_dir": data_dir,
+        "catalogs_dir": catalogs_dir,
+        "memory_dir": memory_dir,
+        "skills_dir": skills_dir,
+        "resources_dir": resources_dir,
+        "workspace": workspace,
+    }
+
+
+def write_catalog(catalogs_dir: Path, filename: str, entries: list[dict]) -> None:
+    """Write a schema-current catalog file the way the generators would."""
+    from generators.base import CATALOG_SCHEMA_VERSION
+
+    payload = {
+        "schema_version": CATALOG_SCHEMA_VERSION,
+        "generated_at": "2026-05-01T00:00:00Z",
+        "entries": entries,
+    }
+    (catalogs_dir / filename).write_text(json.dumps(payload, indent=2))
+
+
+def run_context_hook(
+    env_setup,
+    *,
+    prompt: str,
+    extra_env: dict | None = None,
+    cwd: str = "/tmp",
+    timeout: int = 15,
+) -> dict:
+    """Invoke context_manager.py as a subprocess and return parsed stdout JSON.
+
+    ``extra_env`` overrides/extends the base env (option flags, HOME,
+    PATH, …); ``cwd`` is the hook-payload cwd field, not the process cwd.
+    """
+    env = os.environ.copy()
+    for k in list(env):
+        if k.startswith("CLAUDE_PLUGIN"):
+            del env[k]
+    env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
+    env["CLAUDE_PLUGIN_DATA"] = str(env_setup["data_dir"])
+    env["CLAUDE_PLUGIN_OPTION_memory_dir"] = str(env_setup["memory_dir"])
+    env["CLAUDE_PLUGIN_OPTION_skills_dir"] = str(env_setup["skills_dir"])
+    env["CLAUDE_PLUGIN_OPTION_resources_dir"] = str(env_setup["resources_dir"])
+    if extra_env:
+        env.update(extra_env)
+
+    stdin = json.dumps({
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": prompt,
+        "cwd": cwd,
+    })
+    result = subprocess.run(
+        [sys.executable, str(CONTEXT_MANAGER)],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"context_manager exited {result.returncode}\nstderr: {result.stderr[:500]}"
+        )
+    # Stdout may have warning lines from logging; the LAST line is the JSON.
+    out = result.stdout.strip().splitlines()
+    if not out:
+        raise AssertionError(f"No stdout from context_manager. stderr: {result.stderr[:500]}")
+    return json.loads(out[-1])
 
 
 @pytest.fixture

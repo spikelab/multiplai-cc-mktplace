@@ -16,92 +16,18 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
 
-import pytest
-
-PLUGIN_ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
-CONTEXT_MANAGER = SCRIPTS_DIR / "context_manager.py"
-
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
-
+from conftest import (
+    CONTEXT_MANAGER,
+    PLUGIN_ROOT,
+    SCRIPTS_DIR,
+    run_context_hook as _run_hook,
+    write_catalog as _write_catalog,
+)
 from generators.base import CATALOG_SCHEMA_VERSION
 
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def env_setup(tmp_path):
-    """Build a sandboxed plugin layout: data, memory, skills, resources dirs."""
-    data_dir = tmp_path / "plugin_data"
-    catalogs_dir = data_dir / "catalogs"
-    memory_dir = tmp_path / "memory"
-    skills_dir = tmp_path / "skills"
-    resources_dir = tmp_path / "resources"
-
-    for d in (catalogs_dir, memory_dir, skills_dir, resources_dir):
-        d.mkdir(parents=True)
-
-    return {
-        "tmp_path": tmp_path,
-        "data_dir": data_dir,
-        "catalogs_dir": catalogs_dir,
-        "memory_dir": memory_dir,
-        "skills_dir": skills_dir,
-        "resources_dir": resources_dir,
-    }
-
-
-def _write_catalog(catalogs_dir: Path, filename: str, entries: list[dict]) -> None:
-    payload = {
-        "schema_version": CATALOG_SCHEMA_VERSION,
-        "generated_at": "2026-05-01T00:00:00Z",
-        "entries": entries,
-    }
-    (catalogs_dir / filename).write_text(json.dumps(payload, indent=2))
-
-
-def _run_hook(env_setup, *, prompt: str, extra_env: dict | None = None) -> dict:
-    """Invoke context_manager.py as a subprocess and return parsed stdout JSON."""
-    env = os.environ.copy()
-    for k in list(env):
-        if k.startswith("CLAUDE_PLUGIN"):
-            del env[k]
-    env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
-    env["CLAUDE_PLUGIN_DATA"] = str(env_setup["data_dir"])
-    env["CLAUDE_PLUGIN_OPTION_memory_dir"] = str(env_setup["memory_dir"])
-    env["CLAUDE_PLUGIN_OPTION_skills_dir"] = str(env_setup["skills_dir"])
-    env["CLAUDE_PLUGIN_OPTION_resources_dir"] = str(env_setup["resources_dir"])
-    if extra_env:
-        env.update(extra_env)
-
-    stdin = json.dumps({
-        "hook_event_name": "UserPromptSubmit",
-        "prompt": prompt,
-        "cwd": "/tmp",
-    })
-    result = subprocess.run(
-        [sys.executable, str(CONTEXT_MANAGER)],
-        input=stdin,
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=15,
-    )
-    if result.returncode != 0:
-        raise AssertionError(
-            f"context_manager exited {result.returncode}\nstderr: {result.stderr[:500]}"
-        )
-    # Stdout may have warning lines from logging; the LAST line is the JSON.
-    out = result.stdout.strip().splitlines()
-    if not out:
-        raise AssertionError(f"No stdout from context_manager. stderr: {result.stderr[:500]}")
-    return json.loads(out[-1])
+# The sandbox layout (env_setup) and hook runner live in conftest.py —
+# shared with the qmd and memory-conflict suites.
 
 
 # ---------------------------------------------------------------------------

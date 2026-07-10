@@ -15,35 +15,15 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import textwrap
 from pathlib import Path
 
 import pytest
 
-PLUGIN_ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
-CONTEXT_MANAGER = SCRIPTS_DIR / "context_manager.py"
+from conftest import run_context_hook
 
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
-
-
-@pytest.fixture
-def env_setup(tmp_path):
-    data_dir = tmp_path / "plugin_data"
-    memory_dir = tmp_path / "memory"
-    resources_dir = tmp_path / "resources"
-    workspace = tmp_path / "ws"
-    for d in (data_dir / "catalogs", memory_dir, resources_dir, workspace):
-        d.mkdir(parents=True)
-    return {
-        "tmp_path": tmp_path,
-        "data_dir": data_dir,
-        "memory_dir": memory_dir,
-        "resources_dir": resources_dir,
-        "workspace": workspace,
-    }
+# The sandbox layout (env_setup fixture) and subprocess runner live in
+# conftest.py; only the qmd-specific env shaping stays here.
 
 
 def _fake_qmd(tmp_path: Path, results: list[dict], exit_code: int = 0) -> Path:
@@ -62,43 +42,26 @@ def _fake_qmd(tmp_path: Path, results: list[dict], exit_code: int = 0) -> Path:
 
 def _run_hook(env_setup, *, prompt: str, qmd_bin_dir: Path | None,
               extra_env: dict | None = None) -> dict:
-    env = os.environ.copy()
-    for k in list(env):
-        if k.startswith("CLAUDE_PLUGIN"):
-            del env[k]
-    env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
-    env["CLAUDE_PLUGIN_DATA"] = str(env_setup["data_dir"])
-    env["CLAUDE_PLUGIN_OPTION_memory_dir"] = str(env_setup["memory_dir"])
-    env["CLAUDE_PLUGIN_OPTION_resources_dir"] = str(env_setup["resources_dir"])
-    env["CLAUDE_PLUGIN_OPTION_enable_resources"] = "true"
-    env["CLAUDE_PLUGIN_OPTION_resources_retrieval"] = "qmd"
-    env["CLAUDE_PLUGIN_OPTION_qmd_mode"] = "local"
-    # Point HOME away from any real ~/.bun/bin qmd; PATH carries the fake.
-    env["HOME"] = str(env_setup["tmp_path"])
-    if qmd_bin_dir is not None:
-        env["PATH"] = f"{qmd_bin_dir}:{env['PATH']}"
-    else:
-        env["PATH"] = "/usr/bin:/bin"
+    qmd_env = {
+        "CLAUDE_PLUGIN_OPTION_enable_resources": "true",
+        "CLAUDE_PLUGIN_OPTION_resources_retrieval": "qmd",
+        "CLAUDE_PLUGIN_OPTION_qmd_mode": "local",
+        # Point HOME away from any real ~/.bun/bin qmd; PATH carries the fake.
+        "HOME": str(env_setup["tmp_path"]),
+        "PATH": (
+            f"{qmd_bin_dir}:{os.environ['PATH']}"
+            if qmd_bin_dir is not None else "/usr/bin:/bin"
+        ),
+    }
     if extra_env:
-        env.update(extra_env)
-
-    stdin = json.dumps({
-        "hook_event_name": "UserPromptSubmit",
-        "prompt": prompt,
-        "cwd": str(env_setup["workspace"]),
-    })
-    result = subprocess.run(
-        [sys.executable, str(CONTEXT_MANAGER)],
-        input=stdin, capture_output=True, text=True, env=env, timeout=60,
+        qmd_env.update(extra_env)
+    return run_context_hook(
+        env_setup,
+        prompt=prompt,
+        extra_env=qmd_env,
+        cwd=str(env_setup["workspace"]),
+        timeout=60,
     )
-    if result.returncode != 0:
-        raise AssertionError(
-            f"context_manager exited {result.returncode}\nstderr: {result.stderr[:500]}"
-        )
-    out = result.stdout.strip().splitlines()
-    if not out:
-        raise AssertionError(f"No stdout. stderr: {result.stderr[:500]}")
-    return json.loads(out[-1])
 
 
 QMD_RESULTS = [
