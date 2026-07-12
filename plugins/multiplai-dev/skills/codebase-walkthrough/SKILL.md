@@ -20,7 +20,7 @@ Parse the user's invocation:
 |-----|-------------|---------|
 | **target** | Directory path to the codebase | *(required — current project or specified path)* |
 | `--depth` | `overview` (architecture + entry points), `standard` (core paths + modules), `deep` (everything including utilities and config) | `standard` |
-| `--output` | Output directory for generated files | `INBOX/` |
+| `--output` | Output directory for generated files | `INBOX/` if it exists, else the current directory (tell the user where the files landed; never create `INBOX/`) |
 | `--name` | Base filename for output | Inferred from project name |
 | `--mode` | `human` (full walkthrough) or `agent` (compact output for autonomous agents) | `human` |
 

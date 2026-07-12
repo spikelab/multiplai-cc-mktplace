@@ -13,13 +13,11 @@
 set -euo pipefail
 
 # --- Configuration ---
+# SSH settings are only consulted when running off-Mac and the container→host
+# bridge is actually used (see run_on_host). A vanilla macOS user runs
+# everything locally and never needs these.
 SWIFT_BUILD_HOST="${SWIFT_BUILD_HOST:-host.docker.internal}"
 SWIFT_BUILD_USER="${SWIFT_BUILD_USER:-${SSH_BUILD_USER:-}}"
-if [ -z "$SWIFT_BUILD_USER" ]; then
-  echo "Error: no SSH user for the container→host bridge." >&2
-  echo "  Set SSH_BUILD_USER (or SWIFT_BUILD_USER) in your kit root .env." >&2
-  exit 1
-fi
 SWIFT_BUILD_KEY="${SWIFT_BUILD_KEY:-}"
 
 # Key discovery
@@ -45,6 +43,19 @@ run_on_host() {
     eval "$1"
   else
     # Remote (container) — SSH to host
+    if [ -z "$SWIFT_BUILD_USER" ]; then
+      # MULTIPLAI_CONTAINER: 1 = multiplai container (bridge expected),
+      # 0 = explicitly not a container, unset = fall back to /.dockerenv.
+      if [ "${MULTIPLAI_CONTAINER:-}" = "1" ] \
+         || { [ "${MULTIPLAI_CONTAINER:-}" != "0" ] && [ -f /.dockerenv ]; }; then
+        echo "Error: no SSH user for the container→host bridge." >&2
+        echo "  Set SSH_BUILD_USER (or SWIFT_BUILD_USER) in your kit root .env." >&2
+      else
+        echo "Error: swift-build needs macOS (Xcode/Swift toolchain); this host is $(uname -s)." >&2
+        echo "  Run it on a Mac, or from the multiplai container with the host bridge configured." >&2
+      fi
+      exit 1
+    fi
     if [ -z "$SWIFT_BUILD_KEY" ]; then
       echo "ERROR: No SSH key found. Set SWIFT_BUILD_KEY or place key at ~/.ssh/build_key" >&2
       exit 1

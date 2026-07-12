@@ -10,10 +10,19 @@ set -euo pipefail
 
 SKILL_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# 1. ffmpeg (proxy / audio extract / composite) must be present. It ships in
-#    the container image; we never install it here.
+# 1. ffmpeg (proxy / audio extract / composite) must be present. We never
+#    install it here — the hint names the right fix for the actual platform.
 if ! command -v ffmpeg >/dev/null 2>&1; then
-  echo "✗ ffmpeg not found on PATH. It should be baked into the container image." >&2
+  if [ "$(uname -s)" = "Darwin" ]; then
+    echo "✗ ffmpeg not found on PATH. Install it with: brew install ffmpeg" >&2
+  # MULTIPLAI_CONTAINER: 1 = multiplai container, 0 = explicitly not a
+  # container, unset = fall back to /.dockerenv.
+  elif [ "${MULTIPLAI_CONTAINER:-}" = "1" ] \
+       || { [ "${MULTIPLAI_CONTAINER:-}" != "0" ] && [ -f /.dockerenv ]; }; then
+    echo "✗ ffmpeg not found on PATH. It should be baked into the container image." >&2
+  else
+    echo "✗ ffmpeg not found on PATH. Install it with your package manager (e.g. apt install ffmpeg)." >&2
+  fi
   exit 1
 fi
 echo "✓ ffmpeg: $(command -v ffmpeg)"

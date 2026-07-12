@@ -9,6 +9,14 @@ effort: low
 
 Transcribe audio files to text using mlx-whisper.
 
+## Platform requirement
+
+**mlx-whisper runs only on Apple Silicon macOS** (it needs the Metal GPU). Supported setups:
+
+- **Apple Silicon Mac** — runs locally; needs `pip install mlx-whisper`.
+- **multiplai container** — bridges to the macOS host via SSH (see Container Support below).
+- **Plain Linux / WSL / Intel Mac** — not supported by this skill. Tell the user up front and suggest [whisper.cpp](https://github.com/ggml-org/whisper.cpp) or [faster-whisper](https://github.com/SYSTRAN/faster-whisper) as local alternatives.
+
 ## Quick Start
 
 Run the transcription script:
@@ -59,7 +67,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/transcribe/scripts/transcribe.sh /path/to/audio/fil
 
 ## Container Support
 
-The script auto-detects containers (`uname -s` != Darwin) and bridges to the macOS host via SSH for Metal GPU access. Same pattern as `swift-host.sh`.
+The script detects containers explicitly (`MULTIPLAI_CONTAINER=1`, set by the multiplai container image, with `/.dockerenv` as a generic-Docker fallback) and bridges to the macOS host via SSH for Metal GPU access. Same pattern as `swift-host.sh`. Plain Linux is NOT treated as a container — it gets the platform-requirement message above instead of a bridge error.
 
 Requirements for container use:
 - SSH key at `/home/agent/.ssh/build_key` (or set `TRANSCRIBE_KEY`)
