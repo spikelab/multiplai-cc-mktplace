@@ -203,6 +203,15 @@ def main() -> None:
         if not write_session_state(data_dir, session_state):
             logger.debug("Could not update session_state.json")
 
+    # Hub session registry: a Stop means the turn finished — the session is
+    # idle and safe to adopt. Best-effort, never blocks the Stop.
+    try:
+        from lib import session_registry
+
+        session_registry.record_event(data_dir, hook_input, "stop")
+    except Exception:
+        logger.warning("Session registry stop-event failed", exc_info=True)
+
     # Context checkpoint pass — advisory only, never blocks the Stop.
     system_message: str | None = None
     try:

@@ -66,6 +66,7 @@ MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 EXPECTED_HOOK_SCRIPTS = {
     "SessionStart": ["scripts/session_start.py"],
     "UserPromptSubmit": ["scripts/context_manager.py", "scripts/checkpoint_nudge.py"],
+    "Notification": ["scripts/session_notification.py"],
     "Stop": ["scripts/session_stop.py"],
     "SessionEnd": ["scripts/session_end.py"],
     "PreCompact": ["scripts/pre_compact.py"],

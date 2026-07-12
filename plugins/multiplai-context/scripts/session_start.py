@@ -492,6 +492,17 @@ def main() -> None:
     data_dir = paths.plugin_data()
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    # Hub session registry (hub input contract): GC week-old ended entries,
+    # then stamp this session's "start" event. Best-effort — with no hub
+    # installed the files are simply never read.
+    try:
+        from lib import session_registry
+
+        session_registry.gc_stale(data_dir)
+        session_registry.record_event(data_dir, hook_input, "start")
+    except Exception:
+        logger.warning("Session registry start-event failed", exc_info=True)
+
     # Log which model client is available
     client_type = _log_client_selection()
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.8 — 2026-07-12
+
+### Added
+- **Hub session registry.** The lifecycle hooks now maintain a per-session
+  JSON entry at `<data_dir>/sessions/<session_id>.json` implementing the
+  "hub input contract" of the multiplai hub (spikelab/multiplai-gui,
+  `docs/api-contract.md`): identity fields (`session_id`, `hostname`,
+  `cwd`, `project`, `workspace`, `started_at`) plus a `last_event`
+  stamp — `start` (SessionStart), `stop` (turn finished, session idle
+  and adoptable), `notification` (waiting for user input — the hub's
+  push trigger; a new Notification hook, the plugin's sixth event), and
+  `end` (SessionEnd). Writes are atomic (tmp+rename), read-merge-write
+  so hub-written keys survive, and best-effort throughout — the hooks
+  never raise. SessionStart GCs entries whose session ended more than
+  7 days ago (removing orphaned `.adopt` markers with them) and the
+  data-dir `*` gitignore keeps registry files untracked by mechanism.
+  Degradation: works identically with or without docker or the kit;
+  with no hub installed the files are simply never read.
+
 ## 0.6.6 — 2026-07-10
 
 ### Added

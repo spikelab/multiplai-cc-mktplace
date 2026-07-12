@@ -1168,12 +1168,15 @@ class TestPluginValidationReadiness:
         assert actual == expected, \
             f"Skill mismatch. Extra: {actual - expected}, Missing: {expected - actual}"
 
-    def test_five_distinct_hook_events(self):
+    def test_six_distinct_hook_events(self):
         """WHEN hooks.json events are collected
-        THEN there are exactly 5 distinct event types."""
+        THEN there are exactly 6 distinct event types."""
         hooks = _load_hooks_json()
         event_types = {h["event"] for h in hooks["hooks"]}
-        expected = {"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact"}
+        expected = {
+            "SessionStart", "UserPromptSubmit", "Notification", "Stop",
+            "SessionEnd", "PreCompact",
+        }
         assert event_types == expected, \
             f"Expected exactly {expected}, got {event_types}"
 
