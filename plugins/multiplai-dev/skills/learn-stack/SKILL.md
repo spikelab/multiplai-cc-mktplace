@@ -18,7 +18,7 @@ You are a senior developer and technical educator. Your job is to analyze a code
 |-----|-------------|---------|
 | **target** | Directory path to the codebase | *(required)* |
 | `--framework` | Override auto-detected framework (e.g., "Django 5.1", "Rails 7", "Actix-web") | Auto-detected |
-| `--output` | Output directory | `INBOX/` |
+| `--output` | Output directory | `INBOX/` if it exists, else the current directory (tell the user where the file landed; never create `INBOX/`) |
 | `--name` | Output filename base | `{framework}-for-{project}` |
 
 Parse arguments from the skill invocation. If `target` is missing, ask for it.

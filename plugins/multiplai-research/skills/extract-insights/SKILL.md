@@ -285,7 +285,7 @@ Compact bulleted list. Cap ~20 items for most sources — prefer specific number
 
 ## Output Location
 
-**Always save the insights file to `INBOX/`.** Use the naming pattern: `INBOX/{slug}-insights-{YYYY-MM-DD}.md`. Never save directly to RESOURCES or any other directory — INBOX is the landing zone; the user decides where it goes from there.
+**Save the insights file to `INBOX/` if the workspace has one; otherwise save to the current directory and tell the user where the file landed.** Use the naming pattern: `{slug}-insights-{YYYY-MM-DD}.md`. Never create an `INBOX/` directory that doesn't already exist, and never save directly to RESOURCES — when INBOX exists it is the landing zone; the user decides where it goes from there.
 
 ## Rules
 
