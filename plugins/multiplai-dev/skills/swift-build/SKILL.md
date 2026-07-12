@@ -35,12 +35,13 @@ This is the **preferred approach in containers** — it uses `swift build --pack
 
 ## Environment Detection
 
-The script detects where it's running via `uname -s`:
+The script detects where it's running:
 
-| `uname -s` | Environment | Behavior |
+| Environment | Detected by | Behavior |
 |-------------|-------------|----------|
-| `Darwin` | Local macOS | Commands run directly |
-| `Linux` | Docker container | Commands SSH to macOS host |
+| Local macOS | `uname -s` = `Darwin` | Commands run directly — no SSH config needed |
+| Container | `MULTIPLAI_CONTAINER=1` (set by the multiplai container image) or `/.dockerenv` | Commands SSH to the macOS host bridge |
+| Plain Linux | anything else | Unsupported — the error explains Swift/Xcode builds need macOS |
 
 **You do not need to detect the environment yourself.** Just run the script — it handles routing.
 
