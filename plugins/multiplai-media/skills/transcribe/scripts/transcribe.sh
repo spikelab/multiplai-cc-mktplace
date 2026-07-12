@@ -31,16 +31,29 @@ if [ -z "$TRANSCRIBE_KEY" ]; then
 fi
 
 # --- Environment detection ---
+# A container is detected explicitly (MULTIPLAI_CONTAINER=1, set by the multiplai
+# container image, or /.dockerenv as a generic-Docker fallback) — NOT inferred
+# from "not macOS". A plain Linux/WSL box is not a container and must never be
+# told to configure an SSH bridge it doesn't have. MULTIPLAI_CONTAINER=0
+# explicitly overrides the /.dockerenv fallback (e.g. a Docker box with no bridge).
 IS_CONTAINER=false
-if [ "$(uname -s)" != "Darwin" ]; then
-  IS_CONTAINER=true
-fi
+case "${MULTIPLAI_CONTAINER:-}" in
+  1) IS_CONTAINER=true ;;
+  0) ;;
+  *) [ -f /.dockerenv ] && IS_CONTAINER=true ;;
+esac
 
 # Running locally, we need mlx_whisper on PATH. (mlx-whisper is Apple-Silicon-only;
 # in a container it runs on the macOS host via the SSH bridge, checked below.)
 if [ "$IS_CONTAINER" = "false" ] && ! command -v mlx_whisper &>/dev/null; then
-  echo "Error: mlx_whisper is not installed (required to transcribe locally)." >&2
-  echo "Install with: pip install mlx-whisper  (Apple Silicon macOS only)" >&2
+  if [ "$(uname -s)" = "Darwin" ]; then
+    echo "Error: mlx_whisper is not installed (required to transcribe locally)." >&2
+    echo "Install with: pip install mlx-whisper  (Apple Silicon Macs)" >&2
+  else
+    echo "Error: this skill transcribes with mlx-whisper, which requires Apple Silicon macOS." >&2
+    echo "On $(uname -s), consider whisper.cpp (https://github.com/ggml-org/whisper.cpp)" >&2
+    echo "or faster-whisper (https://github.com/SYSTRAN/faster-whisper) instead." >&2
+  fi
   exit 1
 fi
 

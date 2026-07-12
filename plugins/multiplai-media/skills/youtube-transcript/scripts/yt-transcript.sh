@@ -27,10 +27,17 @@ if [ -z "$TRANSCRIBE_KEY" ]; then
 fi
 
 # --- Environment detection ---
+# A container is detected explicitly (MULTIPLAI_CONTAINER=1, set by the multiplai
+# container image, or /.dockerenv as a generic-Docker fallback) — NOT inferred
+# from "not macOS". A plain Linux box downloads subtitles locally like any other
+# machine and must never be routed to an SSH bridge it doesn't have.
+# MULTIPLAI_CONTAINER=0 explicitly overrides the /.dockerenv fallback.
 IS_CONTAINER=false
-if [ "$(uname -s)" != "Darwin" ]; then
-  IS_CONTAINER=true
-fi
+case "${MULTIPLAI_CONTAINER:-}" in
+  1) IS_CONTAINER=true ;;
+  0) ;;
+  *) [ -f /.dockerenv ] && IS_CONTAINER=true ;;
+esac
 
 # Run a command given as an argv array (NOT a shell string). Locally we exec the
 # argv directly — no eval, so an attacker-controlled arg (e.g. a video title)
@@ -134,8 +141,9 @@ fi
 # weeks, and self-healing here beats failing at runtime on a missing/old binary.
 # Non-fatal (`|| true`): if the network is down we still fall through to whatever
 # is already installed. Skipped on the macOS host, where the user manages their
-# own yt-dlp (brew, etc.) and we shouldn't shadow it.
-if [ "$IS_CONTAINER" = "true" ] && command -v uv &>/dev/null \
+# own yt-dlp (brew, etc.) and we shouldn't shadow it. Any other platform
+# (container or plain Linux) gets the self-heal.
+if [ "$(uname -s)" != "Darwin" ] && command -v uv &>/dev/null \
    && ! python3 -c "import yt_dlp" &>/dev/null; then
     echo "[yt-transcript] Ensuring yt-dlp is installed/current (uv tool install --upgrade yt-dlp) ..." >&2
     uv tool install --upgrade yt-dlp 1>&2 || true
@@ -161,18 +169,15 @@ fi
 # --- Set up temp directory (cleaned up on exit) ---
 # In containers, use INBOX/ in the workspace so the host can access audio files via SSH.
 # /tmp is container-local and invisible to the macOS host.
-if [ "$IS_CONTAINER" = "true" ]; then
+if [ "$IS_CONTAINER" = "true" ] && [ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.workspace" ]; then
   # INBOX is the workspace landing zone — always on the shared mount
-  CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-  WS_FILE="$CONFIG_DIR/.workspace"
-  if [ -f "$WS_FILE" ]; then
-    INBOX_DIR="$(cat "$WS_FILE")/INBOX"
-  else
-    INBOX_DIR="$HOME/INBOX"
-  fi
+  INBOX_DIR="$(cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.workspace")/INBOX"
   mkdir -p "$INBOX_DIR"
   TMPDIR_WORK=$(mktemp -d -p "$INBOX_DIR" .yt-transcript-XXXXXX)
 else
+  # No workspace configured (or not a container): plain temp dir. Without a
+  # shared mount the host bridge can't map paths anyway, so nothing is lost —
+  # and we never invent an INBOX/ on someone's machine.
   TMPDIR_WORK=$(mktemp -d)
 fi
 trap 'rm -rf "$TMPDIR_WORK"' EXIT
@@ -308,8 +313,13 @@ fi
 # In containers, mlx-whisper runs on the host via SSH — skip local check
 if [ "$IS_CONTAINER" = "false" ]; then
     if ! command -v mlx_whisper &>/dev/null; then
-        echo "Error: mlx_whisper is required for audio fallback but not installed." >&2
-        echo "Install with: pip install mlx-whisper" >&2
+        if [ "$(uname -s)" = "Darwin" ]; then
+            echo "Error: mlx_whisper is required for audio fallback but not installed." >&2
+            echo "Install with: pip install mlx-whisper  (Apple Silicon Macs)" >&2
+        else
+            echo "Error: audio fallback transcribes with mlx-whisper, which requires Apple Silicon macOS." >&2
+            echo "On $(uname -s), consider whisper.cpp or faster-whisper to transcribe the audio locally." >&2
+        fi
         exit 1
     fi
 fi
