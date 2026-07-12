@@ -289,6 +289,7 @@ Consult these helpful guides based on your skill's needs:
 
 - **Multi-step processes**: See references/workflows.md for sequential workflows and conditional logic
 - **Specific output formats or quality standards**: See references/output-patterns.md for template and example patterns
+- **Environment dependencies & graceful degradation** (any skill that touches external tools, platforms, memory files, sibling plugins, or workspace paths): See `docs/degradation-contract.md` at the marketplace repo root. Every skill must work on vanilla Claude Code or degrade with an honest message naming the missing capability and the vanilla fix — review the new skill against that file's checklist before packaging.
 
 These files contain established best practices for effective skill design.
 
