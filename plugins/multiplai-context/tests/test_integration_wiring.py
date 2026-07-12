@@ -254,14 +254,21 @@ class TestAfterFieldAndBootstrapFallback:
 
     def test_all_hook_commands_use_uv_run(self):
         """WHEN any hook command is inspected
-        THEN it is launched via `uv run --no-project` rather than `python`."""
+        THEN it execs the script via `uv run --no-project` (rather than
+        `python`), wrapped in the sh-level uv guard that turns a missing uv
+        into one clear message instead of a silent spawn failure (C1 —
+        see test_uv_guard.py for behavior)."""
         parsed = json.loads(HOOKS_JSON.read_text())
         for event, groups in parsed["hooks"].items():
             for group in groups:
                 for entry in group["hooks"]:
                     cmd = entry["command"]
-                    assert cmd.startswith("uv run --no-project "), \
-                        f"{event} command must use 'uv run --no-project', got: {cmd}"
+                    assert cmd.startswith("sh -c 'command -v uv "), \
+                        f"{event} command must start with the uv guard, got: {cmd}"
+                    assert 'exec uv run --no-project "' in cmd, \
+                        f"{event} command must exec via 'uv run --no-project', got: {cmd}"
+                    assert "python " not in cmd.replace("uv run", ""), \
+                        f"{event} command must not invoke bare python: {cmd}"
 
     def test_hooks_json_valid_official_nested_schema(self):
         """WHEN hooks/hooks.json is parsed

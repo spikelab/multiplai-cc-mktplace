@@ -61,6 +61,39 @@ declares its own dependencies inline (PEP 723) and is launched via
 is no shared virtualenv to bootstrap or maintain — `uv` provisions an
 ephemeral, per-script environment on demand.
 
+### Standalone install (no kit)
+
+The plugin is fully standalone. The multiplai kit (launcher, container,
+workspace scaffold) is **optional** — it pre-wires configuration, nothing
+more. On vanilla Claude Code:
+
+1. **Prerequisite: [uv](https://docs.astral.sh/uv).** It is the only hard
+   requirement (`curl -LsSf https://astral.sh/uv/install.sh | sh`). Without
+   it the hooks stay disabled and print one clear install pointer — nothing
+   crashes, but nothing runs either.
+2. Install the plugin:
+   ```
+   /plugin marketplace add spikelab/multiplai-cc-mktplace
+   /plugin install multiplai-context@multiplai
+   ```
+3. **Expect a slow first session start.** The first hook run resolves
+   `multiplai-core` from GitHub plus PyPI deps into uv's cache (the
+   SessionStart hook allows 60s for this). To warm the cache ahead of time
+   instead, run once from a shell:
+   ```
+   uv run --no-project <plugin-dir>/scripts/session_start.py </dev/null
+   ```
+   Every later start is fast (cache hit).
+4. Run `/multiplai-context:setup` in your first session — an onboarding
+   interview that populates your memory files from starter templates.
+
+**What lands where:** with no configuration, all state roots at
+`~/.multiplai/` — `memory/` (your profile), `diary/` (per-session
+narrative), `learnings/` (pending insights), `now/` (project snapshots) —
+and catalogs/logs under `~/.claude/`. Set the `workspace_dir` plugin option
+to anchor state at `<workspace>/.multiplai/` instead. All options are
+listed under Configuration below; every one has a working default.
+
 ## Configuration
 
 All options are set via the plugin's `userConfig` (Claude Code prompts for

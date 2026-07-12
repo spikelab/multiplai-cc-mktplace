@@ -67,8 +67,12 @@ A recommendation without a verified root cause is worthless. For each candidate:
 
 ## Step 4 — Write the report
 
-Write to `INBOX/log-doctor-<scope>-YYYY-MM-DD.md` in the workspace root
-(never straight to PLANS/ or RESOURCES/). Structure:
+Write to `{workspace}/INBOX/log-doctor-<scope>-YYYY-MM-DD.md`, where `{workspace}` is
+the path in `$CLAUDE_CONFIG_DIR/.workspace` (with `CLAUDE_CONFIG_DIR` defaulting to the
+standard Claude config dir) — NOT the session cwd, and never straight to PLANS/ or
+RESOURCES/. If no workspace is configured (vanilla install), write the report to the
+current directory instead and tell the user where it landed — do not invent an
+`INBOX/`. Structure:
 
 ```markdown
 # Log Doctor Report — <scope> — <date>

@@ -123,8 +123,15 @@ If the proposal has a `## Action Items` section, handle the user's approved `A{N
 the toolchain should do, and must survive the Step 5 learnings cleanup, so they go to a
 tracked file.
 
-For each approved action item, append to `PLANS/dream-actions-{YYYY-MM-DD}.md` (create it if
-absent, today's date). Each entry as an unchecked task:
+**Where `PLANS/` lives:** resolve it against the workspace root — the path in
+`$CLAUDE_CONFIG_DIR/.workspace` (with `CLAUDE_CONFIG_DIR` defaulting to the standard
+Claude config dir) — NOT the session cwd. If no workspace is configured (vanilla
+install), ask the user where to put action items before writing anything; suggest
+`~/.multiplai/PLANS/`. Never create a bare `PLANS/` directory wherever the session
+happens to be.
+
+For each approved action item, append to `{workspace}/PLANS/dream-actions-{YYYY-MM-DD}.md`
+(create it if absent, today's date). Each entry as an unchecked task:
 
 ```
 ## Dream action items — {date}
