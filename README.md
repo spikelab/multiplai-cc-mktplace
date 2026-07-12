@@ -5,14 +5,13 @@ library for a full working environment. Designed to pair with
 [`multiplai-kit`](https://github.com/spikelab/multiplai-kit) (launcher +
 sandboxed container + workspace conventions).
 
-**Requirements & compatibility.** The context-plugin hooks and the
-Python-backed skills (buildme, deep-research, render_report) run via
-[`uv`](https://docs.astral.sh/uv/) — install it first. Many skills assume the
-kit's workspace layout (`INBOX/`, `RESOURCES/`, `PLANS/`, the memory
-files); those work best inside a kit workspace. Skills that bridge to a macOS
-host over SSH (transcribe, screen-demo, swift-build, host-browser) need the
-`multiplai-kit` container environment. The rest work in a plain Claude Code
-install.
+**Requirements.** One hard prerequisite: the context-plugin hooks and the
+Python-backed skills run via [`uv`](https://docs.astral.sh/uv/) — install it
+first. The kit (launcher, container, workspace layout) is **optional**:
+everything below tells you exactly what runs where. Per-skill details in the
+[compatibility matrix](#compatibility-matrix); the rules skills follow when a
+capability is missing are in
+[`docs/degradation-contract.md`](docs/degradation-contract.md).
 
 ## Add the marketplace
 
@@ -39,10 +38,40 @@ Then install the plugins you want:
 | [`multiplai-media`](plugins/multiplai-media) | Transcription, YouTube transcripts, screen-recording demo videos, diagrams, host-browser automation. |
 | [`multiplai-messaging`](plugins/multiplai-messaging) | Messaging pack: read/search/post Slack as yourself, and search/read/draft Gmail (never sends). |
 
-Skill-by-skill index: see each plugin's `skills/` directory. Some
-`multiplai-media`/`multiplai-dev` skills (transcribe, screen-demo,
-swift-build, host-browser) bridge to a macOS host over SSH and are designed
-for the `multiplai-kit` container environment.
+## Compatibility matrix
+
+| | |
+|---|---|
+| ✅ | vanilla Claude Code, any OS |
+| 🍎 | vanilla Claude Code on macOS (no kit needed) |
+| 🔑 | needs credentials/tokens you provide |
+| 🌉 | needs the multiplai-kit container→host SSH bridge |
+
+All ✅/🍎 skills also work inside the kit; the kit never *removes* a
+capability. When a prerequisite is missing, skills fail with a message naming
+it and the vanilla fix (see the [degradation
+contract](docs/degradation-contract.md)).
+
+| Plugin | Skill | Runs on | Notes |
+|--------|-------|:-------:|-------|
+| multiplai-context | *all hooks & skills* | ✅ | Needs `uv`. First session start resolves deps (allow ~1 min once). `qmd-search` additionally needs qmd installed. |
+| multiplai-dev | buildme | ✅ | Needs `uv` + network. `--skip-research` if multiplai-research absent. |
+| | code-review, security-review, deepen, think, e2e-test | ✅ | e2e-test frontend mode needs `agent-browser` (npm); backend mode is plain HTTP. |
+| | codebase-walkthrough, learn-stack, skill-creator | ✅ | |
+| | analyze-context-router, propose-skill | ✅ | Operate on multiplai-context — install it first. |
+| | devops-gcp | 🔑 | Knowledge pack; real operations need your `gcloud` auth. |
+| | swift-build | 🍎 | Swift/Xcode toolchain is macOS-only. From the kit container: 🌉. |
+| multiplai-media | youtube-transcript | ✅ | Subtitle path works anywhere. Audio-transcription fallback: 🍎 (Apple-Silicon mlx-whisper) or 🌉. |
+| | excalidraw | ✅ | |
+| | transcribe | 🍎 | mlx-whisper needs Apple Silicon macOS. From the kit container: 🌉. Plain Linux: use whisper.cpp / faster-whisper instead. |
+| | screen-demo | 🍎 | Needs ffmpeg + mlx-whisper on a Mac. From the kit container: 🌉. |
+| | host-browser | 🌉 | Drives the host's real Chrome via the `ab` bridge; on a Mac a local CDP Chrome also works. |
+| multiplai-messaging | slack | 🔑 | Your Slack `xoxp` user token. Full standalone setup docs in the skill. |
+| | gmail | 🔑 | Gmail OAuth credentials. Full standalone setup docs in the skill. |
+| multiplai-pm | job-application, landing-page, pm-jtbd-synthesis, pm-persona-codifier, pm-pr-faq, pm-strategy-memo | ✅ | Personal memory files are optional — skills ask for source material when absent. |
+| multiplai-research | deep-research | ✅ | Zero-config via the Agent SDK; optional 🔑 search-provider keys widen coverage. |
+| | extract-insights, interviewer | ✅ | |
+| multiplai-writing | writing (all modes) | ✅ | Voice memory files optional — asks if missing. |
 
 ## Repository layout
 
