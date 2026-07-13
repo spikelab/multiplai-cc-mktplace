@@ -139,7 +139,14 @@ def record_event(data_dir: Path, hook_input: dict, kind: str) -> bool:
         cwd = str(hook_input.get("cwd") or "").strip()
 
         entry["session_id"] = session_id
-        entry.setdefault("hostname", _hostname())
+        # Hostname is refreshed on every event: a session resumed in a new
+        # container must not keep the dead container's name, or the launcher
+        # would map/adopt against a container that no longer exists.
+        hostname = _hostname()
+        if hostname:
+            entry["hostname"] = hostname
+        else:
+            entry.setdefault("hostname", "")
         entry.setdefault("workspace", _workspace_root(data_dir))
         entry.setdefault("started_at", now)
         if cwd:

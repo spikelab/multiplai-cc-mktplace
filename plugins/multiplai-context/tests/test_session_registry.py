@@ -66,6 +66,22 @@ class TestRecordEventStart:
             sr.record_event(tmp_path, _hook_input(), "start")
         assert _read_entry(tmp_path)["hostname"] == "claude-test-01020304"
 
+    def test_hostname_refreshed_on_every_event(self, tmp_path):
+        """A session resumed in a new container must show the new hostname."""
+        with patch.dict(os.environ, {"HOSTNAME": "claude-container-a"}):
+            sr.record_event(tmp_path, _hook_input(), "start")
+        with patch.dict(os.environ, {"HOSTNAME": "claude-container-b"}):
+            sr.record_event(tmp_path, _hook_input(), "start")
+        assert _read_entry(tmp_path)["hostname"] == "claude-container-b"
+
+    def test_hostname_kept_when_current_unresolvable(self, tmp_path):
+        """An empty current hostname must not clobber a known one."""
+        with patch.dict(os.environ, {"HOSTNAME": "claude-container-a"}):
+            sr.record_event(tmp_path, _hook_input(), "start")
+        with patch.object(sr, "_hostname", return_value=""):
+            sr.record_event(tmp_path, _hook_input(), "stop")
+        assert _read_entry(tmp_path)["hostname"] == "claude-container-a"
+
     def test_project_resolved_when_possible(self, tmp_path):
         with patch.object(sr, "_resolve_project", return_value="myproj"):
             sr.record_event(tmp_path, _hook_input(), "start")
