@@ -157,7 +157,9 @@ class TestRecordEventRobustness:
     def test_atomic_no_tmp_left_behind(self, tmp_path):
         sr.record_event(tmp_path, _hook_input(), "start")
         files = sorted(p.name for p in (tmp_path / "sessions").iterdir())
-        assert files == [f"{SID}.json"], "only the entry itself may remain"
+        assert files == [f"{SID}.json", f"{SID}.lock"], (
+            "only the entry and its lock file may remain"
+        )
 
     def test_failed_write_unlinks_tmp(self, tmp_path, monkeypatch):
         """A failed rename must not orphan a tmp file (GC globs *.json only)."""
@@ -178,6 +180,28 @@ class TestRecordEventRobustness:
         target.write_text("a file where the data dir should be")
         # data_dir is a file → mkdir fails; must return False, not raise
         assert sr.record_event(target, _hook_input(), "start") is False
+
+    def test_update_takes_exclusive_flock_on_lock_file(self, tmp_path):
+        """Read-merge-write serializes on <sid>.lock (hub writes same lock)."""
+        calls = []
+        real_flock = sr.fcntl.flock
+
+        def spy(fd, op):
+            calls.append(op)
+            return real_flock(fd, op)
+
+        with patch.object(sr.fcntl, "flock", side_effect=spy):
+            sr.record_event(tmp_path, _hook_input(), "start")
+        assert calls == [sr.fcntl.LOCK_EX]
+        assert _entry_path(tmp_path).with_suffix(".lock").exists()
+
+    def test_lock_failure_fails_open(self, tmp_path):
+        """Hooks must never crash or skip the write on a flock-less FS."""
+        with patch.object(
+            sr.fcntl, "flock", side_effect=OSError("flock unsupported")
+        ):
+            assert sr.record_event(tmp_path, _hook_input(), "start") is True
+        assert _read_entry(tmp_path)["last_event"]["kind"] == "start"
 
     def test_gitignore_dropped_at_data_root(self, tmp_path):
         sr.record_event(tmp_path, _hook_input(), "start")
@@ -232,6 +256,13 @@ class TestGcStale:
         path.with_suffix(".adopt").touch()
         sr.gc_stale(tmp_path)
         assert not path.with_suffix(".adopt").exists()
+
+    def test_orphan_lock_file_removed_with_entry(self, tmp_path):
+        old = datetime.now(timezone.utc) - timedelta(days=8)
+        path = _write_entry(tmp_path, "locked", "end", old)
+        path.with_suffix(".lock").touch()
+        sr.gc_stale(tmp_path)
+        assert not path.with_suffix(".lock").exists()
 
     def test_old_unparseable_entry_removed(self, tmp_path):
         rdir = tmp_path / "sessions"

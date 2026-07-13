@@ -14,13 +14,19 @@ plain machine hostname otherwise — it is how the launcher wrapper maps a
 container back to its session. The hub additionally writes
 ``<session_id>.adopt`` markers beside the entries; this module never touches
 those beyond GC of orphans, and updates preserve any keys it doesn't own
-(read-merge-write) so hub-written fields survive.
+(read-merge-write) so hub-written fields survive. Concurrent writers
+serialize on an advisory flock of ``<session_id>.lock`` beside the entry —
+a hub that edits entries must take the same lock, or a racing hook update
+can silently revert its keys. The lock is best-effort/fail-open (readonly
+or flock-less filesystems proceed unlocked) because crash-safety beats
+consistency inside a hook.
 
 Degradation: with no hub installed the files are simply never read. Every
 public function is best-effort — it returns rather than raises, because it
 runs inside kill-within-seconds hooks that must never break a session.
 """
 
+import fcntl
 import json
 import logging
 import os
@@ -89,6 +95,44 @@ def _resolve_project(cwd: str) -> str | None:
         return None
 
 
+def _lock_entry(path: Path) -> int | None:
+    """Exclusive advisory flock on ``<sid>.lock``; fd, or None when unavailable.
+
+    Serializes concurrent read-merge-write cycles (Notification vs Stop hook,
+    hook vs hub) so neither silently reverts the other's keys. The lock file
+    is separate from the entry because the atomic-rename write swaps inodes —
+    a flock on the entry itself would not serialize with the next opener.
+    Fail-open: any OSError (readonly FS, flock unsupported) returns None and
+    the caller proceeds unlocked. The blocking wait is bounded by the lock
+    holder's own read-merge-write, i.e. milliseconds.
+    """
+    try:
+        fd = os.open(
+            str(path.with_suffix(".lock")), os.O_CREAT | os.O_RDWR, 0o644
+        )
+    except OSError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return None
+    return fd
+
+
+def _unlock_entry(fd: int | None) -> None:
+    """Release a :func:`_lock_entry` fd (closing drops the flock)."""
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
 def _ensure_data_gitignore(data_dir: Path) -> None:
     """Drop a ``*`` .gitignore at the data-dir root if none exists.
 
@@ -129,40 +173,45 @@ def record_event(data_dir: Path, hook_input: dict, kind: str) -> bool:
         _ensure_data_gitignore(data_dir)
 
         path = rdir / f"{session_id}.json"
-        entry: dict = {}
+        lock_fd = _lock_entry(path)
         try:
-            existing = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(existing, dict):
-                entry = existing
-        except (OSError, json.JSONDecodeError, ValueError):
-            entry = {}
+            entry: dict = {}
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(existing, dict):
+                    entry = existing
+            except (OSError, json.JSONDecodeError, ValueError):
+                entry = {}
 
-        now = _now_iso()
-        cwd = str(hook_input.get("cwd") or "").strip()
+            now = _now_iso()
+            cwd = str(hook_input.get("cwd") or "").strip()
 
-        entry["session_id"] = session_id
-        # Hostname is refreshed on every event: a session resumed in a new
-        # container must not keep the dead container's name, or the launcher
-        # would map/adopt against a container that no longer exists.
-        hostname = _hostname()
-        if hostname:
-            entry["hostname"] = hostname
-        else:
-            entry.setdefault("hostname", "")
-        entry.setdefault("workspace", _workspace_root(data_dir))
-        entry.setdefault("started_at", now)
-        if cwd:
-            entry["cwd"] = cwd
-        else:
-            entry.setdefault("cwd", "")
-        if not entry.get("project"):
-            project = _resolve_project(entry.get("cwd", ""))
-            if project:
-                entry["project"] = project
-        entry["last_event"] = {"ts": now, "kind": kind}
+            entry["session_id"] = session_id
+            # Hostname is refreshed on every event: a session resumed in a
+            # new container must not keep the dead container's name, or the
+            # launcher would map/adopt against a container that no longer
+            # exists.
+            hostname = _hostname()
+            if hostname:
+                entry["hostname"] = hostname
+            else:
+                entry.setdefault("hostname", "")
+            entry.setdefault("workspace", _workspace_root(data_dir))
+            entry.setdefault("started_at", now)
+            if cwd:
+                entry["cwd"] = cwd
+            else:
+                entry.setdefault("cwd", "")
+            if not entry.get("project"):
+                project = _resolve_project(entry.get("cwd", ""))
+                if project:
+                    entry["project"] = project
+            entry["last_event"] = {"ts": now, "kind": kind}
 
-        atomic_write_json(path, entry)
-        return True
+            atomic_write_json(path, entry)
+            return True
+        finally:
+            _unlock_entry(lock_fd)
     except Exception:
         logger.warning("Could not record session registry event", exc_info=True)
         return False
@@ -213,6 +262,7 @@ def gc_stale(
                     continue
                 path.unlink(missing_ok=True)
                 path.with_suffix(".adopt").unlink(missing_ok=True)
+                path.with_suffix(".lock").unlink(missing_ok=True)
                 removed += 1
             except OSError:
                 continue
