@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",

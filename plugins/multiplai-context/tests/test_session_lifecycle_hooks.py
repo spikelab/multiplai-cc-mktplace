@@ -1115,17 +1115,20 @@ class TestErrorResilience:
         )
 
 # ===========================================================================
-# Exactly Five Hook Event Types
+# Exactly Six Hook Event Types
 # ===========================================================================
 
 class TestHookEventTypeCompleteness:
-    """The plugin must register hooks for exactly five lifecycle events."""
+    """The plugin must register hooks for exactly six lifecycle events."""
 
-    def test_five_distinct_event_types(self):
-        """hooks.json must have exactly five distinct event types."""
+    def test_six_distinct_event_types(self):
+        """hooks.json must have exactly six distinct event types."""
         data = _load_hooks_json()
         event_types = {h["event"] for h in data["hooks"]}
-        expected = {"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact"}
+        expected = {
+            "SessionStart", "UserPromptSubmit", "Notification", "Stop",
+            "SessionEnd", "PreCompact",
+        }
         assert event_types == expected, (
             f"Expected exactly {expected}, got {event_types}"
         )

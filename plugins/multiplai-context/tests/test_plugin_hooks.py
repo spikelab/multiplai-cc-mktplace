@@ -40,7 +40,11 @@ class TestHookRegistration:
         events = {h["event"] for h in self.hooks}
         assert "PreCompact" in events
 
-    def test_exactly_five_event_types(self):
+    def test_notification_registered(self):
+        events = {h["event"] for h in self.hooks}
+        assert "Notification" in events
+
+    def test_exactly_six_event_types(self):
         event_types = {h["event"] for h in self.hooks}
         assert event_types == set(EXPECTED_HOOK_SCRIPTS.keys())
 

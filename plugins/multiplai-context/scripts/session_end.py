@@ -86,6 +86,14 @@ def main() -> None:
     paths = get_paths()
     session_state = read_session_state(paths.plugin_data()) or {}
 
+    # Hub session registry: mark the session ended (adoptable / GC-able).
+    try:
+        from lib import session_registry
+
+        session_registry.record_event(paths.plugin_data(), hook_input, "end")
+    except Exception:
+        logger.warning("Session registry end-event failed", exc_info=True)
+
     try:
         _save_deferred_marker(paths.plugin_data(), session_state, hook_input)
     except Exception:

@@ -27,6 +27,17 @@
         ]
       }
     ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'command -v uv >/dev/null 2>&1 || { m=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.multiplai-context-uv-warned\"; if [ ! -f \"$m\" ] || [ -n \"$(find \"$m\" -mmin +1440 2>/dev/null)\" ]; then echo \"[multiplai-context] uv not found - the plugin hooks are disabled until it is installed. Tell the user to install uv: https://docs.astral.sh/uv\"; echo \"[multiplai-context] uv not found - install from https://docs.astral.sh/uv (hooks disabled until then)\" >&2; touch \"$m\" 2>/dev/null; fi; exit 0; }; exec uv run --no-project \"${CLAUDE_PLUGIN_ROOT}/scripts/session_notification.py\"'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

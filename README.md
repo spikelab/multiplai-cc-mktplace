@@ -54,7 +54,7 @@ contract](docs/degradation-contract.md)).
 
 | Plugin | Skill | Runs on | Notes |
 |--------|-------|:-------:|-------|
-| multiplai-context | *all hooks & skills* | ✅ | Needs `uv`. First session start resolves deps (allow ~1 min once). `qmd-search` additionally needs qmd installed. |
+| multiplai-context | *all hooks & skills* | ✅ | Needs `uv`. First session start resolves deps (allow ~1 min once). `qmd-search` additionally needs qmd installed. The hub session registry the hooks write works identically with or without docker/kit; with no multiplai hub installed the files are simply never read. |
 | multiplai-dev | buildme | ✅ | Needs `uv` + network. `--skip-research` if multiplai-research absent. |
 | | code-review, security-review, deepen, think, e2e-test | ✅ | e2e-test frontend mode needs `agent-browser` (npm); backend mode is plain HTTP. |
 | | codebase-walkthrough, learn-stack, skill-creator | ✅ | |
