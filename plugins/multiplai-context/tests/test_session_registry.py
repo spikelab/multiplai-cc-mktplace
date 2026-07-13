@@ -12,6 +12,7 @@ Covers the "hub input contract" (spikelab/multiplai-gui docs/api-contract.md):
 
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -380,3 +381,34 @@ class TestLifecycleIntegration:
                     assert entry["hostname"] == "claude-e2e-test"
             finally:
                 _reset_cache()
+
+    def test_notification_script_executes_e2e(self, tmp_path):
+        """Run session_notification.py as a real subprocess with a fake
+        Notification payload — the script itself, not just its source text."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        env = os.environ.copy()
+        for k in list(env):
+            if k.startswith("CLAUDE_PLUGIN"):
+                del env[k]
+        env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
+        env["HOSTNAME"] = "claude-e2e-notif"
+        payload = json.dumps({
+            "hook_event_name": "Notification",
+            "session_id": SID,
+            "cwd": str(tmp_path),
+            "message": "Claude is waiting for your input",
+        })
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / "session_notification.py")],
+            input=payload,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr[:500]}"
+        entry = _read_entry(data_dir)
+        assert entry["last_event"]["kind"] == "notification"
+        assert entry["hostname"] == "claude-e2e-notif"
+        assert entry["cwd"] == str(tmp_path)
