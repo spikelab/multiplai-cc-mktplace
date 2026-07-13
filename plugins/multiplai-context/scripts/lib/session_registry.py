@@ -28,6 +28,8 @@ import socket
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from lib.fsio import atomic_write_json
+
 logger = logging.getLogger(__name__)
 
 # Registry entries whose session ended more than this long ago are GC'd on
@@ -85,12 +87,6 @@ def _resolve_project(cwd: str) -> str | None:
     except Exception:
         logger.debug("project resolution failed for %s", cwd, exc_info=True)
         return None
-
-
-def _atomic_write(path: Path, payload: dict) -> None:
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(str(tmp), str(path))
 
 
 def _ensure_data_gitignore(data_dir: Path) -> None:
@@ -165,7 +161,7 @@ def record_event(data_dir: Path, hook_input: dict, kind: str) -> bool:
                 entry["project"] = project
         entry["last_event"] = {"ts": now, "kind": kind}
 
-        _atomic_write(path, entry)
+        atomic_write_json(path, entry)
         return True
     except Exception:
         logger.warning("Could not record session registry event", exc_info=True)

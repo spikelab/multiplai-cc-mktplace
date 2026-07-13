@@ -156,8 +156,22 @@ class TestRecordEventRobustness:
 
     def test_atomic_no_tmp_left_behind(self, tmp_path):
         sr.record_event(tmp_path, _hook_input(), "start")
-        leftovers = list((tmp_path / "sessions").glob("*.tmp"))
-        assert leftovers == []
+        files = sorted(p.name for p in (tmp_path / "sessions").iterdir())
+        assert files == [f"{SID}.json"], "only the entry itself may remain"
+
+    def test_failed_write_unlinks_tmp(self, tmp_path, monkeypatch):
+        """A failed rename must not orphan a tmp file (GC globs *.json only)."""
+        from lib import fsio
+
+        def boom(*args, **kwargs):
+            raise OSError("simulated rename failure")
+
+        monkeypatch.setattr(fsio.os, "replace", boom)
+        assert sr.record_event(tmp_path, _hook_input(), "start") is False
+        assert list((tmp_path / "sessions").glob("*.json")) == []
+        assert [
+            p for p in (tmp_path / "sessions").iterdir() if "tmp" in p.name
+        ] == []
 
     def test_never_raises_on_unwritable_dir(self, tmp_path):
         target = tmp_path / "blocked"
