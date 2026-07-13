@@ -199,11 +199,18 @@ class TestGcStale:
         _write_entry(tmp_path, "new-ended", "end", recent)
         assert sr.gc_stale(tmp_path) == 0
 
-    def test_old_live_entry_kept(self, tmp_path):
-        """Only *ended* sessions are GC'd — an old idle session may resume."""
-        old = datetime.now(timezone.utc) - timedelta(days=30)
+    def test_idle_entry_within_live_window_kept(self, tmp_path):
+        """A recently-idle session may resume — kept past the ended cutoff."""
+        old = datetime.now(timezone.utc) - timedelta(days=20)
         _write_entry(tmp_path, "old-idle", "stop", old)
         assert sr.gc_stale(tmp_path) == 0
+
+    def test_idle_entry_past_live_window_removed(self, tmp_path):
+        """Containers killed without SessionEnd age out after live_days."""
+        old = datetime.now(timezone.utc) - timedelta(days=31)
+        _write_entry(tmp_path, "ghost-idle", "stop", old)
+        assert sr.gc_stale(tmp_path) == 1
+        assert not (tmp_path / "sessions" / "ghost-idle.json").exists()
 
     def test_orphan_adopt_marker_removed_with_entry(self, tmp_path):
         old = datetime.now(timezone.utc) - timedelta(days=8)

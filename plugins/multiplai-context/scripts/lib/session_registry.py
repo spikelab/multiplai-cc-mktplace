@@ -34,6 +34,12 @@ logger = logging.getLogger(__name__)
 # SessionStart (per the hub input contract).
 GC_AFTER_DAYS = 7
 
+# Fallback age-out for entries that never saw a SessionEnd: containers killed
+# without the hook firing (docker kill, reboot, OOM — routine with ephemeral
+# containers) would otherwise accumulate forever as ghost "idle" sessions.
+# Generous window: an idle session with no event at all for this long is dead.
+GC_LIVE_AFTER_DAYS = 30
+
 _EVENT_KINDS = ("start", "stop", "notification", "end")
 
 
@@ -166,36 +172,47 @@ def record_event(data_dir: Path, hook_input: dict, kind: str) -> bool:
         return False
 
 
-def gc_stale(data_dir: Path, days: int = GC_AFTER_DAYS) -> int:
+def gc_stale(
+    data_dir: Path,
+    days: int = GC_AFTER_DAYS,
+    live_days: int = GC_LIVE_AFTER_DAYS,
+) -> int:
     """Delete registry entries whose session ended more than *days* ago.
 
-    Unparseable entries older than the window (by mtime) are removed too —
-    they can never become readable again and would otherwise accumulate
-    forever. A removed entry's orphaned ``.adopt`` marker goes with it.
-    Returns the number of entries removed; never raises.
+    Entries whose last event is anything other than ``end`` age out after
+    *live_days* instead — sessions whose container died without a SessionEnd
+    (docker kill, reboot, OOM) would otherwise linger forever as adoptable
+    ghosts. Unparseable entries older than the *days* window (by mtime) are
+    removed too — they can never become readable again and would otherwise
+    accumulate forever. A removed entry's orphaned ``.adopt`` marker goes
+    with it. Returns the number of entries removed; never raises.
     """
     removed = 0
     try:
         rdir = registry_dir(data_dir)
         if not rdir.is_dir():
             return 0
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        now = datetime.now(timezone.utc)
+        cutoff_ended = now - timedelta(days=days)
+        cutoff_live = now - timedelta(days=live_days)
         for path in list(rdir.glob("*.json")):
             try:
                 stale = False
                 try:
                     entry = json.loads(path.read_text(encoding="utf-8"))
                     last = entry.get("last_event") or {}
+                    ts = datetime.fromisoformat(str(last.get("ts") or ""))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
                     if last.get("kind") == "end":
-                        ts = datetime.fromisoformat(str(last.get("ts") or ""))
-                        if ts.tzinfo is None:
-                            ts = ts.replace(tzinfo=timezone.utc)
-                        stale = ts < cutoff
+                        stale = ts < cutoff_ended
+                    else:
+                        stale = ts < cutoff_live
                 except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
                     mtime = datetime.fromtimestamp(
                         path.stat().st_mtime, tz=timezone.utc
                     )
-                    stale = mtime < cutoff
+                    stale = mtime < cutoff_ended
                 if not stale:
                     continue
                 path.unlink(missing_ok=True)
