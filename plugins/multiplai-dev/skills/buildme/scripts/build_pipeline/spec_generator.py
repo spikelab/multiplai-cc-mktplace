@@ -165,6 +165,12 @@ async def _generate_single_artifact(
         output_path.write_text(content)
         log.info("Wrote artifact: %s", output_path)
 
+        # Tasks-shape audit: catch horizontal decomposition before the rubric
+        # and implementation build on a layered breakdown. Prompt instructions
+        # alone drift — this audit is the enforcement.
+        if artifact_id == "tasks":
+            await _audit_tasks_shape(change_dir, context, config, output_path)
+
     # Mark completed
     if state.spec_gen:
         state.spec_gen.completed_artifacts.append(artifact_id)
@@ -209,6 +215,64 @@ async def _generate_requirements(
 
         req_file.write_text(content)
         log.info("Wrote requirements: %s", req_file)
+
+
+async def _audit_tasks_shape(
+    change_dir: Path,
+    context: dict,
+    config,
+    output_path: Path,
+) -> None:
+    """Audit tasks.md for horizontal decomposition; regenerate ONCE on findings.
+
+    Any findings trigger exactly one regeneration pass with the findings
+    injected into the tasks prompt (no re-audit loop). Audit failures are
+    non-fatal — the first-pass tasks.md stands.
+    """
+    from .llm_steps.spec_steps import generate_artifact, run_tasks_audit
+
+    log.info("START phase=TASKS_SHAPE_AUDIT")
+    print("PHASE: tasks_shape_audit")
+    try:
+        findings = await run_tasks_audit(change_dir, config)
+    except Exception as audit_err:
+        log.warning("Tasks shape audit failed (non-fatal): %s", audit_err)
+        print(f"PHASE: tasks_shape_audit_skipped — {audit_err}")
+        return
+
+    if not findings:
+        log.info("DONE phase=TASKS_SHAPE_AUDIT findings=0")
+        return
+
+    log.warning(
+        "DONE phase=TASKS_SHAPE_AUDIT findings=%d — one regeneration pass",
+        len(findings),
+    )
+    for finding in findings:
+        log.warning(
+            "  finding severity=%s desc=%s",
+            finding.get("severity", "?"),
+            finding.get("description", "?"),
+        )
+
+    findings_text = "\n".join(
+        f"- [{f.get('severity', '?')}] {f.get('description', '')}"
+        + (f" Fix: {f['suggestion']}" if f.get("suggestion") else "")
+        for f in findings
+    )
+    try:
+        content = await generate_artifact(
+            "tasks", context, config, audit_findings=findings_text,
+        )
+    except Exception as regen_err:
+        log.warning(
+            "Tasks regeneration failed (non-fatal, first pass stands): %s", regen_err
+        )
+        print(f"PHASE: tasks_regeneration_failed — {regen_err}")
+        return
+    output_path.write_text(content)
+    log.info("Rewrote artifact after shape audit: %s", output_path)
+    print(f"PHASE: tasks_regenerated_after_shape_audit — {len(findings)} findings")
 
 
 async def _generate_rubric(
