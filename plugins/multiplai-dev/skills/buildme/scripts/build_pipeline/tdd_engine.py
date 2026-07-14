@@ -23,6 +23,7 @@ from .gates import (
     review_score_gate,
     wiring_task_gate,
 )
+from .llm_steps.review_steps import run_code_review
 from .llm_steps.tdd_steps import (
     run_implementer,
     run_integration_fix,
@@ -37,7 +38,7 @@ from .models import (
     ReviewResult,
 )
 from .progress import ProgressWriter
-from .sdk import llm_call, llm_call_structured
+from .sdk import llm_call
 from .state import BuildState, TDDState
 
 log = logging.getLogger(__name__)
@@ -93,6 +94,60 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
     except Exception as e:
         log.warning("Unexpected error committing block=%d phase=%s: %s", block.number, phase, e)
         return None
+
+
+def _git_rev_parse_head(config: BuildConfig) -> str | None:
+    """Return the project repo's HEAD SHA, or None (not a repo / no commits)."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(config.project_dir), capture_output=True, text=True, timeout=10,
+        )
+        if proc.returncode == 0:
+            return proc.stdout.strip()
+        log.warning("git rev-parse HEAD failed: %s", proc.stderr.strip())
+    except Exception as e:
+        log.warning("git rev-parse HEAD failed: %s", e)
+    return None
+
+
+# Cap the diff handed to the reviewer so a pathological block can't blow the
+# context window. 150k chars ≈ 40k tokens — far above any sane block diff.
+MAX_REVIEW_DIFF_CHARS = 150_000
+
+
+def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
+    """Capture everything the block changed: baseline commit → working tree.
+
+    Blocks commit at phase boundaries (test/impl commits), so diffing from the
+    recorded pre-block baseline covers those commits plus any uncommitted
+    refactor/review-fix edits. Falls back to `git diff HEAD` when no baseline
+    was recorded (e.g. the project had no commits at block start). Returns ""
+    on git failure — never raises.
+
+    Known limitation: brand-new files that are still untracked (created after
+    the impl commit, e.g. by a review-fix agent) don't appear until the next
+    phase commit tracks them.
+    """
+    target = block.baseline_commit or "HEAD"
+    try:
+        proc = subprocess.run(
+            ["git", "diff", target],
+            cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
+        )
+        if proc.returncode != 0:
+            log.warning(
+                "Failed to capture diff for block %d (git diff %s): %s",
+                block.number, target, proc.stderr.strip(),
+            )
+            return ""
+        diff = proc.stdout
+    except Exception as e:
+        log.warning("Failed to capture diff for block %d: %s", block.number, e)
+        return ""
+    if len(diff) > MAX_REVIEW_DIFF_CHARS:
+        diff = diff[:MAX_REVIEW_DIFF_CHARS] + "\n... (diff truncated for review)"
+    return diff
 
 
 EXIT_SUCCESS = 0
@@ -284,6 +339,15 @@ async def run_block_tdd(
     block_idx = state.tdd.current_block if state.tdd else 0
     total = len(state.tdd.blocks) if state.tdd else 0
     cwd = str(config.project_dir)
+
+    # Record the pre-block diff baseline (once — survives resume via state).
+    # The quality review diffs the working tree against this SHA to review the
+    # block's actual changes.
+    if block.baseline_commit is None:
+        baseline = _git_rev_parse_head(config)
+        if baseline:
+            block.baseline_commit = baseline
+            state.checkpoint(config.state_file_path())
 
     # --- Phase A: Write tests ---
     if block.status == BlockStatus.PENDING:
@@ -494,7 +558,11 @@ async def _run_integration_and_review(
 
 
 async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewResult:
-    """Run a quality review of the block's implementation using LLM scoring.
+    """Run an evidence-based quality review of the block's implementation.
+
+    Reviews the block's ACTUAL diff (pre-block baseline → working tree), with
+    the project's coding standards pushed into the reviewer's context, via
+    llm_steps.review_steps.run_code_review (which honors config.review_model).
 
     Propagates LLMCallError / LLMCallTimeoutError on failure. Callers must
     handle the exception and fail the block — silently fabricating passing
@@ -504,26 +572,24 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
     if config.rubric_path.exists():
         rubric = config.rubric_path.read_text()
 
-    prompt = f"""\
-Review block "{block.name}" implementation against this rubric.
-Score each dimension 1-5 with evidence.
+    diff = _capture_block_diff(config, block)
+    if not diff:
+        log.warning(
+            "No diff captured for block %d (%s) — reviewer sees spec context only",
+            block.number, block.name,
+        )
 
-## Rubric
-{rubric}
+    spec_context = f"Block {block.number}: {block.name}\n{block.description}"
+    if block.satisfies:
+        spec_context += f"\nSatisfies: {', '.join(block.satisfies)}"
 
-## Block Description
-{block.description}
-
-Return JSON:
-```json
-{{
-    "scores": [
-        {{"dimension": "...", "weight": <int>, "score": <int 1-5>, "evidence": "..."}}
-    ]
-}}
-```
-"""
-    return await llm_call_structured(prompt, ReviewResult, model=config.model)
+    return await run_code_review(
+        diff,
+        rubric,
+        config,
+        spec_context=spec_context,
+        standards=config.standards_text(),
+    )
 
 
 async def run_tdd_engine(config: BuildConfig, args) -> int:

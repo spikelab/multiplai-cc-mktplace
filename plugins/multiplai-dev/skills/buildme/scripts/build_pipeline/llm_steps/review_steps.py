@@ -15,38 +15,44 @@ from ..sdk import llm_call, llm_call_structured, agent_call, LLMCallError
 log = logging.getLogger(__name__)
 
 
-# NOTE: not currently wired into the pipeline. The active per-block review is an
-# inline prompt in tdd_engine._run_quality_review. Kept for a future explicit
-# review gate.
+# WIRED: this is the active per-block quality review — called from
+# tdd_engine._run_quality_review with the block's actual diff, the rubric,
+# and the project's coding standards.
 async def run_code_review(
     diff: str,
     rubric: str,
     config,
     *,
     spec_context: str = "",
+    standards: str = "",
 ) -> ReviewResult:
     """Run code review against rubric dimensions.
 
     Args:
         diff: The git diff to review
         rubric: The rubric.md content
-        config: BuildConfig for model selection
+        config: BuildConfig for model selection (config.review_model, when
+            set, overrides config.model for this call)
         spec_context: Relevant spec scenarios for compliance checking
+        standards: Coding-standards doc contents pushed into the reviewer's
+            context (empty → the prompt says "(no standards provided)")
 
     Returns:
         ReviewResult with scores and issues.
     """
     prompt = CODE_REVIEW_PROMPT.format(
-        diff=diff,
+        diff=diff or "(no diff captured)",
         rubric=rubric,
         spec_context=spec_context or "(no spec context provided)",
+        standards=standards or "(no standards provided)",
     )
 
-    log.info("Running code review (%d bytes diff)", len(diff))
+    model = getattr(config, "review_model", None) or config.model
+    log.info("Running code review (%d bytes diff, model=%s)", len(diff), model)
     result = await llm_call_structured(
         prompt,
         ReviewResult,
-        model=config.model,
+        model=model,
         max_retries=1,
     )
     log.info(
@@ -95,8 +101,8 @@ async def run_security_review(
     return result
 
 
-# NOTE: not currently wired into the pipeline (pairs with run_code_review /
-# run_security_review, which are also not wired).
+# NOTE: not currently wired into the pipeline (pairs with run_security_review,
+# which is also not wired; the review-fix loop in tdd_engine uses run_implementer).
 async def run_review_fix(
     issues: list[dict],
     diff: str,

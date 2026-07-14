@@ -114,6 +114,10 @@ class BlockInfo(BaseModel):
     # out (vs an ordinary build/test failure) — lets the orchestrator return
     # EXIT_AGENT_TIMEOUT only for real timeouts.
     timed_out: bool = False
+    # HEAD of the project repo when the block started — the diff baseline for
+    # the evidence-based quality review (git diff <baseline> = everything the
+    # block changed). None when the project isn't a git repo.
+    baseline_commit: str | None = None
     test_commit: str | None = None
     impl_commit: str | None = None
     review_scores: ReviewResult | None = None
