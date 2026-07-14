@@ -211,3 +211,35 @@ class TestTasksAudit:
             findings = await run_tasks_audit(change_dir, config)
 
         assert findings == []
+
+    @pytest.mark.asyncio
+    async def test_non_dict_list_items_are_filtered(self, tmp_path):
+        """A JSON list of strings must not leak out — downstream calls .get()."""
+        change_dir = self._change_dir(tmp_path, "## 1. Slice")
+        config = MagicMock(model="test-model")
+
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = '["Blocks 1-3 are layers", "re-slice them"]'
+            findings = await run_tasks_audit(change_dir, config)
+
+        assert findings == []
+
+    @pytest.mark.asyncio
+    async def test_mixed_list_keeps_only_dict_findings(self, tmp_path):
+        change_dir = self._change_dir(tmp_path, "## 1. Slice")
+        config = MagicMock(model="test-model")
+        raw = (
+            '["stray string", {"category": "horizontal-decomposition", '
+            '"severity": "critical", "description": "layers", "suggestion": "fix"}]'
+        )
+
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = raw
+            findings = await run_tasks_audit(change_dir, config)
+
+        assert len(findings) == 1
+        assert findings[0]["category"] == "horizontal-decomposition"

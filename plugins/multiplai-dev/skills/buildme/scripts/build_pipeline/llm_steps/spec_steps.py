@@ -230,8 +230,14 @@ async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
     try:
         findings = extract_json(raw)
         if isinstance(findings, list):
-            log.info("Tasks shape audit found %d findings", len(findings))
-            return findings
+            dict_findings = [f for f in findings if isinstance(f, dict)]
+            if len(dict_findings) != len(findings):
+                log.warning(
+                    "Tasks shape audit dropped %d non-dict findings",
+                    len(findings) - len(dict_findings),
+                )
+            log.info("Tasks shape audit found %d findings", len(dict_findings))
+            return dict_findings
         return []
     except (ValueError, json.JSONDecodeError):
         log.warning("Tasks shape audit returned non-JSON response")

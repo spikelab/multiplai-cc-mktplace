@@ -278,6 +278,23 @@ class TestTasksShapeAudit:
         assert "tasks" in state.spec_gen.completed_artifacts
 
     @pytest.mark.asyncio
+    async def test_regeneration_failure_is_non_fatal(self, tasks_setup):
+        cm, change_dir, config, state = tasks_setup
+
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.side_effect = ["## 1. Schema layer", RuntimeError("LLM down")]
+            mock_audit.return_value = [_LAYERING_FINDING]
+
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        # Regeneration was attempted once; its failure is swallowed
+        assert mock_gen.call_count == 2
+        # First-pass tasks.md stands and the artifact is still marked complete
+        assert (change_dir / "tasks.md").read_text() == "## 1. Schema layer"
+        assert "tasks" in state.spec_gen.completed_artifacts
+
+    @pytest.mark.asyncio
     async def test_non_tasks_artifacts_are_not_audited(self, tasks_setup):
         cm, change_dir, config, state = tasks_setup
 
