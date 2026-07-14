@@ -149,3 +149,90 @@ class TestSyncCheckpoint:
     def test_main_never_raises_on_garbage(self, data_env, monkeypatch, capsys):
         monkeypatch.setattr("sys.stdin", __import__("io").StringIO("{broken"))
         pre_compact.main()  # must not raise
+
+
+class TestSummaryDirective:
+    """The stdout directive that steers the native summarizer to a stub."""
+
+    def _write_valid_checkpoint(self, data_dir, session_id="sess-pc"):
+        text = "\n".join(f"## {s}\ncontent" for s in cp.CHECKPOINT_SECTIONS)
+        cp.session_dir(data_dir, session_id).mkdir(parents=True, exist_ok=True)
+        cp.checkpoint_file(data_dir, session_id).write_text(text)
+
+    def _pending_markers(self, data_dir):
+        pdir = cp.checkpoints_root(data_dir) / "pending"
+        return list(pdir.glob("*.json")) if pdir.exists() else []
+
+    def test_emits_directive_and_pending_marker(self, tmp_path, data_env):
+        self._write_valid_checkpoint(data_env)
+        directive = pre_compact._summary_directive(
+            _hook_input(tmp_path, 90_000), data_env
+        )
+        assert directive == pre_compact._SUMMARY_DIRECTIVE
+        markers = self._pending_markers(data_env)
+        assert len(markers) == 1
+        payload = json.loads(markers[0].read_text())
+        assert payload["session_id"] == "sess-pc"
+
+    def test_silent_without_checkpoint(self, tmp_path, data_env):
+        assert (
+            pre_compact._summary_directive(_hook_input(tmp_path, 90_000), data_env)
+            is None
+        )
+        assert self._pending_markers(data_env) == []
+
+    def test_silent_on_invalid_checkpoint(self, tmp_path, data_env):
+        cp.session_dir(data_env, "sess-pc").mkdir(parents=True, exist_ok=True)
+        cp.checkpoint_file(data_env, "sess-pc").write_text("## Notes\nonly one")
+        assert (
+            pre_compact._summary_directive(_hook_input(tmp_path, 90_000), data_env)
+            is None
+        )
+
+    def test_silent_when_disabled(self, tmp_path, data_env, monkeypatch):
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_enabled", "false")
+        self._write_valid_checkpoint(data_env)
+        assert (
+            pre_compact._summary_directive(_hook_input(tmp_path, 90_000), data_env)
+            is None
+        )
+
+    def test_silent_for_child_sessions(self, tmp_path, data_env):
+        self._write_valid_checkpoint(data_env, session_id="child")
+        sub = tmp_path / "subagents"
+        sub.mkdir()
+        hook_input = {
+            "session_id": "child",
+            "transcript_path": str(_transcript(sub, 90_000)),
+            "cwd": str(tmp_path),
+        }
+        assert pre_compact._summary_directive(hook_input, data_env) is None
+
+    def test_main_prints_directive_to_stdout(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        """E2E through main(): stdout carries exactly the directive."""
+        self._write_valid_checkpoint(data_env)
+        monkeypatch.setattr(
+            pre_compact.subprocess, "run", lambda *a, **k: None
+        )
+        hook_input = _hook_input(tmp_path, 90_000)
+        monkeypatch.setattr(
+            "sys.stdin", __import__("io").StringIO(json.dumps(hook_input))
+        )
+        pre_compact.main()
+        out = capsys.readouterr().out
+        assert pre_compact._SUMMARY_DIRECTIVE in out
+
+    def test_main_stdout_empty_without_checkpoint(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(
+            pre_compact.subprocess, "run", lambda *a, **k: None
+        )
+        hook_input = _hook_input(tmp_path, 90_000)
+        monkeypatch.setattr(
+            "sys.stdin", __import__("io").StringIO(json.dumps(hook_input))
+        )
+        pre_compact.main()
+        assert capsys.readouterr().out == ""
