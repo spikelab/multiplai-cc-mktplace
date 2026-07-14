@@ -20,6 +20,11 @@ Also checks the Dream 24h gate: when more than 24 hours have
 elapsed since the last dream run and fresh learnings are pending,
 emits a system nudge so the user is prompted to run ``/multiplai-context:dream``
 instead of the consolidation silently falling out of rhythm.
+
+Similarly checks the config-audit 90-day gate: when more than 90 days have
+elapsed since the last subtractive config/rules review, emits a nudge to run
+``/multiplai-context:config-audit`` (state file ``config_audit_state.yaml``,
+stamped by that skill, living beside the dream state).
 """
 
 import json
@@ -40,6 +45,11 @@ from multiplai_core.log_utils import setup_logging, log_event
 logger = setup_logging("session_start")
 
 _DREAM_GATE_HOURS = 24
+
+# The config-audit cadence is deliberately long: config decay is slow, and
+# the audit is a heavyweight review. 90 days mirrors the "quarterly config
+# review" cadence from the subtractive config-audit skill (gap B1).
+_CONFIG_AUDIT_GATE_DAYS = 90
 
 # Deferred-extraction retry policy. A detached extraction child should
 # finish well within the stale window; markers older than this with no
@@ -85,6 +95,39 @@ def _dream_gate_open(dream_state_file: Path) -> bool:
     if last_dt.tzinfo is None:
         last_dt = last_dt.replace(tzinfo=timezone.utc)
     return datetime.now(timezone.utc) - last_dt >= timedelta(hours=_DREAM_GATE_HOURS)
+
+
+def _config_audit_gate_open(config_audit_state_file: Path) -> bool:
+    """Return True when >=90 days have passed since the last config audit.
+
+    Mirrors :func:`_dream_gate_open`: missing state or an unparseable
+    timestamp is treated as gate-open (first run or recovery), and any
+    YAML parse failure is swallowed — a corrupt state file shouldn't block
+    session start; the user recovers by running
+    ``/multiplai-context:config-audit``, which re-stamps the file.
+    """
+    try:
+        state = load_yaml(config_audit_state_file) or {}
+    except Exception:
+        logger.warning(
+            "Could not read config-audit state %s; treating gate as open",
+            config_audit_state_file,
+        )
+        return True
+
+    last_run = state.get("last_run")
+    if not last_run:
+        return True
+
+    try:
+        last_dt = datetime.fromisoformat(last_run)
+    except (ValueError, TypeError):
+        return True
+    if last_dt.tzinfo is None:
+        last_dt = last_dt.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - last_dt >= timedelta(
+        days=_CONFIG_AUDIT_GATE_DAYS
+    )
 
 
 def _learnings_pending(learnings_dir: Path, dream_state_file: Path) -> bool:
@@ -383,6 +426,17 @@ def _emit_dream_nudge() -> None:
     )
 
 
+def _emit_config_audit_nudge() -> None:
+    """Print an additionalContext nudge prompting a subtractive config audit."""
+    print(
+        "\n--- SYSTEM NUDGE ---\n"
+        "Config-audit gate is open (>90 days since the last config/rules "
+        "review). Surface this to the user at the next natural stopping "
+        "point: 'It has been 90+ days since the last config audit — worth "
+        "running /multiplai-context:config-audit to prune stale rules?'"
+    )
+
+
 def _inject_checkpoint_recovery(
     data_dir, cwd: str, session_id: str, source: str = ""
 ) -> bool:
@@ -602,6 +656,19 @@ def main() -> None:
             session_id=session_id,
         )
         _emit_dream_nudge()
+
+    # Config-audit gate: emit a nudge when >=90 days have passed since the
+    # last subtractive config/rules review. State lives beside the dream
+    # state and is stamped by the /multiplai-context:config-audit skill.
+    config_audit_state_file = dream_state_file.parent / "config_audit_state.yaml"
+    if _config_audit_gate_open(config_audit_state_file):
+        logger.info("Config-audit gate open; emitting nudge")
+        log_event(
+            "nudge", "config_audit",
+            "config-audit gate open (>90 days since last audit) — surfaced to user",
+            session_id=session_id,
+        )
+        _emit_config_audit_nudge()
 
     logger.info(
         "Session started: %s (%d memory files on disk; not injected — routed per-prompt)",
