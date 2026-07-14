@@ -1,5 +1,7 @@
 ---
 name: plan
+model: opus
+effort: high
 description: Author self-contained, executable implementation plans that carry their own completion contract — verifiable "Done means" criteria, explicit constraints/out-of-scope, and stop-and-ask gates. The resulting plan file can be handed to a fresh session ("implement the plan"), fed to a goal runner, or used as buildme input, with no conversation context needed. Triggers on "write a plan", "make a plan", "implementation plan", "plan this out", "draft a plan for", or explicit /plan invocation.
 ---
 
@@ -44,8 +46,10 @@ Plans go to files, never to the console.
 - **Routing:** follow the workspace's routing rules if a workspace `CLAUDE.md`
   defines them (e.g. an inbox/landing directory). Otherwise use the project's
   `plans/` directory, creating it if needed.
-- **Filename:** `plan-<slug>-YYYY-MM-DD.md`. State the plan's own path in its
-  header so the executor can name it unambiguously.
+- **Filename:** `plan-<slug>-YYYY-MM-DD.md`. State the plan's own *filename*
+  (not its full path) in its header so the executor can name it unambiguously —
+  plans routed to a landing directory (e.g. INBOX) get promoted elsewhere, and
+  an embedded full path would go stale on the move.
 
 ### 4. Self-test before delivering
 
@@ -65,7 +69,7 @@ not the plan body.
 ```markdown
 # Plan: <title>
 
-> File: <path/to/this/file.md> · Date: <YYYY-MM-DD>
+> File: <this-plan-filename.md> · Date: <YYYY-MM-DD>
 
 **Objective** — one sentence: what exists when this plan is complete.
 
