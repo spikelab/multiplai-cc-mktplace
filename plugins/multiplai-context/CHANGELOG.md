@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.9 — 2026-07-14
+
+### Added
+- **qmd `http` execution mode.** A third `qmd_mode` (`http`) POSTs an
+  authored, typed query to a resident `qmd mcp --http` daemon on the host
+  instead of shelling out per prompt. The daemon keeps the embedding and
+  rerank models warm in VRAM (no ~12s cold start per prompt) and does the
+  fusion + rerank itself; the request is a JSON `searches` array, so the
+  ssh bridge's shell-quoting and newline limits no longer apply. New
+  options: `qmd_http_url` (default `http://host.docker.internal:8181`),
+  `qmd_candidate_limit` (rerank latency dial, default 10), and
+  `qmd_min_score` (weak-match cutoff, default 0.30, now applies to all
+  modes). `qmd_strategy` is ignored in `http` mode.
+
+### Changed
+- **Authored typed queries replace raw-prompt pasting (http mode).**
+  Rather than sending the user's whole sentence — which qmd's lexical arm
+  ANDs (stopwords and all) at 2× RRF weight, electing junk to rank 1 — the
+  lexical arm now carries only the IDF-rarest content words (document
+  frequency read from the project-local `.qmd/index.sqlite`), with the
+  full prompt on the vector arm and passed as `intent`. Degrades to
+  stopword-filtered word order when the index is unreadable.
+- **Stopword list extended** with intent/quantifier fillers (`learn`,
+  `more`, `understand`, `explain` and morphological variants) that were
+  leaking into the lexical keyword arm.
+
 ## 0.6.8 — 2026-07-12
 
 ### Added

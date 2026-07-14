@@ -24,12 +24,16 @@ DEFAULT_RECOMMEND_COOLDOWN_TURNS = 4  # Suppress re-recommending a file for
 # (see scripts/qmd_retrieval.py).
 VALID_RESOURCES_RETRIEVAL = ("catalog", "qmd")
 DEFAULT_RESOURCES_RETRIEVAL = "catalog"
-VALID_QMD_MODES = ("local", "ssh")
+VALID_QMD_MODES = ("local", "ssh", "http")
 DEFAULT_QMD_MODE = "local"
 DEFAULT_QMD_SSH_HOST = "host.docker.internal"
 DEFAULT_QMD_COLLECTION = "resources"
 VALID_QMD_STRATEGIES = ("fused", "hybrid", "fts")
 DEFAULT_QMD_STRATEGY = "fused"
+# http mode: resident `qmd mcp --http` daemon on the host.
+DEFAULT_QMD_HTTP_URL = "http://host.docker.internal:8181"
+DEFAULT_QMD_CANDIDATE_LIMIT = 10   # docs the daemon reranks (latency dial)
+DEFAULT_QMD_MIN_SCORE = 0.30       # weak-match cutoff applied to results
 
 
 @dataclass
@@ -50,6 +54,9 @@ class CatalogConfig:
     qmd_ssh_host: str = DEFAULT_QMD_SSH_HOST
     qmd_collection: str = DEFAULT_QMD_COLLECTION
     qmd_strategy: str = DEFAULT_QMD_STRATEGY
+    qmd_http_url: str = DEFAULT_QMD_HTTP_URL
+    qmd_candidate_limit: int = DEFAULT_QMD_CANDIDATE_LIMIT
+    qmd_min_score: float = DEFAULT_QMD_MIN_SCORE
     catalog_concurrency: int = DEFAULT_CATALOG_CONCURRENCY
     recommend_cooldown_turns: int = DEFAULT_RECOMMEND_COOLDOWN_TURNS
     # When on, session_start fires a detached, flock-guarded cost collector
@@ -92,6 +99,15 @@ class CatalogConfig:
         if self.qmd_strategy not in VALID_QMD_STRATEGIES:
             self.qmd_strategy = DEFAULT_QMD_STRATEGY
 
+        if not self.qmd_http_url.strip():
+            self.qmd_http_url = DEFAULT_QMD_HTTP_URL
+
+        if self.qmd_candidate_limit < 1:
+            self.qmd_candidate_limit = DEFAULT_QMD_CANDIDATE_LIMIT
+
+        if not 0.0 <= self.qmd_min_score <= 1.0:
+            self.qmd_min_score = DEFAULT_QMD_MIN_SCORE
+
     @property
     def effective_diary_model(self) -> str:
         """Model for diary catalog — falls back to main catalog model if unset."""
@@ -105,6 +121,13 @@ def _parse_bool(value: str) -> bool:
 def _parse_int(value: str, default: int) -> int:
     try:
         return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def _parse_float(value: str, default: float) -> float:
+    try:
+        return float(value)
     except (ValueError, TypeError):
         return default
 
@@ -148,6 +171,21 @@ def load_catalog_config() -> CatalogConfig:
     qmd_strategy = os.environ.get(
         "CLAUDE_PLUGIN_OPTION_qmd_strategy", DEFAULT_QMD_STRATEGY
     )
+    qmd_http_url = os.environ.get(
+        "CLAUDE_PLUGIN_OPTION_qmd_http_url", DEFAULT_QMD_HTTP_URL
+    )
+    qmd_candidate_limit = _parse_int(
+        os.environ.get(
+            "CLAUDE_PLUGIN_OPTION_qmd_candidate_limit", str(DEFAULT_QMD_CANDIDATE_LIMIT)
+        ),
+        DEFAULT_QMD_CANDIDATE_LIMIT,
+    )
+    qmd_min_score = _parse_float(
+        os.environ.get(
+            "CLAUDE_PLUGIN_OPTION_qmd_min_score", str(DEFAULT_QMD_MIN_SCORE)
+        ),
+        DEFAULT_QMD_MIN_SCORE,
+    )
     catalog_concurrency = _parse_int(
         os.environ.get(
             "CLAUDE_PLUGIN_OPTION_catalog_concurrency", str(DEFAULT_CATALOG_CONCURRENCY)
@@ -183,6 +221,9 @@ def load_catalog_config() -> CatalogConfig:
         qmd_ssh_host=qmd_ssh_host,
         qmd_collection=qmd_collection,
         qmd_strategy=qmd_strategy,
+        qmd_http_url=qmd_http_url,
+        qmd_candidate_limit=qmd_candidate_limit,
+        qmd_min_score=qmd_min_score,
         catalog_concurrency=catalog_concurrency,
         recommend_cooldown_turns=recommend_cooldown_turns,
         enable_costs=enable_costs,

@@ -14,9 +14,13 @@ Safe to run often:
 - flock guard — a second refresh for the same workspace exits immediately;
 - everything is incremental — a no-op refresh costs one status call.
 
-Runs qmd in the mode configured for retrieval (``qmd_mode``): ``local``
-(qmd on PATH) or ``ssh`` (host over the container→host bridge, where
-Metal makes embedding fast).
+Index maintenance is CLI-only — it is deliberately NOT exposed over the
+``http`` daemon's endpoint (that surface is read-only). So maintenance
+reaches the host over the SSH bridge for both ``ssh`` and ``http`` modes;
+in ``local`` mode it runs qmd on PATH. Under ``http`` this is best-effort:
+if the bridge isn't deployed the refresh simply skips (fail-open) and
+keeping the index fresh becomes the host's job (e.g. a launchd timer
+running ``qmd update`` beside the daemon).
 
 Usage: qmd_refresh.py <workspace-root>   (spawned by session_start.py)
 """
@@ -52,7 +56,9 @@ def run_qmd_raw(args: list[str], timeout: int, target: QmdTarget) -> str | None:
     Same process-group kill discipline as qmd_retrieval.run_qmd — the qmd
     bin wrapper spawns a node grandchild that outlives a plain child kill.
     """
-    if target.mode == "ssh":
+    # http mode queries over HTTP, but index maintenance isn't on that
+    # endpoint — reach the host over the SSH bridge, same as ssh mode.
+    if target.mode in ("ssh", "http"):
         remote = f"cd {target.workspace} && qmd {' '.join(args)}"
         argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
                 target.ssh_host, remote]
