@@ -1,20 +1,5 @@
 # Changelog
 
-## 0.6.9 — 2026-07-14
-
-### Added
-- **Near-instant compaction via summarizer steering.** The PreCompact hook
-  now prints a directive to stdout when a valid checkpoint exists — Claude
-  Code appends PreCompact stdout to the compaction summarization prompt as
-  custom instructions (verified in the CLI 2.1.207 binary; the background
-  precompute path honors them too), so the native summarizer emits a
-  one-sentence stub instead of a multi-KB summary. The checkpoint rebuild
-  (SessionStart source=compact) carries the real state. Safety gates: only
-  when checkpointing is enabled, the session is not a child, and
-  `checkpoint.md` validates; the pending rebuild marker is written first so
-  even a manual /compact below the handoff threshold gets its checkpoint
-  re-injected. Any doubt → native summary (silent stdout).
-
 ## 0.6.8 — 2026-07-12
 
 ### Added
