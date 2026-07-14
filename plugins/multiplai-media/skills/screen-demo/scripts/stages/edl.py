@@ -15,8 +15,9 @@ class Title:
 @dataclass
 class Zoom:
     scale: float = 1.2          # >1 zooms in
-    x: float = 0.5              # normalized horizontal center [0..1]
-    y: float = 0.5              # normalized vertical center [0..1]
+    x: float = 0.5              # normalized crop position [0..1] (0.5 = centered)
+    y: float = 0.5              # normalized crop position [0..1] (0.5 = centered)
+    hold: bool = False          # allow this zoom on the FINAL segment (deliberate close-up ending)
 
 
 @dataclass
@@ -63,11 +64,11 @@ class Music:
 
 @dataclass
 class Output:
-    width: int = 1280
-    height: int = 720
+    width: int = 1920
+    height: int = 1080
     fps: int = 30
-    crf: int = 22
-    audio_bitrate: str = "128k"
+    crf: int = 18
+    audio_bitrate: str = "192k"
 
 
 @dataclass
@@ -109,3 +110,45 @@ class EDL:
         seg_d = sum(s.duration for s in self.segments)
         xfade_d = sum(t.duration for t in self.transitions)
         return title_d + seg_d - xfade_d
+
+    def validate(self) -> list[str]:
+        """Sanity-check the cut plan before rendering.
+
+        Raises ValueError on plan-breaking mistakes; returns a list of warning
+        strings for questionable-but-legal choices.
+        """
+        warnings: list[str] = []
+
+        src = Path(self.source)
+        if src.name.startswith("proxy_") or ".screen-demo-cache" in src.parts or (
+            ".cache" in src.parts and "screen-demo" in src.parts
+        ):
+            raise ValueError(
+                f"EDL source points at the analysis proxy ({self.source}). "
+                "The proxy is 720p and re-encoding it produces a blurry result — "
+                "set `source` to the ORIGINAL recording."
+            )
+
+        if self.segments:
+            last = self.segments[-1]
+            if last.zoom and not last.zoom.hold:
+                raise ValueError(
+                    "The final segment is zoomed — the video would END cropped, hiding "
+                    "part of the screen. End on a full-frame segment (add one after the "
+                    "zoom), or set zoom.hold=true if a close-up ending is deliberate."
+                )
+
+        for i, s in enumerate(self.segments):
+            if s.zoom and s.duration > 12.0:
+                warnings.append(
+                    f"segment {i} is zoomed for {s.duration:.0f}s — zooms work best as "
+                    "short money shots (<12s); viewers lose surrounding context."
+                )
+        zoomed = sum(s.duration for s in self.segments if s.zoom)
+        total = sum(s.duration for s in self.segments)
+        if total > 0 and zoomed / total > 0.5:
+            warnings.append(
+                f"{zoomed/total:.0%} of the runtime is zoomed — most of the demo hides "
+                "part of the screen. Prefer full-frame with a few zoomed money shots."
+            )
+        return warnings
