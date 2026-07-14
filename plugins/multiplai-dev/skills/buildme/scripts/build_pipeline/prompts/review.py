@@ -11,11 +11,16 @@ You are reviewing code changes against a quality rubric.
 ## Rubric
 {rubric}
 
+## Coding Standards
+{standards}
+
 ## Spec Context
 {spec_context}
 
 ## Instructions
 Score each rubric dimension on a 1-5 scale with evidence from the diff.
+Where coding standards are provided above, treat violations as issues and
+reflect them in the relevant dimension scores.
 Flag issues with severity (Critical, Major, Minor, Note).
 
 Critical = blocks merge, must fix.
