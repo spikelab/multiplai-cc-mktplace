@@ -14,7 +14,8 @@
     {"src_start": 752.0, "src_end": 905.0, "speed": 30.0},
     {"src_start": 909.0, "src_end": 921.0, "speed": 1.0, "zoom": {"scale": 1.25, "x": 0.5, "y": 0.5}},
     {"src_start": 921.0, "src_end": 963.0, "speed": 20.0},
-    {"src_start": 970.0, "src_end": 985.0, "speed": 1.0, "zoom": {"scale": 1.2, "x": 0.6, "y": 0.5}}
+    {"src_start": 970.0, "src_end": 981.0, "speed": 1.0, "zoom": {"scale": 1.2, "x": 0.6, "y": 0.5}},
+    {"src_start": 981.0, "src_end": 985.0, "speed": 1.0}
   ],
   "transitions": [
     {"after": 0, "duration": 0.4},
@@ -24,12 +25,13 @@
     {"after": 4, "duration": 0.4},
     {"after": 5, "duration": 0.4},
     {"after": 6, "duration": 0.4},
-    {"after": 7, "duration": 0.4}
+    {"after": 7, "duration": 0.4},
+    {"after": 8, "duration": 0.4}
   ],
   "output": {
-    "width": 1280,
-    "height": 720,
+    "width": 1920,
+    "height": 1080,
     "fps": 30,
-    "crf": 22
+    "crf": 18
   }
 }
