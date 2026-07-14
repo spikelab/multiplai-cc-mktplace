@@ -111,6 +111,14 @@ def _git_rev_parse_head(config: BuildConfig) -> str | None:
     return None
 
 
+# git's well-known empty-tree object. Used as the diff baseline when the
+# project repo has no commits at block start (fresh `git init`): diffing
+# against the empty tree makes block 1's committed work visible to the
+# reviewer, whereas a None baseline would fall back to `git diff HEAD`,
+# which post-commit shows nothing.
+EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
 # Cap the diff handed to the reviewer so a pathological block can't blow the
 # context window. 150k chars ≈ 40k tokens — far above any sane block diff.
 MAX_REVIEW_DIFF_CHARS = 150_000
@@ -121,8 +129,10 @@ def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
 
     Blocks commit at phase boundaries (test/impl commits), so diffing from the
     recorded pre-block baseline covers those commits plus any uncommitted
-    refactor/review-fix edits. Falls back to `git diff HEAD` when no baseline
-    was recorded (e.g. the project had no commits at block start). Returns ""
+    refactor/review-fix edits. An empty repo at block start records
+    EMPTY_TREE_SHA as the baseline (see run_block_tdd). The `git diff HEAD`
+    fallback is a last resort for a truly-None baseline (e.g. checkpoints
+    written before baselines existed) and misses committed work. Returns ""
     on git failure — never raises.
 
     Known limitation: brand-new files that are still untracked (created after
@@ -345,9 +355,11 @@ async def run_block_tdd(
     # block's actual changes.
     if block.baseline_commit is None:
         baseline = _git_rev_parse_head(config)
-        if baseline:
-            block.baseline_commit = baseline
-            state.checkpoint(config.state_file_path())
+        # Empty repo (no commits yet) → baseline against the empty tree so the
+        # reviewer sees block 1's work; a None baseline would diff `HEAD`,
+        # which after the block's own commits shows nothing.
+        block.baseline_commit = baseline or EMPTY_TREE_SHA
+        state.checkpoint(config.state_file_path())
 
     # --- Phase A: Write tests ---
     if block.status == BlockStatus.PENDING:
