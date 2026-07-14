@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from build_pipeline.spec_generator import (
     _extract_capabilities,
     _generate_all_artifacts,
+    _generate_single_artifact,
     _load_or_create_state,
     run_spec_generator,
 )
@@ -178,6 +179,115 @@ class TestResumeSkipsExisting:
             # proposal should NOT have been generated (it's in completed_artifacts)
             for call in mock_gen.call_args_list:
                 assert call[0][0] != "proposal", "Should not regenerate proposal"
+
+
+# --- Tasks shape audit (B4: vertical slices) ---
+
+_LAYERING_FINDING = {
+    "category": "horizontal-decomposition",
+    "severity": "critical",
+    "description": "Blocks 1-3 are schema/API/UI layers",
+    "suggestion": "Re-slice by behavior",
+}
+
+
+class TestTasksShapeAudit:
+    """Generated tasks.md is audited for horizontal decomposition; findings
+    force exactly one regeneration pass with the findings injected."""
+
+    @pytest.fixture
+    def tasks_setup(self, tmp_path):
+        specs_dir = tmp_path / "specs"
+        specs_dir.mkdir()
+        cm = ChangeManager(specs_dir)
+        cm.init_specs()
+        change_dir = cm.create_change("test-feature")
+        (change_dir / "proposal.md").write_text("# Proposal")
+        (change_dir / "design.md").write_text("# Design")
+
+        config = MagicMock()
+        config.change_name = "test-feature"
+        config.specs_dir = specs_dir
+        config.change_dir = change_dir
+        config.model = "test-model"
+        config.task_granularity = "checkboxes"
+        config.state_file_path.return_value = change_dir / ".build-state.json"
+
+        state = BuildState(
+            change_name="test-feature",
+            mode="scratch",
+            tier="standard",
+            state_file=str(change_dir / ".build-state.json"),
+            phase=BuildPhase.SPEC_GENERATION,
+            spec_gen=SpecGenState(),
+        )
+        return cm, change_dir, config, state
+
+    @pytest.mark.asyncio
+    async def test_regenerates_tasks_once_when_audit_reports_layering(self, tasks_setup):
+        cm, change_dir, config, state = tasks_setup
+
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.side_effect = ["## 1. Schema layer", "## 1. Vertical slice A"]
+            mock_audit.return_value = [_LAYERING_FINDING]
+
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        # Exactly one regeneration pass: two generate calls, one audit call
+        assert mock_gen.call_count == 2
+        assert mock_audit.await_count == 1
+
+        # The regeneration prompt carries the audit findings
+        regen_kwargs = mock_gen.call_args_list[1].kwargs
+        assert "Blocks 1-3 are schema/API/UI layers" in regen_kwargs["audit_findings"]
+        assert "Re-slice by behavior" in regen_kwargs["audit_findings"]
+
+        # The regenerated content is what lands on disk
+        assert (change_dir / "tasks.md").read_text() == "## 1. Vertical slice A"
+        assert "tasks" in state.spec_gen.completed_artifacts
+
+    @pytest.mark.asyncio
+    async def test_no_regeneration_when_audit_clean(self, tasks_setup):
+        cm, change_dir, config, state = tasks_setup
+
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.return_value = "## 1. Vertical slice A"
+            mock_audit.return_value = []
+
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        assert mock_gen.call_count == 1
+        assert (change_dir / "tasks.md").read_text() == "## 1. Vertical slice A"
+
+    @pytest.mark.asyncio
+    async def test_audit_failure_is_non_fatal(self, tasks_setup):
+        cm, change_dir, config, state = tasks_setup
+
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.return_value = "## 1. Vertical slice A"
+            mock_audit.side_effect = RuntimeError("LLM down")
+
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        # First-pass tasks.md stands; no regeneration attempted
+        assert mock_gen.call_count == 1
+        assert (change_dir / "tasks.md").read_text() == "## 1. Vertical slice A"
+        assert "tasks" in state.spec_gen.completed_artifacts
+
+    @pytest.mark.asyncio
+    async def test_non_tasks_artifacts_are_not_audited(self, tasks_setup):
+        cm, change_dir, config, state = tasks_setup
+
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.return_value = "# Design content"
+
+            await _generate_single_artifact(cm, change_dir, "design", config, state)
+
+        mock_audit.assert_not_awaited()
 
 
 # --- Run spec generator (integration-ish) ---

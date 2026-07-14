@@ -7,14 +7,17 @@ there — not the empty legacy change_dir/specs/*/spec.md layout.
 """
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from build_pipeline.config import BuildConfig
 from build_pipeline.llm_steps.spec_steps import (
     _build_prompt,
     _read_specs,
     run_design_audit,
+    run_tasks_audit,
 )
+from build_pipeline.prompts.spec_generation import TASKS_PROMPT
 
 
 def _make_config(tmp_path, req_files: dict[str, str]) -> BuildConfig:
@@ -99,3 +102,112 @@ class TestDesignAudit:
         prompt = mock_llm.call_args[0][0]
         assert "SCENARIO: audit-req-marker" in prompt
         assert "(no specs)" not in prompt
+
+
+class TestTasksPromptVerticalSlices:
+    """B4: the tasks prompt must demand vertical slices, not layer-per-block."""
+
+    def test_demands_vertical_slices(self):
+        assert "vertical slice" in TASKS_PROMPT
+
+    def test_forbids_layer_per_block(self):
+        assert "Layer-per-block decomposition is FORBIDDEN" in TASKS_PROMPT
+
+    def test_final_integration_block_removed(self):
+        assert "Final block should be a wiring/integration block" not in TASKS_PROMPT
+        assert "a final integration block is a smell" in TASKS_PROMPT
+
+    def test_keeps_satisfies_and_dependency_ordering(self):
+        assert '"Satisfies:" line MUST reference specific spec files' in TASKS_PROMPT
+        assert "Order blocks by dependency" in TASKS_PROMPT
+
+    def test_first_pass_has_no_findings_placeholder(self, tmp_path):
+        config = _make_config(tmp_path, {"auth": "req"})
+        (config.change_dir / "proposal.md").write_text("proposal body")
+        (config.change_dir / "design.md").write_text("design body")
+        context = {
+            "template": "TEMPLATE",
+            "instruction": "INSTRUCTION",
+            "context": "PROJECT",
+            "dependencies": {"proposal": "proposal.md", "design": "design.md"},
+        }
+        prompt = _build_prompt("tasks", context, config)
+        assert "(none — first pass)" in prompt
+
+    def test_regeneration_pass_injects_findings(self, tmp_path):
+        config = _make_config(tmp_path, {"auth": "req"})
+        (config.change_dir / "proposal.md").write_text("proposal body")
+        (config.change_dir / "design.md").write_text("design body")
+        context = {
+            "template": "TEMPLATE",
+            "instruction": "INSTRUCTION",
+            "context": "PROJECT",
+            "dependencies": {"proposal": "proposal.md", "design": "design.md"},
+        }
+        prompt = _build_prompt(
+            "tasks", context, config,
+            audit_findings="LAYERING-FINDING-MARKER",
+        )
+        assert "LAYERING-FINDING-MARKER" in prompt
+        assert "(none — first pass)" not in prompt
+
+
+class TestTasksAudit:
+    """B4: adversarial shape audit over the generated tasks.md."""
+
+    def _change_dir(self, tmp_path, tasks_text: str) -> Path:
+        change_dir = tmp_path / "changes" / "feat"
+        change_dir.mkdir(parents=True)
+        (change_dir / "design.md").write_text("DESIGN-MARKER")
+        (change_dir / "tasks.md").write_text(tasks_text)
+        return change_dir
+
+    @pytest.mark.asyncio
+    async def test_prompt_includes_tasks_and_design(self, tmp_path):
+        change_dir = self._change_dir(tmp_path, "## 1. TASKS-MARKER block")
+        config = MagicMock(model="test-model")
+
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = "[]"
+            findings = await run_tasks_audit(change_dir, config)
+
+        prompt = mock_llm.call_args[0][0]
+        assert "TASKS-MARKER" in prompt
+        assert "DESIGN-MARKER" in prompt
+        assert "vertical slice" in prompt
+        assert findings == []
+
+    @pytest.mark.asyncio
+    async def test_returns_layering_findings(self, tmp_path):
+        change_dir = self._change_dir(
+            tmp_path, "## 1. Database schema\n## 2. API layer\n## 3. Wiring"
+        )
+        config = MagicMock(model="test-model")
+        raw = (
+            '[{"category": "horizontal-decomposition", "severity": "critical", '
+            '"description": "blocks are layers", "suggestion": "re-slice"}]'
+        )
+
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = raw
+            findings = await run_tasks_audit(change_dir, config)
+
+        assert len(findings) == 1
+        assert findings[0]["category"] == "horizontal-decomposition"
+
+    @pytest.mark.asyncio
+    async def test_non_json_response_returns_empty(self, tmp_path):
+        change_dir = self._change_dir(tmp_path, "## 1. Slice")
+        config = MagicMock(model="test-model")
+
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = "not json at all"
+            findings = await run_tasks_audit(change_dir, config)
+
+        assert findings == []
