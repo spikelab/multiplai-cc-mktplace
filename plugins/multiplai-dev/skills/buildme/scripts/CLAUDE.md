@@ -26,7 +26,7 @@
 |------|-----------|-------------|
 | `spec_steps.py` | `generate_artifact()`, `run_design_audit()`, `run_codebase_analysis()` | Spec generation + adversarial audit (both wired). `run_codebase_analysis()` (3-agent) is **not wired**. |
 | `tdd_steps.py` | `run_test_writer()`, `run_implementer()`, `run_refactorer()`, `run_integration_fix()` | TDD agent spawning with tool allowlists |
-| `review_steps.py` | `run_code_review()`, `run_security_review()`, `run_review_fix()` | Scored review helpers — **not currently wired**. The active per-block review is inline in `tdd_engine._run_quality_review`. |
+| `review_steps.py` | `run_code_review()`, `run_security_review()`, `run_review_fix()` | `run_code_review()` is **wired** as the active per-block review — `tdd_engine._run_quality_review` calls it with the block's actual diff, rubric, spec context, and coding standards (honors `config.review_model`). `run_security_review()` / `run_review_fix()` remain **not wired**. |
 
 ## Prompt Templates (prompts/)
 
