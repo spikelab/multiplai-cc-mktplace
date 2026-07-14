@@ -38,7 +38,7 @@ Cross-reference these artifacts and report ANY gaps:
 
 ### Type-Specific Checks ({change_type})
 - migration: rollback plan exists, data integrity scenarios covered
-- new-feature: entry point wiring task present (if app), error scenarios in specs
+- new-feature: entry point wiring covered inside the slices that need it (if app), error scenarios in specs
 - refactor: behavioral equivalence scenarios, no new functionality sneaked in
 - infra: failure mode scenarios, monitoring/alerting considered
 
@@ -64,4 +64,54 @@ Return a JSON array of gap objects:
 If no gaps found, return an empty array: `[]`
 
 Be thorough but not pedantic. Flag real gaps, not stylistic preferences.
+"""
+
+
+TASKS_AUDIT_PROMPT = """\
+You are an adversarial reviewer auditing a generated task breakdown for horizontal
+(layer-by-layer) decomposition. The required shape is vertical slices: each block is
+one thin end-to-end behavior, exercisable via a test or command the moment the block
+completes, cutting through all the layers that behavior needs.
+
+## Design
+{design_content}
+
+## Tasks
+{tasks_content}
+
+## What to Flag
+
+- Layer-per-block decomposition: blocks scoped by architectural layer (e.g.
+  "database schema", "data models", "API endpoints", "services", "frontend UI")
+  rather than by a user-visible or test-visible behavior
+- A final "wiring", "integration", or "glue" block — wiring must happen inside
+  each slice, not be deferred to the end
+- Blocks that complete without anything runnable or testable end-to-end
+- A block whose deliverable can only be exercised after a LATER block lands
+
+## What NOT to Flag
+
+- Dependency ordering between slices — a DAG of slices is fine; layering is the
+  anti-pattern, not ordering
+- A first walking-skeleton slice (one trivial behavior through all layers) — that
+  IS a vertical slice
+- Setup or scaffolding checkbox items *inside* a behavior-scoped block
+
+## Output Format
+Return a JSON array of finding objects:
+
+```json
+[
+  {{
+    "category": "horizontal-decomposition",
+    "severity": "critical|major|minor",
+    "description": "Which blocks are layered and why that shape is horizontal",
+    "suggestion": "How to re-slice them vertically"
+  }}
+]
+```
+
+If the breakdown is properly sliced into vertical slices, return an empty array: `[]`
+
+Flag shape problems only — not naming style, granularity taste, or block count.
 """

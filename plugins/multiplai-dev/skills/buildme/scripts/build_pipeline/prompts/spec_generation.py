@@ -115,6 +115,9 @@ You are generating a task breakdown for an spec-driven change.
 ## Task Granularity
 {granularity}
 
+## Shape Audit Findings
+{audit_findings}
+
 ## Instructions
 {instruction}
 
@@ -124,13 +127,24 @@ Generate tasks as markdown following this template structure:
 {template}
 
 Rules:
-- Each block maps to roughly one spec's worth of work
-- Block descriptions: 2-4 sentences covering what it delivers, key behaviors, acceptance criteria
+- Each block MUST be a vertical slice: one thin end-to-end behavior that can be
+  exercised via a test or command the moment the block completes, cutting through
+  ALL the layers that behavior needs (schema, logic, API, UI, wiring — whatever it touches)
+- Layer-per-block decomposition is FORBIDDEN: never emit a schema block, then an
+  API block, then a UI block. Blocks scoped by architectural layer leave nothing
+  runnable until the very end. Slice by behavior, not by layer.
+- Wiring happens inside each slice; a final integration block is a smell. Every
+  block leaves the system integrated and demonstrable.
+- Block descriptions: 2-4 sentences covering what it delivers, key behaviors,
+  acceptance criteria, and how to exercise the slice end-to-end once it's done
 - "Satisfies:" line MUST reference specific spec files or scenarios
-- Order blocks by dependency — foundational blocks first
+- Order blocks by dependency — a DAG of slices is fine (a later slice may build on
+  an earlier one); layering is the anti-pattern, not ordering. The first slice can
+  be a walking skeleton: one trivial behavior through all layers.
 - If {granularity} is "blocks": use coarse blocks (## 1. Block Name), 2-4 sentences each
 - If {granularity} is "checkboxes": add checkbox items under each block (- [ ] task)
-- Final block should be a wiring/integration block if this is an app
+- If Shape Audit Findings are present, this is a regeneration pass: fix every
+  finding by re-slicing the flagged blocks vertically
 
 Output ONLY the markdown content. No commentary.
 """

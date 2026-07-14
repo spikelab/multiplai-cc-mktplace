@@ -17,7 +17,7 @@ from ..prompts.spec_generation import (
     DESIGN_PROMPT,
     TASKS_PROMPT,
 )
-from ..prompts.design_audit import DESIGN_AUDIT_PROMPT
+from ..prompts.design_audit import DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT
 from ..sdk import llm_call, extract_json, LLMCallError
 
 log = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ async def generate_artifact(
     interview_summary: str = "",
     research: str = "",
     codebase_analysis: str = "",
+    audit_findings: str = "",
 ) -> str:
     """Generate a single artifact's content via llm_call.
 
@@ -41,6 +42,8 @@ async def generate_artifact(
         interview_summary: For proposal generation
         research: Research findings for proposal generation
         codebase_analysis: Existing code analysis for design generation
+        audit_findings: Tasks-shape audit findings — injected on the one
+            regeneration pass after run_tasks_audit reports layering
 
     Returns:
         Generated markdown content.
@@ -52,6 +55,7 @@ async def generate_artifact(
         interview_summary=interview_summary,
         research=research,
         codebase_analysis=codebase_analysis,
+        audit_findings=audit_findings,
     )
 
     log.info("Generating artifact: %s", artifact_id)
@@ -78,6 +82,7 @@ def _build_prompt(
     interview_summary: str = "",
     research: str = "",
     codebase_analysis: str = "",
+    audit_findings: str = "",
 ) -> str:
     """Build the prompt string for an artifact type."""
     template = context.get("template", "")
@@ -123,6 +128,7 @@ def _build_prompt(
             specs_content=specs_content,
             design_content=design_content,
             granularity=config.task_granularity,
+            audit_findings=audit_findings or "(none — first pass)",
             instruction=instruction,
             template=template,
         )
@@ -199,6 +205,36 @@ async def run_design_audit(change_dir: Path, config) -> list[dict]:
         return []
     except (ValueError, json.JSONDecodeError):
         log.warning("Design audit returned non-JSON response")
+        return []
+
+
+async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
+    """Audit tasks.md for horizontal (layer-by-layer) decomposition.
+
+    Checks that each block is a vertical slice — end-to-end exercisable when it
+    completes — rather than a layer (schema block, API block, UI block, final
+    wiring block). Returns a list of finding dicts with category, severity,
+    description, suggestion; empty list when the shape is clean.
+    """
+    tasks = _read_file(change_dir / "tasks.md")
+    design = _read_file(change_dir / "design.md")
+
+    prompt = TASKS_AUDIT_PROMPT.format(
+        design_content=design,
+        tasks_content=tasks,
+    )
+
+    log.info("Running tasks shape audit on %s", change_dir.name)
+    raw = await llm_call(prompt, model=config.model)
+
+    try:
+        findings = extract_json(raw)
+        if isinstance(findings, list):
+            log.info("Tasks shape audit found %d findings", len(findings))
+            return findings
+        return []
+    except (ValueError, json.JSONDecodeError):
+        log.warning("Tasks shape audit returned non-JSON response")
         return []
 
 
