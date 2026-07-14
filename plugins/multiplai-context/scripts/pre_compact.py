@@ -21,6 +21,17 @@ may not survive. Two jobs:
    session_end.py) pointing at the pre-compaction transcript. The next
    session_start.py drains it through extract_learnings.py, capturing
    learnings/diary before they're lost to compaction.
+
+3. **Steers the native summarizer** (stdout): Claude Code appends a
+   PreCompact hook's stdout to the compaction summarization prompt as
+   custom instructions (verified in the CLI 2.1.207 binary: hook stdout →
+   ``newCustomInstructions`` → summary request; the background-precompute
+   path honors them too). When a fresh, valid checkpoint exists, the
+   native multi-KB summary is pure redundancy — the
+   SessionStart(source=compact) rebuild re-injects the checkpoint anyway —
+   so we ask the summarizer for a one-sentence stub instead. This cuts the
+   visible compaction pause from a long full-transcript summarization to a
+   near-instant call.
 """
 
 import json
@@ -42,6 +53,21 @@ logger = setup_logging("pre_compact")
 
 # Poll step while waiting for an already-in-flight band writer to finish.
 _INFLIGHT_POLL_S = 2.0
+
+# Printed to stdout when a valid checkpoint covers this session: the CLI
+# appends it to the summarizer prompt as custom instructions. One line on
+# purpose — outputs from multiple PreCompact hooks are joined into the same
+# prompt.
+_SUMMARY_DIRECTIVE = (
+    "PRIORITY OVERRIDE — EXTERNAL CHECKPOINT ACTIVE: this session's full "
+    "working state (task tree, involved files, next actions, decisions) is "
+    "already captured in an external checkpoint that is re-injected "
+    "automatically right after this compaction. A detailed summary is "
+    "redundant. Ignore all other summary structure requirements and respond "
+    "with a single short sentence stating that the session state is "
+    "preserved in an external checkpoint and will be restored automatically. "
+    "Do not summarize the conversation."
+)
 
 
 def _sync_checkpoint(hook_input: dict, data_dir) -> None:
@@ -120,6 +146,58 @@ def _sync_checkpoint(hook_input: dict, data_dir) -> None:
         cp.release_writer(data_dir, session_id)
 
 
+def _summary_directive(hook_input: dict, data_dir) -> str | None:
+    """Return the summarizer-steering directive, or None to keep the native summary.
+
+    Emitted only when the checkpoint on disk is valid, so the discarded
+    summary is genuinely replaced by richer state. The pending marker is
+    written first: together with session_start's own-checkpoint fallback on
+    source=compact, it guarantees the rebuild injection even for a manual
+    /compact below the handoff threshold. Any doubt → None (native summary
+    is the safe default).
+    """
+    cfg = cp.load_config()
+    if not cfg.enabled:
+        return None
+    session_id = hook_input.get("session_id") or ""
+    transcript_path = hook_input.get("transcript_path") or ""
+    if not session_id or not transcript_path:
+        return None
+    if cp.is_child_session(transcript_path):
+        return None
+
+    try:
+        text = cp.checkpoint_file(data_dir, session_id).read_text()
+    except OSError:
+        return None
+    if not cp.validate_checkpoint(text):
+        logger.info("PreCompact: checkpoint invalid — keeping native summary")
+        return None
+
+    state = cp.load_state(data_dir, session_id)
+    tokens = cp.read_context_tokens(transcript_path, after_ts=state.get("rebuild_ts"))
+    try:
+        cp.write_pending_marker(
+            data_dir, hook_input.get("cwd", ""), session_id, tokens
+        )
+    except OSError:
+        logger.exception(
+            "PreCompact: pending-marker write failed — keeping native summary"
+        )
+        return None
+
+    logger.info(
+        "PreCompact: steering summarizer to a stub (checkpoint valid, %d tokens)",
+        tokens,
+    )
+    log_event(
+        "checkpoint", "precompact",
+        "native summary replaced by checkpoint stub directive",
+        session_id=session_id, tokens=tokens,
+    )
+    return _SUMMARY_DIRECTIVE
+
+
 def main() -> None:
     try:
         raw_stdin = sys.stdin.read()
@@ -152,6 +230,16 @@ def main() -> None:
         _sync_checkpoint(hook_input, data_dir)
     except Exception:
         logger.exception("PreCompact: checkpoint pass failed (non-fatal)")
+
+    # With a valid checkpoint on disk, tell the native summarizer (via
+    # stdout → custom instructions) to emit a one-line stub instead of a
+    # full summary — the checkpoint re-injection carries the real state.
+    try:
+        directive = _summary_directive(hook_input, data_dir)
+        if directive:
+            print(directive)
+    except Exception:
+        logger.exception("PreCompact: summary-directive pass failed (non-fatal)")
 
     transcript_path = hook_input.get("transcript_path", "")
     if not transcript_path:
