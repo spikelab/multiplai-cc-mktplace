@@ -1,7 +1,7 @@
 {
   "name": "multiplai-dev",
-  "version": "0.2.0",
-  "description": "Developer skill pack: spec-driven builds, code/security review, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring.",
+  "version": "0.3.0",
+  "description": "Developer skill pack: spec-driven builds, executable plan authoring, code/security review, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring.",
   "author": {"name": "Spike", "email": "fsm@spikelab.org"},
   "license": "MIT",
   "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",

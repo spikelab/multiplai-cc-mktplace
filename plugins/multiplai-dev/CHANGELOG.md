@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-07-14
+
+### Added
+- **New skill: `plan`** — author self-contained, executable implementation
+  plans with a mandatory completion contract: verifiable "Done means"
+  criteria, explicit "Constraints / out of scope" (including stop-and-ask
+  gates), and a fresh-session self-containedness test. Plan files are
+  directly consumable by "implement the plan", goal/autonomous runners,
+  or buildme — no parallel goal document needed. Prompt-only, no scripts.
+
 ## 0.2.0 — 2026-07-10
 
 Semantic model tiers for the buildme pipeline (requires multiplai-core ≥ v0.7.0).
