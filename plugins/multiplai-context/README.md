@@ -360,6 +360,7 @@ All commands are namespaced under `/multiplai-context:`.
 | `/multiplai-context:now` | Rebuild per-project `now/` status snapshots from recent diary entries. Run after a backfill, or any time the injected project state looks stale. |
 | `/multiplai-context:qmd-search` | Manually search the resources knowledge base via qmd (semantic + keyword) — the manual companion to `resources_retrieval=qmd`. |
 | `/multiplai-context:costs` | Report API-equivalent costs for Claude Code usage — per chat, skill, subagent, project, model, or day. Collects fresh data from session transcripts, then reports from the cost ledger. Requires `enable_costs`. |
+| `/multiplai-context:config-audit` | **Subtractive** config/rules review on a ~90-day cadence — enumerates the active config surface (global + workspace `CLAUDE.md`s, `settings.json` env/permissions, hook registrations, memory-file standing rules), classifies each rule as still-serving / obsolete / model-constraining, and writes a removals-first proposal to `.multiplai/dreams/config-audit-YYYY-MM-DD.md`. Never applies changes; stamps `config_audit_state.yaml` to close the SessionStart nudge gate. |
 
 ## Where your data lives
 
@@ -407,7 +408,7 @@ with a log warning and everything else keeps working.
 
 | Event | Script | Role |
 |-------|--------|------|
-| `SessionStart` | `session_start.py` | Init session state; drain deferred extractions; emit the dream-due nudge. **Does not** dump memory into context. |
+| `SessionStart` | `session_start.py` | Init session state; drain deferred extractions; emit the dream-due nudge and the 90-day config-audit nudge. **Does not** dump memory into context. |
 | `UserPromptSubmit` | `context_manager.py` | Route the prompt against catalogs and inject only the relevant memory. |
 | `Stop` | `session_stop.py` | Lightweight checkpoint (extraction is deferred, not run here). |
 | `SessionEnd` | `session_end.py` | Write a deferred-extraction marker for the next session to process. |
