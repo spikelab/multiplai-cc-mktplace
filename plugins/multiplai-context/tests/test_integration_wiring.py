@@ -1164,7 +1164,7 @@ class TestPluginValidationReadiness:
         expected = {
             "setup", "dream", "dream-remember", "health",
             "refresh-catalogs", "memory-health-audit", "backfill", "now",
-            "log-doctor", "qmd-search", "costs",
+            "log-doctor", "qmd-search", "costs", "config-audit",
         }
         skill_files = list((PLUGIN_ROOT / "skills").glob("*/SKILL.md"))
         actual = {f.parent.name for f in skill_files}

@@ -14,7 +14,10 @@ from build_pipeline.tdd_engine import (
     run_block_tdd,
     run_test_quality_check,
     run_tdd_engine,
+    _capture_block_diff,
     _git_commit_block_phase,
+    _run_quality_review,
+    EMPTY_TREE_SHA,
     WEAK_TEST_PATTERNS,
     MAX_REVIEW_ITERATIONS,
     EXIT_SUCCESS,
@@ -714,6 +717,164 @@ class TestGitCommitScoping:
         ).stdout
         assert "build-progress.md" not in tracked
         assert ".build-state.json" not in tracked
+
+
+class TestEvidenceBasedReview:
+    """The per-block quality review must see the block's actual diff."""
+
+    def _init_empty_repo(self, repo: Path) -> None:
+        """git init with committer identity but zero commits."""
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+
+    def _init_repo(self, repo: Path) -> str:
+        self._init_empty_repo(repo)
+        (repo / "module.py").write_text("x = 1\n")
+        subprocess.run(["git", "add", "module.py"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+    def _make_config(self, tmp_path) -> BuildConfig:
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        specs_root = project_dir / "specs"
+        change_dir = specs_root / "changes" / "feat"
+        change_dir.mkdir(parents=True)
+        (change_dir / "rubric.md").write_text("# Rubric\nQuality criteria.")
+        config = BuildConfig(project_dir=project_dir, change_name="feat")
+        config.specs_dir = specs_root
+        return config
+
+    @pytest.mark.asyncio
+    async def test_quality_review_passes_nonempty_diff(self, tmp_path):
+        """_run_quality_review hands run_code_review the block's real diff."""
+        config = self._make_config(tmp_path)
+        baseline = self._init_repo(config.project_dir)
+
+        # Simulate the block's work: a committed impl change on top of baseline.
+        (config.project_dir / "module.py").write_text("x = 1\ny = 2  # block change\n")
+        subprocess.run(["git", "commit", "-aqm", "impl(block-1)"], cwd=config.project_dir, check=True)
+
+        block = BlockInfo(
+            number=1, name="Feature", description="Add y",
+            satisfies=["feat"], baseline_commit=baseline,
+        )
+        review = ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=4, evidence="e")])
+        with patch(
+            "build_pipeline.tdd_engine.run_code_review",
+            new_callable=AsyncMock, return_value=review,
+        ) as mock_review:
+            result = await _run_quality_review(block, config)
+
+        assert result is review
+        diff = mock_review.call_args.args[0]
+        assert diff  # non-empty — the reviewer sees actual code
+        assert "y = 2  # block change" in diff
+        # Rubric and standards are pushed too.
+        assert "Quality criteria" in mock_review.call_args.args[1]
+        assert "standards" in mock_review.call_args.kwargs
+        assert "Add y" in mock_review.call_args.kwargs["spec_context"]
+
+    def test_capture_block_diff_from_baseline(self, tmp_path):
+        """Diff spans baseline → working tree: commits AND uncommitted edits."""
+        config = self._make_config(tmp_path)
+        baseline = self._init_repo(config.project_dir)
+
+        (config.project_dir / "module.py").write_text("x = 1\ny = 2\n")
+        subprocess.run(["git", "commit", "-aqm", "impl"], cwd=config.project_dir, check=True)
+        (config.project_dir / "module.py").write_text("x = 1\ny = 2\nz = 3  # uncommitted fix\n")
+
+        block = BlockInfo(number=1, name="B", description="d", baseline_commit=baseline)
+        diff = _capture_block_diff(config, block)
+        assert "y = 2" in diff
+        assert "z = 3  # uncommitted fix" in diff
+
+    def test_capture_block_diff_falls_back_to_head(self, tmp_path):
+        """Without a recorded baseline, uncommitted changes still get reviewed."""
+        config = self._make_config(tmp_path)
+        self._init_repo(config.project_dir)
+        (config.project_dir / "module.py").write_text("x = 42\n")
+
+        block = BlockInfo(number=1, name="B", description="d")  # no baseline_commit
+        diff = _capture_block_diff(config, block)
+        assert "x = 42" in diff
+
+    def test_capture_block_diff_non_repo_returns_empty(self, tmp_path):
+        config = self._make_config(tmp_path)  # project_dir is not a git repo
+        block = BlockInfo(number=1, name="B", description="d")
+        assert _capture_block_diff(config, block) == ""
+
+    @pytest.mark.asyncio
+    async def test_run_block_tdd_records_baseline(self, tmp_path):
+        """run_block_tdd stamps the pre-block HEAD as the diff baseline."""
+        config = self._make_config(tmp_path)
+        config.tier = "advanced"
+        config.test_command = "true"
+        config.config_dir = tmp_path / "config"
+        config.core_memory_files = []
+        head = self._init_repo(config.project_dir)
+
+        block = BlockInfo(number=1, name="B", description="d")
+        state = BuildState(
+            change_name="feat", mode="only", tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
+        progress = ProgressWriter(tmp_path / "progress.md")
+        progress.initialize("feat", "only", "advanced", 1)
+
+        ok = AgentResult(success=True, output="done")
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok):
+            assert await run_block_tdd(block, config, state, progress)
+
+        assert block.baseline_commit == head
+
+    @pytest.mark.asyncio
+    async def test_run_block_tdd_empty_repo_baseline_is_empty_tree(self, tmp_path):
+        """Fresh `git init` (no commits): baseline falls back to the empty tree,
+        so block 1's committed work is visible to the reviewer."""
+        config = self._make_config(tmp_path)
+        config.tier = "advanced"
+        config.test_command = "true"
+        config.config_dir = tmp_path / "config"
+        config.core_memory_files = []
+        self._init_empty_repo(config.project_dir)  # no commits — HEAD unresolvable
+
+        block = BlockInfo(number=1, name="B", description="d")
+        state = BuildState(
+            change_name="feat", mode="only", tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
+        progress = ProgressWriter(tmp_path / "progress.md")
+        progress.initialize("feat", "only", "advanced", 1)
+
+        ok = AgentResult(success=True, output="done")
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok):
+            assert await run_block_tdd(block, config, state, progress)
+
+        assert block.baseline_commit == EMPTY_TREE_SHA
+
+    def test_capture_block_diff_empty_tree_baseline_sees_committed_work(self, tmp_path):
+        """With the empty-tree baseline, work committed during block 1 in a
+        previously-empty repo shows up in the review diff."""
+        config = self._make_config(tmp_path)
+        self._init_empty_repo(config.project_dir)
+
+        # Simulate block 1: first-ever commit lands during the block.
+        (config.project_dir / "module.py").write_text("x = 1  # block-1 work\n")
+        subprocess.run(["git", "add", "module.py"], cwd=config.project_dir, check=True)
+        subprocess.run(["git", "commit", "-qm", "impl(block-1)"], cwd=config.project_dir, check=True)
+
+        block = BlockInfo(number=1, name="B", description="d", baseline_commit=EMPTY_TREE_SHA)
+        diff = _capture_block_diff(config, block)
+        assert "x = 1  # block-1 work" in diff
 
 
 class TestExitCodes:

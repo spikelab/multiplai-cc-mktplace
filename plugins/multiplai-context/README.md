@@ -251,7 +251,12 @@ Long sessions degrade as the context window fills. The checkpoint system
 ### Activation: fully-automatic rebuild
 
 Add to `settings.json` (or export in your launcher) so native auto-compaction
-fires at ~200K instead of near the model window limit:
+fires at ~200K instead of near the model window limit. Sharp edge: at the
+user level (`CLAUDE_CONFIG_DIR`), the `env` block of **`settings.local.json`
+is silently ignored** — only `settings.json`'s env lands (verified
+empirically on CLI 2.1.207; `settings.local.json` is a project-level overlay
+for env). Put these in the tracked `settings.json` or export them from the
+launcher:
 
 ```json
 {
@@ -283,20 +288,26 @@ re-check on CLI major upgrades):
 (including the 200K disable gate, reported as "auto mode off") so the
 overdue warning and nudge suppression track native behavior exactly.
 
-**Minimizing the native summary.** The built-in compactor can't be replaced
-(and disabling it via `DISABLE_AUTO_COMPACT` would remove the automatic
-trigger this design rides on), but its output can be shrunk so the injected
-checkpoint is the real state carrier. Add to your workspace `CLAUDE.md`:
+**Near-instant compaction (automatic since 0.6.9).** The built-in compactor
+can't be replaced (and disabling it via `DISABLE_AUTO_COMPACT` would remove
+the automatic trigger this design rides on), but it can be steered: Claude
+Code appends a PreCompact hook's **stdout** to the compaction summarization
+prompt as custom instructions (verified in the CLI 2.1.207 binary; the
+background-precompute path honors them too). The plugin's PreCompact hook
+uses this to tell the summarizer to emit a **one-sentence stub** instead of
+a multi-KB summary — generation length dominates compaction wall-clock
+(the prefill is prompt-cache-hit), so the visible pause collapses to the
+synchronous checkpoint write plus a near-instant summary call. The injected
+checkpoint is the real state carrier.
 
-```markdown
-# Compact Instructions
-
-When compacting, produce the SHORTEST possible summary — a single short
-paragraph. A structured checkpoint (task tree, next action, involved files,
-decisions, errors/fixes) is injected automatically right after compaction;
-do NOT duplicate any of that. Preserve only the user's current request
-verbatim and any constraints stated in the most recent turns.
-```
+The directive is emitted only when it is safe to discard the summary:
+checkpointing enabled, not a child (subagent) session, and `checkpoint.md`
+exists and validates. The pending rebuild marker is written first, so even
+a **manual `/compact` below the handoff threshold** gets the checkpoint
+re-injected (session_start additionally falls back to the session's own
+checkpoint on `source="compact"`). On any doubt or failure the hook stays
+silent and the native full summary proceeds unchanged. No `CLAUDE.md`
+compact-instructions snippet is needed anymore.
 
 Why compaction (not `/clear`) is the automatic path: hooks cannot invoke
 slash commands, so a hook-triggered `/clear` is impossible — but the
@@ -349,6 +360,7 @@ All commands are namespaced under `/multiplai-context:`.
 | `/multiplai-context:now` | Rebuild per-project `now/` status snapshots from recent diary entries. Run after a backfill, or any time the injected project state looks stale. |
 | `/multiplai-context:qmd-search` | Manually search the resources knowledge base via qmd (semantic + keyword) — the manual companion to `resources_retrieval=qmd`. |
 | `/multiplai-context:costs` | Report API-equivalent costs for Claude Code usage — per chat, skill, subagent, project, model, or day. Collects fresh data from session transcripts, then reports from the cost ledger. Requires `enable_costs`. |
+| `/multiplai-context:config-audit` | **Subtractive** config/rules review on a ~90-day cadence — enumerates the active config surface (global + workspace `CLAUDE.md`s, `settings.json` env/permissions, hook registrations, memory-file standing rules), classifies each rule as still-serving / obsolete / model-constraining, and writes a removals-first proposal to `.multiplai/dreams/config-audit-YYYY-MM-DD.md`. Never applies changes; stamps `config_audit_state.yaml` to close the SessionStart nudge gate. |
 
 ## Where your data lives
 
@@ -396,7 +408,7 @@ with a log warning and everything else keeps working.
 
 | Event | Script | Role |
 |-------|--------|------|
-| `SessionStart` | `session_start.py` | Init session state; drain deferred extractions; emit the dream-due nudge. **Does not** dump memory into context. |
+| `SessionStart` | `session_start.py` | Init session state; drain deferred extractions; emit the dream-due nudge and the 90-day config-audit nudge. **Does not** dump memory into context. |
 | `UserPromptSubmit` | `context_manager.py` | Route the prompt against catalogs and inject only the relevant memory. |
 | `Stop` | `session_stop.py` | Lightweight checkpoint (extraction is deferred, not run here). |
 | `SessionEnd` | `session_end.py` | Write a deferred-extraction marker for the next session to process. |

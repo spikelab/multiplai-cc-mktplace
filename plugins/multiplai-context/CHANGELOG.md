@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.9 — 2026-07-14
+## 0.6.11 — 2026-07-14
 
 ### Added
 - **qmd `http` execution mode.** A third `qmd_mode` (`http`) POSTs an
@@ -25,6 +25,45 @@
 - **Stopword list extended** with intent/quantifier fillers (`learn`,
   `more`, `understand`, `explain` and morphological variants) that were
   leaking into the lexical keyword arm.
+
+## 0.6.10 — 2026-07-14
+
+### Added
+- **`/multiplai-context:config-audit` — subtractive config/rules review**
+  (gap B1 of the AI-coding-insights analysis). The skill enumerates the
+  active config surface (`$CLAUDE_CONFIG_DIR/CLAUDE.md`, workspace
+  `CLAUDE.md`s, `settings.json` env/permissions blocks, hook
+  registrations, memory-file standing rules), classifies every standing
+  rule as *still-serving*, *obsolete*, or *model-constraining*, and
+  writes a removals-first proposal to
+  `.multiplai/dreams/config-audit-YYYY-MM-DD.md` for user review. It
+  never applies changes — same propose-then-review UX as dream. A new
+  90-day SessionStart gate (`_config_audit_gate_open`, state file
+  `config_audit_state.yaml` beside the dream state) nudges
+  `/multiplai-context:config-audit` when the review falls out of
+  cadence. The stamp is deterministic: the skill's final step runs
+  `scripts/config_audit.py --stamp` (mirroring `dream.py --stamp`),
+  which resolves the data dir via the same `get_paths()` cascade the
+  gate uses — never hand-written YAML. Gate semantics: a **missing**
+  state file (fresh install) is seeded with `last_run: now` and does
+  NOT nudge — the 90-day clock starts at install; a stale (>=90d) or
+  existing-but-corrupt state opens the gate (fail-open recovery, like
+  the dream gate).
+
+## 0.6.9 — 2026-07-14
+
+### Added
+- **Near-instant compaction via summarizer steering.** The PreCompact hook
+  now prints a directive to stdout when a valid checkpoint exists — Claude
+  Code appends PreCompact stdout to the compaction summarization prompt as
+  custom instructions (verified in the CLI 2.1.207 binary; the background
+  precompute path honors them too), so the native summarizer emits a
+  one-sentence stub instead of a multi-KB summary. The checkpoint rebuild
+  (SessionStart source=compact) carries the real state. Safety gates: only
+  when checkpointing is enabled, the session is not a child, and
+  `checkpoint.md` validates; the pending rebuild marker is written first so
+  even a manual /compact below the handoff threshold gets its checkpoint
+  re-injected. Any doubt → native summary (silent stdout).
 
 ## 0.6.8 — 2026-07-12
 

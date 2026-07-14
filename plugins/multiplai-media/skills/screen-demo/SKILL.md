@@ -67,6 +67,7 @@ language)").
 Read `<CONTEXT>` (a markdown file with timecoded transcript + cut candidates), then **write an EDL JSON** that realizes the user's prose description. Schema in `examples/demo-narrated.edl.json`.
 
 EDL authoring guidance:
+- **`source` must be the ORIGINAL recording — never the 720p proxy.** The proxy is an analysis artifact; render refuses it.
 - Map each user beat to a segment with `src_start`/`src_end` from the transcript anchors.
 - Use `speed > 1` for "fast-forward" sections (anything >4 auto-mutes audio; that's where the music bed carries).
 - Use `speed = 1.0` and a `zoom: {scale, x, y}` for "money shot" moments.
@@ -74,7 +75,29 @@ EDL authoring guidance:
 - Total target duration: usually 60–120 s.
 - Add a small title card and optional logo per the user's request.
 
+**Zoom rules (a zoom is a crop — everything outside it is invisible):**
+- Zooms are short money shots (≤12 s). After every zoomed segment, return to a full-frame segment so the viewer regains context.
+- **Never end the video zoomed** — render errors on a zoomed final segment. If a close-up ending is genuinely intended, set `"hold": true` inside that zoom.
+- Keep most of the runtime full-frame; render warns when >50% is zoomed.
+
 Write the EDL to a sensible location (e.g. `~/.cache/screen-demo/<key>/edl.json`).
+
+### 3b. Choose music that fits
+
+Music is part of the edit, not an afterthought. Before rendering:
+- If the user named a track or vibe, honor it. If not, **propose a specific track (with source link) and say why it fits** — don't silently pick one.
+- Match genre and tempo to the content, e.g.:
+
+| Demo type | Fits | Avoid |
+|---|---|---|
+| Dev tool / terminal workflow | minimal electronic, lo-fi beats | orchestral, vocals |
+| Business / hiring / SaaS pitch | upbeat corporate, light house | lo-fi sleepy beats, heavy EDM |
+| Consumer app, playful | indie pop, funk | dark ambient |
+| Data/AI "wow" reveal | cinematic electronic build | anything with lyrics |
+
+- Tempo should roughly match cut density: fast-forward-heavy reels want energy; calm narrated walkthroughs want restraint.
+- Search Pixabay Music by mood ("corporate upbeat", "lo-fi chill", "cinematic tech") rather than taking the first result.
+- The `synth` pink-noise bed is a last-resort fallback — never ship it in a final deliverable without telling the user.
 
 ### 4. Render
 
@@ -85,7 +108,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/pipeline.py render <edl
   --music-volume-db -22         # optional, default -18
 ```
 
-### 5. Report back
+### 5. Quality check + report back
+
+Before declaring done, verify the render (ffprobe + spot-check frames with `ffmpeg -ss <t> -frames:v 1`):
+- **Sharpness:** output is 1080p by default; screen text must be legible. If it isn't, check the EDL `source` points at the original recording.
+- **Framing:** extract a frame from the last 2 s — it must be full-frame (no leftover zoom crop).
+- **Music:** the bed fits the content type and ducks under narration.
 
 Print the output path and total duration. If quality issues are visible (caption errors, wrong segment, etc.), iterate on the EDL and re-render — the cached prep means re-renders are fast (the bulk of time is the per-segment cut pass).
 
@@ -109,11 +137,11 @@ See `examples/demo-narrated.edl.json`. Top-level keys:
 - `title` — `{line1, line2, duration}` (omit to skip)
 - `segments` — `[{src_start, src_end, speed?, zoom?, mute?}]`
   - `speed` — `>1` faster, `<1` slower; default 1.0; auto-mutes audio if >4
-  - `zoom` — `{scale, x, y}` where x,y are normalized 0..1 (center coords)
+  - `zoom` — `{scale, x, y, hold?}` where x,y are normalized 0..1 crop position; `hold: true` permits a zoom on the final segment (otherwise render errors)
 - `transitions` — `[{after, kind, duration}]` (currently only `fade`)
 - `logo` — `{path, position: br|bl|tr|tl, scale, start_at}`
 - `music` — `{file}` OR `{prompt}` (prompt is documented but generation is not available in CPU-only Linux containers — pass `file` or `url`)
-- `output` — `{width, height, fps, crf}` (defaults 1280×720, 30 fps, CRF 22)
+- `output` — `{width, height, fps, crf}` (defaults 1920×1080, 30 fps, CRF 18)
 
 ## What it does NOT do
 

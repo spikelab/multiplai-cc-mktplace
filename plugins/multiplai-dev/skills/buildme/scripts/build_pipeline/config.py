@@ -12,7 +12,7 @@ from typing import Literal
 
 import yaml
 
-from .env import pick_model
+from .env import pick_model, resolve_model
 
 log = logging.getLogger(__name__)
 
@@ -66,9 +66,10 @@ DEFAULT_MODEL = pick_model("opus", task="buildme")
 @dataclass
 class GateToggles:
     """Per-gate on/off switches from config.yaml."""
-    # RESERVED / not yet wired: no code path consults these two. The active
-    # per-block review is an inline prompt in tdd_engine._run_quality_review;
-    # there is no separate code-review or security-review gate to toggle yet.
+    # RESERVED / not yet wired: no code path consults these two toggles. The
+    # active per-block review is run_code_review (llm_steps/review_steps.py),
+    # called from tdd_engine._run_quality_review; it always runs — there is no
+    # off-switch consulted yet. No security-review gate exists either.
     code_review_per_block: bool = True
     security_review_per_block: bool = True
     test_quality_enabled: bool = True
@@ -112,6 +113,17 @@ class BuildConfig:
     # Model for LLM calls
     model: str = DEFAULT_MODEL
 
+    # Optional stronger model for quality reviews (None → falls back to
+    # `model`). Populated from BUILDME_REVIEW_MODEL (env, wins) or
+    # `code_review.model` in specs/config.yaml; both ceiling-capped by
+    # resolve_model, matching the existing model-resolution pattern.
+    review_model: str | None = None
+
+    # Coding-standards docs pushed into the reviewer's context (paths from
+    # `standards_files` in specs/config.yaml). Pull-for-implementer,
+    # push-for-reviewer: these are NOT added to implementer prompts.
+    standards_files: list[str] = field(default_factory=list)
+
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> BuildConfig:
         tier, model_name = detect_tier()
@@ -127,6 +139,11 @@ class BuildConfig:
         )
         config.specs_dir = config.project_dir / "specs"
         config._load_specs_config()
+        # Env override wins over config.yaml (same precedence as CLAUDE_MODEL
+        # in detect_tier); ceiling-capped like every other model resolution.
+        env_review_model = os.environ.get("BUILDME_REVIEW_MODEL")
+        if env_review_model:
+            config.review_model = resolve_model(env_review_model)
         config._discover_test_command()
         log.info("Running in %s mode (%s)", tier, model_name)
         return config
@@ -158,6 +175,12 @@ class BuildConfig:
         tdd = data.get("tdd", {})
         if tdd.get("test_command"):
             self.test_command = tdd["test_command"]
+
+        # Reviewer context: coding standards + optional stronger review model
+        self.standards_files = data.get("standards_files") or []
+        code_review_cfg = data.get("code_review", {}) or {}
+        if code_review_cfg.get("model") and not self.review_model:
+            self.review_model = resolve_model(code_review_cfg["model"])
 
         # Gate toggles
         code_review = data.get("code_review", {})
@@ -221,6 +244,34 @@ class BuildConfig:
 
     def progress_file_path(self) -> Path:
         return self.project_dir / "build-progress.md"
+
+    def standards_text(self) -> str:
+        """Concatenated contents of the coding-standards docs for the reviewer.
+
+        Resolves each `standards_files` entry (absolute, or relative to the
+        project dir, then $CLAUDE_CONFIG_DIR/reference/dev/, then
+        $CLAUDE_CONFIG_DIR). Missing files are logged and skipped. Returns ""
+        when nothing resolves — the review prompt then says
+        "(no standards provided)".
+        """
+        parts: list[str] = []
+        for entry in self.standards_files:
+            path = self._resolve_standards_file(entry)
+            if path is None:
+                log.warning("Standards file not found, skipping: %s", entry)
+                continue
+            parts.append(f"### Standard: {path.name}\n{path.read_text()}")
+        return "\n\n".join(parts)
+
+    def _resolve_standards_file(self, entry: str) -> Path | None:
+        p = Path(entry).expanduser()
+        if p.is_absolute():
+            return p if p.is_file() else None
+        for base in (self.project_dir, self.config_dir / "reference" / "dev", self.config_dir):
+            candidate = base / p
+            if candidate.is_file():
+                return candidate
+        return None
 
     def stack_reference_docs(self) -> list[Path]:
         """Return reference doc paths for the detected stack."""

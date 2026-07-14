@@ -38,6 +38,10 @@ def _find_font(bold: bool) -> str:
         ".ttf/.ttc path (checked DejaVu on Linux and Helvetica/Arial on macOS)."
     )
 
+# Segment/title clips are re-encoded by the final composite pass; near-lossless
+# intermediates keep the double encode from compounding into visible grain.
+INTERMEDIATE_CRF = 14
+
 POSITIONS = {
     "br": "x=W-w-{m}:y=H-h-{m}",
     "bl": "x={m}:y=H-h-{m}",
@@ -62,12 +66,16 @@ def _atempo_chain(speed: float) -> str:
 
 
 def _zoom_filter(zoom, W: int, H: int) -> str:
+    # Crop a window at the OUTPUT aspect ratio so the zoom fills the frame with
+    # no distortion (the old ih/s crop kept the source AR, then a hard scale=W:H
+    # stretched 16:10 Mac recordings). Sizing to W×H is left to the shared
+    # scale+pad stage that follows.
     s = zoom.scale
     crop_w = f"iw/{s}"
-    crop_h = f"ih/{s}"
-    x = f"(iw-iw/{s})*{zoom.x}"
-    y = f"(ih-ih/{s})*{zoom.y}"
-    return f"crop={crop_w}:{crop_h}:{x}:{y},scale={W}:{H}"
+    crop_h = f"min(ih\\,iw/{s}*{H}/{W})"
+    x = f"(iw-ow)*{zoom.x}"
+    y = f"(ih-oh)*{zoom.y}"
+    return f"crop={crop_w}:{crop_h}:{x}:{y}"
 
 
 def _cut_segments(edl: EDL, work: Path) -> list[Path]:
@@ -117,7 +125,9 @@ def _cut_segments(edl: EDL, work: Path) -> list[Path]:
             "-i", edl.source,
             "-filter_complex", filter_complex,
             "-map", "[v]", "-map", "[a]",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", str(edl.output.crf),
+            # Intermediates get re-encoded by the composite pass — keep them
+            # near-lossless (CRF 14) so quality is only lost once, at the end.
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", str(INTERMEDIATE_CRF),
             "-c:a", "aac", "-b:a", edl.output.audio_bitrate,
             "-pix_fmt", "yuv420p", str(p),
         ]
@@ -149,7 +159,7 @@ def _render_title(edl: EDL, work: Path) -> Path | None:
         "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate=48000",
         "-t", str(edl.title.duration),
         "-vf", vf,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(edl.output.crf),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(INTERMEDIATE_CRF),
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", edl.output.audio_bitrate,
         str(p),
@@ -243,6 +253,9 @@ def _xfade_duration_for(edl: EDL, segment_index: int) -> float:
 
 
 def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
+    for w in edl.validate():
+        print(f"⚠ EDL warning: {w}")
+
     work = work_dir or Path(tempfile.mkdtemp(prefix="screen-demo-work-"))
     work.mkdir(parents=True, exist_ok=True)
 
@@ -285,7 +298,7 @@ def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
         *cmd_inputs,
         "-filter_complex", filter_complex,
         "-map", f"[{vlabel}]", "-map", f"[{alabel}]",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(edl.output.crf),
+        "-c:v", "libx264", "-preset", "medium", "-crf", str(edl.output.crf),
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", edl.output.audio_bitrate,
         "-movflags", "+faststart",
