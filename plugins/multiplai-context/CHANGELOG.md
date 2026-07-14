@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.10 — 2026-07-14
+
+### Added
+- **`/multiplai-context:config-audit` — subtractive config/rules review**
+  (gap B1 of the AI-coding-insights analysis). The skill enumerates the
+  active config surface (`$CLAUDE_CONFIG_DIR/CLAUDE.md`, workspace
+  `CLAUDE.md`s, `settings.json` env/permissions blocks, hook
+  registrations, memory-file standing rules), classifies every standing
+  rule as *still-serving*, *obsolete*, or *model-constraining*, and
+  writes a removals-first proposal to
+  `.multiplai/dreams/config-audit-YYYY-MM-DD.md` for user review. It
+  never applies changes — same propose-then-review UX as dream. A new
+  90-day SessionStart gate (`_config_audit_gate_open`, state file
+  `config_audit_state.yaml` beside the dream state) nudges
+  `/multiplai-context:config-audit` when the review falls out of
+  cadence. The stamp is deterministic: the skill's final step runs
+  `scripts/config_audit.py --stamp` (mirroring `dream.py --stamp`),
+  which resolves the data dir via the same `get_paths()` cascade the
+  gate uses — never hand-written YAML. Gate semantics: a **missing**
+  state file (fresh install) is seeded with `last_run: now` and does
+  NOT nudge — the 90-day clock starts at install; a stale (>=90d) or
+  existing-but-corrupt state opens the gate (fail-open recovery, like
+  the dream gate).
+
 ## 0.6.9 — 2026-07-14
 
 ### Added
