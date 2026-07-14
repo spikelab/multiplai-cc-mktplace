@@ -65,7 +65,7 @@ TIMEOUT_VEC = 15          # qmd vsearch (query embedding only)
 TIMEOUT_FTS = 5           # qmd search (BM25)
 RRF_K = 60                # standard reciprocal-rank-fusion constant
 SSH_CONNECT_TIMEOUT = 3
-HTTP_TIMEOUT = 10         # POST /query round-trip (warm rerank ~6s)
+HTTP_TIMEOUT = 10         # POST /query floor; http_timeout() scales with dial
 DEFAULT_CANDIDATE_LIMIT = 10   # docs sent to the reranker (latency dial)
 MAX_LEX_TERMS = 3         # IDF-rarest content words fed to the lexical arm
 
@@ -465,6 +465,18 @@ def fused_search(flat: str, target: QmdTarget, runner=run_qmd) -> list | None:
     return rrf_fuse(vec, fts, target)
 
 
+def http_timeout(candidate_limit: int) -> float:
+    """Request timeout for the daemon's /query, scaled to the latency dial.
+
+    Rerank latency is linear in ``candidate_limit`` (~0.58s/doc GPU-warm;
+    measured: 10 docs -> 5.9s, 20 -> 11.6s, 40 -> 24.9s). A fixed timeout
+    would make raising the dial time out every request — and fail-open
+    would silently degrade retrieval to empty. 0.7s/doc + 3s base leaves
+    headroom for a loaded host; HTTP_TIMEOUT stays the floor.
+    """
+    return max(HTTP_TIMEOUT, 3 + 0.7 * candidate_limit)
+
+
 def http_search(searches: list[dict], intent: str, target: QmdTarget) -> list | None:
     """POST an authored typed query to the qmd daemon's REST /query endpoint.
 
@@ -488,11 +500,16 @@ def http_search(searches: list[dict], intent: str, target: QmdTarget) -> list | 
         url, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"}, method="POST",
     )
+    timeout = http_timeout(target.candidate_limit)
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
     except (urllib.error.URLError, TimeoutError, OSError) as e:
-        logger.warning("qmd http query failed (%s): %s", url, type(e).__name__)
+        logger.warning(
+            "qmd http query failed (%s, timeout=%.1fs, candidate_limit=%d): "
+            "%s — resources retrieval degraded to empty",
+            url, timeout, target.candidate_limit, type(e).__name__,
+        )
         return None
     try:
         data = json.loads(raw)

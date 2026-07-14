@@ -510,6 +510,20 @@ class TestBuildSearches:
         assert searches == [{"type": "vec", "query": "tell me about sourdough"}]
 
 
+class TestHttpTimeout:
+    def test_floor_applies_at_default_dial(self):
+        # 3 + 0.7*10 = 10 → HTTP_TIMEOUT floor holds
+        assert qr.http_timeout(10) == qr.HTTP_TIMEOUT == 10
+
+    def test_scales_with_candidate_limit(self):
+        # ~0.58s/doc measured (40 docs → 24.9s); 0.7s/doc + 3s covers it
+        assert qr.http_timeout(40) == pytest.approx(31.0)
+        assert qr.http_timeout(20) == pytest.approx(17.0)
+
+    def test_tiny_dial_still_gets_floor(self):
+        assert qr.http_timeout(1) == qr.HTTP_TIMEOUT
+
+
 class TestHttpSearch:
     def test_posts_typed_payload_and_parses_results(self, monkeypatch):
         captured = {}
@@ -526,6 +540,7 @@ class TestHttpSearch:
             captured["method"] = req.get_method()
             captured["body"] = json.loads(req.data)
             captured["ctype"] = req.headers.get("Content-type")
+            captured["timeout"] = timeout
             return FakeResp()
 
         monkeypatch.setattr(qr.urllib.request, "urlopen", fake_urlopen)
@@ -543,7 +558,22 @@ class TestHttpSearch:
         assert body["rerank"] is True
         assert body["minScore"] == 0.0            # cutoff stays in results_to_entries
         assert body["candidateLimit"] == HTTP_TARGET.candidate_limit
+        # default dial (10): the HTTP_TIMEOUT floor applies
+        assert captured["timeout"] == qr.HTTP_TIMEOUT
         assert results == [{"file": "qmd://resources/x.md", "score": 0.9}]
+
+    def test_timeout_scales_with_candidate_limit(self, monkeypatch):
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["timeout"] = timeout
+            raise qr.urllib.error.URLError("refused")
+
+        monkeypatch.setattr(qr.urllib.request, "urlopen", fake_urlopen)
+        target = qr.QmdTarget(workspace="/ws", resources_dir="/r", mode="http",
+                              candidate_limit=40)
+        qr.http_search([{"type": "vec", "query": "x"}], "x", target)
+        assert captured["timeout"] == pytest.approx(31.0)  # 3 + 0.7*40
 
     def test_transport_error_is_fail_open(self, monkeypatch):
         def boom(req, timeout=None):

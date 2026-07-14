@@ -147,7 +147,7 @@
     "qmd_candidate_limit": {
       "type": "number",
       "title": "qmd Candidate Limit (http)",
-      "description": "How many candidate docs the daemon reranks per query in 'http' mode. The main latency dial (rerank time is linear: ~0.58s/doc). 10 is a good default.",
+      "description": "How many candidate docs the daemon reranks per query in 'http' mode. The main latency dial (rerank time is linear: ~0.58s/doc). 10 is a good default. The HTTP request timeout scales with this dial (max(10s, 3 + 0.7s/doc)), so raising it also lengthens the worst-case wait per prompt.",
       "default": 10
     },
     "qmd_min_score": {
