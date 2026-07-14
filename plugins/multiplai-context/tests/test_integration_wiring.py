@@ -603,9 +603,12 @@ class TestGrepAuditHardcodedPaths:
         THEN all path defaults use ~ prefix, not absolute paths."""
         manifest = _load_plugin_json()
         for key, cfg in manifest.get("userConfig", {}).items():
-            if "default" in cfg and isinstance(cfg["default"], str) and "/" in cfg["default"]:
-                assert cfg["default"].startswith("~"), \
-                    f"userConfig.{key}.default must use ~ prefix, got: {cfg['default']}"
+            default = cfg.get("default")
+            # Only filesystem paths must use ~. URL defaults (e.g. the qmd
+            # http daemon endpoint) legitimately contain "/" but aren't paths.
+            if isinstance(default, str) and "/" in default and "://" not in default:
+                assert default.startswith("~"), \
+                    f"userConfig.{key}.default must use ~ prefix, got: {default}"
 
     def test_no_spikelab_references(self):
         """WHEN all plugin files are scanned

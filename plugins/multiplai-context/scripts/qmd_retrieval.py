@@ -3,11 +3,18 @@
 When ``resources_retrieval == "qmd"`` the context manager bypasses the
 catalog+router path for the resources corpus and calls :func:`search`
 here instead. qmd (https://github.com/tobi/qmd) maintains a hybrid
-BM25 + vector index over the resources directory; this module runs the
-queries and fuses the result lists.
+BM25 + vector index over the resources directory; this module queries it.
 
-Two execution modes (``qmd_mode`` plugin option):
+Three execution modes (``qmd_mode`` plugin option):
 
+- ``http`` — POST an authored, typed query to a resident ``qmd mcp
+  --http`` daemon on the host (``qmd_http_url``). Preferred mode: qmd
+  itself does the fusion + rerank, models stay warm in VRAM (no 12s
+  cold start per prompt), and the request is a JSON array — no shell, so
+  none of the quoting/newline limits of the ssh bridge apply. We author
+  the lexical arm ourselves (IDF-rare terms) instead of pasting the raw
+  sentence, which is what tobi's skill prescribes and what keeps qmd's
+  position-aware score blend honest. ``qmd_strategy`` is ignored here.
 - ``local`` — qmd binary on PATH (native installs; also covers a
   container-local qmd used as a BM25-only fallback).
 - ``ssh``   — qmd runs on the host reached over the container→host SSH
@@ -16,7 +23,7 @@ Two execution modes (``qmd_mode`` plugin option):
   index and query host-side. The index is project-local
   (``<workspace>/.qmd/``) at the same absolute path on both sides.
 
-Search strategies (``qmd_strategy``):
+Search strategies (``qmd_strategy``, ``local``/``ssh`` only):
 
 - ``fused``  — vsearch + BM25 keyword ladder merged with reciprocal-rank
   fusion, no LLM rerank (default: ~1-2s on the host).
@@ -36,8 +43,11 @@ import os
 import re
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,6 +65,9 @@ TIMEOUT_VEC = 15          # qmd vsearch (query embedding only)
 TIMEOUT_FTS = 5           # qmd search (BM25)
 RRF_K = 60                # standard reciprocal-rank-fusion constant
 SSH_CONNECT_TIMEOUT = 3
+HTTP_TIMEOUT = 10         # POST /query floor; http_timeout() scales with dial
+DEFAULT_CANDIDATE_LIMIT = 10   # docs sent to the reranker (latency dial)
+MAX_LEX_TERMS = 3         # IDF-rarest content words fed to the lexical arm
 
 # Minimum prompt length worth a retrieval round-trip; shorter prompts
 # ("yes", "go on") carry no retrievable signal.
@@ -73,7 +86,12 @@ _STOPWORDS = frozenset(
     "would can will my your our their his her its of in on at to for with "
     "from by about into over under and or not no if then than as so just "
     "me us them there here please help want need know tell show find look "
-    "make get set use using went going go".split()
+    "make get set use using went going go "
+    # Intent/quantifier fillers that carried no retrieval signal yet slipped
+    # into the lexical arm — e.g. the query "I want to learn more about
+    # coffee" was searching "learn more coffee" and ANDing the doc away.
+    "learn learns learning learned more most understand understands "
+    "understanding understood explain explains explaining explained".split()
 )
 
 
@@ -84,9 +102,12 @@ class QmdTarget:
     workspace: str                     # cwd for qmd (project-local index)
     resources_dir: str                 # maps qmd:// URIs to absolute paths
     collection: str = "resources"
-    mode: str = "local"                # "local" | "ssh"
+    mode: str = "local"                # "http" | "local" | "ssh"
     ssh_host: str = "host.docker.internal"
-    strategy: str = "fused"            # "fused" | "hybrid" | "fts"
+    strategy: str = "fused"            # "fused" | "hybrid" | "fts" (local/ssh)
+    http_url: str = "http://host.docker.internal:8181"  # qmd mcp --http daemon
+    candidate_limit: int = DEFAULT_CANDIDATE_LIMIT      # docs reranked (http)
+    min_score: float = MIN_SCORE       # weak-match cutoff, all modes
 
 
 def target_from_config(cfg, workspace: str) -> QmdTarget:
@@ -98,6 +119,9 @@ def target_from_config(cfg, workspace: str) -> QmdTarget:
         mode=cfg.qmd_mode,
         ssh_host=cfg.qmd_ssh_host,
         strategy=cfg.qmd_strategy,
+        http_url=cfg.qmd_http_url,
+        candidate_limit=cfg.qmd_candidate_limit,
+        min_score=cfg.qmd_min_score,
     )
 
 
@@ -129,6 +153,104 @@ def content_words(text: str) -> list[str]:
     keep = [w for w in words if len(w) > 2 and w not in _STOPWORDS and w.isalnum()]
     seen: set[str] = set()
     return [w for w in keep if not (w in seen or seen.add(w))]
+
+
+# ---------------------------------------------------------------------------
+# Typed-query authoring (http mode)
+#
+# We do NOT paste the raw prompt into qmd. The lexical arm ANDs its terms
+# and carries 2x weight in qmd's RRF, so a full sentence (stopwords and all)
+# either matches nothing or elects a junk doc to rank 1 — which the
+# position-aware blend then protects. Instead we hand qmd a typed query:
+# a lexical arm of only the IDF-rarest content words, plus a vector arm
+# carrying the whole prompt. See INBOX/qmd-http-rewrite-plan.
+# ---------------------------------------------------------------------------
+
+def flatten_query(text: str) -> str:
+    """Collapse whitespace and bound length; keep the text otherwise intact.
+
+    The vector arm wants natural language, and http mode has no shell to
+    protect (unlike :func:`sanitize_query`), so nothing is stripped.
+    """
+    return " ".join((text or "").split())[:MAX_QUERY_CHARS]
+
+
+def index_db_path(target: QmdTarget) -> Path:
+    """Path to the project-local qmd sqlite index on the shared mount."""
+    return Path(target.workspace) / ".qmd" / "index.sqlite"
+
+
+def doc_frequencies(terms: list[str], target: QmdTarget) -> dict[str, int | None] | None:
+    """Document frequency per term from the FTS index, or None if unreachable.
+
+    Read-only, single connection, short timeout. A term that trips the FTS
+    query parser maps to ``None`` (unknown DF) rather than raising. Returns
+    None (not ``{}``) when the index file itself can't be opened, so callers
+    can distinguish "no index" from "term absent".
+    """
+    if not terms:
+        return {}
+    db = index_db_path(target)
+    if not db.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.0)
+    except sqlite3.Error:
+        return None
+    out: dict[str, int | None] = {}
+    try:
+        for term in terms:
+            try:
+                row = conn.execute(
+                    "SELECT count(*) FROM documents_fts WHERE documents_fts MATCH ?",
+                    (f'"{term}"',),   # double-quote → literal token, never an FTS operator
+                ).fetchone()
+                out[term] = int(row[0]) if row else 0
+            except sqlite3.Error:
+                out[term] = None
+    finally:
+        conn.close()
+    return out
+
+
+def lexical_terms(prompt: str, target: QmdTarget,
+                  max_terms: int = MAX_LEX_TERMS) -> list[str]:
+    """The IDF-rarest content words of *prompt* for the lexical arm.
+
+    Ordered by document frequency ascending (rarest first) so ``coffee``
+    (12/311) beats ``more`` (248/311). Terms absent from the corpus (DF 0)
+    are dropped — ANDed into the lexical arm they would zero it out. When
+    the index can't be read, degrade to stopword-filtered prompt order.
+    """
+    words = content_words(prompt)
+    if not words:
+        return []
+    dfs = doc_frequencies(words, target)
+    if dfs is None:                       # index unreachable
+        return words[:max_terms]
+    scored: list[tuple[int, int, str]] = []
+    for i, w in enumerate(words):
+        df = dfs.get(w)
+        if df == 0:                       # not in corpus → contributes nothing
+            continue
+        # unknown DF (parser-tripping token) → treat as rare but keep it.
+        scored.append((df if df is not None else 1, i, w))
+    scored.sort(key=lambda t: (t[0], t[1]))   # DF asc, then prompt order
+    return [w for _, _, w in scored[:max_terms]]
+
+
+def build_searches(prompt: str, target: QmdTarget) -> list[dict]:
+    """Author the typed ``searches`` array qmd's REST /query expects.
+
+    Always a vector arm over the full prompt; a lexical arm is prepended
+    only when there are rare terms worth ANDing. A prompt with no in-corpus
+    content words (a genuine negative control) goes vector-only.
+    """
+    searches = [{"type": "vec", "query": flatten_query(prompt)}]
+    lex = lexical_terms(prompt, target)
+    if lex:
+        searches.insert(0, {"type": "lex", "query": " ".join(lex)})
+    return searches
 
 
 def normalize_score(item: dict) -> float:
@@ -206,13 +328,14 @@ def rrf_fuse(
     return results
 
 
-def results_to_entries(results: list, target: QmdTarget) -> list[dict]:
+def results_to_entries(results: list, target: QmdTarget,
+                       min_score: float = MIN_SCORE) -> list[dict]:
     """Filter/dedupe raw qmd results into renderable entries.
 
     Returns ``[{"path", "title", "score", "snippet"[, "line"]}, ...]`` —
-    best first, one entry per file, weak matches dropped. ``line`` is the
-    start of the best-matching chunk (qmd matches chunks, not whole docs);
-    omitted when qmd doesn't report one.
+    best first, one entry per file, weak matches (< *min_score*) dropped.
+    ``line`` is the start of the best-matching chunk (qmd matches chunks,
+    not whole docs); omitted when qmd doesn't report one.
     """
     seen: set[str] = set()
     entries: list[dict] = []
@@ -220,7 +343,7 @@ def results_to_entries(results: list, target: QmdTarget) -> list[dict]:
         if not isinstance(item, dict):
             continue
         score = normalize_score(item)
-        if score < MIN_SCORE:
+        if score < min_score:
             continue
         path = to_abs_path(item, target)
         if path in seen:  # multiple chunks of the same doc
@@ -342,16 +465,75 @@ def fused_search(flat: str, target: QmdTarget, runner=run_qmd) -> list | None:
     return rrf_fuse(vec, fts, target)
 
 
+def http_timeout(candidate_limit: int) -> float:
+    """Request timeout for the daemon's /query, scaled to the latency dial.
+
+    Rerank latency is linear in ``candidate_limit`` (~0.58s/doc GPU-warm;
+    measured: 10 docs -> 5.9s, 20 -> 11.6s, 40 -> 24.9s). A fixed timeout
+    would make raising the dial time out every request — and fail-open
+    would silently degrade retrieval to empty. 0.7s/doc + 3s base leaves
+    headroom for a loaded host; HTTP_TIMEOUT stays the floor.
+    """
+    return max(HTTP_TIMEOUT, 3 + 0.7 * candidate_limit)
+
+
+def http_search(searches: list[dict], intent: str, target: QmdTarget) -> list | None:
+    """POST an authored typed query to the qmd daemon's REST /query endpoint.
+
+    qmd owns the fusion + rerank; we send typed ``searches`` (never a raw
+    ``query`` string, which would re-enable auto-expansion and the poisoned
+    2x-weighted raw-sentence lexical arm). ``minScore`` is left at 0 so the
+    weak-match cutoff stays with :func:`results_to_entries`. Returns the raw
+    result list, or None on any transport/parse failure (fail-open).
+    """
+    payload = {
+        "searches": searches,
+        "intent": intent,               # steers rerank + snippet extraction
+        "collections": [target.collection],
+        "limit": MAX_RESULTS,
+        "candidateLimit": target.candidate_limit,
+        "minScore": 0.0,
+        "rerank": True,
+    }
+    url = f"{target.http_url.rstrip('/')}/query"
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    timeout = http_timeout(target.candidate_limit)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        logger.warning(
+            "qmd http query failed (%s, timeout=%.1fs, candidate_limit=%d): "
+            "%s — resources retrieval degraded to empty",
+            url, timeout, target.candidate_limit, type(e).__name__,
+        )
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("qmd http bad json: %s", raw[:200])
+        return None
+    if isinstance(data, dict):
+        data = data.get("results", data.get("documents", []))
+    return data if isinstance(data, list) else None
+
+
 # ---------------------------------------------------------------------------
 # Entry point for the context manager
 # ---------------------------------------------------------------------------
 
-def search(prompt: str, target: QmdTarget, runner=run_qmd) -> list[dict]:
+def search(prompt: str, target: QmdTarget, runner=run_qmd,
+           http_runner=http_search) -> list[dict]:
     """Retrieve resources entries for *prompt*; ``[]`` on any failure.
 
-    Skips slash commands and tiny prompts. Falls back to the BM25 ladder
-    when the configured strategy returns nothing (e.g. embeddings still
-    pending, or vsearch unavailable in a local BM25-only install).
+    In ``http`` mode we author a typed query and let the daemon fuse +
+    rerank. In ``local``/``ssh`` mode we run the configured strategy and
+    fall back to the BM25 ladder when it returns nothing (e.g. embeddings
+    still pending, or vsearch unavailable in a BM25-only install). Slash
+    commands and tiny prompts are skipped.
     """
     prompt = (prompt or "").strip()
     if not prompt or prompt.startswith("/") or len(prompt) < MIN_PROMPT_CHARS:
@@ -359,8 +541,13 @@ def search(prompt: str, target: QmdTarget, runner=run_qmd) -> list[dict]:
     if not target.resources_dir:
         return []
 
-    flat = sanitize_query(prompt)
     try:
+        if target.mode == "http":
+            searches = build_searches(prompt, target)
+            results = http_runner(searches, prompt, target)
+            return results_to_entries(results or [], target, target.min_score)
+
+        flat = sanitize_query(prompt)
         results = None
         if target.strategy == "hybrid":
             results = runner("query", flat, TIMEOUT_HYBRID, target)
@@ -368,7 +555,7 @@ def search(prompt: str, target: QmdTarget, runner=run_qmd) -> list[dict]:
             results = fused_search(flat, target, runner)
         if not results:
             results = fts_ladder(flat, target, runner)[:MAX_RESULTS] or None
-        return results_to_entries(results or [], target)
+        return results_to_entries(results or [], target, target.min_score)
     except Exception:
         # Retrieval is a nicety — never let it break the prompt.
         logger.exception("qmd retrieval failed; returning no results")

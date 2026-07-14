@@ -2,6 +2,8 @@
 search() orchestration with an injected fake runner (no qmd needed).
 """
 
+import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -329,6 +331,12 @@ class TestQmdConfig:
         assert cfg.qmd_ssh_host == "host.docker.internal"
         assert cfg.qmd_collection == "resources"
         assert cfg.qmd_strategy == "fused"
+        assert cfg.qmd_http_url == "http://host.docker.internal:8181"
+        assert cfg.qmd_candidate_limit == 10
+        assert cfg.qmd_min_score == 0.30
+
+    def test_http_is_a_valid_mode(self):
+        assert CatalogConfig(qmd_mode="http").qmd_mode == "http"
 
     def test_invalid_values_fall_back(self):
         cfg = CatalogConfig(
@@ -337,31 +345,277 @@ class TestQmdConfig:
             qmd_ssh_host="  ",
             qmd_collection="",
             qmd_strategy="psychic",
+            qmd_http_url="   ",
+            qmd_candidate_limit=0,
+            qmd_min_score=1.7,
         )
         assert cfg.resources_retrieval == "catalog"
         assert cfg.qmd_mode == "local"
         assert cfg.qmd_ssh_host == "host.docker.internal"
         assert cfg.qmd_collection == "resources"
         assert cfg.qmd_strategy == "fused"
+        assert cfg.qmd_http_url == "http://host.docker.internal:8181"
+        assert cfg.qmd_candidate_limit == 10
+        assert cfg.qmd_min_score == 0.30
 
     def test_loads_from_env(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_resources_retrieval", "qmd")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_mode", "ssh")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_mode", "http")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_ssh_host", "myhost")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_collection", "notes")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_strategy", "fts")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_http_url", "http://host.docker.internal:9000")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_candidate_limit", "20")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_min_score", "0.5")
         cfg = load_catalog_config()
         assert cfg.resources_retrieval == "qmd"
-        assert cfg.qmd_mode == "ssh"
+        assert cfg.qmd_mode == "http"
         assert cfg.qmd_ssh_host == "myhost"
         assert cfg.qmd_collection == "notes"
         assert cfg.qmd_strategy == "fts"
+        assert cfg.qmd_http_url == "http://host.docker.internal:9000"
+        assert cfg.qmd_candidate_limit == 20
+        assert cfg.qmd_min_score == 0.5
 
     def test_target_from_config_uses_cwd_as_workspace(self):
         cfg = CatalogConfig(
-            resources_dir="/ws/RESOURCES", resources_retrieval="qmd", qmd_mode="ssh",
+            resources_dir="/ws/RESOURCES", resources_retrieval="qmd", qmd_mode="http",
+            qmd_http_url="http://h:1", qmd_candidate_limit=7, qmd_min_score=0.4,
         )
         target = qr.target_from_config(cfg, "/some/project")
         assert target.workspace == "/some/project"
         assert target.resources_dir == "/ws/RESOURCES"
-        assert target.mode == "ssh"
+        assert target.mode == "http"
+        assert target.http_url == "http://h:1"
+        assert target.candidate_limit == 7
+        assert target.min_score == 0.4
+
+
+# ---------------------------------------------------------------------------
+# http mode: query authoring (flatten_query / doc_frequencies /
+# lexical_terms / build_searches) and http_search / search dispatch
+# ---------------------------------------------------------------------------
+
+
+def _make_index(workspace: Path, docs: list[str]) -> None:
+    """Write a minimal qmd-shaped index at <workspace>/.qmd/index.sqlite.
+
+    Only what doc_frequencies() touches: a `documents_fts` FTS5 table whose
+    `body` column holds each doc's text (porter/unicode61, like real qmd).
+    """
+    qdir = workspace / ".qmd"
+    qdir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(qdir / "index.sqlite")
+    conn.execute(
+        "CREATE VIRTUAL TABLE documents_fts USING fts5("
+        "filepath, title, body, tokenize='porter unicode61')"
+    )
+    conn.executemany(
+        "INSERT INTO documents_fts (filepath, title, body) VALUES (?, ?, ?)",
+        [(f"doc{i}.md", f"doc {i}", body) for i, body in enumerate(docs)],
+    )
+    conn.commit()
+    conn.close()
+
+
+HTTP_TARGET = qr.QmdTarget(
+    workspace="/ws", resources_dir="/ws/RESOURCES", mode="http",
+    http_url="http://host.docker.internal:8181", collection="resources",
+)
+
+
+class TestFlattenQuery:
+    def test_collapses_whitespace_keeps_metacharacters(self):
+        # Unlike sanitize_query, http mode has no shell — nothing is stripped.
+        assert qr.flatten_query("what's  this?\n(a test)") == "what's this? (a test)"
+
+    def test_truncates(self):
+        assert len(qr.flatten_query("x " * 1000)) <= qr.MAX_QUERY_CHARS
+
+    def test_empty(self):
+        assert qr.flatten_query("") == ""
+        assert qr.flatten_query(None) == ""
+
+
+class TestDocFrequencies:
+    def test_counts_documents_per_term(self, tmp_path):
+        _make_index(tmp_path, ["coffee arabica gesha", "more learning here",
+                               "learn more about things", "learning more today"])
+        target = qr.QmdTarget(workspace=str(tmp_path), resources_dir="/r", mode="http")
+        dfs = qr.doc_frequencies(["coffee", "more", "learn"], target)
+        assert dfs is not None
+        assert dfs["coffee"] == 1
+        assert dfs["more"] == 3
+        # porter stemming folds learn/learning together
+        assert dfs["learn"] == 3
+
+    def test_missing_index_returns_none(self):
+        target = qr.QmdTarget(workspace="/nonexistent", resources_dir="/r", mode="http")
+        assert qr.doc_frequencies(["coffee"], target) is None
+
+    def test_empty_terms_returns_empty(self):
+        assert qr.doc_frequencies([], HTTP_TARGET) == {}
+
+    def test_fts_operator_token_does_not_raise(self, tmp_path):
+        _make_index(tmp_path, ["alpha and beta", "gamma"])
+        target = qr.QmdTarget(workspace=str(tmp_path), resources_dir="/r", mode="http")
+        dfs = qr.doc_frequencies(["and", "alpha"], target)
+        assert dfs is not None
+        assert dfs["alpha"] == 1
+        assert dfs["and"] == 1  # quoted → literal token, not a boolean operator
+
+
+class TestLexicalTerms:
+    def test_orders_by_rarity_and_drops_common(self, tmp_path):
+        _make_index(tmp_path, ["gesha special"] + ["beans"] * 20 + ["flavor"] * 8)
+        target = qr.QmdTarget(workspace=str(tmp_path), resources_dir="/r", mode="http")
+        terms = qr.lexical_terms("gesha beans flavor notes", target, max_terms=2)
+        # gesha (df 1) and flavor (df 8) are rarest; "beans" (df 20) drops out
+        assert terms == ["gesha", "flavor"]
+
+    def test_drops_terms_absent_from_corpus(self, tmp_path):
+        _make_index(tmp_path, ["coffee arabica beans"])
+        target = qr.QmdTarget(workspace=str(tmp_path), resources_dir="/r", mode="http")
+        terms = qr.lexical_terms("coffee sourdough", target)
+        assert terms == ["coffee"]  # sourdough (df 0) is excluded
+
+    def test_all_absent_yields_empty(self, tmp_path):
+        _make_index(tmp_path, ["coffee arabica"])
+        target = qr.QmdTarget(workspace=str(tmp_path), resources_dir="/r", mode="http")
+        assert qr.lexical_terms("sourdough pizza dough", target) == []
+
+    def test_degrades_to_word_order_without_index(self):
+        target = qr.QmdTarget(workspace="/nonexistent", resources_dir="/r", mode="http")
+        terms = qr.lexical_terms("kubernetes deployment canary rollout", target, max_terms=2)
+        assert terms == ["kubernetes", "deployment"]  # stopword-filtered order
+
+
+class TestBuildSearches:
+    def test_lex_and_vec_arms(self, tmp_path):
+        _make_index(tmp_path, ["arabica robusta special"]
+                    + ["beans"] * 30 + ["compare"] * 30)
+        target = qr.QmdTarget(workspace=str(tmp_path), resources_dir="/r", mode="http")
+        prompt = "compare arabica and robusta beans"
+        searches = qr.build_searches(prompt, target)
+        assert searches[-1] == {"type": "vec", "query": prompt}
+        lex = searches[0]
+        assert lex["type"] == "lex"
+        assert "arabica" in lex["query"] and "robusta" in lex["query"]
+        assert "beans" not in lex["query"].split()  # common term drops (max 3 terms)
+
+    def test_vec_only_when_no_rare_terms(self, tmp_path):
+        _make_index(tmp_path, ["coffee arabica"])
+        target = qr.QmdTarget(workspace=str(tmp_path), resources_dir="/r", mode="http")
+        searches = qr.build_searches("tell me about sourdough", target)  # all absent
+        assert searches == [{"type": "vec", "query": "tell me about sourdough"}]
+
+
+class TestHttpTimeout:
+    def test_floor_applies_at_default_dial(self):
+        # 3 + 0.7*10 = 10 → HTTP_TIMEOUT floor holds
+        assert qr.http_timeout(10) == qr.HTTP_TIMEOUT == 10
+
+    def test_scales_with_candidate_limit(self):
+        # ~0.58s/doc measured (40 docs → 24.9s); 0.7s/doc + 3s covers it
+        assert qr.http_timeout(40) == pytest.approx(31.0)
+        assert qr.http_timeout(20) == pytest.approx(17.0)
+
+    def test_tiny_dial_still_gets_floor(self):
+        assert qr.http_timeout(1) == qr.HTTP_TIMEOUT
+
+
+class TestHttpSearch:
+    def test_posts_typed_payload_and_parses_results(self, monkeypatch):
+        captured = {}
+
+        class FakeResp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return json.dumps(
+                {"results": [{"file": "qmd://resources/x.md", "score": 0.9}]}
+            ).encode()
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["method"] = req.get_method()
+            captured["body"] = json.loads(req.data)
+            captured["ctype"] = req.headers.get("Content-type")
+            captured["timeout"] = timeout
+            return FakeResp()
+
+        monkeypatch.setattr(qr.urllib.request, "urlopen", fake_urlopen)
+        searches = [{"type": "lex", "query": "coffee"},
+                    {"type": "vec", "query": "learn about coffee"}]
+        results = qr.http_search(searches, "learn about coffee", HTTP_TARGET)
+
+        assert captured["url"] == "http://host.docker.internal:8181/query"
+        assert captured["method"] == "POST"
+        assert captured["ctype"] == "application/json"
+        body = captured["body"]
+        assert body["searches"] == searches
+        assert body["intent"] == "learn about coffee"
+        assert body["collections"] == ["resources"]
+        assert body["rerank"] is True
+        assert body["minScore"] == 0.0            # cutoff stays in results_to_entries
+        assert body["candidateLimit"] == HTTP_TARGET.candidate_limit
+        # default dial (10): the HTTP_TIMEOUT floor applies
+        assert captured["timeout"] == qr.HTTP_TIMEOUT
+        assert results == [{"file": "qmd://resources/x.md", "score": 0.9}]
+
+    def test_timeout_scales_with_candidate_limit(self, monkeypatch):
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["timeout"] = timeout
+            raise qr.urllib.error.URLError("refused")
+
+        monkeypatch.setattr(qr.urllib.request, "urlopen", fake_urlopen)
+        target = qr.QmdTarget(workspace="/ws", resources_dir="/r", mode="http",
+                              candidate_limit=40)
+        qr.http_search([{"type": "vec", "query": "x"}], "x", target)
+        assert captured["timeout"] == pytest.approx(31.0)  # 3 + 0.7*40
+
+    def test_transport_error_is_fail_open(self, monkeypatch):
+        def boom(req, timeout=None):
+            raise qr.urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr(qr.urllib.request, "urlopen", boom)
+        assert qr.http_search([{"type": "vec", "query": "x"}], "x", HTTP_TARGET) is None
+
+
+class TestSearchHttpDispatch:
+    def test_http_mode_authors_query_and_filters(self, tmp_path):
+        _make_index(tmp_path, ["coffee arabica"] + ["common"] * 40)
+        target = qr.QmdTarget(
+            workspace=str(tmp_path), resources_dir=str(tmp_path / "R"), mode="http",
+            min_score=0.30,
+        )
+        seen = {}
+
+        def fake_http(searches, intent, tgt):
+            seen["searches"] = searches
+            seen["intent"] = intent
+            return [{"file": "qmd://resources/good.md", "score": 0.8},
+                    {"file": "qmd://resources/weak.md", "score": 0.1}]
+
+        entries = qr.search("I want to learn more about coffee", target,
+                            http_runner=fake_http)
+        # authored, not raw: a lex arm of rare terms + the vec arm
+        assert seen["intent"] == "I want to learn more about coffee"
+        assert any(s["type"] == "lex" and "coffee" in s["query"]
+                   for s in seen["searches"])
+        assert any(s["type"] == "vec" for s in seen["searches"])
+        # min_score drops the weak hit
+        assert [e["path"] for e in entries] == [str(tmp_path / "R" / "good.md")]
+
+    def test_http_mode_never_calls_shell_runner(self, tmp_path):
+        _make_index(tmp_path, ["coffee"])
+        target = qr.QmdTarget(
+            workspace=str(tmp_path), resources_dir=str(tmp_path / "R"), mode="http",
+        )
+
+        def exploding_runner(*a, **k):
+            raise AssertionError("shell runner must not be used in http mode")
+
+        qr.search("a prompt about coffee here", target,
+                  runner=exploding_runner, http_runner=lambda *a: [])

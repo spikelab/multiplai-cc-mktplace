@@ -332,6 +332,8 @@ class TestNoHardcodedPaths:
     def test_user_config_defaults_use_tilde(self):
         manifest = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text())
         for key, cfg in manifest.get("userConfig", {}).items():
-            if "default" in cfg and "/" in str(cfg["default"]):
-                assert str(cfg["default"]).startswith("~"), \
+            default = str(cfg.get("default", ""))
+            # URL defaults (e.g. qmd_http_url) contain "/" but aren't paths.
+            if "/" in default and "://" not in default:
+                assert default.startswith("~"), \
                     f"userConfig.{key}.default should use ~ prefix"

@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.6.10",
+  "version": "0.6.11",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",
@@ -117,7 +117,7 @@
     "qmd_mode": {
       "type": "string",
       "title": "qmd Execution Mode",
-      "description": "Where qmd runs when resources_retrieval is 'qmd': 'local' (qmd on PATH \u2014 native installs) or 'ssh' (qmd on the host reached over the container\u2192host SSH bridge).",
+      "description": "Where qmd runs when resources_retrieval is 'qmd': 'http' (POST an authored typed query to a resident 'qmd mcp --http' daemon on the host \u2014 preferred: warm models, no per-prompt cold start, qmd does the fusion+rerank), 'local' (qmd on PATH \u2014 native installs), or 'ssh' (qmd on the host over the container\u2192host SSH bridge).",
       "default": "local"
     },
     "qmd_ssh_host": {
@@ -125,6 +125,12 @@
       "title": "qmd SSH Host",
       "description": "SSH host for qmd_mode 'ssh'.",
       "default": "host.docker.internal"
+    },
+    "qmd_http_url": {
+      "type": "string",
+      "title": "qmd HTTP Daemon URL",
+      "description": "Base URL of the 'qmd mcp --http' daemon for qmd_mode 'http'. The daemon must bind 0.0.0.0 (not localhost) to be reachable from the container. POSTs to <url>/query.",
+      "default": "http://host.docker.internal:8181"
     },
     "qmd_collection": {
       "type": "string",
@@ -134,9 +140,21 @@
     },
     "qmd_strategy": {
       "type": "string",
-      "title": "qmd Search Strategy",
-      "description": "'fused' (vsearch + BM25 merged by reciprocal rank, ~1-2s), 'hybrid' (qmd query with expansion + rerank, best quality but slow), or 'fts' (BM25 only, no embeddings needed).",
+      "title": "qmd Search Strategy (local/ssh only)",
+      "description": "Ignored in 'http' mode (the daemon fuses + reranks). For 'local'/'ssh': 'fused' (vsearch + BM25 merged by reciprocal rank, ~1-2s), 'hybrid' (qmd query with expansion + rerank, best quality but slow), or 'fts' (BM25 only, no embeddings needed).",
       "default": "fused"
+    },
+    "qmd_candidate_limit": {
+      "type": "number",
+      "title": "qmd Candidate Limit (http)",
+      "description": "How many candidate docs the daemon reranks per query in 'http' mode. The main latency dial (rerank time is linear: ~0.58s/doc). 10 is a good default. The HTTP request timeout scales with this dial (max(10s, 3 + 0.7s/doc)), so raising it also lengthens the worst-case wait per prompt.",
+      "default": 10
+    },
+    "qmd_min_score": {
+      "type": "number",
+      "title": "qmd Minimum Score",
+      "description": "Drop retrieved results scoring below this (0\u20131) rather than inject weak matches. Applies to all qmd modes.",
+      "default": 0.30
     },
     "memory_router": {
       "type": "string",
