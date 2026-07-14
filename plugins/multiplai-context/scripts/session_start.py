@@ -23,8 +23,11 @@ instead of the consolidation silently falling out of rhythm.
 
 Similarly checks the config-audit 90-day gate: when more than 90 days have
 elapsed since the last subtractive config/rules review, emits a nudge to run
-``/multiplai-context:config-audit`` (state file ``config_audit_state.yaml``,
-stamped by that skill, living beside the dream state).
+``/multiplai-context:config-audit``. The state file (``config_audit_state.yaml``,
+beside the dream state) is stamped deterministically by that skill via
+``scripts/config_audit.py --stamp``; when it is missing entirely (fresh
+install) this hook seeds it with ``last_run: now`` instead of nudging, so
+the 90-day clock starts at install.
 """
 
 import json
@@ -39,7 +42,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.paths import get_paths
-from multiplai_core.config import load_yaml, read_session_state, write_session_state
+from multiplai_core.config import load_yaml, save_yaml, read_session_state, write_session_state
 from multiplai_core.log_utils import setup_logging, log_event
 
 logger = setup_logging("session_start")
@@ -100,12 +103,40 @@ def _dream_gate_open(dream_state_file: Path) -> bool:
 def _config_audit_gate_open(config_audit_state_file: Path) -> bool:
     """Return True when >=90 days have passed since the last config audit.
 
-    Mirrors :func:`_dream_gate_open`: missing state or an unparseable
-    timestamp is treated as gate-open (first run or recovery), and any
-    YAML parse failure is swallowed — a corrupt state file shouldn't block
-    session start; the user recovers by running
-    ``/multiplai-context:config-audit``, which re-stamps the file.
+    First run (no state file at all): the gate stays CLOSED. There is no
+    record to be stale — nudging "the config audit is due" on every fresh
+    install would be false and noisy. Instead the file is seeded with
+    ``last_run: now`` so the 90-day clock starts at install and the first
+    nudge arrives when the cadence is genuinely due. Seeding is
+    best-effort: if the write fails the gate still stays closed (a
+    filesystem hiccup must not turn into a false nudge) and seeding is
+    retried next session start.
+
+    A state file that EXISTS but yields no usable timestamp (corrupt YAML,
+    missing or garbage ``last_run``) keeps the dream gate's fail-open
+    recovery semantics: a record existed and was lost, so the gate opens
+    and the user re-stamps by running ``/multiplai-context:config-audit``
+    (which stamps via ``config_audit.py --stamp``). Deliberately NOT
+    re-seeded — silently restarting the clock could hide a genuinely
+    overdue audit.
     """
+    if not config_audit_state_file.exists():
+        try:
+            save_yaml(
+                config_audit_state_file,
+                {"last_run": datetime.now(timezone.utc).isoformat()},
+            )
+            logger.info(
+                "Seeded config-audit state %s (first run — 90-day clock starts now)",
+                config_audit_state_file,
+            )
+        except Exception:
+            logger.warning(
+                "Could not seed config-audit state %s; will retry next session",
+                config_audit_state_file,
+            )
+        return False
+
     try:
         state = load_yaml(config_audit_state_file) or {}
     except Exception:
@@ -430,10 +461,11 @@ def _emit_config_audit_nudge() -> None:
     """Print an additionalContext nudge prompting a subtractive config audit."""
     print(
         "\n--- SYSTEM NUDGE ---\n"
-        "Config-audit gate is open (>90 days since the last config/rules "
-        "review). Surface this to the user at the next natural stopping "
-        "point: 'It has been 90+ days since the last config audit — worth "
-        "running /multiplai-context:config-audit to prune stale rules?'"
+        "Config-audit gate is open (no valid record of a config/rules "
+        "review within the last 90 days). Surface this to the user at the "
+        "next natural stopping point: 'The periodic config audit looks due "
+        "— worth running /multiplai-context:config-audit to prune stale "
+        "rules?'"
     )
 
 
@@ -659,7 +691,9 @@ def main() -> None:
 
     # Config-audit gate: emit a nudge when >=90 days have passed since the
     # last subtractive config/rules review. State lives beside the dream
-    # state and is stamped by the /multiplai-context:config-audit skill.
+    # state and is stamped by config_audit.py --stamp (invoked by the
+    # /multiplai-context:config-audit skill); a missing state file is
+    # seeded inside the gate check (clock starts at install, no nudge).
     config_audit_state_file = dream_state_file.parent / "config_audit_state.yaml"
     if _config_audit_gate_open(config_audit_state_file):
         logger.info("Config-audit gate open; emitting nudge")

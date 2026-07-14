@@ -90,25 +90,28 @@ and makes any changes themselves.
    decides what happens to it.
 
 6. **Stamp the state file** (this is what closes the 90-day SessionStart nudge
-   gate — never skip it, even when the audit found nothing to remove). Write
-   `config_audit_state.yaml` into the plugin data directory, **next to
-   `dream_state.yaml`** (default: `<workspace>/.multiplai/data/config_audit_state.yaml`,
-   falling back to `~/.multiplai/data/` when no workspace is configured — locate
-   the directory containing `dream_state.yaml` and write beside it):
+   gate — never skip it, even when the audit found nothing to remove):
 
-   ```yaml
-   last_run: "<UTC ISO-8601 timestamp>"
-   proposal: ".multiplai/dreams/config-audit-YYYY-MM-DD.md"
+   ```bash
+   uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/config_audit.py" --stamp \
+     --proposal <exact-proposal-path-from-step-4>
    ```
 
-   Get the timestamp with `date -u +%Y-%m-%dT%H:%M:%S+00:00`. If a previous
-   state file exists, overwrite it — only the latest run matters.
+   The script resolves the plugin data directory exactly the way the
+   SessionStart gate does (`get_paths()` — the same env cascade) and
+   atomically writes `config_audit_state.yaml` with a fresh `last_run`
+   UTC timestamp, **next to `dream_state.yaml`**. Never hand-write the
+   YAML or guess the directory yourself — on installs where the data dir
+   comes from an env override, a hand-picked path misses the file the
+   gate reads and the nudge fires forever. If a previous state file
+   exists, the script overwrites it — only the latest run matters.
 
 ## Constraints
 
 - **Never apply changes.** This skill must NOT apply, edit, or delete any
   configuration, rule, hook, or memory file. Its entire write surface is the
-  proposal file in `.multiplai/dreams/` and `config_audit_state.yaml`.
+  proposal file in `.multiplai/dreams/` and `config_audit_state.yaml` (written
+  via `config_audit.py --stamp`, step 6).
 - Removals first, edits second, additions only when a removal requires one —
   the proposal's bias is subtractive by design.
 - Be evidence-based: every removal candidate cites where the rule lives and why

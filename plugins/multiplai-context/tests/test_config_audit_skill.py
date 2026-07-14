@@ -4,7 +4,9 @@ Covers: skill definition (frontmatter for CC auto-discovery) and prompt
 content — the config surface it must enumerate, the three-way rule
 classification, the removals-first proposal to .multiplai/dreams/, the
 propose-don't-apply contract, and the state-stamp step that closes the
-90-day SessionStart nudge gate.
+90-day SessionStart nudge gate (delegated to the deterministic
+scripts/config_audit.py --stamp entry point — never hand-written YAML,
+which broke on installs whose data dir comes from an env override).
 """
 
 import re
@@ -104,6 +106,22 @@ class TestConfigAuditSkillPrompt:
         assert "config_audit_state.yaml" in self.text
         assert "dream_state.yaml" in self.text
         assert "last_run" in self.text
+
+    def test_stamp_uses_deterministic_script(self):
+        """Step 6 must invoke config_audit.py --stamp — never hand-write YAML.
+
+        The gate reads paths.data_dir()/config_audit_state.yaml (a 4-way
+        env cascade); a hand-located path misses it on CLAUDE_PLUGIN_DATA /
+        option-override installs and the nudge then fires forever.
+        """
+        assert '${CLAUDE_PLUGIN_ROOT}/scripts/config_audit.py" --stamp' in self.text
+        # No hand-rolled timestamp command and no YAML block to copy out.
+        assert "date -u +" not in self.text
+        assert "<UTC ISO-8601 timestamp>" not in self.text
+
+    def test_stamp_script_exists(self):
+        """The entry point step 6 points at must actually ship."""
+        assert (PLUGIN_ROOT / "scripts" / "config_audit.py").is_file()
 
     def test_stamp_survives_clean_audit(self):
         """The stamp must be required even when nothing is found to remove."""

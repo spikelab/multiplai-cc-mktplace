@@ -13,10 +13,16 @@
   `.multiplai/dreams/config-audit-YYYY-MM-DD.md` for user review. It
   never applies changes — same propose-then-review UX as dream. A new
   90-day SessionStart gate (`_config_audit_gate_open`, state file
-  `config_audit_state.yaml` beside the dream state, stamped by the
-  skill) nudges `/multiplai-context:config-audit` when the review falls
-  out of cadence; gate semantics mirror the dream gate
-  (missing/stale/unparseable state → open).
+  `config_audit_state.yaml` beside the dream state) nudges
+  `/multiplai-context:config-audit` when the review falls out of
+  cadence. The stamp is deterministic: the skill's final step runs
+  `scripts/config_audit.py --stamp` (mirroring `dream.py --stamp`),
+  which resolves the data dir via the same `get_paths()` cascade the
+  gate uses — never hand-written YAML. Gate semantics: a **missing**
+  state file (fresh install) is seeded with `last_run: now` and does
+  NOT nudge — the 90-day clock starts at install; a stale (>=90d) or
+  existing-but-corrupt state opens the gate (fail-open recovery, like
+  the dream gate).
 
 ## 0.6.9 — 2026-07-14
 
