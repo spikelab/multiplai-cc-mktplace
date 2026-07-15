@@ -85,7 +85,10 @@ detect_project() {
 # --- Xcode scheme discovery ---
 discover_scheme() {
   local list_output
-  list_output=$(run_on_host "cd $(q "$(pwd)") && xcodebuild -list -quiet 2>/dev/null") || true
+  # No `2>/dev/null` here: over the SSH bridge the gateway rejects the `>`
+  # redirect as a shell metacharacter (DENIED). The sed/grep parse below only
+  # extracts the "Schemes:" block, so any stderr that comes back is harmless.
+  list_output=$(run_on_host "cd $(q "$(pwd)") && xcodebuild -list -quiet") || true
   echo "$list_output" | sed -n '/Schemes:/,/^$/p' | grep -v 'Schemes:' | head -1 | xargs
 }
 

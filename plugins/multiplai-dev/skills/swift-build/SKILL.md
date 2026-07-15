@@ -7,7 +7,7 @@ description: |
 when_to_use: 'Triggers: swift build, swift test, run tests (Swift project context), simulator, xcodebuild'
 model: opus
 effort: high
-disable-model-invocation: true
+disable-model-invocation: false
 ---
 
 # Swift Build Skill
@@ -205,7 +205,7 @@ When running from a container, all commands the script sends over SSH are compat
 - `xcrun simctl list devices available`, `xcrun simctl boot ...`, `xcrun simctl io ...`, `xcrun simctl install ...`, `xcrun simctl launch ...`, `xcrun simctl shutdown ...`
 - `open -a Simulator` (for opening the Simulator GUI)
 - `cd /path && <any of the above>`
-- Pipes to `xcsift` work because the gateway uses `zsh -lc` which handles the full shell command
+- The `2>&1 | xcsift --format toon --quiet` suffix: the gateway rejects raw pipes/redirects as shell metacharacters, but it special-cases this one **fixed, trusted suffix** — it strips it before the metacharacter check, validates the head command, then re-attaches the xcsift stage host-side as a hardcoded constant. So only this exact suffix pipes; arbitrary pipes are still denied. (Do **not** send any other redirect/pipe over the bridge — e.g. `2>/dev/null` is denied.)
 
 ## Constraints
 
