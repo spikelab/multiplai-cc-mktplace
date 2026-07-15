@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.13 — 2026-07-15
+
+### Fixed
+- **Bumped every `multiplai-core` pin to `@v0.8.1`** (across all PEP 723
+  scripts and `requirements-dev.txt`). `v0.8.1` floors `claude-agent-sdk`
+  to `>=0.2.116,<0.3`; the previously-pinned `v0.6.0` capped the SDK at
+  `<0.2`, forcing the 0.1.x line. Against a modern Claude CLI (`>=2.x`)
+  that SDK misparses the terminal result message and raises the
+  deterministic `Claude Code returned an error result: success` *after* a
+  full generation — the failure that silently broke `dream` (and which any
+  other `[sdk]` consumer — `extract_learnings`, `backfill`,
+  `context_manager`, `generate_catalog`, `checkpoint_writer`,
+  `synthesize_now` — would have hit next). Restores pin consistency (the
+  `test_core_pin_consistency` drift-guard was red: `dream` had moved to
+  `v0.8.0` while every other script lagged at `v0.6.0`).
+
+### Added
+- **`dream` SDK-call failures are now diagnosable from persistent logs**
+  (folds in the unreleased 0.6.12 work): `multiplai-core` `v0.8.1`'s
+  `setup_logging(propagate_loggers=…)` attaches the dream file handler to
+  the `multiplai_core` package loggers, and `dream.py` wraps the
+  `_generate_proposal` call so a failed report logs an exception and exits
+  non-zero instead of vanishing silently.
+
 ## 0.6.11 — 2026-07-14
 
 ### Added

@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.6.0"]
+# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.8.1"]
 # ///
 # NOTE: the [sdk] extra matters — run_agent needs claude-agent-sdk in this
 # ephemeral env. Only this script pays that install; the per-turn hooks
