@@ -200,8 +200,9 @@ ${CLAUDE_PLUGIN_ROOT}/skills/swift-build/scripts/swift-host.sh --package-path /a
 
 When running from a container, all commands the script sends over SSH are compatible with the `~/.local/bin/container-build-gateway.sh` allowlist:
 
-- `swift build`, `swift test --filter ...`
-- `xcodebuild -scheme ... build`, `xcodebuild -scheme ... test`
+- `swift build`, `swift test --filter ...`, `swift --version`
+- `xcodebuild -scheme ... build`, `xcodebuild -scheme ... test`, `xcodebuild -list -quiet` (scheme discovery — `xcodebuild` is allowlisted by command prefix, so any subcommand is accepted)
+- `command -v xcsift` (probes whether the xcsift formatter is installed on the host)
 - `xcrun simctl list devices available`, `xcrun simctl boot ...`, `xcrun simctl io ...`, `xcrun simctl install ...`, `xcrun simctl launch ...`, `xcrun simctl shutdown ...`
 - `open -a Simulator` (for opening the Simulator GUI)
 - `cd /path && <any of the above>`
