@@ -78,8 +78,16 @@ humantype() {
     echo "hb: metachar text → programmatic insert (not real keystrokes)" >&2
     ab focus "$sel" >/dev/null 2>&1 || true
     napms 120 320
-    insert_via_eval "$text"
-    return
+    local res
+    res="$(insert_via_eval "$text")" || true
+    res="${res%\"}"; res="${res#\"}"
+    if [ "$res" != "ok" ]; then
+      # insert_via_eval returns 'no-focus' / 'not-editable:<TAG>' / '' when the
+      # focused element wasn't a writable field — surface it, don't fake success.
+      echo "hb: programmatic insert not confirmed (got '${res:-<empty>}') — field may be unset; check focus/ref" >&2
+      return 1
+    fi
+    return 0
   fi
   ab focus "$sel" >/dev/null 2>&1 || true
   napms 120 320
@@ -213,6 +221,8 @@ goto() {
 #   vis <sel>    : `ab is visible <sel>` reports the element is visible
 # Prints the matched value and exits 0 on success; exits 1 on timeout. Iteration
 # is bounded by a counter (each round ~1.5-2.8s of think), so it never tight-loops.
+# NOTE: timeout_s is an approximate lower bound — the per-round `ab` SSH latency
+# isn't counted, so real wall-clock runs somewhat longer than the nominal value.
 waitfor() {
   local mode="$1" arg="$2" timeout="${3:-60}"
   local rounds=$(( timeout * 10 / 21 + 1 ))   # ~2.1s avg/round -> ~timeout seconds
@@ -237,7 +247,8 @@ waitfor() {
 # addresses). `new` opens the inbox and prints the anonymous address it created;
 # `code` polls that inbox via an in-page fetch (the host SSH gateway denies
 # arbitrary curl) and prints the first 4-8 digit OTP found in a message's
-# subject/intro. Human-paced polling with a timeout — not a tight loop.
+# subject/intro. Human-paced polling with a timeout — not a tight loop. (timeout_s
+# is an approximate lower bound; per-round fetch/SSH latency isn't counted.)
 mail() {
   case "${1:-}" in
     new)
