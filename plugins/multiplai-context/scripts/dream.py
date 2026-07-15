@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.6.0"]
+# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.8.0"]
 # ///
 """Dream consolidation script for multiplai plugin.
 
@@ -37,7 +37,7 @@ from multiplai_core.log_utils import setup_logging
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
 
-logger = setup_logging("dream")
+logger = setup_logging("dream", propagate_loggers=("multiplai_core",))
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +525,14 @@ async def dream_report() -> None:
         len(memory_contents), ", ".join(sorted(memory_contents)),
     )
 
-    proposal = await _generate_proposal(client, all_learnings, memory_contents, source_files)
+    # Mirror dream_auto(): a crash inside the SDK call must leave a traceback in
+    # dream.log / hook-errors.log, not just the ephemeral task stdout. Re-raise
+    # so exit status stays non-zero.
+    try:
+        proposal = await _generate_proposal(client, all_learnings, memory_contents, source_files)
+    except Exception:
+        logger.exception("Dream report generation failed")
+        raise
 
     # Quick structural digest so the log answers "what did the model decide?"
     # without having to open the proposal file.
