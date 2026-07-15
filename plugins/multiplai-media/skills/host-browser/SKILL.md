@@ -82,16 +82,40 @@ detector watches (navigating, typing into fields, clicking submit):
 
 ```bash
 hb goto https://example.com           # navigate like a human: open, settle,
-                                      #   THEN accept cookies / close pop-ups
+                                      #   accept cookies, THEN report a block
+                                      #   verdict (exit 1 + screenshot if walled)
 hb snapshot -i                        # SEE the page (interactive refs @eN)
 hb humantype @e5 "user@example.com"   # focus, clear, type in jittered chunks
 hb think                              # randomized human pause (~0.4–1.4s)
 hb humanclick @e9                     # hover, micro-pause, then click
 hb fillform @e5 "name" @e6 "email"    # humantype across sel/text pairs
+hb waitfor vis @e7 30                 # poll until an element is visible (or URL matches)
+hb mail new                           # open mail.tm, print the anon inbox address
+hb mail code                          # poll that inbox, print the OTP code
 hb dismiss                            # re-clear overlays if one pops up mid-flow
 hb challenged                         # verdict on risk-scored walls (ok / blocked)
 hb data list                          # find embedded JSON (__NEXT_DATA__ etc.) — read it, don't scrape
 ```
+
+**`hb goto` now returns a block verdict.** After it accepts cookies it runs
+`hb challenged`, so `goto` exits `0` on real content and `1` on a risk-scored
+wall — branch on it: `hb goto "$url" && hb data list`. On a block it captures a
+screenshot (saved **host-side** by agent-browser) and prints the host path so you
+can eyeball the wall on the Mac. Add `--see` (`hb goto --see "$url"`) to also emit
+an interactive snapshot in the same step.
+
+**`hb waitfor` / `hb mail` replace hand-rolled poll loops.** Let the wrapper do
+the waiting — it's human-paced and timeout-bounded, so it won't tight-loop or
+retry-storm. `hb waitfor url <regex> [s]` / `hb waitfor vis <sel> [s]`;
+`hb mail new` then `hb mail code [s]` for temp-email signup verification (see
+`references/temp-email-and-signup.md`).
+
+**Typing text with shell metacharacters** (`; | & < > \` $ ( )` or newline — e.g.
+a strong password `P@ss$w0rd&`) can't cross the host gateway as an `ab` argument.
+`hb humantype`/`fillform` detect this and fall back to a base64 `eval -b`
+programmatic insert — it works, but it's **not** real keystrokes (weaker vs.
+keystroke-cadence detectors); a stderr note fires when it happens. Metachar-free
+text keeps the real-keystroke path.
 
 **Always arrive with `hb goto`, not bare `open`.** A real person lands on a
 page and immediately accepts the cookie banner and closes the pop-up before
@@ -137,6 +161,7 @@ to peel stacked overlays. Run `hb dismiss` again any time a new overlay appears.
 | Submit button click never advances | hidden **Cloudflare Turnstile / invisible reCAPTCHA** in an iframe | genuine fingerprint usually passes it; if not, it's a hard wall — stop |
 | Page looks blocked / `datadome` in HTML | **risk-scored wall** (DataDome) — script presence ≠ block | `hb challenged` for the real verdict; warm up + retry spaced before concluding — see `references/antidetection.md` |
 | `curl` over SSH → `DENIED: command not in allowlist` | host gateway only allows `agent-browser …` | read external APIs via `hb eval` in-page `fetch()` |
+| Typing a password/query silently rejected (`DENIED …`) | text has a gateway-forbidden metachar (`; \| & < > \` $ ( )` / newline) — can't be an `ab` arg | `hb humantype`/`fillform` auto-fall back to a base64 `eval -b` insert (prints a stderr note); real keystrokes only for metachar-free text |
 | Email accepted into form, then "this email can't be used" | **disposable-domain policy block** (e.g. Canva) | NOT a detection problem — antidetection can't fix it; use a non-disposable address or a different service |
 | Scraped a list, got only ~2–10 of many items | **virtualized list** — DOM only mounts visible rows | don't scrape cards; `hb data list` → read the embedded JSON blob (`references/data-extraction.md`) |
 | Refs wrong after a click | page changed | re-`snapshot -i` |

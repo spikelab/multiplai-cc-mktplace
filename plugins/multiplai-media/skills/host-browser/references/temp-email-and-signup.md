@@ -8,21 +8,28 @@ Prereq: `hb-connect.sh` succeeded (`webdriver=false`). `hb` is
 
 ## 1. Open a temp inbox (mail.tm — clean addresses, CORS API)
 
+Fast path — `hb mail new` opens mail.tm, settles, dismisses the consent banner,
+and prints the anonymous address it created:
+
+```bash
+hb mail new                          # -> 5ruth@web-library.net
+```
+
+mail.tm addresses have no `+` and are less obviously disposable than
+guerrillamail. Keep this tab as the inbox (the JWT `hb mail code` needs lives in
+its `localStorage`).
+
+<details><summary>Under the hood / other providers</summary>
+
 ```bash
 hb goto https://mail.tm/en/          # opens, settles, auto-accepts the consent banner
 hb snapshot -i
+hb get value @<email textbox ref>    # read the address off the textbox directly
 ```
 
 (`hb goto` clears the cookie/consent overlay for you. If a stubborn one remains,
 `hb dismiss` again, or click its Reject/Accept ref manually.)
-
-mail.tm auto-creates an anonymous account on load and shows the address in the
-"Email" textbox, e.g. `5ruth@web-library.net` (no `+`, less obviously
-disposable than guerrillamail). Grab it:
-
-```bash
-hb get value @<email textbox ref>    # -> 5ruth@web-library.net
-```
+</details>
 
 Keep this tab as the inbox. Open the signup target in a **new tab**:
 
@@ -46,7 +53,18 @@ hb humanclick @<continue/submit>
 
 When the site says *"we sent a code / magic link to your email"*, go read it.
 
-## 3. Read the inbox via in-page fetch (NOT host curl)
+## 3. Read the code (NOT host curl)
+
+Fast path — on the **mail.tm tab**, `hb mail code` polls the inbox (human-paced,
+timeout-bounded) and prints the first 4–8-digit OTP it finds in a message's
+subject/intro:
+
+```bash
+hb tab t1
+hb mail code            # -> 636751   (or exits 1 after the timeout)
+```
+
+<details><summary>Under the hood (raw fetch — full body / magic links / debugging)</summary>
 
 The host SSH gateway denies arbitrary `curl`. Read mail.tm's API with an
 in-page `fetch()` using the JWT it stored in `localStorage`. Run this on the
@@ -82,6 +100,7 @@ cat <<'EOF' | hb eval --stdin
 })()
 EOF
 ```
+</details>
 
 ## 4. Enter the code / open the magic link
 

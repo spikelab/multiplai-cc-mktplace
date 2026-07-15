@@ -51,6 +51,17 @@ modals) before the first real interaction.
 - SSH round-trip latency (~100s of ms per `ab` call) already adds natural,
   non-uniform spacing; the jitter stops it being *too* uniform.
 
+**Caveat — metachar text isn't real keystrokes.** The host gateway forbids
+`; | & < > \` $ ( )` and newline in an `ab` argument, so text containing them
+(a strong password like `P@ss$w0rd&`, a query with `&`/`()`) can't be typed
+key-by-key. `humantype`/`fillform` detect this and fall back to a base64
+`eval -b` that sets the value programmatically (native setter + `input`/`change`
+events). It populates the field, but fires **no** `keydown`/`keypress`/`keyup`,
+so a site scoring keystroke cadence sees a paste, not typing — behaviorally
+weaker. Metachar-free text still types for real. The durable fix is upstream: a
+`type -b/--base64` (or `--stdin`) verb on agent-browser mirroring `eval`, which
+would restore real keystrokes for any text.
+
 **Live proof:** real-Chrome + `hb` human pacing **silently passed Medium's
 invisible reCAPTCHA Enterprise** (`size=invisible`, risk-scored) on a first-try
 signup. Invisible reCAPTCHA/Turnstile score the session; a genuine browser +
