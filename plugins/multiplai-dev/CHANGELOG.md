@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.1 — 2026-07-15
+
+### Fixed
+- **`swift-build` was unusable over the container→host SSH bridge.** The script
+  appends `2>&1 | xcsift --format toon --quiet` to build/test commands, which
+  the host gateway rejected as a shell metacharacter (`DENIED: shell
+  metacharacter in command`) whenever the host had `xcsift` installed — so
+  every containerized `swift build` / `swift test` failed. Paired with a gateway
+  change (multiplai-container) that recognizes this one fixed, trusted suffix.
+- **`discover_scheme` sent `2>/dev/null` over the bridge** — a latent `>`
+  redirect that the gateway also denied, breaking scheme discovery (and thus
+  `build`/`test`) for Xcode-project layouts. Removed; the sed/grep parse
+  tolerates stderr.
+- Corrected the SKILL.md "Gateway Compatibility" note that falsely claimed pipes
+  work because the gateway runs `zsh -lc` on the full command.
+
+### Changed
+- **`swift-build` is now model-invocable** (`disable-model-invocation: false`),
+  so Claude reaches for the skill instead of improvising raw `swift --version` /
+  `ssh` calls that the gateway denies.
+
 ## 0.3.0 — 2026-07-14
 
 ### Added
