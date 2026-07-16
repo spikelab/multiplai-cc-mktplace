@@ -84,14 +84,32 @@ class TestConfigAuditSkillPrompt:
         assert i_rem < i_edt < i_add
         assert re.search(r"(?i)additions.*only.*removal", self.text, re.DOTALL)
 
+    # Every sentence in SKILL.md that may legitimately contain a form of
+    # "apply" — all are propose-only statements. A NEW "apply" occurrence
+    # fails the test until it is reviewed and deliberately whitelisted here
+    # (deliberate review beats the old 80-char negation-proximity heuristic,
+    # which passed any 'apply' that happened to sit near an unrelated
+    # negation).
+    ALLOWED_APPLY_SNIPPETS = (
+        "Does NOT apply changes.",
+        "Do **not** apply any of the proposed changes",
+        "**Never apply changes.** This skill must NOT apply, edit, or delete",
+    )
+
     def test_never_instructs_applying_changes(self):
-        """Every 'apply' occurrence must sit in a negation — the skill
-        proposes; it never applies."""
-        for m in re.finditer(r"(?i)\bappl(y|ies|ied|ying)\b", self.text):
-            window = self.text[max(0, m.start() - 80):m.start()]
-            assert re.search(r"(?i)\b(not|never|nor)\b", window), (
-                f"non-negated 'apply' at offset {m.start()}: "
-                f"...{self.text[max(0, m.start() - 60):m.end() + 20]}..."
+        """Every 'apply' occurrence must belong to a whitelisted propose-only
+        sentence — the skill proposes; it never applies."""
+        lines = self.text.splitlines()
+        for i, line in enumerate(lines):
+            if not re.search(r"(?i)\bappl(y|ies|ied|ying)\b", line):
+                continue
+            # Sentences can wrap across a line break — check a 3-line window.
+            window = "\n".join(lines[max(0, i - 1):i + 2])
+            assert any(s in window for s in self.ALLOWED_APPLY_SNIPPETS), (
+                f"unreviewed 'apply' on line {i + 1}: {line.strip()!r} — "
+                "if this is a new propose-only sentence, whitelist it in "
+                "ALLOWED_APPLY_SNIPPETS; if it instructs applying changes, "
+                "the skill contract is broken"
             )
 
     def test_motivating_examples_present(self):
