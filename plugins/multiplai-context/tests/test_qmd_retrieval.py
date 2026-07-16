@@ -338,6 +338,50 @@ class TestQmdConfig:
     def test_http_is_a_valid_mode(self):
         assert CatalogConfig(qmd_mode="http").qmd_mode == "http"
 
+    def test_candidate_limit_capped_at_ceiling(self):
+        """The http timeout scales with this dial — cap it so a config typo
+        can't stall every prompt for minutes."""
+        from generators.config import MAX_QMD_CANDIDATE_LIMIT
+
+        cfg = CatalogConfig(qmd_candidate_limit=10_000)
+        assert cfg.qmd_candidate_limit == MAX_QMD_CANDIDATE_LIMIT == 50
+
+    def test_candidate_limit_at_ceiling_untouched(self):
+        assert CatalogConfig(qmd_candidate_limit=50).qmd_candidate_limit == 50
+
+
+class TestQmdRefreshRemoteQuoting:
+    """qmd_refresh interpolates the workspace into a remote shell string —
+    it must be shell-quoted so spaces/metacharacters can't split or execute."""
+
+    def test_workspace_quoted_in_remote_shell_string(self, monkeypatch):
+        import shlex
+
+        import qmd_refresh
+
+        captured = {}
+
+        class FakeProc:
+            pid = 1
+            returncode = 0
+
+            def communicate(self, timeout=None):
+                return ("ok", "")
+
+        def fake_popen(argv, **kwargs):
+            captured["argv"] = argv
+            return FakeProc()
+
+        monkeypatch.setattr(qmd_refresh.subprocess, "Popen", fake_popen)
+        hostile = "/tmp/ws with spaces; rm -rf /"
+        target = qr.QmdTarget(
+            workspace=hostile, resources_dir="/tmp/r", mode="ssh", ssh_host="h"
+        )
+        assert qmd_refresh.run_qmd_raw(["status"], 5, target) == "ok"
+        remote = captured["argv"][-1]
+        assert shlex.quote(hostile) in remote
+        assert f"cd {hostile} &&" not in remote
+
     def test_invalid_values_fall_back(self):
         cfg = CatalogConfig(
             resources_retrieval="elasticsearch",

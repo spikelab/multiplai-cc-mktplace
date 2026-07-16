@@ -29,6 +29,7 @@ import fcntl
 import hashlib
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -59,7 +60,10 @@ def run_qmd_raw(args: list[str], timeout: int, target: QmdTarget) -> str | None:
     # http mode queries over HTTP, but index maintenance isn't on that
     # endpoint — reach the host over the SSH bridge, same as ssh mode.
     if target.mode in ("ssh", "http"):
-        remote = f"cd {target.workspace} && qmd {' '.join(args)}"
+        # shlex.quote: the workspace path is interpolated into a remote
+        # shell string — a path with spaces/metacharacters must not split
+        # or execute. args are internal constants ("status"/"update"/"embed").
+        remote = f"cd {shlex.quote(target.workspace)} && qmd {' '.join(args)}"
         argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
                 target.ssh_host, remote]
     else:
