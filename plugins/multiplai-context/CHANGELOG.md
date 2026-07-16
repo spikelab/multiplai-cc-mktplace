@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.6.15 — 2026-07-16
+
+Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
+
+### Fixed
+- **PreCompact freshness gate (data-loss guard).** The summarizer-stub
+  directive is now emitted only when the checkpoint on disk is *fresh* —
+  the synchronous pre-compaction checkpoint succeeded this invocation, or
+  the checkpoint's recorded token watermark / file mtime is close to the
+  live context size. Previously a *stale-but-valid* checkpoint (writer
+  timed out, script missing, tokens unreadable) still stubbed the native
+  summary, silently losing the tail of the session. `_sync_checkpoint`
+  now returns explicit success/failure (all four silent-fail paths return
+  False and are covered by tests), a writer exiting non-zero counts as
+  failure, and a context size of 0 always keeps the native summary.
+- **Dream: last invisible failure path.** `create_client()` in
+  `dream_report()` now sits inside the logged try/except, so an
+  SDK-unavailable `RuntimeError` lands in `dream.log`/`hook-errors.log`
+  like every other dream failure instead of dying only on task stdout.
+- **Session-registry GC races.** GC now takes the same per-entry flock
+  the writers use and re-checks staleness under it before unlinking, so
+  an entry can no longer be deleted out from under a hook/hub mid
+  read-merge-write. `.lock` files are removed only while their flock is
+  held (lock-then-unlink); when the lock is unavailable they are left
+  for a new orphan sweep that collects aged `.adopt`/`.lock` files whose
+  entry is gone (non-blocking flock probe, re-check under the lock).
+- **uv-guard marker fallback.** When `$CLAUDE_CONFIG_DIR` is unwritable,
+  the missing-uv warning marker now degrades to `$TMPDIR` instead of
+  re-warning on every hook event.
+
+### Added
+- **CLI-version canary for the summarizer-steering channel.** The
+  PreCompact hook reads the CLI version from `AI_AGENT` and logs a
+  warning when the major is newer than the last verified one (2.x /
+  2.1.207) — the directive is still emitted (worst case is the native
+  summary). Documented in README with the residual risk.
+- **qmd http exposure documented where it's configured.** The
+  `qmd_http_url` option description and README now state plainly that a
+  `0.0.0.0`-bound daemon is an unauthenticated read-only HTTP endpoint
+  over the whole indexed corpus, reachable from the LAN unless scoped,
+  with a concrete macOS pf rule scoping `:8181` to the OrbStack subnet.
+  The `0.0.0.0` bind instruction itself is unchanged (required for
+  container→host reach under OrbStack).
+
+### Changed
+- `qmd_candidate_limit` is now capped at 50 so the HTTP timeout it
+  scales (`http_timeout()`) is bounded (~38s worst case).
+- `qmd_refresh.py` shell-quotes the workspace path in the remote SSH
+  maintenance command.
+- Test hygiene: the 90-day config-audit boundary test pins `>=` at
+  exactly 90 days under a frozen clock; the config-audit skill's
+  "never applies" test uses an explicit sentence whitelist instead of an
+  80-char negation-proximity heuristic.
+
 ## 0.6.14 — 2026-07-16
 
 ### Added
