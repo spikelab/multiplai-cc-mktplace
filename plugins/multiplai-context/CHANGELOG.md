@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.6.14 — 2026-07-16
+
+### Added
+- **Charter-based extraction targets.** The Stop-hook extractor (and
+  backfill) no longer routes learnings against a bare filename list: each
+  valid target now renders as `file — purpose. NOT: …`, with `purpose`
+  taken from the first sentence of the file's memory-catalog summary and
+  the `NOT:` note from its `anti_domains`. New shared loader
+  `lib/extraction.load_target_charters()` (replaces the two drifting
+  `_list_valid_targets` copies); degrades gracefully to bare names when
+  the catalog is absent/unreadable. The prompt's "use the closest match"
+  instruction is gone — learnings that fit no file's domain are now tagged
+  `target: unknown` for downstream consolidation to reroute or filter,
+  instead of being forced into the closest broadly-named file.
+- **Deterministic routing-validation gate on dream proposals**
+  (`lib/routing_validation.py`, pure code, no LLM). Every generated
+  proposal now ends with a `## Routing Warnings` section — `(none)` when
+  clean — produced by two checks: a section-registry check (H2 section
+  names are unique across memory files, so an entry whose `Section:`
+  lives in a different file than its target is a misroute, and a "new
+  section" colliding with another file's section breaks the invariant)
+  and a cross-file duplicate check (normalized 8-gram token overlap of
+  each proposed insert against *all* memory files, ≥50% flags). The gate
+  only warns — it never rewrites the proposal — and is wired fail-open +
+  loud: a gate crash logs an exception and the proposal is written
+  without the section.
+- **dream-remember consults the warnings.** The skill now surfaces
+  Routing Warnings at presentation time and gates application: flagged
+  items are never silently applied — misrouted sections propose a reroute
+  to the section's owner file, new-section collisions ask for a
+  rename/reroute, and cross-file duplicates are read at the flagged
+  location and skipped/merged unless the user confirms an intentional
+  update.
+
+### Changed
+- **Dream routing prose is data-driven, not hardcoded.** `dream.py`'s
+  proposal prompt now renders `NOT HERE:` per candidate file from the
+  catalog's `anti_domains`, and the routing principles in
+  `_PROPOSAL_SYSTEM` / the critic's mis-routing check (`_CRITIC_SYSTEM`)
+  are genericized to work from the per-file PURPOSE/OWNS DOMAINS/NOT HERE
+  blocks instead of naming specific memory files that drift. The critic
+  now receives the same memory-domain blocks as the proposal pass.
+
 ## 0.6.13 — 2026-07-15
 
 ### Fixed

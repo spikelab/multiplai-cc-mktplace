@@ -67,6 +67,11 @@ Read the proposal file in full. Then tell the user:
 - A one-line summary: e.g. "17 proposed updates across 5 files, plus 3 action items, from 8 learnings files"
 - If the proposal has a `## Action Items` section, mention the count — these are NOT memory;
   approved ones get written to `PLANS/dream-actions-{date}.md` (handled in Step 4b).
+- **Check the `## Routing Warnings` section** (appended by dream.py's deterministic
+  validation gate). If it says `(none)`, say "routing validation clean". If it lists
+  warnings, surface them to the user NOW, next to the affected item numbers — each
+  warning names its item as `` `file` #N (title) ``. If the section is missing
+  entirely, say so: the gate didn't run, so misroutes/duplicates were not checked.
 - **"Review the file and tell me: `all` / `none` / numbers like `1,3,5` or `1-12,16-20` / `A1,A3` for action items / or `modify`"**
 
 Do NOT dump the full proposal into chat. Tell the user where the file is so they can open it.
@@ -103,6 +108,22 @@ Apply this rule? (yes / no / modify)
 
 Wait for explicit answer before moving to the next RULE-PROPOSAL. After all
 RULE-PROPOSAL items are resolved, apply remaining standard items as approved.
+
+### Routing Warnings gate (before applying anything)
+
+Never silently apply an item that appears in `## Routing Warnings`. For each flagged
+item the user approved:
+
+- **"section … does not exist in target but does in `X`"** → propose applying to `X`
+  instead (section names are unique across memory files — the section's owner file is
+  the right home). Ask, don't reroute silently.
+- **"new section collides with an existing section in `X`"** → ask the user to rename
+  the section or reroute to `X`; applying as-is would break the unique-section invariant.
+- **"proposed text already present in … `file:line`"** → read that location; if it's the
+  same insight, skip the item (or merge into the existing entry) and tell the user.
+  Apply as new text only if the user confirms it's an intentional update.
+
+Unflagged items proceed normally.
 
 ### Applying edits
 
