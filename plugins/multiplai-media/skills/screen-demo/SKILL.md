@@ -52,7 +52,10 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/pipeline.py prep <sourc
 ```
 Builds a 720p proxy, extracts 16 kHz audio, transcribes on the host with a
 **multilingual** mlx_whisper model (default `mlx-community/whisper-medium-mlx`),
-runs silencedetect + scenedetect. Caches everything under
+runs silencedetect + scenedetect, and profiles on-screen activity (blackdetect +
+a per-second motion score) into a **dead-span table** — black gaps, frozen
+frames, and typing/cursor-only stretches where nothing watchable happens.
+Caches everything under
 `$WORKSPACE/.screen-demo-cache/<source-hash>/` (or `~/.cache/screen-demo/` when
 no `WORKSPACE`) so re-runs are instant. **Output: prints `CONTEXT: <path>` — that's
 the file you need to read next.**
@@ -68,6 +71,7 @@ Read `<CONTEXT>` (a markdown file with timecoded transcript + cut candidates), t
 
 EDL authoring guidance:
 - **`source` must be the ORIGINAL recording — never the 720p proxy.** The proxy is an analysis artifact; render refuses it.
+- **Honor the dead-span table first.** Segments must not contain a `black` span at any speed, and must not cross a `static`/`low` span at an ordinary fast-forward speed (4-8x) — at 6x a 30s wait is still 5s of a video where nothing moves. Place segment boundaries so dead spans fall in the cuts; when continuity genuinely needs one (text appearing in a field), cross it at `speed >= 20`. After drafting segments, re-check each one against the table. Nuance: dead means don't *linger*, not don't *show* — a motionless-but-readable frame (a results list) can still carry a few-second speed-1 zoom money shot.
 - Map each user beat to a segment with `src_start`/`src_end` from the transcript anchors.
 - Use `speed > 1` for "fast-forward" sections (anything >4 auto-mutes audio; that's where the music bed carries).
 - Use `speed = 1.0` and a `zoom: {scale, x, y}` for "money shot" moments.
@@ -126,6 +130,7 @@ $WORKSPACE/.screen-demo-cache/<source-hash>/   (or ~/.cache/screen-demo/ if no $
   transcript.srt    ← mlx_whisper timestamps (host, multilingual)
   scenes.csv        ← PySceneDetect content-mode output
   cuts.json         ← merged silence_end + scene_change candidates
+  activity.json     ← per-second motion profile (dead-span classification input)
   context.md        ← human-readable bundle for the orchestrator
   edl.json          ← (orchestrator-authored) cut plan
 ```
