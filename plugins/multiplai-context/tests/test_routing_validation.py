@@ -50,13 +50,19 @@ def _memory_contents():
     }
 
 
-def _proposal(target: str, section_field: str, text: str = "Fresh insight about tooling.") -> str:
+def _proposal(
+    target: str,
+    section_field: str,
+    text: str = "Fresh insight about tooling.",
+    change: str = "add",
+) -> str:
     quoted = "\n".join(f"> {line}" for line in text.splitlines())
     return (
         "# Dream proposal\n\n"
         f"## Updates for `{target}`\n\n"
         "### 1. Some update\n"
         f"**Section:** {section_field}\n"
+        f"**Change:** {change}\n"
         f"{quoted}\n"
     )
 
@@ -86,7 +92,12 @@ class TestParseProposalEntries:
         assert e["target"] == "python.md"
         assert e["number"] == "1"
         assert e["section"] == "Asyncio Patterns"
+        assert e["change"] == "add"
         assert e["text"] == "Line one.\nLine two."
+
+    def test_change_field_lowercased(self):
+        entries = parse_proposal_entries(_proposal("python.md", "Packaging", change="Update"))
+        assert entries[0]["change"] == "update"
 
     def test_skips_action_items(self):
         proposal = (
@@ -126,6 +137,17 @@ class TestSectionChecks:
         assert "collides" in warnings[0]
         assert "git-policy.md" in warnings[0]
 
+    def test_new_section_dash_variants_also_flagged(self):
+        # The docstring promises "New section — Name" works; the em-dash /
+        # hyphen separators must parse to the bare name, not "— Name".
+        for field in ("New section — Worktrees", "New section - Worktrees"):
+            warnings = validate_proposal(
+                _proposal("python.md", field), _memory_contents()
+            )
+            assert len(warnings) == 1, field
+            assert "collides" in warnings[0]
+            assert '"Worktrees"' in warnings[0]
+
     def test_new_unique_section_clean(self):
         warnings = validate_proposal(
             _proposal("python.md", 'New section: "Typing Discipline"'), _memory_contents()
@@ -157,6 +179,28 @@ class TestDuplicateDetection:
         dup = [w for w in warnings if "already present" in w]
         assert len(dup) == 1
         assert "target file" in dup[0]
+
+    def test_update_entry_exempt_from_target_file_dedup(self):
+        # An update/replace revises existing text — overlap with its OWN
+        # target file is expected, not a warning.
+        for change in ("update", "replace"):
+            warnings = validate_proposal(
+                _proposal("git-policy.md", "Release Flow", _DUP_TEXT, change=change),
+                _memory_contents(),
+            )
+            assert [w for w in warnings if "already present" in w] == [], change
+
+    def test_update_entry_still_flagged_for_cross_file_duplicate(self):
+        # The exemption is target-file only — text that already lives in a
+        # DIFFERENT file stays a warning even for updates.
+        warnings = validate_proposal(
+            _proposal("python.md", "Packaging", _DUP_TEXT, change="update"),
+            _memory_contents(),
+        )
+        dup = [w for w in warnings if "already present" in w]
+        assert len(dup) == 1
+        assert "ANOTHER file" in dup[0]
+        assert "git-policy.md:" in dup[0]
 
     def test_short_text_never_flagged(self):
         # Below one 8-gram there is no signal — must not warn.
