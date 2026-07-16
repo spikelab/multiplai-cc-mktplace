@@ -284,6 +284,164 @@ class TestGcStale:
         assert sr.gc_stale(tmp_path) == 0
 
 
+class TestGcConcurrency:
+    """GC vs writer races: an entry can't be deleted out from under a writer."""
+
+    def test_recheck_under_lock_keeps_just_refreshed_entry(
+        self, tmp_path, monkeypatch
+    ):
+        """A writer that refreshed the entry between GC's first staleness
+        check and its lock acquisition must win — the re-check under the
+        lock keeps the entry."""
+        old = datetime.now(timezone.utc) - timedelta(days=8)
+        path = _write_entry(tmp_path, "racing", "end", old)
+        real_lock = sr._lock_entry
+
+        def lock_and_refresh(p):
+            fd = real_lock(p)
+            # Simulate the writer that slipped in just before GC locked.
+            _write_entry(tmp_path, "racing", "stop", datetime.now(timezone.utc))
+            return fd
+
+        monkeypatch.setattr(sr, "_lock_entry", lock_and_refresh)
+        assert sr.gc_stale(tmp_path) == 0
+        assert path.exists()
+
+    def test_gc_blocks_on_writer_flock_then_respects_refresh(self, tmp_path):
+        """Real flock contention: GC blocks behind a writer holding the
+        entry lock; the writer refreshes the entry before releasing, so GC
+        must keep it."""
+        import threading
+        import time as _time
+
+        old = datetime.now(timezone.utc) - timedelta(days=8)
+        path = _write_entry(tmp_path, "held", "end", old)
+        fd = sr._lock_entry(path)  # the writer's critical section begins
+        assert fd is not None
+
+        def writer():
+            _time.sleep(0.2)
+            _write_entry(tmp_path, "held", "stop", datetime.now(timezone.utc))
+            sr._unlock_entry(fd)
+
+        t = threading.Thread(target=writer)
+        t.start()
+        removed = sr.gc_stale(tmp_path)
+        t.join()
+        assert removed == 0
+        assert path.exists()
+
+    def test_stale_entry_lock_removed_under_held_flock(self, tmp_path):
+        """Normal path: GC holds the flock while unlinking entry+lock."""
+        old = datetime.now(timezone.utc) - timedelta(days=8)
+        path = _write_entry(tmp_path, "gone", "end", old)
+        path.with_suffix(".lock").touch()
+        assert sr.gc_stale(tmp_path) == 1
+        assert not path.exists()
+        assert not path.with_suffix(".lock").exists()
+
+    def test_lock_left_behind_when_flock_unavailable(self, tmp_path, monkeypatch):
+        """Fail-open filesystems: without the flock the entry still GCs but
+        the lock file is left for the orphan sweep (never unlink a lock we
+        don't hold)."""
+        old = datetime.now(timezone.utc) - timedelta(days=8)
+        path = _write_entry(tmp_path, "noflock", "end", old)
+        lock = path.with_suffix(".lock")
+        lock.touch()
+        monkeypatch.setattr(sr, "_lock_entry", lambda p: None)
+        assert sr.gc_stale(tmp_path) == 1
+        assert not path.exists()
+        assert lock.exists(), "lock must be left behind when not held"
+
+
+class TestOrphanSweep:
+    """GC sweeps .adopt/.lock files whose .json entry is gone."""
+
+    def _age(self, path: Path, days: int) -> None:
+        old = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+        os.utime(path, (old, old))
+
+    def test_old_orphan_adopt_removed(self, tmp_path):
+        rdir = tmp_path / "sessions"
+        rdir.mkdir(parents=True)
+        orphan = rdir / "ghost.adopt"
+        orphan.touch()
+        self._age(orphan, 8)
+        sr.gc_stale(tmp_path)
+        assert not orphan.exists()
+
+    def test_old_orphan_lock_removed(self, tmp_path):
+        rdir = tmp_path / "sessions"
+        rdir.mkdir(parents=True)
+        orphan = rdir / "ghost.lock"
+        orphan.touch()
+        self._age(orphan, 8)
+        sr.gc_stale(tmp_path)
+        assert not orphan.exists()
+
+    def test_fresh_orphan_lock_kept(self, tmp_path):
+        """A fresh lock may belong to a writer about to create its entry."""
+        rdir = tmp_path / "sessions"
+        rdir.mkdir(parents=True)
+        orphan = rdir / "newborn.lock"
+        orphan.touch()
+        sr.gc_stale(tmp_path)
+        assert orphan.exists()
+
+    def test_lock_with_live_entry_kept(self, tmp_path):
+        recent = datetime.now(timezone.utc) - timedelta(days=1)
+        path = _write_entry(tmp_path, "alive", "stop", recent)
+        lock = path.with_suffix(".lock")
+        lock.touch()
+        self._age(lock, 8)  # old lock, but the entry is live
+        sr.gc_stale(tmp_path)
+        assert lock.exists()
+
+    def test_held_orphan_lock_skipped(self, tmp_path):
+        """An old orphan lock currently flocked by a writer is never
+        unlinked out from under it (non-blocking probe skips)."""
+        import fcntl
+
+        rdir = tmp_path / "sessions"
+        rdir.mkdir(parents=True)
+        orphan = rdir / "busy.lock"
+        orphan.touch()
+        self._age(orphan, 8)
+        fd = os.open(str(orphan), os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            sr.gc_stale(tmp_path)
+            assert orphan.exists(), "held lock must survive the sweep"
+        finally:
+            os.close(fd)
+        sr.gc_stale(tmp_path)
+        assert not orphan.exists(), "released orphan lock is swept next GC"
+
+    def test_entry_recreated_under_lock_survives_sweep(self, tmp_path, monkeypatch):
+        """Interleave: the sweep acquires the orphan lock, but a writer
+        recreated the entry first — the under-lock re-check keeps the lock."""
+        rdir = tmp_path / "sessions"
+        rdir.mkdir(parents=True)
+        orphan = rdir / "reborn.lock"
+        orphan.touch()
+        self._age(orphan, 8)
+
+        real_open = os.open
+
+        def open_and_recreate(path, *a, **k):
+            fd = real_open(path, *a, **k)
+            if str(path).endswith("reborn.lock"):
+                _write_entry(
+                    tmp_path, "reborn", "start", datetime.now(timezone.utc)
+                )
+            return fd
+
+        monkeypatch.setattr(sr.os, "open", open_and_recreate)
+        sr.gc_stale(tmp_path)
+        assert orphan.exists(), "lock kept — its entry exists again"
+        assert (rdir / "reborn.json").exists()
+
+
 # ===========================================================================
 # Hook wiring
 # ===========================================================================
