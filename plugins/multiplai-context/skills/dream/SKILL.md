@@ -15,6 +15,10 @@ The proposal sorts every learning into one of three dispositions:
   `/multiplai-context:dream-remember` writes approved ones to `PLANS/dream-actions-{date}.md`.
 - **Filtered Out** — one-off events / diary material, with a reason.
 
+Every proposal ends with a `## Routing Warnings` section — a deterministic
+post-generation check for misrouted sections and cross-file duplicates
+(`(none)` when clean; a missing section means the gate didn't run).
+
 **No memory files are modified.** The proposal is for review only.
 Run `/multiplai-context:dream-remember` to load the proposal and apply approved changes.
 

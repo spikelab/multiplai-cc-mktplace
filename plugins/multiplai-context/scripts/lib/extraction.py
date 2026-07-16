@@ -7,14 +7,72 @@ by write_diary_entries() and append_learnings().
 
 import fcntl
 import hashlib
+import json
 import logging
 import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 logger = logging.getLogger(__name__)
+
+
+def load_target_charters(memory_dir: Path, catalogs_dir: Optional[Path] = None) -> list[dict]:
+    """Return the valid extraction targets with their routing charters.
+
+    Each entry is ``{"name", "purpose", "not_here"}`` where ``purpose`` is the
+    first sentence of the file's catalog summary and ``not_here`` its
+    ``anti_domains`` — the two fields that let the extractor route by domain
+    instead of guessing from a bare filename list. Files absent from the
+    catalog (or the whole catalog being absent/unreadable) degrade gracefully
+    to name-only entries, so extraction never depends on catalog freshness.
+    """
+    if not memory_dir.exists():
+        return []
+    names = sorted(p.name for p in memory_dir.glob("*.md") if p.is_file())
+
+    catalog: dict[str, dict] = {}
+    catalog_file = (catalogs_dir / "memory.json") if catalogs_dir else None
+    if catalog_file and catalog_file.exists():
+        try:
+            data = json.loads(catalog_file.read_text())
+            for entry in data.get("entries", []):
+                src = entry.get("source")
+                if src:
+                    catalog[src] = entry
+        except (json.JSONDecodeError, OSError):
+            logger.warning("Memory catalog unreadable at %s — extraction targets fall back to bare names", catalog_file)
+            catalog = {}
+
+    charters = []
+    for name in names:
+        entry = catalog.get(name, {})
+        summary = (entry.get("summary") or "").strip()
+        # First sentence keeps the prompt cost bounded (~30 tokens/file).
+        purpose = summary.split(". ")[0].rstrip(".") if summary else ""
+        charters.append({
+            "name": name,
+            "purpose": purpose,
+            "not_here": entry.get("anti_domains") or [],
+        })
+    return charters
+
+
+def render_target_line(target: Union[str, dict]) -> str:
+    """Render one valid-target line for the extraction prompt.
+
+    Accepts a bare filename (back-compat / catalog-less fallback) or a
+    charter dict from :func:`load_target_charters`.
+    """
+    if isinstance(target, str):
+        return f"- {target}"
+    line = f"- {target['name']}"
+    if target.get("purpose"):
+        line += f" — {target['purpose']}"
+    if target.get("not_here"):
+        line += ". NOT: " + "; ".join(target["not_here"])
+    return line
 
 
 def _lock_path(target: Path) -> Path:
@@ -64,7 +122,7 @@ invest most effort here. Plain prose; no escaping needed.
 <learning>
 trust: verified | high | medium
 type: OBSERVATION | PREFERENCE | CORRECTION | PATTERN | RULE-PROPOSAL
-target: one valid memory file name from the list below
+target: one valid memory file name from the list below, or unknown
 description: concise but complete (one sentence, single line)
 action: what to add/change in that file (one sentence, single line)
 </learning>
@@ -78,9 +136,15 @@ evidence) | "medium" (inference)
 
 ## Valid target files
 
+Each line is `file — purpose`, with a `NOT:` note naming content that belongs elsewhere:
+
 {valid_targets}
 
-Do NOT invent new file names. Use the closest match if unsure.
+Do NOT invent new file names. Route by the file whose purpose owns the learning's
+SUBJECT — not by which tool happened to run the work. Respect the `NOT:` notes: they
+name content that belongs in a different file. If no file's domain fits, use
+`target: unknown` — downstream consolidation reroutes or filters it. Never force a
+learning into the closest broadly-named file.
 
 ## Correction detection
 
@@ -180,16 +244,21 @@ def _parse_units(raw: str) -> list[dict]:
 async def extract_units(
     text: str,
     *,
-    valid_targets: list[str],
+    valid_targets: Sequence[Union[str, dict]],
     client,
 ) -> list[dict]:
     """Call LLM to extract diary units + learnings from transcript text.
 
+    ``valid_targets`` entries are charter dicts from
+    :func:`load_target_charters` (or bare filenames as a fallback).
     Returns list of unit dicts with 'timestamp', 'diary_entry', 'learnings'.
     Raises on LLM failure — caller decides whether to continue with
     correction-only output.
     """
-    targets_block = "\n".join(f"- {t}" for t in valid_targets) if valid_targets else "(none)"
+    targets_block = (
+        "\n".join(render_target_line(t) for t in valid_targets)
+        if valid_targets else "(none)"
+    )
     # NOT str.format: transcript text routinely contains literal { } (JSON,
     # code, f-strings) which would raise KeyError/ValueError and silently
     # kill extraction. Plain replacement never interprets braces. Replace

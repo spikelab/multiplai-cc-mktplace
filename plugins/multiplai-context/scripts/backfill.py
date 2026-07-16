@@ -38,19 +38,18 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.paths import get_paths
 from multiplai_core.model_client import create_client
 from multiplai_core.log_utils import setup_logging
-from lib.extraction import extract_units, write_diary_entries, append_learnings
+from lib.extraction import (
+    extract_units,
+    load_target_charters,
+    write_diary_entries,
+    append_learnings,
+)
 from lib.transcript_distiller import distill, estimate_tokens
 
 logger = setup_logging("backfill")
 
 DEFAULT_DAYS = 7
 DEFAULT_CONCURRENCY = 3
-
-
-def _list_valid_targets(memory_dir: Path) -> list[str]:
-    if not memory_dir.exists():
-        return []
-    return sorted(p.name for p in memory_dir.glob("*.md") if p.is_file())
 
 
 def _find_transcripts(claude_config_dir: Path) -> list[Path]:
@@ -177,7 +176,7 @@ async def _process_session(
     since: datetime,
     until: datetime | None,
     *,
-    valid_targets: list[str],
+    valid_targets: list[dict],
     diary_dir: Path,
     learnings_file: Path,
     client,
@@ -243,7 +242,7 @@ async def backfill(
     paths = get_paths()
     memory_dir = paths.memory_dir()
     diary_dir = paths.diary_dir()
-    valid_targets = _list_valid_targets(memory_dir)
+    valid_targets = load_target_charters(memory_dir, paths.catalogs_dir())
 
     claude_config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
     all_transcripts = _find_transcripts(claude_config_dir)

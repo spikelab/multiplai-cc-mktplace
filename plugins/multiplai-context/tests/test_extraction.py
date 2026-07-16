@@ -402,3 +402,106 @@ class TestAppendLearnings:
         content = lf.read_text()
         assert "**[trust:" in content
         assert "→ Target:" in content
+
+
+# ---------------------------------------------------------------------------
+# Target charters (purpose + NOT-here routing)
+# ---------------------------------------------------------------------------
+
+def _write_catalog(catalogs_dir: Path, entries: list[dict]) -> None:
+    import json
+    catalogs_dir.mkdir(parents=True, exist_ok=True)
+    (catalogs_dir / "memory.json").write_text(json.dumps({"entries": entries}))
+
+
+class TestLoadTargetCharters:
+    def test_charters_from_catalog(self, tmp_path):
+        from lib.extraction import load_target_charters
+        memory = tmp_path / "memory"
+        memory.mkdir()
+        (memory / "python.md").write_text("# Python\n")
+        catalogs = tmp_path / "catalogs"
+        _write_catalog(catalogs, [{
+            "source": "python.md",
+            "summary": "Python tooling and idioms. Second sentence dropped.",
+            "anti_domains": ["Swift concurrency", "git workflow"],
+        }])
+        charters = load_target_charters(memory, catalogs)
+        assert charters == [{
+            "name": "python.md",
+            "purpose": "Python tooling and idioms",
+            "not_here": ["Swift concurrency", "git workflow"],
+        }]
+
+    def test_catalog_absent_falls_back_to_bare_names(self, tmp_path):
+        from lib.extraction import load_target_charters
+        memory = tmp_path / "memory"
+        memory.mkdir()
+        (memory / "a.md").write_text("x")
+        (memory / "b.md").write_text("y")
+        charters = load_target_charters(memory, tmp_path / "no-catalogs")
+        assert [c["name"] for c in charters] == ["a.md", "b.md"]
+        assert all(c["purpose"] == "" and c["not_here"] == [] for c in charters)
+
+    def test_corrupt_catalog_falls_back(self, tmp_path):
+        from lib.extraction import load_target_charters
+        memory = tmp_path / "memory"
+        memory.mkdir()
+        (memory / "a.md").write_text("x")
+        catalogs = tmp_path / "catalogs"
+        catalogs.mkdir()
+        (catalogs / "memory.json").write_text("{not json")
+        charters = load_target_charters(memory, catalogs)
+        assert charters == [{"name": "a.md", "purpose": "", "not_here": []}]
+
+    def test_missing_memory_dir_returns_empty(self, tmp_path):
+        from lib.extraction import load_target_charters
+        assert load_target_charters(tmp_path / "nope") == []
+
+
+class TestRenderTargetLine:
+    def test_bare_string_back_compat(self):
+        from lib.extraction import render_target_line
+        assert render_target_line("python.md") == "- python.md"
+
+    def test_full_charter_line(self):
+        from lib.extraction import render_target_line
+        line = render_target_line({
+            "name": "python.md",
+            "purpose": "Python tooling",
+            "not_here": ["Swift", "git"],
+        })
+        assert line == "- python.md — Python tooling. NOT: Swift; git"
+
+    def test_charter_without_catalog_fields_is_bare(self):
+        from lib.extraction import render_target_line
+        assert render_target_line({"name": "a.md", "purpose": "", "not_here": []}) == "- a.md"
+
+
+class TestPromptCarriesCharters:
+    """Golden test: the rendered prompt sent to the model must carry the
+    purpose + NOT lines and the unknown-target escape hatch — the whole
+    point of charter-based routing."""
+
+    def _sent_prompt(self, valid_targets) -> str:
+        from lib.extraction import extract_units
+        client = _make_mock_client(_tag_response([]))
+        asyncio.run(extract_units("transcript", valid_targets=valid_targets, client=client))
+        return client.query.call_args.kwargs["messages"][0]["content"]
+
+    def test_prompt_renders_purpose_and_not_lines(self):
+        prompt = self._sent_prompt([{
+            "name": "python.md",
+            "purpose": "Python tooling and idioms",
+            "not_here": ["Swift concurrency"],
+        }])
+        assert "- python.md — Python tooling and idioms. NOT: Swift concurrency" in prompt
+
+    def test_prompt_offers_unknown_instead_of_closest_match(self):
+        from lib.extraction import EXTRACTION_PROMPT
+        assert "target: unknown" in EXTRACTION_PROMPT
+        assert "closest match" not in EXTRACTION_PROMPT.lower()
+
+    def test_bare_names_still_render(self):
+        prompt = self._sent_prompt(["technical-pref.md"])
+        assert "- technical-pref.md" in prompt

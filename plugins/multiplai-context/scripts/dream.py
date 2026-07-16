@@ -133,11 +133,12 @@ def _extract_headers(content: str) -> str:
 
 
 def _load_memory_catalog(catalogs_dir: Path) -> dict[str, dict]:
-    """Return {filename: {summary, intent_domains}} from the memory catalog.
+    """Return {filename: {summary, intent_domains, anti_domains}} from the memory catalog.
 
     The catalog (built by the router) carries each memory file's domain — its
-    summary and intent_domains. Routing by that domain is far more reliable than
-    guessing from section-header names, which makes broadly-named files (e.g.
+    summary, intent_domains, and anti_domains (what does NOT belong there).
+    Routing by that domain is far more reliable than guessing from
+    section-header names, which makes broadly-named files (e.g.
     ai-agent-patterns.md) act as catch-alls. Returns {} if the catalog is absent
     or unreadable — the proposal then falls back to headers-only routing.
     """
@@ -157,6 +158,7 @@ def _load_memory_catalog(catalogs_dir: Path) -> dict[str, dict]:
             out[src] = {
                 "summary": entry.get("summary", ""),
                 "intent_domains": entry.get("intent_domains", []),
+                "anti_domains": entry.get("anti_domains", []),
             }
     return out
 
@@ -310,22 +312,18 @@ Title markers (prefix the {short_title}, none in the normal case):
 
 ## Routing — pick the target file by DOMAIN, not by header keyword
 
-Each candidate file is shown with PURPOSE and OWNS DOMAINS. Route each entry to the file whose
-domain actually owns the learning's SUBJECT, then pick a section within it. The headers only
-choose the section — never the file.
-- Match on subject domain: general/language-agnostic software & data-engineering patterns
-  (data transformation & validation, migration/cutover correctness, defensive scripting, testing
-  strategy, debugging methodology) → the dev-patterns file; GCP/Docker/Terraform/deploy/IAM/
-  networking → the infra file; git → the git file; Python-language gotchas → the Python file;
-  tooling/workflow preferences → the technical-preferences file.
-- `ai-agent-patterns.md` is NOT a catch-all. Put something there ONLY if its subject is
-  genuinely LLM inference, agent design, the Claude Agent SDK, RAG, or memory/retrieval-system
-  design — not just because an agent happened to run the script. "A migration is run by an
-  agent" does NOT make it an agent pattern — it's a data/dev pattern → the dev-patterns file.
-- The dev-patterns vs infra cut: an abstract engineering principle that would hold on any
-  platform (e.g. "data converters must hard-fail on zero transformations", "supplement parity
-  hashes with absolute assertions") → dev-patterns. A platform-specific fact (a GCP/Docker/
-  Terraform behavior, a specific service's quirk) → infra.
+Each candidate file is shown with PURPOSE, OWNS DOMAINS, and NOT HERE (its anti-domains).
+Route each entry to the file whose domain actually owns the learning's SUBJECT, then pick a
+section within it. The headers only choose the section — never the file. All file-specific
+routing knowledge is in those blocks — apply these generic principles to them:
+- Respect NOT HERE: when a file's NOT-HERE line names the learning's subject, that file is
+  disqualified — route to the file whose PURPOSE owns the subject instead.
+- No catch-alls: broadly-named files are never fallbacks. Route by what the lesson is ABOUT,
+  not by which tool or agent happened to perform the work — "an agent ran the migration" does
+  not make it an agent pattern.
+- Portability test: would the knowledge survive switching away from this specific tool or
+  platform? Tool/platform-agnostic principles go to the general craft/design file for their
+  subject; knowledge about operating a specific tool or platform goes to that tool's file.
 - If no file's domain fits, say so (propose a new file or filter) — do not force-fit into the
   nearest broadly-named file.
 
@@ -381,6 +379,8 @@ async def _generate_proposal(
             lines.append(f"PURPOSE: {meta['summary']}")
         if meta.get("intent_domains"):
             lines.append("OWNS DOMAINS: " + "; ".join(meta["intent_domains"]))
+        if meta.get("anti_domains"):
+            lines.append("NOT HERE: " + "; ".join(meta["anti_domains"]))
         lines.append(f"SECTIONS:\n{_extract_headers(content)}")
         blocks.append("\n".join(lines))
     memory_context = "\n\n".join(blocks)
@@ -398,7 +398,35 @@ async def _generate_proposal(
     ]
 
     response = await client.query(system=_PROPOSAL_SYSTEM, messages=messages)
-    return await _critique_proposal(client, response.content)
+    cleaned = await _critique_proposal(client, response.content, memory_context)
+    return _with_routing_warnings(cleaned, memory_contents)
+
+
+def _with_routing_warnings(proposal: str, memory_contents: dict[str, str]) -> str:
+    """Append the deterministic ``## Routing Warnings`` section to a proposal.
+
+    Pure code (section-registry + cross-file dedup, see lib/routing_validation).
+    Fail-open + loud: a crash in the gate must never lose a generated proposal —
+    log the failure and return the proposal unvalidated. Never rewrites entries;
+    the human reviewing via dream-remember stays the gate.
+    """
+    try:
+        from lib.routing_validation import validate_proposal, render_warnings_section
+
+        warnings = validate_proposal(proposal, memory_contents)
+        if warnings:
+            logger.warning(
+                "Routing validation flagged %d issue(s):\n%s",
+                len(warnings), "\n".join(f"  - {w}" for w in warnings),
+            )
+        else:
+            logger.info("Routing validation clean — no misroutes or cross-file duplicates")
+        return proposal.rstrip() + render_warnings_section(warnings)
+    except Exception:
+        logger.exception(
+            "Routing validation gate failed — proposal written WITHOUT a Routing Warnings section"
+        )
+        return proposal
 
 
 # Second pass — bounded surgical critic. The drafting analyst reliably shifts aggregate
@@ -455,13 +483,12 @@ move general knowledge that merely mentions the system.
 
 ## 4. Fix catch-all mis-routing
 
-`ai-agent-patterns.md` is not a catch-all. If an entry filed under it is really about general
-software / data-engineering patterns (data transformation & validation, migration/cutover
-correctness, defensive scripting, testing, debugging methodology), MOVE it to the dev-patterns
-file. If it's about a specific platform (GCP/Docker/Terraform), git, or a Python-language gotcha,
-move it to the infra / git / Python file respectively. An agent running a script does not make
-the script an agent pattern. Only move on a clear subject mismatch; do not reshuffle borderline
-entries.
+The user message includes each memory file's PURPOSE / OWNS DOMAINS / NOT HERE block. If an
+entry is filed under a file whose NOT-HERE line names its subject, or under a broadly-named
+file when another file's PURPOSE clearly owns the subject, MOVE it to the owning file. Broadly-
+named files are never fallbacks, and a tool/agent having performed the work does not make the
+learning about that tool/agent — route by what the lesson is ABOUT. Only move on a clear
+subject mismatch; do not reshuffle borderline entries.
 
 NEVER alter the **Source:** provenance line — it cites `filename:line` for traceability and
 must stay exact. Strip residue from the entry's generalized text only, never from its Source.
@@ -474,13 +501,22 @@ Return the full cleaned proposal and nothing else.
 """
 
 
-async def _critique_proposal(client, proposal: str) -> str:
+async def _critique_proposal(client, proposal: str, memory_context: str = "") -> str:
     """Run the bounded surgical critic over a drafted proposal; return the cleaned version.
 
-    Falls back to the original proposal if the critic call fails — a residue-bearing
-    proposal is still useful, and report mode must not crash on the second pass.
+    ``memory_context`` carries the same PURPOSE / OWNS DOMAINS / NOT HERE file
+    blocks the drafting pass saw, so the critic's mis-routing check works from
+    the live catalog instead of hardcoded file knowledge. Falls back to the
+    original proposal if the critic call fails — a residue-bearing proposal is
+    still useful, and report mode must not crash on the second pass.
     """
-    messages = [{"role": "user", "content": f"## Drafted proposal:\n\n{proposal}"}]
+    content = f"## Drafted proposal:\n\n{proposal}"
+    if memory_context:
+        content = (
+            f"## Memory file domains (for the mis-routing check):\n\n{memory_context}\n\n"
+            + content
+        )
+    messages = [{"role": "user", "content": content}]
     try:
         response = await client.query(system=_CRITIC_SYSTEM, messages=messages)
         cleaned = (response.content or "").strip()

@@ -24,7 +24,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.paths import get_paths
 from multiplai_core.model_client import create_client
 from multiplai_core.log_utils import setup_logging, log_event
-from lib.extraction import extract_units, write_diary_entries, append_learnings
+from lib.extraction import (
+    extract_units,
+    load_target_charters,
+    write_diary_entries,
+    append_learnings,
+)
 from lib.transcript_distiller import distill
 
 logger = setup_logging("extract_learnings")
@@ -65,12 +70,6 @@ def _distill_transcript(transcript_path: str, raw_transcript: str) -> list[str]:
             return []
 
     return []
-
-
-def _list_valid_targets(memory_dir: Path) -> list[str]:
-    if not memory_dir.exists():
-        return []
-    return sorted(p.name for p in memory_dir.glob("*.md") if p.is_file())
 
 
 def _drop_marker(marker_path: str) -> None:
@@ -148,7 +147,7 @@ async def extract() -> bool:
 
     chunks = _distill_transcript(transcript_path, raw_transcript)
 
-    valid_targets = _list_valid_targets(memory_dir)
+    valid_targets = load_target_charters(memory_dir, paths.catalogs_dir())
     units: list[dict] = []
     llm_failed = False
     if chunks:
