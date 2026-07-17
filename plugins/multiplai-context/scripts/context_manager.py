@@ -801,7 +801,7 @@ def main() -> None:
     router_ran = False
     if prompt and any(corpora.values()):
         try:
-            router = create_router()
+            router = create_router(keep_ratio=cfg.keep_ratio)
             picks_by_corpus = router.select_multi(prompt, last_response, corpora)
             router_ran = True
             logger.info(

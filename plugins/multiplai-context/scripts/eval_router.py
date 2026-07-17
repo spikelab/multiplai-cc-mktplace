@@ -203,7 +203,10 @@ def _summary(m: Metrics, passed: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def run(cases: list[dict], catalog: list[dict], k: int, quiet: bool) -> dict:
+def run(
+    cases: list[dict], catalog: list[dict], k: int, quiet: bool,
+    keep_ratio: float | None = None,
+) -> dict:
     from lib.memory_router import create_router
 
     corpora_base = {"memory": catalog, "skills": [], "resources": []}
@@ -212,7 +215,8 @@ def run(cases: list[dict], catalog: list[dict], k: int, quiet: bool) -> dict:
     t0 = time.time()
 
     for case in cases:
-        router = create_router()  # fresh: last_scores is per-instance
+        # fresh per case: last_scores is per-instance
+        router = create_router(keep_ratio=keep_ratio)
         picks = router.select_multi(
             case["prompt"],
             case.get("last_response") or None,
@@ -259,6 +263,8 @@ def main() -> None:
     ap.add_argument("--cases", nargs="*", type=Path, help="Golden JSONL files (default: personal+holdout)")
     ap.add_argument("--catalog", type=Path, help="memory catalog JSON (default: live memory.json)")
     ap.add_argument("--k", type=int, default=10, help="max files per corpus (default 10)")
+    ap.add_argument("--keep-ratio", type=float, default=None,
+                    help="override token_overlap relative-cutoff ratio (default: module default)")
     ap.add_argument("--strategy", choices=["token_overlap", "llm"], help="override router strategy for this run")
     ap.add_argument("--quiet", action="store_true", help="metrics only")
     ap.add_argument("--no-write", action="store_true", help="don't write the snapshot file")
@@ -284,9 +290,12 @@ def main() -> None:
         f"eval: {len(cases)} cases · catalog {catalog_path.name} "
         f"({len(catalog)} entries) · strategy "
         f"{args.strategy or os.environ.get('CLAUDE_PLUGIN_OPTION_memory_router','token_overlap')} "
-        f"· k={args.k}\n"
+        f"· k={args.k}"
+        + (f" · keep_ratio={args.keep_ratio}" if args.keep_ratio is not None else "")
+        + "\n"
     )
-    summary = run(cases, catalog, args.k, args.quiet)
+    summary = run(cases, catalog, args.k, args.quiet, keep_ratio=args.keep_ratio)
+    summary["keep_ratio"] = args.keep_ratio
 
     print("\n" + "=" * 56)
     for key in (

@@ -400,6 +400,31 @@ class TestCatalogConfigDefaults:
         config = CatalogConfig(recommend_cooldown_turns=0)
         assert config.recommend_cooldown_turns == 0
 
+    def test_default_keep_ratio(self):
+        """Scenario: keep_ratio defaults to 0.30 (the new tighter cutoff)."""
+        from generators.config import CatalogConfig, DEFAULT_KEEP_RATIO
+
+        assert DEFAULT_KEEP_RATIO == 0.30
+        assert CatalogConfig().keep_ratio == 0.30
+
+    def test_valid_keep_ratio_preserved(self):
+        """Scenario: an in-range keep_ratio is kept verbatim."""
+        from generators.config import CatalogConfig
+
+        assert CatalogConfig(keep_ratio=0.35).keep_ratio == 0.35
+        assert CatalogConfig(keep_ratio=1.0).keep_ratio == 1.0
+
+    def test_out_of_range_keep_ratio_resets_to_default(self):
+        """Scenario: keep_ratio <= 0 or > 1 is clamped back to the default.
+
+        0 would admit everything (defeating the cutoff); > 1 is nonsensical.
+        """
+        from generators.config import CatalogConfig
+
+        assert CatalogConfig(keep_ratio=0.0).keep_ratio == 0.30
+        assert CatalogConfig(keep_ratio=-0.5).keep_ratio == 0.30
+        assert CatalogConfig(keep_ratio=1.5).keep_ratio == 0.30
+
 
 # ---------------------------------------------------------------------------
 # CatalogConfig Validation — TTL Hours

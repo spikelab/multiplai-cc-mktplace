@@ -18,6 +18,11 @@ DEFAULT_RECOMMEND_COOLDOWN_TURNS = 4  # Suppress re-recommending a file for
                                       # this many turns after it was injected
                                       # (already in conversation context).
                                       # 0 disables the cooldown.
+DEFAULT_KEEP_RATIO = 0.30  # token_overlap relative-cutoff: drop memory
+                           # files scoring < ratio × top. Higher = stricter
+                           # (fewer, more-relevant files; less cap saturation).
+                           # See memory_router.DEFAULT_KEEP_RATIO for the
+                           # production-replay calibration. Clamped to (0, 1].
 
 # Resources retrieval backend. "catalog" is the original catalog+router
 # path; "qmd" routes resources retrieval through a qmd index instead
@@ -64,6 +69,7 @@ class CatalogConfig:
     qmd_min_score: float = DEFAULT_QMD_MIN_SCORE
     catalog_concurrency: int = DEFAULT_CATALOG_CONCURRENCY
     recommend_cooldown_turns: int = DEFAULT_RECOMMEND_COOLDOWN_TURNS
+    keep_ratio: float = DEFAULT_KEEP_RATIO
     # When on, session_start fires a detached, flock-guarded cost collector
     # that prices the session-transcript corpus into the monthly ledger.
     # Local-only and cheap in steady state, but opt-in like the other flags.
@@ -88,6 +94,12 @@ class CatalogConfig:
 
         if self.recommend_cooldown_turns < 0:
             self.recommend_cooldown_turns = DEFAULT_RECOMMEND_COOLDOWN_TURNS
+
+        # keep_ratio is a fraction of the top score; a value <= 0 would
+        # admit everything (defeating the cutoff) and > 1 would keep only
+        # the top file. Clamp out-of-range configs to the default.
+        if not 0.0 < self.keep_ratio <= 1.0:
+            self.keep_ratio = DEFAULT_KEEP_RATIO
 
         if self.resources_retrieval not in VALID_RESOURCES_RETRIEVAL:
             self.resources_retrieval = DEFAULT_RESOURCES_RETRIEVAL
@@ -206,6 +218,10 @@ def load_catalog_config() -> CatalogConfig:
         ),
         DEFAULT_RECOMMEND_COOLDOWN_TURNS,
     )
+    keep_ratio = _parse_float(
+        os.environ.get("CLAUDE_PLUGIN_OPTION_keep_ratio", str(DEFAULT_KEEP_RATIO)),
+        DEFAULT_KEEP_RATIO,
+    )
     enable_costs = _parse_bool(
         os.environ.get("CLAUDE_PLUGIN_OPTION_enable_costs", "false")
     )
@@ -233,6 +249,7 @@ def load_catalog_config() -> CatalogConfig:
         qmd_min_score=qmd_min_score,
         catalog_concurrency=catalog_concurrency,
         recommend_cooldown_turns=recommend_cooldown_turns,
+        keep_ratio=keep_ratio,
         enable_costs=enable_costs,
         memory_conflict_preamble=memory_conflict_preamble,
     )
