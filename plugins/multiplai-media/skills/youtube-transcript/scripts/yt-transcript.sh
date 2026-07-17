@@ -135,15 +135,20 @@ fi
 # broken console-script shebang (happens when the venv is moved/recreated and the
 # yt-dlp wrapper still points at a dead python path). Fall back to the binary.
 #
-# yt-dlp is NOT baked into the container image, so ensure it's present *and
-# current* on every run via uv (installs into ~/.local/bin, which is on PATH).
-# Running `--upgrade` each time is deliberate: YouTube breaks stale yt-dlp within
-# weeks, and self-healing here beats failing at runtime on a missing/old binary.
-# Non-fatal (`|| true`): if the network is down we still fall through to whatever
-# is already installed. Skipped on the macOS host, where the user manages their
-# own yt-dlp (brew, etc.) and we shouldn't shadow it. Any other platform
-# (container or plain Linux) gets the self-heal.
-if [ "$(uname -s)" != "Darwin" ] && command -v uv &>/dev/null \
+# yt-dlp is NOT baked into the multiplai container image, so ensure it's
+# present *and current* on every run via uv (installs into ~/.local/bin, which
+# is on PATH). Running `--upgrade` each time is deliberate: YouTube breaks
+# stale yt-dlp within weeks, and self-healing here beats failing at runtime on
+# a missing/old binary. Non-fatal (`|| true`): if the network is down we still
+# fall through to whatever is already installed.
+#
+# Self-heal is MULTIPLAI-CONTAINER-ONLY (MULTIPLAI_CONTAINER=1): that
+# environment is ours to manage. On macOS, plain Linux, or generic Docker the
+# user manages their own toolchain — installing software onto someone's
+# machine as a side effect of a transcript request is not graceful
+# degradation. Those platforms get honest install instructions + exit 3 below
+# (degradation contract: name the missing capability and the vanilla fix).
+if [ "${MULTIPLAI_CONTAINER:-}" = "1" ] && command -v uv &>/dev/null \
    && ! python3 -c "import yt_dlp" &>/dev/null; then
     echo "[yt-transcript] Ensuring yt-dlp is installed/current (uv tool install --upgrade yt-dlp) ..." >&2
     uv tool install --upgrade yt-dlp 1>&2 || true
@@ -160,10 +165,18 @@ elif command -v yt-dlp &>/dev/null; then
     echo "Fix with: uv tool install --force yt-dlp" >&2
     exit 1
 else
-    echo "Error: yt-dlp is not installed and could not be auto-installed." >&2
-    echo "  Container: 'uv tool install --upgrade yt-dlp' (needs network + uv on PATH)." >&2
-    echo "  macOS host: 'brew install yt-dlp' or 'uv tool install yt-dlp'." >&2
-    exit 1
+    # Exit 3 = missing dependency (distinct from 2 = "no subtitles", so the
+    # orchestrating Claude can react correctly — see docs/degradation-contract.md).
+    echo "Error: yt-dlp is not installed." >&2
+    if [ "${MULTIPLAI_CONTAINER:-}" = "1" ]; then
+        echo "  Auto-install failed — check network and that uv is on PATH, then:" >&2
+        echo "    uv tool install --upgrade yt-dlp" >&2
+    else
+        echo "  Install it yourself (auto-install only runs inside the multiplai container):" >&2
+        echo "    macOS:        brew install yt-dlp   (or: uv tool install yt-dlp)" >&2
+        echo "    Linux/other:  uv tool install yt-dlp  (or: pipx install yt-dlp)" >&2
+    fi
+    exit 3
 fi
 
 # --- Set up temp directory (cleaned up on exit) ---

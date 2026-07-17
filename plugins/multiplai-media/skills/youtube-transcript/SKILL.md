@@ -62,9 +62,16 @@ Tell the user: "This video has no subtitles available. I can download the audio 
 
 If yes, re-run with `--audio-fallback`.
 
+## When exit code is 3 (yt-dlp missing)
+
+yt-dlp is not installed and this is not the multiplai container (auto-install
+only runs there — the script never installs software onto the user's own
+machine as a side effect). Show the printed install instructions verbatim and
+let the user install it, then re-run.
+
 ## Dependencies
 
-- **yt-dlp** — required (subtitle download and audio extraction)
+- **yt-dlp** — required (subtitle download and audio extraction); auto-installed/updated only inside the multiplai container (`MULTIPLAI_CONTAINER=1`)
 - **python3** — required (VTT cleanup)
 - **ffmpeg** — required only for audio fallback
 - **mlx-whisper** — required only for audio fallback
@@ -72,7 +79,7 @@ If yes, re-run with `--audio-fallback`.
 ## In Case of Errors
 
 If the script returns an error, show it to the user verbatim. Common issues:
-- yt-dlp not installed → tell user to `pip install yt-dlp`
+- yt-dlp not installed (exit 3) → user installs it: `brew install yt-dlp` (macOS) or `uv tool install yt-dlp`
 - Video is private/geo-blocked → nothing we can do, tell user
 - Network issues → suggest retry
 
