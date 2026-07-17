@@ -238,6 +238,14 @@ async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
                 )
             log.info("Tasks shape audit found %d findings", len(dict_findings))
             return dict_findings
+        # A non-list JSON payload (e.g. the model wrapped the findings in an
+        # object) would previously pass silently as "no findings" — warn so
+        # the drop is visible in the log.
+        log.warning(
+            "Tasks shape audit returned JSON %s instead of a list — "
+            "treating as no findings",
+            type(findings).__name__,
+        )
         return []
     except (ValueError, json.JSONDecodeError):
         log.warning("Tasks shape audit returned non-JSON response")

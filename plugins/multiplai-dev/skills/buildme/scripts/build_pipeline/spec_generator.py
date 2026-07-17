@@ -124,6 +124,25 @@ async def _generate_all_artifacts(
             )
             log.info("DONE artifact=%s", artifact_id)
 
+    # Tasks-audit resume durability: the audit runs after tasks.md is
+    # written, so a crash mid-audit leaves the artifact DONE (file exists)
+    # and the DAG loop above never re-enters it. The checkpoint state — not
+    # file existence — is the record of audit completion; re-run it here
+    # when the artifact exists but the audit isn't recorded complete.
+    if state.spec_gen and not state.spec_gen.tasks_audit_done:
+        context = cm.artifact_context(change_dir, "tasks")
+        tasks_path = change_dir / context["output_path"]
+        if tasks_path.exists():
+            log.info(
+                "Tasks-shape audit not recorded complete — running it now "
+                "(resume durability)"
+            )
+            await _audit_tasks_shape(change_dir, context, config, tasks_path)
+            state.spec_gen.tasks_audit_done = True
+            state.checkpoint(config.state_file_path())
+    elif state.spec_gen:
+        log.info("SKIP phase=TASKS_SHAPE_AUDIT reason=recorded-complete-in-state")
+
     # Verify completeness
     final_status = cm.artifact_status(change_dir)
     done_count = sum(1 for s in final_status.values() if s == ArtifactStatus.DONE)
@@ -167,9 +186,15 @@ async def _generate_single_artifact(
 
         # Tasks-shape audit: catch horizontal decomposition before the rubric
         # and implementation build on a layered breakdown. Prompt instructions
-        # alone drift — this audit is the enforcement.
+        # alone drift — this audit is the enforcement. Completion is recorded
+        # in checkpoint state (not file existence): tasks.md already exists at
+        # this point, so a crash mid-audit would otherwise mark the artifact
+        # DONE and silently skip the audit on resume (see
+        # _generate_all_artifacts' durability pass).
         if artifact_id == "tasks":
             await _audit_tasks_shape(change_dir, context, config, output_path)
+            if state.spec_gen:
+                state.spec_gen.tasks_audit_done = True
 
     # Mark completed
     if state.spec_gen:

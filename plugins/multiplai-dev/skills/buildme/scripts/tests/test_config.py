@@ -251,6 +251,25 @@ class TestStandardsFiles:
         )
         assert config.standards_text() == ""
 
+    def test_unreadable_standards_file_skipped_not_fatal(self, tmp_path, caplog):
+        """One bad standards doc (here: invalid UTF-8 → UnicodeDecodeError)
+        is logged and skipped, per the docstring — it must not fail the block.
+        Readable siblings still land in the output."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "good.md").write_text("Never use bare except.")
+        (docs / "binary.md").write_bytes(b"\xff\xfe\x00garbage\x80\x81")
+        config = BuildConfig(
+            project_dir=tmp_path,
+            config_dir=tmp_path / "no-such-config",
+            standards_files=["docs/binary.md", "docs/good.md"],
+        )
+        with caplog.at_level("WARNING"):
+            text = config.standards_text()
+        assert "Never use bare except." in text
+        assert "binary.md" not in text
+        assert any("unreadable" in r.getMessage() for r in caplog.records)
+
 
 class TestConfigPaths:
     def test_change_dir(self, tmp_path):

@@ -250,7 +250,8 @@ class BuildConfig:
 
         Resolves each `standards_files` entry (absolute, or relative to the
         project dir, then $CLAUDE_CONFIG_DIR/reference/dev/, then
-        $CLAUDE_CONFIG_DIR). Missing files are logged and skipped. Returns ""
+        $CLAUDE_CONFIG_DIR). Missing OR unreadable files are logged and
+        skipped — one bad standards doc must not fail the block. Returns ""
         when nothing resolves — the review prompt then says
         "(no standards provided)".
         """
@@ -260,7 +261,12 @@ class BuildConfig:
             if path is None:
                 log.warning("Standards file not found, skipping: %s", entry)
                 continue
-            parts.append(f"### Standard: {path.name}\n{path.read_text()}")
+            try:
+                text = path.read_text()
+            except (OSError, UnicodeDecodeError) as e:
+                log.warning("Standards file unreadable, skipping: %s (%s)", path, e)
+                continue
+            parts.append(f"### Standard: {path.name}\n{text}")
         return "\n\n".join(parts)
 
     def _resolve_standards_file(self, entry: str) -> Path | None:

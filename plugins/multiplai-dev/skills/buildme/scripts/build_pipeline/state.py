@@ -22,6 +22,12 @@ class SpecGenState(BaseModel):
     completed_artifacts: list[str] = Field(default_factory=list)
     research_path: str | None = None
     codebase_analysis_path: str | None = None
+    # The tasks-shape audit runs AFTER tasks.md is written, so its completion
+    # can't be inferred from file existence (a crash mid-audit leaves the
+    # artifact DONE and the DAG loop never re-enters it). Recorded here so a
+    # resume re-runs the audit; old checkpoints default to False (idempotent
+    # re-audit, safe).
+    tasks_audit_done: bool = False
 
 
 class TDDState(BaseModel):

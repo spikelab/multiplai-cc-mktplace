@@ -876,6 +876,74 @@ class TestEvidenceBasedReview:
         diff = _capture_block_diff(config, block)
         assert "x = 1  # block-1 work" in diff
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("resume_status", [BlockStatus.IMPLEMENTING, BlockStatus.REVIEWING])
+    async def test_run_block_tdd_resumed_midblock_does_not_stamp_baseline(
+        self, tmp_path, resume_status, caplog
+    ):
+        """A pre-baseline checkpoint resumed mid-block (IMPLEMENTING/REVIEWING,
+        baseline_commit=None) must NOT stamp current HEAD — HEAD already holds
+        the block's own commits, and stamping would hide them from the
+        reviewer. baseline stays None (documented `git diff HEAD` fallback)
+        and a warning is logged."""
+        config = self._make_config(tmp_path)
+        config.tier = "advanced"
+        config.test_command = "true"
+        config.config_dir = tmp_path / "config"
+        config.core_memory_files = []
+        self._init_repo(config.project_dir)
+
+        # Simulate the block's own committed work already at HEAD.
+        (config.project_dir / "module.py").write_text("x = 1  # block work\n")
+        subprocess.run(["git", "add", "module.py"], cwd=config.project_dir, check=True)
+        subprocess.run(["git", "commit", "-qm", "impl(block-1)"], cwd=config.project_dir, check=True)
+
+        block = BlockInfo(number=1, name="B", description="d", status=resume_status)
+        assert block.baseline_commit is None
+        state = BuildState(
+            change_name="feat", mode="only", tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
+        progress = ProgressWriter(tmp_path / "progress.md")
+        progress.initialize("feat", "only", "advanced", 1)
+
+        ok = AgentResult(success=True, output="done")
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
+             caplog.at_level("WARNING"):
+            assert await run_block_tdd(block, config, state, progress)
+
+        assert block.baseline_commit is None
+        assert any("pre-baseline" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_run_block_tdd_resumed_testing_still_stamps_baseline(self, tmp_path):
+        """TESTING means no phase commit is guaranteed yet — stamping HEAD on
+        resume is still correct there."""
+        config = self._make_config(tmp_path)
+        config.tier = "advanced"
+        config.test_command = "true"
+        config.config_dir = tmp_path / "config"
+        config.core_memory_files = []
+        head = self._init_repo(config.project_dir)
+
+        block = BlockInfo(number=1, name="B", description="d", status=BlockStatus.TESTING)
+        state = BuildState(
+            change_name="feat", mode="only", tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
+        progress = ProgressWriter(tmp_path / "progress.md")
+        progress.initialize("feat", "only", "advanced", 1)
+
+        ok = AgentResult(success=True, output="done")
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok):
+            assert await run_block_tdd(block, config, state, progress)
+
+        assert block.baseline_commit == head
+
 
 class TestExitCodes:
     def test_exit_codes_defined(self):
