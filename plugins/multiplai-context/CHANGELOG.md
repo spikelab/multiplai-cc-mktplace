@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.17 — 2026-07-17
+
+### Fixed
+- **Single-token false positives in `token_overlap` routing.** Smoothed IDF
+  over a small catalog values any df=1 domain term at `log((N+1)/2)+1` —
+  ≈3.74 on a 30-entry catalog, above `MIN_SIGNAL=2.0` — so ONE incidental
+  generic token ("search", "browser", "skill", "data") injected an unrelated
+  file (live-reproduced: a travel prompt pulled in three files, each on a
+  single token; "data" alone injected five). Two levers, both scoring-side
+  (`keep_ratio` / relative-cutoff logic untouched):
+  - **Match-breadth eligibility gate** (`MIN_DOMAIN_MATCHES = 2`): an entry
+    can clear the NONE floor only if it matched ≥ 2 distinct `intent_domains`
+    tokens or a multi-word domain phrase appears verbatim in the prompt.
+    Ineligible entries still rank in diagnostics but are never picked
+    (`select_multi` only; `select()` keeps its pure rank+cap contract).
+    Hardcoded, not a plugin option — 2 is the smallest breadth that kills
+    one-token noise, and no catalog geometry favors another value.
+  - **Per-term IDF cap** (`MAX_TERM_IDF = 2.5`) bounds the small-catalog
+    inflation so no single locally-rare term can dominate a score (the
+    historical `audiovideo.md`=23.5 spike mechanism).
+  Seed golden set: NONE-accuracy 66.7% → 100% with recall and precision held
+  at 100%; production replay unchanged (28.4% cap-hit at `keep_ratio=0.30`).
+- **`ROUTING_SCORES` accuracy under the gate.** Picks are no longer a
+  contiguous prefix of the ranking, so the log line now emits the router's
+  actual injected set (`picked_scored`) and computes `floor_excluded` as the
+  best non-injected score.
+- **`replay_router_logs.py`** imports `MIN_SIGNAL` from `lib.memory_router`
+  instead of mirroring the constant (drift-proof, and satisfies the sys.path
+  wiring test).
+
 ## 0.6.16 — 2026-07-17
 
 ### Fixed
