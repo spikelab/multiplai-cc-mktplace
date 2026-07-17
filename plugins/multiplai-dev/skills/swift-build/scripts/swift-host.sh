@@ -37,34 +37,57 @@ fi
 q() { printf '%q' "$1"; }
 
 # --- Environment detection ---
+# Container detection. MULTIPLAI_CONTAINER: 1 = multiplai container (bridge
+# expected), 0 = explicitly not a container, unset = fall back to /.dockerenv.
+in_container() {
+  [ "${MULTIPLAI_CONTAINER:-}" = "1" ] \
+    || { [ "${MULTIPLAI_CONTAINER:-}" != "0" ] && [ -f /.dockerenv ]; }
+}
+
 run_on_host() {
   if [ "$(uname -s)" = "Darwin" ]; then
     # Local macOS — run directly
     eval "$1"
-  else
-    # Remote (container) — SSH to host
-    if [ -z "$SWIFT_BUILD_USER" ]; then
-      # MULTIPLAI_CONTAINER: 1 = multiplai container (bridge expected),
-      # 0 = explicitly not a container, unset = fall back to /.dockerenv.
-      if [ "${MULTIPLAI_CONTAINER:-}" = "1" ] \
-         || { [ "${MULTIPLAI_CONTAINER:-}" != "0" ] && [ -f /.dockerenv ]; }; then
-        echo "Error: no SSH user for the container→host bridge." >&2
-        echo "  Set SSH_BUILD_USER (or SWIFT_BUILD_USER) in your kit root .env." >&2
-      else
-        echo "Error: swift-build needs macOS (Xcode/Swift toolchain); this host is $(uname -s)." >&2
-        echo "  Run it on a Mac, or from the multiplai container with the host bridge configured." >&2
-      fi
-      exit 1
-    fi
-    if [ -z "$SWIFT_BUILD_KEY" ]; then
-      echo "ERROR: No SSH key found. Set SWIFT_BUILD_KEY or place key at ~/.ssh/build_key" >&2
-      exit 1
-    fi
-    ssh -q -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-      -i "$SWIFT_BUILD_KEY" \
-      "${SWIFT_BUILD_USER}@${SWIFT_BUILD_HOST}" \
-      "$1"
+    return
   fi
+  # The SSH bridge path is CONTAINER-ONLY (see SKILL.md support matrix):
+  # plain Linux is unsupported even when SSH_BUILD_USER happens to be set —
+  # the bridge assumes the container↔host identical-path mount, which a
+  # random Linux box doesn't have.
+  if ! in_container; then
+    echo "Error: swift-build needs macOS (Xcode/Swift toolchain); this host is $(uname -s)." >&2
+    echo "  Run it on a Mac, or from the multiplai container with the host bridge configured." >&2
+    echo "  (The SSH bridge is container-only; SSH_BUILD_USER is ignored on plain $(uname -s).)" >&2
+    exit 1
+  fi
+  # Container — SSH to host
+  if [ -z "$SWIFT_BUILD_USER" ]; then
+    echo "Error: no SSH user for the container→host bridge." >&2
+    echo "  Set SSH_BUILD_USER (or SWIFT_BUILD_USER) in your kit root .env." >&2
+    exit 1
+  fi
+  if [ -z "$SWIFT_BUILD_KEY" ]; then
+    echo "ERROR: No SSH key found. Set SWIFT_BUILD_KEY or place key at ~/.ssh/build_key" >&2
+    exit 1
+  fi
+  ssh -q -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    -i "$SWIFT_BUILD_KEY" \
+    "${SWIFT_BUILD_USER}@${SWIFT_BUILD_HOST}" \
+    "$1"
+}
+
+# --- Host xcsift probe (memoized) ---
+# One SSH probe per script invocation at most; "" = not probed yet.
+XCSIFT_ON_HOST=""
+host_has_xcsift() {
+  if [ -z "$XCSIFT_ON_HOST" ]; then
+    if run_on_host "command -v xcsift" &>/dev/null; then
+      XCSIFT_ON_HOST="yes"
+    else
+      XCSIFT_ON_HOST="no"
+    fi
+  fi
+  [ "$XCSIFT_ON_HOST" = "yes" ]
 }
 
 # --- Project detection ---
@@ -99,8 +122,8 @@ pipe_xcsift() {
   if command -v xcsift &>/dev/null; then
     xcsift --format toon --quiet
   elif [ "$(uname -s)" != "Darwin" ]; then
-    # Remote: check if host has xcsift
-    if run_on_host "command -v xcsift" &>/dev/null; then
+    # Remote: check if host has xcsift (memoized probe)
+    if host_has_xcsift; then
       # xcsift is on host — caller should pipe on host side
       cat
     else
@@ -121,8 +144,9 @@ build_remote_cmd() {
   local use_cd="${2:-false}"  # true for xcodebuild commands that need cd
   local xcsift_suffix=""
 
-  # Check if host has xcsift (cache result for session)
-  if run_on_host "command -v xcsift" &>/dev/null 2>&1; then
+  # Check if host has xcsift — memoized, one SSH probe per script invocation
+  # at most (host_has_xcsift; there is no cross-invocation cache).
+  if host_has_xcsift; then
     xcsift_suffix=" 2>&1 | xcsift --format toon --quiet"
   fi
 

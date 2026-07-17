@@ -115,6 +115,13 @@ ${CLAUDE_PLUGIN_ROOT}/skills/swift-build/scripts/swift-host.sh sim shutdown
 ${CLAUDE_PLUGIN_ROOT}/skills/swift-build/scripts/swift-host.sh sim screenshot /tmp/screen.png
 ```
 
+**`sim screenshot` path caveat (bridged mode):** the screenshot is written
+on the **macOS host**, not in the container — the default
+`/tmp/simulator-screenshot.png` lands in the host's `/tmp`, which the
+container cannot read. To view the image from the container, pass a path
+inside the shared workspace mount (same absolute path on both sides), e.g.
+`sim screenshot /path/to/workspace/tmp/screen.png`.
+
 For detailed simulator commands beyond what the script wraps, load `references/simulator-management.md`.
 
 ## Output Parsing
@@ -207,6 +214,22 @@ When running from a container, all commands the script sends over SSH are compat
 - `open -a Simulator` (for opening the Simulator GUI)
 - `cd /path && <any of the above>`
 - The `2>&1 | xcsift --format toon --quiet` suffix: the gateway rejects raw pipes/redirects as shell metacharacters, but it special-cases this one **fixed, trusted suffix** — it strips it before the metacharacter check, validates the head command, then re-attaches the xcsift stage host-side as a hardcoded constant. So only this exact suffix pipes; arbitrary pipes are still denied. (Do **not** send any other redirect/pipe over the bridge — e.g. `2>/dev/null` is denied.)
+
+### Known gateway limitations (bridged mode only)
+
+Until the gateway-side unquoting fix ships in multiplai-container, the
+gateway re-parses the quoted command string in a way that breaks on:
+
+- **Project paths containing spaces** — the `cd '/path with spaces' && …`
+  pattern is mis-split/denied. Keep container-built Swift projects at
+  space-free paths for now.
+- **Xcode scheme names containing parentheses** (e.g. `MyApp (iOS)`) — the
+  quoted scheme is rejected as shell metacharacters. Rename the scheme or
+  build that project locally on the Mac.
+
+These are gateway limitations, not script bugs — `swift-host.sh` quotes
+correctly; the fix belongs to `container-build-gateway.sh` (tracked in the
+multiplai-container repo). Local macOS use is unaffected.
 
 ## Constraints
 
