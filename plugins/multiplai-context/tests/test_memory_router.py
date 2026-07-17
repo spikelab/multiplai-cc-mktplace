@@ -532,6 +532,105 @@ class TestRoutingPolicy:
 
 
 # ---------------------------------------------------------------------------
+# Match-breadth eligibility gate (single-token NONE-floor fix) + IDF cap
+# ---------------------------------------------------------------------------
+
+
+class TestSingleTokenMatchFloor:
+    """A single incidental domain-token match must not clear the NONE floor.
+
+    Root cause: smoothed IDF over a small catalog gives a df=1 term
+    ``log((N+1)/2)+1`` (≈3.74 at N=30), so ONE generic token ("search",
+    "browser", "skill") out-scored MIN_SIGNAL alone and injected an
+    unrelated file. Eligibility now requires ≥ MIN_DOMAIN_MATCHES
+    distinct domain tokens, or a verbatim multi-word domain phrase;
+    single-token entries still rank in diagnostics but never inject.
+    """
+
+    def _catalog(self) -> list[dict]:
+        # ≥5 entries so a df=1 term's smoothed IDF (log(6/2)+1 ≈ 2.10)
+        # clears MIN_SIGNAL on its own — the failure being reproduced
+        # needs a lone token's score to be sufficient.
+        return [
+            {"source": "jobs.md", "intent_domains": ["job search strategies"]},
+            {"source": "ooo.md", "intent_domains": ["out of office"]},
+            {"source": "py.md", "intent_domains": ["debugging python segfaults"]},
+            {"source": "cook.md", "intent_domains": ["cooking dinner recipes"]},
+            {"source": "infra.md", "intent_domains": ["deploying cloud infrastructure"]},
+        ]
+
+    def _route(self, prompt: str, catalog: list[dict] | None = None) -> list[str]:
+        from lib.memory_router import TokenOverlapRouter
+        return TokenOverlapRouter().select_multi(
+            prompt, None,
+            {"memory": catalog or self._catalog(), "skills": [], "resources": []},
+        )["memory"]
+
+    def test_single_domain_token_match_does_not_pick(self):
+        # "search" is jobs.md's only overlapping token — an incidental
+        # hit on a travel prompt. Its lone-token score clears MIN_SIGNAL
+        # but the entry must not inject.
+        assert "jobs.md" not in self._route("search for train tickets to florence")
+
+    def test_single_token_plus_keyword_boost_does_not_pick(self):
+        # Keyword boosts must not rescue an ineligible single-token
+        # domain match — breadth, not score, gates the floor.
+        catalog = self._catalog()
+        catalog[0] = {**catalog[0], "keywords": ["linkedin"]}
+        picks = self._route("search linkedin for train tickets", catalog)
+        assert "jobs.md" not in picks
+
+    def test_two_domain_tokens_still_pick(self):
+        # {debugging, python} — two distinct domain tokens → eligible.
+        assert "py.md" in self._route("debugging a python segfault")
+
+    def test_verbatim_multiword_phrase_still_picks(self):
+        # "out of office" matches only ONE scoring token ("office" —
+        # "out"/"of" are stopword/short) but appears verbatim in the
+        # prompt: unmistakably deliberate → eligible.
+        assert "ooo.md" in self._route("configure my out of office autoreply")
+
+    def test_all_single_token_ties_abstain(self):
+        # The live none-travel failure in miniature: three entries each
+        # matching one distinct generic token → full abstention.
+        catalog = [
+            {"source": "career.md", "intent_domains": ["job search strategies"]},
+            {"source": "tools.md", "intent_domains": ["browser automation workflows"]},
+            {"source": "sales.md", "intent_domains": ["skill assessment pipelines"]},
+            {"source": "py.md", "intent_domains": ["debugging python segfaults"]},
+            {"source": "cook.md", "intent_domains": ["cooking dinner recipes"]},
+        ]
+        picks = self._route(
+            "use the host browser skill to search for train tickets", catalog
+        )
+        assert picks == []
+
+    def test_apply_policy_eligibility_gate(self):
+        from lib.memory_router import _apply_policy
+        scored = [(5.0, "inelig"), (4.0, "elig")]
+        # Gate: only eligible entries can be picked; floor/threshold
+        # anchor on the best ELIGIBLE score.
+        assert _apply_policy(scored, 10, 0.30, eligible={"elig"}) == ["elig"]
+        assert _apply_policy(scored, 10, 0.30, eligible=set()) == []
+        # None (default) = all eligible — select()'s pure rank+cap
+        # contract and direct callers are unchanged.
+        assert _apply_policy(scored, 10, 0.30) == ["inelig", "elig"]
+
+
+class TestIdfCap:
+    def test_lone_df1_term_capped_at_max_term_idf(self):
+        from lib.memory_router import MAX_TERM_IDF, _idf_map
+        # 30-entry catalog, term in exactly one entry: uncapped smoothed
+        # IDF is log(31/2)+1 ≈ 3.74 — the inflation that let one token
+        # beat MIN_SIGNAL. The cap bounds it.
+        sets = [{"common", "rare"} if i == 0 else {"common"} for i in range(30)]
+        idf = _idf_map(sets)
+        assert idf["rare"] == pytest.approx(MAX_TERM_IDF)
+        # A universal term still floors at ~1.0 (unchanged smoothing).
+        assert idf["common"] == pytest.approx(1.0, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
 # LLMRouter.select_multi (multi-corpus, single LLM call)
 # ---------------------------------------------------------------------------
 

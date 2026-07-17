@@ -196,6 +196,33 @@ KEYWORD_CAP = 1.5          # max total keyword contribution per entry
                            # domains-primary split, not this value, is
                            # what moves precision/recall)
 
+# A domain match must be BROAD, not merely strong, to clear the NONE
+# floor. Smoothed IDF over a small catalog makes any df=1 term worth
+# log((N+1)/2)+1 — ≈3.74 on a 30-entry catalog — so ONE incidental
+# generic token ("search", "browser", "skill") out-scored MIN_SIGNAL
+# and injected an unrelated file (a travel prompt pulled in the career
+# file via "search"). Raising MIN_SIGNAL can't fix this without also
+# killing legitimate single strong matches, so floor eligibility gates
+# on match breadth instead: an entry may clear MIN_SIGNAL only if it
+# matched ≥ MIN_DOMAIN_MATCHES distinct intent_domains tokens, OR a
+# multi-word intent_domains phrase appears verbatim in the prompt
+# (phrases whose other words are stopwords — "out of office" — match
+# one scoring token yet are unmistakably deliberate). Ineligible
+# entries still appear in the scored ranking/diagnostics but can never
+# be picked via select_multi — mirroring how KEYWORD_CAP keeps
+# keywords from pulling a file in alone. Hardcoded rather than a
+# plugin option: 2 is the smallest breadth that kills one-token noise,
+# and no catalog geometry favors a different value.
+MIN_DOMAIN_MATCHES = 2
+
+# Per-term ceiling on smoothed IDF, bounding the small-catalog
+# inflation above: no single locally-rare term can dominate a score
+# (the historical audiovideo.md=23.5 spike was several generic tokens
+# × df=1 IDF ≈ 3.74 each). 2.5 sits above the IDF of a term shared by
+# a few entries (real signal) but below the df=1 ceiling for catalogs
+# of ≳12 entries, so it only trims the inflated top.
+MAX_TERM_IDF = 2.5
+
 # Short go-aheads: the conversation already has the context (mirrors
 # the LLM router's rule #1).
 _CONTINUATION = frozenset({
@@ -221,26 +248,39 @@ def _idf_map(per_entry_terms: list[set[str]]) -> dict[str, float]:
     A term in one entry's curated fields is highly discriminating; a
     term in many is near-worthless. ``log((N+1)/(df+1)) + 1`` floors
     at 1.0 so a universal term still contributes a little (keeps the
-    uniform-catalog unit tests well-defined).
+    uniform-catalog unit tests well-defined), and is capped at
+    ``MAX_TERM_IDF`` so a df=1 term on a small catalog can't inflate
+    past the point where one token dominates a score.
     """
     n = len(per_entry_terms)
     df: dict[str, int] = {}
     for terms in per_entry_terms:
         for t in terms:
             df[t] = df.get(t, 0) + 1
-    return {t: math.log((n + 1) / (c + 1)) + 1.0 for t, c in df.items()}
+    return {
+        t: min(math.log((n + 1) / (c + 1)) + 1.0, MAX_TERM_IDF)
+        for t, c in df.items()
+    }
 
 
 def _apply_policy(
     scored: list[tuple[float, str]],
     max_files: int,
     keep_ratio: float = DEFAULT_KEEP_RATIO,
+    eligible: set[str] | None = None,
 ) -> list[str]:
     """Turn a full ranking into a relevance-gated, variable-length pick.
 
-    Two gates replace the old "always take top-N":
-    - NONE floor: if even the best entry is below ``MIN_SIGNAL`` the
-      prompt has no real memory match → return nothing.
+    Three gates replace the old "always take top-N":
+    - Eligibility gate: when ``eligible`` is given, only those entries
+      can be picked and the floor/threshold anchor on the best
+      *eligible* score — a single-token domain match (see
+      MIN_DOMAIN_MATCHES) may rank in the diagnostics but never
+      injects. ``None`` means all entries are eligible (select()'s
+      pure rank+cap contract and direct callers are unchanged).
+    - NONE floor: if even the best eligible entry is below
+      ``MIN_SIGNAL`` the prompt has no real memory match → return
+      nothing.
     - Relative cutoff: keep only entries within ``keep_ratio`` of the
       top score (and above the floor), so the output length tracks
       how many files are actually relevant rather than the cap. The
@@ -250,11 +290,14 @@ def _apply_policy(
     """
     if not scored:
         return []
-    top = scored[0][0]
+    pool = scored if eligible is None else [p for p in scored if p[1] in eligible]
+    if not pool:
+        return []
+    top = pool[0][0]
     if top < MIN_SIGNAL:
         return []
     threshold = max(MIN_SIGNAL, keep_ratio * top)
-    kept = [fn for s, fn in scored if s >= threshold]
+    kept = [fn for s, fn in pool if s >= threshold]
     return kept[:max_files]
 
 
@@ -347,11 +390,20 @@ class TokenOverlapRouter:
         result: dict[str, list[str]] = {}
         for corpus_type in CORPUS_TYPES:
             entries = corpora.get(corpus_type) or []
-            scored = self._scored_pairs(combined, entries)
-            picks = _apply_policy(scored, max_files_per_corpus, self.keep_ratio)
+            scored, eligible = self._scored_pairs(combined, entries)
+            picks = _apply_policy(
+                scored, max_files_per_corpus, self.keep_ratio, eligible=eligible
+            )
             result[corpus_type] = picks
+            score_by_fn = {fn: s for s, fn in scored}
             self.last_scores[corpus_type] = {
                 "scored": scored,
+                # The eligibility gate means picks are no longer a
+                # contiguous prefix of the ranking — expose the actual
+                # injected (score, filename) pairs so the ROUTING_SCORES
+                # log line reports what was really injected.
+                "picked_scored": [(score_by_fn[fn], fn) for fn in picks],
+                "n_eligible": len(eligible),
                 "cap": max_files_per_corpus,
                 "n_candidates": len(scored),
                 "n_picked": len(picks),
@@ -368,23 +420,33 @@ class TokenOverlapRouter:
         *,
         max_files: int,
     ) -> list[str]:
-        scored = self._scored_pairs(prompt, catalog_entries)
+        # Pure rank+cap by contract — the eligibility set is ignored
+        # here; only select_multi's policy path gates on it.
+        scored, _ = self._scored_pairs(prompt, catalog_entries)
         return [filename for _, filename in scored[:max_files]]
 
     def _scored_pairs(
         self,
         prompt: str,
         catalog_entries: list[dict],
-    ) -> list[tuple[float, str]]:
-        """Score every entry; return ``(score, filename)`` sorted desc.
+    ) -> tuple[list[tuple[float, str]], set[str]]:
+        """Score every entry; return ``(ranking, eligible)``.
 
-        Full, un-truncated ranking — callers truncate / cut off.
+        ``ranking`` is ``(score, filename)`` sorted desc — full,
+        un-truncated; callers truncate / cut off. ``eligible`` is the
+        set of filenames whose domain match is broad enough to clear
+        the NONE floor (see MIN_DOMAIN_MATCHES): ≥ 2 distinct
+        ``intent_domains`` tokens matched, or a multi-word domain
+        phrase verbatim in the prompt. ``_apply_policy`` consumes it;
+        ineligible entries rank/tie-break in diagnostics but are never
+        picked.
 
         Scoring (two asymmetric signals):
         - ``intent_domains`` — the trusted, well-scoped signal. Tokens
           are IDF-weighted over the *domain* corpus (a term unique to
-          one file dominates; a shared one is ~free) and carry the full
-          score: only this can clear ``MIN_SIGNAL``.
+          one file dominates — capped at ``MAX_TERM_IDF``; a shared one
+          is ~free) and carry the full score: only this can clear
+          ``MIN_SIGNAL``.
         - ``keywords`` — noisy (LLM catalogs over-tag generic tech /
           proper nouns; IDF-over-a-tiny-corpus then rewards them). Each
           matched keyword token (``KEYWORD_UNIT``) and verbatim
@@ -397,24 +459,29 @@ class TokenOverlapRouter:
         - ``anti_domains`` still hard-excludes (unchanged contract).
         """
         if not catalog_entries or not prompt:
-            return []
+            return [], set()
         prompt_tokens = _tokenize(prompt)
         if not prompt_tokens:
-            return []
+            return [], set()
         prompt_lc = prompt.lower()
 
-        # Pass 1: per-entry domain terms (primary) kept separate from
-        # keyword terms / phrases (demoted).
-        rows: list[tuple[str, set[str], set[str], list[str], set[str]]] = []
+        # Pass 1: per-entry domain terms + verbatim-checkable domain
+        # phrases (primary) kept separate from keyword terms / phrases
+        # (demoted).
+        rows: list[tuple[str, set[str], list[str], set[str], list[str], set[str]]] = []
         per_entry_domain_terms: list[set[str]] = []
         for entry in catalog_entries:
             filename = _entry_filename(entry)
             if not filename:
                 continue
             domain_terms: set[str] = set()
+            domain_phrases: list[str] = []
             for phrase in entry.get("intent_domains", []) or []:
                 if isinstance(phrase, str):
                     domain_terms |= _tokenize(phrase)
+                    normalized = " ".join(phrase.lower().split())
+                    if " " in normalized:
+                        domain_phrases.append(normalized)
             kw_terms: set[str] = set()
             phrases: list[str] = []
             for kw in entry.get("keywords", []) or []:
@@ -433,19 +500,22 @@ class TokenOverlapRouter:
             # on the very tokens that make it relevant. Only the
             # distinctive anti terms should gate exclusion.
             anti -= domain_terms
-            rows.append((filename, domain_terms, anti, phrases, kw_terms))
+            rows.append(
+                (filename, domain_terms, domain_phrases, anti, phrases, kw_terms)
+            )
             per_entry_domain_terms.append(domain_terms)
 
         idf = _idf_map(per_entry_domain_terms)
 
-        # Pass 2: IDF-weighted domain score + capped keyword boost.
+        # Pass 2: IDF-weighted domain score + capped keyword boost,
+        # plus the floor-eligibility predicate (match breadth).
         scored: list[tuple[float, str]] = []
-        for filename, domain_terms, anti, phrases, kw_terms in rows:
+        eligible: set[str] = set()
+        for filename, domain_terms, domain_phrases, anti, phrases, kw_terms in rows:
             if anti & prompt_tokens:
                 continue  # Respect anti_domains — skip this entry
-            domain_score = sum(
-                idf.get(t, 1.0) for t in (domain_terms & prompt_tokens)
-            )
+            matched = domain_terms & prompt_tokens
+            domain_score = sum(idf.get(t, 1.0) for t in matched)
             kw_boost = KEYWORD_UNIT * len(kw_terms & prompt_tokens)
             kw_boost += KEYWORD_PHRASE_UNIT * sum(
                 1 for ph in phrases if ph in prompt_lc
@@ -454,9 +524,13 @@ class TokenOverlapRouter:
             if score <= 0.0:
                 continue
             scored.append((score, filename))
+            if len(matched) >= MIN_DOMAIN_MATCHES or any(
+                ph in prompt_lc for ph in domain_phrases
+            ):
+                eligible.add(filename)
 
         scored.sort(key=lambda pair: (-pair[0], pair[1]))
-        return scored
+        return scored, eligible
 
 
 # ---------------------------------------------------------------------------

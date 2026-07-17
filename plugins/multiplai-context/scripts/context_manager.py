@@ -830,26 +830,33 @@ def main() -> None:
                     _d = router_diag.get(_ct) or {}
                     _scored = _d.get("scored") or []
                     _cap = _d.get("cap", 10)
-                    # _apply_policy keeps a contiguous top prefix, so the
-                    # set actually injected is scored[:n_picked]. Emit that
-                    # — NOT scored[:cap], the raw candidate pool — so
-                    # /health's live top/floor describe what was injected,
-                    # not an excluded candidate (the conflation that made
-                    # the live floor read artificially low).
+                    # Emit the set actually injected — NOT scored[:cap],
+                    # the raw candidate pool — so /health's live
+                    # top/floor describe what was injected, not an
+                    # excluded candidate. The eligibility gate
+                    # (MIN_DOMAIN_MATCHES) means picks are no longer a
+                    # contiguous prefix of the ranking, so use the
+                    # router's own picked_scored; fall back to the
+                    # prefix for diags without it.
                     _np = _d.get("n_picked", 0)
+                    _picked = _d.get("picked_scored")
+                    if _picked is None:
+                        _picked = _scored[:_np]
+                    _picked_fns = {fn for _s, fn in _picked}
+                    # Best score that did NOT inject (may outrank picks
+                    # now that ineligible entries can top the ranking).
+                    _excluded = [s for s, fn in _scored if fn not in _picked_fns]
                     logger.info(
                         "ROUTING_SCORES %s=%s",
                         _ct,
                         json.dumps({
-                            "picked": [[fn, round(s, 3)] for s, fn in _scored[:_np]],
+                            "picked": [[fn, round(s, 3)] for s, fn in _picked],
                             "cap": _cap,
                             "n_candidates": _d.get("n_candidates", len(_scored)),
                             "n_picked": _np,
                             "capped": _d.get("capped", False),
                             "floor_excluded": (
-                                round(_scored[_np][0], 3)
-                                if len(_scored) > _np
-                                else None
+                                round(max(_excluded), 3) if _excluded else None
                             ),
                             "prompt": _plog,
                         }),
