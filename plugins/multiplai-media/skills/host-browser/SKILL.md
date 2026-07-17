@@ -87,7 +87,7 @@ hb goto https://example.com           # navigate like a human: open, settle,
 hb snapshot -i                        # SEE the page (interactive refs @eN)
 hb humantype @e5 "user@example.com"   # focus, clear, type in jittered chunks
 hb think                              # randomized human pause (~0.4–1.4s)
-hb humanclick @e9                     # hover, micro-pause, then click
+hb humanclick @e9                     # curved, eased, jittered mouse path, then click
 hb fillform @e5 "name" @e6 "email"    # humantype across sel/text pairs
 hb waitfor vis @e7 30                 # poll until an element is visible (or URL matches)
 hb mail new                           # open mail.tm, print the anon inbox address
@@ -96,6 +96,26 @@ hb dismiss                            # re-clear overlays if one pops up mid-flo
 hb challenged                         # verdict on risk-scored walls (ok / blocked)
 hb data list                          # find embedded JSON (__NEXT_DATA__ etc.) — read it, don't scrape
 ```
+
+**DataDome / risk-scored-wall verbs** (see `references/antidetection.md` for the model + ethics):
+
+```bash
+hb fpcheck                            # empirical CDP self-test vs bot-detector.rebrowser.net
+                                      #   → PASS/FAIL table + verdict; restores your tab
+hb dd                                 # live DataDome verdict: cookie + network + DOM
+                                      #   → clear | scored | CHALLENGED (exit 0 / 0 / 1)
+hb warmup https://site.example/       # low-risk arrival: homepage, dwell, one on-site
+                                      #   nav click, dwell — a warm profile, not a cold deep-link
+hb solve-wait [--force] [timeout_s]   # on a CHALLENGED verdict, hand the puzzle to the HUMAN
+                                      #   (their own visible Chrome), poll, ride the earned cookie
+```
+
+`hb humanclick` now moves the cursor along a **curved, eased, jittered path** to an
+off-centre point in the target before clicking (attacking the strongest behavioral
+tell — straight/uniform/dead-centre synthesized input). `hb humanclick --fast` keeps
+the old instant path; it falls back to a plain click if the element's box can't be
+read. (agent-browser's `mouse move` is integer-only, so the aim point is
+integer-rounded — we defeat the geometry+timing tells, not sub-pixel coordinates.)
 
 **`hb goto` now returns a block verdict.** After it accepts cookies it runs
 `hb challenged`, so `goto` exits `0` on real content and `1` on a risk-scored
@@ -142,6 +162,27 @@ to peel stacked overlays. Run `hb dismiss` again any time a new overlay appears.
 3. **One session, real rate.** Don't retry-storm. Don't open 10 signups. Human
    pacing means human throughput. See `references/antidetection.md`.
 
+### DataDome / risk-scored walls (the sanctioned flow)
+
+DataDome/PerimeterX/Kasada **score** risk and only escalate to a challenge when the
+score is high — they don't gate every request. From the genuine host browser you
+already win the big inputs (residential IP, real cookies/history, `webdriver=false`;
+confirm with **`hb fpcheck`** — the CDP `Runtime.enable` leak was V8-patched in
+May 2025 and we measure clean). So the play is to **stay under the threshold**, and
+if a challenge does render, **let the human solve it once and ride the cookie** — not
+to defeat a CAPTCHA:
+
+1. **`hb fpcheck`** — confirm the attach still looks human (green = go; a red
+   `runtimeEnableLeak` means the leak regressed → **stop and reassess**).
+2. **`hb warmup <homepage>`** — arrive warm, not via a cold deep-link.
+3. **`hb dd`** after each navigation — `clear` / `scored` / `CHALLENGED`.
+4. On **CHALLENGED**: **`hb solve-wait`** — solve the puzzle yourself in your visible
+   Chrome; it polls and continues on the earned `datadome` cookie.
+
+**Hard rules (non-negotiable):** no fingerprint spoofing, no CAPTCHA auto-solving, no
+proxy rotation, no machine-scale rate. The human solves any rendered challenge. Full
+model + ethics + the explicit authorized-use line: **`references/antidetection.md`**.
+
 ## Step 2 — Recipes
 
 - **Extract data from a results/list page** → `references/data-extraction.md`
@@ -159,7 +200,7 @@ to peel stacked overlays. Run `hb dismiss` again any time a new overlay appears.
 | Clicks/typing do nothing | GDPR/cookie consent or modal **overlay** on top | `hb dismiss` (or arrive via `hb goto`), then re-snapshot |
 | `eval` `querySelectorAll('button')` returns 0 but snapshot shows a button | site uses `<div role=button>` | trust the snapshot `@ref`, not tag-name JS |
 | Submit button click never advances | hidden **Cloudflare Turnstile / invisible reCAPTCHA** in an iframe | genuine fingerprint usually passes it; if not, it's a hard wall — stop |
-| Page looks blocked / `datadome` in HTML | **risk-scored wall** (DataDome) — script presence ≠ block | `hb challenged` for the real verdict; warm up + retry spaced before concluding — see `references/antidetection.md` |
+| Page looks blocked / `datadome` in HTML | **risk-scored wall** (DataDome) — script presence ≠ block | `hb dd` for the real verdict; `hb warmup` first, `hb solve-wait` (human solves) if it renders a challenge — see `references/antidetection.md` |
 | `curl` over SSH → `DENIED: command not in allowlist` | host gateway only allows `agent-browser …` | read external APIs via `hb eval` in-page `fetch()` |
 | Typing a password/query silently rejected (`DENIED …`) | text has a gateway-forbidden metachar (`; \| & < > \` $ ( )` / newline) — can't be an `ab` arg | `hb humantype`/`fillform` auto-fall back to a base64 `eval -b` insert (prints a stderr note); real keystrokes only for metachar-free text |
 | Email accepted into form, then "this email can't be used" | **disposable-domain policy block** (e.g. Canva) | NOT a detection problem — antidetection can't fix it; use a non-disposable address or a different service |
