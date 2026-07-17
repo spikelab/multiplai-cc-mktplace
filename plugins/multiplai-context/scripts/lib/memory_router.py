@@ -404,6 +404,14 @@ class TokenOverlapRouter:
                 # log line reports what was really injected.
                 "picked_scored": [(score_by_fn[fn], fn) for fn in picks],
                 "n_eligible": len(eligible),
+                # Best ELIGIBLE score (None when nothing passed the
+                # breadth gate). On abstention the raw top may be an
+                # ineligible entry scoring above MIN_SIGNAL, so the
+                # activity-line hint needs this to say truthfully
+                # whether the corpus abstained on breadth or on score.
+                "top_eligible": next(
+                    (s for s, fn in scored if fn in eligible), None
+                ),
                 "cap": max_files_per_corpus,
                 "n_candidates": len(scored),
                 "n_picked": len(picks),

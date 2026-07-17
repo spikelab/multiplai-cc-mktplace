@@ -26,6 +26,20 @@
   contiguous prefix of the ranking, so the log line now emits the router's
   actual injected set (`picked_scored`) and computes `floor_excluded` as the
   best non-injected score.
+- **The other contiguous-prefix consumers of the ranking.** A shared
+  `_picked_ranking` helper now feeds everything that reports or reasons
+  about "what was actually injected":
+  - The post-cooldown re-floor anchors on the top *pick* instead of the raw
+    ranking's top — which, under the gate, can be an ineligible entry that
+    never injected and thus never appears in `suppressed`, silently
+    disabling the re-floor exactly when weak cooldown survivors most need
+    re-checking. Intended side effect (matches the documented contract):
+    bundle/co_retrieve expansion picks are no longer bar-checked via their
+    incidental raw-pool scores.
+  - The activity-line score hint reads top/floor from the picked set, and
+    abstention distinguishes "best N lacks match breadth" (raw best may
+    clear MIN_SIGNAL — the single-token trap) from a genuine
+    "best eligible N < floor" (via a new `top_eligible` diag field).
 - **`replay_router_logs.py`** imports `MIN_SIGNAL` from `lib.memory_router`
   instead of mirroring the constant (drift-proof, and satisfies the sys.path
   wiring test).
