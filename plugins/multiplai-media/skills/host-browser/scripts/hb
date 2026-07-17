@@ -36,8 +36,11 @@ think() { napms "${1:-400}" "${2:-1400}"; }
 # DENIED), so humantype routes it through insert_via_eval instead.
 has_meta() {
   local s="$1" stripped
-  stripped="${s//[;|&<>\`\$()]/}"   # drop the gateway-forbidden metacharacters
-  stripped="${stripped//$'\n'/}"    # and newlines
+  stripped="${s//[;|&<>\`\$()]/}"     # drop the gateway-forbidden metacharacters
+  stripped="${stripped//[[:cntrl:]]/}" # and ALL control chars (newline, tab, CR, …)
+  # Control chars beyond newline matter too: a literal tab/CR mid-argument
+  # dies at the gateway (or worse, gets typed as a focus-moving keystroke),
+  # so they must take the eval path like the metacharacters do.
   [ "$stripped" != "$s" ]
 }
 
@@ -224,7 +227,12 @@ goto() {
 # NOTE: timeout_s is an approximate lower bound — the per-round `ab` SSH latency
 # isn't counted, so real wall-clock runs somewhat longer than the nominal value.
 waitfor() {
-  local mode="$1" arg="$2" timeout="${3:-60}"
+  # ${1:-}/${2:-}: under `set -u` a bare $1/$2 would abort with "unbound
+  # variable" before the usage message below is ever reachable.
+  local mode="${1:-}" arg="${2:-}" timeout="${3:-60}"
+  if [ -z "$mode" ] || [ -z "$arg" ]; then
+    echo "usage: hb waitfor url|vis <arg> [timeout_s]" >&2; return 2
+  fi
   local rounds=$(( timeout * 10 / 21 + 1 ))   # ~2.1s avg/round -> ~timeout seconds
   local i=0 cur
   while [ "$i" -lt "$rounds" ]; do
@@ -273,6 +281,7 @@ mail() {
 (async () => {
   let tok; try { tok = JSON.parse(localStorage.getItem('account')).token; } catch(e){ return 'NOAUTH'; }
   const r = await fetch('https://api.mail.tm/messages', {headers:{Authorization:'Bearer '+tok}});
+  if (r.status === 401) return 'AUTHFAIL';   // expired/revoked JWT — polling on can't help
   const j = await r.json();
   const items = (j['hydra:member']||[]);   // mail.tm returns newest first
   const KW = /(code|verif|otp|pin|confirm|security|one[- ]?time|passcode|access)/i;
@@ -302,8 +311,16 @@ JS
         out="${out%\"}"; out="${out#\"}"
         case "$out" in
           NOAUTH) echo "mail code: no mail.tm auth token on this tab (run 'hb mail new' first, same tab)" >&2; return 1 ;;
+          AUTHFAIL) echo "mail code: mail.tm rejected the auth token (401 — expired/revoked JWT); re-run 'hb mail new'" >&2; return 1 ;;
           EMPTY|"") : ;;
-          *) echo "$out"; return 0 ;;
+          *)
+            # Only a plausible OTP leaves this function: 4-8 digits, nothing
+            # else. An eval hiccup ('null'/'undefined', an error string, a
+            # truncated payload) must never be printed as a code — treat it
+            # as "no OTP yet" and keep polling.
+            if printf '%s' "$out" | grep -Eq '^[0-9]{4,8}$'; then
+              echo "$out"; return 0
+            fi ;;
         esac
         think 2500 3800
       done
