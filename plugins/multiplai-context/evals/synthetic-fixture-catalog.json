@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.2.0",
+  "generated_at": "2026-07-17T00:00:00Z",
+  "note": "SYNTHETIC fixture — a fictional hobbyist persona. Contains no real user data. Exists so eval_router.py runs out-of-box for CI and PR reviewers. Real golden sets are user-supplied and live outside this repo (see eval_router.py._default_case_paths).",
+  "entries": [
+    {"source": "cooking.md",
+     "intent_domains": ["planning weekly meal prep", "substituting baking ingredients", "scaling a recipe for a crowd", "fixing a broken emulsion or sauce"],
+     "keywords": ["sourdough", "mise en place", "sous vide", "roux"]},
+    {"source": "gardening.md",
+     "intent_domains": ["planning a vegetable garden layout", "diagnosing plant diseases", "composting kitchen scraps", "scheduling seasonal planting"],
+     "keywords": ["raised bed", "mulch", "drip irrigation", "cover crop"]},
+    {"source": "taxes.md",
+     "intent_domains": ["filing a personal income tax return", "claiming home-office deductions", "tracking freelance invoices and expenses"],
+     "keywords": ["1099", "Schedule C", "standard deduction", "quarterly estimates"]},
+    {"source": "woodworking.md",
+     "intent_domains": ["building furniture from plans", "choosing and applying a wood finish", "sharpening chisels and plane irons"],
+     "keywords": ["dovetail", "mortise", "tung oil", "bookshelf"]},
+    {"source": "running.md",
+     "intent_domains": ["training for a half marathon", "preventing running injuries", "choosing running shoes"],
+     "keywords": ["negative split", "VO2 max", "tempo run", "fartlek"]},
+    {"source": "guitar.md",
+     "intent_domains": ["learning a chord progression", "restringing an acoustic guitar", "practicing scales and arpeggios"],
+     "keywords": ["barre chord", "capo", "fingerpicking", "drop D"]}
+  ]
+}

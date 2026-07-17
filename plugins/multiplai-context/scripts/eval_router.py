@@ -65,17 +65,20 @@ def _load_cases(paths: list[Path]) -> list[dict]:
 def _default_case_paths() -> list[Path]:
     """Locate golden case sets in the user's eval directory.
 
-    Looks in ``$MULTIPLAI_ROUTER_EVALS_DIR`` if set, else ``<workspace>/evals``.
-    The eval sets are user-supplied (this is a diagnostic harness, not a
-    shipped dataset), so an empty result is normal — the caller then asks for
-    ``--cases`` explicitly.
+    Looks in ``$MULTIPLAI_ROUTER_EVALS_DIR`` if set, else
+    ``<data_dir>/evals`` (i.e. ``.multiplai/data/evals`` — golden sets are
+    private runtime state and live under the plugin data dir, not at the
+    workspace root). The eval sets are user-supplied (this is a diagnostic
+    harness, not a shipped dataset), so an empty result is normal — the
+    caller then asks for ``--cases`` explicitly. The repo's synthetic
+    fixture (``evals/synthetic-*``) is run explicitly via ``--cases`` and is
+    never a default.
     """
     env_dir = os.environ.get("MULTIPLAI_ROUTER_EVALS_DIR")
     if env_dir:
         base = Path(env_dir)
     else:
-        workspace = get_paths().data_dir().parent.parent  # .multiplai/data -> workspace
-        base = workspace / "evals"
+        base = get_paths().data_dir() / "evals"  # .multiplai/data/evals
     found = [
         base / "memory-retrieval-cases.jsonl",
         base / "memory-retrieval-holdout-cases.jsonl",
@@ -278,8 +281,9 @@ def main() -> None:
         raise SystemExit(
             "no golden case files found. This is a diagnostic harness that needs "
             "user-supplied cases: pass --cases <file.jsonl> [...], or place "
-            "memory-retrieval-cases.jsonl under <workspace>/evals/ (or set "
-            "MULTIPLAI_ROUTER_EVALS_DIR)."
+            "memory-retrieval-cases.jsonl under <workspace>/.multiplai/data/evals/ "
+            "(or set MULTIPLAI_ROUTER_EVALS_DIR). The repo's synthetic fixture is "
+            "at plugins/multiplai-context/evals/synthetic-cases.jsonl."
         )
     cases = _load_cases(case_files)
 

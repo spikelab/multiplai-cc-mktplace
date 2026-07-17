@@ -23,9 +23,12 @@
 - **`scripts/replay_router_logs.py`** — label-free, real-traffic eval that
   sweeps `keep_ratio` against your own `ROUTING_SCORES` logs.
 - **`eval_router.py --keep-ratio`** for golden-case sweeps at a given ratio,
-  plus a seed golden set (`evals/memory-retrieval-seed-cases.jsonl`) so the
-  harness runs out of the box (the previously-cited 50-case set was absent
-  from the repo).
+  plus a **synthetic** eval fixture (`evals/synthetic-fixture-catalog.json` +
+  `evals/synthetic-cases.jsonl`, a fictional persona — no real user data) so
+  the harness runs out of the box for CI / reviewers (the previously-cited
+  50-case golden set was absent from the repo). Real, user-supplied golden
+  sets live privately under `<workspace>/.multiplai/data/evals/`, which
+  `eval_router.py` now discovers by default.
 
 ## 0.6.15 — 2026-07-16
 
