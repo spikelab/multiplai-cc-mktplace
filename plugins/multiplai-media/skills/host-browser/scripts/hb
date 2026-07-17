@@ -8,11 +8,19 @@
 #
 #   hb think [MIN_MS] [MAX_MS]      sleep a randomized human pause (default 400-1400)
 #   hb humantype <sel> <text>      clear, then type in jittered word-chunks
-#   hb humanclick <sel>            hover, micro-pause, then click
+#   hb humanclick [--fast] <sel>   curved, eased, jittered mouse path then click
 #   hb fillform <sel> <text> ...   humantype across alternating sel/text pairs
 #   hb waitfor url|vis <arg> [s]   poll until URL matches / element visible (timeout)
 #   hb mail new                    open mail.tm, print the anonymous inbox address
 #   hb mail code [s]               poll the mail.tm inbox, print the OTP code
+#
+# DataDome / risk-scored-wall toolset (v0.1.6 — see references/antidetection.md):
+#   hb fpcheck                     empirical CDP self-test vs bot-detector.rebrowser.net
+#   hb dd                          live DataDome verdict: cookie + network + DOM
+#   hb warmup <homepage-url>       low-risk arrival ritual (warm profile, not cold deep-link)
+#   hb solve-wait [--force] [s]    hand a rendered challenge to the human, ride the earned cookie
+# NO spoofing, NO CAPTCHA auto-solving: the human solves any challenge in their
+# own visible Chrome; we only detect state and ride the cookie they earn.
 #
 # humantype/fillform are metachar-safe: text containing the shell metacharacters
 # the host gateway forbids ( ; | & < > ` $ ( ) or newline ) is inserted via a
@@ -108,10 +116,98 @@ humantype() {
 }
 
 humanclick() {
-  local sel="$1"
-  ab hover "$sel" >/dev/null 2>&1 || true
-  napms 140 460
-  ab click "$sel"
+  local fast=0
+  if [ "${1:-}" = "--fast" ]; then fast=1; shift; fi
+  local sel="${1:-}"
+  if [ -z "$sel" ]; then echo "usage: hb humanclick [--fast] <selector|@ref>" >&2; return 2; fi
+
+  # --fast: the original instant path (hover, micro-pause, click). Opt-out for
+  # when behavioral realism doesn't matter and speed does.
+  if [ "$fast" -eq 1 ]; then
+    ab hover "$sel" >/dev/null 2>&1 || true
+    napms 140 460
+    ab click "$sel"
+    return
+  fi
+
+  # Curved path — attacks the strongest behavioral tell (straight-line, uniform,
+  # dead-centre synthesized input). Get the element's box, aim at an OFF-CENTRE
+  # point inside it, and approach along an eased quadratic Bézier with per-step
+  # jitter and variable sleeps, then a real mouse down/up (which agent-browser
+  # dispatches at the last-moved position — verified). Falls back to a plain
+  # click if the box lookup fails.
+  #
+  # NOTE: agent-browser's `mouse move` takes INTEGER coordinates only (floats are
+  # rejected by its CLI arg-parser), so the aim point is integer-rounded. We
+  # therefore defeat the geometry+timing tells (curved, jittered, non-uniform,
+  # off-centre) but cannot express sub-pixel coordinates through this primitive.
+  # NOTE: `|| true` on each parse — under `set -o pipefail` a non-matching grep
+  # (i.e. box lookup failed / element missing) makes the whole substitution exit
+  # non-zero, which `set -e` would treat as a fatal error and abort the function
+  # BEFORE the fallback below ever runs. `|| true` keeps the value empty so the
+  # guard can route to the graceful direct-click fallback.
+  local box bx by bw bh
+  box="$(ab get box "$sel" --json 2>/dev/null || true)"
+  bx="$(printf '%s' "$box" | grep -oE '"x":[0-9.-]+'      | head -1 | sed 's/.*://' || true)"
+  by="$(printf '%s' "$box" | grep -oE '"y":[0-9.-]+'      | head -1 | sed 's/.*://' || true)"
+  bw="$(printf '%s' "$box" | grep -oE '"width":[0-9.-]+'  | head -1 | sed 's/.*://' || true)"
+  bh="$(printf '%s' "$box" | grep -oE '"height":[0-9.-]+' | head -1 | sed 's/.*://' || true)"
+  if [ -z "$bx" ] || [ -z "$bw" ] || [ "$(awk "BEGIN{print (($bw)>0 && ($bh)>0)?1:0}" 2>/dev/null)" != 1 ]; then
+    echo "hb humanclick: box lookup failed for '$sel' → falling back to direct click" >&2
+    ab hover "$sel" >/dev/null 2>&1 || true
+    napms 140 460
+    ab click "$sel"
+    return
+  fi
+
+  # Generate the path with awk (bash has no floats). Emit integer "x y" waypoints
+  # plus a final "TARGET tx ty" line.
+  local path
+  path="$(awk -v x="$bx" -v y="$by" -v w="$bw" -v h="$bh" -v seed="$RANDOM" 'BEGIN{
+    srand(seed);
+    tx = int(x + w*(0.30+0.40*rand()) + 0.5);      # 30-70% across, off dead-centre
+    ty = int(y + h*(0.30+0.40*rand()) + 0.5);
+    sx = int(tx - (60+180*rand())*(rand()<0.5?-1:1) + 0.5);   # approach from a side
+    sy = int(ty - (50+150*rand()) + 0.5);
+    if (sx<2) sx=2; if (sy<2) sy=2;
+    mx=(sx+tx)/2; my=(sy+ty)/2;
+    dx=tx-sx; dy=ty-sy; len=sqrt(dx*dx+dy*dy); if(len<1)len=1;
+    px=-dy/len; py=dx/len;                          # unit perpendicular -> bow
+    bow=(len*0.15)*(rand()<0.5?-1:1)*(0.5+rand());
+    cx=mx+px*bow; cy=my+py*bow;                     # Bézier control point
+    n = 12 + int(rand()*7);                         # 12-18 steps
+    for (i=0;i<=n;i++){
+      t=i/n;
+      te = (t<0.5) ? 2*t*t : 1-((-2*t+2)^2)/2;      # ease-in-out
+      u=1-te;
+      qx=u*u*sx + 2*u*te*cx + te*te*tx;
+      qy=u*u*sy + 2*u*te*cy + te*te*ty;
+      printf("%d %d\n", int(qx+(rand()-0.5)*1.6+0.5), int(qy+(rand()-0.5)*1.6+0.5));
+    }
+    printf("TARGET %d %d\n", tx, ty);
+  }')"
+
+  # Read waypoints on FD 9, NOT stdin: `ab` is an ssh wrapper and ssh slurps its
+  # stdin, so a plain `while read … <<EOF` loop would have the first `ab mouse
+  # move` eat the remaining waypoints. FD 9 for the heredoc + `</dev/null` on the
+  # ssh calls keeps the loop input intact.
+  local f1 f2 f3 steps=0 tx="" ty=""
+  while read -r f1 f2 f3 <&9; do
+    [ -z "$f1" ] && continue
+    if [ "$f1" = "TARGET" ]; then tx="$f2"; ty="$f3"; continue; fi
+    ab mouse move "$f1" "$f2" </dev/null >/dev/null 2>&1 || true
+    steps=$((steps+1))
+    if [ "$(rnd 1 100)" -le 15 ]; then napms 40 130; else napms 12 55; fi
+  done 9<<EOF
+$path
+EOF
+
+  [ -n "$tx" ] && ab mouse move "$tx" "$ty" </dev/null >/dev/null 2>&1 || true
+  napms 60 180
+  ab mouse down >/dev/null 2>&1 || true
+  napms 40 110
+  ab mouse up   >/dev/null 2>&1 || true
+  echo "hb humanclick: curved ${steps}-step path → (${tx:-?}, ${ty:-?}), click issued" >&2
 }
 
 # fillform @e1 "user@x.com" @e2 "secret" ...
@@ -387,6 +483,231 @@ JS
   esac
 }
 
+# ============================================================================
+# DataDome / risk-scored-wall toolset (v0.1.6)
+# ----------------------------------------------------------------------------
+# The line these verbs stay on: DETECT state and RIDE the cookie the human
+# earns. They never spoof a fingerprint, never solve a CAPTCHA, never rotate
+# IPs. `hb solve-wait` hands a rendered challenge to the human in their own
+# visible Chrome. See references/antidetection.md for the full model + ethics.
+# ============================================================================
+
+# _active_tab — id (tN) of the currently active tab, else empty. Parses the
+# tab-list JSON without jq: split objects onto their own lines, take the one
+# flagged active, pull its tabId.
+_active_tab() {
+  ab tab list --json 2>/dev/null | tr '}' '\n' \
+    | grep '"active":true' | grep -oE '"tabId":"[^"]+"' \
+    | head -1 | sed 's/.*"tabId":"//; s/"$//'
+}
+
+# _has_datadome_cookie — true iff a cookie literally named "datadome" is held
+# for the current context (the clearance cookie DataDome issues after a solve).
+_has_datadome_cookie() {
+  ab cookies get --json 2>/dev/null | tr '}' '\n' | grep -q '"name":"datadome"'
+}
+
+# _reqcount <network-requests-args…> — count captured requests matching the
+# given filter. Always prints a number and exits 0 (so `set -e` callers are safe).
+_reqcount() {
+  local c
+  c="$(ab network requests "$@" --json 2>/dev/null | grep -o '"requestId"' | grep -c .)" || c=0
+  printf '%s' "${c:-0}"
+}
+
+# _xdatadome_count — how many captured responses carry an `x-datadome` header
+# (DataDome-specific; case-insensitive). Session-scoped like the request log.
+_xdatadome_count() {
+  local c
+  c="$(ab network requests --json 2>/dev/null | grep -io 'x-datadome' | grep -c .)" || c=0
+  printf '%s' "${c:-0}"
+}
+
+# fpcheck — empirical CDP self-test. Loads bot-detector.rebrowser.net in a
+# throwaway tab, reads its result rows, and prints a PASS/FAIL table for the
+# checks that matter to us (runtimeEnableLeak, navigatorWebdriver, pwInitScripts,
+# viewport) plus a one-line verdict, then RESTORES the prior tab. Rationale:
+# Chrome/agent-browser/DataDome are a moving target — the one thing every source
+# agreed on is "verify empirically." Exit 0 clean, 1 degraded, 2 regressed
+# (runtimeEnableLeak red = the CDP leak is re-exposed → STOP and reassess).
+fpcheck() {
+  local prev; prev="$(_active_tab)"
+  echo "hb fpcheck: loading bot-detector.rebrowser.net in a throwaway tab…" >&2
+  ab tab new https://bot-detector.rebrowser.net/ >/dev/null 2>&1 \
+    || ab tab new https://bot-detector.rebrowser.net/ >/dev/null
+  think 3500 5000
+  ab wait --load networkidle >/dev/null 2>&1 || true
+  think 1500 2500
+  local res
+  res="$(ab eval --stdin <<'JS'
+(() => {
+  const want = ['runtimeEnableLeak','navigatorWebdriver','pwInitScripts','viewport'];
+  const rows = [...document.querySelectorAll('tr')].map(tr => {
+    const td = [...tr.querySelectorAll('td')];
+    if (td.length < 3) return null;
+    return { raw:(td[0].innerText||'').trim(),
+             note:(td[2].innerText||'').replace(/[\\\r\n\t]+/g,' ').trim().slice(0,38) };
+  }).filter(Boolean);
+  const nameOf = r => r.raw.replace(/^[^A-Za-z]+/,'').trim();
+  const statOf = r => r.raw.indexOf('\u{1F7E2}')>=0 ? 'PASS'   // green circle
+                    : r.raw.indexOf('\u{1F534}')>=0 ? 'FAIL'   // red circle
+                    : r.raw.indexOf('\u{1F7E1}')>=0 ? 'WARN'   // yellow circle
+                    : 'N/A';                                    // white = not triggered
+  const pad = (s,n)=> (s+'                    ').slice(0,n);
+  const lines = []; let fail=0;
+  for (const key of want) {
+    const r = rows.find(x => nameOf(x)===key);
+    if (!r) { lines.push(pad(key,20)+' '+pad('MISSING',6)+' (row not found)'); continue; }
+    const st = statOf(r); if (st==='FAIL') fail++;
+    lines.push(pad(key,20)+' '+pad(st,6)+' '+r.note);
+  }
+  const crit = rows.find(x => nameOf(x)==='runtimeEnableLeak');
+  const critFail = crit && statOf(crit)==='FAIL';
+  let verdict, rc;
+  if (critFail) { rc=2; verdict='REGRESSED — runtimeEnableLeak is RED: the CDP Runtime.enable leak is re-exposed. STOP and reassess (advanced options may be warranted).'; }
+  else if (fail>0) { rc=1; verdict='DEGRADED — '+fail+' check(s) FAIL. Review before trusting the attach.'; }
+  else { rc=0; verdict='CLEAN — attach still looks human on the CDP battery. Behaviour + residential IP + datadome cookie remain the real levers.'; }
+  return lines.join('\n')+'\n---\n'+verdict+'\n__RC__='+rc;
+})()
+JS
+)"
+  res="${res%\"}"; res="${res#\"}"
+  local decoded rc
+  decoded="$(printf '%b' "$res")"
+  rc="$(printf '%s\n' "$decoded" | sed -n 's/^__RC__=//p')"
+  printf '%s\n' "$decoded" | grep -v '^__RC__='
+  # restore: close the throwaway (now-active) tab, switch back to the prior one
+  ab tab close >/dev/null 2>&1 || true
+  [ -n "$prev" ] && ab tab "$prev" >/dev/null 2>&1 || true
+  return "${rc:-0}"
+}
+
+# dd — live DataDome / risk-scored-wall verdict, combining three reads:
+#   (a) cookie   : is a `datadome` clearance cookie held? (yes/no)
+#   (b) network  : captcha-delivery assets / `x-datadome` headers seen this
+#                  session (DataDome-specific), plus a raw 403 count for info
+#   (c) DOM      : the authoritative "blocked right now?" check (reuses
+#                  `challenged` — a *visible* captcha iframe / interstitial)
+# Prints `clear | scored | CHALLENGED` + cookie-held + evidence. The exit code
+# is driven ONLY by the live DOM (0 clear / 1 CHALLENGED), so a stale/cross-
+# session request-log entry can never fabricate a CHALLENGED verdict. The
+# network evidence is session-scoped — clear it with `ab network requests
+# --clear` to scope to the current navigation.
+dd() {
+  local hold=no; _has_datadome_cookie && hold=yes
+  local n403 ncap nxdd
+  n403="$(_reqcount --status 403)"
+  ncap="$(_reqcount --filter captcha-delivery)"
+  nxdd="$(_xdatadome_count)"
+  local dom rc=0
+  dom="$(challenged)" || rc=$?     # "ok: …" (exit 0) / "blocked: …" (exit 1)
+  local state ec
+  if [ "$rc" -ne 0 ]; then
+    state="CHALLENGED"; ec=1
+  elif [ "$hold" = yes ] || [ "${nxdd:-0}" -gt 0 ] || [ "${ncap:-0}" -gt 0 ]; then
+    state="scored (DataDome active, not blocked)"; ec=0
+  else
+    state="clear"; ec=0
+  fi
+  echo "hb dd: $state"
+  echo "  datadome cookie held : $hold"
+  echo "  DOM verdict          : $dom"
+  echo "  session evidence     : captcha-delivery×${ncap:-0}  x-datadome-hdr×${nxdd:-0}  (403×${n403:-0} raw)"
+  return "$ec"
+}
+
+# warmup <homepage-url> — score-reduction entry ritual. A profile that has just
+# browsed a site normally scores far lower than one that teleports to a deep
+# filtered URL. Arrive at the homepage via `hb goto` (settle + accept cookies +
+# block verdict), dwell, click ONE on-site nav control (same-origin, non-
+# destructive), dwell again — ending on the site as a warmed profile.
+warmup() {
+  local url="${1:-}"
+  if [ -z "$url" ]; then echo "usage: hb warmup <homepage-url>" >&2; return 2; fi
+  echo "hb warmup: arriving at $url as a warm profile…" >&2
+  goto "$url" || true
+  think 1200 2600
+  local label
+  label="$(ab eval --stdin <<'JS'
+(() => {
+  const origin = location.origin;
+  const here = location.href.replace(/#.*$/,'');
+  const vis = el => { const r=el.getBoundingClientRect(); return r.width>4&&r.height>4; };
+  const bad = /log\s?out|sign\s?out|logout|cart|checkout|account|delete|remove|password/i;
+  const scope = document.querySelector('header,nav') || document.body;
+  for (const a of scope.querySelectorAll('a[href]')) {
+    if (!vis(a)) continue;
+    let href; try { href = new URL(a.getAttribute('href'), location.href); } catch(e){ continue; }
+    if (href.origin !== origin) continue;                       // same-site only
+    if (href.href.replace(/#.*$/,'') === here) continue;        // not the current page
+    const t = (a.innerText||'').trim();
+    if (!t || t.length>40 || bad.test(t)) continue;
+    document.querySelectorAll('[data-hb-nav]').forEach(e=>e.removeAttribute('data-hb-nav'));
+    a.setAttribute('data-hb-nav','1');
+    return t;
+  }
+  return '';
+})()
+JS
+)"
+  label="${label%\"}"; label="${label#\"}"
+  if [ -n "$label" ] && [ "$label" != "null" ]; then
+    echo "hb warmup: browsing to on-site nav '$label'…" >&2
+    humanclick '[data-hb-nav="1"]' || true
+    ab wait --load networkidle >/dev/null 2>&1 || true
+    think 1400 2800
+    dismiss >/dev/null 2>&1 || true
+  else
+    echo "hb warmup: no safe on-site nav link found; dwelling on the homepage" >&2
+    think 1500 3000
+  fi
+  echo "→ warmed profile now on: $(ab get url 2>&1)"
+}
+
+# solve-wait [--force] [timeout_s] — human-in-the-loop challenge handoff, the key
+# counter to a rendered DataDome challenge. When `hb dd` reports CHALLENGED, this
+# tells the user to solve the slider/puzzle in THEIR OWN visible Chrome window
+# (it's their real browser), captures a screenshot so they know which tab, then
+# polls `hb dd` at human cadence until it flips to clear OR a `datadome` clearance
+# cookie appears — then rides that cookie (return 0). Returns 1 on timeout. It
+# never attempts to solve or bypass the challenge itself. `--force` enters the
+# poll loop even if dd's DOM heuristic didn't flag a block (for a challenge you
+# can see that the heuristic missed).
+solve_wait() {
+  local force=0
+  if [ "${1:-}" = "--force" ]; then force=1; shift; fi
+  local timeout="${1:-180}"
+  local rc=0; dd >/dev/null 2>&1 || rc=$?
+  if [ "$force" -ne 1 ] && [ "$rc" -eq 0 ]; then
+    echo "hb solve-wait: hb dd reports clear — no active challenge to hand off."
+    return 0
+  fi
+  echo "⚠️  DataDome challenge — HUMAN ACTION NEEDED."
+  echo "    → Solve the slider/puzzle in YOUR OWN visible Chrome window (this is your real browser)."
+  echo "    → Leave the tab open. I will NOT touch the challenge; I only watch and continue once you clear it."
+  local shot; shot="$(ab screenshot 2>&1 | sed -n 's/.*saved to //p')"
+  [ -n "$shot" ] && echo "    ↳ challenge screenshot (host): $shot"
+  local had=no; _has_datadome_cookie && had=yes
+  local rounds i=0
+  rounds=$(( timeout / 4 + 1 ))
+  echo "    polling hb dd every ~4s (timeout ${timeout}s)…"
+  while [ "$i" -lt "$rounds" ]; do
+    i=$((i+1))
+    napms 3500 4500
+    rc=0; dd >/dev/null 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      echo "✓ cleared — hb dd is green. Riding the earned datadome cookie."
+      return 0
+    fi
+    if [ "$had" = no ] && _has_datadome_cookie; then
+      echo "✓ datadome clearance cookie appeared. Riding it."
+      return 0
+    fi
+  done
+  echo "hb solve-wait: timeout after ${timeout}s — still challenged." >&2
+  return 1
+}
+
 case "${1:-}" in
   think)     shift; think "$@" ;;
   humantype) shift; humantype "$@" ;;
@@ -398,6 +719,10 @@ case "${1:-}" in
   goto)      shift; goto "$@" ;;
   waitfor)   shift; waitfor "$@" ;;
   mail)      shift; mail "$@" ;;
+  fpcheck)   shift; fpcheck "$@" ;;
+  dd)        shift; dd "$@" ;;
+  warmup)    shift; warmup "$@" ;;
+  solve-wait)shift; solve_wait "$@" ;;
   "")        ab ;;                 # no args -> ab help
   *)         ab "$@" ;;            # pass-through
 esac
