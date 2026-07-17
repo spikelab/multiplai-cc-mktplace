@@ -51,6 +51,35 @@ class CutCandidate:
 
 
 @dataclass
+class DeadSpan:
+    start: float
+    end: float
+    kind: str   # "black" | "static" | "low"
+
+    @property
+    def duration(self) -> float:
+        return self.end - self.start
+
+
+# Per-second motion classification (max frame-diff luma, 160px downscale).
+# Calibrated on real screen recordings: a frozen page measures ~0.00, a span
+# where only the cursor blinks / characters land measures <1.0, and any real
+# page activity (scroll, dropdown, navigation) spikes to 5-60.
+STATIC_MOTION_TH = 0.02
+LOW_MOTION_TH = 1.0
+MIN_DEAD_SPAN_S = 3.0
+# An agent typing into a form produces the signature "3s frozen, one keystroke
+# blip, 3s frozen" — merge dead runs separated by activity gaps this short so
+# the whole stretch reads as ONE dead span instead of a fragmented list.
+# But only when the gap is widget-level motion (keystroke, dropdown, calendar
+# paint — measures < 30): page-level events (navigation, results rendering,
+# big scrolls — measure 30-130) are the money shots, and must survive as span
+# boundaries rather than be swallowed into a dead span.
+GAP_MERGE_S = 2.0
+GAP_BURST_TH = 30.0
+
+
+@dataclass
 class PrepResult:
     source: str
     src_duration: float
@@ -145,6 +174,105 @@ def _scenedetect(proxy: Path, work: Path) -> list[CutCandidate]:
             except ValueError:
                 continue
     return cuts
+
+
+def _blackdetect(proxy: Path) -> list[DeadSpan]:
+    p = subprocess.run([
+        "ffmpeg", "-hide_banner", "-i", str(proxy),
+        "-vf", "blackdetect=d=1.0:pix_th=0.05",
+        "-an", "-f", "null", "-",
+    ], capture_output=True, text=True)
+    spans = []
+    for m in re.finditer(r"black_start:([\d.]+) black_end:([\d.]+)", p.stderr):
+        spans.append(DeadSpan(start=float(m.group(1)), end=float(m.group(2)), kind="black"))
+    return spans
+
+
+def _activity_profile(proxy: Path, work: Path) -> list[float]:
+    """Per-second motion profile: max frame-diff luma (YAVG of tblend difference,
+    160px downscale) within each second. ~0 on a frozen screen, <1 when only the
+    cursor blinks or a character lands, 5-60 on real page activity."""
+    cache = work / "activity.json"
+    if cache.exists():
+        return json.loads(cache.read_text())["profile"]
+    p = subprocess.run([
+        "ffmpeg", "-hide_banner", "-i", str(proxy),
+        "-vf", ("scale=160:-2,tblend=all_mode=difference,signalstats,"
+                "metadata=print:key=lavfi.signalstats.YAVG:file=-"),
+        "-an", "-f", "null", "-",
+    ], capture_output=True, text=True, check=True)
+    profile: list[float] = []
+    for m in re.finditer(
+        r"pts_time:([\d.]+)\s*\nlavfi\.signalstats\.YAVG=([\d.eE+-]+)", p.stdout
+    ):
+        t, y = float(m.group(1)), float(m.group(2))
+        while len(profile) <= int(t):
+            profile.append(0.0)
+        profile[int(t)] = max(profile[int(t)], y)
+    cache.write_text(json.dumps({"profile": profile}))
+    return profile
+
+
+def _dead_spans(profile: list[float], black: list[DeadSpan],
+                src_duration: float) -> list[DeadSpan]:
+    """Classify per-second motion into static/low dead spans, skipping seconds
+    already covered by a black span. Dead runs separated by <= GAP_MERGE_S of
+    activity (a keystroke, a click) merge into one `low` span; only merged
+    spans >= MIN_DEAD_SPAN_S are reported. If the video stream ends before the
+    container does (screen recordings do this), the tail is static."""
+    def in_black(s: int) -> bool:
+        return any(b.start <= s + 0.5 <= b.end for b in black)
+
+    # 1. Collect every dead run, however short.
+    runs: list[DeadSpan] = []
+    run_start: int | None = None
+    run_kind: str | None = None
+
+    def flush(end_s: int) -> None:
+        nonlocal run_start, run_kind
+        if run_start is not None:
+            runs.append(DeadSpan(start=float(run_start), end=float(end_s), kind=run_kind or "low"))
+        run_start, run_kind = None, None
+
+    for s, score in enumerate(profile):
+        kind = None
+        if not in_black(s):
+            if score < STATIC_MOTION_TH:
+                kind = "static"
+            elif score < LOW_MOTION_TH:
+                kind = "low"
+        if kind != run_kind:
+            flush(s)
+            if kind is not None:
+                run_start, run_kind = s, kind
+    flush(len(profile))
+
+    # 2. Merge runs separated by blip-length activity. A swallowed gap or a
+    # kind change means there was *some* motion inside — the merged span is
+    # typing-level ("low"), not frozen.
+    merged: list[DeadSpan] = []
+    for run in runs:
+        gap = range(int(merged[-1].end), int(run.start)) if merged else range(0)
+        gap_mergeable = (
+            merged
+            and run.start - merged[-1].end <= GAP_MERGE_S
+            and not any(in_black(s) for s in gap)
+            and all(profile[s] < GAP_BURST_TH for s in gap)
+        )
+        if gap_mergeable:
+            prev = merged[-1]
+            kind = run.kind if (run.kind == prev.kind and run.start == prev.end) else "low"
+            merged[-1] = DeadSpan(start=prev.start, end=run.end, kind=kind)
+        else:
+            merged.append(run)
+
+    spans = [s for s in merged if s.duration >= MIN_DEAD_SPAN_S]
+
+    # Tail beyond the last video frame: no frames = nothing on screen.
+    if src_duration - len(profile) >= MIN_DEAD_SPAN_S:
+        spans.append(DeadSpan(start=float(len(profile)), end=src_duration, kind="static"))
+
+    return sorted(spans + black, key=lambda x: x.start)
 
 
 def _select_model(model: str | None) -> str:
@@ -264,7 +392,8 @@ def _parse_srt(srt: Path) -> list[dict]:
     return out
 
 
-def _write_context(result: PrepResult, segments: list[dict], cuts: list[CutCandidate], dst: Path) -> None:
+def _write_context(result: PrepResult, segments: list[dict], cuts: list[CutCandidate],
+                   dead: list[DeadSpan], dst: Path) -> None:
     lines = [
         "# screen-demo prep context",
         "",
@@ -278,11 +407,45 @@ def _write_context(result: PrepResult, segments: list[dict], cuts: list[CutCandi
         "never the proxy. The proxy is a 720p analysis artifact; rendering from it",
         "produces a blurry, grainy result (render refuses it).",
         "",
+    ]
+    if dead:
+        total_dead = sum(s.duration for s in dead)
+        lines.extend([
+            "## Dead spans (nothing happens on screen — cut these, don't speed through them)",
+            "",
+            f"{total_dead:.0f}s of {result.src_duration:.0f}s "
+            f"({100*total_dead/result.src_duration:.0f}%) is dead air:",
+            "",
+            "| start | end | dur (s) | kind |",
+            "|---|---|---|---|",
+        ])
+        for s in dead:
+            lines.append(f"| {s.start:.1f} | {s.end:.1f} | {s.duration:.1f} | {s.kind} |")
+        lines.extend([
+            "",
+            "- `black` — black screen (recording gap). NEVER include, at any speed.",
+            "- `static` — frozen frame, zero motion (page sitting there, or past the last video frame).",
+            "- `low` — only cursor-blink / typing-level motion (e.g. an agent typing into a field,",
+            "  waiting on an autocomplete). No page activity worth watching.",
+            "",
+            "⚠ Do NOT paper over dead spans with a flat 4-8x speed — at 6x, a 30s dead span",
+            "is still 5s of a video where nothing moves. Author segments so dead spans fall",
+            "in the gaps BETWEEN segments (hard cut), or cross them at speed >= 20 when you",
+            "need visual continuity (e.g. to show text appearing in a field). Per-second",
+            "motion scores are in activity.json next to cuts.json if you need finer grain.",
+            "",
+            "Nuance: dead means don't LINGER, not don't SHOW. A motionless-but-readable",
+            "frame (a results list, a final state) can still carry a short speed-1 zoom",
+            "money shot — the viewer is reading, not watching. Budget it like a money",
+            "shot (a few seconds), not like footage.",
+            "",
+        ])
+    lines.extend([
         "## Cut candidates (use as anchors when authoring the EDL)",
         "",
         "| t (s) | kind | note |",
         "|---|---|---|",
-    ]
+    ])
     for c in sorted(cuts, key=lambda x: x.t):
         lines.append(f"| {c.t:.2f} | {c.kind} | {c.note} |")
     lines.extend([
@@ -330,6 +493,12 @@ def prep(source: str | Path, prompt_hint: str = "",
 
     cuts_path.write_text(json.dumps([asdict(c) for c in all_cuts], indent=2))
 
+    print("→ prep: profiling activity (blackdetect + per-second motion)")
+    black_spans = _blackdetect(proxy)
+    profile = _activity_profile(proxy, cache)
+    dead = _dead_spans(profile, black_spans, duration)
+    dead_total = sum(s.duration for s in dead)
+
     segments = _parse_srt(transcript)
     result = PrepResult(
         source=str(src),
@@ -340,7 +509,9 @@ def prep(source: str | Path, prompt_hint: str = "",
         cuts_path=str(cuts_path),
         context_path=str(context_path),
     )
-    _write_context(result, segments, all_cuts, context_path)
+    _write_context(result, segments, all_cuts, dead, context_path)
     print(f"→ prep: context written to {context_path}")
     print(f"   {len(segments)} transcript segments, {len(all_cuts)} cut candidates")
+    print(f"   {len(dead)} dead spans ({dead_total:.0f}s = "
+          f"{100*dead_total/duration:.0f}% of the recording)")
     return result
