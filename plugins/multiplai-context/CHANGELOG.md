@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.16 — 2026-07-17
+
+### Fixed
+- **Routing cap-saturation / filler injection.** The `token_overlap` router
+  was hitting the 10-file memory cap on ~45% of routes (measured by replaying
+  439 real routing calls, 2026-07-10→16). Root cause: `domain_score` is an
+  unnormalized sum of matched IDF weights, so a long/rich prompt inflates the
+  whole ranking and the shallow `0.20×top` relative cutoff admits a fat filler
+  tail — median 16 candidates cleared it and the cap chopped to 10, so the
+  *cap*, not relevance, did the filtering. The relative-cutoff ratio is raised
+  `0.20 → 0.30` (halves cap-saturation to ~28%; production-replay is exact for
+  a tighter policy since it can only trim). Top matches are always retained;
+  only the sub-30%-of-top tail is dropped. On the seed golden set, `0.30`
+  raised precision 96.8%→100% and false-positives 3.6%→0% with recall held at
+  100% (multi-domain matches preserved).
+
+### Added
+- **`keep_ratio` plugin option** (default `0.30`) exposes the cutoff as a
+  live-tunable knob, so it can be dialed in production without a code release
+  while a full golden eval set is rebuilt. Clamped to `(0, 1]`.
+- **`scripts/replay_router_logs.py`** — label-free, real-traffic eval that
+  sweeps `keep_ratio` against your own `ROUTING_SCORES` logs.
+- **`eval_router.py --keep-ratio`** for golden-case sweeps at a given ratio,
+  plus a seed golden set (`evals/memory-retrieval-seed-cases.jsonl`) so the
+  harness runs out of the box (the previously-cited 50-case set was absent
+  from the repo).
+
 ## 0.6.15 — 2026-07-16
 
 Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
