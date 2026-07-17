@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.3.2 — 2026-07-17
+
+Fixes from the 07-12→16 PR audit (`INBOX/pr-audit-multiplai-2026-07-12-to-16.md`).
+
+### Fixed
+- **buildme: resumed pre-baseline checkpoints no longer mis-baseline the
+  review diff.** `run_block_tdd` stamps `baseline_commit` only when the block
+  is genuinely starting (PENDING/TESTING). Resuming an old mid-block
+  checkpoint (IMPLEMENTING/REVIEWING with no baseline) previously stamped
+  current HEAD — hiding the block's own commits from the quality reviewer;
+  now it keeps the documented `git diff HEAD` fallback and logs a warning.
+- **buildme: one unreadable standards file no longer fails the block.**
+  `BuildConfig.standards_text()` now catches per-file read errors
+  (OSError/UnicodeDecodeError), logs, and skips — as its docstring always
+  promised.
+- **buildme: tasks-shape audit completion is recorded in checkpoint state,
+  not inferred from file existence.** A crash mid-audit used to leave
+  tasks.md DONE and silently skip the audit on resume; resume now re-runs it
+  (idempotent) and logs when it is skipped as recorded-complete. A non-list
+  JSON audit response (e.g. object-wrapped findings) now logs a warning
+  instead of silently passing as "no findings".
+- **buildme: `claude-agent-sdk` floored+capped** (`>=0.2.116,<0.3`) — 0.1.x
+  crashed at import (same bug class as the dream hook crash).
+- **swift-build: plain Linux (no container markers) now refuses the SSH
+  bridge even when `SSH_BUILD_USER` is set**, matching the SKILL.md support
+  matrix — the bridge assumes the container↔host identical-path mount.
+  Also fixed the false "caches result" comment (the xcsift probe is now
+  actually memoized per invocation).
+- **skill-creator: the degradation-contract reference is now resolvable for
+  installed plugins** — `docs/degradation-contract.md` is vendored into the
+  skill's `references/` (repo copy stays canonical) and SKILL.md points at
+  it plus the marketplace GitHub URL.
+
+### Changed
+- swift-build SKILL.md documents two current gateway limitations (paths with
+  spaces / schemes with parens until the container-side unquote fix ships)
+  and the `sim screenshot` host-path caveat.
+
 ## 0.3.1 — 2026-07-15
 
 ### Fixed
