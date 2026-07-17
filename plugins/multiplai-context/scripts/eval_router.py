@@ -65,17 +65,20 @@ def _load_cases(paths: list[Path]) -> list[dict]:
 def _default_case_paths() -> list[Path]:
     """Locate golden case sets in the user's eval directory.
 
-    Looks in ``$MULTIPLAI_ROUTER_EVALS_DIR`` if set, else ``<workspace>/evals``.
-    The eval sets are user-supplied (this is a diagnostic harness, not a
-    shipped dataset), so an empty result is normal — the caller then asks for
-    ``--cases`` explicitly.
+    Looks in ``$MULTIPLAI_ROUTER_EVALS_DIR`` if set, else
+    ``<data_dir>/evals`` (i.e. ``.multiplai/data/evals`` — golden sets are
+    private runtime state and live under the plugin data dir, not at the
+    workspace root). The eval sets are user-supplied (this is a diagnostic
+    harness, not a shipped dataset), so an empty result is normal — the
+    caller then asks for ``--cases`` explicitly. The repo's synthetic
+    fixture (``evals/synthetic-*``) is run explicitly via ``--cases`` and is
+    never a default.
     """
     env_dir = os.environ.get("MULTIPLAI_ROUTER_EVALS_DIR")
     if env_dir:
         base = Path(env_dir)
     else:
-        workspace = get_paths().data_dir().parent.parent  # .multiplai/data -> workspace
-        base = workspace / "evals"
+        base = get_paths().data_dir() / "evals"  # .multiplai/data/evals
     found = [
         base / "memory-retrieval-cases.jsonl",
         base / "memory-retrieval-holdout-cases.jsonl",
@@ -203,7 +206,10 @@ def _summary(m: Metrics, passed: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def run(cases: list[dict], catalog: list[dict], k: int, quiet: bool) -> dict:
+def run(
+    cases: list[dict], catalog: list[dict], k: int, quiet: bool,
+    keep_ratio: float | None = None,
+) -> dict:
     from lib.memory_router import create_router
 
     corpora_base = {"memory": catalog, "skills": [], "resources": []}
@@ -212,7 +218,8 @@ def run(cases: list[dict], catalog: list[dict], k: int, quiet: bool) -> dict:
     t0 = time.time()
 
     for case in cases:
-        router = create_router()  # fresh: last_scores is per-instance
+        # fresh per case: last_scores is per-instance
+        router = create_router(keep_ratio=keep_ratio)
         picks = router.select_multi(
             case["prompt"],
             case.get("last_response") or None,
@@ -259,6 +266,8 @@ def main() -> None:
     ap.add_argument("--cases", nargs="*", type=Path, help="Golden JSONL files (default: personal+holdout)")
     ap.add_argument("--catalog", type=Path, help="memory catalog JSON (default: live memory.json)")
     ap.add_argument("--k", type=int, default=10, help="max files per corpus (default 10)")
+    ap.add_argument("--keep-ratio", type=float, default=None,
+                    help="override token_overlap relative-cutoff ratio (default: module default)")
     ap.add_argument("--strategy", choices=["token_overlap", "llm"], help="override router strategy for this run")
     ap.add_argument("--quiet", action="store_true", help="metrics only")
     ap.add_argument("--no-write", action="store_true", help="don't write the snapshot file")
@@ -272,8 +281,9 @@ def main() -> None:
         raise SystemExit(
             "no golden case files found. This is a diagnostic harness that needs "
             "user-supplied cases: pass --cases <file.jsonl> [...], or place "
-            "memory-retrieval-cases.jsonl under <workspace>/evals/ (or set "
-            "MULTIPLAI_ROUTER_EVALS_DIR)."
+            "memory-retrieval-cases.jsonl under <workspace>/.multiplai/data/evals/ "
+            "(or set MULTIPLAI_ROUTER_EVALS_DIR). The repo's synthetic fixture is "
+            "at plugins/multiplai-context/evals/synthetic-cases.jsonl."
         )
     cases = _load_cases(case_files)
 
@@ -284,9 +294,12 @@ def main() -> None:
         f"eval: {len(cases)} cases · catalog {catalog_path.name} "
         f"({len(catalog)} entries) · strategy "
         f"{args.strategy or os.environ.get('CLAUDE_PLUGIN_OPTION_memory_router','token_overlap')} "
-        f"· k={args.k}\n"
+        f"· k={args.k}"
+        + (f" · keep_ratio={args.keep_ratio}" if args.keep_ratio is not None else "")
+        + "\n"
     )
-    summary = run(cases, catalog, args.k, args.quiet)
+    summary = run(cases, catalog, args.k, args.quiet, keep_ratio=args.keep_ratio)
+    summary["keep_ratio"] = args.keep_ratio
 
     print("\n" + "=" * 56)
     for key in (

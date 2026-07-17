@@ -447,6 +447,44 @@ class TestRoutingPolicy:
         assert "finances.md" in result["memory"]
         assert len(result["memory"]) < 3
 
+    def _graded_catalog(self) -> list[dict]:
+        # Distinct domain-token overlap per file → a graded ranking with a
+        # weak tail (the production pathology: one strong match + weaker
+        # same-topic files). Scores ~ a.md 7.0 > b.md 3.6 > c.md 1.0.
+        return [
+            {"source": "a.md", "intent_domains": ["alpha beta gamma delta epsilon"]},
+            {"source": "b.md", "intent_domains": ["alpha beta gamma"]},
+            {"source": "c.md", "intent_domains": ["alpha"]},
+        ]
+
+    def test_apply_policy_ratio_trims_the_tail(self):
+        # Direct unit test of the lever: a higher ratio raises the floor.
+        from lib.memory_router import _apply_policy
+        scored = [(10.0, "a"), (6.0, "b"), (3.0, "c"), (2.5, "d"), (2.1, "e")]
+        # 0.05×10 = 0.5 < MIN_SIGNAL, so floor = 2.0 → everything ≥ 2.0.
+        assert _apply_policy(scored, 10, 0.05) == ["a", "b", "c", "d", "e"]
+        # 0.60×10 = 6.0 → only a, b clear it.
+        assert _apply_policy(scored, 10, 0.60) == ["a", "b"]
+
+    def test_keep_ratio_tightens_the_pick(self):
+        from lib.memory_router import TokenOverlapRouter
+        prompt = "alpha beta gamma delta epsilon"
+        cat = self._graded_catalog()
+        loose = TokenOverlapRouter(keep_ratio=0.05).select_multi(
+            prompt, None, {"memory": cat, "skills": [], "resources": []})
+        strict = TokenOverlapRouter(keep_ratio=0.60).select_multi(
+            prompt, None, {"memory": cat, "skills": [], "resources": []})
+        # A higher ratio can only trim the tail, never add files, and the
+        # top match survives both.
+        assert len(strict["memory"]) < len(loose["memory"])
+        assert set(strict["memory"]) <= set(loose["memory"])
+        assert strict["memory"][0] == loose["memory"][0]
+
+    def test_create_router_threads_keep_ratio(self):
+        from lib.memory_router import create_router, DEFAULT_KEEP_RATIO
+        assert create_router("token_overlap").keep_ratio == DEFAULT_KEEP_RATIO
+        assert create_router("token_overlap", keep_ratio=0.5).keep_ratio == 0.5
+
     def test_diagnostics_exposed_for_logging(self):
         from lib.memory_router import TokenOverlapRouter
         r = TokenOverlapRouter()

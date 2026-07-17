@@ -146,18 +146,37 @@ STOPWORDS = frozenset({
 
 # Tunable routing policy (select_multi only — select() stays pure
 # rank+cap so the mechanism contract / unit tests are untouched).
-# Calibrated against the 50-case golden eval; see eval_router.py.
-# Calibrated on the 50-case golden eval (see eval_router.py).
 # token_overlap is the DEFAULT router. Splitting the score into a
 # trusted IDF-weighted intent_domains signal + a capped keyword boost
-# (keywords alone can't clear MIN_SIGNAL) traded a little recall for a
-# large precision / false-positive / NONE-accuracy gain — the right
-# trade given the dominant failure was a generic-keyword bloated entry
-# (e.g. career-history.md) flooding unrelated prompts:
-# recall 72%, precision 97%, false-positive 4%, NONE-acc 15%,
-# cap-saturation 17% (vs the prior domains+keywords-merged
-# 74% / 94% / 10% / 0%).
-KEEP_RATIO = 0.20          # drop entries scoring < ratio × top
+# (keywords alone can't clear MIN_SIGNAL) gives a large precision /
+# false-positive / NONE-accuracy gain — the right trade given the
+# dominant failure was a generic-keyword bloated entry (e.g.
+# career-history.md) flooding unrelated prompts.
+#
+# KEEP_RATIO history: the original 0.20 was cited as "calibrated on a
+# 50-case golden eval", but that eval set no longer exists in the repo
+# (or the user's evals/ dir), so the figure was unverifiable. Meanwhile
+# *production* told a clearer story: replaying 439 real routing calls
+# (2026-07-10..16) showed 45% of memory routes hitting the 10-file cap —
+# the domain_score is an UNNORMALIZED SUM of matched IDF weights, so a
+# long/rich prompt inflates the whole ranking and a shallow 0.20×top
+# floor admits a fat filler tail (median 16 candidates cleared it; the
+# cap chopped to 10). The cap, not relevance, was doing the filtering.
+#
+# Note a relative floor can only be moved by the *ratio* itself, not by
+# per-prompt score normalization: dividing every file in a prompt by the
+# same constant (e.g. prompt length) leaves floor/top — and thus the
+# picked set — identical. So the lever is the ratio. Production-replay
+# (exact for a tighter policy, which can only trim the visible set):
+#   ratio  %cap-hit  avg files
+#   0.20     50.9%     7.96   (was default; the observed pathology)
+#   0.30     28.4%     6.88   (new default: ~halves saturation)
+#   0.35     17.1%     6.25
+#   0.40      8.7%     5.55
+# 0.30 is the conservative default (clear win, low recall risk); it is
+# now a live-tunable plugin option (`keep_ratio`) so it can be dialed in
+# production without a release while a real golden set is rebuilt.
+DEFAULT_KEEP_RATIO = 0.30  # drop entries scoring < ratio × top
 MIN_SIGNAL = 2.0           # top must clear this or the corpus → []
 
 # intent_domains are the trusted, well-scoped signal (curated task
@@ -215,22 +234,26 @@ def _idf_map(per_entry_terms: list[set[str]]) -> dict[str, float]:
 def _apply_policy(
     scored: list[tuple[float, str]],
     max_files: int,
+    keep_ratio: float = DEFAULT_KEEP_RATIO,
 ) -> list[str]:
     """Turn a full ranking into a relevance-gated, variable-length pick.
 
     Two gates replace the old "always take top-N":
     - NONE floor: if even the best entry is below ``MIN_SIGNAL`` the
       prompt has no real memory match → return nothing.
-    - Relative cutoff: keep only entries within ``KEEP_RATIO`` of the
+    - Relative cutoff: keep only entries within ``keep_ratio`` of the
       top score (and above the floor), so the output length tracks
-      how many files are actually relevant rather than the cap.
+      how many files are actually relevant rather than the cap. The
+      ratio is the sole lever on the filler tail (see DEFAULT_KEEP_RATIO
+      notes) and is plumbed from the ``keep_ratio`` plugin option so it
+      can be tuned without a code release.
     """
     if not scored:
         return []
     top = scored[0][0]
     if top < MIN_SIGNAL:
         return []
-    threshold = max(MIN_SIGNAL, KEEP_RATIO * top)
+    threshold = max(MIN_SIGNAL, keep_ratio * top)
     kept = [fn for s, fn in scored if s >= threshold]
     return kept[:max_files]
 
@@ -259,7 +282,12 @@ class TokenOverlapRouter:
 
     name = STRATEGY_TOKEN_OVERLAP
 
-    def __init__(self) -> None:
+    def __init__(self, *, keep_ratio: float = DEFAULT_KEEP_RATIO) -> None:
+        # Relative-cutoff ratio for select_multi's _apply_policy. Plumbed
+        # from the `keep_ratio` plugin option (via create_router) so the
+        # filler-tail lever is tunable without a release. select() is
+        # unaffected (it stays pure rank+cap by contract).
+        self.keep_ratio = keep_ratio
         # Populated by select_multi each call: per-corpus full
         # pre-truncation ranking + cap diagnostics, for the context
         # manager to log. This is the routing-quality signal /health
@@ -320,7 +348,7 @@ class TokenOverlapRouter:
         for corpus_type in CORPUS_TYPES:
             entries = corpora.get(corpus_type) or []
             scored = self._scored_pairs(combined, entries)
-            picks = _apply_policy(scored, max_files_per_corpus)
+            picks = _apply_policy(scored, max_files_per_corpus, self.keep_ratio)
             result[corpus_type] = picks
             self.last_scores[corpus_type] = {
                 "scored": scored,
@@ -676,16 +704,24 @@ def resolve_strategy(raw: str | None = None) -> str:
     return value
 
 
-def create_router(strategy: str | None = None) -> CorpusRouter:
+def create_router(
+    strategy: str | None = None, *, keep_ratio: float | None = None
+) -> CorpusRouter:
     """Build a router for *strategy* (or the env default).
+
+    ``keep_ratio`` (when set) overrides the token_overlap relative-cutoff
+    ratio — the context manager passes ``cfg.keep_ratio`` so the plugin
+    option takes effect; ``None`` keeps the module default. It has no
+    effect on the LLM router, which does its own selection.
 
     ``embeddings`` is accepted by name but not yet implemented — it
     raises :class:`NotImplementedError` so a misconfiguration is loud
     at session start rather than silently producing bad routing.
     """
+    kr = DEFAULT_KEEP_RATIO if keep_ratio is None else keep_ratio
     effective = resolve_strategy(strategy)
     if effective == STRATEGY_TOKEN_OVERLAP:
-        return TokenOverlapRouter()
+        return TokenOverlapRouter(keep_ratio=kr)
     if effective == STRATEGY_LLM:
         # Degrade to the offline router when no model client exists
         # (no Agent SDK host, no API key) — otherwise LLMRouter would
@@ -701,7 +737,7 @@ def create_router(strategy: str | None = None) -> CorpusRouter:
                 "degrading to token_overlap for this session",
                 client,
             )
-            return TokenOverlapRouter()
+            return TokenOverlapRouter(keep_ratio=kr)
         return LLMRouter()
     if effective == STRATEGY_EMBEDDINGS:
         raise NotImplementedError(

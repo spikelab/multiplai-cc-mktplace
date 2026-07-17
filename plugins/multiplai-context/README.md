@@ -146,6 +146,7 @@ over the anchor:
 | `memory_router` | `token_overlap` | Context selection strategy: `token_overlap` (offline, fast) or `llm` (one model call per prompt). See [Router latency](#router-latency) before choosing `llm`. |
 | `router_model` | `claude-haiku-4-5` | Model for the `llm` router. Haiku by default — routing is cheap classification, so the smallest/fastest model keeps per-prompt latency down. Ignored under `token_overlap`. |
 | `recommend_cooldown_turns` | `4` | After a file is injected, suppress re-injecting it for this many turns (it's already in the conversation). `0` disables. See [Re-recommendation cooldown](#re-recommendation-cooldown). |
+| `keep_ratio` | `0.30` | `token_overlap` relevance cutoff: keep a memory file only if it scores ≥ this fraction of the top match (0–1). Higher = stricter (fewer, more-relevant files, less 10-file cap saturation); lower admits more of the weaker tail. Ignored under `llm`. See [Routing relevance cutoff](#routing-relevance-cutoff). |
 | `memory_conflict_preamble` | `true` | Conflict-surfacing directive + per-file last-updated stamps above every injected MEMORY block, so the model flags memory-vs-session disagreements. ~90 tokens per memory-carrying turn; turn off to save them. |
 | `enable_skills` / `skills_dir` | `false` / `~/.claude/skills` | Optionally catalog skills for routing |
 | `enable_resources` / `resources_dir` | `false` / `""` | Optionally catalog a research/reference corpus. The flag gates *injection*; you can still refresh the catalog while it's off via `refresh-catalogs --only resources` (needs `resources_dir` set). Only `.md`/`.markdown` files are indexed. |
@@ -616,6 +617,34 @@ Notes: the score hint only appears under the `token_overlap` router
 below `CANDIDATES`, and `CAP-HIT` rare. Persistent flat ranges,
 `CAP-HIT` everywhere, or constant fallback are the symptoms to act on
 (start with `/multiplai-context:health`, which summarises these same numbers).
+
+### Routing relevance cutoff
+
+The `token_overlap` router scores every memory file, then keeps only those
+within `keep_ratio` of the top score (and above an absolute floor). This is
+what makes the injected set track *how many files are actually relevant*
+rather than always filling the 10-file cap.
+
+**Why the default is `0.30`.** The score is an unnormalized sum of matched
+IDF weights, so a long or content-rich prompt inflates the whole ranking at
+once. Too low a ratio then admits a shallow "filler tail" of weakly-related
+files, and the cap silently truncates it to 10 — meaning the *cap*, not
+relevance, does the filtering. Replaying real routing logs showed a `0.20`
+ratio hitting the cap on ~45% of memory routes; `0.30` roughly halves that
+while keeping every genuine multi-domain match. Raise it toward `0.35`–`0.40`
+for stricter, smaller injections; lower it if you want the weaker tail back.
+
+> Note: per-prompt score *normalization* (e.g. dividing by prompt length)
+> does **not** help here — it scales every file equally, leaving the
+> `floor/top` ratio (and thus the picked set) unchanged. The ratio is the
+> lever.
+
+**Measuring it.** `scripts/replay_router_logs.py` sweeps candidate ratios
+against your own `ROUTING_SCORES` logs (label-free, real traffic);
+`scripts/eval_router.py --keep-ratio R` runs the golden-case harness at a
+given ratio. Note `keep_ratio` only moves the *relative* cutoff — a genuinely
+off-topic prompt whose best match merely clears the absolute `MIN_SIGNAL`
+floor is a separate concern.
 
 ### Re-recommendation cooldown
 
