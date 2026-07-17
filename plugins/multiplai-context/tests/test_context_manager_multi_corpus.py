@@ -488,6 +488,95 @@ class TestRefloorHelper:
         assert kept == ["a.md"]
         assert dropped == []
 
+    def test_fires_when_gated_top_pick_suppressed(self):
+        # Regression: under the eligibility gate an ineligible entry can
+        # top the RAW ranking without ever injecting. Anchoring there
+        # means top_name can never be in suppressed (suppressed ⊆ picks
+        # ⊆ eligible) and the refloor silently never fires — so the
+        # anchor must be the top of the *picked* ranking.
+        from context_manager import _picked_ranking, _refloor_after_cooldown
+        diag = {
+            "scored": [(7.0, "inelig.md"), (6.0, "pick.md"), (2.5, "weak.md")],
+            "picked_scored": [(6.0, "pick.md"), (2.5, "weak.md")],
+            "n_picked": 2,
+        }
+        kept, dropped = _refloor_after_cooldown(
+            ["weak.md"], ["pick.md"], _picked_ranking(diag)
+        )
+        # bar = 0.5 × 6.0 = 3.0 → weak (2.5) is dropped.
+        assert kept == []
+        assert dropped == ["weak.md"]
+        # The raw ranking as anchor never fires (the old wiring's bug):
+        # inelig.md tops it but is not in suppressed.
+        kept, dropped = _refloor_after_cooldown(
+            ["weak.md"], ["pick.md"], diag["scored"]
+        )
+        assert kept == ["weak.md"]
+        assert dropped == []
+
+
+class TestPickedRanking:
+    def test_prefers_picked_scored(self):
+        from context_manager import _picked_ranking
+        diag = {
+            "scored": [(7.0, "inelig.md"), (6.0, "pick.md")],
+            "picked_scored": [(6.0, "pick.md")],
+            "n_picked": 1,
+        }
+        assert _picked_ranking(diag) == [(6.0, "pick.md")]
+
+    def test_falls_back_to_prefix_without_picked_scored(self):
+        from context_manager import _picked_ranking
+        diag = {"scored": [(6.0, "a.md"), (3.0, "b.md")], "n_picked": 1}
+        assert _picked_ranking(diag) == [(6.0, "a.md")]
+
+    def test_empty_diag(self):
+        from context_manager import _picked_ranking
+        assert _picked_ranking({}) == []
+
+
+class TestRoutingScoreHint:
+    def test_scores_read_from_picked_not_raw_ranking(self):
+        # Top AND floor must describe injected files: inelig.md (7.0)
+        # outranks every pick but never injected.
+        from context_manager import _routing_score_hint
+        diag = {
+            "scored": [(7.0, "inelig.md"), (6.0, "pick.md"), (2.5, "weak.md")],
+            "picked_scored": [(6.0, "pick.md"), (2.5, "weak.md")],
+            "n_picked": 2,
+            "n_candidates": 3,
+        }
+        hint = _routing_score_hint(diag)
+        assert "scores 6→2.5" in hint
+        assert "(2/3 kept)" in hint
+
+    def test_breadth_abstention_not_reported_as_below_floor(self):
+        # The live trap-probe shape: raw best 2.5 ≥ MIN_SIGNAL, zero
+        # eligible entries. "best 2.5 < floor" would be false.
+        from context_manager import _routing_score_hint
+        diag = {
+            "scored": [(2.5, "trap.md")],
+            "n_picked": 0, "n_eligible": 0, "top_eligible": None,
+        }
+        hint = _routing_score_hint(diag)
+        assert "lacks match breadth" in hint
+        assert "< floor" not in hint
+
+    def test_eligible_below_floor_reports_eligible_score(self):
+        # An ineligible entry outranks the best eligible one — the
+        # abstention message must cite the eligible score, not 2.5.
+        from context_manager import _routing_score_hint
+        diag = {
+            "scored": [(2.5, "inelig.md"), (1.8, "elig.md")],
+            "n_picked": 0, "n_eligible": 1, "top_eligible": 1.8,
+        }
+        assert "best eligible 1.8 < floor" in _routing_score_hint(diag)
+
+    def test_continuation_and_no_candidates(self):
+        from context_manager import _routing_score_hint
+        assert "continuation" in _routing_score_hint({"continuation": True})
+        assert "no candidates" in _routing_score_hint({"scored": []})
+
     def test_prompt_for_log_collapses_and_truncates(self):
         from context_manager import _prompt_for_log
         assert _prompt_for_log("hello\n  world") == "hello world"
@@ -582,7 +671,11 @@ class TestRecommendationCooldown:
             [
                 {"source": "strong.md",
                  "intent_domains": ["debugging python async concurrency event loop"]},
-                {"source": "weak.md", "intent_domains": ["python tooling"]},
+                # The keyword boost lifts weak.md over the 0.30×top
+                # relative cutoff (keep_ratio raised in 0.6.16) while
+                # keeping it under the 0.5×top re-floor bar.
+                {"source": "weak.md", "intent_domains": ["python tooling"],
+                 "keywords": ["tooling"]},
             ],
         )
         env = {
@@ -597,7 +690,7 @@ class TestRecommendationCooldown:
         assert first["memory_files"] == 1
         assert "strong.md" in first["context"]
         # Turn 2: both match; strong is on cooldown. weak.md clears the
-        # absolute MIN_SIGNAL floor (~2.4) but sits at ~30% of the
+        # absolute MIN_SIGNAL floor (~2.9) but sits at ~36% of the
         # suppressed top score (~8.0) — the old pipeline injected it
         # alone; the re-floor drops it and nothing is injected.
         second = _run_hook(
@@ -624,7 +717,10 @@ class TestRecommendationCooldown:
             [
                 {"source": "strong.md",
                  "intent_domains": ["debugging python async concurrency event loop"]},
-                {"source": "weak.md", "intent_domains": ["python tooling"]},
+                # Keyword boost: over the 0.30×top relative cutoff,
+                # under the 0.5×top re-floor bar (see the test above).
+                {"source": "weak.md", "intent_domains": ["python tooling"],
+                 "keywords": ["tooling"]},
             ],
         )
         out = _run_hook(

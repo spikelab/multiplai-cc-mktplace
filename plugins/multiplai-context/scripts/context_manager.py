@@ -627,9 +627,9 @@ def _filter_cooldown(
 
 
 # Post-cooldown relevance re-check. _apply_policy admits everything
-# within KEEP_RATIO (20%) of the corpus's top score, so weak entries
-# ride in as companions of a strong top match. When cooldown then
-# suppresses that top scorer, the survivors lose the anchor that
+# within keep_ratio (default 0.30) of the corpus's top score, so weak
+# entries ride in as companions of a strong top match. When cooldown
+# then suppresses that top scorer, the survivors lose the anchor that
 # justified them — they were only "relevant" relative to a file already
 # in the conversation. Survivors must re-clear a bar derived from the
 # suppressed top score, or nothing is injected: noise is worse than
@@ -642,6 +642,62 @@ def _filter_cooldown(
 POST_COOLDOWN_KEEP_RATIO = 0.5
 
 
+def _picked_ranking(diag: dict) -> list:
+    """``(score, filename)`` pairs the router actually injected.
+
+    The match-breadth eligibility gate (memory_router.MIN_DOMAIN_MATCHES)
+    means picks are no longer a contiguous prefix of the raw ranking —
+    an ineligible entry can outrank every pick — so consumers must not
+    slice ``scored``. Use the router's own ``picked_scored`` (sorted
+    desc, like ``scored``), falling back to the top-``n_picked`` prefix
+    for diags without it.
+    """
+    picked = diag.get("picked_scored")
+    if picked is None:
+        picked = (diag.get("scored") or [])[: diag.get("n_picked", 0)]
+    return picked
+
+
+def _routing_score_hint(diag: dict) -> str:
+    """Compact routing-quality fragment for the human activity line.
+
+    Scores are read from the *picked* set (``_picked_ranking``), not the
+    raw candidate pool — under the eligibility gate the raw top/floor
+    can describe entries that never injected. Abstention is reported
+    honestly instead of a fake range, and distinguishes the two floors:
+    zero *eligible* candidates means the best raw score may well clear
+    MIN_SIGNAL (the single-token trap) — claiming "< floor" there would
+    be false — while a best-eligible score below MIN_SIGNAL is a genuine
+    below-floor abstention. Returns "" when there is nothing to say.
+    """
+    scored = diag.get("scored") or []
+    n_picked = diag.get("n_picked", 0)
+    picked = _picked_ranking(diag)
+    if diag.get("continuation"):
+        return " · continuation — nothing injected"
+    if n_picked <= 0:
+        if not scored:
+            return " · no candidates — nothing injected"
+        top_eligible = diag.get("top_eligible")
+        if top_eligible is None:
+            return (
+                f" · no match (best {scored[0][0]:g} lacks match breadth)"
+                " — nothing injected"
+            )
+        return (
+            f" · no match (best eligible {top_eligible:g} < floor)"
+            " — nothing injected"
+        )
+    if not picked:
+        return ""
+    n_cand = diag.get("n_candidates", len(scored))
+    cap_tag = " CAP-HIT" if diag.get("capped") else ""
+    return (
+        f" · scores {picked[0][0]:g}→{picked[-1][0]:g}{cap_tag} "
+        f"({n_picked}/{n_cand} kept)"
+    )
+
+
 def _refloor_after_cooldown(
     kept: list[str],
     suppressed: list[str],
@@ -649,14 +705,17 @@ def _refloor_after_cooldown(
 ) -> tuple[list[str], list[str]]:
     """Re-check cooldown survivors against a post-suppression bar.
 
-    Fires only when the corpus's top-ranked entry was itself suppressed
-    (the ranking anchor is gone); if the top pick is still going in,
-    the original relevance contract holds and nothing changes.
-    Survivors scoring below ``POST_COOLDOWN_KEEP_RATIO × top score``
-    are dropped. Picks without a score (bundle / co_retrieve expansion)
-    are kept — they were pulled in by metadata, not ranking. ``scored``
-    is the router's ``(score, filename)`` ranking; without it (LLM
-    router) behavior is unchanged. Returns ``(kept, dropped)``.
+    Fires only when the corpus's top *pick* was itself suppressed (the
+    ranking anchor is gone); if the top pick is still going in, the
+    original relevance contract holds and nothing changes. Survivors
+    scoring below ``POST_COOLDOWN_KEEP_RATIO × top score`` are dropped.
+    Picks without a score (bundle / co_retrieve expansion) are kept —
+    they were pulled in by metadata, not ranking. ``scored`` is the
+    router's ranking of the *injected picks* (``_picked_ranking``) —
+    NOT the raw candidate ranking, whose top can be a breadth-ineligible
+    entry that never injected and so can never appear in ``suppressed``
+    (which would silently disable this check). Without it (LLM router)
+    behavior is unchanged. Returns ``(kept, dropped)``.
     """
     if not kept or not suppressed or not scored:
         return kept, []
@@ -830,26 +889,27 @@ def main() -> None:
                     _d = router_diag.get(_ct) or {}
                     _scored = _d.get("scored") or []
                     _cap = _d.get("cap", 10)
-                    # _apply_policy keeps a contiguous top prefix, so the
-                    # set actually injected is scored[:n_picked]. Emit that
-                    # — NOT scored[:cap], the raw candidate pool — so
-                    # /health's live top/floor describe what was injected,
-                    # not an excluded candidate (the conflation that made
-                    # the live floor read artificially low).
+                    # Emit the set actually injected — NOT scored[:cap],
+                    # the raw candidate pool — so /health's live
+                    # top/floor describe what was injected, not an
+                    # excluded candidate (see _picked_ranking).
                     _np = _d.get("n_picked", 0)
+                    _picked = _picked_ranking(_d)
+                    _picked_fns = {fn for _s, fn in _picked}
+                    # Best score that did NOT inject (may outrank picks
+                    # now that ineligible entries can top the ranking).
+                    _excluded = [s for s, fn in _scored if fn not in _picked_fns]
                     logger.info(
                         "ROUTING_SCORES %s=%s",
                         _ct,
                         json.dumps({
-                            "picked": [[fn, round(s, 3)] for s, fn in _scored[:_np]],
+                            "picked": [[fn, round(s, 3)] for s, fn in _picked],
                             "cap": _cap,
                             "n_candidates": _d.get("n_candidates", len(_scored)),
                             "n_picked": _np,
                             "capped": _d.get("capped", False),
                             "floor_excluded": (
-                                round(_scored[_np][0], 3)
-                                if len(_scored) > _np
-                                else None
+                                round(max(_excluded), 3) if _excluded else None
                             ),
                             "prompt": _plog,
                         }),
@@ -921,8 +981,14 @@ def main() -> None:
                 turn_index, cooldown,
             )
             if suppressed and kept:
-                _scored = ((router_diag or {}).get(corpus_type) or {}).get("scored") or []
-                kept, dropped = _refloor_after_cooldown(kept, suppressed, _scored)
+                # Anchor on the injected picks, not the raw ranking:
+                # under the eligibility gate an ineligible entry can top
+                # `scored` without ever injecting, and since suppressed
+                # ⊆ picks the refloor would then never fire.
+                _diag = (router_diag or {}).get(corpus_type) or {}
+                kept, dropped = _refloor_after_cooldown(
+                    kept, suppressed, _picked_ranking(_diag)
+                )
                 if dropped:
                     refloor_dropped[corpus_type] = dropped
             picks_by_corpus[corpus_type] = kept
@@ -1073,33 +1139,11 @@ def main() -> None:
         for corpus, names in files_by_corpus.items()
         if names
     ]
-    # Compact routing-quality hint for the human activity log. Scores
-    # are read from the *picked* set, not the raw candidate pool: since
-    # _apply_policy keeps a contiguous top-of-ranking prefix, the floor
-    # is scored[n_picked-1] (the lowest file actually injected) — not
-    # scored[cap-1], which would report an excluded file's score.
-    # Abstention is reported honestly instead of a fake range.
+    # Compact routing-quality hint for the human activity log — see
+    # _routing_score_hint for the picked-vs-raw and abstention rules.
     score_hint = ""
     if not used_fallback and router_diag:
-        _m = router_diag.get("memory") or {}
-        _s = _m.get("scored") or []
-        _np = _m.get("n_picked", 0)
-        if _m.get("continuation"):
-            score_hint = " · continuation — nothing injected"
-        elif _np <= 0:
-            score_hint = (
-                f" · no match (best {_s[0][0]:g} < floor) — nothing injected"
-                if _s else " · no candidates — nothing injected"
-            )
-        elif _s:
-            _cand = _m.get("n_candidates", len(_s))
-            _top = _s[0][0]
-            _floor = _s[_np - 1][0]
-            _cap_tag = " CAP-HIT" if _m.get("capped") else ""
-            score_hint = (
-                f" · scores {_top:g}→{_floor:g}{_cap_tag} "
-                f"({_np}/{_cand} kept)"
-            )
+        score_hint = _routing_score_hint(router_diag.get("memory") or {})
     summary = (
         f"injected {corpus_counts['memory']} memory · "
         f"{corpus_counts['skills']} skills · "

@@ -28,9 +28,12 @@ import glob as globmod
 import json
 import os
 import statistics
+import sys
 from pathlib import Path
 
-MIN_SIGNAL = 2.0  # mirror memory_router.MIN_SIGNAL
+sys.path.insert(0, str(Path(__file__).parent))
+
+from lib.memory_router import MIN_SIGNAL  # noqa: E402
 
 
 def _default_log_dir() -> Path:
