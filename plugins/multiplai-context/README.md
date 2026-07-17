@@ -181,10 +181,38 @@ catalog path is untouched for other users — `catalog` stays the default.
 | Option | Default | Purpose |
 |--------|---------|---------|
 | `resources_retrieval` | `catalog` | `qmd` routes resources retrieval through the qmd index |
-| `qmd_mode` | `local` | `local` = qmd on PATH (native installs); `ssh` = qmd runs on the host over the container→host SSH bridge |
+| `qmd_mode` | `local` | `http` = POST to a resident `qmd mcp --http` daemon on the host (preferred: warm models, no cold start); `local` = qmd on PATH (native installs); `ssh` = qmd runs on the host over the container→host SSH bridge |
+| `qmd_http_url` | `http://host.docker.internal:8181` | Daemon base URL for `http` mode — see the exposure note below |
+| `qmd_candidate_limit` | `10` | Docs the daemon reranks per query in `http` mode (latency dial; capped at 50) |
 | `qmd_ssh_host` | `host.docker.internal` | Bridge host for `ssh` mode |
 | `qmd_collection` | `resources` | qmd collection holding the index |
-| `qmd_strategy` | `fused` | `fused` (vsearch+BM25 RRF), `hybrid` (`qmd query`: expansion+rerank, slow), `fts` (BM25 only) |
+| `qmd_strategy` | `fused` | `local`/`ssh` only: `fused` (vsearch+BM25 RRF), `hybrid` (`qmd query`: expansion+rerank, slow), `fts` (BM25 only) |
+
+#### Exposure of the http daemon
+
+For `http` mode the daemon must bind `0.0.0.0` — with OrbStack (and Docker
+Desktop-style setups) that is the only bind reachable from inside the
+container, so the instruction stands. Be clear about what that means: the
+daemon is an **unauthenticated, read-only HTTP endpoint over your entire
+indexed corpus**, reachable from every device on your LAN (and any Wi-Fi
+network the machine joins) unless you scope it.
+
+Concrete mitigation on macOS — scope `:8181` to the OrbStack subnet with
+a pf anchor (adjust the subnet to OrbStack Settings → Network):
+
+```
+# /etc/pf.anchors/qmd8181 — only the OrbStack subnet may reach the daemon
+pass in quick proto tcp from 192.168.138.0/23 to any port 8181
+block return in quick proto tcp from any to any port 8181
+```
+
+Load it by adding `anchor "qmd8181"` and
+`load anchor "qmd8181" from "/etc/pf.anchors/qmd8181"` to `/etc/pf.conf`,
+then `sudo pfctl -f /etc/pf.conf -E`. Alternatively, use the macOS
+Application Firewall to deny inbound connections to the daemon's binary,
+or bind the daemon to the OrbStack bridge interface address if your qmd
+version supports an explicit bind address. Don't run the daemon on `0.0.0.0`
+on untrusted networks without one of these in place.
 
 **Host prerequisites** — one-time, run where qmd will execute (the
 machine itself for `local`, the Mac host for `ssh` — llama.cpp needs
@@ -301,13 +329,30 @@ synchronous checkpoint write plus a near-instant summary call. The injected
 checkpoint is the real state carrier.
 
 The directive is emitted only when it is safe to discard the summary:
-checkpointing enabled, not a child (subagent) session, and `checkpoint.md`
-exists and validates. The pending rebuild marker is written first, so even
-a **manual `/compact` below the handoff threshold** gets the checkpoint
-re-injected (session_start additionally falls back to the session's own
-checkpoint on `source="compact"`). On any doubt or failure the hook stays
-silent and the native full summary proceeds unchanged. No `CLAUDE.md`
-compact-instructions snippet is needed anymore.
+checkpointing enabled, not a child (subagent) session, `checkpoint.md`
+exists and validates, **and the checkpoint is fresh** — the synchronous
+pre-compaction checkpoint succeeded this invocation, or the checkpoint's
+recorded token watermark / file mtime is demonstrably close to the live
+context size. A stale checkpoint (writer timed out, script missing,
+context size unreadable) keeps the native full summary, because stubbing
+it would silently lose the tail of the session. The pending rebuild marker
+is written first, so even a **manual `/compact` below the handoff
+threshold** gets the checkpoint re-injected (session_start additionally
+falls back to the session's own checkpoint on `source="compact"`). On any
+doubt or failure the hook stays silent and the native full summary
+proceeds unchanged. No `CLAUDE.md` compact-instructions snippet is needed
+anymore.
+
+**CLI-version canary.** The steering channel rides a CLI implementation
+detail (hook stdout → `newCustomInstructions` → summary prompt), verified
+against CLI **2.1.207**. The hook reads the running CLI version from the
+`AI_AGENT` env var (e.g. `claude-code_2-1-207_agent`) and logs a warning
+when the major is newer than the last verified one
+(`_STEERING_VERIFIED_CLI_MAJOR` in `pre_compact.py`) — it still emits the
+directive, because the worst case of a removed channel is just the native
+summary. If the env var is absent the check is skipped; the residual risk
+is that a future CLI silently drops the channel and compaction reverts to
+full-length summaries (no data loss — re-verify and bump the constant).
 
 Why compaction (not `/clear`) is the automatic path: hooks cannot invoke
 slash commands, so a hook-triggered `/clear` is impossible — but the

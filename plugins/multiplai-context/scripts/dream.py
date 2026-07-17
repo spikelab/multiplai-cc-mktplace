@@ -552,19 +552,20 @@ async def dream_report() -> None:
         ", ".join(f.name for f in source_files),
     )
 
-    client = await create_client(component="dream")
-    logger.info("Dream using %s", type(client).__name__)
-
-    memory_contents = _read_memory_files(memory_dir)
-    logger.info(
-        "Loaded %d memory files for context: %s",
-        len(memory_contents), ", ".join(sorted(memory_contents)),
-    )
-
-    # Mirror dream_auto(): a crash inside the SDK call must leave a traceback in
-    # dream.log / hook-errors.log, not just the ephemeral task stdout. Re-raise
-    # so exit status stays non-zero.
+    # Mirror dream_auto(): a crash inside the SDK call — including an
+    # SDK-unavailable RuntimeError from create_client itself — must leave a
+    # traceback in dream.log / hook-errors.log, not just the ephemeral task
+    # stdout. Re-raise so exit status stays non-zero.
     try:
+        client = await create_client(component="dream")
+        logger.info("Dream using %s", type(client).__name__)
+
+        memory_contents = _read_memory_files(memory_dir)
+        logger.info(
+            "Loaded %d memory files for context: %s",
+            len(memory_contents), ", ".join(sorted(memory_contents)),
+        )
+
         proposal = await _generate_proposal(client, all_learnings, memory_contents, source_files)
     except Exception:
         logger.exception("Dream report generation failed")

@@ -97,16 +97,44 @@ class TestConfigAuditGate:
         _write_state(f, stale)
         assert session_start._config_audit_gate_open(f) is True
 
-    def test_exactly_90_days_opens_gate(self, tmp_path):
-        """The gate uses >=, matching the dream gate's semantics."""
+    def test_exactly_90_days_opens_gate(self, tmp_path, monkeypatch):
+        """The gate uses >= (not >): last_run EXACTLY 90 days old opens it.
+
+        Time is frozen inside session_start so the boundary is pinned to
+        the instant — a real-clock offset would silently degrade this to
+        a >90d test and never distinguish >= from >.
+        """
         import session_start
 
+        frozen = datetime.now(timezone.utc)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen if tz else frozen.replace(tzinfo=None)
+
+        monkeypatch.setattr(session_start, "datetime", _FrozenDatetime)
         f = tmp_path / "config_audit_state.yaml"
-        boundary = (
-            datetime.now(timezone.utc) - timedelta(days=90, minutes=1)
-        ).isoformat()
-        _write_state(f, boundary)
+        _write_state(f, (frozen - timedelta(days=90)).isoformat())
         assert session_start._config_audit_gate_open(f) is True
+
+    def test_just_under_90_days_closes_gate(self, tmp_path, monkeypatch):
+        """One second inside the window (frozen clock) → gate closed."""
+        import session_start
+
+        frozen = datetime.now(timezone.utc)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen if tz else frozen.replace(tzinfo=None)
+
+        monkeypatch.setattr(session_start, "datetime", _FrozenDatetime)
+        f = tmp_path / "config_audit_state.yaml"
+        _write_state(
+            f, (frozen - timedelta(days=90) + timedelta(seconds=1)).isoformat()
+        )
+        assert session_start._config_audit_gate_open(f) is False
 
     def test_recent_state_closes_gate(self, tmp_path):
         """last_run within the 90-day window → gate closed."""

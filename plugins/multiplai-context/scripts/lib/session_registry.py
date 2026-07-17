@@ -217,6 +217,70 @@ def record_event(data_dir: Path, hook_input: dict, kind: str) -> bool:
         return False
 
 
+def _entry_is_stale(
+    path: Path, cutoff_ended: datetime, cutoff_live: datetime
+) -> bool:
+    """Staleness of one registry entry (see :func:`gc_stale` for the policy).
+
+    A missing entry (vanished mid-scan) is NOT stale — there is nothing to
+    remove. Read errors other than absence propagate as OSError for the
+    caller's per-path handler.
+    """
+    try:
+        entry = json.loads(path.read_text(encoding="utf-8"))
+        last = entry.get("last_event") or {}
+        ts = datetime.fromisoformat(str(last.get("ts") or ""))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if last.get("kind") == "end":
+            return ts < cutoff_ended
+        return ts < cutoff_live
+    except FileNotFoundError:
+        return False
+    except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        return mtime < cutoff_ended
+
+
+def _sweep_orphans(rdir: Path, cutoff: datetime) -> int:
+    """Remove ``.adopt``/``.lock`` files whose ``.json`` entry is gone.
+
+    Left behind when GC ran without the entry flock (fail-open) or a hub
+    crashed between marker and entry. Age-gated by mtime (older than the
+    ended cutoff) so an in-progress writer that has created its lock file
+    but not yet the entry is never touched. ``.lock`` files are removed
+    lock-then-unlink: a NON-blocking flock is taken first — a held lock
+    means a writer is inside its critical section, so skip and let the
+    next GC retry; after acquiring, the ``.json`` absence is re-checked
+    under the lock before unlinking.
+    """
+    removed = 0
+    for orphan in [*rdir.glob("*.adopt"), *rdir.glob("*.lock")]:
+        try:
+            if orphan.with_suffix(".json").exists():
+                continue
+            mtime = datetime.fromtimestamp(orphan.stat().st_mtime, tz=timezone.utc)
+            if mtime >= cutoff:
+                continue
+            if orphan.suffix == ".lock":
+                fd = os.open(str(orphan), os.O_RDWR)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    # Re-check under the lock: a writer serialized on this
+                    # lock may have just (re)created the entry.
+                    if not orphan.with_suffix(".json").exists():
+                        orphan.unlink(missing_ok=True)
+                        removed += 1
+                finally:
+                    os.close(fd)
+            else:
+                orphan.unlink(missing_ok=True)
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
+
 def gc_stale(
     data_dir: Path,
     days: int = GC_AFTER_DAYS,
@@ -230,7 +294,19 @@ def gc_stale(
     ghosts. Unparseable entries older than the *days* window (by mtime) are
     removed too — they can never become readable again and would otherwise
     accumulate forever. A removed entry's orphaned ``.adopt`` marker goes
-    with it. Returns the number of entries removed; never raises.
+    with it.
+
+    Concurrency: removal takes the same per-entry flock the writers use and
+    RE-CHECKS staleness under it, so an entry can't be deleted out from
+    under a hook/hub mid read-merge-write (the writer we serialized behind
+    refreshes the timestamp, and the re-check keeps the entry). The
+    ``.lock`` file itself is removed only while its flock is held
+    (lock-then-unlink); when the flock is unavailable (fail-open filesystem)
+    the lock file is left behind — the orphan sweep collects it later. The
+    sweep also removes ``.adopt``/``.lock`` files whose entry is gone.
+
+    Returns the number of entries removed (orphan-file sweeps are not
+    counted); never raises.
     """
     removed = 0
     try:
@@ -242,32 +318,32 @@ def gc_stale(
         cutoff_live = now - timedelta(days=live_days)
         for path in list(rdir.glob("*.json")):
             try:
-                stale = False
-                try:
-                    entry = json.loads(path.read_text(encoding="utf-8"))
-                    last = entry.get("last_event") or {}
-                    ts = datetime.fromisoformat(str(last.get("ts") or ""))
-                    if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=timezone.utc)
-                    if last.get("kind") == "end":
-                        stale = ts < cutoff_ended
-                    else:
-                        stale = ts < cutoff_live
-                except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
-                    mtime = datetime.fromtimestamp(
-                        path.stat().st_mtime, tz=timezone.utc
-                    )
-                    stale = mtime < cutoff_ended
-                if not stale:
+                if not _entry_is_stale(path, cutoff_ended, cutoff_live):
                     continue
-                path.unlink(missing_ok=True)
-                path.with_suffix(".adopt").unlink(missing_ok=True)
-                path.with_suffix(".lock").unlink(missing_ok=True)
+                lock_fd = _lock_entry(path)
+                try:
+                    # Re-check under the lock — the writer we may have just
+                    # waited on could have refreshed the entry.
+                    if not _entry_is_stale(path, cutoff_ended, cutoff_live):
+                        continue
+                    path.unlink(missing_ok=True)
+                    path.with_suffix(".adopt").unlink(missing_ok=True)
+                    if lock_fd is not None:
+                        # We HOLD the flock, so no writer is inside its
+                        # critical section; one blocked on it will simply
+                        # recreate the entry (it is alive by definition).
+                        path.with_suffix(".lock").unlink(missing_ok=True)
+                finally:
+                    _unlock_entry(lock_fd)
                 removed += 1
             except OSError:
                 continue
-        if removed:
-            logger.info("GC'd %d stale session registry entr(y/ies)", removed)
+        orphans = _sweep_orphans(rdir, cutoff_ended)
+        if removed or orphans:
+            logger.info(
+                "GC'd %d stale session registry entr(y/ies), %d orphaned marker/lock file(s)",
+                removed, orphans,
+            )
     except Exception:
         logger.warning("Session registry GC failed", exc_info=True)
     return removed

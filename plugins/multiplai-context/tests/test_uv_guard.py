@@ -76,6 +76,33 @@ class TestUvGuard:
                 f"{hook['event']} warned despite fresh marker"
             )
 
+    def test_unwritable_config_dir_falls_back_to_tmp_marker(self, tmp_path):
+        """An unwritable $CLAUDE_CONFIG_DIR must not turn the warning into a
+        per-event repeat: the marker degrades to $TMPDIR and still
+        rate-limits (warn once, then silent)."""
+        env = _masked_env(tmp_path)
+        cfg = Path(env["CLAUDE_CONFIG_DIR"])
+        scratch_tmp = tmp_path / "scratch-tmp"
+        scratch_tmp.mkdir()
+        env["TMPDIR"] = str(scratch_tmp)
+        cfg.chmod(0o555)  # readable, unwritable
+        try:
+            first = _run(parse_hooks()[0]["command"], env)
+            assert first.returncode == 0
+            assert "uv not found" in first.stdout
+            assert not list(cfg.glob(".multiplai-context-uv-warned*")), (
+                "no marker can land in the unwritable config dir"
+            )
+            fallback = list(scratch_tmp.glob(".multiplai-context-uv-warned*"))
+            assert fallback, "marker must fall back to TMPDIR"
+            again = _run(parse_hooks()[0]["command"], env)
+            assert again.returncode == 0
+            assert again.stdout == "" and again.stderr == "", (
+                "warned again despite the TMPDIR fallback marker"
+            )
+        finally:
+            cfg.chmod(0o755)
+
     def test_with_uv_present_command_reaches_uv(self, tmp_path):
         """With a fake `uv` first on PATH, the guard must exec through to it."""
         env = _masked_env(tmp_path)

@@ -236,3 +236,251 @@ class TestSummaryDirective:
         )
         pre_compact.main()
         assert capsys.readouterr().out == ""
+
+
+class _WriterOk:
+    returncode = 0
+
+
+class TestFreshnessGate:
+    """The stub directive must never be emitted against a stale checkpoint.
+
+    Setup pattern: a VALID checkpoint exists on disk but is stale (old
+    mtime, distant/absent token watermark), then one of the four
+    ``_sync_checkpoint`` silent-fail paths fires. In every case the
+    directive must be suppressed (native summary keeps the state). Only a
+    sync success this pass — or a demonstrably fresh checkpoint — emits.
+    """
+
+    def _write_stale_valid_checkpoint(self, data_dir, session_id="sess-pc"):
+        """Valid 11-section checkpoint whose mtime is an hour in the past."""
+        text = "\n".join(f"## {s}\ncontent" for s in cp.CHECKPOINT_SECTIONS)
+        cp.session_dir(data_dir, session_id).mkdir(parents=True, exist_ok=True)
+        path = cp.checkpoint_file(data_dir, session_id)
+        path.write_text(text)
+        old = time.time() - 3600
+        os.utime(path, (old, old))
+        return path
+
+    def _run_main(self, hook_input, monkeypatch, capsys):
+        monkeypatch.setattr(
+            "sys.stdin", __import__("io").StringIO(json.dumps(hook_input))
+        )
+        pre_compact.main()
+        return capsys.readouterr().out
+
+    # --- the four _sync_checkpoint silent-fail paths ---
+
+    def test_no_directive_when_tokens_zero(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        """Fail path 1: read_context_tokens() == 0 → sync skips, no stub."""
+        self._write_stale_valid_checkpoint(data_env)
+        calls = []
+        monkeypatch.setattr(
+            pre_compact.subprocess, "run",
+            lambda *a, **k: calls.append(1) or _WriterOk(),
+        )
+        # Transcript with no usage records at all → tokens == 0.
+        empty = tmp_path / "t.jsonl"
+        empty.write_text(json.dumps({"type": "user"}) + "\n")
+        hook_input = {
+            "session_id": "sess-pc",
+            "transcript_path": str(empty),
+            "cwd": str(tmp_path / "proj"),
+        }
+        out = self._run_main(hook_input, monkeypatch, capsys)
+        assert calls == []  # sync never spawned a writer
+        assert pre_compact._SUMMARY_DIRECTIVE not in out
+
+    def test_no_directive_when_inflight_writer_never_finishes(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        """Fail path 2: writer-lock (in-flight marker) wait times out."""
+        self._write_stale_valid_checkpoint(data_env)
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_timeout_s", "0")
+        monkeypatch.setattr(pre_compact, "_INFLIGHT_POLL_S", 0.01)
+        cp.claim_writer(data_env, "sess-pc")  # marker that never releases
+        out = self._run_main(
+            _hook_input(tmp_path, 90_000), monkeypatch, capsys
+        )
+        assert pre_compact._SUMMARY_DIRECTIVE not in out
+        cp.release_writer(data_env, "sess-pc")
+
+    def test_no_directive_when_writer_script_missing(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        """Fail path 3: checkpoint_writer.py not found."""
+        self._write_stale_valid_checkpoint(data_env)
+
+        class _FakePaths:
+            def scripts_dir(self):
+                return tmp_path / "no-such-dir"
+
+            def plugin_data(self):
+                return data_env
+
+        monkeypatch.setattr(pre_compact, "get_paths", lambda: _FakePaths())
+        out = self._run_main(
+            _hook_input(tmp_path, 90_000), monkeypatch, capsys
+        )
+        assert pre_compact._SUMMARY_DIRECTIVE not in out
+
+    def test_no_directive_when_writer_times_out(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        """Fail path 4: the synchronous writer subprocess times out."""
+        import subprocess as sp
+
+        self._write_stale_valid_checkpoint(data_env)
+
+        def fake_run(cmd, **kwargs):
+            raise sp.TimeoutExpired(cmd, 1)
+
+        monkeypatch.setattr(pre_compact.subprocess, "run", fake_run)
+        out = self._run_main(
+            _hook_input(tmp_path, 90_000), monkeypatch, capsys
+        )
+        assert pre_compact._SUMMARY_DIRECTIVE not in out
+
+    def test_no_directive_when_writer_fails_rc(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        """A writer exiting non-zero is a failure, not a fresh checkpoint."""
+        self._write_stale_valid_checkpoint(data_env)
+
+        class _WriterFail:
+            returncode = 1
+
+        monkeypatch.setattr(
+            pre_compact.subprocess, "run", lambda *a, **k: _WriterFail()
+        )
+        out = self._run_main(
+            _hook_input(tmp_path, 90_000), monkeypatch, capsys
+        )
+        assert pre_compact._SUMMARY_DIRECTIVE not in out
+
+    # --- the success paths that MUST still emit ---
+
+    def test_directive_after_successful_sync(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        """A stale checkpoint + successful sync this pass → stub emitted."""
+        self._write_stale_valid_checkpoint(data_env)
+        monkeypatch.setattr(
+            pre_compact.subprocess, "run", lambda *a, **k: _WriterOk()
+        )
+        out = self._run_main(
+            _hook_input(tmp_path, 90_000), monkeypatch, capsys
+        )
+        assert pre_compact._SUMMARY_DIRECTIVE in out
+
+    def test_directive_with_fresh_watermark_despite_sync_failure(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        """Sync fails but the watermark is within one refresh band → emit."""
+        import subprocess as sp
+
+        self._write_stale_valid_checkpoint(data_env)
+        cp.save_state(
+            data_env, "sess-pc", {"last_checkpoint_tokens": 80_000}
+        )  # 90K live − 80K covered = 10K < 25K refresh band
+
+        def fake_run(cmd, **kwargs):
+            raise sp.TimeoutExpired(cmd, 1)
+
+        monkeypatch.setattr(pre_compact.subprocess, "run", fake_run)
+        out = self._run_main(
+            _hook_input(tmp_path, 90_000), monkeypatch, capsys
+        )
+        assert pre_compact._SUMMARY_DIRECTIVE in out
+
+    def test_directive_with_fresh_mtime_despite_sync_failure(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        """Sync fails but checkpoint.md was written seconds ago → emit."""
+        import subprocess as sp
+
+        path = self._write_stale_valid_checkpoint(data_env)
+        now = time.time()
+        os.utime(path, (now, now))  # a band writer just finished
+
+        def fake_run(cmd, **kwargs):
+            raise sp.TimeoutExpired(cmd, 1)
+
+        monkeypatch.setattr(pre_compact.subprocess, "run", fake_run)
+        out = self._run_main(
+            _hook_input(tmp_path, 90_000), monkeypatch, capsys
+        )
+        assert pre_compact._SUMMARY_DIRECTIVE in out
+
+    def test_sync_checkpoint_returns_true_on_success(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        monkeypatch.setattr(
+            pre_compact.subprocess, "run", lambda *a, **k: _WriterOk()
+        )
+        assert (
+            pre_compact._sync_checkpoint(_hook_input(tmp_path, 90_000), data_env)
+            is True
+        )
+
+    def test_sync_checkpoint_returns_true_after_inflight_writer_finishes(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        import threading
+
+        monkeypatch.setattr(pre_compact, "_INFLIGHT_POLL_S", 0.01)
+        marker = cp.claim_writer(data_env, "sess-pc")
+
+        def release():
+            time.sleep(0.05)
+            marker.unlink(missing_ok=True)
+
+        t = threading.Thread(target=release)
+        t.start()
+        result = pre_compact._sync_checkpoint(
+            _hook_input(tmp_path, 90_000), data_env
+        )
+        t.join()
+        assert result is True
+
+
+class TestCliVersionCanary:
+    """Item 2: warn when the CLI major outruns the verified steering channel."""
+
+    def test_higher_major_logs_warning_but_still_emits(
+        self, tmp_path, data_env, monkeypatch, caplog
+    ):
+        import logging
+
+        monkeypatch.setenv("AI_AGENT", "claude-code_3-0-1_agent")
+        text = "\n".join(f"## {s}\ncontent" for s in cp.CHECKPOINT_SECTIONS)
+        cp.session_dir(data_env, "sess-pc").mkdir(parents=True, exist_ok=True)
+        cp.checkpoint_file(data_env, "sess-pc").write_text(text)
+        with caplog.at_level(logging.WARNING):
+            directive = pre_compact._summary_directive(
+                _hook_input(tmp_path, 90_000), data_env, sync_ok=True
+            )
+        assert directive == pre_compact._SUMMARY_DIRECTIVE  # never blocks
+        assert any(
+            "steering" in r.message for r in caplog.records
+        ), "expected a canary warning on a newer CLI major"
+
+    def test_verified_major_stays_silent(
+        self, tmp_path, data_env, monkeypatch, caplog
+    ):
+        import logging
+
+        monkeypatch.setenv("AI_AGENT", "claude-code_2-1-207_agent")
+        with caplog.at_level(logging.WARNING):
+            pre_compact._cli_version_canary()
+        assert not any("steering" in r.message for r in caplog.records)
+
+    def test_unknown_version_signal_stays_silent(self, monkeypatch, caplog):
+        import logging
+
+        monkeypatch.delenv("AI_AGENT", raising=False)
+        with caplog.at_level(logging.WARNING):
+            pre_compact._cli_version_canary()
+        assert not any("steering" in r.message for r in caplog.records)

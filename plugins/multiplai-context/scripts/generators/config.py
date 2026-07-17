@@ -33,6 +33,11 @@ DEFAULT_QMD_STRATEGY = "fused"
 # http mode: resident `qmd mcp --http` daemon on the host.
 DEFAULT_QMD_HTTP_URL = "http://host.docker.internal:8181"
 DEFAULT_QMD_CANDIDATE_LIMIT = 10   # docs the daemon reranks (latency dial)
+# Ceiling for qmd_candidate_limit: the HTTP request timeout scales linearly
+# with this dial (qmd_retrieval.http_timeout: 3 + 0.7s/doc), so an
+# unbounded value would let a config typo stall every prompt for minutes.
+# 50 docs ≈ 38s worst-case — already generous.
+MAX_QMD_CANDIDATE_LIMIT = 50
 DEFAULT_QMD_MIN_SCORE = 0.30       # weak-match cutoff applied to results
 
 
@@ -104,6 +109,8 @@ class CatalogConfig:
 
         if self.qmd_candidate_limit < 1:
             self.qmd_candidate_limit = DEFAULT_QMD_CANDIDATE_LIMIT
+        elif self.qmd_candidate_limit > MAX_QMD_CANDIDATE_LIMIT:
+            self.qmd_candidate_limit = MAX_QMD_CANDIDATE_LIMIT
 
         if not 0.0 <= self.qmd_min_score <= 1.0:
             self.qmd_min_score = DEFAULT_QMD_MIN_SCORE

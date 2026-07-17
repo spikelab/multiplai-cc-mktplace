@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.6.14",
+  "version": "0.6.15",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",
@@ -129,7 +129,7 @@
     "qmd_http_url": {
       "type": "string",
       "title": "qmd HTTP Daemon URL",
-      "description": "Base URL of the 'qmd mcp --http' daemon for qmd_mode 'http'. The daemon must bind 0.0.0.0 (not localhost) to be reachable from the container. POSTs to <url>/query.",
+      "description": "Base URL of the 'qmd mcp --http' daemon for qmd_mode 'http'. The daemon must bind 0.0.0.0 (not localhost) to be reachable from the container. POSTs to <url>/query. SECURITY: binding 0.0.0.0 exposes an UNAUTHENTICATED read-only HTTP endpoint over the entire indexed corpus to every device on the LAN unless scoped. On macOS, scope :8181 to the container subnet with a pf/firewall rule — see README → 'Exposure of the http daemon' for a concrete pf example.",
       "default": "http://host.docker.internal:8181"
     },
     "qmd_collection": {
@@ -147,7 +147,7 @@
     "qmd_candidate_limit": {
       "type": "number",
       "title": "qmd Candidate Limit (http)",
-      "description": "How many candidate docs the daemon reranks per query in 'http' mode. The main latency dial (rerank time is linear: ~0.58s/doc). 10 is a good default. The HTTP request timeout scales with this dial (max(10s, 3 + 0.7s/doc)), so raising it also lengthens the worst-case wait per prompt.",
+      "description": "How many candidate docs the daemon reranks per query in 'http' mode. The main latency dial (rerank time is linear: ~0.58s/doc). 10 is a good default. The HTTP request timeout scales with this dial (max(10s, 3 + 0.7s/doc)), so raising it also lengthens the worst-case wait per prompt. Capped at 50 (a bounded worst-case wait of ~38s).",
       "default": 10
     },
     "qmd_min_score": {
