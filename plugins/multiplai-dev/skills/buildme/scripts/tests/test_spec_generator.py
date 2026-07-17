@@ -181,6 +181,132 @@ class TestResumeSkipsExisting:
                 assert call[0][0] != "proposal", "Should not regenerate proposal"
 
 
+# --- Tasks-audit resume durability (completion recorded in state, not file existence) ---
+
+
+class TestTasksAuditResumeDurability:
+    """The audit runs after tasks.md is written, so a crash mid-audit leaves
+    the artifact DONE by file existence. Completion must be read from
+    checkpoint state: a resume with tasks_audit_done=False re-runs the audit;
+    tasks_audit_done=True skips it."""
+
+    def _all_done_setup(self, tmp_path, audit_done: bool):
+        specs_dir = tmp_path / "specs"
+        specs_dir.mkdir()
+        cm = ChangeManager(specs_dir)
+        cm.init_specs()
+        change_dir = cm.create_change("test-feature")
+        # Every artifact already on disk → DAG loop sees all DONE and never
+        # re-enters _generate_single_artifact.
+        (change_dir / "proposal.md").write_text("# Proposal")
+        (change_dir / "design.md").write_text("# Design")
+        (change_dir / "tasks.md").write_text("## 1. Vertical slice A")
+        (change_dir / "rubric.md").write_text("# Rubric")
+        req_dir = change_dir / "requirements"
+        req_dir.mkdir(exist_ok=True)
+        (req_dir / "cap-a.md").write_text("# Req")
+
+        config = MagicMock()
+        config.change_name = "test-feature"
+        config.specs_dir = specs_dir
+        config.change_dir = change_dir
+        config.model = "test-model"
+        config.task_granularity = "checkboxes"
+        config.state_file_path.return_value = change_dir / ".build-state.json"
+
+        state = BuildState(
+            change_name="test-feature",
+            mode="scratch",
+            tier="standard",
+            state_file=str(change_dir / ".build-state.json"),
+            phase=BuildPhase.SPEC_GENERATION,
+            spec_gen=SpecGenState(
+                completed_artifacts=[
+                    "proposal", "requirements", "design", "tasks", "rubric",
+                ],
+                tasks_audit_done=audit_done,
+            ),
+        )
+        return cm, change_dir, config, state
+
+    @pytest.mark.asyncio
+    async def test_resume_reruns_audit_when_not_recorded_complete(self, tmp_path):
+        """Crash mid-audit: tasks.md exists but tasks_audit_done=False —
+        resume re-runs the audit and records + checkpoints completion."""
+        cm, change_dir, config, state = self._all_done_setup(tmp_path, audit_done=False)
+
+        with patch(
+            "build_pipeline.spec_generator._audit_tasks_shape", new_callable=AsyncMock
+        ) as mock_audit:
+            await _generate_all_artifacts(cm, change_dir, config, state)
+
+        assert mock_audit.await_count == 1
+        assert state.spec_gen.tasks_audit_done is True
+        # Completion is checkpointed so the NEXT resume skips it.
+        saved = BuildState.model_validate_json(
+            (change_dir / ".build-state.json").read_text()
+        )
+        assert saved.spec_gen.tasks_audit_done is True
+
+    @pytest.mark.asyncio
+    async def test_resume_skips_audit_when_recorded_complete(self, tmp_path):
+        cm, change_dir, config, state = self._all_done_setup(tmp_path, audit_done=True)
+
+        with patch(
+            "build_pipeline.spec_generator._audit_tasks_shape", new_callable=AsyncMock
+        ) as mock_audit:
+            await _generate_all_artifacts(cm, change_dir, config, state)
+
+        assert mock_audit.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_old_checkpoint_without_flag_defaults_to_rerun(self, tmp_path):
+        """A pre-upgrade checkpoint (no tasks_audit_done key) deserializes to
+        False → idempotent re-audit on resume, never a silent skip."""
+        cm, change_dir, config, state = self._all_done_setup(tmp_path, audit_done=False)
+        raw = state.model_dump()
+        del raw["spec_gen"]["tasks_audit_done"]
+        old_state = BuildState.model_validate(raw)
+        assert old_state.spec_gen.tasks_audit_done is False
+
+    @pytest.mark.asyncio
+    async def test_fresh_generation_records_audit_done(self, tmp_path):
+        """The normal in-line audit in _generate_single_artifact records
+        completion in state."""
+        specs_dir = tmp_path / "specs"
+        specs_dir.mkdir()
+        cm = ChangeManager(specs_dir)
+        cm.init_specs()
+        change_dir = cm.create_change("test-feature")
+        (change_dir / "proposal.md").write_text("# Proposal")
+        (change_dir / "design.md").write_text("# Design")
+
+        config = MagicMock()
+        config.change_name = "test-feature"
+        config.specs_dir = specs_dir
+        config.change_dir = change_dir
+        config.model = "test-model"
+        config.task_granularity = "checkboxes"
+        config.state_file_path.return_value = change_dir / ".build-state.json"
+
+        state = BuildState(
+            change_name="test-feature",
+            mode="scratch",
+            tier="standard",
+            state_file=str(change_dir / ".build-state.json"),
+            phase=BuildPhase.SPEC_GENERATION,
+            spec_gen=SpecGenState(),
+        )
+
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.return_value = "## 1. Vertical slice A"
+            mock_audit.return_value = []
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        assert state.spec_gen.tasks_audit_done is True
+
+
 # --- Tasks shape audit (B4: vertical slices) ---
 
 _LAYERING_FINDING = {

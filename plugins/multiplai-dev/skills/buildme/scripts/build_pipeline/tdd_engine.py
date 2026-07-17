@@ -350,16 +350,35 @@ async def run_block_tdd(
     total = len(state.tdd.blocks) if state.tdd else 0
     cwd = str(config.project_dir)
 
-    # Record the pre-block diff baseline (once — survives resume via state).
-    # The quality review diffs the working tree against this SHA to review the
-    # block's actual changes.
-    if block.baseline_commit is None:
+    # Record the pre-block diff baseline (stamped once at block START —
+    # survives resume via state). The quality review diffs the working tree
+    # against this SHA to review the block's actual changes. Stamp ONLY when
+    # the block is genuinely starting (PENDING/TESTING, i.e. before any
+    # phase commit is guaranteed): resuming a mid-block checkpoint written
+    # before baselines existed (IMPLEMENTING/REVIEWING with
+    # baseline_commit=None) must NOT stamp the current HEAD — HEAD already
+    # contains the block's own test/impl commits, and stamping it would hide
+    # them from the reviewer. Such blocks keep baseline=None and
+    # _capture_block_diff uses its documented `git diff HEAD` fallback
+    # (misses committed work — the best available for pre-baseline
+    # checkpoints).
+    if block.baseline_commit is None and block.status in (
+        BlockStatus.PENDING,
+        BlockStatus.TESTING,
+    ):
         baseline = _git_rev_parse_head(config)
         # Empty repo (no commits yet) → baseline against the empty tree so the
         # reviewer sees block 1's work; a None baseline would diff `HEAD`,
         # which after the block's own commits shows nothing.
         block.baseline_commit = baseline or EMPTY_TREE_SHA
         state.checkpoint(config.state_file_path())
+    elif block.baseline_commit is None:
+        log.warning(
+            "Block %d resumed at %s with no baseline_commit (pre-baseline "
+            "checkpoint) — review diff falls back to `git diff HEAD` and "
+            "misses the block's committed work",
+            block.number, block.status.value,
+        )
 
     # --- Phase A: Write tests ---
     if block.status == BlockStatus.PENDING:
