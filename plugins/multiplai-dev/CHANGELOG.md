@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.3 — 2026-07-18
+
+### Added
+- **swift-build: `swift`/`xcodebuild`/`xcrun` passthrough.** `swift-host.sh`
+  now accepts these as top-level commands and forwards shell-quoted args to
+  the host (from the optional `--package-path` dir). Enables host diagnostics
+  and repair (`xcodebuild -runFirstLaunch`, `-version`, `-showBuildSettings`)
+  and xcodebuild-free simulator builds (e.g. a SwiftPM cross-compile for
+  `arm64-apple-ios17.0-simulator`) without leaving the gateway.
+  An opt-in `--xcsift` flag (first passthrough arg) pipes the host output
+  through the same trusted `2>&1 | xcsift --format toon --quiet` suffix as
+  build/test — errors/warnings survive, build noise is dropped. Off by
+  default because diagnostic output (`-version`, `-showBuildSettings`,
+  `simctl list`) is the answer, not noise, and xcsift would filter it.
+
 ## 0.3.2 — 2026-07-17
 
 Fixes from the 07-12→16 PR audit (`INBOX/pr-audit-multiplai-2026-07-12-to-16.md`).

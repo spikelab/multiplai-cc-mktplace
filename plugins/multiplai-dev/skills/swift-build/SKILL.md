@@ -124,6 +124,28 @@ inside the shared workspace mount (same absolute path on both sides), e.g.
 
 For detailed simulator commands beyond what the script wraps, load `references/simulator-management.md`.
 
+### Tool Passthrough
+
+`swift`, `xcodebuild`, and `xcrun` are accepted as top-level commands and
+forwarded to the host verbatim (shell-quoted, run from the optional
+`--package-path` dir). Use for host diagnostics/repair and custom builds:
+
+```bash
+# Diagnostics — raw output IS the answer, never wrapped
+${CLAUDE_PLUGIN_ROOT}/skills/swift-build/scripts/swift-host.sh xcodebuild -version
+${CLAUDE_PLUGIN_ROOT}/skills/swift-build/scripts/swift-host.sh xcrun simctl list devices
+
+# Full build through the passthrough — add --xcsift (first arg after the
+# tool name) to pipe output through xcsift and save tokens. Errors and
+# warnings survive; only build noise is dropped.
+${CLAUDE_PLUGIN_ROOT}/skills/swift-build/scripts/swift-host.sh --package-path /path/to/pkg \
+  swift --xcsift build --sdk "$SIM_SDK" -Xswiftc -target -Xswiftc arm64-apple-ios17.0-simulator
+```
+
+**Rule of thumb:** pass `--xcsift` whenever the invocation compiles code;
+omit it when you need to read the tool's own output (versions, build
+settings, device lists).
+
 ## Output Parsing
 
 All build/test output is piped through **xcsift** (if installed on the host) using `--format toon --quiet`.
