@@ -338,8 +338,17 @@ case "$COMMAND" in
     cmd_test "$FILTER"
     ;;
   sim)        cmd_sim "$@" ;;
+  swift|xcodebuild|xcrun)
+    # Passthrough for diagnostics/repair and custom builds (e.g. -runFirstLaunch,
+    # -version, -showBuildSettings, or a full simulator build/install invocation).
+    # Args are shell-quoted; run from the (optional) --package-path dir so
+    # relative -project/SYMROOT paths resolve. Gateway allows xcodebuild/xcrun.
+    passthrough="$COMMAND"
+    for a in "$@"; do passthrough="$passthrough $(q "$a")"; done
+    run_on_host "cd $(q "$(pwd)") && $passthrough"
+    ;;
   *)
-    echo "Usage: swift-host.sh [--package-path <dir>] {build|test|sim} [args...]"
+    echo "Usage: swift-host.sh [--package-path <dir>] {build|test|sim|xcodebuild|xcrun} [args...]"
     echo ""
     echo "Commands:"
     echo "  build                        Build the project"
