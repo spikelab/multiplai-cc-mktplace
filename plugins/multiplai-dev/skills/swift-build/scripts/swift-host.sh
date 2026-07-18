@@ -343,12 +343,28 @@ case "$COMMAND" in
     # -version, -showBuildSettings, or a full simulator build/install invocation).
     # Args are shell-quoted; run from the (optional) --package-path dir so
     # relative -project/SYMROOT paths resolve. Gateway allows xcodebuild/xcrun.
+    #
+    # --xcsift (must be the first passthrough arg) pipes the host output through
+    # xcsift, keeping errors/warnings but dropping build noise — use it for full
+    # build invocations to save tokens. Deliberately OFF by default: most
+    # passthrough runs are diagnostics whose entire raw output IS the answer
+    # (-version, -showBuildSettings, simctl list), and xcsift would filter it out.
+    XCSIFT_WRAP="false"
+    if [ "${1:-}" = "--xcsift" ]; then XCSIFT_WRAP="true"; shift; fi
     passthrough="$COMMAND"
     for a in "$@"; do passthrough="$passthrough $(q "$a")"; done
+    if [ "$XCSIFT_WRAP" = "true" ] && host_has_xcsift; then
+      # EXACT same suffix as build_remote_cmd: the gateway special-cases this
+      # one fixed, trusted pipe (any other pipe/redirect is DENIED). Exit codes
+      # propagate through the pipe via pipefail (see SKILL.md).
+      passthrough="$passthrough 2>&1 | xcsift --format toon --quiet"
+    elif [ "$XCSIFT_WRAP" = "true" ]; then
+      echo "WARNING: xcsift not installed — showing raw output" >&2
+    fi
     run_on_host "cd $(q "$(pwd)") && $passthrough"
     ;;
   *)
-    echo "Usage: swift-host.sh [--package-path <dir>] {build|test|sim|xcodebuild|xcrun} [args...]"
+    echo "Usage: swift-host.sh [--package-path <dir>] {build|test|sim|swift|xcodebuild|xcrun} [args...]"
     echo ""
     echo "Commands:"
     echo "  build                        Build the project"
@@ -360,9 +376,12 @@ case "$COMMAND" in
     echo "  sim install <path>           Install .app bundle on booted simulator"
     echo "  sim launch <bundle-id>       Launch app by bundle identifier"
     echo "  sim screenshot [path]        Take screenshot of booted simulator"
+    echo "  swift|xcodebuild|xcrun [...] Pass args through to the host tool"
     echo ""
     echo "Options:"
     echo "  --package-path <dir>         Path to Swift package (default: cwd)"
+    echo "  --xcsift                     (passthrough only, first arg) pipe output"
+    echo "                               through xcsift — use for full builds"
     exit 1
     ;;
 esac
