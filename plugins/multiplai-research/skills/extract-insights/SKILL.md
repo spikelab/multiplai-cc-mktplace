@@ -61,12 +61,12 @@ Decompose the content into its argumentative components. For each, anchor to the
 What is the author's central argument or claim? State it in one sentence. If the thesis is never stated explicitly, reconstruct it from the argument chain and flag it as [inferred].
 
 **Argument Chain**
-The logical sequence of building blocks the author uses to construct their case. Each link in the chain should be:
-- A claim or premise (what they assert)
-- The evidence or reasoning supporting it (why they think it's true)
-- How it connects to the next link (what conclusion it enables)
+The reasoning path the author uses to construct their case, written so a reader can follow it top-to-bottom as connected prose. Each link is 1–2 full sentences stating a claim and the evidence or reasoning behind it, with the speaker attributed inside the sentence ("Evans argues …") rather than in a leading bracket tag. Line anchors stay.
 
-Number these sequentially. The chain should reconstruct the author's reasoning path, not the order they presented it.
+- **Handoff rule:** every link ends with `→ therefore:` naming the conclusion it establishes, and the next link MUST open from that conclusion. If link N+1 cannot be written to pick up link N's conclusion, the argument is not linear at that point — split into threads instead of faking the sequence.
+- **Threads for non-linear arguments:** most long-form sources (especially podcasts) argue in parallel pillars converging on a thesis, not a single line. When that's the case, organize the section as named threads — `**Thread A — <label>:**` with 2–4 links each, the handoff rule holding *within* each thread — followed by a mandatory `**Convergence:**` block stating how the threads jointly produce the thesis. Forcing parallel material into one fake-linear numbered list is a hard failure of this skill: it produces "X, therefore Y — but the next point is Z" non-sequiturs.
+
+The chain should reconstruct the author's reasoning path, not the order they presented it.
 
 **Key Claims**
 The individual claims being driven home. For each:
@@ -98,7 +98,23 @@ Where the author acknowledges complexity, contradiction, or uncertainty:
 
 </extraction_schema>
 
-### Pass 2: What Doesn't Fit?
+### Pass 2: Nuance Harvest
+
+A single holistic pass over a long source dilutes attention and systematically under-samples late material — the extraction loses exactly the small moments a viewer of the source would remember. This pass forces a systematic sweep BEFORE any output section is written.
+
+**For sources > 500 lines:** walk the source in ~300-line windows. For each window, note candidate nuances with line anchors before moving on:
+
+- Hedged reversals and self-undercutting admissions ("though I could be wrong about that", "which cuts against what I said earlier")
+- Vivid metaphors, analogies, and concrete examples
+- Throwaway asides that carry real content
+- Host contributions — sharp questions, reframings, counter-examples
+- Anything a viewer would find interesting that the schema above has no slot for
+
+Keep the harvest as raw candidates; merge it into **Tensions & Nuances** and **Emergent Insights** when writing the output. Harvested material is exempt from the length-budget squeeze — Rule 9 and Check 8 already protect Tensions & Nuances and Emergent Insights, and the harvest shares that protection: trim Key Claims and Facts instead.
+
+For sources ≤ 500 lines, a single attentive re-read replaces the windowed walk, but the same candidate categories apply.
+
+### Pass 3: What Doesn't Fit?
 
 After structured extraction, ask explicitly:
 
@@ -108,7 +124,7 @@ This catches emergent insights that defy the taxonomy — the stuff that makes y
 
 Report anything found as **Emergent Insights** — with a note on why it's interesting.
 
-### Pass 3: Fidelity Check (full depth only)
+### Pass 4: Fidelity Check (full depth only)
 
 Run these checks explicitly before finalizing. This is a known failure-mode gauntlet — extractions that skip it reliably produce B-grade output.
 
@@ -121,9 +137,9 @@ Run these checks explicitly before finalizing. This is a known failure-mode gaun
 - Terms: if the speaker uses jargon ("unhobling"), do NOT credit it to a third party ("Aschenbrenner") the speaker did not name
 - Biography: speaker's prior employers, titles, and achievements are outside knowledge unless the speaker mentions them
 
-**Check 3 — Speaker attribution audit (dialog only).** For each numbered item in Argument Chain, each Key Claim, and each Fact: re-check who actually said it. Hosts often phrase insights as questions ("Do you think X is Y?") that the guest agrees with — the idea is still the host's. Contest ideas, examples, analogies, and reframings from the host are content, not scaffolding. If you attributed a host contribution to the guest, fix it.
+**Check 3 — Speaker attribution audit (dialog only).** For each link in the Argument Chain, each Key Claim, and each Fact: re-check who actually said it. Hosts often phrase insights as questions ("Do you think X is Y?") that the guest agrees with — the idea is still the host's. Contest ideas, examples, analogies, and reframings from the host are content, not scaffolding. If you attributed a host contribution to the guest, fix it.
 
-**Check 4 — Inference labeling.** For each claim in Key Claims and each numbered link in Argument Chain, ask: is this **stated** in the source, or am I **inferring** it? If inferring, is it well-supported or am I projecting? Relabel projections as `[inferred]` or remove them.
+**Check 4 — Inference labeling.** For each claim in Key Claims and each link in the Argument Chain, ask: is this **stated** in the source, or am I **inferring** it? If inferring, is it well-supported or am I projecting? Relabel projections as `[inferred]` or remove them.
 
 **Check 5 — Memorable line present.** Did you include a Most Memorable Line at the top? If not, re-read the source and find one. The absence of a memorable line is usually a sign that the extraction has abstracted away the speaker's voice.
 
@@ -131,7 +147,11 @@ Run these checks explicitly before finalizing. This is a known failure-mode gaun
 
 **Check 7 — Line numbers present.** If the source is a numbered file or transcript (read via the Read tool, or any file with line numbers), does every source anchor in Argument Chain, Key Claims, Facts, Tensions, and Most Memorable Line carry a line reference (`L148` or `L148-155`)? If not, add them. Line numbers are what let the reader verify the extraction against the source — missing them is a hard fidelity failure, not a formatting quibble.
 
-**Check 8 — Length budget.** Count your output lines. Is the extraction ≤ 10% of source length? If over, which sections are bloated? Cut Key Claims and Facts first (cap ~12 and ~20 respectively). Do not cut Tensions, Emergent Insights, or the Argument Chain to hit the budget — those are the sections that justify the extraction's existence.
+**Check 8 — Length budget.** Count your output lines. Is the extraction ≤ 10% of source length? If over, which sections are bloated? Cut Key Claims and Facts first (cap ~12 and ~20 respectively). Do not cut Tensions, Emergent Insights, or the Argument Chain to hit the budget — those are the sections that justify the extraction's existence, and nuance-harvest material (Pass 2) shares their exemption.
+
+**Check 9 — Chain linkage.** For every link in the Argument Chain: does the next link open from this link's `→ therefore:` conclusion, or is this link the last of an explicitly labeled thread? If neither, the chain is broken at that point — reorder the links, split into threads with a Convergence block, or delete the link. A numbered list whose links don't hand off is a hard failure, not a style issue.
+
+**Check 10 — Quartile coverage.** Divide the source into quarters by line number. Does each quartile contribute at least one anchored item (L# reference) somewhere in the output? If a quartile contributed nothing, re-read that quartile — late-source material is systematically under-extracted, and an empty quartile almost always means missed nuances, not empty source.
 
 **Rule:** Better to have a shorter, honest extraction than a longer one padded with inferences dressed as facts. If a claim fails checks 1–3 and you can't fix it without rewriting, delete it.
 
@@ -142,7 +162,7 @@ Apply these on top of the base extraction process:
 ### transcript
 - **Strip filler first.** Remove "um," "uh," "you know," "like," conversational padding, tangents that go nowhere, and self-corrections where the speaker restates more clearly (keep the clear version). But: do NOT strip hedges. "Probably," "maybe," "I don't think," "a little bit" are NOT filler — they're the speaker's actual epistemic stance.
 - **Repetition is signal.** In written content, repetition is redundancy. In spoken content, repetition is emphasis — the speaker is driving a point home. Count repetitions and weight accordingly.
-- **Reconstruct linearity.** Speakers rarely argue linearly. The argument chain will require more reconstruction than written content. Flag heavily reconstructed chains as [reconstructed from non-linear delivery].
+- **Expect parallel threads.** Speakers rarely argue linearly — spoken arguments are usually parallel pillars, so the Argument Chain for transcripts will usually need the thread form (named threads + Convergence block) rather than a single line. Flag heavily reconstructed chains as [reconstructed from non-linear delivery].
 - **Speaker attribution is mandatory for dialog.** If there is more than one speaker, every claim in Argument Chain, Key Claims, and Facts must be tagged `[Guest:]` / `[Host:]` or with named speakers. Host questions, hypotheses, examples, and reframings are content — do not silently merge them into the guest's argument chain. Before submitting, re-read the transcript and verify that each attributed claim was actually said by the attributed speaker. Misattribution is a top-three failure mode of this skill and it happens because hosts often phrase sharp insights as questions the guest then agrees with — the idea is still the host's.
 - **Garble corrections.** Speech-to-text often garbles names (real people, company names, technical terms). Silently correct these when the intended word is unambiguous and flag them in the Transcription Notes section (see Rule 3). If the intended word is ambiguous, leave the garble in and add `[transcription unclear]`. Common garble patterns: "strong DM" → `StrongDM`, "thought works" → `Thoughtworks`, "Misilla" → `Mozilla`, "Andre Karpy" → `Andrej Karpathy`, "data set" → `Datasette` (when context is Simon Willison's tool, not generic "data set"), "pullet surprise" → `Pulitzer Prize`.
 - **Line number anchors.** When the transcript is a numbered file (the Read tool prefixes each line, or the file has explicit line numbers), include line number ranges in every source anchor: `(L148-155)`. This is what lets readers verify quotes against the source without re-reading the whole transcript.
@@ -182,8 +202,8 @@ Apply these on top of the base extraction process:
 - [3-5 bullets, one sentence each, the takeaways]
 
 **Key Claims:**
-1. [claim] `[speaker]` `[strength]` — "[source quote]" (L#-#)
-2. [claim] `[speaker]` `[strength]` — "[source quote]" (L#-#)
+1. [Full-sentence claim with speaker named in it] `[strength]` — "[source quote]" (L#-#)
+2. [Full-sentence claim with speaker named in it] `[strength]` — "[source quote]" (L#-#)
 3. ...
 
 **What's Being Driven Home:** [1-2 sentences on what the author most emphasizes,
@@ -224,12 +244,33 @@ based on boosters, repetition, and structural position]
 
 ## Argument Chain
 
-1. **[Building block 1]** `[Guest:]` or `[Host:]` — [evidence/reasoning, one sentence] (L#-#)
-   → enables: [what conclusion this supports]
-2. **[Building block 2]** `[Guest:]` — [...] (L#-#)
-   → enables: [...]
+[Write links as connected prose: each link is 1–2 full sentences with the speaker
+named in the sentence ("Evans argues that …"), and each link after the first OPENS
+from the previous link's `→ therefore:` conclusion. Use the linear form only when
+the argument genuinely is one line; otherwise use the thread form.]
+
+Linear form:
+
+1. [Full-sentence claim with speaker named in it, plus its evidence/reasoning.] (L#-#)
+   → therefore: [the conclusion this link establishes — link 2 MUST open from it]
+2. [Opens from link 1's conclusion: "Because ..., ..."] (L#-#)
+   → therefore: [...]
 3. ...
-   → **Therefore:** [how the chain resolves into the thesis]
+   → therefore: [the thesis]
+
+Thread form (the common case for long-form sources):
+
+**Thread A — [label]:**
+1. [Full-sentence claim, speaker named in sentence.] (L#-#)
+   → therefore: [...]
+2. [Opens from A1's conclusion ...] (L#-#)
+   → therefore: [thread A's conclusion]
+
+**Thread B — [label]:**
+1. [...] (L#-#)
+   → therefore: [thread B's conclusion]
+
+**Convergence:** [2–3 sentences stating how the threads jointly produce the thesis.]
 
 ## Tensions & Nuances
 
@@ -247,11 +288,11 @@ Non-obvious observations that didn't fit the other categories. Clearly editorial
 
 ## Key Claims
 
-Compact format — one line for the claim, one indented quote line for the anchor. Cap ~12 claims for most sources; more only for unusually dense material. Strength tags: `STRONG` (multiple evidence points), `SUPPORTED` (single evidence), `ASSERTED` (no evidence given), `INFERRED` (reconstructed from context).
+Compact format — one line for the claim, one indented quote line for the anchor. Cap ~12 claims for most sources; more only for unusually dense material. The claim text is a full sentence with the speaker named in the sentence ("Evans argues that …") — keep the strength tag, but do not stack bracket tags at the start of the line. Strength tags: `STRONG` (multiple evidence points), `SUPPORTED` (single evidence), `ASSERTED` (no evidence given), `INFERRED` (reconstructed from context).
 
-1. **[Short label]** `[Guest:]` `STRONG` — [claim in one sentence, hedges preserved]
+1. **[Short label]** `STRONG` — [Full-sentence claim with the speaker named in it, hedges preserved.]
    > "[short verbatim anchor quote]" (L#-#)
-2. **[Short label]** `[Host:]` `SUPPORTED` — [claim]
+2. **[Short label]** `SUPPORTED` — [claim]
    > "[quote]" (L#-#)
 ...
 
@@ -298,7 +339,7 @@ Compact bulleted list. Cap ~20 items for most sources — prefer specific number
    - **Forbidden:** Supplying entities, dates, biographies, affiliations, or attributions the speaker did not state. If the speaker says "cars," you do NOT write "Tesla." If the speaker says "December," you do NOT write "December 2025" — even if the recording date makes it obvious. If the speaker uses a term ("unhobling"), you do NOT credit it to someone they didn't name ("Leopold Aschenbrenner"). Biographical framing that makes a speaker seem more credible ("founding member of OpenAI, Tesla AI lead") goes in a separate `Extractor Context:` section or is omitted entirely — it never appears inside a Source anchor or Strength justification.
    - **Acid test:** Before including any proper noun, date, or attribution, ask: "Does this word appear in the source text?" If no, either omit it or mark it `[inferred]` explicitly.
 
-4. **Every claim needs a speaker (for dialog content).** In interviews, podcasts, panels, and any multi-speaker transcript, every claim in the Argument Chain, Key Claims, and Facts sections must be tagged with the speaker who made it. Use `[Guest:]`, `[Host:]`, or named speakers if known. Host contributions are CONTENT, not framing — their questions, hypotheses, examples, and reframings count as part of the extraction. Stealing the host's ideas and attributing them to the guest is a serious fidelity failure. When in doubt, re-check who actually said the thing.
+4. **Every claim needs a speaker (for dialog content).** In interviews, podcasts, panels, and any multi-speaker transcript, every claim in the Argument Chain, Key Claims, and Facts sections must attribute its speaker. In prose sections (Argument Chain, Key Claims) name the speaker inside the sentence ("Evans argues …"); in compact list sections (Facts) use `[Guest:]`, `[Host:]`, or named-speaker tags. Host contributions are CONTENT, not framing — their questions, hypotheses, examples, and reframings count as part of the extraction. Stealing the host's ideas and attributing them to the guest is a serious fidelity failure. When in doubt, re-check who actually said the thing.
 
 5. **Label inferences.** Anything not directly stated gets an `[inferred]` tag. The user must know what's in the text vs what you reconstructed. Inferences belong in the Emergent Insights section or are explicitly tagged inline — never silently embedded in Key Claims or Facts.
 
@@ -308,6 +349,6 @@ Compact bulleted list. Cap ~20 items for most sources — prefer specific number
 
 8. **No recommendations.** Extract what IS, not what should be done about it. The user will decide what to do.
 
-9. **Short over long. Target ≤ 10% of source length.** A tight 300-line extraction of a 3,000-line transcript is better than a 700-line one that's just the transcript with some parts removed. Cap Key Claims at ~12 and Facts at ~20 for most sources. When over budget, trim Key Claims and Facts before touching Tensions, Emergent Insights, or the Argument Chain — the interesting material is what makes the extraction worth reading, and if the reader has to scroll past 40 claim blocks to reach it, they won't. Strip ruthlessly. A reader who actually reads a short extraction beats a reader who abandons a long one.
+9. **Short over long. Target ≤ 10% of source length.** A tight 300-line extraction of a 3,000-line transcript is better than a 700-line one that's just the transcript with some parts removed. Cap Key Claims at ~12 and Facts at ~20 for most sources. When over budget, trim Key Claims and Facts before touching Tensions, Emergent Insights, or the Argument Chain — nuance-harvest material (Pass 2) lands in those protected sections and shares their exemption. The interesting material is what makes the extraction worth reading, and if the reader has to scroll past 40 claim blocks to reach it, they won't. Strip ruthlessly. A reader who actually reads a short extraction beats a reader who abandons a long one.
 
 10. **If the source is thin, say so.** Some content is genuinely filler-heavy with few real insights. A short extraction with a note "this source has ~3 substantive claims, the rest is padding" is the honest output.
