@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .change_manager import extract_global_constraints
 from .config import BuildConfig
 from .gates import (
     _repo_trusted,
@@ -292,6 +293,22 @@ def parse_blocks(tasks_path: Path) -> list[BlockInfo]:
             satisfies_str = satisfies_match.group(1).strip()
             satisfies = [s.strip() for s in satisfies_str.split(",") if s.strip()]
 
+        # Parse the Interfaces section: `- Produces: <sig>` / `- Consumes: <sig>`
+        # bullet lines under an `Interfaces:` header (until the first
+        # non-bullet, non-blank line).
+        produces: list[str] = []
+        consumes: list[str] = []
+        interfaces_match = re.search(r"^Interfaces:\s*$", body, re.MULTILINE)
+        if interfaces_match:
+            for line in body[interfaces_match.end():].splitlines():
+                bullet = re.match(r"^-\s+(Produces|Consumes)\b[^:]*:\s*(.+)$", line)
+                if bullet:
+                    value = bullet.group(2).strip()
+                    if value and value.lower() != "(none)":
+                        (produces if bullet.group(1) == "Produces" else consumes).append(value)
+                elif line.strip():
+                    break
+
         # Check for checkbox format
         checkbox_pattern = re.compile(r"^-\s+\[[ x]\]\s+(.+)$", re.MULTILINE)
         checkboxes = checkbox_pattern.findall(body)
@@ -311,17 +328,33 @@ def parse_blocks(tasks_path: Path) -> list[BlockInfo]:
             name=name,
             description=description,
             satisfies=satisfies,
+            produces=produces,
+            consumes=consumes,
         ))
 
     return blocks
 
 
-def assemble_context(block: BlockInfo, config: BuildConfig, role: str) -> str:
+def _global_constraints_text(config: BuildConfig) -> str:
+    """The design doc's Global Constraints section ("" when absent)."""
+    if not config.design_path.exists():
+        return ""
+    return extract_global_constraints(config.design_path.read_text())
+
+
+def assemble_context(
+    block: BlockInfo,
+    config: BuildConfig,
+    role: str,
+    blocks: list[BlockInfo] | None = None,
+) -> str:
     """Build the context bundle for an agent prompt.
 
-    Includes: block info, design doc, specs, rubric, memory files, reference docs.
-    The role parameter ("test_writer", "implementer", "refactorer") controls
-    which files are included.
+    Includes: block info, global constraints, cross-block interfaces, design
+    doc, specs, rubric, memory files, reference docs. The role parameter
+    ("test_writer", "implementer", "refactorer") controls which files are
+    included. ``blocks`` (the full block list) threads earlier blocks'
+    Produces signatures into this block's context.
     """
     parts: list[str] = []
 
@@ -330,6 +363,33 @@ def assemble_context(block: BlockInfo, config: BuildConfig, role: str) -> str:
     parts.append(block.description)
     if block.satisfies:
         parts.append(f"Satisfies: {', '.join(block.satisfies)}")
+
+    # Global constraints — verbatim, ahead of everything else the agent reads
+    constraints = _global_constraints_text(config)
+    if constraints:
+        parts.append(
+            f"\n## Global Constraints (project-wide, non-negotiable)\n{constraints}"
+        )
+
+    # This block's interface contract
+    if block.produces or block.consumes:
+        iface_lines = [f"- Produces: {sig}" for sig in block.produces]
+        iface_lines += [f"- Consumes: {sig}" for sig in block.consumes]
+        parts.append("\n## Interfaces (this block)\n" + "\n".join(iface_lines))
+
+    # Earlier blocks' Produces signatures — dependent blocks call these
+    # exactly as written, never re-derived from memory.
+    if blocks:
+        prior = [
+            f"- Block {b.number} ({b.name}) produces: {sig}"
+            for b in blocks if b.number < block.number
+            for sig in b.produces
+        ]
+        if prior:
+            parts.append(
+                "\n## Interfaces from earlier blocks (use these signatures verbatim)\n"
+                + "\n".join(prior)
+            )
 
     # Design document
     if config.design_path.exists():
@@ -653,7 +713,7 @@ async def run_block_tdd(
         for req_file in sorted(req_dir.glob("*.md")):
             specs += f"\n### {req_file.name}\n{req_file.read_text()}"
 
-    context = assemble_context(block, config, "test_writer")
+    context = assemble_context(block, config, "test_writer", blocks=state.tdd.blocks if state.tdd else None)
 
     progress.log_agent("TestWriter", block.name, "STARTED")
     test_result = await run_test_writer(
@@ -703,7 +763,7 @@ async def run_block_tdd(
     state.mark_block_status(block_idx, BlockStatus.IMPLEMENTING, config.state_file_path())
     progress.log_block(block.number, total, block.name, "IMPLEMENTING")
 
-    impl_context = assemble_context(block, config, "implementer")
+    impl_context = assemble_context(block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None)
     progress.log_agent("Implementer", block.name, "STARTED")
     impl_result = await run_implementer(
         block_name=block.name,
@@ -737,7 +797,7 @@ async def run_block_tdd(
     # --- Phase C: Refactor (standard tier only) ---
     if config.refactor_phase:
         log.info("START block=%d name=%s phase=REFACTOR", block.number, block.name)
-        refactor_context = assemble_context(block, config, "refactorer")
+        refactor_context = assemble_context(block, config, "refactorer", blocks=state.tdd.blocks if state.tdd else None)
         progress.log_agent("Refactorer", block.name, "STARTED")
         refactor_result = await run_refactorer(
             block_name=block.name,
@@ -787,7 +847,7 @@ async def _run_integration_and_review(
             if escalated:
                 progress.log_agent("IntegrationFixer", block.name,
                                    "ESCALATED — questioning the architecture")
-            context = assemble_context(block, config, "implementer")
+            context = assemble_context(block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None)
             fix_result = await run_integration_fix(
                 failure_output=gate.metadata.get("stderr", "") + gate.metadata.get("stdout", ""),
                 test_command=config.test_command,
@@ -859,7 +919,7 @@ async def _run_integration_and_review(
         if iteration + 1 >= MAX_REVIEW_ITERATIONS:
             break  # no fix agent after the last review — its work would go unreviewed
         # Spawn fix agent for the failing dimensions
-        context = assemble_context(block, config, "implementer")
+        context = assemble_context(block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None)
         fix = await run_implementer(
             block_name=block.name,
             block_description=f"Fix review issues: {score_gate.reason}",
@@ -929,6 +989,12 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
             req_file = req_dir / f"{cap}.md"
             if req_file.exists():
                 spec_context += f"\n\n### Requirement: {cap}\n{req_file.read_text()}"
+
+    # Global constraints are review criteria too — a block that violates one
+    # is non-compliant even when its local behavior is correct.
+    constraints = _global_constraints_text(config)
+    if constraints:
+        spec_context += f"\n\n### Global Constraints (project-wide)\n{constraints}"
 
     # RED/GREEN evidence reaches the reviewer as claims to verify, not truth.
     report_parts = []

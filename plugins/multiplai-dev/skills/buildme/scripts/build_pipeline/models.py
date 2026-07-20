@@ -164,6 +164,12 @@ class BlockInfo(BaseModel):
     name: str
     description: str
     satisfies: list[str] = Field(default_factory=list)
+    # Cross-block interface contract parsed from the block's `Interfaces:`
+    # section: exact signatures this block creates (produces) and the earlier-
+    # block signatures it calls (consumes). Threaded into dependent blocks'
+    # agent prompts so signatures match across blocks.
+    produces: list[str] = Field(default_factory=list)
+    consumes: list[str] = Field(default_factory=list)
     status: BlockStatus = BlockStatus.PENDING
     # True when the block failed specifically because an agent LLM call timed
     # out (vs an ordinary build/test failure) — lets the orchestrator return

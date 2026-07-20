@@ -11,6 +11,7 @@ from build_pipeline.spec_generator import (
     _generate_single_artifact,
     _load_or_create_state,
     run_spec_generator,
+    scan_placeholders,
 )
 from build_pipeline.change_manager import ChangeManager, ARTIFACT_DAG
 from build_pipeline.models import ArtifactStatus, BuildPhase
@@ -431,6 +432,71 @@ class TestTasksShapeAudit:
             await _generate_single_artifact(cm, change_dir, "design", config, state)
 
         mock_audit.assert_not_awaited()
+
+
+class TestScanPlaceholders:
+    """Deterministic placeholder scan over generated tasks (Item 6)."""
+
+    def test_flags_tbd_and_todo(self):
+        findings = scan_placeholders("## 1. Block\nSchema: TBD\nWire it up.\n- [ ] TODO: name it\n")
+        assert len(findings) == 2
+        assert all(f["category"] == "placeholder" for f in findings)
+        assert "line 2" in findings[0]["description"]
+        assert "line 4" in findings[1]["description"]
+
+    def test_flags_deferred_phrases(self):
+        text = "Add appropriate error handling here.\nUse a structure similar to block 2.\n"
+        findings = scan_placeholders(text)
+        assert len(findings) == 2
+
+    def test_clean_text_yields_no_findings(self):
+        text = "## 1. Token Issuer\nProduces issue_token(user_id: str) -> str.\n"
+        assert scan_placeholders(text) == []
+
+    def test_does_not_flag_substrings_of_words(self):
+        """`TBD`/`TODO` match as words only — not inside identifiers."""
+        assert scan_placeholders("call TODOS_LIST and tbdx_helper()\n") == []
+
+    @pytest.mark.asyncio
+    async def test_placeholder_scan_forces_regeneration_without_llm_audit(self, tmp_path):
+        """The scan runs even when the LLM audit errors out."""
+        specs_dir = tmp_path / "specs"
+        specs_dir.mkdir()
+        cm = ChangeManager(specs_dir)
+        cm.init_specs()
+        change_dir = cm.create_change("ph")
+        (change_dir / "proposal.md").write_text("# Proposal")
+        (change_dir / "design.md").write_text("# Design")
+
+        config = MagicMock()
+        config.change_name = "ph"
+        config.specs_dir = specs_dir
+        config.change_dir = change_dir
+        config.model = "test-model"
+        config.task_granularity = "checkboxes"
+        config.state_file_path.return_value = change_dir / ".build-state.json"
+
+        state = BuildState(
+            change_name="ph",
+            mode="scratch",
+            tier="standard",
+            state_file=str(change_dir / ".build-state.json"),
+            phase=BuildPhase.SPEC_GENERATION,
+            spec_gen=SpecGenState(),
+        )
+
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit", new_callable=AsyncMock) as mock_audit:
+            mock_gen.side_effect = ["## 1. Block\nError handling: TBD\n", "## 1. Block\nConcrete.\n"]
+            mock_audit.side_effect = RuntimeError("LLM down")
+
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        # Scan findings alone drove the one regeneration pass
+        assert mock_gen.call_count == 2
+        assert (change_dir / "tasks.md").read_text() == "## 1. Block\nConcrete.\n"
+        regen_findings = mock_gen.call_args_list[1].kwargs["audit_findings"]
+        assert "Placeholder text on line 2" in regen_findings
 
 
 # --- Run spec generator (integration-ish) ---

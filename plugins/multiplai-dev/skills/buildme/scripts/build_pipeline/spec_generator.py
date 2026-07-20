@@ -12,6 +12,7 @@ Flow:
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -242,6 +243,33 @@ async def _generate_requirements(
         log.info("Wrote requirements: %s", req_file)
 
 
+# Placeholder text that defers specification to the implementer. Deterministic
+# counterpart to the audit prompt's Placeholders check — the regex always runs,
+# even when the LLM audit errors out.
+_PLACEHOLDER_RE = re.compile(
+    r"\bTBD\b|\bTODO\b|add appropriate error handling|similar to block \d+",
+    re.IGNORECASE,
+)
+
+
+def scan_placeholders(text: str) -> list[dict]:
+    """Deterministic TBD/TODO scan over a generated artifact. Returns audit-
+    finding dicts (same shape as the LLM audit) — non-empty triggers the
+    single tasks regeneration pass."""
+    findings = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if _PLACEHOLDER_RE.search(line):
+            findings.append({
+                "category": "placeholder",
+                "severity": "major",
+                "description": f"Placeholder text on line {lineno}: {line.strip()[:120]}",
+                "suggestion": "Replace with the concrete content — exact names, "
+                              "signatures, literal values (repeat code verbatim "
+                              "rather than referencing another block).",
+            })
+    return findings
+
+
 async def _audit_tasks_shape(
     change_dir: Path,
     context: dict,
@@ -250,20 +278,26 @@ async def _audit_tasks_shape(
 ) -> None:
     """Audit tasks.md for horizontal decomposition; regenerate ONCE on findings.
 
-    Any findings trigger exactly one regeneration pass with the findings
-    injected into the tasks prompt (no re-audit loop). Audit failures are
-    non-fatal — the first-pass tasks.md stands.
+    Findings come from two sources: the deterministic placeholder scan (always
+    runs) and the LLM shape/traceability audit. Any findings trigger exactly
+    one regeneration pass with the findings injected into the tasks prompt
+    (no re-audit loop). LLM audit failures are non-fatal — the deterministic
+    findings still count; with none, the first-pass tasks.md stands.
     """
     from .llm_steps.spec_steps import generate_artifact, run_tasks_audit
 
     log.info("START phase=TASKS_SHAPE_AUDIT")
     print("PHASE: tasks_shape_audit")
+    findings = scan_placeholders(output_path.read_text())
+    if findings:
+        log.warning("Placeholder scan found %d deterministic findings", len(findings))
     try:
-        findings = await run_tasks_audit(change_dir, config)
+        findings += await run_tasks_audit(change_dir, config)
     except Exception as audit_err:
         log.warning("Tasks shape audit failed (non-fatal): %s", audit_err)
         print(f"PHASE: tasks_shape_audit_skipped — {audit_err}")
-        return
+        if not findings:
+            return
 
     if not findings:
         log.info("DONE phase=TASKS_SHAPE_AUDIT findings=0")

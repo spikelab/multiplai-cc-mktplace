@@ -76,6 +76,9 @@ completes, cutting through all the layers that behavior needs.
 ## Design
 {design_content}
 
+## Specs
+{specs_content}
+
 ## Tasks
 {tasks_content}
 
@@ -88,6 +91,27 @@ completes, cutting through all the layers that behavior needs.
   each slice, not be deferred to the end
 - Blocks that complete without anything runnable or testable end-to-end
 - A block whose deliverable can only be exercised after a LATER block lands
+
+## Spec-Coverage Traceability
+
+Walk every WHEN/THEN scenario in the specs and name the block that implements
+it. Report each scenario with no implementing block as a finding
+(category "spec-coverage") listing the scenario verbatim.
+
+## Cross-Block Signature Consistency
+
+For every `Consumes:` line in a block's Interfaces, find the earlier block
+whose `Produces:` line it names. Report (category "interface-mismatch"):
+- a Consumes with no matching earlier Produces
+- a Consumes whose signature differs from the Produces it references
+- two blocks producing the same name with different signatures
+
+## Placeholders
+
+Report any block text that defers specification (category "placeholder"):
+"TBD", "TODO", "add appropriate error handling", "similar to block N", or any
+instruction that requires the implementer to guess a name, signature, or
+literal value.
 
 ## What NOT to Flag
 

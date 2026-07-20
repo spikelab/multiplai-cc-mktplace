@@ -219,8 +219,17 @@ async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
     tasks = _read_file(change_dir / "tasks.md")
     design = _read_file(change_dir / "design.md")
 
+    # Specs feed the traceability check: every WHEN/THEN must map to a block.
+    specs_parts = []
+    req_dir = change_dir / "requirements"
+    if req_dir.exists():
+        for req_file in sorted(req_dir.glob("*.md")):
+            specs_parts.append(f"### {req_file.name}\n{req_file.read_text()}")
+    specs_content = "\n\n".join(specs_parts) or "(no requirements files)"
+
     prompt = TASKS_AUDIT_PROMPT.format(
         design_content=design,
+        specs_content=specs_content,
         tasks_content=tasks,
     )
 

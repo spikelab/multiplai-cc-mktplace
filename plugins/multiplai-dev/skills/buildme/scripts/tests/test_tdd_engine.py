@@ -184,6 +184,66 @@ class TestParseBlocks:
         assert blocks[0].satisfies == []
 
 
+class TestParseBlockInterfaces:
+    """The `Interfaces:` section threads cross-block signatures (Item 6)."""
+
+    def test_parses_produces_and_consumes(self, tmp_path):
+        tasks_file = tmp_path / "tasks.md"
+        tasks_file.write_text(
+            "## 1. Token Issuer\n\nIssue tokens.\n\n"
+            "Interfaces:\n"
+            "- Produces: issue_token(user_id: str) -> str\n"
+            "- Produces: TokenError(Exception)\n"
+            "Satisfies: auth\n\n"
+            "## 2. Login Endpoint\n\nWire login.\n\n"
+            "Interfaces:\n"
+            "- Consumes: Block 1: issue_token(user_id: str) -> str\n"
+            "- Produces: POST /login -> {token: str}\n"
+            "Satisfies: auth\n"
+        )
+        blocks = parse_blocks(tasks_file)
+
+        assert blocks[0].produces == [
+            "issue_token(user_id: str) -> str",
+            "TokenError(Exception)",
+        ]
+        assert blocks[0].consumes == []
+        assert blocks[1].consumes == ["Block 1: issue_token(user_id: str) -> str"]
+        assert blocks[1].produces == ["POST /login -> {token: str}"]
+
+    def test_none_marker_yields_empty_lists(self, tmp_path):
+        tasks_file = tmp_path / "tasks.md"
+        tasks_file.write_text(
+            "## 1. Standalone\n\nDoes its own thing.\n\n"
+            "Interfaces:\n"
+            "- Produces: (none)\n"
+            "Satisfies: solo\n"
+        )
+        blocks = parse_blocks(tasks_file)
+        assert blocks[0].produces == []
+        assert blocks[0].consumes == []
+
+    def test_absent_section_yields_empty_lists(self, tmp_path):
+        tasks_file = tmp_path / "tasks.md"
+        tasks_file.write_text("## 1. Old Format\n\nNo interfaces here.\n\nSatisfies: x\n")
+        blocks = parse_blocks(tasks_file)
+        assert blocks[0].produces == []
+        assert blocks[0].consumes == []
+
+    def test_stops_at_first_non_bullet_line(self, tmp_path):
+        """A prose line ends the section — later bullets are not interfaces."""
+        tasks_file = tmp_path / "tasks.md"
+        tasks_file.write_text(
+            "## 1. Block\n\nDesc.\n\n"
+            "Interfaces:\n"
+            "- Produces: alpha() -> int\n"
+            "Notes follow here.\n"
+            "- Produces: should_not_be_parsed() -> None\n"
+        )
+        blocks = parse_blocks(tasks_file)
+        assert blocks[0].produces == ["alpha() -> int"]
+
+
 class TestAssembleContext:
     def _make_config(self, tmp_path):
         """Create a BuildConfig with a populated change directory."""
@@ -273,6 +333,88 @@ class TestAssembleContext:
         ctx = assemble_context(block, config, "test_writer")
         assert "Block 1: Solo" in ctx
         assert "Just this" in ctx
+
+
+class TestContextConstraintsAndInterfaces:
+    """Global Constraints + cross-block interfaces reach agent prompts (Item 6)."""
+
+    def _make_config(self, tmp_path, design_text):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        specs_root = project_dir / "specs"
+        change_dir = specs_root / "changes" / "c"
+        change_dir.mkdir(parents=True)
+        (change_dir / "design.md").write_text(design_text)
+
+        config = BuildConfig(
+            project_dir=project_dir,
+            change_name="c",
+            config_dir=tmp_path / "claude-config",
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
+        )
+        config.specs_dir = specs_root
+        return config
+
+    def test_injects_global_constraints_verbatim(self, tmp_path):
+        config = self._make_config(
+            tmp_path,
+            "# Design\n\n## Global Constraints\n"
+            "- Python >= 3.11\n"
+            "- Queue name is exactly `dolce-jobs-v2`\n\n"
+            "## Decisions\nSomething else.\n",
+        )
+        block = BlockInfo(number=1, name="X", description="desc")
+        ctx = assemble_context(block, config, "implementer")
+
+        assert "Global Constraints (project-wide, non-negotiable)" in ctx
+        assert "Queue name is exactly `dolce-jobs-v2`" in ctx
+
+    def test_no_constraints_section_when_design_lacks_one(self, tmp_path):
+        config = self._make_config(tmp_path, "# Design\n\n## Decisions\nNo constraints.\n")
+        block = BlockInfo(number=1, name="X", description="desc")
+        ctx = assemble_context(block, config, "implementer")
+        assert "Global Constraints (project-wide" not in ctx
+
+    def test_injects_own_interfaces(self, tmp_path):
+        config = self._make_config(tmp_path, "# Design\n")
+        block = BlockInfo(
+            number=2,
+            name="Login",
+            description="desc",
+            produces=["POST /login -> {token: str}"],
+            consumes=["Block 1: issue_token(user_id: str) -> str"],
+        )
+        ctx = assemble_context(block, config, "implementer")
+
+        assert "## Interfaces (this block)" in ctx
+        assert "- Produces: POST /login -> {token: str}" in ctx
+        assert "- Consumes: Block 1: issue_token(user_id: str) -> str" in ctx
+
+    def test_injects_earlier_block_produces(self, tmp_path):
+        config = self._make_config(tmp_path, "# Design\n")
+        b1 = BlockInfo(
+            number=1, name="Issuer", description="d",
+            produces=["issue_token(user_id: str) -> str"],
+        )
+        b2 = BlockInfo(number=2, name="Login", description="d")
+        b3 = BlockInfo(
+            number=3, name="Later", description="d",
+            produces=["later_only() -> None"],
+        )
+        ctx = assemble_context(b2, config, "implementer", blocks=[b1, b2, b3])
+
+        assert "Interfaces from earlier blocks" in ctx
+        assert "Block 1 (Issuer) produces: issue_token(user_id: str) -> str" in ctx
+        # Later blocks' interfaces are not leaked backwards
+        assert "later_only()" not in ctx
+
+    def test_no_earlier_interfaces_section_for_first_block(self, tmp_path):
+        config = self._make_config(tmp_path, "# Design\n")
+        b1 = BlockInfo(number=1, name="First", description="d", produces=["a() -> int"])
+        ctx = assemble_context(b1, config, "test_writer", blocks=[b1])
+        assert "Interfaces from earlier blocks" not in ctx
 
 
 class TestModelAdaptiveAgentSelection:
