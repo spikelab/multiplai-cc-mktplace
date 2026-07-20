@@ -73,6 +73,10 @@ class ResearchState(BaseModel):
     sources: list[Source] = Field(default_factory=list)  # after triage
     findings: list[Finding] = Field(default_factory=list)
     reassessment: ReassessResult | None = None
+    # Set when a reassess-cycle leg raised — surfaced to synthesis so the
+    # report never silently pretends refinement/verification happened.
+    refinement_error: str = ""
+    verification_error: str = ""
     total_fetches: int = 0  # cumulative count across READ + link follows
     tavily_fallback_count: int = 0  # Tavily content fallbacks used (max 10 per run)
 

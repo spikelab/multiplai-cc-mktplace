@@ -339,7 +339,15 @@ async def _run_main_stages(
         # Recovery: run DIVERGE again with an instruction to diversify
         log.info("Diversity gate failed — re-running DIVERGE")
         state.plan = await plan_node.diverge(config, state.plan)
-        # Re-check (no infinite loop — just one retry)
+        # Re-check after the one retry (no infinite loop) — proceed either
+        # way, but the recheck result is actually computed and logged.
+        diversity_result = query_diversity_gate(
+            state.plan.all_queries, min_clusters=3
+        )
+        progress.log_stage(
+            "DIVERSITY GATE (recheck)",
+            f"passed={diversity_result.passed} | {diversity_result.reason}",
+        )
     state.advance_to(Stage.DIVERSITY_GATE_PASSED)
 
     if config.plan_only:
@@ -374,10 +382,13 @@ async def _run_main_stages(
         f"passed={min_result.passed} | {min_result.reason}",
     )
     if not min_result.passed:
+        # No recovery machinery here — the run proceeds, visibly thin.
         log.warning("Min sources gate failed: %s", min_result.reason)
-        # Best-effort recovery: broaden the search with contrarian/mechanism queries
-        # already in the plan — most of the time this means search was already thin.
-        # We proceed with what we have rather than infinite-looping.
+        progress.log_stage(
+            "MIN SOURCES GATE",
+            f"FAILED — proceeding under minimum "
+            f"({len(state.sources)}/{config.preset.min_sources})",
+        )
     state.advance_to(Stage.MIN_SOURCES_GATE_PASSED)
 
     # READ (with fetch fallback chain: SDK → httpx → Tavily for AUTHORITATIVE)
@@ -420,6 +431,9 @@ async def _run_main_stages(
                 max_results=max(config.preset.sources // max(len(uncovered), 1), 1),
                 strategy="keyword",
             )
+            # Dedupe against already-triaged sources (same as refinement/verification)
+            known_urls = {s.url for s in state.sources}
+            targeted_results = [r for r in targeted_results if r.url not in known_urls]
             if targeted_results:
                 # Triage the new results
                 new_sources = await triage_node.triage(
@@ -529,17 +543,32 @@ async def _run_reassess_cycle(
     router: SearchRouter,
     progress: ProgressWriter,
 ) -> None:
-    """Run refinement and/or verification cycles based on REASSESS output."""
+    """Run refinement and/or verification cycles based on REASSESS output.
+
+    Sequential on purpose: both cycles extend state.sources/state.findings and
+    re-enter read_node.read, so running them concurrently duplicated fetches
+    and findings. A failed cycle is recorded on state and surfaced in the
+    progress file — the pipeline continues, but the failure is never silent.
+    """
     assert state.reassessment is not None
 
-    tasks = []
     if state.reassessment.refinement_needed and state.reassessment.refinement_queries:
-        tasks.append(_run_refinement(config, state, router, progress))
-    if state.reassessment.verify_queries:
-        tasks.append(_run_verification(config, state, router, progress))
+        try:
+            await _run_refinement(config, state, router, progress)
+        except Exception as e:  # noqa: BLE001
+            log.exception("REFINEMENT cycle failed")
+            state.refinement_error = str(e)
+            state.checkpoint()
+            progress.log_stage("REFINEMENT FAILED", str(e))
 
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+    if state.reassessment.verify_queries:
+        try:
+            await _run_verification(config, state, router, progress)
+        except Exception as e:  # noqa: BLE001
+            log.exception("VERIFICATION cycle failed")
+            state.verification_error = str(e)
+            state.checkpoint()
+            progress.log_stage("VERIFICATION FAILED", str(e))
 
 
 async def _run_refinement(

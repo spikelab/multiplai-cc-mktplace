@@ -243,6 +243,16 @@ def _format_reassessment(state: ResearchState) -> str:
         lines.append("Claims flagged for verification:")
         for c in r.verify_claims:
             lines.append(f"  - {c}")
+    if state.refinement_error:
+        lines.append(
+            f"Refinement was attempted but FAILED ({state.refinement_error}) "
+            "— coverage gaps flagged above remain unaddressed."
+        )
+    if state.verification_error:
+        lines.append(
+            f"Verification was attempted but FAILED ({state.verification_error}) "
+            "— treat flagged claims as unverified."
+        )
     if not lines:
         lines.append("Reassessment passed — no issues found.")
     return "\n".join(lines)
