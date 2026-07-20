@@ -265,6 +265,55 @@ def red_gate(test_output: str, exit_code: int | None) -> GateResult:
     )
 
 
+_AGENT_STATUS_RE = re.compile(
+    r"^\s*(?:[-*]\s*|\*\*)?STATUS:?\*{0,2}\s*[:\-]?\s*"
+    r"(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|BLOCKED)\b",
+    re.MULTILINE | re.IGNORECASE,
+)
+_AGENT_STATUS_PROCEED = {"DONE", "DONE_WITH_CONCERNS"}
+
+
+def parse_agent_status(output: str) -> str | None:
+    """The last `STATUS:` slot an agent reported, uppercased ("" → None).
+
+    Agents are instructed to close their report with a REQUIRED STATUS slot.
+    The last occurrence wins so a status quoted mid-report (e.g. restating the
+    instructions) never outranks the agent's own final verdict.
+    """
+    matches = _AGENT_STATUS_RE.findall(output or "")
+    return matches[-1].upper() if matches else None
+
+
+def agent_status_gate(output: str, agent_name: str) -> GateResult:
+    """Gate an agent's self-reported STATUS slot.
+
+    NEEDS_CONTEXT and BLOCKED are the agent saying it could not do the work —
+    the pipeline surfaces the stated reason and fails the block rather than
+    proceeding on an admitted non-result. A missing slot is not fatal (the
+    deterministic gates are the real verification), but it is reported.
+    """
+    status = parse_agent_status(output)
+    if status is None:
+        return GateResult(
+            passed=True,
+            reason=f"{agent_name} reported no STATUS slot",
+            metadata={"status": None},
+        )
+    if status in _AGENT_STATUS_PROCEED:
+        return GateResult(
+            passed=True,
+            reason=f"{agent_name} reported STATUS: {status}",
+            metadata={"status": status},
+        )
+    return GateResult(
+        passed=False,
+        reason=f"{agent_name} reported STATUS: {status} — it could not complete "
+               f"the work. Agent report:\n{(output or '')[-1500:]}",
+        action="escalate_to_human",
+        metadata={"status": status},
+    )
+
+
 def review_score_gate(review: ReviewResult) -> GateResult:
     """Two-verdict gate: spec compliance (nothing missing/misunderstood) AND
     score threshold (weighted avg >= 3.5, no dimension at 1)."""

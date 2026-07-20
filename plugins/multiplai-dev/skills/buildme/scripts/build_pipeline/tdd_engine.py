@@ -22,6 +22,7 @@ from .change_manager import extract_global_constraints
 from .config import BuildConfig
 from .gates import (
     _repo_trusted,
+    agent_status_gate,
     baseline_test_gate,
     integration_gate,
     red_gate,
@@ -738,6 +739,17 @@ async def run_block_tdd(
         state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
         return False
 
+    # The agent's own STATUS slot: NEEDS_CONTEXT/BLOCKED is it saying the work
+    # was not doable as specified — stop the block, surface its reason.
+    status = agent_status_gate(test_result.output, "TestWriter")
+    if not status.passed:
+        log.error("FAIL block=%d name=%s phase=TEST_WRITE reason=agent_status status=%s",
+                  block.number, block.name, status.metadata.get("status"))
+        progress.log_agent("TestWriter", block.name, str(status.metadata.get("status")))
+        progress.log_diagnosis(block.name, status.reason)
+        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        return False
+
     log.info("DONE block=%d name=%s phase=TEST_WRITE", block.number, block.name)
     progress.log_agent("TestWriter", block.name, "COMPLETE")
 
@@ -782,6 +794,15 @@ async def run_block_tdd(
         log.error("FAIL block=%d name=%s phase=IMPLEMENT reason=%s error=%s",
                   block.number, block.name, reason, impl_result.error)
         progress.log_agent("Implementer", block.name, "TIMEOUT" if impl_result.timed_out else "FAILED")
+        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        return False
+
+    impl_status = agent_status_gate(impl_result.output, "Implementer")
+    if not impl_status.passed:
+        log.error("FAIL block=%d name=%s phase=IMPLEMENT reason=agent_status status=%s",
+                  block.number, block.name, impl_status.metadata.get("status"))
+        progress.log_agent("Implementer", block.name, str(impl_status.metadata.get("status")))
+        progress.log_diagnosis(block.name, impl_status.reason)
         state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
         return False
 

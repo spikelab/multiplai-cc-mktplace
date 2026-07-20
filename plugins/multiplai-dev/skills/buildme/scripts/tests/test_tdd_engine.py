@@ -2004,3 +2004,95 @@ class TestIntegrationFixPrompts:
         assert "Debugging Protocol" in prompt  # protocol carries over
         assert "DIAGNOSIS:" in prompt
         assert "restructure the block's implementation" in prompt
+
+
+class TestAgentStatusEnforcement:
+    """An agent that reports NEEDS_CONTEXT/BLOCKED fails the block instead of
+    the pipeline proceeding on an admitted non-result (Item 7)."""
+
+    @pytest.fixture(autouse=True)
+    def _red(self, red_gate_passes, quality_audit_overturns):
+        yield
+
+    @pytest.fixture
+    def setup(self, tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        specs_root = project_dir / "specs"
+        (specs_root / "changes" / "test").mkdir(parents=True)
+
+        config = BuildConfig(
+            project_dir=project_dir, change_name="test", tier="advanced",
+            test_command="pytest -xvs", config_dir=tmp_path / "config",
+            core_memory_files=[], stack_memory_files=[], additional_memory_files=[],
+        )
+        config.specs_dir = specs_root
+
+        block = BlockInfo(number=1, name="Block1", description="Test block")
+        state = BuildState(
+            change_name="test", mode="only", tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
+        progress_path = tmp_path / "progress.md"
+        progress = ProgressWriter(progress_path)
+        progress.initialize("test", "only", "advanced", 1)
+        return config, state, progress, block, progress_path
+
+    @pytest.mark.asyncio
+    async def test_test_writer_needs_context_fails_block(self, setup):
+        config, state, progress, block, progress_path = setup
+        blocked = AgentResult(
+            success=True,
+            output="Spec names Widget.render() which does not exist.\n\nSTATUS: NEEDS_CONTEXT\n",
+        )
+
+        with patch("build_pipeline.tdd_engine.run_test_writer",
+                   new_callable=AsyncMock, return_value=blocked), \
+             patch("build_pipeline.tdd_engine.run_implementer",
+                   new_callable=AsyncMock) as impl:
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is False
+        # The pipeline never proceeded to implementation on a non-result
+        impl.assert_not_called()
+        assert state.tdd.blocks[0].status == BlockStatus.FAILED
+        # The agent's stated reason reaches the operator's progress file
+        assert "Widget.render()" in progress_path.read_text()
+
+    @pytest.mark.asyncio
+    async def test_implementer_blocked_fails_block(self, setup):
+        config, state, progress, block, progress_path = setup
+        tests_ok = AgentResult(success=True, output="STATUS: DONE\nTESTS_RUN: pytest\n")
+        blocked = AgentResult(
+            success=True,
+            output="Tests demand a sync API the design forbids.\n\nSTATUS: BLOCKED\n",
+        )
+
+        with patch("build_pipeline.tdd_engine.run_test_writer",
+                   new_callable=AsyncMock, return_value=tests_ok), \
+             patch("build_pipeline.tdd_engine.run_implementer",
+                   new_callable=AsyncMock, return_value=blocked):
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is False
+        assert state.tdd.blocks[0].status == BlockStatus.FAILED
+        assert "sync API the design forbids" in progress_path.read_text()
+
+    @pytest.mark.asyncio
+    async def test_done_with_concerns_proceeds(self, setup):
+        """A flagged-but-complete result is not a stop condition."""
+        config, state, progress, block, _ = setup
+        ok = AgentResult(
+            success=True,
+            output="STATUS: DONE_WITH_CONCERNS\nTESTS_RUN: pytest\nMock is thin.\n",
+        )
+
+        with patch("build_pipeline.tdd_engine.run_test_writer",
+                   new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_implementer",
+                   new_callable=AsyncMock, return_value=ok) as impl:
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is True
+        impl.assert_called_once()

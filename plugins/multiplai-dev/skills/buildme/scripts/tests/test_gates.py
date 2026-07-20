@@ -4,6 +4,8 @@ import pytest
 from pathlib import Path
 
 from build_pipeline.gates import (
+    agent_status_gate,
+    parse_agent_status,
     red_gate,
     review_score_gate,
     review_iteration_gate,
@@ -215,3 +217,66 @@ class TestIntegrationGate:
         result = integration_gate("true", tmp_path)
         assert not result.passed
         assert "not trusted" in result.reason
+
+
+class TestParseAgentStatus:
+    """Agents close their report with a REQUIRED STATUS slot (Item 7)."""
+
+    def test_parses_plain_slot(self):
+        assert parse_agent_status("Wrote tests.\n\nSTATUS: DONE\nTESTS_RUN: pytest\n") == "DONE"
+
+    def test_parses_underscored_variant(self):
+        assert parse_agent_status("STATUS: DONE_WITH_CONCERNS\n") == "DONE_WITH_CONCERNS"
+        assert parse_agent_status("STATUS: NEEDS_CONTEXT\n") == "NEEDS_CONTEXT"
+        assert parse_agent_status("STATUS: BLOCKED\n") == "BLOCKED"
+
+    def test_parses_bold_and_bulleted_markdown(self):
+        assert parse_agent_status("**STATUS:** DONE\n") == "DONE"
+        assert parse_agent_status("- STATUS: BLOCKED\n") == "BLOCKED"
+
+    def test_lowercase_is_normalized(self):
+        assert parse_agent_status("status: blocked\n") == "BLOCKED"
+
+    def test_last_occurrence_wins(self):
+        """A status quoted mid-report never outranks the agent's final verdict."""
+        out = "I was told to report STATUS: DONE when finished.\n\nSTATUS: BLOCKED\n"
+        assert parse_agent_status(out) == "BLOCKED"
+
+    def test_missing_slot_returns_none(self):
+        assert parse_agent_status("All finished, tests pass.") is None
+        assert parse_agent_status("") is None
+
+
+class TestAgentStatusGate:
+    def test_done_passes(self):
+        r = agent_status_gate("STATUS: DONE\n", "Implementer")
+        assert r.passed
+        assert r.metadata["status"] == "DONE"
+
+    def test_done_with_concerns_passes(self):
+        r = agent_status_gate("STATUS: DONE_WITH_CONCERNS\nMock is thin.\n", "Implementer")
+        assert r.passed
+        assert r.metadata["status"] == "DONE_WITH_CONCERNS"
+
+    def test_needs_context_fails_and_surfaces_reason(self):
+        out = "The spec names Widget.render() which does not exist.\n\nSTATUS: NEEDS_CONTEXT\n"
+        r = agent_status_gate(out, "TestWriter")
+        assert not r.passed
+        assert r.metadata["status"] == "NEEDS_CONTEXT"
+        assert "TestWriter" in r.reason
+        # The agent's own words reach the operator, not just the status token
+        assert "Widget.render()" in r.reason
+        assert r.action == "escalate_to_human"
+
+    def test_blocked_fails(self):
+        r = agent_status_gate("STATUS: BLOCKED\n", "Implementer")
+        assert not r.passed
+        assert r.metadata["status"] == "BLOCKED"
+
+    def test_missing_slot_passes_but_is_reported(self):
+        """Deterministic gates are the real verification — a missing slot is
+        reported, not fatal."""
+        r = agent_status_gate("Done, all tests pass.", "Implementer")
+        assert r.passed
+        assert r.metadata["status"] is None
+        assert "no STATUS slot" in r.reason

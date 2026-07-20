@@ -54,10 +54,31 @@ For each test you wrote, confirm:
 ## Test Command
 {test_command}
 
+## When the block is not writable as specified
+
+It is always OK to stop and say this is too hard or under-specified — bad work
+is worse than no work. When the specs contradict each other, name a type or
+signature that does not exist, or leave a behavior you would have to invent,
+report `STATUS: NEEDS_CONTEXT` (or `BLOCKED`) with the specific question. The
+pipeline stops the block and surfaces your reason; guessing produces tests that
+lock in the wrong behavior.
+
 ## Output
 Write the test files to the project directory. After writing, run the test command
 to verify the tests are valid (failing is expected, crashing is not).
-Report which files you created and how many tests you wrote.
+
+End your report with these REQUIRED slots, each on its own line:
+
+```
+STATUS: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
+TESTS_RUN: <the exact command you ran>
+FILES: <test files you created or modified, comma-separated>
+TEST_COUNT: <how many tests you wrote>
+```
+
+Use DONE when the tests are written and fail for the right reason;
+DONE_WITH_CONCERNS when they are written but something is worth flagging (state
+what under the slot); NEEDS_CONTEXT or BLOCKED per the section above.
 """
 
 TEST_QUALITY_PROMPT = """\
