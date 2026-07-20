@@ -199,7 +199,13 @@ def integration_gate(test_command: str, project_dir: Path) -> GateResult:
 _RED_RIGHT_REASON = re.compile(
     r"(AssertionError|NotImplementedError|"
     r"has no attribute|is not defined|"
-    r"^FAILED\b|\bFAILED\b)",
+    r"^FAILED\b|\bFAILED\b|"
+    # Runner-agnostic signatures: Jest/Vitest print a per-file `FAIL src/…`
+    # marker (uppercase only — lowercase "fail" appears in ordinary prose);
+    # terse runners (pytest -q --tb=no, Jest's "Tests: 1 failed") may emit
+    # only a summary count. Zero-count summaries ("0 failed") are not proof.
+    r"^FAIL\b|"
+    r"(?i:\b[1-9]\d*\s+failed\b))",
     re.MULTILINE,
 )
 

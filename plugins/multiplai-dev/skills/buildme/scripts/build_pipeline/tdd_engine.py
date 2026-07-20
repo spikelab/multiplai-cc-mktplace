@@ -1176,22 +1176,24 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
         progress.log_phase("FINAL_REVIEW", "Running comprehensive review")
         final_review = await _run_final_review(config, state)
 
-        if final_review and final_review.action == "final_review_error":
-            # Fail closed: an unverifiable final review is a failure, not a
-            # pass. Not marked done — a resume re-runs the review.
-            log.error("FAIL phase=FINAL_REVIEW reason=%s", final_review.reason[:200])
-            progress.log_phase("FINAL_REVIEW", f"ERROR: {final_review.reason}")
+        if final_review is not None and not final_review.passed:
+            # Fail closed on both an unverifiable review (error) and a genuine
+            # FAILED verdict — a build the reviewer would not trust is not
+            # done. Not marked done — a resume re-runs the review.
+            label = ("ERROR" if final_review.action == "final_review_error"
+                     else "FAILED")
+            log.error("FAIL phase=FINAL_REVIEW result=%s reason=%s",
+                      label.lower(), final_review.reason[:200])
+            progress.log_phase("FINAL_REVIEW", f"{label}: {final_review.reason}")
             if not config.lenient_review:
                 return EXIT_BUILD_FAILURE
-            log.warning("--lenient-review: continuing despite final-review error")
-
-        state.tdd.final_review_done = True
-        state.checkpoint(state_path)
-
-        if final_review and not final_review.passed:
-            log.warning("DONE phase=FINAL_REVIEW result=issues reason=%s", final_review.reason[:100])
-            progress.log_phase("FINAL_REVIEW", f"ISSUES: {final_review.reason}")
+            log.warning("--lenient-review: continuing despite final-review %s",
+                        label.lower())
+            state.tdd.final_review_done = True
+            state.checkpoint(state_path)
         else:
+            state.tdd.final_review_done = True
+            state.checkpoint(state_path)
             log.info("DONE phase=FINAL_REVIEW result=passed")
             progress.log_phase("FINAL_REVIEW", "PASSED")
 

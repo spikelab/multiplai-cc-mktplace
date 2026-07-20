@@ -92,8 +92,8 @@ class BuildConfig:
     spec_only: bool = False
     skip_research: bool = False
     # Restores the pre-0.4 accept-and-continue behavior for overnight runs:
-    # review exhaustion and final-review errors log-and-continue instead of
-    # failing the build.
+    # review exhaustion and final-review failures/errors log-and-continue
+    # instead of failing the build.
     lenient_review: bool = False
 
     # Project context (from specs/config.yaml)

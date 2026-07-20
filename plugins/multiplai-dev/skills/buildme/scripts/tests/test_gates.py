@@ -181,6 +181,31 @@ class TestRedGate:
         assert not result.passed
         assert result.action == "fix_tests"
 
+    def test_passes_on_terse_lowercase_summary(self):
+        """pytest -q --tb=no emits only a summary count — no FAILED lines."""
+        assert red_gate("1 failed, 3 passed in 0.12s", 1).passed
+
+    def test_passes_on_jest_style_output(self):
+        """Jest/Vitest print `FAIL <file>` and a lowercase `N failed` summary —
+        no AssertionError, no uppercase FAILED."""
+        output = (
+            "FAIL src/auth.test.js\n"
+            "  ● login › returns a token\n"
+            "Tests: 1 failed, 2 passed, 3 total\n"
+        )
+        assert red_gate(output, 1).passed
+
+    def test_zero_failed_summary_is_not_red_proof(self):
+        result = red_gate("0 failed, 5 passed", 1)
+        assert not result.passed
+        assert result.action == "fix_tests"
+
+    def test_lowercase_fail_in_prose_is_not_red_proof(self):
+        """`fail` in ordinary prose (vs the uppercase FAIL marker) proves nothing."""
+        result = red_gate("warning: flaky tests may fail intermittently", 1)
+        assert not result.passed
+        assert result.action == "fix_tests"
+
 
 class TestRunTestSuite:
     def test_returns_exit_code_and_output(self, tmp_path, trust_repo):

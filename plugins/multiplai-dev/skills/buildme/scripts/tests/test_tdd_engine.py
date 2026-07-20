@@ -1810,6 +1810,54 @@ class TestFinalReviewFailClosed:
 
         assert result == EXIT_SUCCESS
 
+    @pytest.mark.asyncio
+    async def test_engine_fails_build_on_failed_verdict(self, tmp_path):
+        """A genuine FAILED verdict fails the build — not only an errored
+        review. Not marked done, so a resume re-runs the review."""
+        config, state = self._make(tmp_path)
+        (config.change_dir / "tasks.md").write_text("## 1. Setup\n\nInit.\n\nSatisfies: s\n")
+        config.test_command = "true"
+        config.config_dir = tmp_path / "config"
+        config.core_memory_files = []
+        args = MagicMock()
+        args.block = None
+        verdict = FinalReviewVerdict(
+            passed=False, summary="Block 2 wired to a stub.",
+            issues=["api.py: handler returns hardcoded value"],
+        )
+
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
+             patch("build_pipeline.tdd_engine.run_block_tdd", new_callable=AsyncMock, return_value=True), \
+             patch("build_pipeline.tdd_engine._run_integration_and_review", new_callable=AsyncMock, return_value=True), \
+             patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
+                   return_value=verdict):
+            result = await run_tdd_engine(config, args)
+
+        assert result == EXIT_BUILD_FAILURE
+        persisted = BuildState.load(config.state_file_path())
+        assert persisted.tdd.final_review_done is False
+
+    @pytest.mark.asyncio
+    async def test_engine_lenient_continues_past_failed_verdict(self, tmp_path):
+        config, state = self._make(tmp_path)
+        (config.change_dir / "tasks.md").write_text("## 1. Setup\n\nInit.\n\nSatisfies: s\n")
+        config.test_command = "true"
+        config.config_dir = tmp_path / "config"
+        config.core_memory_files = []
+        config.lenient_review = True
+        args = MagicMock()
+        args.block = None
+        verdict = FinalReviewVerdict(passed=False, summary="Stub wiring.")
+
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
+             patch("build_pipeline.tdd_engine.run_block_tdd", new_callable=AsyncMock, return_value=True), \
+             patch("build_pipeline.tdd_engine._run_integration_and_review", new_callable=AsyncMock, return_value=True), \
+             patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
+                   return_value=verdict):
+            result = await run_tdd_engine(config, args)
+
+        assert result == EXIT_SUCCESS
+
 
 class TestEntryPointSmokeRun:
     """_verify_entry_point actually executes the entry point — no fabricated pass."""

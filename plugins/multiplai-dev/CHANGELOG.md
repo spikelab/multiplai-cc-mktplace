@@ -49,10 +49,12 @@ two-verdict rubric.
   warning (the previously-unwired `TEST_QUALITY_PROMPT` auditor adjudicates the
   static scan, with one test-writer retry). Review exhaustion fails the block
   rather than marking it done regardless. `_run_final_review` uses a structured
-  verdict over the full-build diff and fails closed — an exception yields
-  `passed=False` with the error surfaced. `_verify_entry_point` actually smoke-
-  runs the detected entry point under the repo-trust guard instead of
-  reporting an unverified pass.
+  verdict over the full-build diff and fails closed — a FAILED verdict fails
+  the build, and so does an unverifiable review (an exception yields
+  `passed=False` with the error surfaced); neither is marked done, so a resume
+  re-runs the review. `_verify_entry_point` actually smoke-runs the detected
+  entry point under the repo-trust guard instead of reporting an unverified
+  pass.
 
 ## 0.3.3 — 2026-07-18
 
