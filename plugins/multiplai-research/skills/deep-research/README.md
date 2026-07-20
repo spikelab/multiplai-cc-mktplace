@@ -84,8 +84,11 @@ SKILL.md (thin wrapper)
               │   [GATE: coverage check — CODE]
               ├── REASSESS node (LLM)      → framing/claims check
               │   [GATE: refinement/verification cycle decision — CODE]
+              ├── VERIFY node (LLM)        → per-claim verdicts (confirmed/refuted/unresolved)
+              │                              from verification-read evidence
               ├── SYNTHESIZE node (LLM)    → final markdown + YAML appendix
-              └── ADVERSARIAL REVIEW (LLM) → optional stress-test (--challenge)
+              └── ADVERSARIAL REVIEW (LLM) → stress-test (--challenge, thorough preset,
+                                             or auto when REASSESS flags suspect claims)
 ```
 
 All stages write to a `ResearchState` JSON file after every transition. Per-source tracking in READ means crashing at source 19/20 only re-fetches source 20 on resume, not the entire phase.
@@ -274,7 +277,7 @@ Three improvements to research output quality and machine-parseability, inspired
 
 1. **Falsifiability prompt:** Pre-synthesis checkpoint 4 requires the agent to articulate what evidence would disprove its conclusions. Statement appears in all output levels (gist: 1 sentence, structured: 2-3 sentences, detailed: per-conclusion breakdown). Catches unfalsifiable conclusions before they ship.
 2. **YAML index block:** New `index:` section at the top of every YAML appendix. Contains `questions_investigated`, `questions_open`, `sources_consulted`, `total_findings`, `findings_by_confidence`, `sources_by_reputation`, and `falsifiability`. Enables future research sessions to quickly parse coverage from prior research without reading the full document. PLAN progress entry now records actual sub-question text.
-3. **Adversarial review:** Optional devil's advocate subagent (`--challenge` flag, auto-triggered on thorough preset). After synthesis, a new agent reads the completed output and stress-tests it: identifies weakest claims, tests falsifiability genuineness, rates robustness on 3 dimensions (evidence strength, argument coherence, counter-argument resistance). Writes a `-challenge.md` review file and appends summary to user notification.
+3. **Adversarial review:** Devil's advocate pass (`--challenge` flag, auto on thorough preset, and auto-triggered whenever REASSESS flags any suspect claim (verification-queued, load-bearing, conflation, or convenience-bias — the same `flagged_claims` set that drives the verify verdicts) — `--no-challenge` suppresses). After synthesis, a fresh call reads the completed report plus the extracted findings, spot-checks grounding, identifies weakest claims, and rates robustness on 3 structured dimensions (evidence strength, argument coherence, counter-argument resistance, each 1-5). Writes a `-challenge.md` review file that opens with a code-generated score table, and the pipeline prints a `CHALLENGE: <file> | overall=<score>` line for the dispatcher to surface.
 
 **New arguments:** `--challenge`, `--no-challenge`
 

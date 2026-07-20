@@ -143,3 +143,29 @@ class TestCleanup:
         fresh_state.checkpoint()
         fresh_state.cleanup()
         fresh_state.cleanup()  # second call is no-op
+
+
+class TestExtractedContentTruncation:
+    def test_persisted_extracted_content_capped_at_2000_chars(
+        self, fresh_state: ResearchState
+    ) -> None:
+        """Checkpoint size guard: full page content must never persist —
+        only a 2000-char debug excerpt (findings carry the signal)."""
+        fresh_state.sources.append(
+            Source(url="https://big.example", title="Big", snippet="s")
+        )
+        fresh_state.mark_source_extracted("https://big.example", "x" * 50_000, [])
+
+        loaded = ResearchState.load(Path(fresh_state.state_file))
+        content = loaded.sources[0].extracted_content
+        assert content is not None
+        assert len(content) <= 2000
+        assert loaded.sources[0].status == SourceStatus.EXTRACTED
+
+    def test_short_content_kept_verbatim(self, fresh_state: ResearchState) -> None:
+        fresh_state.sources.append(
+            Source(url="https://small.example", title="Small", snippet="s")
+        )
+        fresh_state.mark_source_extracted("https://small.example", "short content", [])
+        loaded = ResearchState.load(Path(fresh_state.state_file))
+        assert loaded.sources[0].extracted_content == "short content"

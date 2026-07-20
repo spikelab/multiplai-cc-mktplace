@@ -46,7 +46,7 @@ async def synthesize(config: ResearchConfig, state: ResearchState) -> str:
     prompt_bytes = len(single_pass_prompt.encode("utf-8"))
     if prompt_bytes <= MAX_PROMPT_BYTES:
         log.info("SYNTHESIZE: single-pass (%d bytes, under %d limit)", prompt_bytes, MAX_PROMPT_BYTES)
-        report = await llm_call(single_pass_prompt, model=config.models.get("synthesize"), effort=config.effort, label="synthesize")
+        report = await llm_call(single_pass_prompt, model=config.models.get("synthesize"), effort=config.efforts.get("synthesize"), label="synthesize")
         log.info("SYNTHESIZE: report generated (%d chars)", len(report))
         return _append_failed_sources(report, state)
 
@@ -89,7 +89,7 @@ async def _map_reduce_synthesize(
             findings=chunk_findings_text,
             sources=chunk_sources_text,
         )
-        map_tasks.append(llm_call(prompt, model=config.models.get("synthesize"), effort=config.effort, label=f"synthesize:map{i}"))
+        map_tasks.append(llm_call(prompt, model=config.models.get("synthesize"), effort=config.efforts.get("synthesize"), label=f"synthesize:map{i}"))
 
     intermediate_results = await asyncio.gather(*map_tasks, return_exceptions=True)
 
@@ -160,7 +160,7 @@ async def _map_reduce_synthesize(
             )
             reduce_bytes = len(reduce_prompt.encode("utf-8"))
 
-    report = await llm_call(reduce_prompt, model=config.models.get("synthesize"), effort=config.effort, label="synthesize:reduce")
+    report = await llm_call(reduce_prompt, model=config.models.get("synthesize"), effort=config.efforts.get("synthesize"), label="synthesize:reduce")
     log.info("SYNTHESIZE REDUCE: report generated (%d chars)", len(report))
     return report
 
@@ -243,6 +243,30 @@ def _format_reassessment(state: ResearchState) -> str:
         lines.append("Claims flagged for verification:")
         for c in r.verify_claims:
             lines.append(f"  - {c}")
+    if state.verdicts:
+        lines.append("")
+        lines.append("VERDICTS (targeted verification of flagged claims):")
+        lines.append("| Claim | Verdict | Evidence |")
+        lines.append("|-------|---------|----------|")
+        for v in state.verdicts:
+            claim = v.claim.replace("|", "/")
+            evidence = "; ".join(v.evidence).replace("|", "/") if v.evidence else "—"
+            lines.append(f"| {claim} | {v.verdict} | {evidence} |")
+        lines.append(
+            "Claims with verdict=refuted MUST be corrected or removed from the "
+            "report — do not merely footnote them. Claims with verdict=unresolved "
+            "MUST be tagged UNVERIFIED."
+        )
+    if state.refinement_error:
+        lines.append(
+            f"Refinement was attempted but FAILED ({state.refinement_error}) "
+            "— coverage gaps flagged above remain unaddressed."
+        )
+    if state.verification_error:
+        lines.append(
+            f"Verification was attempted but FAILED ({state.verification_error}) "
+            "— treat flagged claims as unverified."
+        )
     if not lines:
         lines.append("Reassessment passed — no issues found.")
     return "\n".join(lines)

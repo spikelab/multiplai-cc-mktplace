@@ -16,6 +16,7 @@ log = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
 
 from .models import (
+    ClaimVerdict,
     Finding,
     PlanResult,
     ReassessResult,
@@ -73,6 +74,16 @@ class ResearchState(BaseModel):
     sources: list[Source] = Field(default_factory=list)  # after triage
     findings: list[Finding] = Field(default_factory=list)
     reassessment: ReassessResult | None = None
+    # Per-claim verdicts issued by the VERIFY node after the verification
+    # read — rendered as a binding table in the synthesis prompt.
+    verdicts: list[ClaimVerdict] = Field(default_factory=list)
+    # Set when a reassess-cycle leg raised — surfaced to synthesis so the
+    # report never silently pretends refinement/verification happened.
+    refinement_error: str = ""
+    verification_error: str = ""
+    # Overall robustness score of the adversarial review, persisted so a
+    # resumed run can re-emit the CHALLENGE: line for the dispatcher.
+    challenge_overall: float | None = None
     total_fetches: int = 0  # cumulative count across READ + link follows
     tavily_fallback_count: int = 0  # Tavily content fallbacks used (max 10 per run)
 
@@ -156,7 +167,10 @@ class ResearchState(BaseModel):
         for source in self.sources:
             if source.url == url:
                 source.status = SourceStatus.EXTRACTED
-                source.extracted_content = content
+                # Findings carry the signal; content is kept only as a debug
+                # excerpt. Full content would bloat the checkpoint (rewritten
+                # after every source) to tens of MB on a thorough run.
+                source.extracted_content = content[:2000]
                 break
         self.findings.extend(findings)
         self.checkpoint()

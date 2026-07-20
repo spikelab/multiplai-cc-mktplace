@@ -125,6 +125,7 @@ class ResearchConfig:
     session_id: str = ""  # Claude Code session ID for log correlation
 
     # Effort level for all SDK calls (low/medium/high). None = SDK default.
+    # Kept for record/CLI parity — call sites read the per-node `efforts` map.
     effort: str | None = None
 
     # Per-node model tiers: opus for reasoning, sonnet for the high-volume
@@ -134,12 +135,33 @@ class ResearchConfig:
             "plan": DEFAULT_MODEL,
             "diverge": DEFAULT_MODEL,
             "challenge": DEFAULT_MODEL,
+            "search": PARSE_MODEL,
             "triage_relevance": PARSE_MODEL,
             "extract": PARSE_MODEL,
+            "verify": PARSE_MODEL,
             "reassess": DEFAULT_MODEL,
             "synthesize": DEFAULT_MODEL,
             "adversarial": DEFAULT_MODEL,
-            "quality_check": DEFAULT_MODEL,
+            "quality_check": PARSE_MODEL,
+        }
+    )
+
+    # Per-node reasoning effort: mechanical parse/search work runs "low",
+    # the quality gate "medium", reasoning nodes None (SDK default).
+    # `--effort` overrides all nodes, mirroring `--model`.
+    efforts: dict[str, str | None] = field(
+        default_factory=lambda: {
+            "plan": None,
+            "diverge": None,
+            "challenge": None,
+            "search": "low",
+            "triage_relevance": "low",
+            "extract": "low",
+            "verify": "low",
+            "reassess": None,
+            "synthesize": None,
+            "adversarial": None,
+            "quality_check": "medium",
         }
     )
 
@@ -173,6 +195,9 @@ class ResearchConfig:
         model_override = getattr(args, "model", None)
         if model_override:
             config.models = {k: model_override for k in config.models}
+        # Global effort override — mirrors --model, sets all nodes to same effort
+        if config.effort:
+            config.efforts = {k: config.effort for k in config.efforts}
         return config
 
     @property

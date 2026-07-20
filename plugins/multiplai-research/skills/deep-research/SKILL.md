@@ -138,6 +138,18 @@ Research complete: {filename}
 {summary text}
 ```
 
+Also check stdout for a `CHALLENGE: <review-file> | overall=<score>` line — the
+pipeline emits it when an adversarial review ran (explicit `--challenge`, thorough
+preset, or auto-triggered because REASSESS flagged suspect claims). When present,
+report it to the user below the summary:
+
+```
+Adversarial review: {review-file} (overall robustness {score}/5)
+```
+
+If the overall score is below 3, recommend the user read the review before acting
+on the report.
+
 If the pipeline failed (non-zero exit) or the output file shows `Status: INCOMPLETE`:
 
 1. Read the output file to understand what gaps were identified (look for "Critical Gaps" section)
