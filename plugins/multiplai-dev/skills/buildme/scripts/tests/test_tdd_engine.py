@@ -16,6 +16,7 @@ from build_pipeline.tdd_engine import (
     run_tdd_engine,
     _capture_block_diff,
     _detect_entry_point,
+    _read_block_test_files,
     _git_commit_block_phase,
     _run_final_review,
     _run_integration_and_review,
@@ -2096,3 +2097,80 @@ class TestAgentStatusEnforcement:
 
         assert result is True
         impl.assert_called_once()
+
+
+class TestReadBlockTestFiles:
+    """The quality gate scans real test source, not the agent's prose report."""
+
+    @pytest.fixture
+    def repo(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        subprocess.run(["git", "init", "-q", "."], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=project, check=True)
+        (project / "README.md").write_text("start\n")
+        subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=project, check=True)
+        baseline = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=project,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        specs_root = project / "specs"
+        (specs_root / "changes" / "c").mkdir(parents=True)
+        config = BuildConfig(
+            project_dir=project, change_name="c", tier="advanced",
+            config_dir=tmp_path / "config", core_memory_files=[],
+            stack_memory_files=[], additional_memory_files=[],
+        )
+        config.specs_dir = specs_root
+        block = BlockInfo(number=1, name="B", description="d", baseline_commit=baseline)
+        return project, config, block
+
+    def test_reads_test_files_changed_since_baseline(self, repo):
+        project, config, block = repo
+        tests_dir = project / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_adder.py").write_text("def test_add():\n    assert add(2, 3) == 5\n")
+        subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-qm", "tests"], cwd=project, check=True)
+
+        content = _read_block_test_files(config, block)
+        assert "def test_add()" in content
+        assert "assert add(2, 3) == 5" in content
+
+    def test_ignores_non_test_files(self, repo):
+        project, config, block = repo
+        (project / "adder.py").write_text("def add(a, b):\n    return a + b\n")
+        subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-qm", "impl"], cwd=project, check=True)
+
+        assert _read_block_test_files(config, block) == ""
+
+    def test_returns_empty_when_nothing_changed(self, repo):
+        _, config, block = repo
+        assert _read_block_test_files(config, block) == ""
+
+    def test_returns_empty_outside_a_git_repo(self, tmp_path):
+        project = tmp_path / "bare"
+        project.mkdir()
+        specs_root = project / "specs"
+        (specs_root / "changes" / "c").mkdir(parents=True)
+        config = BuildConfig(
+            project_dir=project, change_name="c", tier="advanced",
+            config_dir=tmp_path / "config", core_memory_files=[],
+            stack_memory_files=[], additional_memory_files=[],
+        )
+        config.specs_dir = specs_root
+        block = BlockInfo(number=1, name="B", description="d")
+        assert _read_block_test_files(config, block) == ""
+
+    def test_agent_report_alone_would_fail_the_static_scan(self, repo):
+        """Why this helper exists: a prose report contains no test functions,
+        so scanning it fails every block on "No test functions found"."""
+        _, config, _ = repo
+        report = "I wrote 18 tests in tests/test_adder.py covering the spec.\nSTATUS: DONE\n"
+        scan = run_test_quality_check(report, "specs", config)
+        assert not scan.passed
+        assert scan.metadata["total_tests"] == 0

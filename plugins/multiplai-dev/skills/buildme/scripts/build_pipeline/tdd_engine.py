@@ -136,6 +136,47 @@ EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 MAX_REVIEW_DIFF_CHARS = 150_000
 
 
+_TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]+\.py|[^/]+_test\.py|conftest\.py)$")
+MAX_TEST_SCAN_CHARS = 200_000
+
+
+def _read_block_test_files(config: BuildConfig, block: BlockInfo) -> str:
+    """Concatenated source of the test files this block added or modified.
+
+    The quality gate scans real test source, never the test-writer agent's
+    prose report — a report contains no `def test_*`, so scanning it makes the
+    gate fail every block on "No test functions found". Returns "" when git
+    cannot tell us what changed; the caller falls back to the agent output.
+    """
+    target = block.baseline_commit or "HEAD"
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--name-only", target],
+            cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
+        )
+        if proc.returncode != 0:
+            log.warning("Could not list changed files for block %d: %s",
+                        block.number, proc.stderr.strip())
+            return ""
+        names = proc.stdout.splitlines()
+    except Exception as e:
+        log.warning("Could not list changed files for block %d: %s", block.number, e)
+        return ""
+
+    parts: list[str] = []
+    for name in names:
+        if not _TEST_FILE_RE.search(name.strip()):
+            continue
+        path = config.project_dir / name.strip()
+        try:
+            parts.append(f"# --- {name.strip()} ---\n{path.read_text()}")
+        except OSError as e:
+            log.warning("Could not read test file %s: %s", name, e)
+
+    content = "\n\n".join(parts)
+    return content[:MAX_TEST_SCAN_CHARS]
+
+
 def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
     """Capture everything the block changed: baseline commit → working tree.
 
@@ -557,11 +598,12 @@ async def _enforce_test_quality(
         block.test_commit = sha
         state.checkpoint(config.state_file_path())
 
-    rescan = run_test_quality_check(retry.output, specs, config)
+    retry_source = _read_block_test_files(config, block) or retry.output
+    rescan = run_test_quality_check(retry_source, specs, config)
     if rescan.passed:
         return True
     try:
-        re_audit = await _audit_test_quality(retry.output, specs, config)
+        re_audit = await _audit_test_quality(retry_source, specs, config)
     except Exception as e:
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_REAUDIT error=%s",
                   block.number, block.name, e)
@@ -759,8 +801,12 @@ async def run_block_tdd(
         state.checkpoint(config.state_file_path())
 
     # --- Phase A.5: Test quality enforcement (static scan + LLM adjudication) ---
+    # Scan the test source the agent actually wrote — its report is prose and
+    # contains no test functions. Fall back to the report only when git can't
+    # tell us what changed (non-git project).
+    test_source = _read_block_test_files(config, block) or test_result.output
     quality_ok = await _enforce_test_quality(
-        block, config, state, progress, specs, context, block_idx, test_result.output,
+        block, config, state, progress, specs, context, block_idx, test_source,
     )
     if not quality_ok:
         return False
