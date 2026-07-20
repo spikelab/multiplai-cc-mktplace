@@ -43,6 +43,25 @@ class TestReviewScoreGate:
         assert result.action == "fix_critical_dimension"
         assert "B" in result.metadata["failing_dimensions"]
 
+    def test_fails_on_spec_verdict_despite_high_scores(self):
+        r = ReviewResult(
+            scores=[ReviewScore(dimension="A", weight=2, score=5, evidence="")],
+            missing=["WHEN empty input THEN 400"],
+            misunderstood=["retry semantics"],
+        )
+        result = review_score_gate(r)
+        assert not result.passed
+        assert result.action == "fix_spec_compliance"
+        assert "WHEN empty input THEN 400" in result.reason
+        assert result.metadata["missing"] == ["WHEN empty input THEN 400"]
+
+    def test_extra_alone_does_not_trip_spec_verdict(self):
+        r = ReviewResult(
+            scores=[ReviewScore(dimension="A", weight=2, score=4, evidence="")],
+            extra=["bonus flag"],
+        )
+        assert review_score_gate(r).passed
+
 
 class TestReviewIterationGate:
     def test_within_limit(self):

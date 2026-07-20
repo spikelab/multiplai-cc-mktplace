@@ -266,10 +266,28 @@ def red_gate(test_output: str, exit_code: int | None) -> GateResult:
 
 
 def review_score_gate(review: ReviewResult) -> GateResult:
-    """Check if review scores meet threshold (weighted avg >= 3.5, no dim at 1)."""
+    """Two-verdict gate: spec compliance (nothing missing/misunderstood) AND
+    score threshold (weighted avg >= 3.5, no dimension at 1)."""
     avg = review.weighted_average
     failing = review.failing_dimensions
 
+    if not review.spec_compliant:
+        parts = []
+        if review.missing:
+            parts.append(f"missing: {review.missing}")
+        if review.misunderstood:
+            parts.append(f"misunderstood: {review.misunderstood}")
+        return GateResult(
+            passed=False,
+            reason=f"Spec-compliance verdict failed — {'; '.join(parts)}",
+            action="fix_spec_compliance",
+            metadata={
+                "missing": review.missing,
+                "misunderstood": review.misunderstood,
+                "extra": review.extra,
+                "weighted_average": avg,
+            },
+        )
     if failing:
         return GateResult(
             passed=False,

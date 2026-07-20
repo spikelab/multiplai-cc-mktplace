@@ -56,6 +56,14 @@ class ReviewIssue(BaseModel):
 class ReviewResult(BaseModel):
     scores: list[ReviewScore]
     issues: list[ReviewIssue] = Field(default_factory=list)
+    # Strengths-first review: what the diff genuinely does well.
+    strengths: list[str] = Field(default_factory=list)
+    # Spec-compliance verdict (two-verdict review, ported from the superpowers
+    # task reviewer): spec behavior absent from the diff, implementation beyond
+    # the spec, and implementation that got a scenario's meaning wrong.
+    missing: list[str] = Field(default_factory=list)
+    extra: list[str] = Field(default_factory=list)
+    misunderstood: list[str] = Field(default_factory=list)
 
     @property
     def weighted_average(self) -> float:
@@ -67,8 +75,20 @@ class ReviewResult(BaseModel):
         return sum(s.score * s.weight for s in self.scores) / total_weight
 
     @property
+    def spec_compliant(self) -> bool:
+        """Clean-or-minor spec verdict. Missing or misunderstood spec behavior
+        means the block cannot be trusted; `extra` alone is scope creep the
+        dimension scores already price in."""
+        return not self.missing and not self.misunderstood
+
+    @property
     def passed(self) -> bool:
-        return self.weighted_average >= 3.5 and all(s.score > 1 for s in self.scores)
+        """Both verdicts must hold: spec compliance AND the score threshold."""
+        return (
+            self.spec_compliant
+            and self.weighted_average >= 3.5
+            and all(s.score > 1 for s in self.scores)
+        )
 
     @property
     def failing_dimensions(self) -> list[str]:

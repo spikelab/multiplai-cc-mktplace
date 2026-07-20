@@ -940,6 +940,38 @@ class TestEvidenceBasedReview:
         assert "standards" in mock_review.call_args.kwargs
         assert "Add y" in mock_review.call_args.kwargs["spec_context"]
 
+    @pytest.mark.asyncio
+    async def test_quality_review_threads_scenarios_and_evidence(self, tmp_path):
+        """The reviewer gets the Satisfies scenarios verbatim and the block's
+        RED/GREEN evidence as an unverified implementer report."""
+        config = self._make_config(tmp_path)
+        baseline = self._init_repo(config.project_dir)
+        req_dir = config.change_dir / "requirements"
+        req_dir.mkdir()
+        (req_dir / "feat.md").write_text(
+            "## Scenario: add y\nWHEN y is requested THEN y == 2\n"
+        )
+
+        block = BlockInfo(
+            number=1, name="Feature", description="Add y",
+            satisfies=["feat"], baseline_commit=baseline,
+            red_evidence="FAILED test_y - AssertionError",
+            green_evidence="2 passed in 0.1s",
+        )
+        review = ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=4, evidence="e")])
+        with patch(
+            "build_pipeline.tdd_engine.run_code_review",
+            new_callable=AsyncMock, return_value=review,
+        ) as mock_review:
+            await _run_quality_review(block, config)
+
+        spec_context = mock_review.call_args.kwargs["spec_context"]
+        assert "WHEN y is requested THEN y == 2" in spec_context  # verbatim scenario
+        report = mock_review.call_args.kwargs["implementer_report"]
+        assert "FAILED test_y - AssertionError" in report
+        assert "2 passed in 0.1s" in report
+        assert "RED evidence" in report and "GREEN evidence" in report
+
     def test_capture_block_diff_from_baseline(self, tmp_path):
         """Diff spans baseline → working tree: commits AND uncommitted edits."""
         config = self._make_config(tmp_path)

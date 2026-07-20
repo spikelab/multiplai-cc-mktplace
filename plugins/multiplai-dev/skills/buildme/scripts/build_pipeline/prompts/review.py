@@ -1,12 +1,20 @@
 """Prompt templates for code and security review."""
 
 CODE_REVIEW_PROMPT = """\
-You are reviewing code changes against a quality rubric.
+You are reviewing a block implementation against its spec and a quality
+rubric. The diff is the only ground truth; everything the implementer reports
+about their own work is a claim you verify against it.
 
-## Diff
+## Diff (ground truth)
 ```
 {diff}
 ```
+
+## Spec Context — the scenarios this block must satisfy
+{spec_context}
+
+## Implementer Report (unverified claims, incl. RED/GREEN test evidence)
+{implementer_report}
 
 ## Rubric
 {rubric}
@@ -14,18 +22,27 @@ You are reviewing code changes against a quality rubric.
 ## Coding Standards
 {standards}
 
-## Spec Context
-{spec_context}
+## Review Method
+1. Start with strengths: name what the implementation genuinely does well,
+   grounded in specific lines of the diff.
+2. Verify the implementer's claims: for each claim (behavior implemented,
+   tests run, evidence shown), find the supporting code in the diff. A claim
+   without supporting code in the diff is a finding.
+3. Judge spec compliance scenario by scenario, sorting deviations into:
+   - **missing** — spec behavior with no implementation in the diff
+   - **extra** — implementation beyond what the spec asks for
+   - **misunderstood** — implementation that addresses a scenario but gets
+     its meaning wrong
+4. Score each rubric dimension 1-5 with evidence from the diff. Where coding
+   standards are provided, reflect violations in the relevant dimension
+   scores.
+5. For every issue, cite the file path and line, say why it matters, and say
+   how to fix it — all three in the description.
 
-## Instructions
-Score each rubric dimension on a 1-5 scale with evidence from the diff.
-Where coding standards are provided above, treat violations as issues and
-reflect them in the relevant dimension scores.
-Flag issues with severity (Critical, Major, Minor, Note).
-
-Critical = blocks merge, must fix.
-Major = significantly degrades quality, should fix.
-Minor = improvement opportunity, nice to fix.
+## Severity Calibration
+Critical = correctness or security is broken; blocks merge.
+Major = this block cannot be trusted until fixed.
+Minor = improvement opportunity; trust is intact.
 Note = observation, no action needed.
 
 ## Output Format
@@ -33,6 +50,10 @@ Return a JSON object matching this schema:
 
 ```json
 {{
+  "strengths": ["What the diff does well, with file references"],
+  "missing": ["Spec scenario/behavior absent from the diff"],
+  "extra": ["Implementation beyond the spec"],
+  "misunderstood": ["Scenario implemented with the wrong meaning"],
   "scores": [
     {{
       "dimension": "Dimension Name",
@@ -45,13 +66,16 @@ Return a JSON object matching this schema:
     {{
       "dimension": "Dimension Name",
       "severity": "Critical",
-      "description": "What's wrong",
+      "description": "What's wrong, why it matters, and how to fix it",
       "file_path": "path/to/file.py",
       "line": 42
     }}
   ]
 }}
 ```
+
+An empty array is the correct value for missing/extra/misunderstood when the
+diff matches the spec — report what you verified, not what you assume.
 
 Score honestly. A 5 means genuinely excellent, not just "no obvious problems."
 A 3 means acceptable but clearly improvable. A 1 means fundamentally broken.

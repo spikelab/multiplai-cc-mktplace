@@ -859,6 +859,22 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
     spec_context = f"Block {block.number}: {block.name}\n{block.description}"
     if block.satisfies:
         spec_context += f"\nSatisfies: {', '.join(block.satisfies)}"
+        # The satisfied capabilities' spec scenarios, verbatim — the reviewer
+        # judges Missing/Extra/Misunderstood against these, not a paraphrase.
+        req_dir = config.change_dir / "requirements"
+        for cap in block.satisfies:
+            req_file = req_dir / f"{cap}.md"
+            if req_file.exists():
+                spec_context += f"\n\n### Requirement: {cap}\n{req_file.read_text()}"
+
+    # RED/GREEN evidence reaches the reviewer as claims to verify, not truth.
+    report_parts = []
+    if block.red_evidence:
+        report_parts.append(f"### RED evidence (tests failing before implementation)\n"
+                            f"```\n{block.red_evidence}\n```")
+    if block.green_evidence:
+        report_parts.append(f"### GREEN evidence (suite after implementation)\n"
+                            f"```\n{block.green_evidence}\n```")
 
     return await run_code_review(
         diff,
@@ -866,6 +882,7 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
         config,
         spec_context=spec_context,
         standards=config.standards_text(),
+        implementer_report="\n\n".join(report_parts),
     )
 
 

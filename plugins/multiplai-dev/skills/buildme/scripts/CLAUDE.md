@@ -56,6 +56,18 @@ All tests mock LLM calls — no API keys needed. Tests cover:
 - Spec Generator: dependency ordering, resume, change type detection
 - TDD Engine: block parsing, context assembly, weak test patterns, agent selection
 
+## Prompt Authoring Rules
+
+- **Review prompts stay unbiased.** Never inject "do not flag X", pre-judged
+  severities, or any instruction that suppresses findings into a review
+  prompt. The reviewer decides severity from the calibration scale; the diff
+  and specs are its only ground truth. If a known non-issue keeps getting
+  flagged, fix the spec/rubric wording — never blindfold the reviewer.
+- **Positive recipes over prohibition lists.** Prompts state what to do and
+  the observable condition for doing it (structural REQUIRED slots,
+  gate-function checks). Enforcement lives in code gates, not in aggressive
+  language.
+
 ## Adding a New Gate
 
 1. Add the gate function to `gates.py` — pure function returning `GateResult`
