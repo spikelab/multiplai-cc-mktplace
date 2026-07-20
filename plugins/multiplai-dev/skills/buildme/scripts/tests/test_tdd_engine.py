@@ -393,6 +393,109 @@ class TestWeakPatterns:
         text_ellipsis = "def test_foo():\n    ..."
         assert WEAK_TEST_PATTERNS[2].search(text_ellipsis)
 
+    def test_assert_called_alone_pattern(self):
+        assert WEAK_TEST_PATTERNS[3].search("    assert client.ping.called")
+        assert WEAK_TEST_PATTERNS[3].search("assert mock.called")
+        # A comparison on call_count is not the bare `.called` pattern
+        assert not WEAK_TEST_PATTERNS[3].search("    assert mock.call_count == 2")
+        # Real-behavior assertion mentioning 'called' in a name stays clean
+        assert not WEAK_TEST_PATTERNS[3].search("    assert times_called(log) == 3")
+
+
+class TestMockAntiPatterns:
+    """Per-function heuristics: mock-assertion-only and mock-setup-dominant."""
+
+    def _check(self, content):
+        config = BuildConfig(gates=MagicMock(test_quality_enabled=True))
+        return run_test_quality_check(content, "", config)
+
+    def test_mock_assertion_only_flagged(self):
+        content = """\
+def test_notifier_calls_sender():
+    sender = MagicMock()
+    notifier = Notifier(sender)
+    notifier.notify("hi")
+    sender.send.assert_called_once_with("hi")
+"""
+        result = self._check(content)
+        assert not result.passed
+        assert any("mock-assertion-only" in f for f in result.metadata["findings"])
+
+    def test_mock_setup_dominant_flagged(self):
+        content = """\
+def test_transform_result():
+    a = MagicMock()
+    a.load.return_value = [1]
+    b = MagicMock()
+    b.norm.return_value = 2
+    result = run(a, b)
+    assert result == [2]
+"""
+        result = self._check(content)
+        assert not result.passed
+        assert any("mock-setup-dominant" in f for f in result.metadata["findings"])
+
+    def test_mock_used_with_behavior_assertion_passes(self):
+        """Mocks are fine when the test asserts an observable outcome and
+        setup stays proportionate."""
+        content = """\
+def test_greets_user():
+    repo = MagicMock()
+    repo.get.return_value = "Ada"
+    assert greet(repo) == "Hello Ada"
+    assert repo.get.call_count == 1
+"""
+        result = self._check(content)
+        assert result.passed
+
+    def test_plain_behavior_tests_pass(self):
+        content = """\
+def test_add_reports_sum():
+    calc = Calculator()
+    assert calc.add(2, 3) == 5
+"""
+        result = self._check(content)
+        assert result.passed
+
+    def test_assert_called_alone_fails_check(self):
+        content = """\
+def test_ping_called():
+    client = MagicMock()
+    ping(client)
+    assert client.ping.called
+"""
+        result = self._check(content)
+        assert not result.passed
+
+
+class TestAntiPatternPrompts:
+    """The five testing anti-patterns appear as positive gate checks."""
+
+    def test_test_writer_quality_gates(self):
+        from build_pipeline.prompts.test_writing import TEST_WRITER_PROMPT
+        assert "Quality Gates" in TEST_WRITER_PROMPT
+        assert "tests real behavior" in TEST_WRITER_PROMPT
+        assert "Mocks honor the real contract" in TEST_WRITER_PROMPT
+        assert "Side effects are understood" in TEST_WRITER_PROMPT
+        assert "production code\n   stays test-free" in TEST_WRITER_PROMPT
+        assert "poll" in TEST_WRITER_PROMPT
+
+    def test_auditor_prompt_covers_mock_patterns(self):
+        from build_pipeline.prompts.test_writing import TEST_QUALITY_PROMPT
+        assert "Mock-assertion-only" in TEST_QUALITY_PROMPT
+        assert "Mock-setup-dominant" in TEST_QUALITY_PROMPT
+        assert "sleep" in TEST_QUALITY_PROMPT.lower()
+
+    def test_rubric_prompt_scores_anti_patterns(self):
+        from build_pipeline.prompts.rubric_prompts import RUBRIC_PROMPT
+        assert "anti-patterns" in RUBRIC_PROMPT
+        assert "assert_called_*" in RUBRIC_PROMPT
+
+    def test_rubric_template_scores_anti_patterns(self):
+        from build_pipeline.change_manager import TEMPLATES
+        assert "interrogate mocks" in TEMPLATES["rubric"]
+        assert "sleep" in TEMPLATES["rubric"]
+
 
 class TestIntegrationGateWiring:
     """Test that integration gate results drive the correct pipeline behavior."""

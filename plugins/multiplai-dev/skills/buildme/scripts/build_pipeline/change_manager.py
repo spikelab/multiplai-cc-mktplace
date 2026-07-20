@@ -127,9 +127,9 @@ Satisfies: <!-- spec references -->
 ## Test Quality (weight: 1)
 | Score | Criteria |
 |-------|----------|
-| 5 | Tests verify behavior, not implementation. Edge cases covered. |
-| 3 | Happy path tested, some edge cases. |
-| 1 | Coverage theater — tests pass but verify nothing meaningful. |
+| 5 | Tests verify behavior through observable outcomes, not implementation. Edge cases covered. Mocks honor the real collaborator's contract. |
+| 3 | Happy path tested, some edge cases. Occasional mock-heavy test. |
+| 1 | Coverage theater — assertions only interrogate mocks (`.called`, `assert_called_*`), mock setup outweighs assertions, tests sleep instead of polling, or tests pass while verifying nothing meaningful. |
 
 ## Spec Compliance (weight: 3)
 | Score | Criteria |

@@ -29,6 +29,28 @@ failing tests that define the expected behavior for a block of work.
 8. Run the test command after writing to confirm tests are syntactically valid
    (they should fail, not error with ImportError/SyntaxError).
 
+## Quality Gates — check every test against these before finishing
+
+For each test you wrote, confirm:
+
+1. **It tests real behavior.** The assertions check what the code under test
+   produces (return values, state changes, emitted output). When every
+   assertion interrogates a mock (`.called`, `call_count`, `assert_called_*`),
+   rewrite the test around an observable outcome.
+2. **Mocks honor the real contract.** A mocked collaborator returns the same
+   shapes and raises the same errors the real one does — mirror the collaborator's
+   documented interface, not just the one method this test touches.
+3. **Side effects are understood before they're mocked.** When the code under
+   test relies on a collaborator's side effect (writes a file, mutates state),
+   the test either lets it happen for real or asserts the effect explicitly.
+4. **The public API is enough.** Tests exercise the code through its existing
+   public interface. When a test seems to need a new method on the production
+   class, that's a design signal to raise in your report — production code
+   stays test-free.
+5. **Integration tests poll for conditions.** When a test waits for something
+   asynchronous, it polls for the observable condition with a timeout;
+   fixed sleeps are both slow and flaky.
+
 ## Test Command
 {test_command}
 
@@ -56,6 +78,12 @@ that indicate coverage theater rather than real testing.
 5. Tests that only check types, never values
 6. Duplicate tests (same assertion, different name)
 7. Tests with no assertions at all
+8. Mock-assertion-only tests — every assertion interrogates a mock
+   (`.called`, `call_count`, `assert_called_*`) instead of an observable
+   outcome of the code under test
+9. Mock-setup-dominant tests — more lines configuring mocks than asserting
+   behavior (the test exercises the mock, not the code)
+10. Fixed sleeps standing in for condition polling in async/integration tests
 
 ## Output
 Return a JSON object:

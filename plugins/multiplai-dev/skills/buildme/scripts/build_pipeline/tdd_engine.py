@@ -188,12 +188,71 @@ MAX_EVIDENCE_CHARS = 4000
 def _trim_evidence(output: str) -> str:
     return output[-MAX_EVIDENCE_CHARS:]
 
-# Weak test patterns for Phase A.5 quality check
+# Weak test patterns for Phase A.5 quality check (line-level; per-function
+# mock heuristics live in _scan_test_function)
 WEAK_TEST_PATTERNS = [
     re.compile(r"assert\s+True\b"),
     re.compile(r"assert\s+\w+\s+is\s+not\s+None\s*$", re.MULTILINE),
     re.compile(r"def\s+test_\w+\s*\([^)]*\)\s*:\s*\n\s*(pass|\.\.\.)\s*$", re.MULTILINE),
+    # `assert x.called` (or obj.method.called) alone on a line — verifies the
+    # mock was touched, not what the code did.
+    re.compile(r"^\s*assert\s+\w+(?:\.\w+)*\.called\s*(?:#.*)?$", re.MULTILINE),
 ]
+
+# Per-function heuristics (superpowers testing-anti-patterns): a test whose
+# only assertions interrogate a mock, or whose mock scaffolding outweighs its
+# assertions, is testing the mock — not the behavior.
+_TEST_FUNC_RE = re.compile(
+    r"^([ \t]*)def\s+(test_\w+)\s*\([^)]*\)\s*(?:->\s*[^:]+)?:", re.MULTILINE
+)
+_ASSERT_LINE_RE = re.compile(r"^\s*assert\s")
+_MOCK_ASSERT_RE = re.compile(
+    r"^\s*(?:assert\s+.*\.(?:called|call_count|call_args)\b"
+    r"|\w+(?:\.\w+)*\.assert_(?:called|any_call|has_calls|not_called)\w*\()"
+)
+_MOCK_SETUP_RE = re.compile(
+    r"MagicMock\(|(?<!\w)Mock\(|(?<!\w)patch[.(]|\.return_value|\.side_effect"
+)
+
+
+def _iter_test_functions(content: str):
+    """Yield (name, body) for each test function; body ends at the next line
+    indented at or below the def's level."""
+    matches = list(_TEST_FUNC_RE.finditer(content))
+    for i, m in enumerate(matches):
+        indent = len(m.group(1))
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        body_lines = []
+        for line in content[m.end():end].splitlines():
+            if line.strip() and len(line) - len(line.lstrip()) <= indent:
+                break
+            body_lines.append(line)
+        yield m.group(2), "\n".join(body_lines)
+
+
+def _scan_test_function(name: str, body: str) -> list[str]:
+    """Mechanical mock anti-pattern findings for one test function."""
+    lines = body.splitlines()
+    mock_asserts = [ln for ln in lines if _MOCK_ASSERT_RE.match(ln)]
+    real_asserts = [
+        ln for ln in lines
+        if _ASSERT_LINE_RE.match(ln) and not _MOCK_ASSERT_RE.match(ln)
+    ]
+    setup_lines = [ln for ln in lines if _MOCK_SETUP_RE.search(ln)]
+
+    findings = []
+    if mock_asserts and not real_asserts:
+        findings.append(
+            f"{name}: mock-assertion-only — every assertion interrogates a mock; "
+            f"assert an observable outcome of the code under test"
+        )
+    total_asserts = len(mock_asserts) + len(real_asserts)
+    if total_asserts and len(setup_lines) > total_asserts:
+        findings.append(
+            f"{name}: mock-setup-dominant — {len(setup_lines)} mock-setup lines vs "
+            f"{total_asserts} assertion(s); the test mostly configures mocks"
+        )
+    return findings
 
 
 def parse_blocks(tasks_path: Path) -> list[BlockInfo]:
@@ -319,6 +378,10 @@ def run_test_quality_check(test_files_content: str, contracts: str, config: Buil
         matches = pattern.findall(test_files_content)
         for m in matches:
             weak_findings.append(f"Weak pattern found: {m.strip()[:80]}")
+
+    # Per-function mock heuristics (mock-assertion-only, mock-setup-dominant)
+    for func_name, body in _iter_test_functions(test_files_content):
+        weak_findings.extend(_scan_test_function(func_name, body))
 
     # Count total test functions
     total_tests = len(re.findall(r"def\s+test_\w+", test_files_content))
