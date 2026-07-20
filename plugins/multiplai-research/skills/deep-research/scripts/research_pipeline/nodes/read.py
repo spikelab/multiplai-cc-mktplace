@@ -316,8 +316,7 @@ async def _extract_findings(
             log.warning("Finding validation failed: %s", e)
 
     # Store follow links on the source for _follow_links to pick up
-    source.extracted_content = content
-    # Use a private attr on the source via model_extra (Pydantic allows this)
+    # (a private attr via model_extra — Pydantic allows this)
     setattr(source, "_follow_links", [fl.url for fl in extracted.follow_links[:3]])
 
     state.mark_source_extracted(source.url, content=content, findings=findings)

@@ -16,6 +16,7 @@ log = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
 
 from .models import (
+    ClaimVerdict,
     Finding,
     PlanResult,
     ReassessResult,
@@ -23,7 +24,6 @@ from .models import (
     Source,
     SourceStatus,
 )
-from .nodes.verify import ClaimVerdict
 
 
 class Stage(str, Enum):
@@ -81,6 +81,9 @@ class ResearchState(BaseModel):
     # report never silently pretends refinement/verification happened.
     refinement_error: str = ""
     verification_error: str = ""
+    # Overall robustness score of the adversarial review, persisted so a
+    # resumed run can re-emit the CHALLENGE: line for the dispatcher.
+    challenge_overall: float | None = None
     total_fetches: int = 0  # cumulative count across READ + link follows
     tavily_fallback_count: int = 0  # Tavily content fallbacks used (max 10 per run)
 

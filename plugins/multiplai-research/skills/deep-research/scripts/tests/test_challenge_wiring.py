@@ -12,10 +12,15 @@ from pathlib import Path
 import pytest
 
 from research_pipeline import pipeline
-from research_pipeline.models import Confidence, Finding, ReassessResult, Source
+from research_pipeline.models import (
+    ClaimVerdict,
+    Confidence,
+    Finding,
+    ReassessResult,
+    Source,
+)
 from research_pipeline.nodes.challenge import ChallengeReview
-from research_pipeline.nodes.verify import ClaimVerdict
-from research_pipeline.state import Stage
+from research_pipeline.state import ResearchState, Stage
 
 from tests.test_pipeline_recovery import (
     StubRouter,
@@ -113,6 +118,24 @@ class TestAutoChallengeTrigger:
         out = capsys.readouterr().out
         assert "CHALLENGE:" not in out
         assert "SUMMARY:" in out  # pipeline still completed normally
+
+    @pytest.mark.asyncio
+    async def test_verify_claims_alone_trigger_challenge(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        """verify_claims are part of ReassessResult.flagged_claims — the same
+        set that drives verdicts must drive the auto-challenge trigger."""
+        config = _mk_config(tmp_path, preset="standard")
+
+        rc, review_calls = await _run_pipeline_with_stubbed_stages(
+            config,
+            monkeypatch,
+            reassessment=ReassessResult(verify_claims=["check me"]),
+        )
+
+        assert rc == 0
+        assert len(review_calls) == 1
+        assert "CHALLENGE:" in capsys.readouterr().out
 
     @pytest.mark.asyncio
     async def test_no_flagged_claims_no_challenge(
@@ -231,3 +254,65 @@ class TestVerificationVerdictWiring:
         # Only the finding added by the verification read — not pre-existing ones
         assert captured["new_findings"] == [new]
         assert [v.verdict for v in state.verdicts] == ["confirmed"]
+
+    @pytest.mark.asyncio
+    async def test_flagged_claims_without_verify_queries_still_get_verdicts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Claims flagged with NO verify_queries: the reassess cycle still runs
+        the verdict pass (no search, no LLM) — every flagged claim ends up
+        unresolved instead of silently unverdicted."""
+        config = _mk_config(tmp_path)
+        state = _mk_state(config)
+        state.reassessment = ReassessResult(load_bearing_claims=["claim L"])
+        router = StubRouter()
+        progress = _mk_progress(tmp_path)
+
+        await pipeline._run_reassess_cycle(
+            config, state, _as_router(router), progress
+        )
+
+        assert router.batch_search_calls == []  # no queries → no search
+        assert [v.claim for v in state.verdicts] == ["claim L"]
+        assert state.verdicts[0].verdict == "unresolved"
+
+
+class TestChallengeLineOnResume:
+    @pytest.mark.asyncio
+    async def test_resumed_run_reemits_challenge_line_without_rerunning_review(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        """A run resumed after CHALLENGE_REVIEW_COMPLETE must re-print the
+        CHALLENGE: line (from state.challenge_overall) so the SKILL.md
+        dispatcher still surfaces the existing review file."""
+        config = _mk_config(tmp_path, preset="standard")
+        state = ResearchState.new(
+            query=config.query,
+            output_file=config.output_file_path(),
+            state_file=config.state_file_path(),
+        )
+        Path(state.output_file).write_text("# Report")
+        state.challenge_overall = 3.0
+        state.advance_to(Stage.CHALLENGE_REVIEW_COMPLETE)  # checkpoints to disk
+
+        async def fake_main_stages(config, state, router, progress) -> None:
+            pass  # everything already complete in the loaded state
+
+        async def exploding_review(config, report, findings):
+            raise AssertionError("review must not re-run on resume")
+
+        monkeypatch.setattr(
+            pipeline, "build_default_router", lambda **kw: _as_router(StubRouter())
+        )
+        monkeypatch.setattr(pipeline, "_run_main_stages", fake_main_stages)
+        monkeypatch.setattr(
+            pipeline.challenge_node, "adversarial_review", exploding_review
+        )
+
+        rc = await pipeline.run_pipeline(config)
+
+        assert rc == 0
+        review_path = config.output_dir / (
+            config.output_file_path().stem + "-challenge.md"
+        )
+        assert f"CHALLENGE: {review_path} | overall=3.0" in capsys.readouterr().out

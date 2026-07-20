@@ -12,7 +12,7 @@ import logging
 from pydantic import BaseModel, Field
 
 from ..config import ResearchConfig
-from ..models import Finding
+from ..models import Finding, format_numbered_findings
 from ..prompts.challenge import ADVERSARIAL_REVIEW_PROMPT
 from ..sdk import llm_call_structured
 
@@ -55,17 +55,6 @@ def render_review(review: ChallengeReview) -> str:
     return "\n".join(lines) + review.review_markdown
 
 
-def _format_findings(findings: list[Finding]) -> str:
-    lines = []
-    for i, f in enumerate(findings):
-        lines.append(
-            f"{i + 1}. [{f.confidence.value}|{f.reputation.value}] {f.fact}"
-            + (f' — quote: "{f.quote}"' if f.quote else "")
-            + f" (source: {f.source_title})"
-        )
-    return "\n".join(lines) or "No findings available."
-
-
 async def adversarial_review(
     config: ResearchConfig, report: str, findings: list[Finding]
 ) -> ChallengeReview:
@@ -76,11 +65,11 @@ async def adversarial_review(
     """
     prompt = ADVERSARIAL_REVIEW_PROMPT.format(
         report=report[:MAX_REPORT_CHARS],
-        findings=_format_findings(findings),
+        findings=format_numbered_findings(findings),
         date=config.date,
     )
     if len(report) > MAX_REPORT_CHARS:
-        prompt += "\n\nNOTE: report truncated at 50,000 chars for review"
+        prompt += f"\n\nNOTE: report truncated at {MAX_REPORT_CHARS:,} chars for review"
 
     review = await llm_call_structured(
         prompt,

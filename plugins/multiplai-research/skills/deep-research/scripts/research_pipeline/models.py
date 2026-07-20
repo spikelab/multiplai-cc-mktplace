@@ -7,6 +7,7 @@ validation, serialization, and clear typing at LLM boundaries.
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -56,7 +57,7 @@ class Source(BaseModel):
     source_api: str = ""
     status: SourceStatus = SourceStatus.PENDING
     error: str | None = None  # populated when status=FAILED
-    extracted_content: str | None = None  # debug excerpt (truncated to 2000 chars at checkpoint)
+    extracted_content: str | None = None  # debug excerpt (mark_source_extracted truncates to 2000 chars)
     published_date: str | None = None
     # Carried from the SearchResult; a declared field so the authority-budget
     # reservation in READ survives checkpoint/resume.
@@ -85,6 +86,23 @@ class Finding(BaseModel):
     quote: str | None = None  # direct quote supporting the fact
     date: str | None = None
     relates_to_sub_question: int | None = None  # index into PlanResult.sub_questions
+
+
+def format_numbered_findings(
+    findings: list[Finding], empty: str = "No findings available."
+) -> str:
+    """Numbered evidence list for prompts that ground an LLM in findings.
+
+    Shared by the challenge and verify nodes so "finding N" references mean
+    the same thing everywhere.
+    """
+    lines = [
+        f"{i + 1}. [{f.confidence.value}|{f.reputation.value}] {f.fact}"
+        + (f' — quote: "{f.quote}"' if f.quote else "")
+        + f" (source: {f.source_title})"
+        for i, f in enumerate(findings)
+    ]
+    return "\n".join(lines) or empty
 
 
 # ---------------------------------------------------------------------------
@@ -137,19 +155,12 @@ PlanResult.model_rebuild()
 # ---------------------------------------------------------------------------
 
 
-class ClaimVerdict(str, Enum):
-    CONFIRMED = "confirmed"
-    CORRECTED = "corrected"
-    UNVERIFIABLE = "unverifiable"
+class ClaimVerdict(BaseModel):
+    """Verdict for one flagged claim, grounded in verification findings."""
 
-
-class VerifiedClaim(BaseModel):
     claim: str
-    original_source: str
-    verification_source: str | None = None
-    verdict: ClaimVerdict = ClaimVerdict.UNVERIFIABLE
-    correction: str | None = None
-    impact: str | None = None
+    verdict: Literal["confirmed", "refuted", "unresolved"]
+    evidence: list[str] = Field(default_factory=list)
 
 
 class ReassessResult(BaseModel):
@@ -171,6 +182,26 @@ class ReassessResult(BaseModel):
     refinement_queries: list[str] = Field(default_factory=list)
     verify_claims: list[str] = Field(default_factory=list)
     verify_queries: list[str] = Field(default_factory=list)
+
+    @property
+    def flagged_claims(self) -> list[str]:
+        """Every claim REASSESS flagged as suspect, deduped, order-preserving.
+
+        Single source of truth for both the verify-verdict pass and the
+        auto-challenge trigger — the two sets must never diverge.
+        """
+        seen: set[str] = set()
+        out: list[str] = []
+        for claim in (
+            self.verify_claims
+            + self.load_bearing_claims
+            + self.conflation_claims
+            + self.convenience_bias_claims
+        ):
+            if claim not in seen:
+                seen.add(claim)
+                out.append(claim)
+        return out
 
 
 # ---------------------------------------------------------------------------

@@ -9,24 +9,15 @@ verdicts. Synthesis renders them as a table with binding instructions
 from __future__ import annotations
 
 import logging
-from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from ..config import ResearchConfig
-from ..models import Finding
+from ..models import ClaimVerdict, Finding, format_numbered_findings
 from ..prompts.verify import VERIFY_VERDICTS_PROMPT
 from ..sdk import llm_call_structured
 
 log = logging.getLogger(__name__)
-
-
-class ClaimVerdict(BaseModel):
-    """Verdict for one flagged claim, grounded in verification findings."""
-
-    claim: str
-    verdict: Literal["confirmed", "refuted", "unresolved"]
-    evidence: list[str] = Field(default_factory=list)
 
 
 class VerifyVerdicts(BaseModel):
@@ -57,12 +48,7 @@ async def verify_verdicts(
             ClaimVerdict(claim=c, verdict="unresolved", evidence=[]) for c in claims
         ]
 
-    findings_text = "\n".join(
-        f"{i + 1}. [{f.confidence.value}|{f.reputation.value}] {f.fact}"
-        + (f' — quote: "{f.quote}"' if f.quote else "")
-        + f" (source: {f.source_title})"
-        for i, f in enumerate(new_findings)
-    )
+    findings_text = format_numbered_findings(new_findings)
     claims_text = "\n".join(f"- {c}" for c in claims)
     prompt = VERIFY_VERDICTS_PROMPT.format(claims=claims_text, findings=findings_text)
 

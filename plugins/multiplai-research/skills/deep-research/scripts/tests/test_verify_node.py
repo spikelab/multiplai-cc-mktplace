@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from research_pipeline.config import PRESETS, ResearchConfig
-from research_pipeline.models import Confidence, Finding, ReassessResult
+from research_pipeline.models import ClaimVerdict, Confidence, Finding, ReassessResult
 from research_pipeline.nodes import verify as verify_node
-from research_pipeline.nodes.verify import ClaimVerdict, VerifyVerdicts, verify_verdicts
+from research_pipeline.nodes.verify import VerifyVerdicts, verify_verdicts
 from research_pipeline.state import ResearchState
 
 
@@ -97,6 +97,23 @@ class TestVerifyVerdictsNode:
     def test_verdict_literal_rejects_unknown_value(self) -> None:
         with pytest.raises(Exception):
             ClaimVerdict(claim="c", verdict="maybe")  # type: ignore[arg-type]
+
+
+class TestFlaggedClaims:
+    """ReassessResult.flagged_claims — the single claim set shared by the
+    verdict pass and the auto-challenge trigger."""
+
+    def test_order_and_dedup(self) -> None:
+        r = ReassessResult(
+            verify_claims=["a", "b"],
+            load_bearing_claims=["b", "c"],
+            conflation_claims=["d"],
+            convenience_bias_claims=["a", "e"],
+        )
+        assert r.flagged_claims == ["a", "b", "c", "d", "e"]
+
+    def test_empty_by_default(self) -> None:
+        assert ReassessResult().flagged_claims == []
 
 
 class TestVerdictsRenderedForSynthesis:

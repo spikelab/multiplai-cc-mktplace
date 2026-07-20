@@ -236,14 +236,13 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
         elif (
             not config.no_challenge
             and state.reassessment is not None
-            and (
-                state.reassessment.load_bearing_claims
-                or state.reassessment.conflation_claims
-                or state.reassessment.convenience_bias_claims
-            )
+            and state.reassessment.flagged_claims
         ):
             challenge_trigger = "reassess-flagged claims"
 
+        review_path = config.output_dir / (
+            config.output_file_path().stem + "-challenge.md"
+        )
         challenge_line = ""
         if (
             not aborted
@@ -257,17 +256,25 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
             review = await challenge_node.adversarial_review(
                 config, report, review_findings
             )
-            review_path = config.output_dir / (
-                config.output_file_path().stem + "-challenge.md"
-            )
             review_path.write_text(challenge_node.render_review(review))
             progress.log_stage(
                 "CHALLENGE REVIEW",
                 f"trigger={challenge_trigger} | overall={review.overall:.1f} | "
                 f"written to {review_path}",
             )
+            state.challenge_overall = review.overall
             state.advance_to(Stage.CHALLENGE_REVIEW_COMPLETE)
             challenge_line = f"CHALLENGE: {review_path} | overall={review.overall:.1f}"
+        elif (
+            not aborted
+            and state.is_complete(Stage.CHALLENGE_REVIEW_COMPLETE)
+            and state.challenge_overall is not None
+        ):
+            # Resumed after the review already ran — re-emit the line so the
+            # dispatcher (SKILL.md) still surfaces the existing review file.
+            challenge_line = (
+                f"CHALLENGE: {review_path} | overall={state.challenge_overall:.1f}"
+            )
 
         # 12. Done — cleanup (preserve state on abort for retry/manual synthesis)
         if not aborted:
@@ -605,7 +612,10 @@ async def _run_reassess_cycle(
             state.checkpoint()
             progress.log_stage("REFINEMENT FAILED", str(e))
 
-    if state.reassessment.verify_queries:
+    # Verification runs when there are targeted queries OR flagged claims —
+    # claims flagged without queries still get (unresolved) verdicts, so the
+    # "every flagged claim gets a verdict" guarantee is unconditional.
+    if state.reassessment.verify_queries or state.reassessment.flagged_claims:
         try:
             await _run_verification(config, state, router, progress)
         except Exception as e:  # noqa: BLE001
@@ -671,9 +681,11 @@ async def _run_verification(
     # Snapshot so the verdict node judges ONLY findings added by this read
     findings_before = len(state.findings)
 
-    results = await router.batch_search(queries, strategy="keyword")
-    known_urls = {s.url for s in state.sources}
-    new_results = [r for r in results if r.url not in known_urls]
+    new_results = []
+    if queries:
+        results = await router.batch_search(queries, strategy="keyword")
+        known_urls = {s.url for s in state.sources}
+        new_results = [r for r in results if r.url not in known_urls]
 
     if new_results:
         # Verification prefers authoritative sources — use the triage pipeline to filter
@@ -696,12 +708,9 @@ async def _run_verification(
         )
 
     # Close the loop: verdicts for every flagged claim (unresolved when the
-    # read produced nothing new — no LLM call in that case).
-    flagged_claims = (
-        reassessment.verify_claims
-        + reassessment.conflation_claims
-        + reassessment.convenience_bias_claims
-    )
+    # read produced nothing new — no LLM call in that case). Same claim set
+    # as the auto-challenge trigger, via ReassessResult.flagged_claims.
+    flagged_claims = reassessment.flagged_claims
     if flagged_claims:
         new_findings = state.findings[findings_before:]
         state.verdicts = await verify_node.verify_verdicts(
