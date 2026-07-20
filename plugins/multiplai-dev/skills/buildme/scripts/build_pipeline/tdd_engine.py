@@ -174,7 +174,10 @@ EXIT_SUCCESS = 0
 EXIT_BUILD_FAILURE = 1
 EXIT_AGENT_TIMEOUT = 3
 
-MAX_INTEGRATION_FIX_ATTEMPTS = 2
+# Circuit breaker: attempts 1-2 run the scoped fix prompt; the final attempt
+# escalates — question-the-architecture prompt on config.review_model (when
+# set). Exhaustion fails the block with a diagnosis in build-progress.md.
+MAX_INTEGRATION_FIX_ATTEMPTS = 3
 MAX_REVIEW_ITERATIONS = 3
 
 # Cap for RED/GREEN evidence blobs stored in block state and fed to the
@@ -710,25 +713,43 @@ async def _run_integration_and_review(
     gate = integration_gate(config.test_command, config.project_dir)
     if not gate.passed:
         log.warning("Integration gate failed after block %s: %s", block.name, gate.reason)
-        # Attempt fix
+        # Circuit breaker: scoped fixes first, then one architecture-questioning
+        # escalation, then FAILED with a diagnosis — never an endless fix loop.
+        last_fix_output = ""
         for attempt in range(MAX_INTEGRATION_FIX_ATTEMPTS):
-            log.info("Integration fix attempt %d/%d", attempt + 1, MAX_INTEGRATION_FIX_ATTEMPTS)
+            escalated = attempt == MAX_INTEGRATION_FIX_ATTEMPTS - 1
+            fix_model = (config.review_model or config.model) if escalated else config.model
+            log.info("Integration fix attempt %d/%d%s", attempt + 1,
+                     MAX_INTEGRATION_FIX_ATTEMPTS, " (escalated)" if escalated else "")
+            if escalated:
+                progress.log_agent("IntegrationFixer", block.name,
+                                   "ESCALATED — questioning the architecture")
             context = assemble_context(block, config, "implementer")
             fix_result = await run_integration_fix(
                 failure_output=gate.metadata.get("stderr", "") + gate.metadata.get("stdout", ""),
                 test_command=config.test_command,
                 context_bundle=context,
-                model=config.model,
+                escalate=escalated,
+                model=fix_model,
                 cwd=str(config.project_dir),
             )
             # A timed-out or failed fix leaves success=False; retry until attempts run out.
             if fix_result.success:
+                last_fix_output = fix_result.output
                 gate = integration_gate(config.test_command, config.project_dir)
                 if gate.passed:
                     break
 
         if not gate.passed:
-            log.error("Integration gate still failing after fix attempts for block %s", block.name)
+            log.error("Integration gate still failing after %d fix attempts for block %s",
+                      MAX_INTEGRATION_FIX_ATTEMPTS, block.name)
+            diagnosis = (
+                f"Integration gate exhausted after {MAX_INTEGRATION_FIX_ATTEMPTS} fix "
+                f"attempts (final attempt escalated).\n"
+                f"Gate: {gate.reason}\n"
+                f"Last fix agent report:\n{last_fix_output or '(no fix agent completed)'}"
+            )
+            progress.log_diagnosis(block.name, diagnosis)
             state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
             return False
 

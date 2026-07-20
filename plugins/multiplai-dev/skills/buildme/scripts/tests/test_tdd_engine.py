@@ -1600,3 +1600,130 @@ class TestEntryPointSmokeRun:
         tests_pkg.mkdir()
         (tests_pkg / "__main__.py").write_text("print('test runner')\n")
         assert _detect_entry_point(config) is None
+
+
+class TestIntegrationFixCircuitBreaker:
+    """3 fix attempts: two scoped, then an escalated architecture-questioning
+    attempt on the review model; exhaustion → FAILED + diagnosis in progress."""
+
+    @pytest.fixture
+    def setup(self, tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        specs_root = project_dir / "specs"
+        (specs_root / "changes" / "test").mkdir(parents=True)
+
+        config = BuildConfig(
+            project_dir=project_dir, change_name="test", tier="advanced",
+            test_command="pytest -xvs", config_dir=tmp_path / "config",
+            core_memory_files=[], stack_memory_files=[], additional_memory_files=[],
+        )
+        config.specs_dir = specs_root
+        config.model = "claude-opus-x"
+        config.review_model = "claude-stronger-y"
+
+        block = BlockInfo(number=1, name="Block1", description="d",
+                          status=BlockStatus.IMPLEMENTING)
+        state = BuildState(
+            change_name="test", mode="only", tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
+        progress = ProgressWriter(tmp_path / "progress.md")
+        progress.initialize("test", "only", "advanced", 1)
+        return config, state, progress, block
+
+    @pytest.mark.asyncio
+    async def test_exhaustion_escalates_then_fails_with_diagnosis(self, setup):
+        config, state, progress, block = setup
+        failing_gate = GateResult(passed=False, reason="2 tests failing",
+                                  metadata={"stdout": "FAILED test_a", "stderr": ""})
+        fix = AgentResult(success=True, output="DIAGNOSIS: circular import between a and b")
+
+        with patch("build_pipeline.tdd_engine.integration_gate", return_value=failing_gate), \
+             patch("build_pipeline.tdd_engine.run_integration_fix", new_callable=AsyncMock,
+                   return_value=fix) as fixer:
+            result = await _run_integration_and_review(block, config, state, progress)
+
+        assert result is False
+        assert block.status == BlockStatus.FAILED
+        assert fixer.call_count == 3
+        # Attempts 1-2 scoped on the build model; attempt 3 escalated on review_model.
+        assert fixer.call_args_list[0].kwargs["escalate"] is False
+        assert fixer.call_args_list[0].kwargs["model"] == "claude-opus-x"
+        assert fixer.call_args_list[1].kwargs["escalate"] is False
+        assert fixer.call_args_list[2].kwargs["escalate"] is True
+        assert fixer.call_args_list[2].kwargs["model"] == "claude-stronger-y"
+        # Diagnosis lands in build-progress.md with the fix agent's report.
+        progress_text = progress.path.read_text()
+        assert "DIAGNOSIS (Block1)" in progress_text
+        assert "circular import between a and b" in progress_text
+        assert "ESCALATED" in progress_text
+
+    @pytest.mark.asyncio
+    async def test_escalation_falls_back_to_build_model(self, setup):
+        config, state, progress, block = setup
+        config.review_model = None
+        failing_gate = GateResult(passed=False, reason="failing", metadata={})
+        fix = AgentResult(success=True, output="tried")
+
+        with patch("build_pipeline.tdd_engine.integration_gate", return_value=failing_gate), \
+             patch("build_pipeline.tdd_engine.run_integration_fix", new_callable=AsyncMock,
+                   return_value=fix) as fixer:
+            result = await _run_integration_and_review(block, config, state, progress)
+
+        assert result is False
+        assert fixer.call_args_list[2].kwargs["model"] == "claude-opus-x"
+
+    @pytest.mark.asyncio
+    async def test_fix_success_stops_before_escalation(self, setup):
+        config, state, progress, block = setup
+        gates = iter([
+            GateResult(passed=False, reason="failing", metadata={"stdout": "FAILED"}),
+            GateResult(passed=True, reason="all green", metadata={"stdout": "3 passed"}),
+        ])
+        fix = AgentResult(success=True, output="fixed the import")
+        review = ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])
+
+        with patch("build_pipeline.tdd_engine.integration_gate", side_effect=lambda *a, **k: next(gates)), \
+             patch("build_pipeline.tdd_engine.run_integration_fix", new_callable=AsyncMock,
+                   return_value=fix) as fixer, \
+             patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+                   return_value=review):
+            result = await _run_integration_and_review(block, config, state, progress)
+
+        assert result is True
+        assert block.status == BlockStatus.DONE
+        assert fixer.call_count == 1
+        assert fixer.call_args.kwargs["escalate"] is False
+
+
+class TestIntegrationFixPrompts:
+    """The fix prompts embed the systematic-debugging protocol; escalation
+    switches to the question-the-architecture variant."""
+
+    @pytest.mark.asyncio
+    async def test_scoped_prompt_has_debug_protocol(self):
+        from build_pipeline.llm_steps.tdd_steps import run_integration_fix
+        ok = AgentResult(success=True, output="done")
+        with patch("build_pipeline.llm_steps.tdd_steps.agent_call", new_callable=AsyncMock,
+                   return_value=ok) as call:
+            await run_integration_fix("FAILED test_a", "pytest", "ctx")
+        prompt = call.call_args.args[0]
+        assert "Debugging Protocol" in prompt
+        assert "ONE hypothesis" in prompt
+        assert "Reproduce" in prompt
+        assert "one variable at a time" in prompt
+        assert "question the block's" not in prompt  # scoped, not escalated
+
+    @pytest.mark.asyncio
+    async def test_escalated_prompt_questions_architecture(self):
+        from build_pipeline.llm_steps.tdd_steps import run_integration_fix
+        ok = AgentResult(success=True, output="done")
+        with patch("build_pipeline.llm_steps.tdd_steps.agent_call", new_callable=AsyncMock,
+                   return_value=ok) as call:
+            await run_integration_fix("FAILED test_a", "pytest", "ctx", escalate=True)
+        prompt = call.call_args.args[0]
+        assert "Debugging Protocol" in prompt  # protocol carries over
+        assert "DIAGNOSIS:" in prompt
+        assert "restructure the block's implementation" in prompt

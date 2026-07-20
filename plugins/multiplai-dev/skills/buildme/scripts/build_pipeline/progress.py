@@ -58,6 +58,13 @@ class ProgressWriter:
                 f.write(f"    {line}\n")
             f.write("    ```\n")
 
+    def log_diagnosis(self, block_name: str, text: str) -> None:
+        """Append the circuit-breaker diagnosis when integration fixes exhaust."""
+        with self.path.open("a") as f:
+            f.write(f"\n## [{self._now()}] DIAGNOSIS ({block_name})\n")
+            for line in text.strip().splitlines()[:40]:
+                f.write(f"{line}\n")
+
     def cleanup(self) -> None:
         if self.path.exists():
             self.path.unlink()
