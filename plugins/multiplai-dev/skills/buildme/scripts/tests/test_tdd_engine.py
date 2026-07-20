@@ -515,8 +515,24 @@ class TestTDDStepToolAllowlists:
         assert REFACTORER_TIMEOUT == 15 * 60
 
 
+# A suite result that satisfies the RED gate: non-zero exit, genuine failure.
+RED_SUITE_RESULT = (1, "FAILED tests/test_x.py::test_a - AssertionError: not implemented")
+
+
+@pytest.fixture
+def red_gate_passes():
+    """Make the RED gate see a properly failing suite (most engine tests
+    exercise other phases and just need RED to be satisfied)."""
+    with patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT):
+        yield
+
+
 class TestRunBlockTDD:
     """Test run_block_tdd with mocked agents."""
+
+    @pytest.fixture(autouse=True)
+    def _red(self, red_gate_passes):
+        yield
 
     @pytest.fixture
     def setup(self, tmp_path):
@@ -719,8 +735,129 @@ class TestGitCommitScoping:
         assert ".build-state.json" not in tracked
 
 
+class TestRedGateWiring:
+    """The RED gate runs between the test-writer and implementer phases."""
+
+    @pytest.fixture
+    def setup(self, tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        specs_root = project_dir / "specs"
+        change_dir = specs_root / "changes" / "test"
+        change_dir.mkdir(parents=True)
+
+        config = BuildConfig(
+            project_dir=project_dir,
+            change_name="test",
+            tier="advanced",
+            test_command="pytest -xvs",
+            config_dir=tmp_path / "config",
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
+        )
+        config.specs_dir = specs_root
+
+        block = BlockInfo(number=1, name="Block1", description="Test block")
+        state = BuildState(
+            change_name="test", mode="only", tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
+        progress = ProgressWriter(tmp_path / "progress.md")
+        progress.initialize("test", "only", "advanced", 1)
+        return config, state, progress, block
+
+    @pytest.mark.asyncio
+    async def test_red_pass_stores_evidence(self, setup):
+        config, state, progress, block = setup
+        ok = AgentResult(success=True, output="Tests written")
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT):
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is True
+        assert "AssertionError" in block.red_evidence
+        # Evidence also lands in the progress file
+        assert "RED evidence" in progress.path.read_text()
+
+    @pytest.mark.asyncio
+    async def test_red_failure_retries_test_writer_once_then_passes(self, setup):
+        """First run: suite passes (tests test nothing) → one test-writer retry;
+        second run fails properly → RED confirmed."""
+        config, state, progress, block = setup
+        ok = AgentResult(success=True, output="Tests written")
+        suite_results = iter([(0, "5 passed"), RED_SUITE_RESULT])
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok) as tw, \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_test_suite", side_effect=lambda *a, **k: next(suite_results)):
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is True
+        assert tw.call_count == 2  # initial + one RED retry
+        # The retry prompt carries the gate's reason
+        retry_desc = tw.call_args_list[1].kwargs["block_description"]
+        assert "RED Gate Failure" in retry_desc
+        assert block.red_evidence  # captured on the second (passing) run
+
+    @pytest.mark.asyncio
+    async def test_red_failure_twice_fails_block(self, setup):
+        config, state, progress, block = setup
+        ok = AgentResult(success=True, output="Tests written")
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok) as tw, \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok) as impl, \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=(0, "5 passed")):
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is False
+        assert block.status == BlockStatus.FAILED
+        assert tw.call_count == 2
+        impl.assert_not_called()  # never implemented without RED proof
+
+    @pytest.mark.asyncio
+    async def test_broken_tests_get_fix_tests_action(self, setup):
+        """Collection errors drive the fix_tests action into the retry prompt."""
+        config, state, progress, block = setup
+        ok = AgentResult(success=True, output="Tests written")
+        suite_results = iter([
+            (2, "ERROR collecting tests/test_x.py\nSyntaxError: invalid syntax"),
+            RED_SUITE_RESULT,
+        ])
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok) as tw, \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_test_suite", side_effect=lambda *a, **k: next(suite_results)):
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is True
+        assert "fix_tests" in tw.call_args_list[1].kwargs["block_description"]
+
+    @pytest.mark.asyncio
+    async def test_no_test_command_skips_red_gate(self, setup):
+        config, state, progress, block = setup
+        config.test_command = ""
+        ok = AgentResult(success=True, output="Tests written")
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_test_suite") as rts:
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is True
+        rts.assert_not_called()
+        assert block.red_evidence == ""
+
+
 class TestEvidenceBasedReview:
     """The per-block quality review must see the block's actual diff."""
+
+    @pytest.fixture(autouse=True)
+    def _red(self, red_gate_passes):
+        yield
 
     def _init_empty_repo(self, repo: Path) -> None:
         """git init with committer identity but zero commits."""

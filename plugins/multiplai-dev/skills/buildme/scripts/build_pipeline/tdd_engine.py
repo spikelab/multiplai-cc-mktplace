@@ -19,8 +19,10 @@ from .config import BuildConfig
 from .gates import (
     baseline_test_gate,
     integration_gate,
+    red_gate,
     review_iteration_gate,
     review_score_gate,
+    run_test_suite,
     wiring_task_gate,
 )
 from .llm_steps.review_steps import run_code_review
@@ -166,6 +168,14 @@ EXIT_AGENT_TIMEOUT = 3
 
 MAX_INTEGRATION_FIX_ATTEMPTS = 2
 MAX_REVIEW_ITERATIONS = 3
+
+# Cap for RED/GREEN evidence blobs stored in block state and fed to the
+# reviewer — the interesting part of a pytest run is the tail.
+MAX_EVIDENCE_CHARS = 4000
+
+
+def _trim_evidence(output: str) -> str:
+    return output[-MAX_EVIDENCE_CHARS:]
 
 # Weak test patterns for Phase A.5 quality check
 WEAK_TEST_PATTERNS = [
@@ -332,6 +342,81 @@ def run_test_quality_check(test_files_content: str, contracts: str, config: Buil
     )
 
 
+async def _enforce_red_gate(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    specs: str,
+    context: str,
+    block_idx: int,
+) -> bool:
+    """Prove the block's tests fail for the right reason before implementing.
+
+    Runs the suite and applies red_gate. On failure: one test-writer retry
+    carrying the gate's reason; a second failure marks the block FAILED.
+    On pass: stores trimmed RED output as evidence in block state and the
+    progress log. Returns True when RED is confirmed (or unverifiable
+    because no test command is configured).
+    """
+    if not config.test_command:
+        log.info("RED gate skipped for block %s: no test command configured", block.name)
+        return True
+
+    for attempt in (1, 2):
+        exit_code, output = run_test_suite(config.test_command, config.project_dir)
+        gate = red_gate(output, exit_code)
+        if gate.passed:
+            block.red_evidence = _trim_evidence(output)
+            state.checkpoint(config.state_file_path())
+            log.info("RED confirmed block=%d name=%s (%s)", block.number, block.name, gate.reason)
+            progress.log_agent("RedGate", block.name, "RED CONFIRMED")
+            progress.log_evidence("RED", block.name, block.red_evidence)
+            return True
+
+        if attempt == 1:
+            log.warning(
+                "RED gate failed for block %s (action=%s): %s — one test-writer retry",
+                block.name, gate.action, gate.reason,
+            )
+            progress.log_agent("RedGate", block.name, f"FAILED ({gate.action}) — retrying test writer")
+            retry = await run_test_writer(
+                block_name=block.name,
+                block_description=(
+                    f"{block.description}\n\n"
+                    f"## RED Gate Failure — fix the tests\n"
+                    f"The previously written tests did not fail for the right reason:\n"
+                    f"{gate.reason}\n\n"
+                    f"Required action: {gate.action}. Rework the test files so they "
+                    f"fail because the behavior is unimplemented (assertion/"
+                    f"NotImplementedError/missing attribute), not because the test "
+                    f"files themselves are broken, and not pass trivially."
+                ),
+                specs=specs,
+                context_bundle=context,
+                test_command=config.test_command,
+                model=config.model,
+                cwd=str(config.project_dir),
+            )
+            if not retry.success:
+                block.timed_out = retry.timed_out
+                log.error("FAIL block=%d name=%s phase=RED_GATE_RETRY error=%s",
+                          block.number, block.name, retry.error)
+                progress.log_agent("TestWriter", block.name, "TIMEOUT" if retry.timed_out else "FAILED")
+                state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+                return False
+            sha = _git_commit_block_phase(config, "test", block)
+            if sha:
+                block.test_commit = sha
+                state.checkpoint(config.state_file_path())
+
+    log.error("FAIL block=%d name=%s phase=RED_GATE reason=%s",
+              block.number, block.name, gate.reason)
+    progress.log_agent("RedGate", block.name, f"FAILED after retry: {gate.reason}")
+    state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+    return False
+
+
 async def run_block_tdd(
     block: BlockInfo,
     config: BuildConfig,
@@ -433,6 +518,11 @@ async def run_block_tdd(
         log.warning("Test quality check failed for block %s: %s", block.name, quality_gate.reason)
         # Don't fail the build — log and continue
 
+    # --- Phase A.6: RED gate — prove tests fail before implementing ---
+    red_ok = await _enforce_red_gate(block, config, state, progress, specs, context, block_idx)
+    if not red_ok:
+        return False
+
     # --- Phase B: Implement ---
     log.info("START block=%d name=%s phase=IMPLEMENT", block.number, block.name)
     state.mark_block_status(block_idx, BlockStatus.IMPLEMENTING, config.state_file_path())
@@ -532,6 +622,12 @@ async def _run_integration_and_review(
             log.error("Integration gate still failing after fix attempts for block %s", block.name)
             state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
             return False
+
+    # GREEN evidence: the suite passing with the implementation in place —
+    # the counterpart to the RED evidence captured before implementation.
+    block.green_evidence = _trim_evidence(gate.metadata.get("stdout", "") or gate.reason)
+    state.checkpoint(config.state_file_path())
+    progress.log_evidence("GREEN", block.name, block.green_evidence)
 
     # --- Quality review loop ---
     state.mark_block_status(block_idx, BlockStatus.REVIEWING, config.state_file_path())

@@ -4,8 +4,10 @@ import pytest
 from pathlib import Path
 
 from build_pipeline.gates import (
+    red_gate,
     review_score_gate,
     review_iteration_gate,
+    run_test_suite,
     wiring_task_gate,
     baseline_test_gate,
     integration_gate,
@@ -108,6 +110,75 @@ class TestBaselineTestGate:
         result = baseline_test_gate("true", tmp_path)
         assert not result.passed
         assert "not trusted" in result.reason
+
+
+class TestRedGate:
+    """RED gate: tests must fail for the right reason before implementation."""
+
+    def test_passes_on_assertion_failure(self):
+        output = "FAILED tests/test_auth.py::test_login - AssertionError: expected token"
+        result = red_gate(output, 1)
+        assert result.passed
+        assert "right reason" in result.reason
+
+    def test_passes_on_not_implemented(self):
+        output = "FAILED tests/test_auth.py::test_login - NotImplementedError"
+        assert red_gate(output, 1).passed
+
+    def test_passes_on_missing_attribute(self):
+        output = (
+            "FAILED tests/test_auth.py::test_login - "
+            "AttributeError: module 'auth' has no attribute 'login'"
+        )
+        assert red_gate(output, 1).passed
+
+    def test_suite_passing_means_rewrite_tests(self):
+        result = red_gate("5 passed in 0.3s", 0)
+        assert not result.passed
+        assert result.action == "rewrite_tests"
+
+    def test_collection_error_means_fix_tests(self):
+        output = "ERROR collecting tests/test_auth.py\nSyntaxError: invalid syntax"
+        result = red_gate(output, 2)
+        assert not result.passed
+        assert result.action == "fix_tests"
+
+    def test_syntax_error_means_fix_tests(self):
+        output = "E   SyntaxError: invalid syntax (test_auth.py, line 12)"
+        result = red_gate(output, 2)
+        assert not result.passed
+        assert result.action == "fix_tests"
+
+    def test_unrecognized_failure_means_fix_tests(self):
+        result = red_gate("something exploded unrecognizably", 1)
+        assert not result.passed
+        assert result.action == "fix_tests"
+
+    def test_unrunnable_suite_means_fix_tests(self):
+        """exit_code=None (untrusted repo / missing binary) is not RED proof."""
+        result = red_gate("Repo not trusted", None)
+        assert not result.passed
+        assert result.action == "fix_tests"
+
+
+class TestRunTestSuite:
+    def test_returns_exit_code_and_output(self, tmp_path, trust_repo):
+        code, output = run_test_suite("true", tmp_path)
+        assert code == 0
+
+    def test_nonzero_exit(self, tmp_path, trust_repo):
+        code, _ = run_test_suite("false", tmp_path)
+        assert code == 1
+
+    def test_untrusted_repo_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("BUILDME_TRUST_REPO", raising=False)
+        code, output = run_test_suite("true", tmp_path)
+        assert code is None
+        assert "not trusted" in output
+
+    def test_missing_binary_returns_none(self, tmp_path, trust_repo):
+        code, output = run_test_suite("definitely-not-a-command-xyz", tmp_path)
+        assert code is None
 
 
 class TestIntegrationGate:

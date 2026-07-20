@@ -122,6 +122,12 @@ class BlockInfo(BaseModel):
     impl_commit: str | None = None
     review_scores: ReviewResult | None = None
     review_iterations: int = 0
+    # Red-green proof captured by the engine (trimmed suite output): RED is
+    # stored when the RED gate confirms the block's tests fail before
+    # implementation; GREEN when the integration gate passes after it. Both
+    # feed the reviewer (as evidence to verify, not trust) and build-progress.md.
+    red_evidence: str = ""
+    green_evidence: str = ""
 
 
 # --- Change artifacts ---

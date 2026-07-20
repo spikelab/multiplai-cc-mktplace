@@ -139,6 +139,29 @@ def baseline_test_gate(test_command: str, project_dir: Path) -> GateResult:
     )
 
 
+def run_test_suite(test_command: str, project_dir: Path, timeout: int = 300) -> tuple[int | None, str]:
+    """Run the repo's test suite under the trust guard (shared mechanics for
+    the integration and RED gates).
+
+    Returns (exit_code, combined output). exit_code is None when the command
+    could not run at all (missing binary, timeout, untrusted repo) — callers
+    must treat None as "could not verify", never as pass or fail evidence.
+    """
+    if not _repo_trusted():
+        return None, (
+            "Repo not trusted — refusing to run its test_command/conftest.py "
+            "(set --trust-repo or BUILDME_TRUST_REPO=1)."
+        )
+    try:
+        result = subprocess.run(
+            shlex.split(test_command),
+            capture_output=True, text=True, cwd=project_dir, timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return None, f"Test command failed to run: {e}"
+    return result.returncode, result.stdout + "\n" + result.stderr
+
+
 def integration_gate(test_command: str, project_dir: Path) -> GateResult:
     """Run the full test suite after a block completes."""
     if not test_command:
@@ -158,12 +181,87 @@ def integration_gate(test_command: str, project_dir: Path) -> GateResult:
         return GateResult(passed=False, reason=f"Integration tests failed: {e}")
 
     if result.returncode == 0:
-        return GateResult(passed=True, reason="All tests pass")
+        return GateResult(
+            passed=True, reason="All tests pass",
+            metadata={"stdout": result.stdout[-2000:]},
+        )
     return GateResult(
         passed=False,
         reason=f"Tests failing (exit {result.returncode})",
         action="spawn_fix_agent",
         metadata={"stderr": result.stderr[-1000:], "stdout": result.stdout[-500:]},
+    )
+
+
+# Failure signatures that prove tests fail "for the right reason": the code
+# under test is missing or incomplete, not that the test files themselves are
+# broken.
+_RED_RIGHT_REASON = re.compile(
+    r"(AssertionError|NotImplementedError|"
+    r"has no attribute|is not defined|"
+    r"^FAILED\b|\bFAILED\b)",
+    re.MULTILINE,
+)
+
+# Signatures of broken test files: pytest could not even collect/parse them.
+_RED_BROKEN_TESTS = re.compile(
+    r"(SyntaxError|IndentationError|"
+    r"error(s)? during collection|collection error|"
+    r"errors during collection|ERROR collecting|"
+    r"INTERNALERROR)",
+    re.IGNORECASE,
+)
+
+
+def red_gate(test_output: str, exit_code: int | None) -> GateResult:
+    """RED-phase gate: prove the freshly written tests fail for the right reason.
+
+    Pass iff the suite exits non-zero AND the failure signature is a genuine
+    behavioral failure (FAILED / AssertionError / NotImplementedError /
+    missing attribute), not a broken test file (collection/syntax error).
+
+    Fail actions:
+    - "rewrite_tests": suite passed — the new tests exercise nothing that is
+      still unimplemented, so they prove nothing.
+    - "fix_tests": tests are broken (collection/syntax error) or the failure
+      signature is unrecognizable — repair the test files, don't implement yet.
+    """
+    tail = test_output[-1000:]
+    if exit_code is None:
+        return GateResult(
+            passed=False,
+            reason=f"RED gate could not run the suite: {tail}",
+            action="fix_tests",
+            metadata={"exit_code": None},
+        )
+    if exit_code == 0:
+        return GateResult(
+            passed=False,
+            reason="RED gate failed: suite passed BEFORE implementation — the new "
+                   "tests exercise nothing unimplemented and prove nothing",
+            action="rewrite_tests",
+            metadata={"exit_code": 0},
+        )
+    if _RED_BROKEN_TESTS.search(test_output):
+        return GateResult(
+            passed=False,
+            reason=f"RED gate failed: tests error instead of failing "
+                   f"(collection/syntax problem, exit {exit_code}): {tail}",
+            action="fix_tests",
+            metadata={"exit_code": exit_code},
+        )
+    if _RED_RIGHT_REASON.search(test_output):
+        return GateResult(
+            passed=True,
+            reason=f"RED confirmed: tests fail for the right reason (exit {exit_code})",
+            metadata={"exit_code": exit_code},
+        )
+    return GateResult(
+        passed=False,
+        reason=f"RED gate failed: suite exits {exit_code} but with no recognizable "
+               f"test-failure signature: {tail}",
+        action="fix_tests",
+        metadata={"exit_code": exit_code},
     )
 
 
