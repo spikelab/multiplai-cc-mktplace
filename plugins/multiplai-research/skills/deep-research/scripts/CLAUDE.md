@@ -18,7 +18,7 @@ uv run --directory <this-dir> python -m research_pipeline --query "..." [options
 | Module | Purpose |
 |---|---|
 | `pipeline.py` | Orchestrator — sequences stages, invokes gates, handles recovery and resume |
-| `config.py` | `ResearchConfig` + preset definitions (quick/standard/thorough) |
+| `config.py` | `ResearchConfig` + preset definitions (micro/quick/standard/thorough) + per-node `models`/`efforts` tier maps |
 | `models.py` | Pydantic models for every structured type flowing through the pipeline |
 | `state.py` | `ResearchState` with per-source granularity + JSON checkpointing |
 | `gates.py` | Query diversity, min sources, coverage, reassess — pure functions |
@@ -28,7 +28,7 @@ uv run --directory <this-dir> python -m research_pipeline --query "..." [options
 | `progress.py` | Human-readable progress file writer (tail-able) |
 | `research_types.py` | Loads `../references/research-types.md` for type-specific guidance |
 | `eval.py` | Quality scoring harness + dataset builder from existing research outputs |
-| `nodes/` | Per-stage node implementations (plan, search, triage, read, reassess, synthesize, challenge) |
+| `nodes/` | Per-stage node implementations (plan, search, triage, read, reassess, verify, quality_check, synthesize, challenge) |
 | `prompts/` | Focused prompt templates for each LLM node |
 
 ## Running Tests
@@ -51,6 +51,19 @@ All tests use stubs/mocks — no real API calls. Run in milliseconds.
 **Config flags:**
 - `ResearchConfig.prefer_claude_tools` (default True) — `--no-claude-tools` to disable
 - `ResearchConfig.allow_paid_fallback` (default False) — `--allow-paid-fallback` to enable (only unlocks Serper beyond free tier; Tavily/Exa/Brave are capped at free tier always)
+
+**Model/effort tiers:** every LLM call site reads `config.models[node]` and
+`config.efforts[node]`. Search, triage, extract, and verify run the parse-tier
+model (sonnet) at `effort="low"` — they're mechanical formatting/parsing work.
+The Claude Agent search provider gets its pin via
+`build_default_router(model=..., effort=...)`. `--model`/`--effort` override
+all nodes uniformly.
+
+**Retry policy:** `sdk.llm_call` defaults to `max_attempts=2` (one transient
+retry inside `run_agent`). The fetcher and the Claude Agent search provider
+pass `max_attempts=1` — the router's provider failover and the per-source
+FAILED handling are their retry layer; stacking SDK retries on top would
+double worst-case latency.
 
 Full provider comparison: `references/search-engines.md`
 
@@ -98,6 +111,20 @@ Full provider comparison: `references/search-engines.md`
 **Don't add retry loops inside nodes.** Retry belongs at the fetcher level (transient errors) or the SDK wrapper level (LLM validation). Nodes should be idempotent and fail loudly.
 
 **State transitions must go through `state.advance_to()`.** Don't set `state.stage` directly — `advance_to()` also checkpoints to disk.
+
+**The reassess cycle is sequential ON PURPOSE.** `_run_reassess_cycle` runs
+refinement, then verification — verification's verdict node must see the
+findings refinement added, and both legs mutate `state.sources`/`state.findings`
+(concurrent mutation corrupts per-source tracking). Don't "optimize" it back to
+`asyncio.gather` (there's a test asserting it's gone). Each leg fails loudly
+into `state.refinement_error`/`verification_error`, which `_format_reassessment`
+surfaces to the synthesis prompt.
+
+**Don't persist full page content on state.** `mark_source_extracted` truncates
+`extracted_content` to a 2000-char debug excerpt — the checkpoint is rewritten
+after every source, and full content makes it grow to tens of MB on a thorough
+run. Findings carry the signal; anything needing full content must consume it
+in-flight, not from the checkpoint.
 
 ## Debugging a Failing Pipeline Run
 
