@@ -175,6 +175,7 @@ async def llm_call(
     model: str | None = None,
     effort: str | None = None,
     max_turns: int = 1,
+    max_attempts: int = 2,
     system_prompt: str | None = None,
     allowed_tools: list[str] | None = None,
     call_timeout: float = DEFAULT_LLM_CALL_TIMEOUT_S,
@@ -187,6 +188,9 @@ async def llm_call(
     output from the response.
 
     Args:
+        max_attempts: Transient-error retries at the run_agent level (default 2:
+            one retry). Callers with their own failover — the search router's
+            provider chain, the fetcher's per-source error handling — pass 1.
         label: Short identifier for this call (e.g., "synthesize", "fetch:example.com").
             Used in concurrency tracking and log messages to distinguish concurrent calls.
 
@@ -219,6 +223,7 @@ async def llm_call(
                 system_prompt=system_prompt,
                 allowed_tools=allowed_tools,
                 max_turns=max_turns,
+                max_attempts=max_attempts,
                 model=model,
                 effort=effort,
                 timeout_s=call_timeout,

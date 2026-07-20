@@ -7,7 +7,7 @@ This is where everything comes together:
   min-sources gate → READ → coverage gate → REASSESS → reassess gate →
   SYNTHESIZE → (optional adversarial review)
 - Handles gate recovery actions
-- Handles parallel mode (N sub-pipelines merged via synthesis)
+- Handles parallel mode (N sub-pipelines; reports concatenated with pointers)
 - Supports --plan-only and --approved-plan modes
 - Resumes from checkpoint when state file exists
 """
@@ -190,7 +190,8 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
         router = build_default_router(
             prefer_claude_tools=config.prefer_claude_tools,
             allow_paid_fallback=config.allow_paid_fallback,
-            effort=config.effort,
+            model=config.models.get("search"),
+            effort=config.efforts.get("search"),
         )
     except RuntimeError as e:
         print(f"Search router setup failed: {e}", file=sys.stderr)
@@ -291,12 +292,16 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
         if challenge_line:
             print(challenge_line)
         print(f"COST: ${usage.cost_usd:.4f} | "
-              f"input={usage.input_tokens} output={usage.output_tokens} | "
+              f"input={usage.input_tokens} output={usage.output_tokens} "
+              f"cache_write={usage.cache_creation_tokens} "
+              f"cache_read={usage.cache_read_tokens} | "
               f"{usage.num_calls} SDK calls | peak_concurrency={peak}")
         log.info(
-            "Pipeline %s: %d findings, %d sources, %d SDK calls, peak_concurrency=%d",
+            "Pipeline %s: %d findings, %d sources, %d SDK calls, "
+            "peak_concurrency=%d, cache_write=%d, cache_read=%d",
             "INCOMPLETE" if aborted else "complete",
-            len(state.findings), len(state.completed_sources()), usage.num_calls, peak,
+            len(state.findings), len(state.completed_sources()), usage.num_calls,
+            peak, usage.cache_creation_tokens, usage.cache_read_tokens,
         )
         return 0
 
@@ -719,7 +724,11 @@ async def _run_verification(
 
 
 async def run_parallel(config: ResearchConfig) -> int:
-    """Run N sub-pipelines concurrently and merge via synthesis."""
+    """Run N sub-pipelines concurrently; concatenate their reports.
+
+    The merge is a concatenation with pointers to the sub-reports — there is
+    no cross-topic synthesis pass over the combined findings.
+    """
     log.info("PARALLEL MODE: decomposing query")
 
     # Reset the shared usage/concurrency counters ONCE here; sub-pipelines run

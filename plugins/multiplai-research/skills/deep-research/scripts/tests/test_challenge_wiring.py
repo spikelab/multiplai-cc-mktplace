@@ -129,6 +129,27 @@ class TestAutoChallengeTrigger:
         assert "CHALLENGE:" not in capsys.readouterr().out
 
 
+class TestCostLineCacheCounters:
+    @pytest.mark.asyncio
+    async def test_cost_line_reports_cache_write_and_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        """The COST: line must expose prompt-cache traffic — cache-write cost
+        dominance is invisible with input/output tokens alone."""
+        config = _mk_config(tmp_path, preset="standard")
+
+        rc, _ = await _run_pipeline_with_stubbed_stages(
+            config, monkeypatch, reassessment=ReassessResult()
+        )
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        cost_lines = [l for l in out.splitlines() if l.startswith("COST:")]
+        assert len(cost_lines) == 1
+        assert "cache_write=" in cost_lines[0]
+        assert "cache_read=" in cost_lines[0]
+
+
 class TestVerificationVerdictWiring:
     @pytest.mark.asyncio
     async def test_flagged_claims_get_unresolved_verdicts_without_new_evidence(

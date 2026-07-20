@@ -56,7 +56,7 @@ class Source(BaseModel):
     source_api: str = ""
     status: SourceStatus = SourceStatus.PENDING
     error: str | None = None  # populated when status=FAILED
-    extracted_content: str | None = None  # markdown from trafilatura
+    extracted_content: str | None = None  # debug excerpt (truncated to 2000 chars at checkpoint)
     published_date: str | None = None
     # Carried from the SearchResult; a declared field so the authority-budget
     # reservation in READ survives checkpoint/resume.

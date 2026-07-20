@@ -331,3 +331,68 @@ class TestUsageAccumulator:
         assert usage.cache_read_tokens == 17
         assert usage.cost_usd == pytest.approx(0.03)
         assert usage.num_calls == 2
+
+
+class TestMaxAttempts:
+    """Retry policy: SDK-level retry by default, disabled where callers
+    already have their own failover (router chain, per-source fetch handling)."""
+
+    def _patch_run_agent(self, monkeypatch: pytest.MonkeyPatch, text: str = "[]") -> dict:
+        from types import SimpleNamespace
+
+        from research_pipeline import sdk
+
+        captured: dict = {}
+
+        async def fake_run_agent(prompt, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                text=text,
+                usage=SimpleNamespace(
+                    input_tokens=1, output_tokens=1,
+                    cache_creation_tokens=0, cache_read_tokens=0, cost_usd=0.0,
+                ),
+            )
+
+        monkeypatch.setattr(sdk, "run_agent", fake_run_agent)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_llm_call_defaults_to_two_attempts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured = self._patch_run_agent(monkeypatch)
+        await llm_call("p")
+        assert captured["max_attempts"] == 2
+
+    @pytest.mark.asyncio
+    async def test_llm_call_max_attempts_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured = self._patch_run_agent(monkeypatch)
+        await llm_call("p", max_attempts=1)
+        assert captured["max_attempts"] == 1
+
+    @pytest.mark.asyncio
+    async def test_fetcher_disables_sdk_retry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ClaudeAgentFetcher has per-source failover — one attempt only."""
+        from research_pipeline.claude_agent_fetcher import ClaudeAgentFetcher
+
+        captured = self._patch_run_agent(monkeypatch, text='{"content_markdown": "c"}')
+        result = await ClaudeAgentFetcher().fetch_url("https://a.example")
+        assert result.success
+        assert captured["max_attempts"] == 1
+
+    @pytest.mark.asyncio
+    async def test_search_provider_disables_sdk_retry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The router fails over to the next provider — one attempt only."""
+        from research_pipeline.search_router import ClaudeAgentSearchProvider
+
+        captured = self._patch_run_agent(monkeypatch, text="[]")
+        results = await ClaudeAgentSearchProvider().search("q")
+        assert results == []
+        assert captured["max_attempts"] == 1

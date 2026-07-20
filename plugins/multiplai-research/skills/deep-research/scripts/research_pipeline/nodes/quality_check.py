@@ -1,7 +1,8 @@
 """Quality check node — pre-synthesis go/no-go assessment.
 
 Runs after REASSESS, before SYNTHESIZE. Uses the parse-tier model (sonnet)
-with effort="medium". Prevents synthesis on research that's completely
+at the "quality_check" effort from config.efforts (default "medium").
+Prevents synthesis on research that's completely
 empty, but has a strong GO bias — aborting after expensive fetch+extract
 is almost always the worse outcome. GO/NO-GO thresholds scale with the
 active preset (filled into the prompt from config.preset).
@@ -77,7 +78,7 @@ async def quality_check(config: ResearchConfig, state: ResearchState) -> Quality
             prompt,
             QualityCheckResult,
             model=config.models.get("quality_check"),
-            effort="medium",
+            effort=config.efforts.get("quality_check"),
             label="quality_check",
         )
         log.info(

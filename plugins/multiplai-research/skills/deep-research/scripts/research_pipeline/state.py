@@ -164,7 +164,10 @@ class ResearchState(BaseModel):
         for source in self.sources:
             if source.url == url:
                 source.status = SourceStatus.EXTRACTED
-                source.extracted_content = content
+                # Findings carry the signal; content is kept only as a debug
+                # excerpt. Full content would bloat the checkpoint (rewritten
+                # after every source) to tens of MB on a thorough run.
+                source.extracted_content = content[:2000]
                 break
         self.findings.extend(findings)
         self.checkpoint()

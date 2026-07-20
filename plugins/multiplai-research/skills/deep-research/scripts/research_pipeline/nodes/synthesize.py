@@ -46,7 +46,7 @@ async def synthesize(config: ResearchConfig, state: ResearchState) -> str:
     prompt_bytes = len(single_pass_prompt.encode("utf-8"))
     if prompt_bytes <= MAX_PROMPT_BYTES:
         log.info("SYNTHESIZE: single-pass (%d bytes, under %d limit)", prompt_bytes, MAX_PROMPT_BYTES)
-        report = await llm_call(single_pass_prompt, model=config.models.get("synthesize"), effort=config.effort, label="synthesize")
+        report = await llm_call(single_pass_prompt, model=config.models.get("synthesize"), effort=config.efforts.get("synthesize"), label="synthesize")
         log.info("SYNTHESIZE: report generated (%d chars)", len(report))
         return _append_failed_sources(report, state)
 
@@ -89,7 +89,7 @@ async def _map_reduce_synthesize(
             findings=chunk_findings_text,
             sources=chunk_sources_text,
         )
-        map_tasks.append(llm_call(prompt, model=config.models.get("synthesize"), effort=config.effort, label=f"synthesize:map{i}"))
+        map_tasks.append(llm_call(prompt, model=config.models.get("synthesize"), effort=config.efforts.get("synthesize"), label=f"synthesize:map{i}"))
 
     intermediate_results = await asyncio.gather(*map_tasks, return_exceptions=True)
 
@@ -160,7 +160,7 @@ async def _map_reduce_synthesize(
             )
             reduce_bytes = len(reduce_prompt.encode("utf-8"))
 
-    report = await llm_call(reduce_prompt, model=config.models.get("synthesize"), effort=config.effort, label="synthesize:reduce")
+    report = await llm_call(reduce_prompt, model=config.models.get("synthesize"), effort=config.efforts.get("synthesize"), label="synthesize:reduce")
     log.info("SYNTHESIZE REDUCE: report generated (%d chars)", len(report))
     return report
 

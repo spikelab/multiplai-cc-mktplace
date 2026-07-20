@@ -1,6 +1,7 @@
 """Prompt template for the pre-synthesis quality check.
 
-Uses the parse-tier model (sonnet) with effort="medium". Strong GO bias —
+Uses the parse-tier model (sonnet) at the config.efforts["quality_check"]
+effort (default "medium"). Strong GO bias —
 aborting after expensive fetch+extract wastes far more than a synthesis
 attempt. Thresholds are scaled to the active preset, not absolute counts:
 a micro run with 3 sources must not be judged by thorough-run standards.

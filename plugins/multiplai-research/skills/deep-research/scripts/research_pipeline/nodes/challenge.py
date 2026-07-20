@@ -86,7 +86,7 @@ async def adversarial_review(
         prompt,
         ChallengeReview,
         model=config.models.get("adversarial"),
-        effort=config.effort,
+        effort=config.efforts.get("adversarial"),
         label="adversarial",
     )
     log.info(

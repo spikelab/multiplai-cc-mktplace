@@ -56,7 +56,7 @@ async def plan(config: ResearchConfig) -> PlanResult:
         max_sub_questions=config.preset.max_sub_questions,
     )
     response = await llm_call_structured(
-        prompt, PlanResponse, model=config.models.get("plan"), effort=config.effort,
+        prompt, PlanResponse, model=config.models.get("plan"), effort=config.efforts.get("plan"),
         label="plan",
     )
 
@@ -83,7 +83,7 @@ async def diverge(config: ResearchConfig, plan_result: PlanResult) -> PlanResult
         research_type_guidance=guidance_for(config.research_type, "diverge"),
     )
     response = await llm_call_structured(
-        prompt, DivergeResponse, model=config.models.get("diverge"), effort=config.effort,
+        prompt, DivergeResponse, model=config.models.get("diverge"), effort=config.efforts.get("diverge"),
         label="diverge",
     )
 
@@ -111,7 +111,7 @@ async def challenge(config: ResearchConfig, plan_result: PlanResult) -> PlanResu
         research_type_guidance=guidance_for(config.research_type, "challenge"),
     )
     response = await llm_call_structured(
-        prompt, ChallengeResponse, model=config.models.get("challenge"), effort=config.effort,
+        prompt, ChallengeResponse, model=config.models.get("challenge"), effort=config.efforts.get("challenge"),
         label="challenge",
     )
 

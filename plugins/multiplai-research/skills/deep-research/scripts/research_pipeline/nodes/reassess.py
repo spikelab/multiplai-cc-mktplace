@@ -60,7 +60,7 @@ async def reassess(
         prompt,
         ReassessResult,
         model=config.models.get("reassess"),
-        effort=config.effort,
+        effort=config.efforts.get("reassess"),
         label="reassess",
     )
 
@@ -99,8 +99,8 @@ async def _chunked_reassess(
     )
 
     result_a, result_b = await asyncio.gather(
-        llm_call_structured(prompt_a, ReassessResult, model=config.models.get("reassess"), effort=config.effort, label="reassess:chunk_a"),
-        llm_call_structured(prompt_b, ReassessResult, model=config.models.get("reassess"), effort=config.effort, label="reassess:chunk_b"),
+        llm_call_structured(prompt_a, ReassessResult, model=config.models.get("reassess"), effort=config.efforts.get("reassess"), label="reassess:chunk_a"),
+        llm_call_structured(prompt_b, ReassessResult, model=config.models.get("reassess"), effort=config.efforts.get("reassess"), label="reassess:chunk_b"),
     )
 
     # Merge: OR of booleans, union of lists
@@ -113,9 +113,12 @@ async def _chunked_reassess(
         conflation_claims=result_a.conflation_claims + result_b.conflation_claims,
         convenience_bias_claims=result_a.convenience_bias_claims + result_b.convenience_bias_claims,
         refinement_needed=result_a.refinement_needed or result_b.refinement_needed,
-        refinement_queries=list(set(result_a.refinement_queries + result_b.refinement_queries)),
-        verify_claims=list(set(result_a.verify_claims + result_b.verify_claims)),
-        verify_queries=list(set(result_a.verify_queries + result_b.verify_queries)),
+        # sorted(): set order is randomized per process (hash seed) — unsorted
+        # merges would make reruns non-deterministic downstream (query order,
+        # prompt content, cache keys).
+        refinement_queries=sorted(set(result_a.refinement_queries + result_b.refinement_queries)),
+        verify_claims=sorted(set(result_a.verify_claims + result_b.verify_claims)),
+        verify_queries=sorted(set(result_a.verify_queries + result_b.verify_queries)),
     )
 
     log.info(

@@ -124,12 +124,16 @@ class ClaudeAgentFetcher:
             # asyncio.wait_for. An outer wait_for would re-introduce the
             # cancel-and-await hang: cancelling a wedged llm_call could block
             # the outer wait_for forever. One robust timeout, enforced in sdk.
+            # max_attempts=1: fetch failures are handled per-source (fallback
+            # fetcher, FAILED status) — SDK-level retry would double the
+            # worst-case per-source latency.
             raw = await sdk.llm_call(
                 prompt,
                 model=self.model,
                 effort=self.effort,
                 allowed_tools=["WebFetch"],
                 max_turns=3,
+                max_attempts=1,
                 call_timeout=self.request_timeout,
                 label=f"fetch:{_domain}",
             )
@@ -217,7 +221,7 @@ class ClaudeAgentFetcher:
                 self.batch_timeout, len(pending), len(tasks),
             )
         raw_results = []
-        for t in tasks:
+        for url, t in zip(urls, tasks):
             if t in done:
                 try:
                     raw_results.append(t.result())
@@ -228,10 +232,10 @@ class ClaudeAgentFetcher:
                 t.add_done_callback(sdk._swallow_task_result)
                 raw_results.append(
                     FetchResult(
-                        url="<cancelled>",
+                        url=url,
                         success=False,
                         error=FetchError(
-                            url="<cancelled>",
+                            url=url,
                             error_type=FetchErrorType.TIMEOUT,
                             message="batch timeout",
                             elapsed_seconds=self.batch_timeout,

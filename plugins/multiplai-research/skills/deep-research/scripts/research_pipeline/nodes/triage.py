@@ -203,7 +203,7 @@ async def triage(
                     ),
                     RelevanceScores,
                     model=config.models.get("triage_relevance"),
-                    effort=config.effort,
+                    effort=config.efforts.get("triage_relevance"),
                     label="triage:relevance",
                 )
                 score_map = {s.url: s.score for s in response.scores}

@@ -57,7 +57,7 @@ def _build_fetchers(
     When using httpx as primary (--no-claude-tools), there's no fallback.
     """
     if config.prefer_claude_tools:
-        primary = ClaudeAgentFetcher(model=config.models.get("extract"), effort=config.effort)
+        primary = ClaudeAgentFetcher(model=config.models.get("extract"), effort=config.efforts.get("extract"))
         fallback = HttpxFetcher()
         return primary, fallback
     return HttpxFetcher(), None
@@ -288,7 +288,7 @@ async def _extract_findings(
             prompt,
             ExtractedFindings,
             model=config.models.get("extract"),
-            effort=config.effort,
+            effort=config.efforts.get("extract"),
             label=f"extract:{source.url[:50]}",
         )
     except Exception as e:  # noqa: BLE001

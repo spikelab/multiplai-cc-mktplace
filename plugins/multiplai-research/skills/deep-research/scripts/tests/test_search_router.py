@@ -469,3 +469,59 @@ class TestAclose:
         from research_pipeline.models import QuotaState
         state = QuotaState.model_validate_json(tmp_quota_file.read_text())
         assert state.quotas["primary"].monthly_count == 1
+
+
+class TestClaudeAgentModelPin:
+    """Search is mechanical formatting work — it runs on the pinned parse-tier
+    model, not the default reasoning model."""
+
+    @pytest.mark.asyncio
+    async def test_provider_passes_model_and_effort_to_llm_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        from research_pipeline import sdk
+
+        captured: dict = {}
+
+        async def fake_run_agent(prompt, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                text="[]",
+                usage=SimpleNamespace(
+                    input_tokens=1, output_tokens=1,
+                    cache_creation_tokens=0, cache_read_tokens=0, cost_usd=0.0,
+                ),
+            )
+
+        monkeypatch.setattr(sdk, "run_agent", fake_run_agent)
+
+        provider = ClaudeAgentSearchProvider(model="pinned-model", effort="low")
+        await provider.search("some query")
+        assert captured["model"] == "pinned-model"
+        assert captured["effort"] == "low"
+
+    def test_build_default_router_pins_claude_agent_model(
+        self, tmp_path: Path
+    ) -> None:
+        from research_pipeline.search_router import build_default_router
+
+        router = build_default_router(
+            quota_file=tmp_path / "quotas.json",
+            prefer_claude_tools=True,
+            model="pinned-model",
+            effort="low",
+        )
+        provider = router.providers["claude_agent"]
+        assert provider.model == "pinned-model"  # type: ignore[attr-defined]
+        assert provider.effort == "low"  # type: ignore[attr-defined]
+
+    def test_build_default_router_defaults_to_none(self, tmp_path: Path) -> None:
+        from research_pipeline.search_router import build_default_router
+
+        router = build_default_router(
+            quota_file=tmp_path / "quotas.json", prefer_claude_tools=True
+        )
+        provider = router.providers["claude_agent"]
+        assert provider.model is None  # type: ignore[attr-defined]

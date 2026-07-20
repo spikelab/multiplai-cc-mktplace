@@ -70,7 +70,7 @@ async def verify_verdicts(
         prompt,
         VerifyVerdicts,
         model=config.models.get("verify"),
-        effort=config.effort,
+        effort=config.efforts.get("verify"),
         label="verify:verdicts",
     )
 
