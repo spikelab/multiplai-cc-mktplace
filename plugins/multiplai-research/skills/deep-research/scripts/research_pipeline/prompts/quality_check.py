@@ -1,13 +1,16 @@
 """Prompt template for the pre-synthesis quality check.
 
-Uses sonnet with effort="medium". Strong GO bias — aborting
-after expensive fetch+extract wastes far more than a synthesis attempt.
-NO-GO only when research is completely empty.
+Uses the parse-tier model (sonnet) with effort="medium". Strong GO bias —
+aborting after expensive fetch+extract wastes far more than a synthesis
+attempt. Thresholds are scaled to the active preset, not absolute counts:
+a micro run with 3 sources must not be judged by thorough-run standards.
 """
 
 QUALITY_CHECK_PROMPT = """You are a research quality assessor. Given the research state below, decide whether the findings are sufficient to produce a useful synthesis report.
 
 QUERY: {query}
+
+PRESET: this is a "{preset_name}" run targeting {preset_sources} sources (minimum {min_sources}). Judge sufficiency relative to that scale — a small preset legitimately produces few findings.
 
 SUB-QUESTIONS:
 {sub_questions}
@@ -29,5 +32,5 @@ Decide GO or NO-GO. Return ONLY a JSON object:
 
 STRONG BIAS TOWARD GO. Synthesis is cheap (~$0.05). The fetch+extract that preceded this cost far more. Aborting wastes all that work.
 
-GO when: At least one sub-question has multi-source findings. Total findings >= 20 with mix of sources. Even if some sub-questions are thin, synthesis can note gaps.
-NO-GO ONLY when: ALL sub-questions lack credible findings (< 5 total high-confidence findings). Or zero sources were successfully fetched. A single weak sub-question among otherwise strong coverage is NOT grounds for NO-GO — the synthesis can flag it as a gap."""
+GO when: At least one sub-question has findings from more than one source, OR the total finding count is healthy for a {preset_name} run (roughly a few findings per targeted source). Even if some sub-questions are thin, synthesis can note gaps.
+NO-GO ONLY when: fewer than {nogo_high_conf_threshold} high-confidence findings in total AND no sub-question has multi-source coverage. Or zero sources were successfully fetched. A single weak sub-question among otherwise strong coverage is NOT grounds for NO-GO — the synthesis can flag it as a gap."""

@@ -1,8 +1,10 @@
 """Quality check node — pre-synthesis go/no-go assessment.
 
-Runs after REASSESS, before SYNTHESIZE. Uses sonnet with effort="medium". Prevents synthesis on research that's completely empty,
-but has a strong GO bias — aborting after expensive fetch+extract is
-almost always the worse outcome.
+Runs after REASSESS, before SYNTHESIZE. Uses the parse-tier model (sonnet)
+with effort="medium". Prevents synthesis on research that's completely
+empty, but has a strong GO bias — aborting after expensive fetch+extract
+is almost always the worse outcome. GO/NO-GO thresholds scale with the
+active preset (filled into the prompt from config.preset).
 """
 
 from __future__ import annotations
@@ -61,6 +63,12 @@ async def quality_check(config: ResearchConfig, state: ResearchState) -> Quality
     prompt = QUALITY_CHECK_PROMPT.format(
         query=config.query,
         sub_questions="\n".join(f"{i+1}. {q}" for i, q in enumerate(sub_questions)),
+        preset_name=config.preset.name,
+        preset_sources=config.preset.sources,
+        min_sources=config.preset.min_sources,
+        # Scaled NO-GO bar: a micro run (3 sources) needs 2 high-confidence
+        # findings; a thorough run (30) needs 10.
+        nogo_high_conf_threshold=max(2, config.preset.sources // 3),
         **summary,
     )
 

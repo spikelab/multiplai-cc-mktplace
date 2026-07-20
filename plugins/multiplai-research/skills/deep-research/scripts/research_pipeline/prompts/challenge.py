@@ -47,6 +47,9 @@ are NOT the researcher. You are the skeptic.
 RESEARCH REPORT:
 {report}
 
+EXTRACTED FINDINGS (the evidence base the report was synthesized from):
+{findings}
+
 INSTRUCTIONS:
 
 1. Identify the WEAKEST claims — specifically:
@@ -56,36 +59,37 @@ INSTRUCTIONS:
    - Missing perspectives: viewpoints or stakeholders not represented
    - Recency risks: findings that may already be outdated
 
-2. Test the falsifiability statement: is it genuine (names specific, concrete \
+2. Spot-check grounding: pick several report claims that cite sources and check \
+whether they are actually supported by the EXTRACTED FINDINGS above (facts and \
+quotes). A claim that appears in the report but has no supporting finding is a \
+grounding failure — call it out explicitly.
+
+3. Test the falsifiability statement: is it genuine (names specific, concrete \
 evidence that could be sought) or fake (unfalsifiable or trivially unlikely)?
 
-3. Rate robustness on 3 dimensions (1-5 each):
-   - Evidence strength
-   - Argument coherence
-   - Counter-argument resistance
+4. Rate robustness on 3 dimensions (integer 1-5 each):
+   - evidence_strength
+   - argument_coherence
+   - counter_argument_resistance
 
-4. Write the review in this markdown format:
+5. Write the review body in this markdown format (do NOT include a score table — \
+it is generated separately from your numeric scores):
 
 # Adversarial Review: [Research Topic]
 
-**Date:** {date} | **Research file:** [filename]
-
-## Robustness Rating
-
-| Dimension | Score (1-5) | Assessment |
-|-----------|-------------|------------|
-| Evidence strength | N | [1 sentence] |
-| Argument coherence | N | [1 sentence] |
-| Counter-argument resistance | N | [1 sentence] |
-| **Overall** | **N.N** (avg) | [1 sentence verdict] |
+**Date:** {date}
 
 ## Weakest Claims
 
 ### [Claim 1]
 - **The claim:** [...]
-- **The weakness:** [single source / logic gap / assumption]
+- **The weakness:** [single source / logic gap / assumption / ungrounded]
 - **Impact if wrong:** [...]
 - **Suggested test:** [how to verify or disprove]
+
+## Grounding Spot-Check
+
+[Which claims you checked against the findings, and what you found.]
 
 ## Falsifiability Assessment
 
@@ -100,5 +104,16 @@ evidence that could be sought) or fake (unfalsifiable or trivially unlikely)?
 [2-3 sentences: overall assessment. Is this research safe to act on? What would \
 make it stronger?]
 
-Be genuinely critical, not performatively harsh. Return the complete markdown review.
+Be genuinely critical, not performatively harsh.
+
+Return JSON matching this schema:
+{{
+  "evidence_strength": 1-5,
+  "argument_coherence": 1-5,
+  "counter_argument_resistance": 1-5,
+  "weakest_claims": ["one-line summary of each weakest claim", ...],
+  "review_markdown": "the complete markdown review body"
+}}
+
+Return ONLY valid JSON.
 """

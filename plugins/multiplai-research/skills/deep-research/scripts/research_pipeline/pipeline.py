@@ -41,6 +41,7 @@ from .nodes import reassess as reassess_node
 from .nodes import search as search_node
 from .nodes import synthesize as synthesize_node
 from .nodes import triage as triage_node
+from .nodes import verify as verify_node
 from .progress import ProgressWriter
 from .search_router import SearchRouter, build_default_router
 from .state import ResearchState, Stage
@@ -225,20 +226,47 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
             # Output already written by synthesize step or abort handler
             pass
 
-        # 11. Adversarial review (if enabled and not aborted)
+        # 11. Adversarial review — explicit flag/preset, OR auto-triggered when
+        # REASSESS flagged claims (unless --no-challenge). challenge_enabled
+        # lives on config and cannot see state, so the OR happens here.
+        challenge_trigger = ""
+        if config.challenge_enabled:
+            challenge_trigger = "config (--challenge or thorough preset)"
+        elif (
+            not config.no_challenge
+            and state.reassessment is not None
+            and (
+                state.reassessment.load_bearing_claims
+                or state.reassessment.conflation_claims
+                or state.reassessment.convenience_bias_claims
+            )
+        ):
+            challenge_trigger = "reassess-flagged claims"
+
+        challenge_line = ""
         if (
             not aborted
-            and config.challenge_enabled
+            and challenge_trigger
             and not state.is_complete(Stage.CHALLENGE_REVIEW_COMPLETE)
         ):
             report = Path(state.output_file).read_text()
-            review = await challenge_node.adversarial_review(config, report)
+            review_findings = deduplicate_findings(state.findings)[
+                : config.preset.max_reassess_findings
+            ]
+            review = await challenge_node.adversarial_review(
+                config, report, review_findings
+            )
             review_path = config.output_dir / (
                 config.output_file_path().stem + "-challenge.md"
             )
-            review_path.write_text(review)
-            progress.log_stage("CHALLENGE REVIEW", f"written to {review_path}")
+            review_path.write_text(challenge_node.render_review(review))
+            progress.log_stage(
+                "CHALLENGE REVIEW",
+                f"trigger={challenge_trigger} | overall={review.overall:.1f} | "
+                f"written to {review_path}",
+            )
             state.advance_to(Stage.CHALLENGE_REVIEW_COMPLETE)
+            challenge_line = f"CHALLENGE: {review_path} | overall={review.overall:.1f}"
 
         # 12. Done — cleanup (preserve state on abort for retry/manual synthesis)
         if not aborted:
@@ -260,6 +288,8 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
         else:
             print(f"SUMMARY: Research complete. {len(state.findings)} findings from "
                   f"{len(state.completed_sources())} sources.")
+        if challenge_line:
+            print(challenge_line)
         print(f"COST: ${usage.cost_usd:.4f} | "
               f"input={usage.input_tokens} output={usage.output_tokens} | "
               f"{usage.num_calls} SDK calls | peak_concurrency={peak}")
@@ -512,6 +542,15 @@ async def _run_main_stages(
             "QUALITY CHECK",
             f"go={qc_result.go} confidence={qc_result.confidence:.2f} | {qc_result.reasoning[:100]}",
         )
+        # The node fails open (returns GO) when the check itself errors — it
+        # has no progress handle, so the defaulted verdict is surfaced here.
+        if qc_result.confidence == 0.0 and qc_result.reasoning.startswith(
+            "Quality check failed"
+        ):
+            progress.log_stage(
+                "QUALITY CHECK (defaulted GO — check errored)",
+                qc_result.reasoning[:200],
+            )
         if not qc_result.go:
             log.warning("Quality check failed — aborting: %s", qc_result.reasoning)
             report = synthesize_node.write_incomplete_report(
@@ -617,34 +656,61 @@ async def _run_verification(
     router: SearchRouter,
     progress: ProgressWriter,
 ) -> None:
-    """Run targeted searches to verify specific claims."""
+    """Run targeted searches to verify specific claims, then issue per-claim
+    verdicts from whatever new evidence the verification read gathered."""
     assert state.reassessment is not None
-    queries = state.reassessment.verify_queries
+    reassessment = state.reassessment
+    queries = reassessment.verify_queries
     log.info("VERIFICATION: running %d targeted queries", len(queries))
+
+    # Snapshot so the verdict node judges ONLY findings added by this read
+    findings_before = len(state.findings)
 
     results = await router.batch_search(queries, strategy="keyword")
     known_urls = {s.url for s in state.sources}
     new_results = [r for r in results if r.url not in known_urls]
 
-    if not new_results:
-        return
+    if new_results:
+        # Verification prefers authoritative sources — use the triage pipeline to filter
+        assert state.plan is not None
+        verify_sources = await triage_node.triage(
+            config,
+            new_results,
+            state.plan.sub_questions,
+            state.plan.target_domains,
+            authority_domains=state.plan.authority_domains,
+        )
+        # Cap the verify additions to keep the budget reasonable
+        verify_sources = verify_sources[:5]
+        state.sources.extend(verify_sources)
+        state.checkpoint()
 
-    # Verification prefers authoritative sources — use the triage pipeline to filter
-    assert state.plan is not None
-    verify_sources = await triage_node.triage(
-        config,
-        new_results,
-        state.plan.sub_questions,
-        state.plan.target_domains,
-        authority_domains=state.plan.authority_domains,
+        await read_node.read(config, state, router=router)
+        progress.log_stage(
+            "VERIFICATION CYCLE", f"{len(verify_sources)} verification sources"
+        )
+
+    # Close the loop: verdicts for every flagged claim (unresolved when the
+    # read produced nothing new — no LLM call in that case).
+    flagged_claims = (
+        reassessment.verify_claims
+        + reassessment.conflation_claims
+        + reassessment.convenience_bias_claims
     )
-    # Cap the verify additions to keep the budget reasonable
-    verify_sources = verify_sources[:5]
-    state.sources.extend(verify_sources)
-    state.checkpoint()
-
-    await read_node.read(config, state, router=router)
-    progress.log_stage("VERIFICATION CYCLE", f"{len(verify_sources)} verification sources")
+    if flagged_claims:
+        new_findings = state.findings[findings_before:]
+        state.verdicts = await verify_node.verify_verdicts(
+            config, flagged_claims, new_findings
+        )
+        state.checkpoint()
+        counts: dict[str, int] = {}
+        for v in state.verdicts:
+            counts[v.verdict] = counts.get(v.verdict, 0) + 1
+        progress.log_stage(
+            "VERIFY VERDICTS",
+            f"{len(state.verdicts)} claims: "
+            + (", ".join(f"{n} {k}" for k, n in sorted(counts.items())) or "none"),
+        )
 
 
 # ---------------------------------------------------------------------------

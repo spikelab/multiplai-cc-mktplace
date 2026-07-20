@@ -23,6 +23,7 @@ from .models import (
     Source,
     SourceStatus,
 )
+from .nodes.verify import ClaimVerdict
 
 
 class Stage(str, Enum):
@@ -73,6 +74,9 @@ class ResearchState(BaseModel):
     sources: list[Source] = Field(default_factory=list)  # after triage
     findings: list[Finding] = Field(default_factory=list)
     reassessment: ReassessResult | None = None
+    # Per-claim verdicts issued by the VERIFY node after the verification
+    # read — rendered as a binding table in the synthesis prompt.
+    verdicts: list[ClaimVerdict] = Field(default_factory=list)
     # Set when a reassess-cycle leg raised — surfaced to synthesis so the
     # report never silently pretends refinement/verification happened.
     refinement_error: str = ""

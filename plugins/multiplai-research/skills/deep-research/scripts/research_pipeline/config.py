@@ -136,10 +136,11 @@ class ResearchConfig:
             "challenge": DEFAULT_MODEL,
             "triage_relevance": PARSE_MODEL,
             "extract": PARSE_MODEL,
+            "verify": PARSE_MODEL,
             "reassess": DEFAULT_MODEL,
             "synthesize": DEFAULT_MODEL,
             "adversarial": DEFAULT_MODEL,
-            "quality_check": DEFAULT_MODEL,
+            "quality_check": PARSE_MODEL,
         }
     )
 

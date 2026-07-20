@@ -314,3 +314,139 @@ class TestWriteIncompleteReport:
         assert "credible coverage" in report
         assert "https://docs.gov" in report
         assert "Suggested Next Steps" in report
+
+
+# ---------------------------------------------------------------------------
+# Quality check: preset-scaled prompt + parse-tier model
+# ---------------------------------------------------------------------------
+
+
+class TestQualityCheckPresetScaling:
+    def test_template_uses_preset_placeholders_not_absolute_counts(self) -> None:
+        from research_pipeline.prompts.quality_check import QUALITY_CHECK_PROMPT
+
+        assert "{preset_name}" in QUALITY_CHECK_PROMPT
+        assert "{preset_sources}" in QUALITY_CHECK_PROMPT
+        assert "{nogo_high_conf_threshold}" in QUALITY_CHECK_PROMPT
+        # The old absolute thresholds are gone
+        assert "findings >= 20" not in QUALITY_CHECK_PROMPT
+        assert "< 5 total" not in QUALITY_CHECK_PROMPT
+
+    @pytest.mark.asyncio
+    async def test_micro_preset_fills_scaled_thresholds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A micro run (3 sources) gets a NO-GO bar of 2, not thorough-run
+        standards — and every placeholder is filled."""
+        from research_pipeline.config import PRESETS, ResearchConfig
+        from research_pipeline.nodes import quality_check as qc_node
+
+        captured: dict = {}
+
+        async def fake_structured(prompt, schema, **kwargs):
+            captured["prompt"] = prompt
+            captured["kwargs"] = kwargs
+            return QualityCheckResult(go=True, confidence=0.9, reasoning="ok")
+
+        monkeypatch.setattr(qc_node, "llm_call_structured", fake_structured)
+
+        config = ResearchConfig(
+            query="q", output_dir=tmp_path, preset=PRESETS["micro"], date="2026-07-20"
+        )
+        state = ResearchState.new(
+            query="q", output_file=tmp_path / "o.md", state_file=tmp_path / "s.json"
+        )
+        result = await qc_node.quality_check(config, state)
+
+        assert result.go
+        prompt = captured["prompt"]
+        assert '"micro" run targeting 3 sources' in prompt
+        assert "fewer than 2 high-confidence findings" in prompt
+        assert "{preset" not in prompt  # all placeholders filled
+        # Runs on the parse-tier model
+        from research_pipeline.config import PARSE_MODEL
+
+        assert captured["kwargs"]["model"] == PARSE_MODEL
+
+    def test_model_tier_mapping(self, tmp_path: Path) -> None:
+        """Mechanical LLM tasks run on the parse tier, reasoning on default."""
+        from research_pipeline.config import (
+            DEFAULT_MODEL,
+            PARSE_MODEL,
+            PRESETS,
+            ResearchConfig,
+        )
+
+        config = ResearchConfig(
+            query="q", output_dir=tmp_path, preset=PRESETS["quick"], date="2026-07-20"
+        )
+        assert config.models["quality_check"] == PARSE_MODEL
+        assert config.models["verify"] == PARSE_MODEL
+        assert config.models["synthesize"] == DEFAULT_MODEL
+
+
+class TestQualityCheckDefaultedGoVisibility:
+    @pytest.mark.asyncio
+    async def test_defaulted_go_gets_loud_progress_line(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the quality check errors and fail-opens to GO, the progress
+        file says so explicitly instead of looking like a real GO."""
+        from research_pipeline import pipeline
+        from tests.test_pipeline_recovery import (
+            StubRouter,
+            _as_router,
+            _mk_config,
+            _mk_progress,
+            _mk_state,
+            _sr,
+            _stub_llm_nodes,
+        )
+
+        config = _mk_config(tmp_path)
+        state = _mk_state(config)
+        router = StubRouter(result_batches=[[_sr("https://a.example")]])
+        _stub_llm_nodes(monkeypatch, [], [])
+
+        async def defaulted_quality_check(config, state):
+            return QualityCheckResult(
+                go=True,
+                confidence=0.0,
+                reasoning="Quality check failed (boom), proceeding by default",
+            )
+
+        monkeypatch.setattr(
+            pipeline.quality_check_node, "quality_check", defaulted_quality_check
+        )
+
+        progress = _mk_progress(tmp_path)
+        await pipeline._run_main_stages(config, state, _as_router(router), progress)
+
+        progress_text = (tmp_path / "progress.md").read_text()
+        assert "QUALITY CHECK (defaulted GO — check errored)" in progress_text
+        assert "boom" in progress_text
+
+    @pytest.mark.asyncio
+    async def test_real_go_has_no_defaulted_line(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from research_pipeline import pipeline
+        from tests.test_pipeline_recovery import (
+            StubRouter,
+            _as_router,
+            _mk_config,
+            _mk_progress,
+            _mk_state,
+            _sr,
+            _stub_llm_nodes,
+        )
+
+        config = _mk_config(tmp_path)
+        state = _mk_state(config)
+        router = StubRouter(result_batches=[[_sr("https://a.example")]])
+        _stub_llm_nodes(monkeypatch, [], [])
+
+        progress = _mk_progress(tmp_path)
+        await pipeline._run_main_stages(config, state, _as_router(router), progress)
+
+        assert "defaulted GO" not in (tmp_path / "progress.md").read_text()

@@ -243,6 +243,20 @@ def _format_reassessment(state: ResearchState) -> str:
         lines.append("Claims flagged for verification:")
         for c in r.verify_claims:
             lines.append(f"  - {c}")
+    if state.verdicts:
+        lines.append("")
+        lines.append("VERDICTS (targeted verification of flagged claims):")
+        lines.append("| Claim | Verdict | Evidence |")
+        lines.append("|-------|---------|----------|")
+        for v in state.verdicts:
+            claim = v.claim.replace("|", "/")
+            evidence = "; ".join(v.evidence).replace("|", "/") if v.evidence else "—"
+            lines.append(f"| {claim} | {v.verdict} | {evidence} |")
+        lines.append(
+            "Claims with verdict=refuted MUST be corrected or removed from the "
+            "report — do not merely footnote them. Claims with verdict=unresolved "
+            "MUST be tagged UNVERIFIED."
+        )
     if state.refinement_error:
         lines.append(
             f"Refinement was attempted but FAILED ({state.refinement_error}) "
