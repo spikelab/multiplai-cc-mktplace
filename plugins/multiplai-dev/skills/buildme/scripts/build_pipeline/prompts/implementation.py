@@ -31,9 +31,31 @@ no separate refactoring phase, your code should be production-quality from the s
 ## Test Command
 {test_command}
 
+## When the block cannot be implemented as specified
+
+It is always OK to stop and say this is too hard or under-specified — bad work
+is worse than no work. When the tests demand a contract that contradicts the
+design, depend on something that does not exist, or cannot be satisfied without
+inventing behavior nobody specified, report `STATUS: NEEDS_CONTEXT` (or
+`BLOCKED`) with the specific question. The pipeline stops the block and surfaces
+your reason; a plausible-looking guess costs more to unwind than a stop.
+
 ## Output
 Write the implementation files. Run the test command to verify all tests pass.
-Report which files you created/modified and the test results.
+
+End your report with these REQUIRED slots, each on its own line:
+
+```
+STATUS: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
+TESTS_RUN: <the exact command you ran>
+GREEN: <the suite's result line, verbatim — e.g. "42 passed in 3.1s">
+FILES: <files you created or modified, comma-separated>
+```
+
+Use DONE when every test passes; DONE_WITH_CONCERNS when they pass but
+something is worth flagging (state what under the slot); NEEDS_CONTEXT or
+BLOCKED per the section above. The pipeline re-runs the suite itself — these
+slots feed the reviewer and the progress log, so report what actually happened.
 """
 
 IMPLEMENTER_PROMPT_MINIMUM = """\
@@ -62,9 +84,31 @@ refactoring agent will clean up the code afterward.
 ## Test Command
 {test_command}
 
+## When the block cannot be implemented as specified
+
+It is always OK to stop and say this is too hard or under-specified — bad work
+is worse than no work. When the tests demand a contract that contradicts the
+design, depend on something that does not exist, or cannot be satisfied without
+inventing behavior nobody specified, report `STATUS: NEEDS_CONTEXT` (or
+`BLOCKED`) with the specific question. The pipeline stops the block and surfaces
+your reason; a plausible-looking guess costs more to unwind than a stop.
+
 ## Output
 Write the implementation files. Run the test command to verify all tests pass.
-Report which files you created/modified and the test results.
+
+End your report with these REQUIRED slots, each on its own line:
+
+```
+STATUS: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
+TESTS_RUN: <the exact command you ran>
+GREEN: <the suite's result line, verbatim — e.g. "42 passed in 3.1s">
+FILES: <files you created or modified, comma-separated>
+```
+
+Use DONE when every test passes; DONE_WITH_CONCERNS when they pass but
+something is worth flagging (state what under the slot); NEEDS_CONTEXT or
+BLOCKED per the section above. The pipeline re-runs the suite itself — these
+slots feed the reviewer and the progress log, so report what actually happened.
 """
 
 REFACTOR_PROMPT = """\

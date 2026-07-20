@@ -52,6 +52,38 @@ class TestReviewResult:
         assert r.failing_dimensions == ["B", "C"]
 
 
+class TestTwoVerdictReview:
+    """passed gates on BOTH verdicts: spec compliance AND score threshold."""
+
+    def _good_scores(self):
+        return [ReviewScore(dimension="A", weight=2, score=5, evidence="")]
+
+    def test_clean_spec_verdict_passes(self):
+        r = ReviewResult(scores=self._good_scores())
+        assert r.spec_compliant
+        assert r.passed
+
+    def test_missing_spec_behavior_fails_despite_high_scores(self):
+        r = ReviewResult(scores=self._good_scores(), missing=["WHEN empty input THEN 400"])
+        assert not r.spec_compliant
+        assert not r.passed
+
+    def test_misunderstood_scenario_fails_despite_high_scores(self):
+        r = ReviewResult(scores=self._good_scores(), misunderstood=["retry means backoff, not loop"])
+        assert not r.spec_compliant
+        assert not r.passed
+
+    def test_extra_alone_does_not_fail_spec_verdict(self):
+        r = ReviewResult(scores=self._good_scores(), extra=["added a --verbose flag"])
+        assert r.spec_compliant
+        assert r.passed
+
+    def test_clean_spec_but_low_scores_still_fails(self):
+        r = ReviewResult(scores=[ReviewScore(dimension="A", weight=1, score=2, evidence="")])
+        assert r.spec_compliant
+        assert not r.passed
+
+
 class TestBlockInfo:
     def test_default_status(self):
         b = BlockInfo(number=1, name="Test", description="desc")

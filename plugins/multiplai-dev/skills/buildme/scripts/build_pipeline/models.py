@@ -56,6 +56,14 @@ class ReviewIssue(BaseModel):
 class ReviewResult(BaseModel):
     scores: list[ReviewScore]
     issues: list[ReviewIssue] = Field(default_factory=list)
+    # Strengths-first review: what the diff genuinely does well.
+    strengths: list[str] = Field(default_factory=list)
+    # Spec-compliance verdict (two-verdict review, ported from the superpowers
+    # task reviewer): spec behavior absent from the diff, implementation beyond
+    # the spec, and implementation that got a scenario's meaning wrong.
+    missing: list[str] = Field(default_factory=list)
+    extra: list[str] = Field(default_factory=list)
+    misunderstood: list[str] = Field(default_factory=list)
 
     @property
     def weighted_average(self) -> float:
@@ -67,12 +75,59 @@ class ReviewResult(BaseModel):
         return sum(s.score * s.weight for s in self.scores) / total_weight
 
     @property
+    def spec_compliant(self) -> bool:
+        """Clean-or-minor spec verdict. Missing or misunderstood spec behavior
+        means the block cannot be trusted; `extra` alone is scope creep the
+        dimension scores already price in."""
+        return not self.missing and not self.misunderstood
+
+    @property
     def passed(self) -> bool:
-        return self.weighted_average >= 3.5 and all(s.score > 1 for s in self.scores)
+        """Both verdicts must hold: spec compliance AND the score threshold."""
+        return (
+            self.spec_compliant
+            and self.weighted_average >= 3.5
+            and all(s.score > 1 for s in self.scores)
+        )
 
     @property
     def failing_dimensions(self) -> list[str]:
         return [s.dimension for s in self.scores if s.score == 1]
+
+
+class WeakTestFinding(BaseModel):
+    """One weak test flagged by the LLM test-quality auditor."""
+    file: str = ""
+    test_name: str = ""
+    pattern: str = ""
+    suggestion: str = ""
+
+
+class TestQualityAudit(BaseModel):
+    """Structured verdict from the LLM test-quality auditor (TEST_QUALITY_PROMPT).
+
+    Adjudicates the static weak-pattern scan: the regex scan is cheap but
+    coarse, so its failures are confirmed or overturned by this audit before
+    the pipeline fails a block over test quality.
+    """
+    passed: bool
+    weak_tests: list[WeakTestFinding] = Field(default_factory=list)
+    total_tests: int = 0
+    weak_count: int = 0
+
+    def findings_text(self) -> str:
+        return "\n".join(
+            f"- {w.file}::{w.test_name}: {w.pattern} — {w.suggestion}"
+            for w in self.weak_tests
+        )
+
+
+class FinalReviewVerdict(BaseModel):
+    """Structured verdict for the final comprehensive review — replaces the
+    old string-match on 'PASSED' in free text."""
+    passed: bool
+    summary: str = ""
+    issues: list[str] = Field(default_factory=list)
 
 
 # --- Gates ---
@@ -109,6 +164,12 @@ class BlockInfo(BaseModel):
     name: str
     description: str
     satisfies: list[str] = Field(default_factory=list)
+    # Cross-block interface contract parsed from the block's `Interfaces:`
+    # section: exact signatures this block creates (produces) and the earlier-
+    # block signatures it calls (consumes). Threaded into dependent blocks'
+    # agent prompts so signatures match across blocks.
+    produces: list[str] = Field(default_factory=list)
+    consumes: list[str] = Field(default_factory=list)
     status: BlockStatus = BlockStatus.PENDING
     # True when the block failed specifically because an agent LLM call timed
     # out (vs an ordinary build/test failure) — lets the orchestrator return
@@ -122,6 +183,12 @@ class BlockInfo(BaseModel):
     impl_commit: str | None = None
     review_scores: ReviewResult | None = None
     review_iterations: int = 0
+    # Red-green proof captured by the engine (trimmed suite output): RED is
+    # stored when the RED gate confirms the block's tests fail before
+    # implementation; GREEN when the integration gate passes after it. Both
+    # feed the reviewer (as evidence to verify, not trust) and build-progress.md.
+    red_evidence: str = ""
+    green_evidence: str = ""
 
 
 # --- Change artifacts ---

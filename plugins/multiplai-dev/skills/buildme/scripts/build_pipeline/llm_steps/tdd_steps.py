@@ -131,21 +131,46 @@ async def run_refactorer(
     )
 
 
+# Systematic-debugging protocol (ported from superpowers systematic-debugging):
+# a positive recipe the fix agent follows in order, shared by both fix prompts.
+_DEBUG_PROTOCOL = """\
+## Debugging Protocol — work through these phases in order
+1. **Read.** Read the complete failure output top to bottom before touching
+   code. Identify the FIRST genuine error — later failures usually cascade
+   from it.
+2. **Reproduce.** Run the test command yourself and confirm you see the same
+   failure before changing anything.
+3. **Locate.** When the failure spans multiple components, add temporary
+   instrumentation (prints/logging) at the component boundaries to see where
+   the data first goes wrong. Remove the instrumentation before finishing.
+4. **Fix.** Form ONE hypothesis about the root cause. Make the smallest change
+   that tests it, re-run, and evaluate. Change one variable at a time. Keep
+   the diff scoped to this failure — unrelated improvements belong to their
+   own block."""
+
+
 async def run_integration_fix(
     failure_output: str,
     test_command: str,
     context_bundle: str,
     *,
+    escalate: bool = False,
     model: str | None = None,
     cwd: str | None = None,
 ) -> AgentResult:
     """Spawn an agent to fix broken integration tests.
 
     Gets the failure output and must make the full test suite pass again.
+    ``escalate=True`` (final circuit-breaker attempt) switches to the
+    question-the-architecture prompt: prior scoped fixes failed, so the agent
+    is asked to challenge the block's approach, not just the last edit.
     """
-    prompt = f"""\
-You are a fix agent. The integration test suite is failing after a block was implemented.
-Your job is to fix the failures without breaking other tests.
+    if escalate:
+        prompt = f"""\
+You are a senior fix agent. The integration test suite is still failing after
+a block was implemented and two scoped fix attempts. Repeated scoped fixes
+failing is a signal the problem is structural — question the block's
+approach, not just the last edit.
 
 ## Failure Output
 {failure_output}
@@ -156,16 +181,45 @@ Your job is to fix the failures without breaking other tests.
 ## Test Command
 {test_command}
 
-## Rules
-1. Diagnose the root cause from the failure output.
-2. Fix the minimum code needed to make tests pass.
-3. Don't modify tests unless they have a genuine bug.
-4. Run the full test suite after fixing to verify.
+{_DEBUG_PROTOCOL}
+
+## Escalation Guidance
+- Re-derive the expected behavior from the context and specs; check whether
+  the implementation's structure can satisfy it at all.
+- When the design is the root cause, restructure the block's implementation —
+  you have license to rewrite it, provided the tests and specs stay satisfied.
+- Modify a test only when you can point to the exact spec line it contradicts.
+- Run the full test suite after fixing to verify.
 
 ## Output
-Report what you fixed and confirm all tests pass.
+Report a `DIAGNOSIS:` section — the root cause, why the previous scoped fixes
+could not work, and what you changed — then confirm the suite result.
 """
-    log.info("Spawning integration fix agent")
+    else:
+        prompt = f"""\
+You are a fix agent. The integration test suite is failing after a block was
+implemented. Your job is to fix the failures without breaking other tests.
+
+## Failure Output
+{failure_output}
+
+## Context
+{context_bundle}
+
+## Test Command
+{test_command}
+
+{_DEBUG_PROTOCOL}
+
+## Rules
+1. Fix the minimum code needed to make tests pass.
+2. Modify a test only when it has a genuine bug (contradicts the specs).
+3. Run the full test suite after fixing to verify.
+
+## Output
+Report the root cause, what you fixed, and confirm all tests pass.
+"""
+    log.info("Spawning integration fix agent%s", " (escalated)" if escalate else "")
     return await agent_call(
         prompt,
         allowed_tools=IMPLEMENTER_TOOLS,

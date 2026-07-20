@@ -139,6 +139,29 @@ def baseline_test_gate(test_command: str, project_dir: Path) -> GateResult:
     )
 
 
+def run_test_suite(test_command: str, project_dir: Path, timeout: int = 300) -> tuple[int | None, str]:
+    """Run the repo's test suite under the trust guard (shared mechanics for
+    the integration and RED gates).
+
+    Returns (exit_code, combined output). exit_code is None when the command
+    could not run at all (missing binary, timeout, untrusted repo) — callers
+    must treat None as "could not verify", never as pass or fail evidence.
+    """
+    if not _repo_trusted():
+        return None, (
+            "Repo not trusted — refusing to run its test_command/conftest.py "
+            "(set --trust-repo or BUILDME_TRUST_REPO=1)."
+        )
+    try:
+        result = subprocess.run(
+            shlex.split(test_command),
+            capture_output=True, text=True, cwd=project_dir, timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return None, f"Test command failed to run: {e}"
+    return result.returncode, result.stdout + "\n" + result.stderr
+
+
 def integration_gate(test_command: str, project_dir: Path) -> GateResult:
     """Run the full test suite after a block completes."""
     if not test_command:
@@ -158,7 +181,10 @@ def integration_gate(test_command: str, project_dir: Path) -> GateResult:
         return GateResult(passed=False, reason=f"Integration tests failed: {e}")
 
     if result.returncode == 0:
-        return GateResult(passed=True, reason="All tests pass")
+        return GateResult(
+            passed=True, reason="All tests pass",
+            metadata={"stdout": result.stdout[-2000:]},
+        )
     return GateResult(
         passed=False,
         reason=f"Tests failing (exit {result.returncode})",
@@ -167,11 +193,156 @@ def integration_gate(test_command: str, project_dir: Path) -> GateResult:
     )
 
 
+# Failure signatures that prove tests fail "for the right reason": the code
+# under test is missing or incomplete, not that the test files themselves are
+# broken.
+_RED_RIGHT_REASON = re.compile(
+    r"(AssertionError|NotImplementedError|"
+    r"has no attribute|is not defined|"
+    r"^FAILED\b|\bFAILED\b|"
+    # Runner-agnostic signatures: Jest/Vitest print a per-file `FAIL src/…`
+    # marker (uppercase only — lowercase "fail" appears in ordinary prose);
+    # terse runners (pytest -q --tb=no, Jest's "Tests: 1 failed") may emit
+    # only a summary count. Zero-count summaries ("0 failed") are not proof.
+    r"^FAIL\b|"
+    r"(?i:\b[1-9]\d*\s+failed\b))",
+    re.MULTILINE,
+)
+
+# Signatures of broken test files: pytest could not even collect/parse them.
+_RED_BROKEN_TESTS = re.compile(
+    r"(SyntaxError|IndentationError|"
+    r"error(s)? during collection|collection error|"
+    r"errors during collection|ERROR collecting|"
+    r"INTERNALERROR)",
+    re.IGNORECASE,
+)
+
+
+def red_gate(test_output: str, exit_code: int | None) -> GateResult:
+    """RED-phase gate: prove the freshly written tests fail for the right reason.
+
+    Pass iff the suite exits non-zero AND the failure signature is a genuine
+    behavioral failure (FAILED / AssertionError / NotImplementedError /
+    missing attribute), not a broken test file (collection/syntax error).
+
+    Fail actions:
+    - "rewrite_tests": suite passed — the new tests exercise nothing that is
+      still unimplemented, so they prove nothing.
+    - "fix_tests": tests are broken (collection/syntax error) or the failure
+      signature is unrecognizable — repair the test files, don't implement yet.
+    """
+    tail = test_output[-1000:]
+    if exit_code is None:
+        return GateResult(
+            passed=False,
+            reason=f"RED gate could not run the suite: {tail}",
+            action="fix_tests",
+            metadata={"exit_code": None},
+        )
+    if exit_code == 0:
+        return GateResult(
+            passed=False,
+            reason="RED gate failed: suite passed BEFORE implementation — the new "
+                   "tests exercise nothing unimplemented and prove nothing",
+            action="rewrite_tests",
+            metadata={"exit_code": 0},
+        )
+    if _RED_BROKEN_TESTS.search(test_output):
+        return GateResult(
+            passed=False,
+            reason=f"RED gate failed: tests error instead of failing "
+                   f"(collection/syntax problem, exit {exit_code}): {tail}",
+            action="fix_tests",
+            metadata={"exit_code": exit_code},
+        )
+    if _RED_RIGHT_REASON.search(test_output):
+        return GateResult(
+            passed=True,
+            reason=f"RED confirmed: tests fail for the right reason (exit {exit_code})",
+            metadata={"exit_code": exit_code},
+        )
+    return GateResult(
+        passed=False,
+        reason=f"RED gate failed: suite exits {exit_code} but with no recognizable "
+               f"test-failure signature: {tail}",
+        action="fix_tests",
+        metadata={"exit_code": exit_code},
+    )
+
+
+_AGENT_STATUS_RE = re.compile(
+    r"^\s*(?:[-*]\s*|\*\*)?STATUS:?\*{0,2}\s*[:\-]?\s*"
+    r"(DONE_WITH_CONCERNS|DONE|NEEDS_CONTEXT|BLOCKED)\b",
+    re.MULTILINE | re.IGNORECASE,
+)
+_AGENT_STATUS_PROCEED = {"DONE", "DONE_WITH_CONCERNS"}
+
+
+def parse_agent_status(output: str) -> str | None:
+    """The last `STATUS:` slot an agent reported, uppercased ("" → None).
+
+    Agents are instructed to close their report with a REQUIRED STATUS slot.
+    The last occurrence wins so a status quoted mid-report (e.g. restating the
+    instructions) never outranks the agent's own final verdict.
+    """
+    matches = _AGENT_STATUS_RE.findall(output or "")
+    return matches[-1].upper() if matches else None
+
+
+def agent_status_gate(output: str, agent_name: str) -> GateResult:
+    """Gate an agent's self-reported STATUS slot.
+
+    NEEDS_CONTEXT and BLOCKED are the agent saying it could not do the work —
+    the pipeline surfaces the stated reason and fails the block rather than
+    proceeding on an admitted non-result. A missing slot is not fatal (the
+    deterministic gates are the real verification), but it is reported.
+    """
+    status = parse_agent_status(output)
+    if status is None:
+        return GateResult(
+            passed=True,
+            reason=f"{agent_name} reported no STATUS slot",
+            metadata={"status": None},
+        )
+    if status in _AGENT_STATUS_PROCEED:
+        return GateResult(
+            passed=True,
+            reason=f"{agent_name} reported STATUS: {status}",
+            metadata={"status": status},
+        )
+    return GateResult(
+        passed=False,
+        reason=f"{agent_name} reported STATUS: {status} — it could not complete "
+               f"the work. Agent report:\n{(output or '')[-1500:]}",
+        action="escalate_to_human",
+        metadata={"status": status},
+    )
+
+
 def review_score_gate(review: ReviewResult) -> GateResult:
-    """Check if review scores meet threshold (weighted avg >= 3.5, no dim at 1)."""
+    """Two-verdict gate: spec compliance (nothing missing/misunderstood) AND
+    score threshold (weighted avg >= 3.5, no dimension at 1)."""
     avg = review.weighted_average
     failing = review.failing_dimensions
 
+    if not review.spec_compliant:
+        parts = []
+        if review.missing:
+            parts.append(f"missing: {review.missing}")
+        if review.misunderstood:
+            parts.append(f"misunderstood: {review.misunderstood}")
+        return GateResult(
+            passed=False,
+            reason=f"Spec-compliance verdict failed — {'; '.join(parts)}",
+            action="fix_spec_compliance",
+            metadata={
+                "missing": review.missing,
+                "misunderstood": review.misunderstood,
+                "extra": review.extra,
+                "weighted_average": avg,
+            },
+        )
     if failing:
         return GateResult(
             passed=False,

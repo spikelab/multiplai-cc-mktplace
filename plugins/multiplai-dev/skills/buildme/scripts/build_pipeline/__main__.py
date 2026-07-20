@@ -29,6 +29,17 @@ def _add_trust_repo_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_lenient_review_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--lenient-review",
+        action="store_true",
+        help="Accept-and-continue when quality reviews stay below threshold "
+             "after all fix iterations, or when the final review fails or "
+             "errors (pre-0.4 behavior, for overnight runs). Default: fail "
+             "the build.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="build_pipeline",
@@ -49,6 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--interview-summary", default="", help="Pre-gathered interview summary")
     build.add_argument("--context-files", nargs="*", default=[], help="Brief/context file paths")
     _add_trust_repo_flag(build)
+    _add_lenient_review_flag(build)
 
     # --- spec-generate ---
     spec = sub.add_parser("spec-generate", help="Artifact generation pipeline")
@@ -64,6 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     tdd.add_argument("--project-dir", default=".", help="Project directory")
     tdd.add_argument("--block", type=int, help="Start from specific block number")
     _add_trust_repo_flag(tdd)
+    _add_lenient_review_flag(tdd)
 
     # --- apply ---
     apply_ = sub.add_parser("apply", help="Manual single-agent change application")

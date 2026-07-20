@@ -25,26 +25,31 @@ async def run_code_review(
     *,
     spec_context: str = "",
     standards: str = "",
+    implementer_report: str = "",
 ) -> ReviewResult:
-    """Run code review against rubric dimensions.
+    """Run the two-verdict code review (spec compliance + rubric scores).
 
     Args:
         diff: The git diff to review
         rubric: The rubric.md content
         config: BuildConfig for model selection (config.review_model, when
             set, overrides config.model for this call)
-        spec_context: Relevant spec scenarios for compliance checking
+        spec_context: The spec scenarios this block must satisfy (verbatim)
         standards: Coding-standards doc contents pushed into the reviewer's
             context (empty → the prompt says "(no standards provided)")
+        implementer_report: The implementer's own report + RED/GREEN evidence,
+            presented to the reviewer as unverified claims
 
     Returns:
-        ReviewResult with scores and issues.
+        ReviewResult with scores, issues, and the missing/extra/misunderstood
+        spec verdict.
     """
     prompt = CODE_REVIEW_PROMPT.format(
         diff=diff or "(no diff captured)",
         rubric=rubric,
         spec_context=spec_context or "(no spec context provided)",
         standards=standards or "(no standards provided)",
+        implementer_report=implementer_report or "(no implementer report provided)",
     )
 
     model = getattr(config, "review_model", None) or config.model

@@ -2,7 +2,11 @@
 
 import pytest
 
-from build_pipeline.change_manager import ChangeManager, ARTIFACT_DAG
+from build_pipeline.change_manager import (
+    ChangeManager,
+    ARTIFACT_DAG,
+    extract_global_constraints,
+)
 from build_pipeline.models import ArtifactStatus
 
 
@@ -226,3 +230,31 @@ class TestInitSpecs:
         assert (specs / "changes").is_dir()
         assert (specs / "registry").is_dir()
         assert (specs / "archive").is_dir()
+
+
+class TestExtractGlobalConstraints:
+    """design.md's `## Global Constraints` body is threaded into agent prompts."""
+
+    def test_extracts_section_body_verbatim(self):
+        design = (
+            "# Design\n\n## Decisions\nUse X.\n\n"
+            "## Global Constraints\n"
+            "- Python >= 3.11\n"
+            "- Queue name is exactly `dolce-jobs-v2`\n\n"
+            "## Risks\nNone.\n"
+        )
+        out = extract_global_constraints(design)
+        assert out == "- Python >= 3.11\n- Queue name is exactly `dolce-jobs-v2`"
+
+    def test_extracts_trailing_section(self):
+        design = "# Design\n\n## Global Constraints\n- Only rule.\n"
+        assert extract_global_constraints(design) == "- Only rule."
+
+    def test_returns_empty_when_absent(self):
+        assert extract_global_constraints("# Design\n\n## Decisions\nNothing.\n") == ""
+
+    def test_stops_at_next_h2(self):
+        design = "## Global Constraints\n- A\n\n## Other\n- B\n"
+        out = extract_global_constraints(design)
+        assert "- A" in out
+        assert "- B" not in out

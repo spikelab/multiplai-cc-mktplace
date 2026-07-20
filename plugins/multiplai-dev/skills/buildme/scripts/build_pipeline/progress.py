@@ -48,6 +48,23 @@ class ProgressWriter:
                 f"iter={iteration} score={score:.1f} {verdict}\n"
             )
 
+    def log_evidence(self, kind: str, block_name: str, output: str) -> None:
+        """Append a trimmed RED/GREEN test-run evidence blob for a block."""
+        tail = output.strip().splitlines()[-15:]
+        with self.path.open("a") as f:
+            f.write(f"  - [{self._now()}] {kind} evidence ({block_name}):\n")
+            f.write("    ```\n")
+            for line in tail:
+                f.write(f"    {line}\n")
+            f.write("    ```\n")
+
+    def log_diagnosis(self, block_name: str, text: str) -> None:
+        """Append the circuit-breaker diagnosis when integration fixes exhaust."""
+        with self.path.open("a") as f:
+            f.write(f"\n## [{self._now()}] DIAGNOSIS ({block_name})\n")
+            for line in text.strip().splitlines()[:40]:
+                f.write(f"{line}\n")
+
     def cleanup(self) -> None:
         if self.path.exists():
             self.path.unlink()

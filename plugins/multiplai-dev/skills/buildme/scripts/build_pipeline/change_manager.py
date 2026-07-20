@@ -44,6 +44,21 @@ def normalize_change_name(name: str) -> str:
 
 
 # The spec-driven artifact DAG — hardcoded since we only use one schema.
+_GLOBAL_CONSTRAINTS_RE = re.compile(
+    r"^##\s+Global Constraints\s*$(.*?)(?=^##\s|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def extract_global_constraints(design_text: str) -> str:
+    """Verbatim body of design.md's `## Global Constraints` section ("" when
+    absent). These are the project-wide rules (version floors, naming, exact
+    literals) every block's agents must honor — threaded into agent and
+    review prompts by the TDD engine."""
+    m = _GLOBAL_CONSTRAINTS_RE.search(design_text)
+    return m.group(1).strip() if m else ""
+
+
 ARTIFACT_DAG: dict[str, dict] = {
     "proposal": {"generates": "proposal.md", "requires": []},
     "requirements": {"generates": "requirements/*.md", "requires": ["proposal"]},
@@ -127,9 +142,9 @@ Satisfies: <!-- spec references -->
 ## Test Quality (weight: 1)
 | Score | Criteria |
 |-------|----------|
-| 5 | Tests verify behavior, not implementation. Edge cases covered. |
-| 3 | Happy path tested, some edge cases. |
-| 1 | Coverage theater — tests pass but verify nothing meaningful. |
+| 5 | Tests verify behavior through observable outcomes, not implementation. Edge cases covered. Mocks honor the real collaborator's contract. |
+| 3 | Happy path tested, some edge cases. Occasional mock-heavy test. |
+| 1 | Coverage theater — assertions only interrogate mocks (`.called`, `assert_called_*`), mock setup outweighs assertions, tests sleep instead of polling, or tests pass while verifying nothing meaningful. |
 
 ## Spec Compliance (weight: 3)
 | Score | Criteria |

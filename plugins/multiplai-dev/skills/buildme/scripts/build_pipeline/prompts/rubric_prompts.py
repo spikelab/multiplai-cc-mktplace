@@ -20,7 +20,12 @@ Generate a rubric.md with scoring dimensions tailored to this change.
 
 Every rubric MUST include these core dimensions:
 - **Code Architecture** (weight: 2) — module boundaries, coupling, patterns
-- **Test Quality** (weight: 1) — behavior verification, edge cases, meaningful assertions
+- **Test Quality** (weight: 1) — behavior verification, edge cases, meaningful
+  assertions. Score down for the testing anti-patterns: assertions that only
+  interrogate mocks (`.called`, `assert_called_*`) with no observable-outcome
+  assertion; mock setup outweighing assertions; mocks that don't honor the
+  real collaborator's contract; production methods added only for tests;
+  fixed sleeps instead of condition polling in integration tests.
 - **Spec Compliance** (weight: 3) — WHEN/THEN scenarios implemented and tested
 
 Additionally, add 1-2 dimensions specific to the change type:

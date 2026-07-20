@@ -93,6 +93,12 @@ Rules:
 - Integration contracts: define interfaces between components
 - Be explicit about what's new vs what's modified
 - Flag any spec requirements that seem infeasible or contradictory
+- REQUIRED section `## Global Constraints`: the project-wide rules every
+  implementation block must honor — version floors, naming conventions,
+  library choices, exact string literals/IDs/paths. One rule per line, each
+  stating its verbatim value (write the exact literal; a paraphrase forces
+  implementers to guess). When the change genuinely has none, write "None."
+  under the heading.
 
 Output ONLY the markdown content. No commentary.
 """
@@ -138,6 +144,19 @@ Rules:
 - Block descriptions: 2-4 sentences covering what it delivers, key behaviors,
   acceptance criteria, and how to exercise the slice end-to-end once it's done
 - "Satisfies:" line MUST reference specific spec files or scenarios
+- Each block MUST carry an `Interfaces:` section (directly above its Satisfies
+  line) declaring its cross-block contract:
+  - `- Produces: <exact signature>` — one line per function/class/endpoint this
+    block creates that later blocks call, with the exact signature (names,
+    parameters, types, return)
+  - `- Consumes: Block <N>: <exact signature>` — one line per earlier-block
+    interface this block calls, naming the source block and repeating the
+    signature exactly as that block's Produces line states it
+  A block with no cross-block interfaces writes `- Produces: (none)`.
+- Every block is fully specified in place: exact names, signatures, and
+  literal values. Where "TBD", "TODO", "add appropriate error handling", or
+  "similar to block N" would appear, write the concrete content instead —
+  repeat the signature or code verbatim rather than pointing at another block.
 - Order blocks by dependency — a DAG of slices is fine (a later slice may build on
   an earlier one); layering is the anti-pattern, not ordering. The first slice can
   be a walking skeleton: one trivial behavior through all layers.

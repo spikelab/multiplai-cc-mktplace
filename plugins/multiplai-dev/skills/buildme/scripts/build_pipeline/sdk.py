@@ -88,6 +88,25 @@ def _repo_is_trusted() -> bool:
     return os.environ.get("BUILDME_TRUST_REPO", "").strip().lower() in ("1", "true", "yes")
 
 
+# Tools a text-only llm_call must be actively denied, not merely left out of
+# the allow-list. run_agent's allow-list is advisory under bypassPermissions;
+# only disallowed_tools actually removes a tool.
+_TEXT_ONLY_DISALLOWED = [
+    "Bash", "BashOutput", "KillShell", "Edit", "Write", "NotebookEdit",
+    "Task", "Agent", "AskUserQuestion", "SlashCommand", "ExitPlanMode",
+    "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "ToolSearch", "Skill",
+]
+
+
+def _text_only_disallowed(prompt: str) -> list[str]:
+    """The deny-list for a no-tools call, minus Read when run_agent's
+    oversized-prompt fallback will need it (it writes the prompt to a temp
+    file and directs the agent to Read it)."""
+    if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
+        return [t for t in _TEXT_ONLY_DISALLOWED if t != "Read"]
+    return list(_TEXT_ONLY_DISALLOWED)
+
+
 async def llm_call(
     prompt: str,
     *,
@@ -97,7 +116,14 @@ async def llm_call(
     allowed_tools: list[str] | None = None,
     call_timeout: float = DEFAULT_LLM_CALL_TIMEOUT_S,
 ) -> str:
-    """Single-turn LLM call. Returns text response. No tools by default."""
+    """Single-turn LLM call. Returns text response. No tools by default.
+
+    When no tools are requested the call must also *disallow* them: an
+    allow-list is advisory under bypassPermissions, so the model can still
+    reach for Bash/Read, burn the single turn on a tool call, and fail the
+    whole call with "Reached maximum number of turns (1)" instead of
+    answering. All the context these calls need is already in the prompt.
+    """
     _require_sdk()
 
     log.info("START sdk_call=llm prompt_bytes=%d model=%s timeout=%.0fs",
@@ -108,6 +134,7 @@ async def llm_call(
                 prompt,
                 system_prompt=system_prompt,
                 allowed_tools=allowed_tools,
+                disallowed_tools=None if allowed_tools else _text_only_disallowed(prompt),
                 max_turns=max_turns,
                 model=model,
                 timeout_s=call_timeout,
