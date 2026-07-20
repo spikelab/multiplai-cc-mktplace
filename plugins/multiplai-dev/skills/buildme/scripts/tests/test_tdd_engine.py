@@ -15,8 +15,12 @@ from build_pipeline.tdd_engine import (
     run_test_quality_check,
     run_tdd_engine,
     _capture_block_diff,
+    _detect_entry_point,
     _git_commit_block_phase,
+    _run_final_review,
+    _run_integration_and_review,
     _run_quality_review,
+    _verify_entry_point,
     EMPTY_TREE_SHA,
     WEAK_TEST_PATTERNS,
     MAX_REVIEW_ITERATIONS,
@@ -29,10 +33,13 @@ from build_pipeline.models import (
     AgentResult,
     BlockInfo,
     BlockStatus,
+    FinalReviewVerdict,
     GateResult,
     ReviewResult,
     ReviewScore,
+    WeakTestFinding,
 )
+from build_pipeline.models import TestQualityAudit as QualityAudit  # Test* name breaks pytest collection
 from build_pipeline.state import BuildState, TDDState
 from build_pipeline.progress import ProgressWriter
 
@@ -527,11 +534,24 @@ def red_gate_passes():
         yield
 
 
+@pytest.fixture
+def quality_audit_overturns():
+    """Have the LLM test-quality auditor overturn the static scan (most engine
+    tests use placeholder agent output with no test code, which the static
+    scan flags; the audit path itself is tested separately)."""
+    from build_pipeline.models import TestQualityAudit
+    with patch(
+        "build_pipeline.tdd_engine._audit_test_quality",
+        new_callable=AsyncMock, return_value=TestQualityAudit(passed=True),
+    ):
+        yield
+
+
 class TestRunBlockTDD:
     """Test run_block_tdd with mocked agents."""
 
     @pytest.fixture(autouse=True)
-    def _red(self, red_gate_passes):
+    def _red(self, red_gate_passes, quality_audit_overturns):
         yield
 
     @pytest.fixture
@@ -738,6 +758,10 @@ class TestGitCommitScoping:
 class TestRedGateWiring:
     """The RED gate runs between the test-writer and implementer phases."""
 
+    @pytest.fixture(autouse=True)
+    def _quality(self, quality_audit_overturns):
+        yield
+
     @pytest.fixture
     def setup(self, tmp_path):
         project_dir = tmp_path / "project"
@@ -856,7 +880,7 @@ class TestEvidenceBasedReview:
     """The per-block quality review must see the block's actual diff."""
 
     @pytest.fixture(autouse=True)
-    def _red(self, red_gate_passes):
+    def _red(self, red_gate_passes, quality_audit_overturns):
         yield
 
     def _init_empty_repo(self, repo: Path) -> None:
@@ -1196,3 +1220,383 @@ class TestRunTDDEngineEntryPoint:
             result = await run_tdd_engine(config, args)
 
         assert result == EXIT_BUILD_FAILURE
+
+
+# Test content the static weak-test scan flags (1/1 weak) vs. accepts.
+WEAK_TESTS_OUTPUT = "def test_something():\n    assert True\n"
+GOOD_TESTS_OUTPUT = "def test_addition():\n    assert add(2, 3) == 5\n"
+
+
+class TestWeakTestEnforcement:
+    """Phase A.5 is enforced: confirmed-weak tests fail the block, not just warn."""
+
+    @pytest.fixture(autouse=True)
+    def _red(self, red_gate_passes):
+        yield
+
+    @pytest.fixture
+    def setup(self, tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        specs_root = project_dir / "specs"
+        (specs_root / "changes" / "test").mkdir(parents=True)
+
+        config = BuildConfig(
+            project_dir=project_dir, change_name="test", tier="advanced",
+            test_command="pytest -xvs", config_dir=tmp_path / "config",
+            core_memory_files=[], stack_memory_files=[], additional_memory_files=[],
+        )
+        config.specs_dir = specs_root
+
+        block = BlockInfo(number=1, name="Block1", description="Test block")
+        state = BuildState(
+            change_name="test", mode="only", tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
+        progress = ProgressWriter(tmp_path / "progress.md")
+        progress.initialize("test", "only", "advanced", 1)
+        return config, state, progress, block
+
+    @pytest.mark.asyncio
+    async def test_static_pass_skips_auditor(self, setup):
+        config, state, progress, block = setup
+        ok = AgentResult(success=True, output=GOOD_TESTS_OUTPUT)
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock) as audit:
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is True
+        audit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auditor_overturns_static_scan(self, setup):
+        config, state, progress, block = setup
+        ok = AgentResult(success=True, output=WEAK_TESTS_OUTPUT)
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok) as tw, \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
+                   return_value=QualityAudit(passed=True)):
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is True
+        assert tw.call_count == 1  # no retry when the auditor overturns
+
+    @pytest.mark.asyncio
+    async def test_confirmed_weak_retries_then_passes(self, setup):
+        config, state, progress, block = setup
+        confirm = QualityAudit(
+            passed=False, weak_count=1, total_tests=1,
+            weak_tests=[WeakTestFinding(
+                file="test_x.py", test_name="test_something",
+                pattern="assert True", suggestion="assert the actual behavior",
+            )],
+        )
+        tw_results = [
+            AgentResult(success=True, output=WEAK_TESTS_OUTPUT),
+            AgentResult(success=True, output=GOOD_TESTS_OUTPUT),
+        ]
+        ok = AgentResult(success=True, output="done")
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, side_effect=tw_results) as tw, \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
+                   return_value=confirm) as audit:
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is True
+        assert tw.call_count == 2
+        retry_desc = tw.call_args_list[1].kwargs["block_description"]
+        assert "Test Quality Failure" in retry_desc
+        assert "assert the actual behavior" in retry_desc  # findings carried into the retry
+        audit.assert_called_once()  # rescan passed, no re-audit needed
+
+    @pytest.mark.asyncio
+    async def test_still_weak_after_retry_fails_block(self, setup):
+        config, state, progress, block = setup
+        weak = AgentResult(success=True, output=WEAK_TESTS_OUTPUT)
+        confirm = QualityAudit(passed=False, weak_count=1, total_tests=1)
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=weak), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock) as impl, \
+             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
+                   return_value=confirm) as audit:
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is False
+        assert block.status == BlockStatus.FAILED
+        assert audit.call_count == 2  # initial audit + re-audit after retry
+        impl.assert_not_called()  # weak tests never gate an implementation
+
+    @pytest.mark.asyncio
+    async def test_auditor_error_fails_block(self, setup):
+        """An unverifiable quality gate fails the block — never silently passes."""
+        config, state, progress, block = setup
+        weak = AgentResult(success=True, output=WEAK_TESTS_OUTPUT)
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=weak), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock) as impl, \
+             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
+                   side_effect=RuntimeError("SDK down")):
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is False
+        assert block.status == BlockStatus.FAILED
+        impl.assert_not_called()
+
+
+class TestReviewExhaustionEnforcement:
+    """Review exhaustion FAILs the block by default; --lenient-review restores accept."""
+
+    @pytest.fixture
+    def setup(self, tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        specs_root = project_dir / "specs"
+        (specs_root / "changes" / "test").mkdir(parents=True)
+
+        config = BuildConfig(
+            project_dir=project_dir, change_name="test", tier="advanced",
+            test_command="",  # integration gate skips — review loop is the subject
+            config_dir=tmp_path / "config",
+            core_memory_files=[], stack_memory_files=[], additional_memory_files=[],
+        )
+        config.specs_dir = specs_root
+
+        block = BlockInfo(number=1, name="Block1", description="d",
+                          status=BlockStatus.IMPLEMENTING)
+        state = BuildState(
+            change_name="test", mode="only", tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
+        progress = ProgressWriter(tmp_path / "progress.md")
+        progress.initialize("test", "only", "advanced", 1)
+        return config, state, progress, block
+
+    def _failing_review(self):
+        return ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=2, evidence="weak")])
+
+    def _passing_review(self):
+        return ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="solid")])
+
+    @pytest.mark.asyncio
+    async def test_exhaustion_fails_block(self, setup, capsys):
+        config, state, progress, block = setup
+        fix = AgentResult(success=True, output="fixed")
+
+        with patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+                   return_value=self._failing_review()), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
+                   return_value=fix) as fixer:
+            result = await _run_integration_and_review(block, config, state, progress)
+
+        assert result is False
+        assert block.status == BlockStatus.FAILED
+        assert "REVIEW_EXHAUSTED" in capsys.readouterr().out
+        # No fix agent after the last review — its work would go unreviewed.
+        assert fixer.call_count == MAX_REVIEW_ITERATIONS - 1
+
+    @pytest.mark.asyncio
+    async def test_lenient_review_accepts_and_continues(self, setup, capsys):
+        config, state, progress, block = setup
+        config.lenient_review = True
+        fix = AgentResult(success=True, output="fixed")
+
+        with patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+                   return_value=self._failing_review()), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=fix):
+            result = await _run_integration_and_review(block, config, state, progress)
+
+        assert result is True
+        assert block.status == BlockStatus.DONE
+        assert "REVIEW_EXHAUSTED" not in capsys.readouterr().out
+        assert "--lenient-review" in progress.path.read_text()
+
+    @pytest.mark.asyncio
+    async def test_passing_review_marks_done(self, setup, capsys):
+        config, state, progress, block = setup
+
+        with patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+                   return_value=self._passing_review()), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock) as fixer:
+            result = await _run_integration_and_review(block, config, state, progress)
+
+        assert result is True
+        assert block.status == BlockStatus.DONE
+        assert "COMPLETE" in capsys.readouterr().out
+        fixer.assert_not_called()
+        # GREEN evidence is recorded even on the no-test-command path.
+        assert block.green_evidence
+        assert "GREEN evidence" in progress.path.read_text()
+
+
+class TestFinalReviewFailClosed:
+    """The final review returns a structured verdict and fails closed on errors."""
+
+    def _make(self, tmp_path, with_rubric=True):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        specs_root = project_dir / "specs"
+        change_dir = specs_root / "changes" / "feat"
+        change_dir.mkdir(parents=True)
+        if with_rubric:
+            (change_dir / "rubric.md").write_text("# Rubric\nQuality criteria.")
+        config = BuildConfig(project_dir=project_dir, change_name="feat")
+        config.specs_dir = specs_root
+        state = BuildState(
+            change_name="feat", mode="only", tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[BlockInfo(number=1, name="B", description="d")]),
+        )
+        return config, state
+
+    @pytest.mark.asyncio
+    async def test_no_rubric_skips(self, tmp_path):
+        config, state = self._make(tmp_path, with_rubric=False)
+        result = await _run_final_review(config, state)
+        assert result.passed is True
+        assert "No rubric" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_llm_error_fails_closed(self, tmp_path):
+        config, state = self._make(tmp_path)
+        with patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
+                   side_effect=RuntimeError("api down")):
+            result = await _run_final_review(config, state)
+        assert result.passed is False
+        assert result.action == "final_review_error"
+
+    @pytest.mark.asyncio
+    async def test_structured_verdict_passes_through(self, tmp_path):
+        config, state = self._make(tmp_path)
+        verdict = FinalReviewVerdict(passed=True, summary="Coherent build, blocks integrate.")
+        with patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
+                   return_value=verdict):
+            result = await _run_final_review(config, state)
+        assert result.passed is True
+        assert "Coherent build" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_structured_verdict_failure_carries_issues(self, tmp_path):
+        config, state = self._make(tmp_path)
+        verdict = FinalReviewVerdict(
+            passed=False, summary="Block 2 wired to a stub.",
+            issues=["api.py: handler returns hardcoded value"],
+        )
+        with patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
+                   return_value=verdict):
+            result = await _run_final_review(config, state)
+        assert result.passed is False
+        assert "hardcoded value" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_engine_fails_build_on_final_review_error(self, tmp_path):
+        config, state = self._make(tmp_path)
+        (config.change_dir / "tasks.md").write_text("## 1. Setup\n\nInit.\n\nSatisfies: s\n")
+        config.test_command = "true"
+        config.config_dir = tmp_path / "config"
+        config.core_memory_files = []
+        args = MagicMock()
+        args.block = None
+
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
+             patch("build_pipeline.tdd_engine.run_block_tdd", new_callable=AsyncMock, return_value=True), \
+             patch("build_pipeline.tdd_engine._run_integration_and_review", new_callable=AsyncMock, return_value=True), \
+             patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
+                   side_effect=RuntimeError("api down")):
+            result = await run_tdd_engine(config, args)
+
+        assert result == EXIT_BUILD_FAILURE
+
+    @pytest.mark.asyncio
+    async def test_engine_lenient_continues_past_final_review_error(self, tmp_path):
+        config, state = self._make(tmp_path)
+        (config.change_dir / "tasks.md").write_text("## 1. Setup\n\nInit.\n\nSatisfies: s\n")
+        config.test_command = "true"
+        config.config_dir = tmp_path / "config"
+        config.core_memory_files = []
+        config.lenient_review = True
+        args = MagicMock()
+        args.block = None
+
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
+             patch("build_pipeline.tdd_engine.run_block_tdd", new_callable=AsyncMock, return_value=True), \
+             patch("build_pipeline.tdd_engine._run_integration_and_review", new_callable=AsyncMock, return_value=True), \
+             patch("build_pipeline.tdd_engine.llm_call_structured", new_callable=AsyncMock,
+                   side_effect=RuntimeError("api down")):
+            result = await run_tdd_engine(config, args)
+
+        assert result == EXIT_SUCCESS
+
+
+class TestEntryPointSmokeRun:
+    """_verify_entry_point actually executes the entry point — no fabricated pass."""
+
+    def _config(self, tmp_path) -> BuildConfig:
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        return BuildConfig(project_dir=project_dir, change_name="feat")
+
+    def test_library_project_passes_by_assumption(self, tmp_path):
+        config = self._config(tmp_path)
+        result = _verify_entry_point(config)
+        assert result.passed is True
+        assert "library" in result.reason
+
+    def test_untrusted_repo_reports_unverified(self, tmp_path):
+        config = self._config(tmp_path)
+        (config.project_dir / "main.py").write_text("print('hi')\n")
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": ""}):
+            result = _verify_entry_point(config)
+        assert result.passed is False
+        assert "not smoke-run" in result.reason
+
+    def test_smoke_run_passes_with_evidence(self, tmp_path):
+        config = self._config(tmp_path)
+        (config.project_dir / "main.py").write_text(
+            "import sys\nprint('usage: demo')\nsys.exit(0)\n"
+        )
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}):
+            result = _verify_entry_point(config)
+        assert result.passed is True
+        assert "usage: demo" in result.metadata["output"]
+
+    def test_smoke_run_failure_reports_exit_code(self, tmp_path):
+        config = self._config(tmp_path)
+        (config.project_dir / "main.py").write_text(
+            "import sys\nprint('boom')\nsys.exit(3)\n"
+        )
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}):
+            result = _verify_entry_point(config)
+        assert result.passed is False
+        assert "exit 3" in result.reason
+
+    def test_detect_src_layout_package(self, tmp_path):
+        config = self._config(tmp_path)
+        pkg = config.project_dir / "src" / "mytool"
+        pkg.mkdir(parents=True)
+        (pkg / "__main__.py").write_text("print('hi')\n")
+        entry = _detect_entry_point(config)
+        assert entry is not None
+        label, argv, env = entry
+        assert label == "python -m mytool"
+        assert str(config.project_dir / "src") in env["PYTHONPATH"]
+
+    def test_detect_node_main(self, tmp_path):
+        config = self._config(tmp_path)
+        (config.project_dir / "package.json").write_text('{"main": "index.js"}')
+        (config.project_dir / "index.js").write_text("console.log('hi')\n")
+        entry = _detect_entry_point(config)
+        assert entry is not None
+        assert entry[0] == "node index.js"
+
+    def test_tests_package_not_treated_as_entry_point(self, tmp_path):
+        config = self._config(tmp_path)
+        tests_pkg = config.project_dir / "tests"
+        tests_pkg.mkdir()
+        (tests_pkg / "__main__.py").write_text("print('test runner')\n")
+        assert _detect_entry_point(config) is None

@@ -75,6 +75,41 @@ class ReviewResult(BaseModel):
         return [s.dimension for s in self.scores if s.score == 1]
 
 
+class WeakTestFinding(BaseModel):
+    """One weak test flagged by the LLM test-quality auditor."""
+    file: str = ""
+    test_name: str = ""
+    pattern: str = ""
+    suggestion: str = ""
+
+
+class TestQualityAudit(BaseModel):
+    """Structured verdict from the LLM test-quality auditor (TEST_QUALITY_PROMPT).
+
+    Adjudicates the static weak-pattern scan: the regex scan is cheap but
+    coarse, so its failures are confirmed or overturned by this audit before
+    the pipeline fails a block over test quality.
+    """
+    passed: bool
+    weak_tests: list[WeakTestFinding] = Field(default_factory=list)
+    total_tests: int = 0
+    weak_count: int = 0
+
+    def findings_text(self) -> str:
+        return "\n".join(
+            f"- {w.file}::{w.test_name}: {w.pattern} — {w.suggestion}"
+            for w in self.weak_tests
+        )
+
+
+class FinalReviewVerdict(BaseModel):
+    """Structured verdict for the final comprehensive review — replaces the
+    old string-match on 'PASSED' in free text."""
+    passed: bool
+    summary: str = ""
+    issues: list[str] = Field(default_factory=list)
+
+
 # --- Gates ---
 
 class GateResult(BaseModel):

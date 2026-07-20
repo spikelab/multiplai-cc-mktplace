@@ -91,6 +91,10 @@ class BuildConfig:
     auto: bool = False
     spec_only: bool = False
     skip_research: bool = False
+    # Restores the pre-0.4 accept-and-continue behavior for overnight runs:
+    # review exhaustion and final-review errors log-and-continue instead of
+    # failing the build.
+    lenient_review: bool = False
 
     # Project context (from specs/config.yaml)
     project_name: str = ""
@@ -136,6 +140,7 @@ class BuildConfig:
             auto=getattr(args, "auto", False),
             spec_only=getattr(args, "spec_only", False),
             skip_research=getattr(args, "skip_research", False),
+            lenient_review=getattr(args, "lenient_review", False),
         )
         config.specs_dir = config.project_dir / "specs"
         config._load_specs_config()

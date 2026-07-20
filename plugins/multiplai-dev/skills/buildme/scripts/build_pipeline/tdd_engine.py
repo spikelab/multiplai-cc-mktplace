@@ -10,13 +10,17 @@ Exit codes: 0=success, 1=build failure, 3=agent timeout.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from .config import BuildConfig
 from .gates import (
+    _repo_trusted,
     baseline_test_gate,
     integration_gate,
     red_gate,
@@ -36,11 +40,15 @@ from .models import (
     BlockInfo,
     BlockStatus,
     BuildPhase,
+    FinalReviewVerdict,
     GateResult,
     ReviewResult,
+    TestQualityAudit,
 )
 from .progress import ProgressWriter
-from .sdk import llm_call
+from .prompts.review import FINAL_REVIEW_PROMPT
+from .prompts.test_writing import TEST_QUALITY_PROMPT
+from .sdk import llm_call_structured
 from .state import BuildState, TDDState
 
 log = logging.getLogger(__name__)
@@ -342,6 +350,107 @@ def run_test_quality_check(test_files_content: str, contracts: str, config: Buil
     )
 
 
+async def _audit_test_quality(test_files_content: str, contracts: str, config: BuildConfig) -> TestQualityAudit:
+    """LLM adjudication of the static weak-test scan (TEST_QUALITY_PROMPT)."""
+    prompt = TEST_QUALITY_PROMPT.format(
+        test_files=test_files_content,
+        contracts=contracts or "(none provided)",
+    )
+    return await llm_call_structured(prompt, TestQualityAudit, model=config.model, max_retries=1)
+
+
+async def _enforce_test_quality(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    specs: str,
+    context: str,
+    block_idx: int,
+    test_files_content: str,
+) -> bool:
+    """Enforced test-quality gate: static scan, LLM-adjudicated, no advisory path.
+
+    Static scan fail → the LLM auditor adjudicates (the regex scan is coarse;
+    the auditor confirms or overturns). Confirmed weak → one test-writer retry
+    carrying the findings, then re-scan (+ re-audit). Still weak → block
+    FAILED. Auditor errors also fail the block — an unverifiable gate must
+    not silently pass.
+    """
+    scan = run_test_quality_check(test_files_content, specs, config)
+    if scan.passed:
+        return True
+
+    log.warning(
+        "Static weak-test scan failed for block %s (%s) — LLM auditor adjudicating",
+        block.name, scan.reason,
+    )
+    try:
+        audit = await _audit_test_quality(test_files_content, specs, config)
+    except Exception as e:
+        log.error("FAIL block=%d name=%s phase=TEST_QUALITY_AUDIT error=%s",
+                  block.number, block.name, e)
+        progress.log_agent("TestQualityAuditor", block.name, f"ERROR: {e}")
+        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        return False
+
+    if audit.passed:
+        log.info("Test-quality auditor overturned the static scan for block %s", block.name)
+        progress.log_agent("TestQualityAuditor", block.name, "OVERTURNED static scan — tests OK")
+        return True
+
+    findings = audit.findings_text() or scan.reason
+    log.warning("Test-quality auditor confirmed weak tests for block %s — one test-writer retry",
+                block.name)
+    progress.log_agent("TestQualityAuditor", block.name, "CONFIRMED weak tests — retrying test writer")
+    retry = await run_test_writer(
+        block_name=block.name,
+        block_description=(
+            f"{block.description}\n\n"
+            f"## Test Quality Failure — rewrite the weak tests\n"
+            f"A quality audit confirmed these tests are too weak to gate an "
+            f"implementation:\n{findings}\n\n"
+            f"Rewrite them so every test asserts a meaningful behavioral outcome."
+        ),
+        specs=specs,
+        context_bundle=context,
+        test_command=config.test_command,
+        model=config.model,
+        cwd=str(config.project_dir),
+    )
+    if not retry.success:
+        block.timed_out = retry.timed_out
+        log.error("FAIL block=%d name=%s phase=TEST_QUALITY_RETRY error=%s",
+                  block.number, block.name, retry.error)
+        progress.log_agent("TestWriter", block.name, "TIMEOUT" if retry.timed_out else "FAILED")
+        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        return False
+    sha = _git_commit_block_phase(config, "test", block)
+    if sha:
+        block.test_commit = sha
+        state.checkpoint(config.state_file_path())
+
+    rescan = run_test_quality_check(retry.output, specs, config)
+    if rescan.passed:
+        return True
+    try:
+        re_audit = await _audit_test_quality(retry.output, specs, config)
+    except Exception as e:
+        log.error("FAIL block=%d name=%s phase=TEST_QUALITY_REAUDIT error=%s",
+                  block.number, block.name, e)
+        progress.log_agent("TestQualityAuditor", block.name, f"ERROR: {e}")
+        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        return False
+    if re_audit.passed:
+        return True
+
+    log.error("FAIL block=%d name=%s phase=TEST_QUALITY reason=still-weak-after-retry",
+              block.number, block.name)
+    progress.log_agent("TestQualityAuditor", block.name, "STILL WEAK after retry — block failed")
+    state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+    return False
+
+
 async def _enforce_red_gate(
     block: BlockInfo,
     config: BuildConfig,
@@ -511,12 +620,12 @@ async def run_block_tdd(
         block.test_commit = test_sha
         state.checkpoint(config.state_file_path())
 
-    # --- Phase A.5: Test quality check ---
-    test_files_content = test_result.output
-    quality_gate = run_test_quality_check(test_files_content, specs, config)
-    if not quality_gate.passed:
-        log.warning("Test quality check failed for block %s: %s", block.name, quality_gate.reason)
-        # Don't fail the build — log and continue
+    # --- Phase A.5: Test quality enforcement (static scan + LLM adjudication) ---
+    quality_ok = await _enforce_test_quality(
+        block, config, state, progress, specs, context, block_idx, test_result.output,
+    )
+    if not quality_ok:
+        return False
 
     # --- Phase A.6: RED gate — prove tests fail before implementing ---
     red_ok = await _enforce_red_gate(block, config, state, progress, specs, context, block_idx)
@@ -633,6 +742,7 @@ async def _run_integration_and_review(
     state.mark_block_status(block_idx, BlockStatus.REVIEWING, config.state_file_path())
     progress.log_block(block.number, total, block.name, "REVIEWING")
 
+    review_passed = False
     for iteration in range(MAX_REVIEW_ITERATIONS):
         iter_gate = review_iteration_gate(iteration, MAX_REVIEW_ITERATIONS)
         if not iter_gate.passed:
@@ -658,9 +768,12 @@ async def _run_integration_and_review(
         progress.log_review(block.name, iteration + 1, review.weighted_average, score_gate.passed)
 
         if score_gate.passed:
+            review_passed = True
             break
 
         log.info("Review iteration %d failed for block %s: %s", iteration + 1, block.name, score_gate.reason)
+        if iteration + 1 >= MAX_REVIEW_ITERATIONS:
+            break  # no fix agent after the last review — its work would go unreviewed
         # Spawn fix agent for the failing dimensions
         context = assemble_context(block, config, "implementer")
         fix = await run_implementer(
@@ -676,7 +789,23 @@ async def _run_integration_and_review(
         if not fix.success and fix.timed_out:
             log.warning("Fix agent timed out during review iteration %d", iteration + 1)
 
-    # Mark done regardless of final review outcome (we gave it MAX attempts)
+    if not review_passed:
+        if config.lenient_review:
+            # Accept-and-continue (pre-0.4 behavior), explicitly opted into.
+            log.warning(
+                "Review exhausted for block %s after %d iterations — accepting "
+                "(--lenient-review)", block.name, MAX_REVIEW_ITERATIONS,
+            )
+            progress.log_block(block.number, total, block.name,
+                               "COMPLETE (review below threshold, --lenient-review)")
+        else:
+            log.error("FAIL block=%d name=%s phase=REVIEW reason=review-exhausted "
+                      "after %d iterations", block.number, block.name, MAX_REVIEW_ITERATIONS)
+            progress.log_block(block.number, total, block.name, "FAILED — review exhausted")
+            print(f"BLOCK:{block.number}/{total}:{block.name}:REVIEW_EXHAUSTED")
+            state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+            return False
+
     state.mark_block_status(block_idx, BlockStatus.DONE, config.state_file_path())
     log.info("DONE block=%d/%d name=%s", block.number, total, block.name)
     progress.log_block(block.number, total, block.name, "COMPLETE")
@@ -811,7 +940,17 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
     if not state.tdd.final_review_done:
         log.info("START phase=FINAL_REVIEW")
         progress.log_phase("FINAL_REVIEW", "Running comprehensive review")
-        final_review = await _run_final_review(config)
+        final_review = await _run_final_review(config, state)
+
+        if final_review and final_review.action == "final_review_error":
+            # Fail closed: an unverifiable final review is a failure, not a
+            # pass. Not marked done — a resume re-runs the review.
+            log.error("FAIL phase=FINAL_REVIEW reason=%s", final_review.reason[:200])
+            progress.log_phase("FINAL_REVIEW", f"ERROR: {final_review.reason}")
+            if not config.lenient_review:
+                return EXIT_BUILD_FAILURE
+            log.warning("--lenient-review: continuing despite final-review error")
+
         state.tdd.final_review_done = True
         state.checkpoint(state_path)
 
@@ -844,49 +983,154 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
     return EXIT_SUCCESS
 
 
-async def _run_final_review(config: BuildConfig) -> GateResult | None:
-    """Run a final comprehensive review of the entire implementation."""
+def _capture_full_build_diff(config: BuildConfig, state: BuildState) -> str:
+    """Whole-build diff for the final review: first block's pre-build baseline
+    → working tree, capped like the per-block review diff. Returns "" on git
+    failure — never raises."""
+    baseline = None
+    if state.tdd and state.tdd.blocks:
+        baseline = state.tdd.blocks[0].baseline_commit
+    target = baseline or "HEAD"
+    try:
+        proc = subprocess.run(
+            ["git", "diff", target],
+            cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
+        )
+        if proc.returncode != 0:
+            log.warning("Failed to capture full build diff (git diff %s): %s",
+                        target, proc.stderr.strip())
+            return ""
+        diff = proc.stdout
+    except Exception as e:
+        log.warning("Failed to capture full build diff: %s", e)
+        return ""
+    if len(diff) > MAX_REVIEW_DIFF_CHARS:
+        diff = diff[:MAX_REVIEW_DIFF_CHARS] + "\n... (diff truncated for review)"
+    return diff
+
+
+async def _run_final_review(config: BuildConfig, state: BuildState) -> GateResult | None:
+    """Final comprehensive review over the full build diff.
+
+    Structured verdict (FinalReviewVerdict via llm_call_structured) — no
+    string-matching on free text. Fails closed: an exception yields
+    passed=False with action="final_review_error", surfaced to the caller —
+    never a fabricated pass.
+    """
     rubric = ""
     if config.rubric_path.exists():
         rubric = config.rubric_path.read_text()
     if not rubric:
         return GateResult(passed=True, reason="No rubric — skipping final review")
 
-    prompt = f"""\
-Perform a comprehensive final review of the entire implementation.
-Check for cross-block integration issues, missed specs, and overall quality.
-
-## Rubric
-{rubric}
-
-Return a brief summary: PASSED or FAILED with key issues.
-"""
+    diff = _capture_full_build_diff(config, state)
+    if not diff:
+        log.warning("No full-build diff captured — final review sees rubric only")
+    prompt = FINAL_REVIEW_PROMPT.format(
+        diff=diff or "(no diff captured)",
+        rubric=rubric,
+    )
+    model = getattr(config, "review_model", None) or config.model
     try:
-        result = await llm_call(prompt, model=config.model)
-        passed = "PASSED" in result.upper() and "FAILED" not in result.upper()
-        return GateResult(passed=passed, reason=result[:200])
+        verdict = await llm_call_structured(prompt, FinalReviewVerdict, model=model, max_retries=1)
     except Exception as e:
-        log.warning("Final review failed: %s", e)
-        return GateResult(passed=True, reason=f"Review unavailable: {e}")
+        log.error("Final review errored (failing closed): %s", e)
+        return GateResult(
+            passed=False,
+            reason=f"Final review errored: {e}",
+            action="final_review_error",
+        )
+    reason = verdict.summary
+    if verdict.issues:
+        reason += " Issues: " + "; ".join(verdict.issues)
+    return GateResult(
+        passed=verdict.passed,
+        reason=reason[:500],
+        metadata={"issues": verdict.issues},
+    )
+
+
+def _detect_entry_point(config: BuildConfig) -> tuple[str, list[str], dict | None] | None:
+    """Find a runnable entry point to smoke-test: (label, argv, env) or None.
+
+    Covers python packages (<pkg>/__main__.py at root or under src/, run as
+    `python -m <pkg>`), loose scripts (main.py/app.py/__main__.py), and node
+    projects (package.json "main"). env is a full environment mapping when
+    the run needs one (src-layout PYTHONPATH), else None (inherit).
+    """
+    project_dir = config.project_dir
+    for base in (project_dir, project_dir / "src"):
+        if not base.is_dir():
+            continue
+        for p in sorted(base.glob("*/__main__.py")):
+            pkg = p.parent.name
+            if pkg.startswith(".") or pkg in ("tests", "test"):
+                continue
+            env = None
+            if base != project_dir:
+                env = dict(os.environ)
+                existing = env.get("PYTHONPATH", "")
+                env["PYTHONPATH"] = str(base) + (os.pathsep + existing if existing else "")
+            return f"python -m {pkg}", [sys.executable, "-m", pkg, "--help"], env
+    for name in ("main.py", "app.py", "__main__.py"):
+        if (project_dir / name).exists():
+            return f"python {name}", [sys.executable, name, "--help"], None
+    pkg_json = project_dir / "package.json"
+    if pkg_json.exists():
+        try:
+            data = json.loads(pkg_json.read_text())
+        except (ValueError, OSError):
+            data = {}
+        main = data.get("main")
+        if isinstance(main, str) and (project_dir / main).exists():
+            return f"node {main}", ["node", main, "--help"], None
+    return None
 
 
 def _verify_entry_point(config: BuildConfig) -> GateResult:
-    """Check that the project has a runnable entry point if it's an app."""
-    project_dir = config.project_dir
-    entry_points = [
-        project_dir / "src" / "__main__.py",
-        project_dir / "__main__.py",
-        project_dir / "main.py",
-        project_dir / "app.py",
-    ]
-    # Also check package.json for bin/main
-    pkg_json = project_dir / "package.json"
-    if pkg_json.exists():
-        return GateResult(passed=True, reason="package.json found — entry point assumed")
+    """Smoke-run the project's entry point (app-type projects).
 
-    for ep in entry_points:
-        if ep.exists():
-            return GateResult(passed=True, reason=f"Entry point found: {ep.name}")
+    Reports real evidence: the detected entry point is actually executed
+    (`--help`) under the repo-trust guard with a 60s timeout. Library
+    projects (no entry point) pass by assumption; anything found but not
+    executable is reported unverified (passed=False — stays warn-level at
+    the call site) rather than fabricated as "passed".
+    """
+    entry = _detect_entry_point(config)
+    if entry is None:
+        return GateResult(passed=True, reason="No explicit entry point (library project assumed)")
+    label, argv, env = entry
 
-    # Not necessarily a problem for libraries
-    return GateResult(passed=True, reason="No explicit entry point (library project assumed)")
+    if not _repo_trusted():
+        return GateResult(
+            passed=False,
+            reason=f"Entry point found ({label}) but not smoke-run: repo not "
+                   f"trusted (set --trust-repo or BUILDME_TRUST_REPO=1)",
+        )
+    try:
+        proc = subprocess.run(
+            argv, cwd=str(config.project_dir), env=env,
+            capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        return GateResult(
+            passed=False,
+            reason=f"Entry point smoke run timed out after 60s: {label}",
+        )
+    except (FileNotFoundError, OSError) as e:
+        return GateResult(
+            passed=False,
+            reason=f"Entry point smoke run could not start ({label}): {e}",
+        )
+    output_tail = (proc.stdout + proc.stderr)[-500:]
+    if proc.returncode == 0:
+        return GateResult(
+            passed=True,
+            reason=f"Entry point smoke run passed: {label}",
+            metadata={"output": output_tail},
+        )
+    return GateResult(
+        passed=False,
+        reason=f"Entry point smoke run failed (exit {proc.returncode}): {label}",
+        metadata={"output": output_tail},
+    )

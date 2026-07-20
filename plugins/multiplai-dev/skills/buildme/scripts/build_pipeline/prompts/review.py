@@ -59,6 +59,41 @@ A 3 means acceptable but clearly improvable. A 1 means fundamentally broken.
 Return ONLY the JSON. No commentary.
 """
 
+FINAL_REVIEW_PROMPT = """\
+You are performing the final comprehensive review of a completed multi-block
+implementation. Judge the build as a whole: cross-block integration, missed
+specs, and overall quality. The diff below is the entire build's change set —
+base your findings on it, not on assumptions.
+
+## Full Build Diff
+```
+{diff}
+```
+
+## Rubric
+{rubric}
+
+## Instructions
+- Check that the blocks integrate: shared interfaces line up, nothing is
+  wired to a stub, no block undoes another's work.
+- Check the rubric dimensions across the whole build, not per block.
+- Cite concrete evidence from the diff for every issue.
+
+## Output Format
+Return a JSON object matching this schema:
+
+```json
+{{
+  "passed": true,
+  "summary": "One-paragraph overall assessment",
+  "issues": ["Specific issue with file reference", "..."]
+}}
+```
+
+`passed` is false when any issue would make the build untrustworthy as
+delivered. Return ONLY the JSON. No commentary.
+"""
+
 SECURITY_REVIEW_PROMPT = """\
 You are performing a security review of code changes.
 
