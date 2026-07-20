@@ -36,6 +36,7 @@ Python pipeline. Interview → Research → Specs → Design Audit → TDD Build
 | `--auto` | Skip review checkpoint (overnight/autonomous runs) |
 | `--spec-only` | Stop after spec generation + design audit |
 | `--skip-research` | Skip the research phase |
+| `--lenient-review` | Accept-and-continue when a block exhausts its review iterations instead of failing the block. Unattended overnight runs only — the default is to fail, so a low-scoring block is never silently marked done. |
 
 ## Scale Assessment (MANDATORY)
 
@@ -110,7 +111,7 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
   --project-dir "{project_dir}" \
   --interview-summary "{summary}" \
   --research-path "{research_output_path}" \
-  [--auto] [--spec-only] [--skip-research]
+  [--auto] [--spec-only] [--skip-research] [--lenient-review]
 ```
 
 **Important:** Always pass `--session-id` with the current session ID for log correlation.

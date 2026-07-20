@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.4.0 — 2026-07-20
+
+Ports enforcement mechanisms from the `superpowers` plugin's methodology skills
+into buildme's code-driven pipeline. The theme: buildme structurally enforces
+red-green TDD, never marks failing work done, and reviews against a hardened
+two-verdict rubric.
+
+### Added
+- **RED gate** (`gates.red_gate`, from *test-driven-development*). Between the
+  test-writer and implementer phases the pipeline runs the suite and requires a
+  non-zero exit failing for the right reason. A passing suite means the tests
+  prove nothing (`rewrite_tests`); a collection/syntax error means broken test
+  files (`fix_tests`). One retry each, then the block fails. RED and GREEN
+  output are captured as block evidence and fed to the reviewer.
+- **Two-verdict review** (from *subagent-driven-development*'s task reviewer).
+  `ReviewResult` gained a spec-compliance verdict (`missing`/`extra`/
+  `misunderstood`) alongside the scored dimensions; passing requires both.
+  `CODE_REVIEW_PROMPT` now treats the implementer's report as unverified
+  claims, verifies against the ground-truth diff, cites file:line with
+  why-it-matters and how-to-fix, and acknowledges strengths first.
+- **Integration circuit breaker** with escalation (from *systematic-debugging*).
+  Three fix attempts; the third switches to a question-the-architecture prompt
+  and escalates to `config.review_model`. The fix prompt carries the four-phase
+  debugging protocol (read the complete error, reproduce, one hypothesis, one
+  variable at a time). Exhaustion writes a diagnosis to `build-progress.md`.
+- **Global Constraints + Interfaces threading.** `design.md` carries a REQUIRED
+  `## Global Constraints` section; task blocks carry `Interfaces:`
+  (`Produces:`/`Consumes:` exact signatures). Both are injected verbatim into
+  agent and review prompts, plus earlier blocks' Produces signatures, so
+  implementers use exact signatures rather than re-deriving them. Generated
+  tasks are scanned deterministically for placeholders (TBD/TODO/"add
+  appropriate error handling"/"similar to block N"), and the tasks audit gained
+  spec-coverage traceability and cross-block signature-consistency checks.
+- **REQUIRED report slots.** Test-writer and implementer reports close with
+  `STATUS:`/`TESTS_RUN:`/GREEN evidence, plus explicit permission to stop
+  ("bad work is worse than no work"). `NEEDS_CONTEXT`/`BLOCKED` fails the block
+  with the agent's stated reason surfaced.
+- **Testing anti-patterns** (from *testing-anti-patterns*). Mechanical
+  detection of mock-assertion-only and mock-setup-dominant tests; the
+  test-writer prompt and rubric Test Quality dimension gained the five
+  anti-pattern checks as positive gate-function criteria.
+- `--lenient-review` restores accept-and-continue on review exhaustion for
+  unattended overnight runs.
+
+### Changed
+- **No silent DONE.** Confirmed-weak tests now fail the block instead of
+  warning (the previously-unwired `TEST_QUALITY_PROMPT` auditor adjudicates the
+  static scan, with one test-writer retry). Review exhaustion fails the block
+  rather than marking it done regardless. `_run_final_review` uses a structured
+  verdict over the full-build diff and fails closed — an exception yields
+  `passed=False` with the error surfaced. `_verify_entry_point` actually smoke-
+  runs the detected entry point under the repo-trust guard instead of
+  reporting an unverified pass.
+
 ## 0.3.3 — 2026-07-18
 
 ### Added

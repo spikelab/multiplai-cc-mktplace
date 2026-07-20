@@ -28,11 +28,12 @@ about their own work is a claim you verify against it.
 2. Verify the implementer's claims: for each claim (behavior implemented,
    tests run, evidence shown), find the supporting code in the diff. A claim
    without supporting code in the diff is a finding.
-3. Judge spec compliance scenario by scenario, sorting deviations into:
-   - **missing** — spec behavior with no implementation in the diff
-   - **extra** — implementation beyond what the spec asks for
-   - **misunderstood** — implementation that addresses a scenario but gets
-     its meaning wrong
+3. Judge spec compliance scenario by scenario — Missing / Extra /
+   Misunderstood — sorting each deviation into exactly one:
+   - **Missing** (`missing`) — spec behavior with no implementation in the diff
+   - **Extra** (`extra`) — implementation beyond what the spec asks for
+   - **Misunderstood** (`misunderstood`) — implementation that addresses a
+     scenario but gets its meaning wrong
 4. Score each rubric dimension 1-5 with evidence from the diff. Where coding
    standards are provided, reflect violations in the relevant dimension
    scores.
