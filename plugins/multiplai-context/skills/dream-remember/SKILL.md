@@ -13,6 +13,20 @@ Dream (nightly or on demand via `/multiplai-context:dream`) generates a proposal
 `.multiplai/dreams/`. This skill loads that proposal, walks through it with the user, and
 applies approved changes.
 
+### Shared decision record (`## Processed`) — read this before Step 3
+
+The proposal `.md` is **itself the decision record**, shared with the multiplai-gui hub
+GUI. When an item is decided (applied, edited, or rejected) its block is **moved into a
+`## Processed` section** at the end of the file; the parser ignores that section, so a
+moved item is no longer pending. That is the entire cross-tool contract — **no sidecar,
+no key scheme** — so one proposal can be reviewed partly in the GUI and finished here (or
+vice-versa) with no double-applies and nothing re-presented. This skill drives it through
+`dream.py`: `--pending-view` to see what is still pending, `--mark-processed` to record
+each decision, and `--archive` (which now *refuses* to archive while anything is still
+pending). The canonical spec of this contract lives in `scripts/lib/dream_processed.py` and,
+across the repo boundary, in `multiplai-gui`'s `hub/src/multiplai_hub/dreams.py`. Never
+hand-write a `## Processed` block — always go through `dream.py`.
+
 ---
 
 ## Step 1: Locate the Proposal
@@ -61,7 +75,24 @@ If `dream.py` is unavailable and you need to generate manually:
 
 ## Step 3: Present the Proposal
 
-Read the proposal file in full. Then tell the user:
+**First, find out what is still pending.** Some items may already have been decided in
+the multiplai-gui GUI (moved to the proposal's `## Processed` section). Run:
+
+```bash
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" \
+  --pending-view --proposal <exact-proposal-path-recorded-in-Step-1>
+```
+
+It prints `PENDING: <count>` followed by one ref per still-open item
+(`update:<file>#<N>` / `action:A<N>`). **Present ONLY the pending items** — never
+re-present anything under `## Processed`. Compare the pending count to the proposal's
+total item count (from reading the file): if some are already decided, tell the user
+plainly, e.g. *"2 items were already processed via the GUI — showing the remaining 4."*
+If `PENDING: 0`, everything is already decided: skip to Step 6 (archive) and tell the
+user there was nothing left to review.
+
+Read the proposal file in full (so you have each pending item's content and section).
+Then tell the user:
 
 - The source file path and date
 - A one-line summary: e.g. "17 proposed updates across 5 files, plus 3 action items, from 8 learnings files"
@@ -134,6 +165,30 @@ For each approved update:
 3. Apply with the Edit tool — one edit at a time per file, in order.
 4. Update "Last Updated" date if present.
 5. Confirm each edit was applied.
+6. **Record the decision to the shared `## Processed` record** — immediately after the
+   edit lands (so a crash can only ever leave a just-written item still pending, never
+   double-applied):
+   ```bash
+   uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" \
+     --mark-processed --proposal <path> \
+     --ref update:<file>#<N> --status applied --target <memory-file>
+   ```
+   Use `--status edited` (still with `--target`) when you applied a user-modified
+   version (`modify N`). The `<file>` in `--ref` is the **raw target string from the
+   `## Updates for \`<file>\`` heading** (not a resolved path); `<N>` is the item's
+   `### N.` number.
+
+**Also record every reject.** For each item the user did NOT approve (an explicit
+reject, or an item skipped on a partial/`none` review), move it to `## Processed` too so
+the proposal becomes fully decided and archivable — a recorded reject writes nothing to
+memory:
+```bash
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" \
+  --mark-processed --proposal <path> --ref update:<file>#<N> --status rejected
+```
+(No `--target` on a reject.) Do the same for action items in Step 4b using
+`--ref action:A<N>`. When you are done, `--pending-view` should print `PENDING: 0` — that
+is what lets Step 6 archive.
 
 ---
 
@@ -166,6 +221,14 @@ For each approved action item, append to `{workspace}/PLANS/dream-actions-{YYYY-
 If the file already exists for today, append new items under the same heading (don't
 duplicate the heading). Report the path and count to the user. Skip this step if there are no
 action items or the user approved `none`.
+
+**Record each action-item decision to `## Processed`** (same contract as Step 4): after
+writing an approved item to PLANS, mark it `applied`; mark every un-approved action item
+`rejected`. This is what makes the proposal fully decided:
+```bash
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" \
+  --mark-processed --proposal <path> --ref action:A<N> --status {applied|rejected}
+```
 
 ---
 
@@ -216,8 +279,17 @@ Pass the exact path recorded in Step 1 — never re-discover the file here (a ne
 pending proposal from another session may have arrived mid-review; see the Step 5
 warning). dream.py performs the move itself: collision-safe (a same-name file already
 archived gets a `-2`/`-3` suffix, never overwritten) and with a plain rename, so it
-works whether or not the workspace git tracks `.multiplai/`. Archive on partial
-applies too (some items approved).
+works whether or not the workspace git tracks `.multiplai/`.
+
+**`--archive` refuses to archive a partially-decided proposal.** If any item is still
+pending (not moved to `## Processed`), the command exits non-zero, lists the pending
+refs, and does **not** move the file or touch `dream_state`. This is the backstop for
+the GUI/CLI split review — the CLI must never archive a proposal the GUI still has live
+items in. So if you followed Step 4/4b correctly (recording a decision for **every**
+item, approvals *and* rejects), archiving succeeds; if it refuses, you missed some — run
+`--pending-view` to see which, decide/record them, then re-run this step. Do NOT force it
+or delete the file by hand; leave the proposal pending and tell the user which items
+remain.
 
 ---
 

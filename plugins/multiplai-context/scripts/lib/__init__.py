@@ -11,6 +11,7 @@ context-specific modules:
     router_prompt       — Router prompt construction
     section_loader      — Memory section loading
     project_identity    — Project identity resolution
+    dream_processed     — Shared ## Processed decision-record coordination
     transcript_distiller — Transcript distillation
     transcript_helper   — Transcript helpers
 """

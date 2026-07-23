@@ -20,6 +20,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Shared ``## Processed`` coordination (no heavy deps — pure text ops). Kept in
+# lib/ so the lightweight --mark-processed/--pending-view/--archive verbs import
+# it without the SDK. Its ## Processed writer is a byte-for-byte port of the
+# multiplai-gui hub; see lib/dream_processed.py for the cross-repo contract.
+from lib import dream_processed
+
 # Dream runs over a large backlog (40+ learnings, 20+ memory files) regularly
 # exceed model_client's 600s default per-call ceiling and time out (observed
 # repeatedly through 2026-06-26), forcing a manual env override each run. dream
@@ -916,10 +922,109 @@ def main() -> None:
         default="applied",
         help=argparse.SUPPRESS,
     )
+    # -- shared ## Processed decision-record verbs (GUI/CLI split-review) --------
+    parser.add_argument(
+        "--mark-processed",
+        action="store_true",
+        help="Move one decided item's block into the proposal's ## Processed "
+             "section (the cross-tool decision record shared with the "
+             "multiplai-gui GUI). Requires --proposal, --ref, --status.",
+    )
+    parser.add_argument(
+        "--pending-view",
+        action="store_true",
+        help="Print the proposal's still-pending vs already-processed items "
+             "(PENDING:/DECIDED:), so /dream-remember presents only what is "
+             "left. Requires --proposal.",
+    )
+    parser.add_argument(
+        "--proposal",
+        metavar="PATH",
+        help="Proposal .md path for --mark-processed / --pending-view.",
+    )
+    parser.add_argument(
+        "--ref",
+        help="Item ref for --mark-processed: 'update:<file>#<N>' or 'action:A<N>'.",
+    )
+    parser.add_argument(
+        "--status",
+        choices=("applied", "edited", "rejected"),
+        help="Disposition for --mark-processed (approve→applied, edit→edited, "
+             "reject→rejected).",
+    )
+    parser.add_argument(
+        "--target",
+        help="With --mark-processed applied/edited: the memory file the update "
+             "was written to (recorded in the ## Processed annotation).",
+    )
     args = parser.parse_args()
+
+    if args.mark_processed:
+        if not (args.proposal and args.ref and args.status):
+            print("ERROR: --mark-processed requires --proposal, --ref, --status")
+            sys.exit(2)
+        proposal_path = Path(args.proposal)
+        if not proposal_path.is_file():
+            print(f"ERROR: --proposal not found: {proposal_path}")
+            sys.exit(1)
+        try:
+            ref = dream_processed.parse_ref(args.ref)
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(2)
+        changed = dream_processed.mark_processed(
+            proposal_path, ref, args.status, target=args.target
+        )
+        key = dream_processed.item_key(ref)
+        if changed:
+            print(f"Processed {key} ({args.status}) → {proposal_path.name}")
+        else:
+            # Idempotent: already processed, or the item isn't a pending block.
+            print(f"No change for {key} (already processed or not pending)")
+        remaining = dream_processed.count_pending(proposal_path.read_text())
+        print(f"Pending items remaining: {remaining}")
+        return
+
+    if args.pending_view:
+        if not args.proposal:
+            print("ERROR: --pending-view requires --proposal")
+            sys.exit(2)
+        proposal_path = Path(args.proposal)
+        if not proposal_path.is_file():
+            print(f"ERROR: --proposal not found: {proposal_path}")
+            sys.exit(1)
+        pending = dream_processed.pending_items(proposal_path.read_text())
+        keys = [dream_processed.item_key(r) for r in pending]
+        print(f"PENDING: {len(keys)}")
+        for k in keys:
+            print(f"  {k}")
+        if not keys:
+            print("  (none — proposal fully decided; safe to archive)")
+        return
 
     if args.stamp:
         paths = get_paths()
+        # When archiving, pre-validate BEFORE any state change: a partially
+        # decided proposal (items still pending, i.e. not yet moved into the
+        # shared ## Processed decision record) must stay pending. Refuse without
+        # stamping or moving the .md, so a refused archive is a clean no-op that
+        # doesn't reset the dream gate. This mirrors the multiplai-gui hub's
+        # ``archivable = undecided == 0`` rule and backstops the GUI/CLI split
+        # review (Step 6 of /dream-remember relies on it).
+        proposal_path = None
+        if args.archive:
+            proposal_path = Path(args.archive)
+            if not proposal_path.is_file():
+                print(f"ERROR: --archive path not found: {proposal_path}")
+                sys.exit(1)
+            pending = dream_processed.pending_items(proposal_path.read_text())
+            if pending:
+                keys = ", ".join(dream_processed.item_key(r) for r in pending)
+                print(
+                    f"ERROR: {len(pending)} item(s) still undecided — left "
+                    f"pending, not archiving: {keys}"
+                )
+                sys.exit(1)
         dream_state_file = paths.dream_state_file()
         state = load_yaml(dream_state_file) or {}
         state["last_run"] = datetime.now(timezone.utc).isoformat()
@@ -927,11 +1032,7 @@ def main() -> None:
         state["learnings_processed"] = args.learnings_processed
         save_yaml(dream_state_file, state)
         print(f"Stamped dream_state: last_run={state['last_run']}")
-        if args.archive:
-            proposal_path = Path(args.archive)
-            if not proposal_path.is_file():
-                print(f"ERROR: --archive path not found: {proposal_path}")
-                sys.exit(1)
+        if proposal_path is not None:
             archived = _archive_proposal(
                 proposal_path, paths.dreams_dir(), args.archive_as
             )
