@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.7.0 — 2026-07-23
+
+### Added
+- **In-file decision record for dream proposals (`## Processed`).** When
+  `/dream-remember` applies, edits, or rejects an item, the item's block is now
+  **moved into a `## Processed` section** at the end of the proposal `.md`
+  instead of the proposal being reviewed all-or-nothing. Items under
+  `## Processed` are no longer pending, so a proposal can be reviewed partly in
+  the multiplai-gui GUI and finished in the CLI (or vice versa) with no
+  double-applies. The `## Processed` heading is the entire cross-tool contract —
+  no sidecar file, no key scheme. Mirrors the multiplai-gui hub.
+  - New `scripts/lib/dream_processed.py`: `move_to_processed` / `mark_processed`
+    (idempotent, group-aware block relocation via write-then-rename) and
+    `has_pending_items`.
+  - New `dream.py --mark-processed --proposal … --kind {update|action} --index N
+    [--file …] --status {applied|edited|rejected} [--target …]` verb, called by
+    the skill per item so decisions are recorded mechanically, never hand-edited.
+  - `dream.py --archive` now **refuses** a proposal that still has pending items
+    (exits non-zero), so a partially-reviewed proposal is left pending instead of
+    silently discarding the remainder.
+
+### Changed
+- `dream-remember` SKILL: Step 3 presents only pending items (skips
+  `## Processed`); Step 4/4b record each decision via `--mark-processed`; Step 5
+  cleans up learnings only when the proposal is fully decided; Step 6 archives
+  only when nothing is left pending (undecided items stay for a later run/GUI).
+
 ## 0.6.17 — 2026-07-17
 
 ### Fixed

@@ -36,6 +36,7 @@ from multiplai_core.config import load_yaml, save_yaml
 from multiplai_core.log_utils import setup_logging
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
+from lib.dream_processed import has_pending_items, mark_processed
 
 logger = setup_logging("dream", propagate_loggers=("multiplai_core",))
 
@@ -916,7 +917,49 @@ def main() -> None:
         default="applied",
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--mark-processed",
+        action="store_true",
+        help="Move one decided proposal item into the proposal's `## Processed` "
+             "section — the in-file decision record shared with the multiplai-gui "
+             "GUI. Use with --proposal, --kind, --index, --status (and --file for "
+             "updates). /dream-remember calls this per item as it applies/rejects.",
+    )
+    parser.add_argument("--proposal", metavar="PATH", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--kind", choices=("update", "action"), default="update", help=argparse.SUPPRESS
+    )
+    parser.add_argument("--index", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--file", metavar="TARGET.md", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--status", choices=("applied", "edited", "rejected"), help=argparse.SUPPRESS
+    )
+    parser.add_argument("--target", metavar="TARGET.md", help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    if args.mark_processed:
+        if not args.proposal or args.index is None or not args.status:
+            print("ERROR: --mark-processed needs --proposal, --index and --status")
+            sys.exit(2)
+        proposal_path = Path(args.proposal)
+        if not proposal_path.is_file():
+            print(f"ERROR: --proposal path not found: {proposal_path}")
+            sys.exit(1)
+        if args.kind == "update":
+            if not args.file:
+                print("ERROR: --mark-processed --kind update needs --file")
+                sys.exit(2)
+            ref: tuple = ("update", args.file, args.index)
+            label = f"update {args.file}#{args.index}"
+        else:
+            ref = ("action", args.index)
+            label = f"action A{args.index}"
+        changed = mark_processed(proposal_path, ref, args.status, target=args.target)
+        if changed:
+            print(f"Marked {label} as {args.status} in {proposal_path.name}")
+        else:
+            print(f"No change: {label} not pending (already processed or not found)")
+        return
 
     if args.stamp:
         paths = get_paths()
@@ -932,6 +975,15 @@ def main() -> None:
             if not proposal_path.is_file():
                 print(f"ERROR: --archive path not found: {proposal_path}")
                 sys.exit(1)
+            # Backstop: a proposal is archivable only once every item is decided
+            # (moved under ## Processed). Undecided items outside that section
+            # would be silently discarded by the move — leave it pending instead.
+            if has_pending_items(proposal_path.read_text()):
+                print(
+                    f"ERROR: {proposal_path.name} still has pending items (not under "
+                    "## Processed) — left pending, not archived. Decide or move them first."
+                )
+                sys.exit(3)
             archived = _archive_proposal(
                 proposal_path, paths.dreams_dir(), args.archive_as
             )
