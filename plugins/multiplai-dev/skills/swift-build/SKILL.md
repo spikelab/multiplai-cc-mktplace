@@ -124,6 +124,42 @@ inside the shared workspace mount (same absolute path on both sides), e.g.
 
 For detailed simulator commands beyond what the script wraps, load `references/simulator-management.md`.
 
+### UI Testing & Screenshots
+
+Run an XCUITest bundle and pull the captured screenshots back out — the agent
+self-verification workhorse for macOS/iOS GUI work (launch the app, drive it,
+*see* the result). Uses only already-allowed commands (`xcodebuild`, `xcrun
+xcresulttool`) — no gateway change.
+
+```bash
+# iOS simulator — no login session or TCC grant needed:
+${CLAUDE_PLUGIN_ROOT}/skills/swift-build/scripts/swift-host.sh --package-path app uitest \
+  --scheme MyUITests --destination 'platform=iOS Simulator,name=iPhone 17'
+
+# macOS — real window chrome + gestures; needs an active login session AND a
+# one-time Accessibility/Automation TCC grant to the test runner:
+${CLAUDE_PLUGIN_ROOT}/skills/swift-build/scripts/swift-host.sh --package-path app uitest \
+  --scheme MyUITests --destination 'platform=macOS'
+
+# Extract XCTAttachment PNGs from the result bundle (either destination):
+${CLAUDE_PLUGIN_ROOT}/skills/swift-build/scripts/swift-host.sh --package-path app screenshots
+#   → app/.uitest-artifacts/screenshots/*.png  (+ manifest.json)
+```
+
+- `uitest` defaults the result bundle to `<pkg>/.uitest-artifacts/result.xcresult`
+  (override `--result-bundle`); it cleans that path first (xcodebuild refuses a
+  pre-existing `-resultBundlePath`). `--only-testing <ID>` narrows the run.
+- `screenshots` reads that same default bundle; `--output`, `--test-id`, and
+  `--only-failures` narrow the export.
+- Put the result bundle / output **inside the workspace mount** (the defaults
+  do) so the container can `Read` the PNGs at the same path.
+- In the test, set `attachment.lifetime = .keepAlways` or a **green** run
+  discards the screenshots.
+
+For headless component snapshots that need no UI target at all (the cheaper
+first tier), render with `ImageRenderer` inside `swift test` — see the target
+project's self-verification docs.
+
 ### Tool Passthrough
 
 `swift`, `xcodebuild`, and `xcrun` are accepted as top-level commands and
@@ -233,6 +269,7 @@ When running from a container, all commands the script sends over SSH are compat
 - `xcodebuild -scheme ... build`, `xcodebuild -scheme ... test`, `xcodebuild -list -quiet` (scheme discovery — `xcodebuild` is allowlisted by command prefix, so any subcommand is accepted)
 - `command -v xcsift` (probes whether the xcsift formatter is installed on the host)
 - `xcrun simctl list devices available`, `xcrun simctl boot ...`, `xcrun simctl io ...`, `xcrun simctl install ...`, `xcrun simctl launch ...`, `xcrun simctl shutdown ...`
+- `xcodebuild test -scheme ... -destination ... -resultBundlePath ...` (the `uitest` verb) and `xcrun xcresulttool export attachments --path ... --output-path ...` (the `screenshots` verb) — both allowlisted by command prefix, no gateway change
 - `open -a Simulator` (for opening the Simulator GUI)
 - `cd /path && <any of the above>`
 - The `2>&1 | xcsift --format toon --quiet` suffix: the gateway rejects raw pipes/redirects as shell metacharacters, but it special-cases this one **fixed, trusted suffix** — it strips it before the metacharacter check, validates the head command, then re-attaches the xcsift stage host-side as a hardcoded constant. So only this exact suffix pipes; arbitrary pipes are still denied. (Do **not** send any other redirect/pipe over the bridge — e.g. `2>/dev/null` is denied.)
