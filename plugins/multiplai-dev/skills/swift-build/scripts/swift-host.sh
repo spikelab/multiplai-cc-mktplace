@@ -288,6 +288,98 @@ cmd_sim() {
   esac
 }
 
+# Run an XCUITest bundle and capture a result bundle (.xcresult). Uses
+# `xcodebuild test`, which the gateway already allows — no gateway change.
+#   swift-host.sh uitest --scheme <SCHEME> --destination <DEST> \
+#                        [--only-testing <ID>] [--result-bundle <PATH>]
+#
+# DEST examples:
+#   'platform=macOS'                              (real macOS window: chrome + gestures)
+#   'platform=iOS Simulator,name=iPhone 17'       (simulator: no login session/TCC needed)
+#
+# The macOS destination needs an active Aqua login session on the host plus a
+# one-time Accessibility/Automation TCC grant to the test runner — see the
+# swift-build reference docs. The simulator destination needs neither.
+#
+# Pair with `screenshots` to pull the captured XCUIScreen/XCTAttachment PNGs out
+# of the result bundle.
+cmd_uitest() {
+  local scheme="" destination="" only="" result_bundle=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --scheme)        scheme="$2"; shift 2 ;;
+      --destination)   destination="$2"; shift 2 ;;
+      --only-testing)  only="$2"; shift 2 ;;
+      --result-bundle) result_bundle="$2"; shift 2 ;;
+      *) echo "ERROR: unknown uitest flag: $1" >&2; exit 1 ;;
+    esac
+  done
+  if [ -z "$scheme" ]; then
+    echo "ERROR: uitest requires --scheme <SCHEME>" >&2; exit 1
+  fi
+  if [ -z "$destination" ]; then
+    echo "ERROR: uitest requires --destination (e.g. 'platform=macOS' or 'platform=iOS Simulator,name=iPhone 17')" >&2
+    exit 1
+  fi
+  # Default the result bundle under the (workspace-mounted) project dir so the
+  # container can read it back at the same path.
+  if [ -z "$result_bundle" ]; then
+    result_bundle="$(pwd)/.uitest-artifacts/result.xcresult"
+  fi
+  # xcodebuild refuses a pre-existing -resultBundlePath. Clean it LOCALLY: this
+  # is a plain filesystem op on the shared mount (container or Mac), never sent
+  # over the gateway.
+  rm -rf "$result_bundle"
+  mkdir -p "$(dirname "$result_bundle")"
+
+  local test_cmd="xcodebuild test -scheme $(q "$scheme") -destination $(q "$destination") -resultBundlePath $(q "$result_bundle")"
+  if [ -n "$only" ]; then
+    test_cmd="$test_cmd -only-testing:$(q "$only")"
+  fi
+  # xcodebuild needs the project/workspace in cwd → use cd (gateway allows the
+  # `cd X && ...` prefix). Route output through xcsift like other build/test.
+  if [ "$(uname -s)" = "Darwin" ]; then
+    eval "cd $(q "$(pwd)") && $test_cmd" 2>&1 | pipe_xcsift
+  else
+    run_on_host "$(build_remote_cmd "$test_cmd" "true")"
+  fi
+  echo "Result bundle: $result_bundle"
+}
+
+# Extract XCTAttachment images (XCUIScreen.main.screenshot(), etc.) from a
+# result bundle produced by `uitest`, using `xcrun xcresulttool export
+# attachments` (gateway-allowed). Writes the PNGs plus a manifest.json.
+#   swift-host.sh screenshots [--result-bundle <PATH>] [--output <DIR>] \
+#                             [--test-id <ID>] [--only-failures]
+cmd_screenshots() {
+  local result_bundle="" output="" test_id="" only_failures=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --result-bundle) result_bundle="$2"; shift 2 ;;
+      --output)        output="$2"; shift 2 ;;
+      --test-id)       test_id="$2"; shift 2 ;;
+      --only-failures) only_failures="1"; shift ;;
+      *) echo "ERROR: unknown screenshots flag: $1" >&2; exit 1 ;;
+    esac
+  done
+  if [ -z "$result_bundle" ]; then
+    result_bundle="$(pwd)/.uitest-artifacts/result.xcresult"
+  fi
+  if [ -z "$output" ]; then
+    output="$(pwd)/.uitest-artifacts/screenshots"
+  fi
+  # Clean + recreate the output dir LOCALLY (shared mount) so stale attachments
+  # from a prior run don't linger.
+  rm -rf "$output"
+  mkdir -p "$output"
+
+  local cmd="xcrun xcresulttool export attachments --path $(q "$result_bundle") --output-path $(q "$output")"
+  if [ -n "$test_id" ]; then cmd="$cmd --test-id $(q "$test_id")"; fi
+  if [ -n "$only_failures" ]; then cmd="$cmd --only-failures"; fi
+  run_on_host "$cmd"
+  echo "Attachments exported to: $output (see manifest.json)"
+}
+
 # --- Main ---
 
 # Parse global flags (before command)
@@ -337,7 +429,9 @@ case "$COMMAND" in
     done
     cmd_test "$FILTER"
     ;;
-  sim)        cmd_sim "$@" ;;
+  sim)         cmd_sim "$@" ;;
+  uitest)      cmd_uitest "$@" ;;
+  screenshots) cmd_screenshots "$@" ;;
   swift|xcodebuild|xcrun)
     # Passthrough for diagnostics/repair and custom builds (e.g. -runFirstLaunch,
     # -version, -showBuildSettings, or a full simulator build/install invocation).
@@ -364,7 +458,7 @@ case "$COMMAND" in
     run_on_host "cd $(q "$(pwd)") && $passthrough"
     ;;
   *)
-    echo "Usage: swift-host.sh [--package-path <dir>] {build|test|sim|swift|xcodebuild|xcrun} [args...]"
+    echo "Usage: swift-host.sh [--package-path <dir>] {build|test|sim|uitest|screenshots|swift|xcodebuild|xcrun} [args...]"
     echo ""
     echo "Commands:"
     echo "  build                        Build the project"
@@ -376,6 +470,11 @@ case "$COMMAND" in
     echo "  sim install <path>           Install .app bundle on booted simulator"
     echo "  sim launch <bundle-id>       Launch app by bundle identifier"
     echo "  sim screenshot [path]        Take screenshot of booted simulator"
+    echo "  uitest --scheme S --destination D [--only-testing ID] [--result-bundle P]"
+    echo "                               Run an XCUITest bundle → .xcresult"
+    echo "                               D: 'platform=macOS' | 'platform=iOS Simulator,name=iPhone 17'"
+    echo "  screenshots [--result-bundle P] [--output DIR] [--test-id ID] [--only-failures]"
+    echo "                               Extract XCTAttachment PNGs from a .xcresult"
     echo "  swift|xcodebuild|xcrun [...] Pass args through to the host tool"
     echo ""
     echo "Options:"
