@@ -459,17 +459,18 @@ async def _run_main_stages(
     if not coverage_result.passed and coverage_result.metadata:
         uncovered = coverage_result.metadata.get("uncovered_questions", [])
         if uncovered:
+            # Search using the uncovered sub-questions as queries directly,
+            # skipping any already dispatched earlier this run.
+            fresh_queries = state.select_unseen_queries(uncovered)
             log.info(
-                "Coverage gate failed — running targeted search for %d uncovered sub-questions",
+                "Coverage gate failed — running targeted search for %d of %d uncovered sub-questions",
+                len(fresh_queries),
                 len(uncovered),
             )
             progress.log_stage(
                 "COVERAGE RECOVERY",
-                f"targeted search for {len(uncovered)} uncovered sub-questions",
+                f"targeted search for {len(fresh_queries)}/{len(uncovered)} uncovered sub-questions",
             )
-            # Search using the uncovered sub-questions as queries directly,
-            # skipping any already dispatched earlier this run.
-            fresh_queries = state.select_unseen_queries(uncovered)
             targeted_results = (
                 await router.batch_search(
                     fresh_queries,
@@ -643,10 +644,10 @@ async def _run_refinement(
     """Run additional search+read rounds for framing refinement."""
     assert state.reassessment is not None
     queries = state.select_unseen_queries(state.reassessment.refinement_queries)
-    log.info("REFINEMENT: running %d new queries", len(queries))
     if not queries:
         log.info("REFINEMENT: all refinement queries already searched this run; skipping")
         return
+    log.info("REFINEMENT: running %d new queries", len(queries))
 
     new_results = await router.batch_search(queries, strategy="keyword")
     # Dedupe against already-triaged sources
@@ -688,13 +689,17 @@ async def _run_verification(
     assert state.reassessment is not None
     reassessment = state.reassessment
     queries = reassessment.verify_queries
-    log.info("VERIFICATION: running %d targeted queries", len(queries))
+    fresh_queries = state.select_unseen_queries(queries)
+    log.info(
+        "VERIFICATION: running %d targeted queries (%d already searched this run)",
+        len(fresh_queries),
+        len(queries) - len(fresh_queries),
+    )
 
     # Snapshot so the verdict node judges ONLY findings added by this read
     findings_before = len(state.findings)
 
     new_results = []
-    fresh_queries = state.select_unseen_queries(queries)
     if fresh_queries:
         results = await router.batch_search(fresh_queries, strategy="keyword")
         known_urls = {s.url for s in state.sources}

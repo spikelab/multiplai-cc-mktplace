@@ -92,6 +92,9 @@ class ResearchState(BaseModel):
     # diverge queries and of each other, so without this the same query re-fires
     # as a full WebSearch subprocess and usually returns already-known URLs — the
     # fetch is saved by the URL dedup, but the search itself is fully re-paid.
+    # Recorded at dispatch time, so a batch whose search then fails still counts
+    # as executed — the failed cycle is surfaced via refinement_error /
+    # verification_error, not retried under a re-minted duplicate query.
     # Persisted so a resumed run keeps the dedup.
     executed_queries: list[str] = Field(default_factory=list)
 
