@@ -14,7 +14,7 @@ SummaryLevel = Literal["gist", "structured", "detailed"]
 Preset = Literal["micro", "quick", "standard", "thorough"]
 ResearchType = Literal["general", "company", "job-market", "fact-check", "theme"]
 
-from .env import pick_model
+from .env import load_multiplai_conf, pick_model, resolve_effort
 
 # Reasoning nodes run opus (hard work); the high-volume per-source parse nodes
 # (triage, extract) run sonnet (cheap bulk work). Both are resolved from a
@@ -24,6 +24,32 @@ from .env import pick_model
 # per task in multiplai.conf: [deep-research] / [deep-research.parse] MODEL=...
 DEFAULT_MODEL = pick_model("opus", task="deep-research")
 PARSE_MODEL = pick_model("sonnet", task="deep-research.parse")
+
+
+def conf_effort(task: str, default: str | None = None) -> str | None:
+    """``EFFORT=`` for *task* from multiplai.conf, capped by MULTIPLAI_EFFORT.
+
+    Model and effort are two axes of the same tuning decision, and only the
+    model half was configurable without a code edit — a node could be retuned
+    to sonnet from the conf file but not dialled down to `low` thinking. This
+    is the missing half: ``[deep-research.extract] EFFORT=low``.
+
+    Returns *default* when the conf says nothing, so every existing per-node
+    default below is unchanged unless someone opts in.
+    """
+    section = (load_multiplai_conf().get("_sections", {}) or {}).get(task) or {}
+    requested = (section.get("EFFORT") or "").strip().lower()
+    if not requested:
+        return default
+    # The ceiling exists so a budget run can force every node down; it must
+    # apply to a conf override exactly as it applies to a code default.
+    return resolve_effort(requested)
+
+
+def _node_effort(node: str, default: str | None) -> str | None:
+    """Per-node effort: the node's own conf section wins over the skill-wide
+    one, which wins over the code default."""
+    return conf_effort(f"deep-research.{node}", conf_effort("deep-research", default))
 
 
 @dataclass
@@ -151,17 +177,20 @@ class ResearchConfig:
     # `--effort` overrides all nodes, mirroring `--model`.
     efforts: dict[str, str | None] = field(
         default_factory=lambda: {
-            "plan": None,
-            "diverge": None,
-            "challenge": None,
-            "search": "low",
-            "triage_relevance": "low",
-            "extract": "low",
-            "verify": "low",
-            "reassess": None,
-            "synthesize": None,
-            "adversarial": None,
-            "quality_check": "medium",
+            node: _node_effort(node, default)
+            for node, default in (
+                ("plan", None),
+                ("diverge", None),
+                ("challenge", None),
+                ("search", "low"),
+                ("triage_relevance", "low"),
+                ("extract", "low"),
+                ("verify", "low"),
+                ("reassess", None),
+                ("synthesize", None),
+                ("adversarial", None),
+                ("quality_check", "medium"),
+            )
         }
     )
 
