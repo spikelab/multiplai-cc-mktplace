@@ -1,7 +1,7 @@
 ---
 name: plan
 model: opus
-effort: high
+effort: medium
 description: Author self-contained, executable implementation plans that carry their own completion contract — verifiable "Done means" criteria, explicit constraints/out-of-scope, and stop-and-ask gates. The resulting plan file can be handed to a fresh session ("implement the plan"), fed to a goal runner, or used as buildme input, with no conversation context needed. Triggers on "write a plan", "make a plan", "implementation plan", "plan this out", "draft a plan for", or explicit /plan invocation.
 ---
 

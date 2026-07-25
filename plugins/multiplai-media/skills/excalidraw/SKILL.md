@@ -7,7 +7,7 @@ description: >
   Triggers on "draw a diagram", "create an excalidraw", "diagram this",
   "visualize this architecture", or explicit /excalidraw invocation.
 model: opus
-effort: low
+effort: medium
 ---
 
 # Excalidraw Diagram Generator

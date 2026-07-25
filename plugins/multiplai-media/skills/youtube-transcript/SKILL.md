@@ -2,7 +2,7 @@
 name: youtube-transcript
 description: Download transcripts from YouTube videos. Use when the user provides a YouTube URL and wants the transcript, captions, subtitles, or text content from the video. Supports subtitle download (fast) with audio transcription fallback.
 model: opus
-effort: low
+effort: medium
 ---
 
 # YouTube Transcript

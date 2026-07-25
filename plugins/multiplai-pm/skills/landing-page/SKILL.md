@@ -7,7 +7,7 @@ description: |
   Triggers on "landing page", "create a landing page", "landing page copy",
   "review this landing page", "optimize this landing page", "landing page audit".
 model: opus
-effort: high
+effort: medium
 ---
 
 # Landing Page — Dispatcher

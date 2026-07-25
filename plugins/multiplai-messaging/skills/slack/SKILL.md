@@ -9,7 +9,7 @@ description: >-
   "check #channel", "search Slack for …", "post to #channel", "DM X on Slack",
   "send a Slack message", "sync my Slack", or a pasted Slack permalink.
 model: opus
-effort: low
+effort: medium
 ---
 
 # Slack
