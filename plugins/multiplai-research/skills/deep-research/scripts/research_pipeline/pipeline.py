@@ -399,6 +399,9 @@ async def _run_main_stages(
     # SEARCH
     if not state.is_complete(Stage.SEARCH_COMPLETE):
         state.search_results = await search_node.search(config, state.plan, router)
+        # Record the baseline queries so later reassess cycles (coverage /
+        # refinement / verification) dedup against them instead of re-searching.
+        state.select_unseen_queries(state.plan.all_queries)
         state.advance_to(Stage.SEARCH_COMPLETE)
         progress.log_stage(
             "SEARCH COMPLETE",
@@ -456,22 +459,29 @@ async def _run_main_stages(
     if not coverage_result.passed and coverage_result.metadata:
         uncovered = coverage_result.metadata.get("uncovered_questions", [])
         if uncovered:
+            # Search using the uncovered sub-questions as queries directly,
+            # skipping any already dispatched earlier this run.
+            fresh_queries = state.select_unseen_queries(uncovered)
             log.info(
-                "Coverage gate failed — running targeted search for %d uncovered sub-questions",
+                "Coverage gate failed — running targeted search for %d of %d uncovered sub-questions",
+                len(fresh_queries),
                 len(uncovered),
             )
             progress.log_stage(
                 "COVERAGE RECOVERY",
-                f"targeted search for {len(uncovered)} uncovered sub-questions",
+                f"targeted search for {len(fresh_queries)}/{len(uncovered)} uncovered sub-questions",
             )
-            # Search using the uncovered sub-questions as queries directly
-            targeted_results = await router.batch_search(
-                uncovered,
-                # Floor at 1: sources // uncovered integer-divides to 0 for
-                # small presets with many uncovered questions (e.g. micro
-                # preset, 4+ uncovered), which would request zero results.
-                max_results=max(config.preset.sources // max(len(uncovered), 1), 1),
-                strategy="keyword",
+            targeted_results = (
+                await router.batch_search(
+                    fresh_queries,
+                    # Floor at 1: sources // uncovered integer-divides to 0 for
+                    # small presets with many uncovered questions (e.g. micro
+                    # preset, 4+ uncovered), which would request zero results.
+                    max_results=max(config.preset.sources // max(len(fresh_queries), 1), 1),
+                    strategy="keyword",
+                )
+                if fresh_queries
+                else []
             )
             # Dedupe against already-triaged sources (same as refinement/verification)
             known_urls = {s.url for s in state.sources}
@@ -633,7 +643,10 @@ async def _run_refinement(
 ) -> None:
     """Run additional search+read rounds for framing refinement."""
     assert state.reassessment is not None
-    queries = state.reassessment.refinement_queries
+    queries = state.select_unseen_queries(state.reassessment.refinement_queries)
+    if not queries:
+        log.info("REFINEMENT: all refinement queries already searched this run; skipping")
+        return
     log.info("REFINEMENT: running %d new queries", len(queries))
 
     new_results = await router.batch_search(queries, strategy="keyword")
@@ -676,14 +689,19 @@ async def _run_verification(
     assert state.reassessment is not None
     reassessment = state.reassessment
     queries = reassessment.verify_queries
-    log.info("VERIFICATION: running %d targeted queries", len(queries))
+    fresh_queries = state.select_unseen_queries(queries)
+    log.info(
+        "VERIFICATION: running %d targeted queries (%d already searched this run)",
+        len(fresh_queries),
+        len(queries) - len(fresh_queries),
+    )
 
     # Snapshot so the verdict node judges ONLY findings added by this read
     findings_before = len(state.findings)
 
     new_results = []
-    if queries:
-        results = await router.batch_search(queries, strategy="keyword")
+    if fresh_queries:
+        results = await router.batch_search(fresh_queries, strategy="keyword")
         known_urls = {s.url for s in state.sources}
         new_results = [r for r in results if r.url not in known_urls]
 

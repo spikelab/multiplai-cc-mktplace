@@ -28,6 +28,31 @@ def fresh_state(state_paths: tuple[Path, Path]) -> ResearchState:
     return ResearchState.new(query="test query", output_file=output, state_file=state)
 
 
+class TestSelectUnseenQueries:
+    def test_first_batch_all_fresh(self, fresh_state: ResearchState) -> None:
+        fresh = fresh_state.select_unseen_queries(["alpha", "beta"])
+        assert fresh == ["alpha", "beta"]
+        assert fresh_state.executed_queries == ["alpha", "beta"]
+
+    def test_cross_cycle_dedup(self, fresh_state: ResearchState) -> None:
+        fresh_state.select_unseen_queries(["alpha", "beta"])
+        # A later cycle repeats "alpha" (with different case/whitespace) and adds "gamma".
+        fresh = fresh_state.select_unseen_queries(["  ALPHA ", "gamma"])
+        assert fresh == ["gamma"]
+        assert fresh_state.executed_queries == ["alpha", "beta", "gamma"]
+
+    def test_within_batch_dedup_and_blanks(self, fresh_state: ResearchState) -> None:
+        fresh = fresh_state.select_unseen_queries(["dup", "dup", "", "   "])
+        assert fresh == ["dup"]
+        assert fresh_state.executed_queries == ["dup"]
+
+    def test_dedup_survives_checkpoint_roundtrip(self, fresh_state: ResearchState) -> None:
+        fresh_state.select_unseen_queries(["alpha"])
+        fresh_state.checkpoint()
+        reloaded = ResearchState.load(Path(fresh_state.state_file))
+        assert reloaded.select_unseen_queries(["alpha", "beta"]) == ["beta"]
+
+
 class TestCheckpointRoundTrip:
     def test_fresh_state_has_init_stage(self, fresh_state: ResearchState) -> None:
         assert fresh_state.stage == Stage.INIT

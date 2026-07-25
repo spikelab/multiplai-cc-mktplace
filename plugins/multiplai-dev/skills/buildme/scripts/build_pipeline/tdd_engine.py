@@ -437,9 +437,15 @@ def assemble_context(
     if config.design_path.exists():
         parts.append(f"\n## Design Document\n{config.design_path.read_text()}")
 
-    # Requirement files (BDD scenarios — one per capability)
+    # Requirement files (BDD scenarios — one per capability).
+    # The test_writer already receives these verbatim through its dedicated
+    # ``specs`` slot (built by the caller in run_block_tdd / the quality+RED
+    # retries), so including them here too would ship the full requirements
+    # set TWICE inside a single prompt — pure intra-call duplication that the
+    # prompt cache cannot dedupe. Implementer/refactorer/reviewer get them
+    # only via this bundle, so keep them for every role except test_writer.
     req_dir = config.change_dir / "requirements"
-    if req_dir.exists():
+    if role != "test_writer" and req_dir.exists():
         for req_file in sorted(req_dir.glob("*.md")):
             rel = req_file.relative_to(config.change_dir)
             parts.append(f"\n## Requirements: {rel}\n{req_file.read_text()}")

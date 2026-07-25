@@ -293,11 +293,23 @@ class TestAssembleContext:
         assert "Some design content" in ctx
 
     def test_includes_specs(self, tmp_path):
+        # Implementer/refactorer/reviewer receive requirements only via the
+        # context bundle, so they must be present here.
+        config = self._make_config(tmp_path)
+        block = BlockInfo(number=1, name="X", description="desc")
+        ctx = assemble_context(block, config, "implementer")
+        assert "Auth Requirements" in ctx
+        assert "WHEN user logs in" in ctx
+
+    def test_test_writer_bundle_omits_requirements(self, tmp_path):
+        # The test_writer already gets the full requirements set through its
+        # dedicated ``specs`` prompt slot; assemble_context must NOT include
+        # them again, or a single test-writer prompt ships requirements twice.
         config = self._make_config(tmp_path)
         block = BlockInfo(number=1, name="X", description="desc")
         ctx = assemble_context(block, config, "test_writer")
-        assert "Auth Requirements" in ctx
-        assert "WHEN user logs in" in ctx
+        assert "Auth Requirements" not in ctx
+        assert "## Requirements:" not in ctx
 
     def test_includes_rubric(self, tmp_path):
         config = self._make_config(tmp_path)

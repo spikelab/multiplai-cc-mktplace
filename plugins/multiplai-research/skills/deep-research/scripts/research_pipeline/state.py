@@ -86,6 +86,17 @@ class ResearchState(BaseModel):
     challenge_overall: float | None = None
     total_fetches: int = 0  # cumulative count across READ + link follows
     tavily_fallback_count: int = 0  # Tavily content fallbacks used (max 10 per run)
+    # Normalized queries already dispatched to the search router across every
+    # cycle (initial + coverage recovery + refinement + verification). REASSESS
+    # mints refinement/verify queries fresh each cycle, independent of the
+    # diverge queries and of each other, so without this the same query re-fires
+    # as a full WebSearch subprocess and usually returns already-known URLs — the
+    # fetch is saved by the URL dedup, but the search itself is fully re-paid.
+    # Recorded at dispatch time, so a batch whose search then fails still counts
+    # as executed — the failed cycle is surfaced via refinement_error /
+    # verification_error, not retried under a re-minted duplicate query.
+    # Persisted so a resumed run keeps the dedup.
+    executed_queries: list[str] = Field(default_factory=list)
 
     # Parallel mode
     sub_state_files: list[str] = Field(default_factory=list)
@@ -144,6 +155,33 @@ class ResearchState(BaseModel):
     def is_complete(self, stage: Stage) -> bool:
         """Is the given stage already complete?"""
         return stage_index(self.stage) >= stage_index(stage)
+
+    # ------------------------------------------------------------------
+    # Search-query dedup (across cycles)
+    # ------------------------------------------------------------------
+
+    def select_unseen_queries(self, queries: list[str]) -> list[str]:
+        """Return the queries not yet dispatched this run, and record them.
+
+        Normalizes for comparison (whitespace-collapsed, lowercased) so
+        trivially different phrasings of the same query don't both fire, and
+        de-duplicates within the batch. Returns the ORIGINAL strings of the
+        newly-seen queries, in order. Mutates ``executed_queries`` with the new
+        normalized forms — call once per batch, immediately before dispatching
+        to the router. Recording the initial-search queries (even though the
+        first batch filters to a no-op) is what lets later reassess cycles skip
+        re-searching them.
+        """
+        seen = set(self.executed_queries)
+        fresh: list[str] = []
+        for q in queries:
+            norm = " ".join(q.split()).lower()
+            if not norm or norm in seen:
+                continue
+            seen.add(norm)
+            self.executed_queries.append(norm)
+            fresh.append(q)
+        return fresh
 
     # ------------------------------------------------------------------
     # Per-source tracking (for fine-grained resume)
