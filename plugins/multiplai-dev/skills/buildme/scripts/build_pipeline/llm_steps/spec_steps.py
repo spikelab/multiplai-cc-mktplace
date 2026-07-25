@@ -69,6 +69,7 @@ async def generate_artifact(
             "tools, explore code, or request more information. All the context you "
             "need is in the prompt. Output ONLY markdown content."
         ),
+        budget_label=f"spec:{artifact_id}",
     )
     log.info("Artifact %s generated (%d chars)", artifact_id, len(result))
     return result
@@ -195,7 +196,7 @@ async def run_design_audit(change_dir: Path, config) -> list[dict]:
     )
 
     log.info("Running design audit on %s", change_dir.name)
-    raw = await llm_call(prompt, model=config.model)
+    raw = await llm_call(prompt, model=config.model, budget_label="design_audit")
 
     try:
         gaps = extract_json(raw)
@@ -234,7 +235,7 @@ async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
     )
 
     log.info("Running tasks shape audit on %s", change_dir.name)
-    raw = await llm_call(prompt, model=config.model)
+    raw = await llm_call(prompt, model=config.model, budget_label="tasks_audit")
 
     try:
         findings = extract_json(raw)
@@ -296,6 +297,7 @@ async def run_codebase_analysis(project_dir: Path, config) -> str:
             model=config.model,
             allowed_tools=["Read", "Glob", "Grep"],
             max_turns=5,
+            budget_label="codebase_analysis",
         )
         for p in prompts
     ]

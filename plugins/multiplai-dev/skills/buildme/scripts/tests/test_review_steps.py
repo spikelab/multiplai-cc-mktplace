@@ -4,8 +4,8 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 from build_pipeline.config import BuildConfig
-from build_pipeline.llm_steps.review_steps import run_code_review
-from build_pipeline.models import ReviewResult, ReviewScore
+from build_pipeline.llm_steps.review_steps import merge_panel_results, run_code_review
+from build_pipeline.models import ReviewFinding, ReviewResult, ReviewScore
 from build_pipeline.prompts.review import CODE_REVIEW_PROMPT
 
 
@@ -35,7 +35,10 @@ class TestRunCodeReviewPromptContent:
                 spec_context="SPEC_SENTINEL",
                 standards="STANDARDS_SENTINEL: no bare except",
             )
-        assert result is REVIEW_OK
+        # Not `is` — a single reviewer is still merged (to stamp `panel`), so
+        # the result is a copy of REVIEW_OK, not the same object.
+        assert result.scores == REVIEW_OK.scores
+        assert result.panel == ["claude-sonnet-4-6"]
         prompt = mock_call.call_args.args[0]
         assert "DIFF_SENTINEL: +def added(): pass" in prompt
         assert "STANDARDS_SENTINEL: no bare except" in prompt
@@ -135,3 +138,107 @@ class TestImplementerReportThreading:
         with _mock_llm() as mock_call:
             await run_code_review("diff", "rubric", config)
         assert "(no implementer report provided)" in mock_call.call_args.args[0]
+
+
+def _result(*, scores=None, findings=None, missing=None, misunderstood=None):
+    return ReviewResult(
+        scores=scores or [ReviewScore(dimension="Quality", weight=2, score=4, evidence="e")],
+        findings=findings or [],
+        missing=missing or [],
+        misunderstood=misunderstood or [],
+    )
+
+
+class TestMergePanelResults:
+    def test_single_reviewer_is_unchanged_apart_from_the_panel_stamp(self):
+        r = _result()
+        merged = merge_panel_results([r], ["model-a"])
+        assert merged.scores == r.scores
+        assert merged.panel == ["model-a"]
+
+    def test_scores_average_across_the_panel(self):
+        a = _result(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="a")])
+        b = _result(scores=[ReviewScore(dimension="Q", weight=2, score=3, evidence="b")])
+        merged = merge_panel_results([a, b], ["a", "b"])
+        assert len(merged.scores) == 1
+        assert merged.scores[0].score == 4
+
+    def test_disagreement_collapses_confidence(self):
+        """Two reviewers 4 apart carry no information; the graded gate then
+        reads the dimension as neutral rather than as a verdict."""
+        a = _result(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="a")])
+        b = _result(scores=[ReviewScore(dimension="Q", weight=2, score=1, evidence="b")])
+        merged = merge_panel_results([a, b], ["a", "b"])
+        assert merged.scores[0].confidence == 0.0
+
+    def test_agreement_preserves_confidence(self):
+        a = _result(scores=[ReviewScore(dimension="Q", weight=2, score=4, evidence="a")])
+        b = _result(scores=[ReviewScore(dimension="Q", weight=2, score=4, evidence="b")])
+        merged = merge_panel_results([a, b], ["a", "b"])
+        assert merged.scores[0].confidence == 1.0
+
+    def test_independent_confirmation_raises_finding_confidence(self):
+        """Noisy-or: two reviewers each 60% sure of the same defect → 84%."""
+        f = dict(claim="unbounded loop", file_path="a.py", line=7, confidence=0.6)
+        merged = merge_panel_results(
+            [_result(findings=[ReviewFinding(**f)]), _result(findings=[ReviewFinding(**f)])],
+            ["a", "b"],
+        )
+        assert len(merged.findings) == 1
+        assert merged.findings[0].confidence == pytest.approx(0.84)
+        assert merged.findings[0].reviewers == ["a", "b"]
+
+    def test_harshest_severity_wins_on_a_shared_finding(self):
+        merged = merge_panel_results(
+            [
+                _result(findings=[ReviewFinding(claim="x", file_path="a.py", line=1,
+                                                severity="Minor")]),
+                _result(findings=[ReviewFinding(claim="x", file_path="a.py", line=1,
+                                                severity="Critical")]),
+            ],
+            ["a", "b"],
+        )
+        assert merged.findings[0].severity == "Critical"
+
+    def test_spec_verdicts_are_unioned_not_intersected(self):
+        """Reviewers find disjoint sets — requiring consensus would discard
+        exactly what the panel exists to surface."""
+        merged = merge_panel_results(
+            [_result(missing=["retry path"]), _result(missing=["timeout path"])],
+            ["a", "b"],
+        )
+        assert merged.missing == ["retry path", "timeout path"]
+
+    def test_union_dedupes_identical_verdicts(self):
+        merged = merge_panel_results(
+            [_result(misunderstood=["same"]), _result(misunderstood=["same"])],
+            ["a", "b"],
+        )
+        assert merged.misunderstood == ["same"]
+
+
+class TestPanelDispatch:
+    @pytest.mark.asyncio
+    async def test_no_panel_configured_runs_one_reviewer(self):
+        config = BuildConfig(model="claude-sonnet-4-6")
+        with _mock_llm() as mock_call:
+            result = await run_code_review("diff", "rubric", config)
+        assert mock_call.await_count == 1
+        assert result.panel == ["claude-sonnet-4-6"]
+
+    @pytest.mark.asyncio
+    async def test_panel_runs_one_call_per_member(self):
+        config = BuildConfig(model="claude-sonnet-4-6")
+        config.review_panel = ["model-a", "model-b", "model-c"]
+        with _mock_llm() as mock_call:
+            result = await run_code_review("diff", "rubric", config)
+        assert mock_call.await_count == 3
+        assert result.panel == ["model-a", "model-b", "model-c"]
+
+    @pytest.mark.asyncio
+    async def test_review_model_overrides_the_default_when_no_panel(self):
+        config = BuildConfig(model="claude-sonnet-4-6")
+        config.review_model = "claude-opus-5"
+        with _mock_llm() as mock_call:
+            await run_code_review("diff", "rubric", config)
+        assert mock_call.call_args.kwargs["model"] == "claude-opus-5"

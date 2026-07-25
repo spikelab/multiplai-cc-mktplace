@@ -13,7 +13,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from .models import GateResult, ReviewResult
+from .models import GateResult, ReviewGatePolicy, ReviewResult
 
 log = logging.getLogger(__name__)
 
@@ -320,11 +320,27 @@ def agent_status_gate(output: str, agent_name: str) -> GateResult:
     )
 
 
-def review_score_gate(review: ReviewResult) -> GateResult:
-    """Two-verdict gate: spec compliance (nothing missing/misunderstood) AND
-    score threshold (weighted avg >= 3.5, no dimension at 1)."""
-    avg = review.weighted_average
-    failing = review.failing_dimensions
+def review_score_gate(
+    review: ReviewResult, policy: ReviewGatePolicy | None = None
+) -> GateResult:
+    """Graded two-verdict gate.
+
+    Spec compliance stays a **hard floor** — no confidence weighting applies to
+    "the spec behavior is missing", because that is a factual claim about the
+    diff, not a judgment call.
+
+    The rubric dimensions are graded: each score is discounted toward neutral
+    by the reviewer's confidence (see `ReviewScore.effective_score`), so an
+    unsure reviewer moves the needle less than a certain one and a panel that
+    disagreed with itself moves it barely at all. Thresholds come from
+    *policy* (`specs/config.yaml: code_review.gate`); its defaults, together
+    with the default confidence of 1.0, reproduce the previous binary
+    behavior exactly.
+    """
+    pol = policy or ReviewGatePolicy()
+    avg = review.weighted_average_with(pol)
+    failing = review.failing_dimensions_with(pol)
+    graded = any(s.confidence < 1.0 for s in review.scores)
 
     if not review.spec_compliant:
         parts = []
@@ -346,21 +362,122 @@ def review_score_gate(review: ReviewResult) -> GateResult:
     if failing:
         return GateResult(
             passed=False,
-            reason=f"Dimension(s) scored 1: {failing}",
+            reason=(
+                f"Dimension(s) at or below the critical score "
+                f"{pol.critical_score:g}: {failing}"
+            ),
             action="fix_critical_dimension",
-            metadata={"failing_dimensions": failing, "weighted_average": avg},
+            metadata={
+                "failing_dimensions": failing,
+                "weighted_average": avg,
+                "graded": graded,
+            },
         )
-    if avg < 3.5:
+    if avg < pol.min_weighted_average:
         return GateResult(
             passed=False,
-            reason=f"Weighted average {avg:.1f} < 3.5 threshold",
+            reason=f"Weighted average {avg:.1f} < {pol.min_weighted_average:g} threshold",
             action="fix_low_scores",
-            metadata={"weighted_average": avg},
+            metadata={"weighted_average": avg, "graded": graded},
         )
     return GateResult(
         passed=True,
         reason=f"Review passed: weighted average {avg:.1f}",
-        metadata={"weighted_average": avg},
+        metadata={"weighted_average": avg, "graded": graded},
+    )
+
+
+# The implementer's declaration that a test genuinely had to change. It is an
+# escape hatch, not an authorization: it downgrades the gate from fail to a
+# flagged claim that the reviewer (and the adjudicator) must verify — the same
+# treatment RED/GREEN evidence already gets.
+TEST_CHANGE_MARKER = "TEST CHANGE REQUIRED:"
+_TEST_CHANGE_RE = re.compile(
+    rf"{re.escape(TEST_CHANGE_MARKER)}\s*(.+)", re.IGNORECASE
+)
+
+
+def parse_test_change_claims(report: str) -> list[str]:
+    """The reasons an implementer declared for changing a test file."""
+    return [m.strip() for m in _TEST_CHANGE_RE.findall(report or "") if m.strip()]
+
+
+def unchanged_tests_gate(
+    before: dict[str, str],
+    after: dict[str, str],
+    implementer_report: str = "",
+) -> GateResult:
+    """Fail when the tests that gated this block changed after they gated it.
+
+    The threat is not hypothetical. `IMPLEMENTER_TOOLS` grants Write/Edit/Bash
+    with **no path restriction**, so test files are writable for the entire
+    implement phase; the review-fix agent is the same implementer, so every fix
+    iteration re-opens that window; and both the weak-test scan and its LLM
+    auditor run at test-writing time only, so nothing re-checks the tests
+    afterwards. An implementer measured by "the tests pass" can therefore make
+    them pass by editing them, and today nothing would notice.
+
+    Restricting the tool allow-list is NOT the fix: the SDK allow-list is
+    per-tool rather than per-path, and Bash routes around it anyway. Hashing is
+    the enforcement; the prompt instruction is only a hint.
+
+    Args:
+        before: {test file path: sha256} snapshotted when the RED gate passed.
+        after: the same map recomputed now.
+        implementer_report: checked for the TEST CHANGE REQUIRED escape hatch.
+
+    Returns a passing gate when nothing was snapshotted (no test command, or a
+    checkpoint predating this gate) — an unverifiable gate reports that it did
+    not run rather than failing a block on absent evidence.
+    """
+    if not before:
+        return GateResult(
+            passed=True,
+            reason="Test integrity not checked: no snapshot taken for this block",
+            metadata={"checked": False},
+        )
+
+    mutated = sorted(p for p, h in before.items() if p in after and after[p] != h)
+    deleted = sorted(p for p in before if p not in after)
+    changed = mutated + deleted
+
+    if not changed:
+        return GateResult(
+            passed=True,
+            reason=f"Test integrity OK: {len(before)} test file(s) unchanged since RED",
+            metadata={"checked": True, "files": len(before)},
+        )
+
+    claims = parse_test_change_claims(implementer_report)
+    detail = ", ".join(mutated + [f"{p} (deleted)" for p in deleted])
+    if claims:
+        # Declared, so not a silent mutation — but a declaration is a claim,
+        # not proof. Pass the gate and hand the claim to the reviewer.
+        return GateResult(
+            passed=True,
+            reason=(
+                f"Test files changed after RED with a declared reason "
+                f"(unverified claim): {detail}"
+            ),
+            action="flag_test_change_claim",
+            metadata={
+                "checked": True,
+                "changed_files": changed,
+                "claims": claims,
+                "flagged": True,
+            },
+        )
+
+    return GateResult(
+        passed=False,
+        reason=(
+            f"Test files changed after the RED gate with no declared reason: {detail}. "
+            f"The tests that were supposed to gate this block are not the tests that "
+            f"gated it. Restore them, or state '{TEST_CHANGE_MARKER} <reason>' in the "
+            f"report so a reviewer can verify the change was legitimate."
+        ),
+        action="restore_tests",
+        metadata={"checked": True, "changed_files": changed, "flagged": False},
     )
 
 

@@ -112,6 +112,7 @@ async def run_apply(config: BuildConfig, args) -> int:
             model=config.model,
             max_turns=50,
             cwd=str(config.project_dir),
+            budget_label="apply",
         )
 
         if result.success:

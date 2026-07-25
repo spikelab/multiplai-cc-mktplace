@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.5.0 — 2026-07-25
+
+Verification overhaul for buildme. The theme: reviewers **propose** and the
+orchestrator **disposes**; the tests that gate a block must still be the tests
+that gated it; and spend is bounded by money, not just by iteration counts.
+
+### Added
+- **Test-integrity gate** (`gates.unchanged_tests_gate`). The implementer's
+  tool grant is per-tool, not per-path, so test files stay writable for the
+  whole implement phase — and the review-fix agent is the same implementer, so
+  every fix iteration re-opens the window. Buildme now sha256-hashes the
+  block's test files when the RED gate passes and re-checks them at both
+  windows. A silent change fails the block. `TEST CHANGE REQUIRED: <reason>`
+  in the implementer's report downgrades it to a flag, re-baselines the
+  hashes, and hands the reason to the reviewer as an unverified claim.
+- **Structured findings + orchestrator adjudication.** Reviews emit discrete
+  `ReviewFinding` claims (claim, severity, confidence, evidence, location).
+  `_adjudicate_review_findings` re-judges each one on the main model with the
+  full build context that a fresh-context reviewer structurally lacks;
+  rejected findings are recorded and never reach a fix agent. Fails open — an
+  adjudicator error keeps every finding. `code_review.adjudicate: false`
+  **drops** findings rather than applying them blind.
+- **Reviewer panel** (`code_review.panel`). Each member reviews the diff in
+  its own fresh context, concurrently, and the results merge: dimension scores
+  average with confidence scaled down by panel disagreement; identical
+  findings combine confidence (noisy-or) and keep the harshest severity
+  anyone assigned; spec verdicts are unioned, not intersected.
+- **Graded review gate** (`code_review.gate` → `ReviewGatePolicy`). Dimension
+  scores are discounted toward neutral by reviewer confidence, so an unsure
+  reviewer moves the needle less. Spec compliance stays a hard floor. The
+  3.5/1.0 thresholds now live in one place instead of being duplicated
+  between `review_score_gate` and `ReviewResult.passed`.
+- **Trajectory judgment in the final review.** The final reviewer receives a
+  per-block history (review iterations, final weighted scores, rejected
+  findings, declared test changes) and is asked to judge drift, scope creep,
+  erosion, and test gaming across the whole build — the failures that are
+  invisible to per-step review because they are spread thin.
+- **Per-build budget** (`budget.max_tokens` / `budget.max_usd`). Every other
+  loop bound is an iteration count, which does not bound spend. Spend is
+  recorded per phase on every SDK call, checked at block boundaries, warns
+  once at 80%, and stops with a breakdown of where the tokens went. It rides
+  in `.build-state.json`, so a resumed build does not get a fresh budget.
+
+### Changed
+- `ReviewScore` gained `confidence` (default 1.0) and `effective_score()`.
+  Confidence shrinks a score *toward neutral* rather than scaling it down —
+  scaling would make an unsure reviewer look harsher, inverting the meaning of
+  low confidence. Existing fixtures at the default confidence score exactly as
+  before.
+- All `llm_call`/`agent_call` sites pass a `budget_label`, so a budget stop can
+  name the phase that spent the money.
+
+### Notes
+- Every new behavior is opt-in via `specs/config.yaml`. With no `panel`, no
+  `gate`, and no `budget:` section, the pipeline behaves as it did in 0.4.0.
+
 ## 0.4.0 — 2026-07-20
 
 Ports enforcement mechanisms from the `superpowers` plugin's methodology skills

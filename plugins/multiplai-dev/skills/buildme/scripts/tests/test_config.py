@@ -296,3 +296,99 @@ class TestConfigPaths:
         config = BuildConfig(project_dir=tmp_path, change_name="My Feature")
         config.specs_dir = tmp_path / "specs"
         assert config.change_dir == tmp_path / "specs" / "changes" / "my-feature"
+
+
+def _config_from_yaml(tmp_path, yaml_text):
+    specs = tmp_path / "specs"
+    specs.mkdir()
+    (specs / "config.yaml").write_text(yaml_text)
+    config = BuildConfig(project_dir=tmp_path)
+    config.specs_dir = specs
+    config._load_specs_config()
+    return config
+
+
+class TestReviewPanelConfig:
+    def test_defaults_to_no_panel(self):
+        assert BuildConfig().review_panel == []
+
+    def test_accepts_dict_and_bare_string_entries(self, tmp_path):
+        config = _config_from_yaml(
+            tmp_path, "code_review:\n  panel:\n    - model: opus\n    - sonnet\n"
+        )
+        assert len(config.review_panel) == 2
+
+    def test_provider_qualified_entries_bypass_the_ceiling(self, tmp_path):
+        """The point of a cross-family member is that it is not in the family
+        the Claude ceiling ranks."""
+        config = _config_from_yaml(
+            tmp_path, "code_review:\n  panel:\n    - openai:gpt-5\n"
+        )
+        assert config.review_panel == ["openai:gpt-5"]
+
+    def test_malformed_entries_are_skipped_not_fatal(self, tmp_path):
+        config = _config_from_yaml(
+            tmp_path, "code_review:\n  panel:\n    - {}\n    - opus\n"
+        )
+        assert len(config.review_panel) == 1
+
+    def test_non_list_panel_is_ignored(self, tmp_path):
+        config = _config_from_yaml(tmp_path, "code_review:\n  panel: opus\n")
+        assert config.review_panel == []
+
+
+class TestReviewGateConfig:
+    def test_defaults_match_the_previous_hardcoded_thresholds(self):
+        gate = BuildConfig().review_gate
+        assert gate.min_weighted_average == 3.5
+        assert gate.critical_score == 1.0
+
+    def test_thresholds_load_from_yaml(self, tmp_path):
+        config = _config_from_yaml(
+            tmp_path,
+            "code_review:\n  gate:\n    min_weighted_average: 4.0\n    critical_score: 2\n",
+        )
+        assert config.review_gate.min_weighted_average == 4.0
+        assert config.review_gate.critical_score == 2
+
+    def test_invalid_thresholds_keep_the_defaults(self, tmp_path):
+        """A typo'd threshold must not silently loosen the gate."""
+        config = _config_from_yaml(
+            tmp_path, "code_review:\n  gate:\n    min_weighted_average: not-a-number\n"
+        )
+        assert config.review_gate.min_weighted_average == 3.5
+
+    def test_unknown_keys_are_ignored(self, tmp_path):
+        config = _config_from_yaml(
+            tmp_path, "code_review:\n  gate:\n    nonsense: 1\n    critical_score: 2\n"
+        )
+        assert config.review_gate.critical_score == 2
+
+
+class TestAdjudicationConfig:
+    def test_on_by_default(self):
+        assert BuildConfig().adjudicate_findings is True
+
+    def test_can_be_disabled(self, tmp_path):
+        config = _config_from_yaml(tmp_path, "code_review:\n  adjudicate: false\n")
+        assert config.adjudicate_findings is False
+
+
+class TestBudgetConfig:
+    def test_unlimited_by_default(self):
+        config = BuildConfig()
+        assert config.budget_max_tokens is None
+        assert config.budget_max_usd is None
+
+    def test_ceilings_load_from_yaml(self, tmp_path):
+        config = _config_from_yaml(tmp_path, "budget:\n  max_tokens: 5000000\n  max_usd: 25\n")
+        assert config.budget_max_tokens == 5_000_000
+        assert config.budget_max_usd == 25.0
+
+    def test_unparseable_ceiling_falls_back_to_unlimited(self, tmp_path):
+        config = _config_from_yaml(tmp_path, "budget:\n  max_tokens: lots\n")
+        assert config.budget_max_tokens is None
+
+    def test_absent_budget_section_is_unlimited(self, tmp_path):
+        config = _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n")
+        assert config.budget_max_tokens is None

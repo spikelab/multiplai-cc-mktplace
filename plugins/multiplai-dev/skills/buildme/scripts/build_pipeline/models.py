@@ -38,11 +38,48 @@ class ArtifactStatus(str, Enum):
 
 # --- Quality evaluation ---
 
+class ReviewGatePolicy(BaseModel):
+    """Thresholds the review gate applies. THE single source of these numbers.
+
+    Previously 3.5 and "score == 1" were hardcoded in `review_score_gate` AND
+    duplicated in `ReviewResult.passed`; the two could drift. Both now read
+    this policy, and `specs/config.yaml: code_review.gate` overrides it. The
+    defaults reproduce the old binary behavior exactly.
+    """
+
+    # Weighted average of effective scores below this fails the block.
+    min_weighted_average: float = 3.5
+    # An effective dimension score at or below this is a hard fail on its own.
+    critical_score: float = 1.0
+    # The "no information" score confidence pulls toward — see
+    # ReviewScore.effective_score. Sitting exactly at the pass threshold means
+    # a zero-confidence dimension neither rescues nor sinks a block.
+    neutral_score: float = 3.5
+
+
 class ReviewScore(BaseModel):
     dimension: str
     weight: int = Field(ge=1, le=3)
     score: int = Field(ge=1, le=5)
     evidence: str
+    # Graded, not binary: how sure the reviewer is of THIS dimension's score.
+    # Defaults to 1.0 so a reviewer that emits no confidence (and every
+    # existing fixture) scores exactly as it did before.
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    def effective_score(self, neutral: float = 3.5) -> float:
+        """The score discounted by confidence, toward *neutral*.
+
+        Confidence interpolates between the reviewer's claim and "no
+        information": at 1.0 this IS the raw score; at 0.0 it is `neutral`.
+
+        The direction matters. Multiplying score by confidence would make an
+        unsure reviewer look *harsher* (score 2 at 40% → 0.8, a hard critical
+        fail), which is backwards — low confidence is weak evidence, not
+        strong evidence of badness. Shrinking toward neutral instead means an
+        unsure bad score merely stops counting.
+        """
+        return neutral + self.confidence * (self.score - neutral)
 
 
 class ReviewIssue(BaseModel):
@@ -53,9 +90,64 @@ class ReviewIssue(BaseModel):
     line: int | None = None
 
 
+class ReviewFinding(BaseModel):
+    """One discrete, adjudicable claim from a reviewer.
+
+    Reviews used to emit only scores and prose, which cannot be accepted or
+    rejected one at a time. Roughly a quarter of reviewer suggestions are
+    wrong, so a finding is a *proposal*: the orchestrator adjudicates it (see
+    `_adjudicate_review_findings`) before anything acts on it.
+    """
+
+    claim: str
+    severity: str = "Minor"  # Critical, Major, Minor, Note
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    evidence: str = ""
+    dimension: str = ""
+    file_path: str | None = None
+    line: int | None = None
+    # Which panel members raised it. Independent confirmation is the strongest
+    # signal a panel produces, so it is recorded rather than collapsed away.
+    reviewers: list[str] = Field(default_factory=list)
+
+    def dedupe_key(self) -> tuple:
+        """Identity for cross-reviewer dedupe: same place, same claim."""
+        claim = " ".join(self.claim.lower().split())[:160]
+        return (self.file_path or "", self.line or 0, claim)
+
+
+class FindingVerdict(BaseModel):
+    """The orchestrator's accept/reject decision on one finding."""
+
+    index: int
+    accepted: bool
+    reason: str = ""
+
+
+class FindingAdjudication(BaseModel):
+    """Structured output of the adjudication pass over a review's findings."""
+
+    verdicts: list[FindingVerdict] = Field(default_factory=list)
+
+    def accepted_indices(self, total: int) -> set[int]:
+        """Indices judged accepted.
+
+        A finding with no verdict is treated as ACCEPTED. Fail-safe direction:
+        the adjudicator silently dropping a finding must not silently discard
+        a real defect — an unreviewed finding stays in play.
+        """
+        judged = {v.index for v in self.verdicts if 0 <= v.index < total}
+        rejected = {v.index for v in self.verdicts if not v.accepted and 0 <= v.index < total}
+        unjudged = set(range(total)) - judged
+        return (judged - rejected) | unjudged
+
+
 class ReviewResult(BaseModel):
     scores: list[ReviewScore]
     issues: list[ReviewIssue] = Field(default_factory=list)
+    # Discrete adjudicable claims. Reviewers that emit only `issues` get these
+    # derived from them (see `findings_or_derived`), so nothing is lost.
+    findings: list[ReviewFinding] = Field(default_factory=list)
     # Strengths-first review: what the diff genuinely does well.
     strengths: list[str] = Field(default_factory=list)
     # Spec-compliance verdict (two-verdict review, ported from the superpowers
@@ -64,15 +156,29 @@ class ReviewResult(BaseModel):
     missing: list[str] = Field(default_factory=list)
     extra: list[str] = Field(default_factory=list)
     misunderstood: list[str] = Field(default_factory=list)
+    # Findings the orchestrator rejected, kept for the record. Never fed to a
+    # fix agent — that is the point of adjudication.
+    rejected_findings: list[ReviewFinding] = Field(default_factory=list)
+    # Reviewer labels that produced this result (>1 after a panel merge).
+    panel: list[str] = Field(default_factory=list)
 
-    @property
-    def weighted_average(self) -> float:
+    def weighted_average_with(self, policy: ReviewGatePolicy | None = None) -> float:
+        """Confidence-discounted weighted average (see ReviewScore.effective_score)."""
         if not self.scores:
             return 0.0
+        pol = policy or ReviewGatePolicy()
         total_weight = sum(s.weight for s in self.scores)
         if total_weight == 0:
             return 0.0
-        return sum(s.score * s.weight for s in self.scores) / total_weight
+        return sum(
+            s.effective_score(pol.neutral_score) * s.weight for s in self.scores
+        ) / total_weight
+
+    @property
+    def weighted_average(self) -> float:
+        """Default-policy weighted average. Identical to the pre-graded value
+        whenever every score carries the default confidence of 1.0."""
+        return self.weighted_average_with(None)
 
     @property
     def spec_compliant(self) -> bool:
@@ -83,16 +189,61 @@ class ReviewResult(BaseModel):
 
     @property
     def passed(self) -> bool:
-        """Both verdicts must hold: spec compliance AND the score threshold."""
+        """Both verdicts must hold: spec compliance AND the score threshold.
+
+        Delegates to the default policy so the thresholds live in exactly one
+        place (they used to be duplicated here and in `review_score_gate`).
+        """
+        pol = ReviewGatePolicy()
         return (
             self.spec_compliant
-            and self.weighted_average >= 3.5
-            and all(s.score > 1 for s in self.scores)
+            and self.weighted_average_with(pol) >= pol.min_weighted_average
+            and not self.failing_dimensions_with(pol)
         )
+
+    def failing_dimensions_with(self, policy: ReviewGatePolicy | None = None) -> list[str]:
+        pol = policy or ReviewGatePolicy()
+        return [
+            s.dimension
+            for s in self.scores
+            if s.effective_score(pol.neutral_score) <= pol.critical_score
+        ]
 
     @property
     def failing_dimensions(self) -> list[str]:
-        return [s.dimension for s in self.scores if s.score == 1]
+        return self.failing_dimensions_with(None)
+
+    def findings_or_derived(self) -> list[ReviewFinding]:
+        """Findings to adjudicate — falling back to `issues` when empty.
+
+        A reviewer running an older prompt (or a model that ignored the
+        findings slot) still produces `issues`; deriving findings from them
+        keeps adjudication total rather than silently reviewing nothing.
+        """
+        if self.findings:
+            return list(self.findings)
+        return [
+            ReviewFinding(
+                claim=i.description,
+                severity=i.severity,
+                dimension=i.dimension,
+                file_path=i.file_path,
+                line=i.line,
+                # Derived, not stated: mid confidence rather than a fabricated
+                # high one.
+                confidence=0.5,
+            )
+            for i in self.issues
+        ]
+
+    def findings_text(self) -> str:
+        """Accepted findings rendered for a fix agent's prompt."""
+        return "\n".join(
+            f"- [{f.severity}] {f.claim}"
+            + (f" ({f.file_path}:{f.line})" if f.file_path else "")
+            + (f"\n  evidence: {f.evidence}" if f.evidence else "")
+            for f in self.findings
+        )
 
 
 class WeakTestFinding(BaseModel):
@@ -189,6 +340,18 @@ class BlockInfo(BaseModel):
     # feed the reviewer (as evidence to verify, not trust) and build-progress.md.
     red_evidence: str = ""
     green_evidence: str = ""
+    # {test file path: sha256} snapshotted the moment the RED gate passed.
+    # The test files stay writable for the whole implement phase AND for every
+    # review-fix iteration, so this is the only way to tell afterwards whether
+    # the bar moved. Persisted so it survives resume. Empty = not snapshotted
+    # (pre-integrity checkpoints, or no test command configured).
+    test_file_hashes: dict[str, str] = Field(default_factory=dict)
+    # The implementer's own report, kept so the reviewer and the test-integrity
+    # gate (its TEST CHANGE REQUIRED escape hatch) can both consult it.
+    implementer_report: str = ""
+    # Test-integrity claims the implementer declared. Passed to the reviewer as
+    # unverified assertions, exactly like RED/GREEN evidence.
+    test_change_claims: list[str] = Field(default_factory=list)
 
 
 # --- Change artifacts ---

@@ -64,6 +64,7 @@ async def run_test_writer(
         max_turns=TEST_WRITER_MAX_TURNS,
         cwd=cwd,
         call_timeout=TEST_WRITER_TIMEOUT,
+        budget_label="test_writer",
     )
 
 
@@ -98,6 +99,7 @@ async def run_implementer(
         max_turns=IMPLEMENTER_MAX_TURNS,
         cwd=cwd,
         call_timeout=IMPLEMENTER_TIMEOUT,
+        budget_label="implementer",
     )
 
 
@@ -128,6 +130,7 @@ async def run_refactorer(
         max_turns=REFACTORER_MAX_TURNS,
         cwd=cwd,
         call_timeout=REFACTORER_TIMEOUT,
+        budget_label="refactor",
     )
 
 
@@ -227,4 +230,5 @@ Report the root cause, what you fixed, and confirm all tests pass.
         max_turns=IMPLEMENTER_MAX_TURNS,
         cwd=cwd,
         call_timeout=IMPLEMENTER_TIMEOUT,
+        budget_label="integration_fix",
     )
