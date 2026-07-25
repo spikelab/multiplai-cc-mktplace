@@ -2,7 +2,7 @@
 name: security-review
 description: Deep security audit for any codebase or code snippet. Use when the user wants to check if code is secure, find vulnerabilities, do a security audit, assess security posture, review code they're downloading or evaluating for safety, or check for supply chain risks. Triggers on "is this secure", "security review", "security audit", "is this safe to use", "check for vulnerabilities", "find security issues", "audit security", "check this dependency", "is this library safe".
 model: opus
-effort: high
+effort: medium
 ---
 
 # Security Review

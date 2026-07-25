@@ -2,7 +2,7 @@
 name: transcribe
 description: Transcribe audio files to text using mlx-whisper. Use when the user wants to transcribe audio files (.mp3, .m4a, .wav, etc.) to text, convert speech to text, or extract text from audio recordings.
 model: opus
-effort: low
+effort: medium
 ---
 
 # Transcribe

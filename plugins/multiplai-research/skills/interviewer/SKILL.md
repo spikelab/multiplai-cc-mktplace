@@ -2,7 +2,7 @@
 name: interviewer
 description: Ask great questions to uncover assumptions, learnings, and facts that wouldn't surface otherwise. Use when the user wants to be interviewed about a topic, think through a decision, clarify requirements, or surface hidden assumptions. Triggers on "interview me about", "ask me questions about", "help me think through", "probe my thinking on", or explicit /interview invocation. Works for product discovery, life decisions, technical design, problem diagnosis, and any context where deeper questioning reveals what surface conversation misses.
 model: opus
-effort: high
+effort: medium
 ---
 
 # Interviewer

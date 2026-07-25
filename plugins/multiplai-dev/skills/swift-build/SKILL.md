@@ -6,7 +6,7 @@ description: |
   Claude calls the script, reads structured output, never touches SSH directly.
 when_to_use: 'Triggers: swift build, swift test, run tests (Swift project context), simulator, xcodebuild'
 model: opus
-effort: high
+effort: medium
 disable-model-invocation: false
 ---
 

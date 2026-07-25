@@ -2,7 +2,7 @@
 name: learn-stack
 description: "Generate an interactive framework learning guide from any codebase. Triggers: learn the stack, learn the framework, teach me this framework, I don't know [framework], framework guide, learn-stack, what framework concepts do I need, how does [framework] work"
 model: opus
-effort: low
+effort: medium
 disable-model-invocation: true
 ---
 

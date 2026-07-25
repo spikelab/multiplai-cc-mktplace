@@ -2,7 +2,7 @@
 name: memory-health-audit
 description: "Full memory system health audit — cross-correlates retrieval logs, diary, learnings, and memory file structure to assess what's working, what's wasteful, and what to change. Broader than the /multiplai-context:health check (which focuses on infrastructure). Use when the user asks 'how's memory doing', 'audit the memory system', 'what patterns have you noticed about memory', 'memory health check', or periodically (monthly) to track system health over time."
 model: opus
-effort: high
+effort: medium
 ---
 
 # Memory Health Audit

@@ -2,7 +2,7 @@
 name: code-review
 description: Thorough code quality review for any codebase or code snippet. Use when the user wants to review code, evaluate code quality, audit a codebase, review a PR, assess whether code is good or bad, or get improvement recommendations. Triggers on "review this code", "is this code good", "code review", "review the codebase", "what could be improved", "audit this code", "evaluate this code".
 model: opus
-effort: high
+effort: medium
 ---
 
 # Code Review

@@ -9,7 +9,7 @@ description: >-
   on "check my inbox", "search my email", "email from X about Y", "read that
   email", "draft a reply", "write an email to", "gmail".
 model: opus
-effort: low
+effort: medium
 ---
 
 # Gmail

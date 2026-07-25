@@ -2,7 +2,7 @@
 name: analyze-context-router
 description: "Analyze memory retrieval logs for routing accuracy, false negatives, token efficiency, and system health. Use when the user wants to evaluate how well the memory loader is performing, check retrieval quality, audit retrieval routing, or identify improvement opportunities. Triggers on \"analyze memory retrieval\", \"how's the memory loader doing\", \"memory retrieval analysis\", \"check retrieval quality\", \"memory loader performance\"."
 model: opus
-effort: low
+effort: medium
 disable-model-invocation: true
 ---
 

@@ -2,7 +2,7 @@
 name: propose-skill
 description: Analyze session patterns and propose new skills. Use when Claude notices repeating workflows, when the skill-creation nudge fires, or when the user says "formalize this", "make this a skill", or "propose a skill". Reads session context to identify recurring tool sequences, command patterns, or file editing flows that could be automated.
 model: opus
-effort: high
+effort: medium
 disable-model-invocation: true
 ---
 
