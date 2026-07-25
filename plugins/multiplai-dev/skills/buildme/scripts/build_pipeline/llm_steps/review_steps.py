@@ -58,6 +58,7 @@ async def run_code_review(
         prompt,
         ReviewResult,
         model=model,
+        effort=config.review_effort,
         max_retries=1,
     )
     log.info(
@@ -96,6 +97,7 @@ async def run_security_review(
         prompt,
         ReviewResult,
         model=config.model,
+        effort=config.review_effort,
         max_retries=1,
     )
     log.info(
@@ -143,6 +145,7 @@ async def run_review_fix(
         prompt,
         allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
         model=config.model,
+        effort=config.agent_effort,
         max_turns=20,
         cwd=str(config.project_dir),
     )

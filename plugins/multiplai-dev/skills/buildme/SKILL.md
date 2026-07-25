@@ -38,6 +38,32 @@ Python pipeline. Interview → Research → Specs → Design Audit → TDD Build
 | `--skip-research` | Skip the research phase |
 | `--lenient-review` | Accept-and-continue when a block exhausts its review iterations, or when the final review fails or errors, instead of failing the build. Unattended overnight runs only — the default is to fail, so low-scoring work is never silently marked done. |
 
+## Tuning model and effort (multiplai.conf)
+
+Model and effort are two axes of one decision; both are set from
+`multiplai.conf` without a code edit. Sections:
+
+| Section | Tunes |
+|---|---|
+| `[buildme]` | `MODEL=` and `EFFORT=` for the whole pipeline |
+| `[buildme.spec]` | `EFFORT=` for spec generation, audits, rubric |
+| `[buildme.review]` | `EFFORT=` for code review, test-quality audit, final review |
+| `[buildme.agent]` | `EFFORT=` for the TDD agents (test writer, implementer, refactorer, fix) |
+
+```ini
+[buildme]
+MODEL=opus
+EFFORT=medium
+
+[buildme.review]
+EFFORT=high
+```
+
+A step section falls back to `[buildme]`, which falls back to the SDK default
+(unset). The `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT` ceilings still cap the
+result, so a budget run forces everything down and a conf override cannot
+escape it.
+
 ## Scale Assessment (MANDATORY)
 
 After understanding what needs to be built, assess scale before choosing a path:

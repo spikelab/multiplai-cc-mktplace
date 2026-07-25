@@ -196,6 +196,29 @@ automatically by `uv run --directory`:
 - `multiplai-core`, `httpx`, `trafilatura`, `tavily-python`, `exa-py`, `pydantic`, `python-dotenv`, `claude-agent-sdk`
 - optional `[browser]` extra: `playwright` (JS-rendered fetch fallback; run `playwright install chromium` after installing)
 
+## Tuning model and effort (multiplai.conf)
+
+Per-node model tier and reasoning effort are both settable from
+`multiplai.conf` — no code edit:
+
+```ini
+[deep-research]            # whole pipeline
+MODEL=opus
+EFFORT=medium
+
+[deep-research.parse]      # MODEL= for the high-volume parse nodes
+MODEL=sonnet
+
+[deep-research.extract]    # one node
+EFFORT=low
+```
+
+`[deep-research.<node>]` beats `[deep-research]` beats the code default. Nodes:
+`plan`, `diverge`, `challenge`, `search`, `triage_relevance`, `extract`,
+`verify`, `reassess`, `synthesize`, `adversarial`, `quality_check`. `--model` /
+`--effort` on the CLI override every node uniformly. The `MULTIPLAI_MODEL` /
+`MULTIPLAI_EFFORT` ceilings cap all of the above.
+
 ## Architecture
 
 The pipeline is a Python asyncio script with strict timeouts and per-source state checkpointing. It cannot hang on a WebFetch the way prompt-driven workflows can — every network call is under a hard timeout. On the default Claude Agent path (`ClaudeAgentFetcher`) fetches are killed at 60s per request / 180s per batch; the search router kills any single search at 45s (`per_query_timeout`); the legacy httpx fetcher (`--no-claude-tools`) uses 15s per request / 30s per batch. See `scripts/research_pipeline/` for the implementation. See `README.md` (skill root) for setup and `scripts/CLAUDE.md` for extension notes.

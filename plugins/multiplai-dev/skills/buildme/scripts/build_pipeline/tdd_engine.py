@@ -530,7 +530,8 @@ async def _audit_test_quality(test_files_content: str, contracts: str, config: B
         test_files=test_files_content,
         contracts=contracts or "(none provided)",
     )
-    return await llm_call_structured(prompt, TestQualityAudit, model=config.model, max_retries=1)
+    return await llm_call_structured(prompt, TestQualityAudit, model=config.model,
+                                       effort=config.review_effort, max_retries=1)
 
 
 async def _enforce_test_quality(
@@ -590,6 +591,7 @@ async def _enforce_test_quality(
         context_bundle=context,
         test_command=config.test_command,
         model=config.model,
+        effort=config.agent_effort,
         cwd=str(config.project_dir),
     )
     if not retry.success:
@@ -680,6 +682,7 @@ async def _enforce_red_gate(
                 context_bundle=context,
                 test_command=config.test_command,
                 model=config.model,
+                effort=config.agent_effort,
                 cwd=str(config.project_dir),
             )
             if not retry.success:
@@ -772,6 +775,7 @@ async def run_block_tdd(
         context_bundle=context,
         test_command=config.test_command,
         model=config.model,
+        effort=config.agent_effort,
         cwd=cwd,
     )
 
@@ -837,6 +841,7 @@ async def run_block_tdd(
         test_command=config.test_command,
         prompt_style=config.implementer_prompt_style,
         model=config.model,
+        effort=config.agent_effort,
         cwd=cwd,
     )
 
@@ -878,6 +883,7 @@ async def run_block_tdd(
             context_bundle=refactor_context,
             test_command=config.test_command,
             model=config.model,
+            effort=config.agent_effort,
             cwd=cwd,
         )
         # Refactor is non-fatal: a failed or timed-out refactor leaves the
@@ -927,6 +933,7 @@ async def _run_integration_and_review(
                 context_bundle=context,
                 escalate=escalated,
                 model=fix_model,
+                effort=config.agent_effort,
                 cwd=str(config.project_dir),
             )
             # A timed-out or failed fix leaves success=False; retry until attempts run out.
@@ -1001,6 +1008,7 @@ async def _run_integration_and_review(
             test_command=config.test_command,
             prompt_style=config.implementer_prompt_style,
             model=config.model,
+            effort=config.agent_effort,
             cwd=str(config.project_dir),
         )
         if not fix.success and fix.timed_out:
@@ -1274,7 +1282,8 @@ async def _run_final_review(config: BuildConfig, state: BuildState) -> GateResul
     )
     model = getattr(config, "review_model", None) or config.model
     try:
-        verdict = await llm_call_structured(prompt, FinalReviewVerdict, model=model, max_retries=1)
+        verdict = await llm_call_structured(prompt, FinalReviewVerdict, model=model,
+                                           effort=config.review_effort, max_retries=1)
     except Exception as e:
         log.error("Final review errored (failing closed): %s", e)
         return GateResult(

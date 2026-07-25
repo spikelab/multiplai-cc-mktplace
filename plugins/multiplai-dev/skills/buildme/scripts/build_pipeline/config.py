@@ -12,7 +12,7 @@ from typing import Literal
 
 import yaml
 
-from .env import pick_model, resolve_model
+from .env import load_multiplai_conf, pick_model, resolve_effort, resolve_model
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +61,25 @@ def _is_advanced_model(model: str) -> bool:
 # multiplai.conf if present; the family→ID map is the single source of truth in
 # multiplai_core.env, so there is no dated model literal to go stale here.
 DEFAULT_MODEL = pick_model("opus", task="buildme")
+
+
+def conf_effort(task: str, default: str | None = None) -> str | None:
+    """``EFFORT=`` for *task* from multiplai.conf, capped by MULTIPLAI_EFFORT.
+
+    The effort twin of ``pick_model``'s ``[task] MODEL=`` override: model and
+    effort are two axes of the same tuning decision, and only the model half
+    was reachable from the conf file. ``[buildme] EFFORT=low`` dials the whole
+    pipeline down; ``[buildme.review] EFFORT=high`` tunes one step.
+
+    Returns *default* when the conf says nothing, so behaviour is unchanged
+    unless someone opts in. The MULTIPLAI_EFFORT ceiling still applies — a
+    budget run forces every step down and a conf override can't escape it.
+    """
+    section = (load_multiplai_conf().get("_sections", {}) or {}).get(task) or {}
+    requested = (section.get("EFFORT") or "").strip().lower()
+    if not requested:
+        return default
+    return resolve_effort(requested)
 
 
 @dataclass
@@ -122,6 +141,20 @@ class BuildConfig:
     # `code_review.model` in specs/config.yaml; both ceiling-capped by
     # resolve_model, matching the existing model-resolution pattern.
     review_model: str | None = None
+
+    # Reasoning effort, the second axis of the same tuning decision as `model`.
+    # None → SDK default. `[buildme] EFFORT=` sets the pipeline-wide value;
+    # `[buildme.spec]` / `[buildme.review]` / `[buildme.agent]` tune one step.
+    # All four read the conf at construction (not import) time, so the
+    # pipeline-wide value and the per-step ones can never disagree about which
+    # conf they saw.
+    effort: str | None = field(default_factory=lambda: conf_effort("buildme"))
+    spec_effort: str | None = field(
+        default_factory=lambda: conf_effort("buildme.spec", conf_effort("buildme")))
+    review_effort: str | None = field(
+        default_factory=lambda: conf_effort("buildme.review", conf_effort("buildme")))
+    agent_effort: str | None = field(
+        default_factory=lambda: conf_effort("buildme.agent", conf_effort("buildme")))
 
     # Coding-standards docs pushed into the reviewer's context (paths from
     # `standards_files` in specs/config.yaml). Pull-for-implementer,
