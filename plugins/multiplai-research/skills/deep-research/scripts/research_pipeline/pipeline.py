@@ -399,6 +399,9 @@ async def _run_main_stages(
     # SEARCH
     if not state.is_complete(Stage.SEARCH_COMPLETE):
         state.search_results = await search_node.search(config, state.plan, router)
+        # Record the baseline queries so later reassess cycles (coverage /
+        # refinement / verification) dedup against them instead of re-searching.
+        state.select_unseen_queries(state.plan.all_queries)
         state.advance_to(Stage.SEARCH_COMPLETE)
         progress.log_stage(
             "SEARCH COMPLETE",
@@ -464,14 +467,20 @@ async def _run_main_stages(
                 "COVERAGE RECOVERY",
                 f"targeted search for {len(uncovered)} uncovered sub-questions",
             )
-            # Search using the uncovered sub-questions as queries directly
-            targeted_results = await router.batch_search(
-                uncovered,
-                # Floor at 1: sources // uncovered integer-divides to 0 for
-                # small presets with many uncovered questions (e.g. micro
-                # preset, 4+ uncovered), which would request zero results.
-                max_results=max(config.preset.sources // max(len(uncovered), 1), 1),
-                strategy="keyword",
+            # Search using the uncovered sub-questions as queries directly,
+            # skipping any already dispatched earlier this run.
+            fresh_queries = state.select_unseen_queries(uncovered)
+            targeted_results = (
+                await router.batch_search(
+                    fresh_queries,
+                    # Floor at 1: sources // uncovered integer-divides to 0 for
+                    # small presets with many uncovered questions (e.g. micro
+                    # preset, 4+ uncovered), which would request zero results.
+                    max_results=max(config.preset.sources // max(len(fresh_queries), 1), 1),
+                    strategy="keyword",
+                )
+                if fresh_queries
+                else []
             )
             # Dedupe against already-triaged sources (same as refinement/verification)
             known_urls = {s.url for s in state.sources}
@@ -633,8 +642,11 @@ async def _run_refinement(
 ) -> None:
     """Run additional search+read rounds for framing refinement."""
     assert state.reassessment is not None
-    queries = state.reassessment.refinement_queries
+    queries = state.select_unseen_queries(state.reassessment.refinement_queries)
     log.info("REFINEMENT: running %d new queries", len(queries))
+    if not queries:
+        log.info("REFINEMENT: all refinement queries already searched this run; skipping")
+        return
 
     new_results = await router.batch_search(queries, strategy="keyword")
     # Dedupe against already-triaged sources
@@ -682,8 +694,9 @@ async def _run_verification(
     findings_before = len(state.findings)
 
     new_results = []
-    if queries:
-        results = await router.batch_search(queries, strategy="keyword")
+    fresh_queries = state.select_unseen_queries(queries)
+    if fresh_queries:
+        results = await router.batch_search(fresh_queries, strategy="keyword")
         known_urls = {s.url for s in state.sources}
         new_results = [r for r in results if r.url not in known_urls]
 
