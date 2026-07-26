@@ -94,8 +94,16 @@ MODEL=""
 TASK=""
 LANGUAGE=""
 
+usage() {
+    echo "Usage: transcribe.sh <audio_file> [output_file] [--override] [--model <model_name>] [--task <transcribe|translate>] [--language <code>]"
+}
+
 while [[ $# -gt 0 ]]; do
     case $1 in
+        -h|--help)
+            usage
+            exit 0
+            ;;
         --override)
             OVERRIDE=true
             shift
@@ -135,7 +143,7 @@ fi
 # Validate audio file
 if [[ -z "$AUDIO_FILE" ]]; then
     echo "Error: No audio file specified" >&2
-    echo "Usage: transcribe.sh <audio_file> [output_file] [--override] [--model <model_name>]" >&2
+    usage >&2
     exit 1
 fi
 

@@ -147,6 +147,9 @@ class TestResumeSkipsExisting:
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
+        config.project_dir = tmp_path
+        config.explainers_active = True
+        config.project_description = ""
         config.model = "test-model"
         config.tier = "standard"
         config.mode = "scratch"
@@ -201,6 +204,7 @@ class TestTasksAuditResumeDurability:
         # re-enters _generate_single_artifact.
         (change_dir / "proposal.md").write_text("# Proposal")
         (change_dir / "design.md").write_text("# Design")
+        (change_dir / "unknowns.md").write_text("# Unknowns\n\nNo dependencies new to this project.")
         (change_dir / "tasks.md").write_text("## 1. Vertical slice A")
         (change_dir / "rubric.md").write_text("# Rubric")
         req_dir = change_dir / "requirements"
@@ -211,6 +215,9 @@ class TestTasksAuditResumeDurability:
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
+        config.project_dir = tmp_path
+        config.explainers_active = True
+        config.project_description = ""
         config.model = "test-model"
         config.task_granularity = "checkboxes"
         config.state_file_path.return_value = change_dir / ".build-state.json"
@@ -223,9 +230,10 @@ class TestTasksAuditResumeDurability:
             phase=BuildPhase.SPEC_GENERATION,
             spec_gen=SpecGenState(
                 completed_artifacts=[
-                    "proposal", "requirements", "design", "tasks", "rubric",
+                    "proposal", "requirements", "design", "unknowns", "tasks", "rubric",
                 ],
                 tasks_audit_done=audit_done,
+                explainers_done=True,
             ),
         )
         return cm, change_dir, config, state
@@ -286,6 +294,9 @@ class TestTasksAuditResumeDurability:
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
+        config.project_dir = tmp_path
+        config.explainers_active = True
+        config.project_description = ""
         config.model = "test-model"
         config.task_granularity = "checkboxes"
         config.state_file_path.return_value = change_dir / ".build-state.json"
@@ -336,6 +347,9 @@ class TestTasksShapeAudit:
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
+        config.project_dir = tmp_path
+        config.explainers_active = True
+        config.project_description = ""
         config.model = "test-model"
         config.task_granularity = "checkboxes"
         config.state_file_path.return_value = change_dir / ".build-state.json"
@@ -540,3 +554,313 @@ class TestRunSpecGenerator:
             mock_gen.side_effect = RuntimeError("boom")
             exit_code = await run_spec_generator(config)
             assert exit_code == 1
+
+
+# --- Unknowns / explainer artifact (B1) ---------------------------------------
+
+
+class TestGenerateUnknowns:
+    """`unknowns.md` is always written — the DAG's `tasks` step depends on it,
+    so a skip or a clean scan must still leave a readable record on disk."""
+
+    def _setup(self, tmp_path, *, impact: str = "", explainers_active: bool = True):
+        specs_dir = tmp_path / "specs"
+        specs_dir.mkdir()
+        cm = ChangeManager(specs_dir)
+        cm.init_specs()
+        change_dir = cm.create_change("test-feature")
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "pyproject.toml").write_text(
+            '[project]\nname = "demo"\ndependencies = ["httpx"]\n'
+        )
+        (change_dir / "proposal.md").write_text("## Impact\n" + impact + "\n")
+        (change_dir / "design.md").write_text("## Decisions\nNone.\n")
+
+        config = MagicMock()
+        config.change_name = "test-feature"
+        config.specs_dir = specs_dir
+        config.change_dir = change_dir
+        config.project_dir = project_dir
+        config.project_description = ""
+        config.model = "test-model"
+        config.explainers_active = explainers_active
+        config.state_file_path.return_value = change_dir / ".build-state.json"
+
+        state = BuildState(
+            change_name="test-feature", mode="scratch", tier="standard",
+            state_file=str(change_dir / ".build-state.json"),
+            phase=BuildPhase.SPEC_GENERATION, spec_gen=SpecGenState(),
+        )
+        return cm, change_dir, config, state
+
+    @pytest.mark.asyncio
+    async def test_one_explainer_call_per_detected_dependency(self, tmp_path):
+        from build_pipeline.spec_generator import _generate_unknowns
+
+        cm, change_dir, config, state = self._setup(
+            tmp_path, impact="Adds `polars` and `duckdb`."
+        )
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.run_explainer", new_callable=AsyncMock
+        ) as mock_explain, patch(
+            "build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock
+        ) as mock_gen:
+            mock_explain.side_effect = lambda dep, cfg, usage_context="": (
+                f"## {dep.name}\n\n### Edge cases & failure modes\n- empty input errors\n\n"
+                f"### Assumptions we are making\n- version 1.x is stable\n"
+            )
+            mock_gen.return_value = "regenerated"
+            await _generate_unknowns(cm, change_dir, config, state)
+
+        assert mock_explain.await_count == 2
+        # A complete first pass needs no regeneration.
+        assert mock_gen.await_count == 0
+        text = (change_dir / "unknowns.md").read_text()
+        assert "## duckdb" in text and "## polars" in text
+        assert state.spec_gen.explainers_done is True
+
+    @pytest.mark.asyncio
+    async def test_explainer_receives_design_decisions(self, tmp_path):
+        """usage_context carries the design's Decisions section, not the
+        placeholder — the explainer researches the edge cases of how THIS
+        project will use the dependency."""
+        from build_pipeline.spec_generator import _generate_unknowns
+
+        cm, change_dir, config, state = self._setup(tmp_path, impact="Adds `polars`.")
+        (change_dir / "design.md").write_text(
+            "## Decisions\nStream frames lazily; never collect() whole files.\n"
+        )
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.run_explainer", new_callable=AsyncMock
+        ) as mock_explain, patch(
+            "build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock
+        ) as mock_gen:
+            mock_explain.return_value = (
+                "## polars\n\n### Edge cases & failure modes\n- x\n\n"
+                "### Assumptions we are making\n- y\n"
+            )
+            mock_gen.return_value = "regenerated"
+            await _generate_unknowns(cm, change_dir, config, state)
+
+        assert mock_explain.call_args.kwargs["usage_context"] == (
+            "Stream frames lazily; never collect() whole files."
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_new_dependencies_records_the_absence(self, tmp_path):
+        from build_pipeline.spec_generator import (
+            NO_NEW_DEPENDENCIES_LINE, _generate_unknowns,
+        )
+
+        cm, change_dir, config, state = self._setup(
+            tmp_path, impact="Uses `httpx` and `pathlib` only."
+        )
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.run_explainer", new_callable=AsyncMock
+        ) as mock_explain:
+            await _generate_unknowns(cm, change_dir, config, state)
+
+        assert mock_explain.await_count == 0
+        assert NO_NEW_DEPENDENCIES_LINE in (change_dir / "unknowns.md").read_text()
+        assert state.spec_gen.explainers_done is True
+
+    @pytest.mark.asyncio
+    async def test_skip_explainers_still_writes_the_artifact(self, tmp_path):
+        from build_pipeline.spec_generator import (
+            EXPLAINERS_SKIPPED_LINE, _generate_unknowns,
+        )
+
+        cm, change_dir, config, state = self._setup(
+            tmp_path, impact="Adds `polars`.", explainers_active=False
+        )
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.run_explainer", new_callable=AsyncMock
+        ) as mock_explain:
+            await _generate_unknowns(cm, change_dir, config, state)
+
+        assert mock_explain.await_count == 0
+        assert EXPLAINERS_SKIPPED_LINE in (change_dir / "unknowns.md").read_text()
+
+    @pytest.mark.asyncio
+    async def test_failed_explainer_leaves_a_visible_hole(self, tmp_path):
+        """A failed explainer call writes an empty-section stub so the gate
+        sees the hole — it is never silently dropped."""
+        from build_pipeline.spec_generator import _generate_unknowns
+
+        cm, change_dir, config, state = self._setup(tmp_path, impact="Adds `polars`.")
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.run_explainer", new_callable=AsyncMock
+        ) as mock_explain, patch(
+            "build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock
+        ) as mock_gen:
+            mock_explain.side_effect = RuntimeError("no network")
+            mock_gen.return_value = "## polars\n\n### Edge cases & failure modes\n- x\n\n### Assumptions we are making\n- y\n"
+            await _generate_unknowns(cm, change_dir, config, state)
+
+        # The gate saw an incomplete section and spent its one regeneration pass.
+        assert mock_gen.await_count == 1
+
+
+class TestUnknownsGateResumeDurability:
+    """Mirrors the tasks-audit durability contract: the gate runs after
+    unknowns.md is written, so completion is read from checkpoint state."""
+
+    def _setup(self, tmp_path, explainers_done: bool):
+        specs_dir = tmp_path / "specs"
+        specs_dir.mkdir()
+        cm = ChangeManager(specs_dir)
+        cm.init_specs()
+        change_dir = cm.create_change("test-feature")
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (change_dir / "proposal.md").write_text("## Impact\nAdds `polars`.\n")
+        (change_dir / "design.md").write_text("## Decisions\nNone.\n")
+        (change_dir / "unknowns.md").write_text("# Unknowns\n\n## polars\n")
+        (change_dir / "tasks.md").write_text("## 1. Slice")
+        (change_dir / "rubric.md").write_text("# Rubric")
+        req_dir = change_dir / "requirements"
+        req_dir.mkdir(exist_ok=True)
+        (req_dir / "cap-a.md").write_text("# Req")
+
+        config = MagicMock()
+        config.change_name = "test-feature"
+        config.specs_dir = specs_dir
+        config.change_dir = change_dir
+        config.project_dir = project_dir
+        config.project_description = ""
+        config.model = "test-model"
+        config.explainers_active = True
+        config.task_granularity = "checkboxes"
+        config.state_file_path.return_value = change_dir / ".build-state.json"
+
+        state = BuildState(
+            change_name="test-feature", mode="scratch", tier="standard",
+            state_file=str(change_dir / ".build-state.json"),
+            phase=BuildPhase.SPEC_GENERATION,
+            spec_gen=SpecGenState(
+                completed_artifacts=[
+                    "proposal", "requirements", "design", "unknowns", "tasks", "rubric",
+                ],
+                tasks_audit_done=True,
+                explainers_done=explainers_done,
+            ),
+        )
+        return cm, change_dir, config, state
+
+    @pytest.mark.asyncio
+    async def test_resume_reruns_gate_when_not_recorded_complete(self, tmp_path):
+        cm, change_dir, config, state = self._setup(tmp_path, explainers_done=False)
+        with patch(
+            "build_pipeline.spec_generator._audit_unknowns", new_callable=AsyncMock
+        ) as mock_audit:
+            await _generate_all_artifacts(cm, change_dir, config, state)
+
+        assert mock_audit.await_count == 1
+        assert state.spec_gen.explainers_done is True
+        saved = BuildState.model_validate_json(
+            (change_dir / ".build-state.json").read_text()
+        )
+        assert saved.spec_gen.explainers_done is True
+
+    @pytest.mark.asyncio
+    async def test_resume_skips_gate_when_recorded_complete(self, tmp_path):
+        cm, change_dir, config, state = self._setup(tmp_path, explainers_done=True)
+        with patch(
+            "build_pipeline.spec_generator._audit_unknowns", new_callable=AsyncMock
+        ) as mock_audit:
+            await _generate_all_artifacts(cm, change_dir, config, state)
+
+        assert mock_audit.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_resume_honors_skip_explainers(self, tmp_path):
+        """--skip-explainers on a resumed build must not run detection or the
+        gate's LLM regeneration — that is what the flag exists to prevent."""
+        cm, change_dir, config, state = self._setup(tmp_path, explainers_done=False)
+        config.explainers_active = False
+        with patch(
+            "build_pipeline.spec_generator._audit_unknowns", new_callable=AsyncMock
+        ) as mock_audit, patch(
+            "build_pipeline.spec_generator.detect_new_dependencies"
+        ) as mock_detect:
+            await _generate_all_artifacts(cm, change_dir, config, state)
+
+        assert mock_audit.await_count == 0
+        mock_detect.assert_not_called()
+        assert state.spec_gen.explainers_done is True
+
+    @pytest.mark.asyncio
+    async def test_resume_with_skip_explainers_writes_the_marker_when_missing(
+        self, tmp_path,
+    ):
+        """A crash before unknowns.md existed + --skip-explainers on the
+        re-run: the skip-marker document is written so the DAG's `tasks`
+        dependency stays satisfiable."""
+        from build_pipeline.spec_generator import EXPLAINERS_SKIPPED_LINE
+
+        cm, change_dir, config, state = self._setup(tmp_path, explainers_done=False)
+        config.explainers_active = False
+        (change_dir / "unknowns.md").unlink()
+        with patch(
+            "build_pipeline.spec_generator._audit_unknowns", new_callable=AsyncMock
+        ) as mock_audit:
+            await _generate_all_artifacts(cm, change_dir, config, state)
+
+        assert mock_audit.await_count == 0
+        assert EXPLAINERS_SKIPPED_LINE in (change_dir / "unknowns.md").read_text()
+        assert state.spec_gen.explainers_done is True
+
+    def test_old_checkpoint_without_flag_defaults_to_rerun(self, tmp_path):
+        cm, change_dir, config, state = self._setup(tmp_path, explainers_done=False)
+        raw = state.model_dump()
+        del raw["spec_gen"]["explainers_done"]
+        assert BuildState.model_validate(raw).spec_gen.explainers_done is False
+
+
+class TestUnknownsThreadedIntoTasks:
+    @pytest.mark.asyncio
+    async def test_tasks_context_carries_the_unknowns_text(self, tmp_path):
+        """Edge cases only become tests if the block that touches the
+        dependency names them — so the task breakdown must see them."""
+        specs_dir = tmp_path / "specs"
+        specs_dir.mkdir()
+        cm = ChangeManager(specs_dir)
+        cm.init_specs()
+        change_dir = cm.create_change("test-feature")
+        (change_dir / "proposal.md").write_text("## Impact\nNone.\n")
+        (change_dir / "design.md").write_text("## Decisions\nNone.\n")
+        (change_dir / "unknowns.md").write_text(
+            "# Unknowns\n\n## polars\n\n### Edge cases & failure modes\n"
+            "- empty frame raises SchemaError\n"
+        )
+        (change_dir / "requirements").mkdir(exist_ok=True)
+        (change_dir / "requirements" / "cap-a.md").write_text("# Req")
+
+        config = MagicMock()
+        config.change_name = "test-feature"
+        config.specs_dir = specs_dir
+        config.change_dir = change_dir
+        config.project_dir = tmp_path
+        config.project_description = ""
+        config.model = "test-model"
+        config.task_granularity = "checkboxes"
+        config.explainers_active = True
+        config.state_file_path.return_value = change_dir / ".build-state.json"
+
+        state = BuildState(
+            change_name="test-feature", mode="scratch", tier="standard",
+            state_file=str(change_dir / ".build-state.json"),
+            phase=BuildPhase.SPEC_GENERATION, spec_gen=SpecGenState(),
+        )
+
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock
+        ) as mock_gen, patch(
+            "build_pipeline.spec_generator._audit_tasks_shape", new_callable=AsyncMock
+        ):
+            mock_gen.return_value = "## 1. Slice"
+            await _generate_single_artifact(cm, change_dir, "tasks", config, state)
+
+        context = mock_gen.await_args.args[1]
+        assert "empty frame raises SchemaError" in context["unknowns_content"]

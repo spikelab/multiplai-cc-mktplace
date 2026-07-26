@@ -33,6 +33,7 @@ from multiplai_core.agent_runner import (
 from multiplai_core.aio import hard_timeout, swallow_task_result as _swallow_task_result  # noqa: F401
 from multiplai_core.text import extract_json  # noqa: F401
 
+from . import budget
 from .models import AgentResult
 
 log = logging.getLogger(__name__)
@@ -88,33 +89,71 @@ def _repo_is_trusted() -> bool:
     return os.environ.get("BUILDME_TRUST_REPO", "").strip().lower() in ("1", "true", "yes")
 
 
-# Tools a text-only llm_call must be actively denied, not merely left out of
-# the allow-list. run_agent's allow-list is advisory under bypassPermissions;
-# only disallowed_tools actually removes a tool.
-_TEXT_ONLY_DISALLOWED = [
+# The tool universe a call's deny-list is computed from. run_agent's
+# allow-list is advisory under bypassPermissions; only disallowed_tools
+# actually removes a tool — so every call denies the complement of what it
+# explicitly allows (a text-only call denies all of it).
+_TOOL_UNIVERSE = [
     "Bash", "BashOutput", "KillShell", "Edit", "Write", "NotebookEdit",
     "Task", "Agent", "AskUserQuestion", "SlashCommand", "ExitPlanMode",
     "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "ToolSearch", "Skill",
 ]
 
 
-def _text_only_disallowed(prompt: str) -> list[str]:
-    """The deny-list for a no-tools call, minus Read when run_agent's
-    oversized-prompt fallback will need it (it writes the prompt to a temp
-    file and directs the agent to Read it)."""
+def _deny_list(prompt: str, allowed_tools: list[str] | None) -> list[str]:
+    """Every known tool the caller did not explicitly allow.
+
+    Without this, an allowlisted agent (e.g. the web-ingesting explainer with
+    Read/WebFetch allowed) can still reach Bash/Write under bypassPermissions —
+    the allow-list alone removes nothing. Read is kept available when
+    run_agent's oversized-prompt fallback will need it (it writes the prompt
+    to a temp file and directs the agent to Read it)."""
+    allowed = set(allowed_tools or ())
+    denied = [t for t in _TOOL_UNIVERSE if t not in allowed]
     if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
-        return [t for t in _TEXT_ONLY_DISALLOWED if t != "Read"]
-    return list(_TEXT_ONLY_DISALLOWED)
+        denied = [t for t in denied if t != "Read"]
+    return denied
+
+
+def _require_trusted_repo() -> None:
+    """Fail closed: any bypassPermissions agent with tool access acts on
+    instructions drawn from the target repo's specs/. Refuse unless the user
+    has explicitly vouched for the repo."""
+    if not _repo_is_trusted():
+        raise RepoTrustError(
+            "buildme runs its tool-using agents with auto-approved tool access "
+            "(bypassPermissions), executing steps described in this repo's specs/ "
+            "(design.md, tasks.md, config.yaml). Only proceed on a repository you "
+            "trust — a hostile repo can turn those files into arbitrary command "
+            "execution as you.\n"
+            "If you authored / trust this repo, re-run with --trust-repo "
+            "(or set BUILDME_TRUST_REPO=1)."
+        )
+
+
+def _record_partial(error: AgentRunError, label: str) -> None:
+    """Charge the budget for tokens a *failed* call already burned.
+
+    The runaway spend this ledger guards against is made of exactly these:
+    a review that times out after a 150k-char prompt cost real money and
+    would otherwise be invisible. `budget.record()` never raises, so this is
+    safe on an error path.
+    """
+    partial = getattr(error, "partial", None)
+    if partial is not None:
+        budget.record(partial.usage, label=label)
 
 
 async def llm_call(
     prompt: str,
     *,
     model: str | None = None,
+    effort: str | None = None,
     max_turns: int = 1,
     system_prompt: str | None = None,
     allowed_tools: list[str] | None = None,
     call_timeout: float = DEFAULT_LLM_CALL_TIMEOUT_S,
+    budget_label: str = "",
 ) -> str:
     """Single-turn LLM call. Returns text response. No tools by default.
 
@@ -123,8 +162,14 @@ async def llm_call(
     reach for Bash/Read, burn the single turn on a tool call, and fail the
     whole call with "Reached maximum number of turns (1)" instead of
     answering. All the context these calls need is already in the prompt.
+
+    A call that *does* request tools is an agent in all but name — it runs
+    under bypassPermissions like agent_call — so it is subject to the same
+    repo trust gate and gets the complement of its allow-list as a deny-list.
     """
     _require_sdk()
+    if allowed_tools:
+        _require_trusted_repo()
 
     log.info("START sdk_call=llm prompt_bytes=%d model=%s timeout=%.0fs",
              len(prompt.encode("utf-8")), model or "default", call_timeout)
@@ -134,26 +179,33 @@ async def llm_call(
                 prompt,
                 system_prompt=system_prompt,
                 allowed_tools=allowed_tools,
-                disallowed_tools=None if allowed_tools else _text_only_disallowed(prompt),
+                disallowed_tools=_deny_list(prompt, allowed_tools),
                 max_turns=max_turns,
                 model=model,
+                effort=effort,
                 timeout_s=call_timeout,
                 label="llm",
                 component="buildme",
             )
         except AgentRunTimeout as e:
+            # A call that dies after burning a 150k-char review prompt is
+            # exactly the spend the budget exists to catch, so account for the
+            # partial usage before propagating (same rule as `agent_call`).
+            _record_partial(e, budget_label or "llm")
             log.error("FAIL sdk_call=llm reason=timeout after %.0fs\n--- CLI stderr ---\n%s",
                       call_timeout, e.stderr_tail)
             raise LLMCallTimeoutError(
                 f"LLM call exceeded {call_timeout:.0f}s timeout"
             ) from e
         except AgentRunError as e:
+            _record_partial(e, budget_label or "llm")
             log.error("FAIL sdk_call=llm error=%s\n--- CLI stderr ---\n%s",
                       e.reason, e.stderr_tail)
             raise LLMCallError(
                 f"SDK query failed: {e.reason}\n--- CLI stderr ---\n{e.stderr_tail}"
             ) from e
 
+    budget.record(result.usage, label=budget_label or "llm")
     log.info("DONE sdk_call=llm result_chars=%d", len(result.text))
     return result.text
 
@@ -163,9 +215,11 @@ async def agent_call(
     *,
     allowed_tools: list[str],
     model: str | None = None,
+    effort: str | None = None,
     max_turns: int = 50,
     cwd: str | None = None,
     call_timeout: float = DEFAULT_AGENT_CALL_TIMEOUT_S,
+    budget_label: str = "",
 ) -> AgentResult:
     """Multi-turn agent call with file tools. For TDD agents.
 
@@ -174,19 +228,7 @@ async def agent_call(
     """
     _require_sdk()
 
-    # Fail closed: these agents auto-approve every tool call (bypassPermissions)
-    # and act on instructions drawn from the target repo's specs/. Refuse unless
-    # the user has explicitly vouched for the repo.
-    if not _repo_is_trusted():
-        raise RepoTrustError(
-            "buildme runs its implementation agents with auto-approved tool access "
-            "(bypassPermissions), executing steps described in this repo's specs/ "
-            "(design.md, tasks.md, config.yaml). Only proceed on a repository you "
-            "trust — a hostile repo can turn those files into arbitrary command "
-            "execution as you.\n"
-            "If you authored / trust this repo, re-run with --trust-repo "
-            "(or set BUILDME_TRUST_REPO=1)."
-        )
+    _require_trusted_repo()
 
     log.info("START sdk_call=agent tools=%s model=%s max_turns=%d timeout=%.0fs",
              allowed_tools, model or "default", max_turns, call_timeout)
@@ -197,8 +239,10 @@ async def agent_call(
             result = await run_agent(
                 prompt,
                 allowed_tools=allowed_tools,
+                disallowed_tools=_deny_list(prompt, allowed_tools),
                 max_turns=max_turns,
                 model=model,
+                effort=effort,
                 cwd=cwd,  # None → run_agent's isolated hook-sessions dir
                 timeout_s=call_timeout,
                 label="agent",
@@ -210,6 +254,8 @@ async def agent_call(
             elapsed = time.monotonic() - start
             partial = e.partial
             timed_out = isinstance(e, AgentRunTimeout)
+            # A failed agent still burned tokens up to the failure point.
+            _record_partial(e, budget_label or "agent")
             log.error("FAIL sdk_call=agent reason=%s elapsed=%.0fs turns=%d\n--- CLI stderr ---\n%s",
                       "timeout" if timed_out else e.reason, elapsed,
                       partial.turns if partial else 0, e.stderr_tail)
@@ -229,6 +275,7 @@ async def agent_call(
             )
 
     elapsed = time.monotonic() - start
+    budget.record(result.usage, label=budget_label or "agent")
     log.info("DONE sdk_call=agent turns=%d elapsed=%.0fs files_changed=%d",
              result.turns, elapsed, len(result.files_changed))
     return AgentResult(
@@ -245,16 +292,20 @@ async def llm_call_structured(
     schema: type[T],
     *,
     model: str | None = None,
+    effort: str | None = None,
     max_retries: int = 1,
     system_prompt: str | None = None,
     call_timeout: float = DEFAULT_LLM_CALL_TIMEOUT_S,
+    budget_label: str = "",
 ) -> T:
     """LLM call with Pydantic-validated structured output."""
     current_prompt = prompt
     last_error: Exception | None = None
 
     for attempt in range(max_retries + 1):
-        raw = await llm_call(current_prompt, model=model, system_prompt=system_prompt, call_timeout=call_timeout)
+        raw = await llm_call(current_prompt, model=model, effort=effort,
+                             system_prompt=system_prompt, call_timeout=call_timeout,
+                             budget_label=budget_label)
         try:
             payload = extract_json(raw)
             return schema.model_validate(payload)

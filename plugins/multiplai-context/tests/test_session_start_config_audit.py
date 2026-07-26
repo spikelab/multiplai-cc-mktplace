@@ -35,9 +35,13 @@ def _write_state(path: Path, last_run: str) -> None:
 
 class TestConfigAuditGate:
     def test_gate_is_60_days(self):
-        """Tightened 90 -> 60 (2026-07-26): the audit's job is deleting
-        scaffolding newer models outgrew, and capability now moves faster than
-        a quarterly cadence catches."""
+        """The cadence constant is 60 days.
+
+        Tightened from 90 in 2026-07: the binding constraint is model drift,
+        not config drift. Model releases land inside a quarter, and each can
+        make prompt scaffolding redundant — a 90-day gate let a whole release
+        cycle pass with skills carrying instructions the model had outgrown.
+        """
         import session_start
 
         assert session_start._CONFIG_AUDIT_GATE_DAYS == 60
@@ -120,8 +124,13 @@ class TestConfigAuditGate:
         _write_state(f, (frozen - timedelta(days=60)).isoformat())
         assert session_start._config_audit_gate_open(f) is True
 
-    def test_just_under_60_days_closes_gate(self, tmp_path, monkeypatch):
-        """One second inside the window (frozen clock) → gate closed."""
+    def test_just_under_the_window_closes_gate(self, tmp_path, monkeypatch):
+        """One second inside the window (frozen clock) → gate closed.
+
+        Derived from the constant rather than hardcoded: when the cadence moved
+        90 → 60 the hardcoded boundary tests failed for no reason other than
+        having restated the number.
+        """
         import session_start
 
         frozen = datetime.now(timezone.utc)
@@ -133,13 +142,12 @@ class TestConfigAuditGate:
 
         monkeypatch.setattr(session_start, "datetime", _FrozenDatetime)
         f = tmp_path / "config_audit_state.yaml"
-        _write_state(
-            f, (frozen - timedelta(days=60) + timedelta(seconds=1)).isoformat()
-        )
+        window = timedelta(days=session_start._CONFIG_AUDIT_GATE_DAYS)
+        _write_state(f, (frozen - window + timedelta(seconds=1)).isoformat())
         assert session_start._config_audit_gate_open(f) is False
 
     def test_recent_state_closes_gate(self, tmp_path):
-        """last_run within the 60-day window → gate closed."""
+        """last_run within the cadence window → gate closed."""
         import session_start
 
         f = tmp_path / "config_audit_state.yaml"
@@ -148,11 +156,12 @@ class TestConfigAuditGate:
         assert session_start._config_audit_gate_open(f) is False
 
     def test_just_inside_window_closes_gate(self, tmp_path):
-        """59 days ago is still inside the window → gate closed."""
+        """One day short of the cadence is still inside the window."""
         import session_start
 
         f = tmp_path / "config_audit_state.yaml"
-        inside = (datetime.now(timezone.utc) - timedelta(days=59)).isoformat()
+        days = session_start._CONFIG_AUDIT_GATE_DAYS - 1
+        inside = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         _write_state(f, inside)
         assert session_start._config_audit_gate_open(f) is False
 

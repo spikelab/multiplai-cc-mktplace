@@ -43,6 +43,7 @@ async def run_test_writer(
     test_command: str,
     *,
     model: str | None = None,
+    effort: str | None = None,
     cwd: str | None = None,
 ) -> AgentResult:
     """Spawn a test-writing agent for a block.
@@ -61,9 +62,11 @@ async def run_test_writer(
         prompt,
         allowed_tools=TEST_WRITER_TOOLS,
         model=model,
+        effort=effort,
         max_turns=TEST_WRITER_MAX_TURNS,
         cwd=cwd,
         call_timeout=TEST_WRITER_TIMEOUT,
+        budget_label="test_writer",
     )
 
 
@@ -76,6 +79,7 @@ async def run_implementer(
     *,
     prompt_style: str = "clean",
     model: str | None = None,
+    effort: str | None = None,
     cwd: str | None = None,
 ) -> AgentResult:
     """Spawn an implementation agent for a block.
@@ -95,9 +99,11 @@ async def run_implementer(
         prompt,
         allowed_tools=IMPLEMENTER_TOOLS,
         model=model,
+        effort=effort,
         max_turns=IMPLEMENTER_MAX_TURNS,
         cwd=cwd,
         call_timeout=IMPLEMENTER_TIMEOUT,
+        budget_label="implementer",
     )
 
 
@@ -108,6 +114,7 @@ async def run_refactorer(
     test_command: str,
     *,
     model: str | None = None,
+    effort: str | None = None,
     cwd: str | None = None,
 ) -> AgentResult:
     """Spawn a refactoring agent (standard tier only).
@@ -125,9 +132,11 @@ async def run_refactorer(
         prompt,
         allowed_tools=REFACTORER_TOOLS,
         model=model,
+        effort=effort,
         max_turns=REFACTORER_MAX_TURNS,
         cwd=cwd,
         call_timeout=REFACTORER_TIMEOUT,
+        budget_label="refactor",
     )
 
 
@@ -156,6 +165,7 @@ async def run_integration_fix(
     *,
     escalate: bool = False,
     model: str | None = None,
+    effort: str | None = None,
     cwd: str | None = None,
 ) -> AgentResult:
     """Spawn an agent to fix broken integration tests.
@@ -224,7 +234,9 @@ Report the root cause, what you fixed, and confirm all tests pass.
         prompt,
         allowed_tools=IMPLEMENTER_TOOLS,
         model=model,
+        effort=effort,
         max_turns=IMPLEMENTER_MAX_TURNS,
         cwd=cwd,
         call_timeout=IMPLEMENTER_TIMEOUT,
+        budget_label="integration_fix",
     )

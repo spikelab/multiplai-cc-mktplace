@@ -49,12 +49,13 @@ logger = setup_logging("session_start")
 
 _DREAM_GATE_HOURS = 24
 
-# The config-audit cadence is deliberately long: config decay is slow, and
-# the audit is a heavyweight review. Tightened 90 -> 60 (2026-07-26): the
-# thing the audit removes is scaffolding that newer models no longer need,
-# and model capability now moves faster than a quarterly cadence catches —
-# rules written for a model two releases ago sit in the prompt costing tokens
-# and constraining a model that outgrew them.
+# The config-audit cadence is long because config decay is slow and the audit
+# is a heavyweight review. Tightened 90 → 60 days (2026-07): the binding
+# constraint turned out not to be config drift but *model* drift. Model
+# releases now land well inside a quarter, and each one can make prompt
+# scaffolding redundant — capabilities that needed spelling out get absorbed by
+# the next model. A 90-day gate meant a whole release cycle could pass with
+# skills still carrying instructions the model had outgrown.
 _CONFIG_AUDIT_GATE_DAYS = 60
 
 # Deferred-extraction retry policy. A detached extraction child should

@@ -528,6 +528,32 @@ The autonomous-tdd orchestrator checks the E2E report status and includes it in 
 
 ---
 
+## Re-Testing After a Model Upgrade
+
+Skills are prompts, and a prompt tuned against one model is not automatically
+correct against the next. A model bump can silently change output format,
+verbosity, or how literally an instruction is followed — none of which raises
+an error, and all of which change what an E2E run actually verifies.
+
+Run this pass whenever the `MULTIPLAI_MODEL` ceiling changes, a skill's
+`model:`/`effort:` frontmatter changes, or Claude Code's default model moves:
+
+1. **Smoke-invoke every skill** — each bundled script with `--help` and with its
+   documented minimal invocation. A traceback means it's broken now.
+2. **Run the contract assertions** — skills with a `CONTRACT.md` have concrete
+   expected-output checks. These catch a changed output *shape*, which a crash
+   test never will.
+3. **Re-check the frontmatter tier** — a newer model at `effort: medium` often
+   matches the old one at `high`. Compare the cost report before and after.
+4. **Delete scaffolding the model no longer needs** — newer models absorb
+   capabilities that older ones needed spelled out. Redundant scaffolding costs
+   context on every invocation and constrains a model that would do better
+   without it. A skill shrinking on upgrade is the expected outcome.
+5. **Record what changed**, so the next upgrade starts from the last one.
+
+Full checklist: `$CLAUDE_CONFIG_DIR/reference/dev/skill-dev.md` → Model-Upgrade
+Re-Test Checklist. `config-audit` surfaces this on its cadence.
+
 ## Limitations
 
 1. **Frontend mode requires agent-browser** — Falls back to backend-only if unavailable

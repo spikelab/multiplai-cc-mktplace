@@ -14,6 +14,13 @@
 # daemon is attached to a real Chrome with webdriver=false.
 set -euo pipefail
 
+case "${1:-}" in
+  -h|--help)
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+esac
+
 PORT="${1:-9222}"
 HOST="${AB_HOST:-host.docker.internal}"
 

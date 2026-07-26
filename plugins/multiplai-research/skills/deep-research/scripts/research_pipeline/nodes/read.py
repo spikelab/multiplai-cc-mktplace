@@ -30,6 +30,7 @@ from ..prompts.extract import EXTRACT_PROMPT
 from ..search_router import SearchRouter
 from ..sdk import llm_call_structured
 from ..state import ResearchState
+from ..untrusted import defang_untrusted
 
 log = logging.getLogger(__name__)
 
@@ -277,10 +278,13 @@ async def _extract_findings(
     prompt = EXTRACT_PROMPT.format(
         query=config.query,
         sub_questions="\n".join(f"{i}. {q}" for i, q in enumerate(sub_questions)),
-        title=source.title,
-        url=source.url,
+        title=defang_untrusted(source.title),
+        url=defang_untrusted(source.url),
         reputation=source.reputation.value,
-        content=content[:30000],  # cap content length to keep prompt manageable
+        # Title, URL and body are all page-controlled: defang the fence markers
+        # so the content cannot close its own <untrusted-content> block and
+        # promote itself from data to instruction.
+        content=defang_untrusted(content[:30000]),  # cap to keep prompt manageable
     )
 
     try:

@@ -1,13 +1,24 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pyyaml"]
+# ///
 """
 Quick validation script for skills - minimal version
+
+PyYAML is not in the container's base interpreter, so this declares it inline
+(PEP 723) and is meant to be run as `uv run --script quick_validate.py`. Run
+with a bare `python3` it dies on `import yaml` before doing any work — which is
+how it silently failed as a gate: the traceback looked like the *skill* was
+broken, not the validator.
 """
 
-import sys
-import os
+import argparse
 import re
-import yaml
+import sys
 from pathlib import Path
+
+import yaml
 
 def validate_skill(skill_path):
     """Basic validation of a skill"""
@@ -38,8 +49,22 @@ def validate_skill(skill_path):
     except yaml.YAMLError as e:
         return False, f"Invalid YAML in frontmatter: {e}"
 
-    # Define allowed properties
-    ALLOWED_PROPERTIES = {'name', 'description', 'license', 'allowed-tools', 'metadata'}
+    # Define allowed properties.
+    #
+    # `model`, `effort` and `when_to_use` are multiplai conventions on top of
+    # the upstream skill spec. They were missing here, which meant this
+    # validator rejected every skill in the marketplace — all 43 of them —
+    # with "Unexpected key(s): effort, model, when_to_use". Anything built on
+    # top of it (the promote_skill gate) would have inherited that.
+    ALLOWED_PROPERTIES = {
+        'name', 'description', 'license', 'allowed-tools', 'metadata',
+        'model', 'effort', 'when_to_use', 'disable-model-invocation',
+    }
+
+    # Frontmatter values Claude Code actually accepts. A typo is ignored at
+    # runtime, so the skill silently runs on the wrong tier.
+    KNOWN_MODELS = {'opus', 'sonnet', 'haiku', 'inherit', 'fable'}
+    KNOWN_EFFORTS = {'low', 'medium', 'high', 'xhigh', 'max'}
 
     # Check for unexpected properties (excluding nested keys under metadata)
     unexpected_keys = set(frontmatter.keys()) - ALLOWED_PROPERTIES
@@ -47,6 +72,18 @@ def validate_skill(skill_path):
         return False, (
             f"Unexpected key(s) in SKILL.md frontmatter: {', '.join(sorted(unexpected_keys))}. "
             f"Allowed properties are: {', '.join(sorted(ALLOWED_PROPERTIES))}"
+        )
+
+    model = frontmatter.get('model')
+    if model is not None and model not in KNOWN_MODELS:
+        return False, (
+            f"Unknown model '{model}'. Known models: {', '.join(sorted(KNOWN_MODELS))}"
+        )
+
+    effort = frontmatter.get('effort')
+    if effort is not None and effort not in KNOWN_EFFORTS:
+        return False, (
+            f"Unknown effort '{effort}'. Known efforts: {', '.join(sorted(KNOWN_EFFORTS))}"
         )
 
     # Check required fields
@@ -85,11 +122,17 @@ def validate_skill(skill_path):
 
     return True, "Skill is valid!"
 
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python quick_validate.py <skill_directory>")
-        sys.exit(1)
-    
-    valid, message = validate_skill(sys.argv[1])
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Validate a skill directory's SKILL.md frontmatter.")
+    parser.add_argument("skill_directory",
+                        help="path to the skill directory containing SKILL.md")
+    args = parser.parse_args(argv)
+
+    valid, message = validate_skill(args.skill_directory)
     print(message)
-    sys.exit(0 if valid else 1)
+    return 0 if valid else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
