@@ -47,6 +47,18 @@ class TestCreateChange:
         path = cm.create_change("my_feature_name")
         assert path.name == "my-feature-name"
 
+    def test_repairs_dir_missing_metadata(self, cm, specs_dir):
+        """A pre-existing dir without .change.yaml (junk from an older
+        pipeline) must not suppress the metadata — retry writes it."""
+        junk = specs_dir / "changes" / "retried"
+        junk.mkdir(parents=True)
+        (junk / ".board.json").write_text("{}")
+        path = cm.create_change("retried")
+        assert path == junk
+        assert (path / ".change.yaml").exists()
+        assert "spec-driven" in (path / ".change.yaml").read_text()
+        assert (path / ".board.json").exists(), "existing files must survive the repair"
+
 
 class TestNormalizeChangeName:
     def test_empty_input_stays_empty(self):
@@ -73,6 +85,29 @@ class TestNormalizeChangeName:
         err = capsys.readouterr().err
         assert "ERROR:" in err and "no usable characters" in err
         assert list(tmp_path.iterdir()) == [], "nothing may be created behind the refusal"
+
+
+class TestArchivedChangeDirs:
+    def test_anchored_match_ignores_suffix_collisions(self, specs_dir):
+        """`foo` must not match `2026-07-26-bar-foo` — a loose `*-foo` glob
+        would cross two changes' archives."""
+        from build_pipeline.change_manager import archived_change_dirs
+        (specs_dir / "archive" / "2026-07-26-bar-foo").mkdir(parents=True)
+        (specs_dir / "archive" / "2026-07-20-foo").mkdir()
+        (specs_dir / "archive" / "2026-07-25-foo").mkdir()
+        (specs_dir / "archive" / "not-a-date-foo").mkdir()
+        assert archived_change_dirs(specs_dir, "foo") == [
+            specs_dir / "archive" / "2026-07-20-foo",
+            specs_dir / "archive" / "2026-07-25-foo",
+        ]
+        assert archived_change_dirs(specs_dir, "bar-foo") == [
+            specs_dir / "archive" / "2026-07-26-bar-foo",
+        ]
+
+    def test_no_archive_root_or_empty_name(self, tmp_path):
+        from build_pipeline.change_manager import archived_change_dirs
+        assert archived_change_dirs(tmp_path / "specs", "foo") == []
+        assert archived_change_dirs(tmp_path / "specs", "") == []
 
 
 class TestArtifactStatus:

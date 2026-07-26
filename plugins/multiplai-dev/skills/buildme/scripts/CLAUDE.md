@@ -16,7 +16,7 @@
 | `gates.py` | Quality gate assertions (pure code) + agent-report parsers (`parse_agent_status`, `parse_implementation_note`). New gates: `unknowns_gate`, `prototype_required`, `prototype_gate`. | No |
 | `dependencies.py` | Pure detection of dependencies **new to this project**: parses the proposal's `## Impact` and design's `## Decisions`, subtracts every manifest (`pyproject.toml`, `package.json`, `Package.swift`, `Cargo.toml`, `go.mod`, `requirements.txt`) and every existing import. Feeds the B1 explainer gate. No LLM, no network. | No |
 | `git_ops.py` | Every `git`/`gh` invocation: worktree+branch setup, explicit-path commits, push, `gh pr create`. `shell=False`, fixed argv, never merges/force-pushes/deletes. | No |
-| `board.py` | Board seam: pure `column_for(phase, block_status)` → `BoardColumn`, `.board.json` card writer, `BOARD:<change>:<Column>` stdout line. Drives Shaping → Planning → In Development → In Review only; its docstring names the columns it never sets. | No |
+| `board.py` | Board seam: pure `column_for(phase, block_status)` → `BoardColumn`, `.board.json` card writer, `BOARD:<slug>:<Column>` stdout line. Drives Shaping → Planning → In Development → In Review only; its docstring names the columns it never sets. The `BoardCard`/`BoardEvent` pydantic models live here deliberately (they are the card file's private schema, not shared pipeline data). | No |
 | `sdk.py` | `llm_call()` + `agent_call()` adapters over `multiplai_core.run_agent()` | Yes (SDK) |
 | `rubric.py` | Rubric generation and change type detection | Via sdk |
 | _(logging)_ | Uses shared `log_utils.setup_logging()` from hooks/ | No |

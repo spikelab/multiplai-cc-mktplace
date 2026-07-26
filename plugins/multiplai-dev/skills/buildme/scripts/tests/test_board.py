@@ -219,6 +219,58 @@ class TestRecord:
         state = _state(config)
         assert record(config, state, BuildPhase.TDD_BUILD) is BoardColumn.IN_DEVELOPMENT
 
+    def test_board_line_carries_the_normalized_slug(self, tmp_path, capsys):
+        """A raw name with `:` would break the 3-field BOARD: protocol — the
+        line must carry the normalized slug (which can never contain `:`)."""
+        config = _config(tmp_path, "Weird: Name")
+        state = _state(config)
+        record(config, state, BuildPhase.BOOTSTRAP)
+        out = capsys.readouterr().out
+        assert "BOARD:weird-name:Shaping" in out
+        board_line = next(ln for ln in out.splitlines() if ln.startswith("BOARD:"))
+        # 3-field protocol: slug never contains ':'; only the column may.
+        assert board_line.split(":", 2)[:2] == ["BOARD", "weird-name"]
+
+    def test_write_is_atomic_a_failed_write_keeps_the_old_card(self, tmp_path):
+        """A crash mid-write must never leave truncated JSON: the card is
+        written to a temp file and swapped in with os.replace. If the swap
+        never happens, the previous card (and its history) is untouched."""
+        config = _config(tmp_path)
+        state = _state(config)
+        record(config, state, BuildPhase.BOOTSTRAP)
+
+        with patch("build_pipeline.board.os.replace", side_effect=OSError("disk full")):
+            # record never raises; the failed write is logged and swallowed.
+            assert record(config, state, BuildPhase.TDD_BUILD) is None
+
+        card = BoardCard.model_validate(
+            json.loads((config.change_dir / ".board.json").read_text())
+        )
+        assert card.column is BoardColumn.SHAPING
+        assert [e.column for e in card.history] == [BoardColumn.SHAPING]
+        # ...and the interrupted write did not corrupt anything: the next
+        # record still sees the full history and appends to it.
+        assert record(config, state, BuildPhase.TDD_BUILD) is BoardColumn.IN_DEVELOPMENT
+        card = BoardCard.model_validate(
+            json.loads((config.change_dir / ".board.json").read_text())
+        )
+        assert [e.column for e in card.history] == [
+            BoardColumn.SHAPING, BoardColumn.IN_DEVELOPMENT,
+        ]
+
+    def test_no_card_without_a_change_dir(self, tmp_path):
+        """A pre-bootstrap failure runs against the caller's SOURCE repo — a
+        board write must never manufacture specs/changes/<name>/ there."""
+        config = BuildConfig(
+            project_dir=tmp_path, change_name="never-started",
+            git=GitToggles(worktree=False, push=False, pr="none"),
+        )
+        config.specs_dir = tmp_path / "specs"
+        state = _state(config)
+        assert record(config, state, BuildPhase.BOOTSTRAP) is None
+        assert not config.change_dir.exists()
+        assert not (tmp_path / "specs").exists()
+
 
 class TestBoardPath:
     def test_follows_the_change_into_the_archive(self, tmp_path):
@@ -237,6 +289,24 @@ class TestBoardPath:
         assert not change_dir.exists(), "must not recreate the active change dir"
         card = BoardCard.model_validate(json.loads((dest / ".board.json").read_text()))
         assert card.history[-1].column is BoardColumn.IN_REVIEW
+
+    def test_archive_lookup_is_anchored_not_a_suffix_match(self, tmp_path):
+        """Change `foo` must not resolve to `2026-07-26-bar-foo` — that is
+        ANOTHER change's archived card, and writing there would clobber it."""
+        specs = tmp_path / "specs"
+        other = specs / "archive" / "2026-07-26-bar-foo"
+        other.mkdir(parents=True)
+        (other / ".board.json").write_text("{}")
+
+        # No archive of `foo` itself → the active (nonexistent-yet) path.
+        assert board_path(specs, "foo") == specs / "changes" / "foo" / ".board.json"
+
+        # An exact `YYYY-MM-DD-foo` archive IS found — and still never bar-foo.
+        mine = specs / "archive" / "2026-07-25-foo"
+        mine.mkdir()
+        (mine / ".board.json").write_text("{}")
+        assert board_path(specs, "foo") == mine / ".board.json"
+        assert board_path(specs, "bar-foo") == other / ".board.json"
 
 
 class TestRecordFailure:
@@ -268,6 +338,22 @@ class TestRecordFailure:
         assert card.column is BoardColumn.CANCELLED
         assert card.history[-1].note == "no checkpoint left"
         assert "BOARD:card-change:Cancelled" in capsys.readouterr().out
+
+    def test_failure_before_the_change_dir_exists_writes_nothing(self, tmp_path, capsys):
+        """A failure before bootstrap (config still bound to the caller's
+        source repo, change dir never created) must not manufacture
+        specs/changes/<name>/ just to hold a Cancelled card."""
+        config = BuildConfig(
+            project_dir=tmp_path, change_name="refused",
+            git=GitToggles(worktree=False, push=False, pr="none"),
+        )
+        config.specs_dir = tmp_path / "specs"
+        state = _state(config)
+
+        assert record_failure(config, state, "preflight refused") is None
+        assert not config.change_dir.exists()
+        assert not (tmp_path / "specs").exists()
+        assert "BOARD:" not in capsys.readouterr().out
 
 
 # --- 3. A whole run -------------------------------------------------------
@@ -382,3 +468,75 @@ class TestFullRunBoardTrail:
         )
         assert card.column is BoardColumn.IN_DEVELOPMENT
         assert card.pr_url is None
+
+    @pytest.mark.asyncio
+    async def test_preflight_refusal_leaves_no_trace_in_the_source_repo(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """A worktree preflight refusal fails BEFORE the first checkpoint and
+        before config is re-bound — the failure path must not create
+        specs/changes/<name>/ (or any card) in the caller's source repo."""
+        from build_pipeline.orchestrator import run_orchestrator
+
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+
+        config = BuildConfig(project_dir=repo, change_name="refused", auto=True)
+        config.specs_dir = repo / "specs"
+
+        monkeypatch.setattr(
+            git_ops, "preflight",
+            lambda repo_path, *, worktree_requested: (_ for _ in ()).throw(
+                git_ops.GitLifecycleError("uncommitted changes — refusing")
+            ),
+        )
+        rc = await run_orchestrator(config, _args(repo, "refused"))
+
+        assert rc == 1
+        assert not (repo / "specs").exists(), "no specs/ junk in the source repo"
+        assert "BOARD:" not in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_crash_after_success_is_not_recorded_as_cancelled(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """After publish, the checkpoint is deliberately gone. An exception in
+        the post-success tail (here: progress cleanup) must not flip the card
+        from In Review to Cancelled."""
+        from build_pipeline.orchestrator import run_orchestrator
+
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        make_bare_origin(repo, tmp_path / "origin.git")
+
+        config = BuildConfig(project_dir=repo, change_name="latecrash", auto=True)
+        config.specs_dir = repo / "specs"
+
+        monkeypatch.setattr(
+            git_ops, "_run_gh",
+            lambda argv, cwd=None, timeout=None: GitResult(
+                argv, 0, "https://github.com/acme/proj/pull/9", "",
+            ),
+        )
+        with patch("build_pipeline.spec_generator.run_spec_generator",
+                   new_callable=AsyncMock, return_value=0), \
+             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   new_callable=AsyncMock, return_value=[]), \
+             patch("build_pipeline.tdd_engine.run_tdd_engine",
+                   new_callable=AsyncMock, return_value=0), \
+             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                   new_callable=AsyncMock, return_value=None), \
+             patch.object(ProgressWriter, "cleanup",
+                          side_effect=RuntimeError("late crash")):
+            rc = await run_orchestrator(config, _args(repo, "latecrash"))
+
+        assert rc == 1  # the crash is still an error...
+        out = capsys.readouterr().out
+        assert "Cancelled" not in out  # ...but never a cancellation
+        archived = list((config.specs_dir / "archive").glob("*-latecrash"))
+        assert len(archived) == 1
+        card = BoardCard.model_validate(
+            json.loads((archived[0] / ".board.json").read_text())
+        )
+        assert card.column is BoardColumn.IN_REVIEW
+        assert card.history[-1].column is BoardColumn.IN_REVIEW

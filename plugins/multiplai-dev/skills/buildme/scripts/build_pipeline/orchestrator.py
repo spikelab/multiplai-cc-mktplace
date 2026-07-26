@@ -55,6 +55,12 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
 
     cm = ChangeManager(config.specs_dir)
 
+    # Set the moment the build's outcome is decided as success (spec-only done,
+    # or publish resolved). From then on the checkpoint is deliberately gone,
+    # so a late exception (progress cleanup, stdout) must NOT be recorded as
+    # Cancelled — the card's real column (e.g. In Review) already stands.
+    build_succeeded = False
+
     try:
         # Phase: Bootstrap
         if not state.is_phase_complete(BuildPhase.BOOTSTRAP) and config.mode != "only":
@@ -171,6 +177,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # Stop if --spec-only
         if config.spec_only:
             log.info("DONE pipeline=spec-only")
+            build_succeeded = True
             state.cleanup(state_path)
             print("RESULT:SUCCESS:spec-only", flush=True)
             return 0
@@ -295,6 +302,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             config, state, progress, state_path=state_path, docs_dir=publish_docs_dir,
         )
         state.phase = BuildPhase.COMPLETE
+        build_succeeded = True
         if published:
             state.cleanup(state_path)
             # Only clear the progress file when there is nothing left for a
@@ -320,8 +328,11 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         log.error("FAIL pipeline change=%s error=%s", config.change_name, e, exc_info=True)
         print(f"ERROR:{e}", file=sys.stderr, flush=True)
         # Cancelled only if nothing survives to resume from; otherwise the card
-        # stays in its last column and a re-run picks it up there.
-        board.record_failure(config, state, f"pipeline error: {e}", progress=progress)
+        # stays in its last column and a re-run picks it up there. Once the
+        # build succeeded the missing checkpoint is the normal post-success
+        # cleanup, not an unrecoverable failure — never Cancelled then.
+        if not build_succeeded:
+            board.record_failure(config, state, f"pipeline error: {e}", progress=progress)
         return 1
 
 
@@ -591,11 +602,14 @@ def _existing_state_path(config: BuildConfig) -> Path | None:
         return active
     if not config.change_name:
         return None
-    from .change_manager import normalize_change_name
-    norm = normalize_change_name(config.change_name)
-    archived = sorted(
-        (config.specs_dir / "archive").glob(f"*-{norm}/{active.name}")
-    )
+    from .change_manager import archived_change_dirs
+    # Anchored to exactly YYYY-MM-DD-<slug> — a loose `*-<slug>` glob would
+    # also adopt another change's checkpoint (`foo` matching `…-bar-foo`).
+    archived = [
+        d / active.name
+        for d in archived_change_dirs(config.specs_dir, config.change_name)
+        if (d / active.name).exists()
+    ]
     return archived[-1] if archived else None
 
 
