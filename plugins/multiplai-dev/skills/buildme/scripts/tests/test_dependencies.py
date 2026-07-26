@@ -374,3 +374,72 @@ class TestManifestFilenamesAreNotDependencies:
                    "`Package.swift`, `Cargo.toml`, `go.mod`, `go.sum`, `uv.lock`.",
         )
         assert detect_new_dependencies(change, project) == []
+
+
+class TestDottedPathsCollapseToDistributions:
+    """`rich.console.Console` is the library `rich`, not a fourth dependency."""
+
+    @pytest.fixture
+    def py_project(self, project):
+        (project / "pyproject.toml").write_text('[project]\nname = "demo"\ndependencies = []\n')
+        return project
+
+    def test_dotted_mentions_collapse_to_one_candidate(self, tmp_path, py_project):
+        change = _write_change(
+            tmp_path / "change",
+            impact="Renders via `rich`, `rich.print`, `rich.console.Console` "
+                   "and `rich.table.Table`.",
+        )
+        assert [d.name for d in detect_new_dependencies(change, py_project)] == ["rich"]
+
+    def test_declared_dependency_is_matched_through_its_dotted_form(self, tmp_path, project):
+        (project / "pyproject.toml").write_text(
+            '[project]\nname = "demo"\ndependencies = ["rich"]\n'
+        )
+        change = _write_change(tmp_path / "change", impact="Uses `rich.console.Console`.")
+        assert detect_new_dependencies(change, project) == []
+
+    def test_stdlib_member_access_never_fires(self, tmp_path, py_project):
+        change = _write_change(
+            tmp_path / "change",
+            impact="Walks with `pathlib.Path.rglob` and formats `datetime.datetime`.",
+        )
+        assert detect_new_dependencies(change, py_project) == []
+
+    def test_npm_dotted_package_survives_in_a_js_project(self, tmp_path, project):
+        (project / "package.json").write_text(json.dumps({"dependencies": {}}))
+        change = _write_change(tmp_path / "change", impact="Adds `lodash.debounce`.")
+        assert [d.name for d in detect_new_dependencies(change, project)] == ["lodash.debounce"]
+
+
+class TestBuiltinsAndMembersNeverFire:
+    @pytest.fixture
+    def py_project(self, project):
+        (project / "pyproject.toml").write_text('[project]\nname = "demo"\ndependencies = []\n')
+        return project
+
+    @pytest.mark.parametrize("token", ["open", "print", "sorted", "isinstance", "property"])
+    def test_builtin_names_never_fire(self, tmp_path, py_project, token):
+        change = _write_change(tmp_path / "change", impact=f"Calls `{token}` directly.")
+        assert detect_new_dependencies(change, py_project) == []
+
+    @pytest.mark.parametrize("token", ["ljust", "rglob", "unlink", "iterdir"])
+    def test_bare_stdlib_member_names_never_fire(self, tmp_path, py_project, token):
+        change = _write_change(tmp_path / "change", impact=f"Uses `{token}` on the result.")
+        assert detect_new_dependencies(change, py_project) == []
+
+    @pytest.mark.parametrize("token", ["st_mtime", "st_size", "st_mode"])
+    def test_stat_struct_fields_never_fire(self, tmp_path, py_project, token):
+        change = _write_change(tmp_path / "change", impact=f"Compares `{token}` values.")
+        assert detect_new_dependencies(change, py_project) == []
+
+    @pytest.mark.parametrize("token", ["skip-explainer", "log-warning", "return-early"])
+    def test_hyphenated_prose_phrases_never_fire(self, tmp_path, py_project, token):
+        change = _write_change(tmp_path / "change", impact=f"We `{token}` in that case.")
+        assert detect_new_dependencies(change, py_project) == []
+
+    def test_builtin_named_package_still_fires_in_a_js_project(self, tmp_path, project):
+        """`open` is a real npm package — the builtin filter is Python-only."""
+        (project / "package.json").write_text(json.dumps({"dependencies": {}}))
+        change = _write_change(tmp_path / "change", impact="Adds `open` for launching URLs.")
+        assert [d.name for d in detect_new_dependencies(change, project)] == ["open"]

@@ -46,6 +46,7 @@ prompt both read those fields.
 
 from __future__ import annotations
 
+import builtins
 import json
 import logging
 import re
@@ -141,6 +142,74 @@ _GENERIC_TERMS = frozenset({
 # ``.-_`` separators, optionally npm-scoped (``@scope/name``).
 _NAME_RE = re.compile(r"^@?[A-Za-z][A-Za-z0-9._+-]*(?:/[A-Za-z0-9._+-]+)?$")
 
+# Builtins are not packages. `sys.stdlib_module_names` only knows *top-level
+# module* names, so `open`, `str` and `NotADirectoryError` sailed straight
+# through it and each minted an explainer on the first real run.
+_BUILTIN_NAMES = frozenset(
+    n.lower().replace("_", "-") for n in dir(builtins) if not n.startswith("__")
+)
+
+# Public attribute names of the stdlib modules that real design prose actually
+# name-drops. The same gap as above one level down: `scandir`, `DirEntry` and
+# `entry.stat` are `os` members, not distributions.
+#
+# Introspected rather than hand-listed so it cannot drift from the interpreter,
+# and confined to a fixed tuple of import-safe modules — importing arbitrary
+# stdlib modules to build a denylist would be a side effect nobody asked a
+# dependency scanner for.
+_STDLIB_MEMBER_MODULES = (
+    "builtins", "os", "os.path", "sys", "io", "re", "json", "pathlib", "shutil",
+    "subprocess", "itertools", "functools", "collections", "datetime", "time",
+    "math", "string", "typing", "dataclasses", "enum", "logging", "contextlib",
+    "tempfile", "textwrap", "argparse", "hashlib", "base64", "uuid", "random",
+    "csv", "glob", "stat", "socket", "struct", "threading", "asyncio",
+)
+
+
+def _stdlib_member_names() -> frozenset[str]:
+    import importlib
+    import pathlib
+
+    # Method names of the types prose describes operations on: `ljust`,
+    # `rglob`, `iterdir` are methods, so they are absent from `dir(module)`.
+    types_ = (str, bytes, list, dict, set, tuple, pathlib.Path, pathlib.PurePath)
+
+    names: set[str] = set()
+    targets: list[object] = []
+    for mod_name in _STDLIB_MEMBER_MODULES:
+        try:
+            targets.append(importlib.import_module(mod_name))
+        except ImportError as exc:  # pragma: no cover - defensive
+            log.debug("Skipping stdlib member scan for %s: %s", mod_name, exc)
+    targets.extend(types_)
+    for target in targets:
+        for attr in dir(target):
+            if attr.startswith("_"):
+                continue
+            names.add(attr.lower().replace("_", "-"))
+    return frozenset(names)
+
+
+_STDLIB_MEMBERS = _stdlib_member_names()
+
+# `st_mtime`, `st_size`, `st_mode` — `os.stat_result` field names. They are
+# attributes of a C struct, so `dir(os)` does not list them.
+_STRUCT_FIELD_RE = re.compile(r"^st-[a-z]+$")
+
+# A verb phrase harvested out of prose reads exactly like a hyphenated package
+# name: "add a section" → `add-section`, "scan directory" → `scan-directory`.
+# Deliberately a SMALL imperative list — a long one would start rejecting real
+# packages whose names legitimately open with a verb (`build-essential`,
+# `parse-torrent`), so this is scoped to the verbs that show up in design prose
+# describing what the code will do.
+_PROSE_VERBS = frozenset({
+    "add", "scan", "get", "set", "run", "make", "build", "parse", "write",
+    "read", "create", "delete", "update", "fetch", "load", "save", "render",
+    "compute", "collect", "emit", "handle", "check", "detect", "resolve",
+    "skip", "log", "return", "raise", "keep", "drop", "reject", "apply",
+    "route", "wrap", "surface", "record", "gate", "suppress",
+})
+
 # Filenames/paths, not packages.
 _FILE_EXT_RE = re.compile(
     r"\.(py|pyi|js|mjs|cjs|jsx|ts|tsx|swift|rs|go|java|kt|rb|sh|bash|zsh|"
@@ -179,6 +248,26 @@ def _aliases(canonical_name: str) -> set[str]:
     return {a for a in out if a}
 
 
+def _collapse(canonical_name: str) -> str:
+    """``pkg.sub.thing`` → ``pkg``. A distribution is the head, not the path.
+
+    Without this, `rich`, `rich.print`, `rich.console.console` and
+    `rich.table.table` were four separate candidates and `rich` was explained
+    four times over; and member accesses like `entry.stat` or `str.ljust`
+    survived because their head never got tested against the stdlib.
+
+    npm scopes (``@scope/pkg``) and Go module paths keep their slash form —
+    those really are the distribution name — so only dots are collapsed.
+    """
+    if "." not in canonical_name:
+        return canonical_name
+    # Never collapse a filename — `package.json` must stay `package.json` so
+    # the extension rule can reject it, not become a bogus `package` candidate.
+    if _FILE_EXT_RE.search(canonical_name):
+        return canonical_name
+    return canonical_name.partition(".")[0]
+
+
 def _is_plausible_dependency(canonical_name: str, *, python_ecosystem: bool = True) -> bool:
     if len(canonical_name) < 2:
         return False
@@ -188,6 +277,24 @@ def _is_plausible_dependency(canonical_name: str, *, python_ecosystem: bool = Tr
         return False
     if canonical_name in _GENERIC_TERMS:
         return False
+    # In Python land every dotted token was collapsed to its head before this
+    # point, so a surviving dot means a filename-shaped token we refused to
+    # collapse. Elsewhere dots are legitimate (`lodash.debounce`).
+    if python_ecosystem and "." in canonical_name:
+        return False
+    if _STRUCT_FIELD_RE.match(canonical_name):
+        return False
+    head_word = canonical_name.split("-", 1)[0]
+    if "-" in canonical_name and head_word in _PROSE_VERBS:
+        return False
+    # Builtins and stdlib members: the two levels `sys.stdlib_module_names`
+    # cannot see. Gated on the Python ecosystem for the same reason the stdlib
+    # check below is — `open` and `register` could be real npm packages.
+    if python_ecosystem:
+        if canonical_name in _BUILTIN_NAMES:
+            return False
+        if canonical_name in _STDLIB_MEMBERS:
+            return False
     # Stdlib is never "new" — this is the gate that stops an explainer firing
     # on every `pathlib` / `asyncio` / `json` mention in a real change. It
     # only applies where Python is plausible: `secrets` or `queue` are real
@@ -302,8 +409,7 @@ def _declared_in_package_swift(path: Path) -> set[str]:
         return names
     for url in _SWIFT_PKG_URL_RE.findall(text):
         last = url.rstrip("/").rsplit("/", 1)[-1]
-        if last.endswith(".git"):
-            last = last[: -len(".git")]
+        last = last.removesuffix(".git")
         names.add(_canonical(last))
     for name in _SWIFT_PKG_NAME_RE.findall(text):
         names.add(_canonical(name))
@@ -507,6 +613,10 @@ def detect_new_dependencies(
             for match in _BACKTICK_RE.finditer(line):
                 raw = match.group(1)
                 canonical_name = _canonical(raw)
+                # Only in Python land: `lodash.debounce` really is an npm
+                # distribution, so collapsing dots there would rename it.
+                if python_ecosystem:
+                    canonical_name = _collapse(canonical_name)
                 if not _is_plausible_dependency(
                     canonical_name, python_ecosystem=python_ecosystem,
                 ):
