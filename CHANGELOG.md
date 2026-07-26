@@ -22,7 +22,8 @@ values are in `.claude-plugin/marketplace.json`, which is what Claude Code's
 `/plugin` menu reads:
 
 ```bash
-python3 -c 'import json;[print(f"{p[\"name\"]:22}{p[\"version\"]}") for p in json.load(open(".claude-plugin/marketplace.json"))["plugins"]]'
+python3 -c "import json; [print(p['name'], p['version']) for p in
+            json.load(open('.claude-plugin/marketplace.json'))['plugins']]"
 ```
 
 Each plugin's changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
