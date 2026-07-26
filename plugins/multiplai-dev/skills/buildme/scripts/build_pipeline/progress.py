@@ -65,6 +65,32 @@ class ProgressWriter:
             for line in text.strip().splitlines()[:40]:
                 f.write(f"{line}\n")
 
+    def log_spec_impact(
+        self, block_name: str, role: str, spec_impact: str, surprises: str,
+    ) -> None:
+        """Append an agent's spec-impact note. A `contradicts` note is written
+        as a WARNING heading so it is visible in the tail of the progress file
+        the moment it happens, not only in the end-of-build respec proposal."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        label = "WARNING" if spec_impact == "contradicts" else "NOTE"
+        with self.path.open("a") as f:
+            f.write(
+                f"\n## [{self._now()}] {label} — SPEC_IMPACT: {spec_impact} "
+                f"({block_name} / {role})\n"
+            )
+            for line in (surprises or "").strip().splitlines()[:20]:
+                f.write(f"{line}\n")
+
+    def log_board(self, column: str, owner_agent: str | None = None, note: str = "") -> None:
+        """Append a board-column transition (the `.board.json` seam's human
+        channel). Only called when the card actually moves columns."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        owner = f" (owner: {owner_agent})" if owner_agent else ""
+        with self.path.open("a") as f:
+            f.write(f"\n## [{self._now()}] BOARD → {column}{owner}\n")
+            if note:
+                f.write(f"{note}\n")
+
     def cleanup(self) -> None:
         if self.path.exists():
             self.path.unlink()

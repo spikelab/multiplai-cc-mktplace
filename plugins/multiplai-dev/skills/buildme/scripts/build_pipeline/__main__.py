@@ -40,6 +40,66 @@ def _add_lenient_review_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_skip_explainers_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--skip-explainers",
+        action="store_true",
+        help="Skip the unknowns/edge-case explainer pass for dependencies new "
+             "to this project. unknowns.md is still written, recording the skip. "
+             "Default: explainers on (also settable as "
+             "`explainers: {enabled: false}` in specs/config.yaml).",
+    )
+
+
+def _add_prototype_flags(p: argparse.ArgumentParser) -> None:
+    """Override the prototype stage's auto-detection in either direction.
+    Without a flag, `prototype: {enabled: auto|true|false}` in
+    specs/config.yaml decides; with neither, the applicability rule does."""
+    group = p.add_mutually_exclusive_group()
+    group.add_argument(
+        "--prototype",
+        action="store_true",
+        help="Always run the prototype stage before the build, whatever the "
+             "change type.",
+    )
+    group.add_argument(
+        "--no-prototype",
+        action="store_true",
+        help="Skip the prototype stage (the skip and its reason are logged).",
+    )
+
+
+def _add_git_lifecycle_flags(p: argparse.ArgumentParser) -> None:
+    """Git lifecycle controls. Defaults: worktree on, push on, PR draft.
+
+    `--no-worktree --no-push --no-pr` reproduces the pre-git-lifecycle
+    pipeline exactly (build in place, on the caller's branch). The buildme
+    SKILL.md wrapper passes --no-worktree when it is already inside one.
+    """
+    p.add_argument(
+        "--no-worktree",
+        action="store_true",
+        help="Build in the project dir on the current branch instead of "
+             "creating a dedicated worktree + branch (pre-0.5 behavior; use "
+             "when already inside a worktree).",
+    )
+    p.add_argument(
+        "--no-push",
+        action="store_true",
+        help="Do not push the build's branch to origin.",
+    )
+    p.add_argument(
+        "--no-pr",
+        action="store_true",
+        help="Do not open a pull request after pushing.",
+    )
+    p.add_argument(
+        "--pr-ready",
+        action="store_true",
+        help="Open the PR ready-for-review instead of the default draft.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="build_pipeline",
@@ -61,6 +121,9 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--context-files", nargs="*", default=[], help="Brief/context file paths")
     _add_trust_repo_flag(build)
     _add_lenient_review_flag(build)
+    _add_skip_explainers_flag(build)
+    _add_prototype_flags(build)
+    _add_git_lifecycle_flags(build)
 
     # --- spec-generate ---
     spec = sub.add_parser("spec-generate", help="Artifact generation pipeline")
@@ -69,6 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
     spec.add_argument("--interview-summary", default="", help="Interview summary text")
     spec.add_argument("--research-path", default="", help="Path to research output")
     _add_trust_repo_flag(spec)
+    _add_skip_explainers_flag(spec)
 
     # --- tdd ---
     tdd = sub.add_parser("tdd", help="TDD implementation engine")
@@ -102,6 +166,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Earliest common entry point for every subcommand that takes --change:
+    # refuse a name that normalizes to nothing (e.g. '!!!') here, cleanly,
+    # instead of dying much later on a 'buildme/' branch or a collapsed
+    # specs/changes path (normalize_change_name raises ValueError for these).
+    change = getattr(args, "change", "") or ""
+    if change:
+        from .change_manager import normalize_change_name
+        try:
+            normalize_change_name(change)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
 
     # Propagate the repo-trust opt-in to the agent layer (sdk._repo_is_trusted).
     if getattr(args, "trust_repo", False):

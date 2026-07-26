@@ -31,6 +31,9 @@ from the append-only cost ledger in `<data_dir>/costs/`. Two scripts:
    | per branch | `costs_report.py --all --by branch` |
    | one branch | `costs_report.py --branch <name>` (reads all months; `--branch "(none)"` for unattributed) |
    | a PR | resolve the branch with `gh`, then `--branch` — see below |
+   | cost per completed task | `costs_report.py --all --group task --pr-join --project-dir <repo>` |
+   | cost per buildme block | `costs_report.py --all --group build --project-dir <repo>` |
+   | cache utilization | `costs_report.py --all --report cache [--cache-threshold 0.5]` |
 
    All via `uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/costs_report.py" ...`.
    Add `--json` when you need to post-process numbers.
@@ -54,6 +57,42 @@ from the append-only cost ledger in `<data_dir>/costs/`. Two scripts:
    ```
 3. If several PRs were cut from one branch, they **share** the branch's cost —
    say so when presenting the number.
+
+## Cost per completed task
+
+Raw tokens and raw dollars answer "what did we spend", not "what did it cost to
+get something done". Two outcome units are available:
+
+- `--group task --pr-join` — a *task* is a branch whose PR state resolves via
+  `gh` (merged / closed / open / no-pr). Rows carry cost + tokens + outcome, and
+  the summary divides total cost by merged-PR count, with per-task median/p90.
+  A repo `gh` cannot reach degrades to `no-pr` rather than failing the report.
+- `--group build` — buildme's finer signal, joined from
+  `specs/changes/*/.build-state.json`: cost per DONE block *and* cost per FAILED
+  block. The failed-block figure is the retry-and-loop spend, which is where
+  verification changes (adjudication, reviewer panels) either pay for themselves
+  or don't.
+
+**Framing rule — cross-model comparisons must be per-outcome, never
+per-token.** Different models tokenize differently, so the same work yields
+different token counts; a cheaper per-token model that loops twice is more
+expensive. When comparing models or pipeline versions, quote cost per merged PR
+or per DONE block. Quote per-token numbers only within one model.
+
+## Cache utilization
+
+`--report cache` computes, per project/skill/component, the hit ratio
+`cr / (in + cr)` and the cache-write share, flagging rows under the threshold
+(default 50%). The data is already in every ledger record — no collector
+change, so it works on historical months.
+
+Baseline measured 2026-07-25 over the whole ledger: **99.7% overall hit ratio**
+(4.77B cached / 4.78B eligible tokens); every SDK component
+(deep-research, buildme, dream, catalogs, model_client) sat at 100.0%, and
+interactive at 99.7%. Cache breakpoints in the in-house pipelines were already
+placed correctly — the finding is "already optimal", not a fix. Write share is
+the number to watch instead: `model_client` writes 65% and `catalogs` 36%, i.e.
+they re-write prefixes more often than they reuse them.
 
 ## Branch attribution caveats
 
