@@ -96,3 +96,67 @@ class TestTDDState:
         loaded = BuildState.load(state_file)
         assert loaded.tdd.current_block == 1
         assert loaded.tdd.blocks[1].status == BlockStatus.TESTING
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+class TestLegacyCheckpointResume:
+    """Done-means #7: a .build-state.json written before BuildPhase.PROTOTYPE
+    existed must still load and resume at the right phase. The stored phase is
+    a name, not an ordinal, so inserting a phase cannot shift it — but
+    is_phase_complete compares enum *positions*, so the resume point is what
+    actually has to be asserted."""
+
+    def test_pre_prototype_fixture_has_no_prototype_fields(self):
+        """Guard the guard: if someone regenerates these fixtures with the
+        current code they stop testing backwards compatibility."""
+        for name in ("build-state-pre-prototype-design-audit.json",
+                     "build-state-pre-prototype-tdd.json"):
+            raw = (FIXTURES / name).read_text()
+            assert "prototype" not in raw, f"{name} is no longer a pre-change fixture"
+
+    def test_loads_and_resumes_at_design_audit(self):
+        s = BuildState.load(FIXTURES / "build-state-pre-prototype-design-audit.json")
+
+        assert s.phase == BuildPhase.DESIGN_AUDIT
+        assert s.change_name == "legacy-change"
+        # Fields added after the checkpoint was written take their defaults.
+        assert s.spec_gen.prototype_done is False
+        assert s.spec_gen.tasks_audit_done is True
+
+        # Everything before the design audit stays complete...
+        assert s.is_phase_complete(BuildPhase.BOOTSTRAP)
+        assert s.is_phase_complete(BuildPhase.RESEARCH)
+        assert s.is_phase_complete(BuildPhase.SPEC_GENERATION)
+        # ...and the resume point is the design audit, with the new prototype
+        # phase still ahead of it rather than silently skipped.
+        assert not s.is_phase_complete(BuildPhase.DESIGN_AUDIT)
+        assert not s.is_phase_complete(BuildPhase.PROTOTYPE)
+        assert not s.is_phase_complete(BuildPhase.REVIEW)
+        assert not s.is_phase_complete(BuildPhase.TDD_BUILD)
+
+    def test_loads_and_resumes_at_tdd_build(self):
+        s = BuildState.load(FIXTURES / "build-state-pre-prototype-tdd.json")
+
+        assert s.phase == BuildPhase.REVIEW
+        assert s.tdd.current_block == 1
+        assert s.tdd.blocks[0].status == BlockStatus.DONE
+
+        # A build already past the review checkpoint does not go back for a
+        # prototype — its shaping is done.
+        assert s.is_phase_complete(BuildPhase.DESIGN_AUDIT)
+        assert s.is_phase_complete(BuildPhase.PROTOTYPE)
+        assert not s.is_phase_complete(BuildPhase.REVIEW)
+        assert not s.is_phase_complete(BuildPhase.TDD_BUILD)
+
+    def test_roundtrip_rewrites_with_the_new_field(self, tmp_path):
+        """Loading an old checkpoint and re-checkpointing must not lose data."""
+        s = BuildState.load(FIXTURES / "build-state-pre-prototype-design-audit.json")
+        out = tmp_path / "state.json"
+        s.checkpoint(out)
+
+        reloaded = BuildState.load(out)
+        assert reloaded.phase == BuildPhase.DESIGN_AUDIT
+        assert reloaded.spec_gen.completed_artifacts == s.spec_gen.completed_artifacts
+        assert json.loads(out.read_text())["spec_gen"]["prototype_done"] is False

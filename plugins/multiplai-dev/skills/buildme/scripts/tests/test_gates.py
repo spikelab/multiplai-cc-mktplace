@@ -6,6 +6,10 @@ from pathlib import Path
 from build_pipeline.gates import (
     agent_status_gate,
     parse_agent_status,
+    parse_prototype_notes,
+    prototype_gate,
+    prototype_required,
+    slot_has_content,
     red_gate,
     review_score_gate,
     review_iteration_gate,
@@ -528,3 +532,146 @@ async def test_unknowns_gate_regeneration_failure_leaves_first_pass_standing(tmp
 
     assert mock_gen.await_count == 1
     assert output_path.read_text() == before
+
+
+# --- Prototype-first stage ---
+
+GOOD_NOTES = """\
+# Prototype notes
+
+PROVES: The settings page fits in one column with four grouped toggles.
+DISPROVES: none
+OPEN_QUESTIONS: Should the reset button live above or below the toggles?
+STATUS: DONE
+"""
+
+
+def _write_change(change_dir: Path, proposal: str, design: str = "") -> Path:
+    change_dir.mkdir(parents=True, exist_ok=True)
+    (change_dir / "proposal.md").write_text(proposal)
+    (change_dir / "design.md").write_text(design or "## Decisions\nNone yet.")
+    return change_dir
+
+
+def _write_prototype(proto_dir: Path, notes: str, artifact: str = "mockup.html") -> Path:
+    proto_dir.mkdir(parents=True, exist_ok=True)
+    if artifact:
+        (proto_dir / artifact).write_text("<html><body>hi</body></html>")
+    (proto_dir / "NOTES.md").write_text(notes)
+    return proto_dir
+
+
+class TestPrototypeRequired:
+    def test_frontend_change_requires_prototype(self, tmp_path):
+        _write_change(
+            tmp_path / "change",
+            "## Why\nUsers need a settings page.\n\n"
+            "## What Changes\nA new React component renders the form in the "
+            "browser with Tailwind CSS. The UI has a button per toggle and a "
+            "page-level layout in the DOM.\n",
+        )
+        assert prototype_required(tmp_path / "change") is True
+
+    def test_plain_backend_change_does_not(self, tmp_path):
+        _write_change(
+            tmp_path / "change",
+            "## Why\nThe worker queue drops jobs under load.\n\n"
+            "## What Changes\nAdd a retry column to the jobs database table, a "
+            "migration for it, and a celery worker that re-enqueues failed "
+            "jobs via the internal API endpoint.\n",
+        )
+        assert prototype_required(tmp_path / "change") is False
+
+    def test_backend_change_with_user_visible_output_requires_prototype(self, tmp_path):
+        _write_change(
+            tmp_path / "change",
+            "## Why\nOps need a weekly summary.\n\n"
+            "## What Changes\nA cron worker queries the database and writes a "
+            "weekly report as a CSV export.\n",
+        )
+        assert prototype_required(tmp_path / "change") is True
+
+    def test_output_format_mentioned_only_in_design(self, tmp_path):
+        _write_change(
+            tmp_path / "change",
+            "## Why\nBetter diagnostics.\n\n## What Changes\nAn API endpoint.\n",
+            design="## Decisions\nThe command prints its findings as CLI output "
+                   "in a fixed column layout.\n",
+        )
+        assert prototype_required(tmp_path / "change") is True
+
+    def test_missing_artifacts_do_not_crash(self, tmp_path):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        assert prototype_required(empty) is False
+
+
+class TestParsePrototypeNotes:
+    def test_parses_all_slots(self):
+        notes = parse_prototype_notes(GOOD_NOTES)
+        assert notes["proves"].startswith("The settings page")
+        assert notes["disproves"] == "none"
+        assert notes["open_questions"].startswith("Should the reset button")
+        assert notes["status"] == "DONE"
+
+    def test_multiline_slot_value(self):
+        text = (
+            "PROVES: one\ncontinued on the next line\n"
+            "DISPROVES: none\nOPEN_QUESTIONS: none\nSTATUS: DONE\n"
+        )
+        notes = parse_prototype_notes(text)
+        assert "continued on the next line" in notes["proves"]
+
+    def test_slot_has_content_treats_none_as_empty(self):
+        assert not slot_has_content("none")
+        assert not slot_has_content("  N/A ")
+        assert not slot_has_content(None)
+        assert slot_has_content("the header wraps at 320px")
+
+
+class TestPrototypeGate:
+    def test_passes_with_artifact_and_complete_notes(self, tmp_path):
+        proto = _write_prototype(tmp_path / "prototype", GOOD_NOTES)
+        r = prototype_gate(proto)
+        assert r.passed, r.reason
+        assert r.metadata["status"] == "DONE"
+
+    def test_fails_on_empty_proves_slot(self, tmp_path):
+        notes = "PROVES:\nDISPROVES: none\nOPEN_QUESTIONS: none\nSTATUS: DONE\n"
+        proto = _write_prototype(tmp_path / "prototype", notes)
+        r = prototype_gate(proto)
+        assert not r.passed
+        assert "PROVES" in r.reason
+        assert r.action == "retry_prototype"
+
+    def test_fails_on_empty_open_questions_slot(self, tmp_path):
+        notes = "PROVES: the layout\nDISPROVES: none\nOPEN_QUESTIONS:\nSTATUS: DONE\n"
+        proto = _write_prototype(tmp_path / "prototype", notes)
+        r = prototype_gate(proto)
+        assert not r.passed
+        assert "OPEN_QUESTIONS" in r.reason
+
+    def test_fails_when_only_notes_exist(self, tmp_path):
+        proto = _write_prototype(tmp_path / "prototype", GOOD_NOTES, artifact="")
+        r = prototype_gate(proto)
+        assert not r.passed
+        assert "besides NOTES.md" in r.reason
+
+    def test_fails_on_missing_notes(self, tmp_path):
+        proto = tmp_path / "prototype"
+        proto.mkdir()
+        (proto / "mockup.html").write_text("<html></html>")
+        r = prototype_gate(proto)
+        assert not r.passed
+        assert "NOTES.md missing" in r.reason
+
+    def test_fails_on_missing_directory(self, tmp_path):
+        r = prototype_gate(tmp_path / "nope")
+        assert not r.passed
+        assert "not created" in r.reason
+
+    def test_fails_on_missing_slots(self, tmp_path):
+        proto = _write_prototype(tmp_path / "prototype", "PROVES: a layout\n")
+        r = prototype_gate(proto)
+        assert not r.passed
+        assert "REQUIRED slots" in r.reason

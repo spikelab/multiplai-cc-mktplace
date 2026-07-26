@@ -263,7 +263,7 @@ async def _run_prototype_phase(
         log.info("SKIP phase=PROTOTYPE_FEEDBACK reason=recorded-complete-in-state")
         return
     try:
-        regenerated = await apply_prototype_findings(config, state)
+        regenerated = await apply_prototype_findings(config)
         log.info("DONE phase=PROTOTYPE_FEEDBACK regenerated=%d", regenerated)
     except Exception as feedback_err:  # non-fatal
         log.warning("Prototype feedback pass failed (non-fatal): %s", feedback_err)

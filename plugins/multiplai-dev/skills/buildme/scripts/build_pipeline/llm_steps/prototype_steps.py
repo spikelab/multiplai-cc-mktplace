@@ -6,7 +6,7 @@ Two steps live here:
   output / CLI transcript plus NOTES.md inside `specs/changes/<name>/prototype/`
   and nowhere else. The write boundary is enforced here in code
   (`_files_outside`), not only stated in the prompt.
-- `apply_prototype_findings(config, state)` folds the notes' DISPROVES /
+- `apply_prototype_findings(config)` folds the notes' DISPROVES /
   OPEN_QUESTIONS content back into design.md and tasks.md with exactly one
   regeneration pass each — the same `generate_artifact(..., audit_findings=...)`
   mechanism the tasks-shape audit uses.
@@ -173,7 +173,7 @@ def primary_prototype_artifact(prototype_dir: Path) -> Path | None:
     return files[0]
 
 
-async def apply_prototype_findings(config, state) -> int:
+async def apply_prototype_findings(config) -> int:
     """Regenerate design.md and tasks.md ONCE from the prototype's notes.
 
     Returns the number of artifacts regenerated (0 when the notes carry nothing
