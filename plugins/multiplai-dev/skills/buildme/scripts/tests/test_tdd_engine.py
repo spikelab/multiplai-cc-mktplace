@@ -328,6 +328,31 @@ class TestAssembleContext:
         assert "Evaluation Rubric" in ctx
         assert "Code quality criteria" in ctx
 
+    def test_test_writer_gets_unknowns_and_refactorer_does_not(self, tmp_path):
+        """B1's payoff: the documented edge cases reach the agent that turns
+        them into tests. The refactorer has no use for them, so the document
+        stays out of its bundle."""
+        config = self._make_config(tmp_path)
+        config.unknowns_path.write_text(
+            "# Unknowns\n\n## mlx-whisper\n\n### Edge cases & failure modes\n"
+            "- Silence transcribes as 'thanks for watching', not an empty string.\n"
+        )
+        block = BlockInfo(number=1, name="X", description="desc")
+
+        writer_ctx = assemble_context(block, config, "test_writer")
+        assert "thanks for watching" in writer_ctx
+        assert "Unknowns — dependencies new to this project" in writer_ctx
+
+        refactorer_ctx = assemble_context(block, config, "refactorer")
+        assert "thanks for watching" not in refactorer_ctx
+        assert "Unknowns" not in refactorer_ctx
+
+    def test_missing_unknowns_file_is_fine(self, tmp_path):
+        config = self._make_config(tmp_path)
+        assert not config.unknowns_path.exists()
+        block = BlockInfo(number=1, name="X", description="desc")
+        assert "Unknowns" not in assemble_context(block, config, "test_writer")
+
     def test_includes_project_description(self, tmp_path):
         config = self._make_config(tmp_path)
         block = BlockInfo(number=1, name="X", description="desc")
@@ -1003,6 +1028,7 @@ class TestGitCommitScoping:
         (project_dir / "module.py").write_text("x = 1\n")
         config.progress_file_path().write_text("# progress\n")
         config.state_file_path().write_text("{}\n")
+        (config.change_dir / ".board.json").write_text("{}\n")
 
         sha = _git_commit_block_phase(config, "impl", BlockInfo(number=1, name="B", description="d"))
         assert sha is not None
@@ -1014,6 +1040,7 @@ class TestGitCommitScoping:
         assert "module.py" in committed
         assert "build-progress.md" not in committed
         assert not any(".build-state.json" in f for f in committed)
+        assert not any(".board.json" in f for f in committed)
 
         # The bookkeeping files must remain untracked afterward.
         tracked = subprocess.run(
@@ -1021,6 +1048,7 @@ class TestGitCommitScoping:
         ).stdout
         assert "build-progress.md" not in tracked
         assert ".build-state.json" not in tracked
+        assert ".board.json" not in tracked
 
 
 class TestRedGateWiring:
@@ -2555,3 +2583,230 @@ class TestBudgetCircuitBreaker:
             await run_tdd_engine(config, args)
         # Reached the block: the budget did not intercept it.
         writer.assert_awaited()
+CONTRADICTION_REPORT = """\
+Implemented the uploader against the failing tests.
+
+STATUS: DONE
+TESTS_RUN: pytest -xvs
+GREEN: 12 passed in 1.2s
+FILES: uploader.py
+SURPRISES: The storage client raises on timeout; the design says it returns
+an error code. The block only works if the caller catches the exception.
+SPEC_IMPACT: contradicts
+"""
+
+CLARIFY_TEST_REPORT = """\
+STATUS: DONE
+TESTS_RUN: pytest -xvs
+FILES: tests/test_uploader.py
+TEST_COUNT: 6
+SURPRISES: The spec never says what happens on an empty file; I pinned it to
+a validation error.
+SPEC_IMPACT: clarify
+"""
+
+CLEAN_REPORT = "STATUS: DONE\nFILES: uploader.py\nSURPRISES: none\nSPEC_IMPACT: none\n"
+
+
+class TestImplementationNotesLoop:
+    """B3: agents' SURPRISES/SPEC_IMPACT reports become durable notes, and a
+    contradiction is surfaced (and optionally halts the build)."""
+
+    @pytest.fixture(autouse=True)
+    def _red(self, red_gate_passes, quality_audit_overturns):
+        yield
+
+    @pytest.fixture
+    def setup(self, tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        specs_root = project_dir / "specs"
+        change_dir = specs_root / "changes" / "test"
+        change_dir.mkdir(parents=True)
+        (change_dir / "design.md").write_text("# Design")
+
+        config = BuildConfig(
+            project_dir=project_dir,
+            change_name="test",
+            tier="advanced",
+            test_command="pytest -xvs",
+            config_dir=tmp_path / "config",
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
+        )
+        config.specs_dir = specs_root
+
+        block = BlockInfo(number=1, name="Uploader", description="Upload block")
+        state = BuildState(
+            change_name="test", mode="only", tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
+        progress = ProgressWriter(project_dir / "build-progress.md")
+        progress.initialize("test", "only", "advanced", 1)
+        return config, state, progress, block
+
+    @staticmethod
+    def _agents(test_output, impl_output):
+        return (
+            patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock,
+                  return_value=AgentResult(success=True, output=test_output)),
+            patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
+                  return_value=AgentResult(success=True, output=impl_output)),
+        )
+
+    @pytest.mark.asyncio
+    async def test_contradiction_note_is_recorded_and_warned_about(self, setup):
+        """Criterion 8 (default config): the note lands in
+        implementation-notes.md, on the block, and as a warning in
+        build-progress.md — and the build keeps going."""
+        config, state, progress, block = setup
+        tw, impl = self._agents("STATUS: DONE\nTEST_COUNT: 6\n", CONTRADICTION_REPORT)
+
+        with tw, impl:
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is True  # halt_on_contradiction defaults to False
+        notes_file = config.change_dir / "implementation-notes.md"
+        assert notes_file.exists()
+        notes_text = notes_file.read_text()
+        assert "SPEC_IMPACT: contradicts" in notes_text
+        assert "raises on timeout" in notes_text
+        assert "## Block 1 — Uploader (implementer)" in notes_text
+
+        assert len(block.notes) == 1
+        assert block.notes[0].contradicts
+        assert block.notes[0].role == "implementer"
+
+        progress_text = progress.path.read_text()
+        assert "WARNING — SPEC_IMPACT: contradicts" in progress_text
+        assert "raises on timeout" in progress_text
+
+    @pytest.mark.asyncio
+    async def test_halt_on_contradiction_stops_the_build_with_a_diagnosis(self, setup):
+        """Criterion 8 (respec.halt_on_contradiction: true)."""
+        config, state, progress, block = setup
+        config.gates.respec_halt_on_contradiction = True
+        tw, impl = self._agents("STATUS: DONE\nTEST_COUNT: 6\n", CONTRADICTION_REPORT)
+
+        with tw, impl:
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is False
+        assert block.status == BlockStatus.FAILED
+        progress_text = progress.path.read_text()
+        assert "DIAGNOSIS (Uploader)" in progress_text
+        assert "SPEC_IMPACT: contradicts" in progress_text
+        assert "halt_on_contradiction" in progress_text
+        # The note is still recorded — a halted build keeps its learning.
+        assert (config.change_dir / "implementation-notes.md").exists()
+
+    @pytest.mark.asyncio
+    async def test_notes_persist_on_state_for_resume(self, setup):
+        config, state, progress, block = setup
+        tw, impl = self._agents(CLARIFY_TEST_REPORT, CONTRADICTION_REPORT)
+
+        with tw, impl:
+            assert await run_block_tdd(block, config, state, progress) is True
+
+        reloaded = BuildState.load(config.state_file_path())
+        roles = [(n.role, n.spec_impact) for n in reloaded.tdd.blocks[0].notes]
+        assert roles == [("test_writer", "clarify"), ("implementer", "contradicts")]
+
+    @pytest.mark.asyncio
+    async def test_note_is_on_disk_before_a_later_crash(self, setup):
+        """Appended as the build runs: the test_writer's note survives an
+        implementer failure that ends the block."""
+        config, state, progress, block = setup
+
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock,
+                   return_value=AgentResult(success=True, output=CLARIFY_TEST_REPORT)), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock,
+                   return_value=AgentResult(success=False, error="agent crashed")):
+            result = await run_block_tdd(block, config, state, progress)
+
+        assert result is False
+        notes_text = (config.change_dir / "implementation-notes.md").read_text()
+        assert "## Block 1 — Uploader (test_writer)" in notes_text
+        assert "SPEC_IMPACT: clarify" in notes_text
+        assert "empty file" in notes_text
+
+    @pytest.mark.asyncio
+    async def test_clean_reports_record_no_notes(self, setup):
+        config, state, progress, block = setup
+        tw, impl = self._agents(CLEAN_REPORT, CLEAN_REPORT)
+
+        with tw, impl:
+            assert await run_block_tdd(block, config, state, progress) is True
+
+        assert not (config.change_dir / "implementation-notes.md").exists()
+        assert block.notes == []
+
+    def test_resume_does_not_duplicate_an_identical_note(self, setup):
+        """A resumed mid-block run re-parses the same agent report — the note
+        must land once on the block and once in implementation-notes.md."""
+        from build_pipeline.tdd_engine import _record_implementation_note
+
+        config, state, progress, block = setup
+        for _ in range(2):
+            assert _record_implementation_note(
+                block, config, state, progress, "implementer", CONTRADICTION_REPORT,
+            ) is True
+
+        assert len(block.notes) == 1
+        notes_text = (config.change_dir / "implementation-notes.md").read_text()
+        assert notes_text.count("## Block 1 — Uploader (implementer)") == 1
+
+    def test_distinct_notes_are_both_recorded(self, setup):
+        from build_pipeline.tdd_engine import _record_implementation_note
+
+        config, state, progress, block = setup
+        _record_implementation_note(
+            block, config, state, progress, "test_writer", CLARIFY_TEST_REPORT,
+        )
+        _record_implementation_note(
+            block, config, state, progress, "implementer", CONTRADICTION_REPORT,
+        )
+        assert len(block.notes) == 2
+
+    def test_duplicate_contradiction_still_halts_when_configured(self, setup):
+        """Dedupe skips the recording, never the halt — a resume must not
+        sneak past halt_on_contradiction."""
+        from build_pipeline.tdd_engine import _record_implementation_note
+
+        config, state, progress, block = setup
+        config.gates.respec_halt_on_contradiction = True
+        first = _record_implementation_note(
+            block, config, state, progress, "implementer", CONTRADICTION_REPORT,
+        )
+        second = _record_implementation_note(
+            block, config, state, progress, "implementer", CONTRADICTION_REPORT,
+        )
+        assert first is False
+        assert second is False
+        assert len(block.notes) == 1
+
+
+class TestReportContractSlots:
+    """3.1 — the two new REQUIRED slots are in every agent report contract."""
+
+    def test_implementer_prompts_declare_both_slots(self):
+        from build_pipeline.prompts.implementation import (
+            IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM,
+        )
+        for prompt in (IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM):
+            assert "SURPRISES:" in prompt
+            assert "SPEC_IMPACT: <none | clarify | contradicts>" in prompt
+
+    def test_test_writer_prompt_declares_both_slots(self):
+        from build_pipeline.prompts.test_writing import TEST_WRITER_PROMPT
+        assert "SURPRISES:" in TEST_WRITER_PROMPT
+        assert "SPEC_IMPACT: <none | clarify | contradicts>" in TEST_WRITER_PROMPT
+
+    def test_prompts_explain_contradicts_without_discouraging_reports(self):
+        """Positive recipe: the prompt says when to use each value and that
+        nothing is auto-applied — no instruction that suppresses a finding."""
+        from build_pipeline.prompts.implementation import IMPLEMENTER_PROMPT_CLEAN
+        assert "contradicts" in IMPLEMENTER_PROMPT_CLEAN
+        assert "implementation-notes.md" in IMPLEMENTER_PROMPT_CLEAN

@@ -74,11 +74,24 @@ STATUS: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
 TESTS_RUN: <the exact command you ran>
 FILES: <test files you created or modified, comma-separated>
 TEST_COUNT: <how many tests you wrote>
+SURPRISES: <what did not match the spec/design, or "none">
+SPEC_IMPACT: <none | clarify | contradicts>
 ```
 
 Use DONE when the tests are written and fail for the right reason;
 DONE_WITH_CONCERNS when they are written but something is worth flagging (state
 what under the slot); NEEDS_CONTEXT or BLOCKED per the section above.
+
+SURPRISES and SPEC_IMPACT close the loop back to the spec. Write down anything
+the specs did not prepare you for — a scenario whose expected shape differs from
+the design, a behavior you had to pin down yourself, a contract that only makes
+sense one way. Use `clarify` when the spec was silent or ambiguous and you had
+to pick, and `contradicts` when the tests you wrote can only be satisfied by
+doing something the spec/design does not say or says otherwise. `none` is the
+right answer when the specs described the behavior accurately. These notes are
+collected into implementation-notes.md and become a proposed spec delta at the
+end of the build — nobody edits the spec from them automatically, so an honest
+note costs you nothing and saves the next build.
 """
 
 TEST_QUALITY_PROMPT = """\

@@ -18,6 +18,7 @@ from ..prompts.spec_generation import (
     TASKS_PROMPT,
 )
 from ..prompts.design_audit import DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT
+from ..prompts.explainer import EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT
 from ..sdk import llm_call, extract_json, LLMCallError
 
 log = logging.getLogger(__name__)
@@ -42,8 +43,10 @@ async def generate_artifact(
         interview_summary: For proposal generation
         research: Research findings for proposal generation
         codebase_analysis: Existing code analysis for design generation
-        audit_findings: Tasks-shape audit findings — injected on the one
-            regeneration pass after run_tasks_audit reports layering
+        audit_findings: Findings injected on a single regeneration pass —
+            tasks-shape audit findings (run_tasks_audit) or prototype notes
+            (prototype_steps.apply_prototype_findings). Used by `design` and
+            `tasks`.
 
     Returns:
         Generated markdown content.
@@ -116,6 +119,7 @@ def _build_prompt(
             proposal_content=proposal_content,
             specs_content=specs_content,
             codebase_analysis=codebase_analysis or "(new project)",
+            audit_findings=audit_findings or "(none — first pass)",
             instruction=instruction,
             template=template,
         )
@@ -129,7 +133,19 @@ def _build_prompt(
             specs_content=specs_content,
             design_content=design_content,
             granularity=config.task_granularity,
+            unknowns_content=context.get("unknowns_content") or "(none detected)",
             audit_findings=audit_findings or "(none — first pass)",
+            instruction=instruction,
+            template=template,
+        )
+    elif artifact_id == "unknowns":
+        # Regeneration pass only — the first pass is one run_explainer call per
+        # dependency (see spec_generator._generate_unknowns).
+        return UNKNOWNS_REGEN_PROMPT.format(
+            project_context=project_context,
+            dependency_list=context.get("dependency_list") or "(none)",
+            current_unknowns=context.get("current_unknowns") or "(empty)",
+            audit_findings=audit_findings or "(none)",
             instruction=instruction,
             template=template,
         )
@@ -164,6 +180,31 @@ def _read_specs(config) -> str:
         cap_name = req_file.stem
         parts.append(f"### {cap_name}\n{req_file.read_text()}")
     return "\n\n".join(parts) if parts else "(no specs yet)"
+
+
+async def run_explainer(dep, config, usage_context: str = "") -> str:
+    """Write one dependency's section of `unknowns.md` (B1 explainer gate).
+
+    ``dep`` is a ``dependencies.NewDependency``. Research tools are allowed —
+    the point of the explainer is to find the documented edge cases (the
+    Whisper-silence class) rather than recall them. Returns the markdown
+    section; the caller concatenates one per dependency.
+    """
+    prompt = EXPLAINER_PROMPT.format(
+        dep_name=dep.name,
+        mentioned_in=", ".join(getattr(dep, "mentioned_in", []) or []) or "(unrecorded)",
+        evidence=getattr(dep, "evidence", "") or "(no manifest evidence recorded)",
+        project_context=getattr(config, "project_description", "") or "(none)",
+        usage_context=usage_context or "(see the design's Decisions section)",
+    )
+
+    log.info("Running explainer for dependency: %s", dep.name)
+    return await llm_call(
+        prompt,
+        model=config.model,
+        allowed_tools=["WebSearch", "WebFetch", "Read", "Glob", "Grep"],
+        max_turns=12,
+    )
 
 
 async def run_design_audit(change_dir: Path, config) -> list[dict]:

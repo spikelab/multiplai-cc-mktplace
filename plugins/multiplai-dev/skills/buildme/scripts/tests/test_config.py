@@ -392,3 +392,252 @@ class TestBudgetConfig:
     def test_absent_budget_section_is_unlimited(self, tmp_path):
         config = _config_from_yaml(tmp_path, "tdd:\n  test_command: pytest\n")
         assert config.budget_max_tokens is None
+class TestExplainerToggle:
+    """B1 explainers default ON; the CLI flag wins over specs/config.yaml."""
+
+    def test_default_is_on(self):
+        assert GateToggles().explainers_enabled
+        assert BuildConfig().explainers_active
+
+    def test_config_yaml_can_disable(self, tmp_path):
+        import yaml
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text(
+            yaml.dump({"context": "demo", "explainers": {"enabled": False}})
+        )
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = specs
+        config._load_specs_config()
+        assert not config.gates.explainers_enabled
+        assert not config.explainers_active
+
+    def test_cli_flag_disables_even_when_config_enables(self, tmp_path):
+        import yaml
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text(
+            yaml.dump({"context": "demo", "explainers": {"enabled": True}})
+        )
+        config = BuildConfig(project_dir=tmp_path, skip_explainers=True)
+        config.specs_dir = specs
+        config._load_specs_config()
+        assert config.gates.explainers_enabled
+        assert not config.explainers_active
+
+    def test_unknowns_path_lives_in_the_change_dir(self, tmp_path):
+        config = BuildConfig(project_dir=tmp_path, change_name="my-change")
+        config.specs_dir = tmp_path / "specs"
+        assert config.unknowns_path == (
+            tmp_path / "specs" / "changes" / "my-change" / "unknowns.md"
+        )
+
+
+class TestSkipExplainersFlag:
+    def test_flag_is_declared_on_build_and_spec_generate(self):
+        from build_pipeline.__main__ import build_parser
+
+        parser = build_parser()
+        for argv in (
+            ["build", "--skip-explainers"],
+            ["spec-generate", "--change", "x", "--skip-explainers"],
+        ):
+            assert parser.parse_args(argv).skip_explainers is True
+
+    def test_default_is_false(self):
+        from build_pipeline.__main__ import build_parser
+
+        assert build_parser().parse_args(["build"]).skip_explainers is False
+
+
+class TestPrototypeToggle:
+    """`prototype: {enabled: auto|true|false}` in specs/config.yaml, with the
+    --prototype / --no-prototype CLI flags overriding it."""
+
+    def _write_config(self, tmp_path, body):
+        specs = tmp_path / "specs"
+        specs.mkdir(parents=True, exist_ok=True)
+        (specs / "config.yaml").write_text(body)
+        return specs
+
+    def test_defaults_to_auto(self, tmp_path):
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = tmp_path / "specs"
+        config._load_specs_config()
+        assert config.gates.prototype == "auto"
+
+    def test_reads_auto_from_config_yaml(self, tmp_path):
+        self._write_config(tmp_path, "prototype:\n  enabled: auto\n")
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = tmp_path / "specs"
+        config._load_specs_config()
+        assert config.gates.prototype == "auto"
+
+    def test_reads_boolean_from_config_yaml(self, tmp_path):
+        self._write_config(tmp_path, "prototype:\n  enabled: false\n")
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = tmp_path / "specs"
+        config._load_specs_config()
+        assert config.gates.prototype == "false"
+
+    def test_unrecognized_value_falls_back_to_auto(self, tmp_path):
+        self._write_config(tmp_path, "prototype:\n  enabled: sometimes\n")
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = tmp_path / "specs"
+        config._load_specs_config()
+        assert config.gates.prototype == "auto"
+
+    def test_cli_flag_overrides_config_yaml(self, tmp_path):
+        import argparse
+        self._write_config(tmp_path, "prototype:\n  enabled: true\n")
+        args = argparse.Namespace(
+            mode="scratch", project_dir=str(tmp_path), change="c",
+            auto=False, spec_only=False, skip_research=False,
+            lenient_review=False, prototype=False, no_prototype=True,
+        )
+        config = BuildConfig.from_cli_args(args)
+        assert config.prototype_mode == "false"
+
+    def test_no_flags_takes_the_config_value(self, tmp_path):
+        import argparse
+        self._write_config(tmp_path, "prototype:\n  enabled: true\n")
+        args = argparse.Namespace(
+            mode="scratch", project_dir=str(tmp_path), change="c",
+            auto=False, spec_only=False, skip_research=False,
+            lenient_review=False, prototype=False, no_prototype=False,
+        )
+        config = BuildConfig.from_cli_args(args)
+        assert config.prototype_mode == "true"
+
+    def test_prototype_dir_is_inside_the_change(self, tmp_path):
+        config = BuildConfig(project_dir=tmp_path, change_name="my-change")
+        config.specs_dir = tmp_path / "specs"
+        assert config.prototype_dir == config.change_dir / "prototype"
+
+    def test_cli_parser_exposes_the_flags(self):
+        from build_pipeline.__main__ import build_parser
+        parser = build_parser()
+        assert parser.parse_args(["build", "--no-prototype"]).no_prototype is True
+        assert parser.parse_args(["build", "--prototype"]).prototype is True
+        with pytest.raises(SystemExit):
+            parser.parse_args(["build", "--prototype", "--no-prototype"])
+
+
+class TestRespecToggle:
+    """`respec: {halt_on_contradiction: ...}` in specs/config.yaml, default off."""
+
+    def test_defaults_to_false(self):
+        assert BuildConfig().gates.respec_halt_on_contradiction is False
+
+    def test_absent_config_section_keeps_the_default(self, tmp_path):
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text("context: demo\n")
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = specs
+        config._load_specs_config()
+        assert config.gates.respec_halt_on_contradiction is False
+
+    def test_enabled_from_specs_config_yaml(self, tmp_path):
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text("respec:\n  halt_on_contradiction: true\n")
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = specs
+        config._load_specs_config()
+        assert config.gates.respec_halt_on_contradiction is True
+
+
+# --- Git lifecycle toggles (work item 4) ---------------------------------
+
+class TestGitToggles:
+    def test_defaults_are_worktree_on_push_on_pr_draft(self):
+        from build_pipeline.config import BuildConfig, GitToggles
+
+        assert GitToggles() == GitToggles(worktree=True, push=True, pr="draft")
+        assert BuildConfig().git.worktree is True
+        assert BuildConfig().pipeline_branch is None
+
+    def test_loaded_from_config_yaml(self, tmp_path):
+        import yaml
+        from build_pipeline.config import BuildConfig
+
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text(yaml.dump({
+            "schema": "spec-driven",
+            "git": {"worktree": False, "push": False, "pr": "ready"},
+        }))
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = specs
+        config._load_specs_config()
+        assert config.git.worktree is False
+        assert config.git.push is False
+        assert config.git.pr == "ready"
+
+    def test_invalid_pr_mode_falls_back_to_draft(self, tmp_path):
+        import yaml
+        from build_pipeline.config import BuildConfig
+
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text(yaml.dump({"git": {"pr": "merge-it"}}))
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = specs
+        config._load_specs_config()
+        assert config.git.pr == "draft"
+
+    def test_cli_flags_beat_config_yaml(self, tmp_path):
+        import argparse
+        from build_pipeline.config import BuildConfig
+
+        config = BuildConfig(project_dir=tmp_path)
+        config._apply_git_cli_overrides(argparse.Namespace(
+            no_worktree=True, no_push=True, no_pr=True, pr_ready=False,
+        ))
+        assert config.git.worktree is False
+        assert config.git.push is False
+        assert config.git.pr == "none"
+
+    def test_pr_ready_flag(self, tmp_path):
+        import argparse
+        from build_pipeline.config import BuildConfig
+
+        config = BuildConfig(project_dir=tmp_path)
+        config._apply_git_cli_overrides(argparse.Namespace(
+            no_worktree=False, no_push=False, no_pr=False, pr_ready=True,
+        ))
+        assert config.git.pr == "ready"
+
+    def test_absent_flags_leave_defaults(self, tmp_path):
+        import argparse
+        from build_pipeline.config import BuildConfig
+
+        config = BuildConfig(project_dir=tmp_path)
+        config._apply_git_cli_overrides(argparse.Namespace())
+        assert config.git == type(config.git)(worktree=True, push=True, pr="draft")
+
+    def test_cli_parser_exposes_the_flags(self):
+        from build_pipeline.__main__ import build_parser
+
+        args = build_parser().parse_args(
+            ["build", "--no-worktree", "--no-push", "--no-pr", "--pr-ready"]
+        )
+        assert args.no_worktree and args.no_push and args.no_pr and args.pr_ready
+        plain = build_parser().parse_args(["build"])
+        assert not plain.no_worktree and not plain.no_push and not plain.no_pr
+
+
+class TestRebindProjectDir:
+    def test_rebinding_moves_every_derived_path(self, tmp_path):
+        from build_pipeline.config import BuildConfig
+
+        config = BuildConfig(project_dir=tmp_path / "src", change_name="c")
+        config.specs_dir = tmp_path / "src" / "specs"
+        wt = tmp_path / "wt"
+        config.rebind_project_dir(wt)
+        assert config.project_dir == wt
+        assert config.specs_dir == wt / "specs"
+        assert config.change_dir == wt / "specs" / "changes" / "c"
+        assert config.state_file_path() == wt / "specs" / "changes" / "c" / ".build-state.json"
+        assert config.progress_file_path() == wt / "build-progress.md"

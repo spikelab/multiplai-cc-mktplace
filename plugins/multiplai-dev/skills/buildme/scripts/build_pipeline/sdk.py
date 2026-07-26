@@ -89,23 +89,46 @@ def _repo_is_trusted() -> bool:
     return os.environ.get("BUILDME_TRUST_REPO", "").strip().lower() in ("1", "true", "yes")
 
 
-# Tools a text-only llm_call must be actively denied, not merely left out of
-# the allow-list. run_agent's allow-list is advisory under bypassPermissions;
-# only disallowed_tools actually removes a tool.
-_TEXT_ONLY_DISALLOWED = [
+# The tool universe a call's deny-list is computed from. run_agent's
+# allow-list is advisory under bypassPermissions; only disallowed_tools
+# actually removes a tool — so every call denies the complement of what it
+# explicitly allows (a text-only call denies all of it).
+_TOOL_UNIVERSE = [
     "Bash", "BashOutput", "KillShell", "Edit", "Write", "NotebookEdit",
     "Task", "Agent", "AskUserQuestion", "SlashCommand", "ExitPlanMode",
     "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "ToolSearch", "Skill",
 ]
 
 
-def _text_only_disallowed(prompt: str) -> list[str]:
-    """The deny-list for a no-tools call, minus Read when run_agent's
-    oversized-prompt fallback will need it (it writes the prompt to a temp
-    file and directs the agent to Read it)."""
+def _deny_list(prompt: str, allowed_tools: list[str] | None) -> list[str]:
+    """Every known tool the caller did not explicitly allow.
+
+    Without this, an allowlisted agent (e.g. the web-ingesting explainer with
+    Read/WebFetch allowed) can still reach Bash/Write under bypassPermissions —
+    the allow-list alone removes nothing. Read is kept available when
+    run_agent's oversized-prompt fallback will need it (it writes the prompt
+    to a temp file and directs the agent to Read it)."""
+    allowed = set(allowed_tools or ())
+    denied = [t for t in _TOOL_UNIVERSE if t not in allowed]
     if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
-        return [t for t in _TEXT_ONLY_DISALLOWED if t != "Read"]
-    return list(_TEXT_ONLY_DISALLOWED)
+        denied = [t for t in denied if t != "Read"]
+    return denied
+
+
+def _require_trusted_repo() -> None:
+    """Fail closed: any bypassPermissions agent with tool access acts on
+    instructions drawn from the target repo's specs/. Refuse unless the user
+    has explicitly vouched for the repo."""
+    if not _repo_is_trusted():
+        raise RepoTrustError(
+            "buildme runs its tool-using agents with auto-approved tool access "
+            "(bypassPermissions), executing steps described in this repo's specs/ "
+            "(design.md, tasks.md, config.yaml). Only proceed on a repository you "
+            "trust — a hostile repo can turn those files into arbitrary command "
+            "execution as you.\n"
+            "If you authored / trust this repo, re-run with --trust-repo "
+            "(or set BUILDME_TRUST_REPO=1)."
+        )
 
 
 def _record_partial(error: AgentRunError, label: str) -> None:
@@ -138,8 +161,14 @@ async def llm_call(
     reach for Bash/Read, burn the single turn on a tool call, and fail the
     whole call with "Reached maximum number of turns (1)" instead of
     answering. All the context these calls need is already in the prompt.
+
+    A call that *does* request tools is an agent in all but name — it runs
+    under bypassPermissions like agent_call — so it is subject to the same
+    repo trust gate and gets the complement of its allow-list as a deny-list.
     """
     _require_sdk()
+    if allowed_tools:
+        _require_trusted_repo()
 
     log.info("START sdk_call=llm prompt_bytes=%d model=%s timeout=%.0fs",
              len(prompt.encode("utf-8")), model or "default", call_timeout)
@@ -149,7 +178,7 @@ async def llm_call(
                 prompt,
                 system_prompt=system_prompt,
                 allowed_tools=allowed_tools,
-                disallowed_tools=None if allowed_tools else _text_only_disallowed(prompt),
+                disallowed_tools=_deny_list(prompt, allowed_tools),
                 max_turns=max_turns,
                 model=model,
                 timeout_s=call_timeout,
@@ -196,19 +225,7 @@ async def agent_call(
     """
     _require_sdk()
 
-    # Fail closed: these agents auto-approve every tool call (bypassPermissions)
-    # and act on instructions drawn from the target repo's specs/. Refuse unless
-    # the user has explicitly vouched for the repo.
-    if not _repo_is_trusted():
-        raise RepoTrustError(
-            "buildme runs its implementation agents with auto-approved tool access "
-            "(bypassPermissions), executing steps described in this repo's specs/ "
-            "(design.md, tasks.md, config.yaml). Only proceed on a repository you "
-            "trust — a hostile repo can turn those files into arbitrary command "
-            "execution as you.\n"
-            "If you authored / trust this repo, re-run with --trust-repo "
-            "(or set BUILDME_TRUST_REPO=1)."
-        )
+    _require_trusted_repo()
 
     log.info("START sdk_call=agent tools=%s model=%s max_turns=%d timeout=%.0fs",
              allowed_tools, model or "default", max_turns, call_timeout)
@@ -219,6 +236,7 @@ async def agent_call(
             result = await run_agent(
                 prompt,
                 allowed_tools=allowed_tools,
+                disallowed_tools=_deny_list(prompt, allowed_tools),
                 max_turns=max_turns,
                 model=model,
                 cwd=cwd,  # None → run_agent's isolated hook-sessions dir

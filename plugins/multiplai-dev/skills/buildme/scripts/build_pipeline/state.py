@@ -29,6 +29,15 @@ class SpecGenState(BaseModel):
     # resume re-runs the audit; old checkpoints default to False (idempotent
     # re-audit, safe).
     tasks_audit_done: bool = False
+    # Same durability problem for the unknowns/explainer gate: the gate and its
+    # single regeneration pass run AFTER unknowns.md is written, so file
+    # existence would mark the artifact DONE and skip the gate on resume.
+    # Old checkpoints default to False (re-running the gate is idempotent).
+    explainers_done: bool = False
+    # Same durability argument for the prototype feedback pass: design.md and
+    # tasks.md already exist when the prototype notes are folded back in, so
+    # file existence proves nothing. Old checkpoints default to False.
+    prototype_done: bool = False
 
 
 class TDDState(BaseModel):
@@ -55,6 +64,15 @@ class BuildState(BaseModel):
     bootstrap_done: bool = False
     interview_summary: str | None = None
     research_path: str | None = None
+
+    # Git lifecycle — set when the pipeline creates its own worktree/branch.
+    # Persisted so a resume RE-BINDS to the existing worktree instead of
+    # creating a second one. All four default to None, so a .build-state.json
+    # written before the git lifecycle existed still loads.
+    worktree_path: str | None = None
+    branch: str | None = None
+    source_repo: str | None = None
+    pr_url: str | None = None
 
     # Sub-pipeline state
     spec_gen: SpecGenState | None = None

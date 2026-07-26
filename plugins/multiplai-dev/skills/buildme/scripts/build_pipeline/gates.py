@@ -13,7 +13,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from .models import GateResult, ReviewGatePolicy, ReviewResult
+from .models import GateResult, ImplementationNote, ReviewGatePolicy, ReviewResult
 
 log = logging.getLogger(__name__)
 
@@ -320,6 +320,283 @@ def agent_status_gate(output: str, agent_name: str) -> GateResult:
     )
 
 
+# --- Prototype-first stage ---
+
+# Words that name a user-visible output format. Deliberately narrower than the
+# rubric's backend keyword set: bare "schema" and "model" are ordinary
+# database/backend vocabulary, so matching them would make every DB change
+# "needs a prototype". The phrases here describe something a person looks at —
+# a rendered page, a printed/exported document, a shaped response.
+_OUTPUT_FORMAT_RE = re.compile(
+    r"\b(report|reports|export|exports|dashboard|mockup|wireframe|"
+    r"screenshot|printout|invoice|receipt|spreadsheet|pdf|"
+    r"cli output|command.line output|terminal output|console output|"
+    r"stdout|sample output|output format|output schema|response schema|"
+    r"json schema|rendered (?:page|view|output|document)|"
+    r"user.visible|user.facing (?:output|format|document))\b",
+    re.IGNORECASE,
+)
+
+
+def prototype_required(change_dir: Path) -> bool:
+    """Whether this change should prove its shape with a cheap prototype first.
+
+    True when the change type is frontend or fullstack (there is a UI to look
+    at), or when the proposal/design describe a user-visible output format.
+    Pure function — reads the artifacts already on disk, makes no LLM call.
+    """
+    from .rubric import detect_change_type
+
+    change_type = detect_change_type(change_dir)
+    if change_type in ("frontend", "fullstack"):
+        log.info("Prototype required: change_type=%s", change_type)
+        return True
+
+    for filename in ("proposal.md", "design.md"):
+        path = change_dir / filename
+        if not path.exists():
+            continue
+        match = _OUTPUT_FORMAT_RE.search(path.read_text())
+        if match:
+            log.info(
+                "Prototype required: %s mentions user-visible output (%r)",
+                filename, match.group(0),
+            )
+            return True
+
+    log.info("Prototype not required: change_type=%s, no output-format mention", change_type)
+    return False
+
+
+# The REQUIRED slots a prototype agent closes its NOTES.md with. Same convention
+# as the implementation agents' STATUS/TESTS_RUN/GREEN/FILES slots parsed by
+# parse_agent_status.
+PROTOTYPE_SLOTS = ("PROVES", "DISPROVES", "OPEN_QUESTIONS", "STATUS")
+
+_SLOT_HEADER_RE = re.compile(
+    r"^\s*(?:[-*]\s*|#{1,6}\s*|\*\*)?(" + "|".join(PROTOTYPE_SLOTS) + r")\*{0,2}\s*:",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# Slot values that say "nothing here". A slot filled with "none" is a real
+# answer (the agent looked and found nothing) but carries no content to act on.
+_EMPTY_SLOT_VALUES = {"", "none", "none.", "n/a", "na", "-", "—", "(none)", "nothing", "tbd"}
+
+
+def parse_prototype_notes(text: str) -> dict[str, str]:
+    """Parse a prototype NOTES.md into its REQUIRED slots.
+
+    Returns a dict keyed by lowercased slot name (proves, disproves,
+    open_questions, status) with the slot's text, which may span several lines
+    up to the next slot header. Missing slots are absent from the dict.
+    """
+    notes: dict[str, str] = {}
+    matches = list(_SLOT_HEADER_RE.finditer(text or ""))
+    for i, match in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        value = text[match.end():end].strip()
+        notes[match.group(1).lower()] = value
+    return notes
+
+
+def slot_has_content(value: str | None) -> bool:
+    """Whether a slot carries something actionable ("none" does not)."""
+    if value is None:
+        return False
+    stripped = value.strip().strip("*_` ").lower()
+    return stripped not in _EMPTY_SLOT_VALUES
+
+
+def prototype_gate(prototype_dir: Path) -> GateResult:
+    """Gate the prototype stage's output.
+
+    Passes when the directory holds at least one artifact file besides NOTES.md
+    (the thing that actually proves the shape) and NOTES.md reports what the
+    prototype PROVES plus its OPEN_QUESTIONS. A NOTES.md with no artifact
+    beside it is a description of a prototype, not a prototype.
+    """
+    if not prototype_dir.exists():
+        return GateResult(
+            passed=False,
+            reason=f"Prototype directory not created: {prototype_dir}",
+            action="retry_prototype",
+        )
+
+    notes_path = prototype_dir / "NOTES.md"
+    if not notes_path.exists():
+        return GateResult(
+            passed=False,
+            reason=f"Prototype NOTES.md missing in {prototype_dir}",
+            action="retry_prototype",
+        )
+
+    notes_text = notes_path.read_text()
+    notes = parse_prototype_notes(notes_text)
+
+    # The prompt invites an honest STATUS: NEEDS_CONTEXT / BLOCKED when the
+    # proposal and design do not say enough to draw the shape. Checked BEFORE
+    # the artifact/slot checks: an agent that could not draw usually leaves
+    # only NOTES.md, and retrying or reporting "empty PROVES" would bury its
+    # stated blocker under a misleading structural failure. `action` is
+    # deliberately not "retry_prototype" — re-asking the same unanswerable
+    # question cannot succeed.
+    status_value = (notes.get("status") or "").strip().strip("*_` ")
+    status_word = status_value.split()[0].upper().rstrip(".,;:") if status_value else ""
+    if status_word in ("BLOCKED", "NEEDS_CONTEXT"):
+        return GateResult(
+            passed=False,
+            reason=(
+                f"Prototype agent reported STATUS: {status_word} — it could not "
+                f"draw the shape from the proposal/design. Its notes:\n"
+                f"{notes_text[-1500:]}"
+            ),
+            action="prototype_blocked",
+            metadata={"status": status_word},
+        )
+
+    artifacts = [
+        p for p in sorted(prototype_dir.rglob("*"))
+        if p.is_file() and p != notes_path
+    ]
+    if not artifacts:
+        return GateResult(
+            passed=False,
+            reason="Prototype produced no artifact file besides NOTES.md — "
+                   "nothing to look at, so nothing is proven.",
+            action="retry_prototype",
+        )
+
+    missing = [s for s in PROTOTYPE_SLOTS if s.lower() not in notes]
+    if missing:
+        return GateResult(
+            passed=False,
+            reason=f"Prototype NOTES.md is missing REQUIRED slots: {missing}",
+            action="retry_prototype",
+            metadata={"artifacts": [str(a) for a in artifacts]},
+        )
+
+    # The three slot content rules deliberately differ:
+    # - PROVES must carry real content ("none" fails, via slot_has_content):
+    #   an artifact that proves nothing about the shape is not a prototype.
+    # - OPEN_QUESTIONS must be non-empty but "none" passes: "I looked and
+    #   nothing is left to decide" is a real answer; only a blank slot means
+    #   the agent never considered the question.
+    # - DISPROVES needs only to be present (the `missing` check above): empty
+    #   and "none" both mean nothing was disproved — there is nothing to act
+    #   on, so nothing further to enforce.
+    if not slot_has_content(notes.get("proves")):
+        return GateResult(
+            passed=False,
+            reason="Prototype NOTES.md has an empty PROVES: slot — the artifact "
+                   "must state what shape it proves.",
+            action="retry_prototype",
+            metadata={"artifacts": [str(a) for a in artifacts]},
+        )
+
+    if not (notes.get("open_questions") or "").strip():
+        return GateResult(
+            passed=False,
+            reason="Prototype NOTES.md has an empty OPEN_QUESTIONS: slot — write "
+                   "the remaining questions, or 'none'.",
+            action="retry_prototype",
+            metadata={"artifacts": [str(a) for a in artifacts]},
+        )
+
+    return GateResult(
+        passed=True,
+        reason=f"Prototype produced {len(artifacts)} artifact file(s) with complete NOTES.md",
+        metadata={
+            "artifacts": [str(a) for a in artifacts],
+            "status": notes.get("status", ""),
+        },
+    )
+
+
+# --- Implementation notes (SURPRISES: / SPEC_IMPACT: slots) ---
+
+# Every REQUIRED slot label an agent report can carry — used as the stop
+# boundary when reading the free-text SURPRISES slot.
+_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|SURPRISES|SPEC_IMPACT"
+
+# The colon after a slot label is MANDATORY — every legitimate slot form
+# carries one (`SURPRISES: x`, `- **SURPRISES:** x`, `**SURPRISES**: x`).
+# Requiring it keeps prose that merely mentions the word ("Surprises were
+# minimal this block.", or an echo of the prompt's own coaching sentence)
+# from being recorded as a note, and keeps a continuation line that happens
+# to open with a slot word ("STATUS quo in the repo differs...") from
+# truncating a multiline value. The colon may sit inside or outside the
+# closing ** of a bold label.
+_SLOT_COLON = r"(?::\*{0,2}|\*{1,2}:)"
+
+_SURPRISES_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?SURPRISES" + _SLOT_COLON + r"[ \t]*"
+    r"(.*?)"
+    r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")"
+    + _SLOT_COLON + r"|\Z)",
+    re.MULTILINE | re.IGNORECASE | re.DOTALL,
+)
+
+_SPEC_IMPACT_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?SPEC_IMPACT" + _SLOT_COLON + r"\s*"
+    r"(none|clarify|contradicts)\b",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# Placeholder answers that mean "nothing to report" — treated as an empty
+# SURPRISES slot rather than as content. Shares the prototype gate's
+# empty-slot vocabulary (_EMPTY_SLOT_VALUES) minus "tbd": in a prototype's
+# PROVES: slot "tbd" is a non-answer, but an implementer writing "tbd" under
+# SURPRISES is deferring something real, which the respec loop must keep.
+_EMPTY_SURPRISES = _EMPTY_SLOT_VALUES - {"tbd"}
+
+
+def _clean_surprises(raw: str) -> str:
+    """Strip fences and the prompt's own angle-bracket placeholder from the
+    free-text SURPRISES slot; return "" when it says nothing."""
+    lines = [
+        ln for ln in (raw or "").strip().splitlines()
+        if not ln.strip().startswith("```")
+    ]
+    text = "\n".join(lines).strip()
+    # The agent echoing the template (`SURPRISES: <what did not match ...>`)
+    # is not a finding.
+    if text.startswith("<") and text.endswith(">"):
+        return ""
+    return "" if text.lower() in _EMPTY_SURPRISES else text
+
+
+def parse_implementation_note(
+    output: str,
+    *,
+    block_number: int,
+    block_name: str,
+    role: str,
+) -> ImplementationNote | None:
+    """Build an ImplementationNote from an agent's SURPRISES/SPEC_IMPACT slots.
+
+    Returns None when the agent reported nothing worth recording (no slots, or
+    "none" on both) — the notes file stays signal-only. The last occurrence of
+    each slot wins, so a report that quotes the instructions before answering
+    them never outranks the agent's own answer.
+    """
+    surprises_matches = _SURPRISES_RE.findall(output or "")
+    surprises = _clean_surprises(surprises_matches[-1]) if surprises_matches else ""
+
+    impact_matches = _SPEC_IMPACT_RE.findall(output or "")
+    spec_impact = impact_matches[-1].lower() if impact_matches else "none"
+
+    if not surprises and spec_impact == "none":
+        return None
+
+    return ImplementationNote(
+        block_number=block_number,
+        block_name=block_name,
+        role=role,
+        surprises=surprises,
+        spec_impact=spec_impact,
+    )
+
+
 def review_score_gate(
     review: ReviewResult, policy: ReviewGatePolicy | None = None
 ) -> GateResult:
@@ -478,6 +755,119 @@ def unchanged_tests_gate(
         ),
         action="restore_tests",
         metadata={"checked": True, "changed_files": changed, "flagged": False},
+    )
+
+
+# --- Unknowns / explainer gate (B1) ---
+
+# A dependency's section is a level-2 heading; its required lists are level-3
+# subsections. Matching is by heading text, so the gate reads the same document
+# a human reads.
+_UNKNOWNS_SECTION_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+_UNKNOWNS_SUBSECTION_RE = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
+_EDGE_CASES_RE = re.compile(r"edge\s*case", re.IGNORECASE)
+_ASSUMPTIONS_RE = re.compile(r"assumption", re.IGNORECASE)
+# A filled list item: a bullet or numbered item with real text after it —
+# the (?!<) lookahead refuses template placeholders (`- <case>: <what happens>`).
+_LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?!<)(\S.*)$", re.MULTILINE)
+
+
+def _split_sections(text: str, pattern: re.Pattern[str]) -> list[tuple[str, str]]:
+    """(heading, body) pairs for every heading matched by ``pattern``."""
+    matches = list(pattern.finditer(text or ""))
+    out: list[tuple[str, str]] = []
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        out.append((m.group(1).strip(), text[m.end():end]))
+    return out
+
+
+def _has_filled_list(body: str) -> bool:
+    """True when the body carries at least one list item with real content
+    (the item pattern itself already refuses `<placeholder>` items)."""
+    return _LIST_ITEM_RE.search(body or "") is not None
+
+
+def _heading_names_dep(heading: str, needle: str) -> bool:
+    """Whether a ``## heading`` is THIS dependency's section.
+
+    Whole-token match over package-name characters — `react` must not ride on
+    a `## react-query` heading — while still tolerating decoration around the
+    name (backticks, a trailing ``— what it is`` clause).
+    """
+    return re.search(
+        r"(?<![A-Za-z0-9._+@/-])" + re.escape(needle) + r"(?![A-Za-z0-9._+@/-])",
+        heading.lower(),
+    ) is not None
+
+
+def unknowns_gate(unknowns_text: str, deps) -> GateResult:
+    """Structural gate on `unknowns.md` — the explainer must actually explain.
+
+    Fails when a detected dependency has no section at all, or when its
+    "Edge cases & failure modes" or "Assumptions we are making" list is empty.
+    Those two lists are the whole point of the explainer (the Whisper-silence
+    class of surprise), so an empty one is an unwritten explainer, not a
+    stylistic nit.
+
+    ``deps`` accepts NewDependency objects or plain name strings. With no
+    dependencies the gate passes — "nothing new to this project" is a recorded
+    finding, not a failure.
+    """
+    names = [getattr(d, "name", d) for d in (deps or [])]
+    if not names:
+        return GateResult(
+            passed=True,
+            reason="No dependencies new to this project — nothing to explain",
+            metadata={"dependencies": []},
+        )
+
+    sections = _split_sections(unknowns_text or "", _UNKNOWNS_SECTION_RE)
+    findings: list[str] = []
+    for name in names:
+        needle = str(name).lower()
+        match = next(
+            (body for heading, body in sections if _heading_names_dep(heading, needle)),
+            None,
+        )
+        if match is None:
+            findings.append(f"`{name}`: no `## {name}` section in unknowns.md")
+            continue
+
+        subsections = _split_sections(match, _UNKNOWNS_SUBSECTION_RE)
+        edge_body = next(
+            (b for h, b in subsections if _EDGE_CASES_RE.search(h)), None
+        )
+        assum_body = next(
+            (b for h, b in subsections if _ASSUMPTIONS_RE.search(h)), None
+        )
+        if edge_body is None:
+            findings.append(f"`{name}`: missing an 'Edge cases & failure modes' subsection")
+        elif not _has_filled_list(edge_body):
+            findings.append(
+                f"`{name}`: 'Edge cases & failure modes' list is empty — needs at "
+                f"least one bullet naming observed behavior on empty, malformed, "
+                f"oversized, concurrent, and offline input"
+            )
+        if assum_body is None:
+            findings.append(f"`{name}`: missing an 'Assumptions we are making' subsection")
+        elif not _has_filled_list(assum_body):
+            findings.append(
+                f"`{name}`: 'Assumptions we are making' list is empty — needs at "
+                f"least one falsifiable claim"
+            )
+
+    if findings:
+        return GateResult(
+            passed=False,
+            reason="Explainer sections incomplete:\n" + "\n".join(f"- {f}" for f in findings),
+            action="regenerate_unknowns",
+            metadata={"findings": findings, "dependencies": names},
+        )
+    return GateResult(
+        passed=True,
+        reason=f"All {len(names)} dependency explainer(s) complete",
+        metadata={"dependencies": names},
     )
 
 

@@ -15,8 +15,25 @@ class BuildPhase(str, Enum):
     RESEARCH = "research"
     SPEC_GENERATION = "spec_generation"
     DESIGN_AUDIT = "design_audit"
+    # Cheap shape proof (mockup / sample output / CLI transcript) before the
+    # expensive TDD build. Ordinal position matters: state.is_phase_complete
+    # compares positions in this enum, so PROTOTYPE sits where it runs — after
+    # the design audit, before the human review checkpoint. Checkpoints written
+    # before this phase existed still load (the stored value is a phase name,
+    # not an index) and resume at their recorded phase.
+    PROTOTYPE = "prototype"
     REVIEW = "review"
     TDD_BUILD = "tdd_build"
+    # Proposes a spec delta from the implementation notes collected during the
+    # build. Sits between TDD_BUILD and PUBLISH because it reads what the
+    # build learned; is_phase_complete compares enum positions, so old
+    # checkpoints (which never carry "respec") still order correctly.
+    RESPEC = "respec"
+    # Push the build's own branch + open the PR. Ordinal position matters:
+    # state.is_phase_complete compares positions in this enum, so PUBLISH must
+    # sit immediately before COMPLETE (and after every producing phase,
+    # including RESPEC).
+    PUBLISH = "publish"
     COMPLETE = "complete"
     FAILED = "failed"
 
@@ -28,6 +45,31 @@ class BlockStatus(str, Enum):
     REVIEWING = "reviewing"
     DONE = "done"
     FAILED = "failed"
+
+
+class BoardColumn(str, Enum):
+    """The eleven kanban columns of the dark-factory board.
+
+    Values are the column names exactly as the board displays them — the same
+    string lands in `.board.json`'s `column` field and in the
+    `BOARD:<change>:<column>` stdout line, so there is one representation and
+    no translation table.
+
+    The enum is the full vocabulary of the board, NOT a claim about what the
+    pipeline drives. `board.column_for` is the only mapping, and `board.py`'s
+    module docstring states which of these columns the pipeline ever sets.
+    """
+    BACKLOG = "Backlog"
+    ACCEPTED = "Accepted"
+    SHAPING = "Shaping"
+    PLANNING = "Planning"
+    IN_DEVELOPMENT = "In Development"
+    IN_REVIEW = "In Review"
+    TESTING = "Testing"
+    READY_FOR_PROD = "Ready for Prod"
+    DEPLOYING = "Deploying"
+    DEPLOYED = "Deployed"
+    CANCELLED = "Cancelled"
 
 
 class ArtifactStatus(str, Enum):
@@ -327,6 +369,32 @@ class AgentResult(BaseModel):
     elapsed_seconds: float = 0.0
 
 
+# --- Implementation notes (spec ↔ implementation loop) ---
+
+SPEC_IMPACT_LEVELS = ("none", "clarify", "contradicts")
+
+
+class ImplementationNote(BaseModel):
+    """One agent's report of what did not match the spec/design.
+
+    Parsed from the agent's REQUIRED `SURPRISES:` / `SPEC_IMPACT:` slots
+    (gates.parse_implementation_note). Notes accumulate on the block (so they
+    survive resume) and are appended to implementation-notes.md as the build
+    runs, which is what the respec step reads at the end of the build.
+    """
+    block_number: int
+    block_name: str
+    role: str  # test_writer | implementer | refactorer
+    surprises: str = ""
+    spec_impact: str = "none"  # none | clarify | contradicts
+
+    @property
+    def contradicts(self) -> bool:
+        """The block could only be built by doing something the spec does not
+        say (or says otherwise) — the loudest signal for the respec step."""
+        return self.spec_impact == "contradicts"
+
+
 # --- Block state ---
 
 class BlockInfo(BaseModel):
@@ -372,6 +440,10 @@ class BlockInfo(BaseModel):
     # Test-integrity claims the implementer declared. Passed to the reviewer as
     # unverified assertions, exactly like RED/GREEN evidence.
     test_change_claims: list[str] = Field(default_factory=list)
+    # Surprises the block's agents reported (SURPRISES:/SPEC_IMPACT: slots).
+    # Persisted here so a resumed build keeps the learning it already
+    # collected; also appended to implementation-notes.md as they arrive.
+    notes: list[ImplementationNote] = Field(default_factory=list)
 
 
 # --- Change artifacts ---

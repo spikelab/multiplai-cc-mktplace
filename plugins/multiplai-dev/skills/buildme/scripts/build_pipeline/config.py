@@ -64,6 +64,27 @@ def _is_advanced_model(model: str) -> bool:
 DEFAULT_MODEL = pick_model("opus", task="buildme")
 
 
+def _normalize_prototype_toggle(value) -> str:
+    """Map a config.yaml `prototype.enabled` value to "auto" | "true" | "false".
+
+    YAML turns `enabled: true` into a bool and `enabled: auto` into a string, so
+    both spellings arrive here. Anything unrecognized falls back to "auto" with
+    a warning — an unreadable toggle should leave the applicability rule in
+    charge, not silently disable the stage.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value).strip().lower()
+    if text in ("auto", "true", "false"):
+        return text
+    if text in ("yes", "on", "1"):
+        return "true"
+    if text in ("no", "off", "0"):
+        return "false"
+    log.warning("Unrecognized prototype.enabled value %r — using 'auto'", value)
+    return "auto"
+
+
 @dataclass
 class GateToggles:
     """Per-gate on/off switches from config.yaml."""
@@ -75,6 +96,35 @@ class GateToggles:
     security_review_per_block: bool = True
     test_quality_enabled: bool = True
     e2e_test_entry_point_check: bool = True
+    # B1 explainer gate: write unknowns.md before depending on anything new to
+    # this project. Default ON — reading the explainers is the anti-slop step.
+    explainers_enabled: bool = True
+    # Prototype-first stage: "auto" (run when gates.prototype_required says the
+    # change has a UI or a user-visible output format), "true" (always), or
+    # "false" (never). Tri-state rather than bool because the useful default is
+    # "decide from the change", not on/off.
+    prototype: str = "auto"
+    # `respec: {halt_on_contradiction: true}` in specs/config.yaml. When an
+    # agent reports SPEC_IMPACT: contradicts, the build stops with a diagnosis
+    # instead of steering around the spec. Default False — the note is always
+    # recorded and surfaced; halting is the opt-in escalation.
+    respec_halt_on_contradiction: bool = False
+
+
+@dataclass
+class GitToggles:
+    """Git lifecycle switches (`git:` block in specs/config.yaml, overridden by
+    --no-worktree / --no-push / --no-pr / --pr-ready).
+
+    Defaults are the product defaults: the build runs in its own worktree on
+    its own branch, pushes it, and opens a **draft** PR. `worktree=False`
+    reproduces the pre-git-lifecycle pipeline exactly (build in place, no
+    push, no PR — push/PR only ever act on a branch the pipeline created).
+    """
+
+    worktree: bool = True
+    push: bool = True
+    pr: Literal["draft", "ready", "none"] = "draft"
 
 
 @dataclass
@@ -96,6 +146,14 @@ class BuildConfig:
     # review exhaustion and final-review failures/errors log-and-continue
     # instead of failing the build.
     lenient_review: bool = False
+    # --skip-explainers: skip the B1 unknowns/edge-case explainer pass.
+    # unknowns.md is still written (recording the skip) so the artifact DAG
+    # stays satisfied and the absence is visible rather than silent.
+    skip_explainers: bool = False
+    # Prototype-first stage: "auto" | "true" | "false". Resolved from
+    # specs/config.yaml (`prototype: {enabled: ...}`) with --prototype /
+    # --no-prototype winning over it.
+    prototype_mode: str = "auto"
 
     # Project context (from specs/config.yaml)
     project_name: str = ""
@@ -110,6 +168,15 @@ class BuildConfig:
 
     # Gate toggles
     gates: GateToggles = field(default_factory=GateToggles)
+
+    # Git lifecycle toggles
+    git: GitToggles = field(default_factory=GitToggles)
+
+    # Runtime marker, not user-configurable: set to the branch name once the
+    # pipeline has created its own worktree+branch (or re-bound to one on
+    # resume). None means "we do not own a branch" — every commit/push/PR
+    # helper no-ops, which is what keeps --no-worktree behavior unchanged.
+    pipeline_branch: str | None = None
 
     # Paths (resolved after config load)
     config_dir: Path = field(default_factory=lambda: Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser())
@@ -163,9 +230,20 @@ class BuildConfig:
             spec_only=getattr(args, "spec_only", False),
             skip_research=getattr(args, "skip_research", False),
             lenient_review=getattr(args, "lenient_review", False),
+            skip_explainers=getattr(args, "skip_explainers", False),
         )
         config.specs_dir = config.project_dir / "specs"
         config._load_specs_config()
+        # config.yaml supplies the default; the CLI flags override it.
+        config.prototype_mode = config.gates.prototype
+        if getattr(args, "prototype", False):
+            config.prototype_mode = "true"
+        if getattr(args, "no_prototype", False):
+            config.prototype_mode = "false"
+        # CLI flags win over the config.yaml `git:` block (same precedence as
+        # every other override here). Absent flags leave the config.yaml /
+        # dataclass defaults alone.
+        config._apply_git_cli_overrides(args)
         # Env override wins over config.yaml (same precedence as CLAUDE_MODEL
         # in detect_tier); ceiling-capped like every other model resolution.
         env_review_model = os.environ.get("BUILDME_REVIEW_MODEL")
@@ -218,12 +296,53 @@ class BuildConfig:
         security_review = data.get("security_review", {})
         test_quality = data.get("test_quality", {})
         e2e_test = data.get("e2e_test", {})
+        explainers = data.get("explainers", {}) or {}
+        prototype = data.get("prototype", {}) or {}
+        respec = data.get("respec", {}) or {}
         self.gates = GateToggles(
             code_review_per_block=code_review.get("per_block", True),
             security_review_per_block=security_review.get("per_block", True),
             test_quality_enabled=test_quality.get("enabled", True),
             e2e_test_entry_point_check=e2e_test.get("entry_point_check", True),
+            explainers_enabled=explainers.get("enabled", True),
+            prototype=_normalize_prototype_toggle(prototype.get("enabled", "auto")),
+            respec_halt_on_contradiction=respec.get("halt_on_contradiction", False),
         )
+
+        # Git lifecycle: git: {worktree: true, push: true, pr: draft|ready|none}
+        git_cfg = data.get("git", {}) or {}
+        pr_mode = str(git_cfg.get("pr", "draft")).lower()
+        if pr_mode not in ("draft", "ready", "none"):
+            log.warning("Invalid git.pr value %r in config.yaml — using 'draft'", pr_mode)
+            pr_mode = "draft"
+        self.git = GitToggles(
+            worktree=bool(git_cfg.get("worktree", True)),
+            push=bool(git_cfg.get("push", True)),
+            pr=pr_mode,
+        )
+
+    def _apply_git_cli_overrides(self, args: argparse.Namespace) -> None:
+        """--no-worktree / --no-push / --no-pr / --pr-ready beat config.yaml."""
+        if getattr(args, "no_worktree", False):
+            self.git.worktree = False
+        if getattr(args, "no_push", False):
+            self.git.push = False
+        if getattr(args, "no_pr", False):
+            self.git.pr = "none"
+        if getattr(args, "pr_ready", False):
+            self.git.pr = "ready"
+
+    def rebind_project_dir(self, new_project_dir: Path) -> None:
+        """Point the whole config at a different checkout of the same project.
+
+        Called once, in BOOTSTRAP, after the build's worktree is created (and
+        on resume when re-binding to an existing one). `specs_dir` is the only
+        derived path stored as a field; `change_dir`, `state_file_path()` and
+        `progress_file_path()` are computed from these two, so every later
+        phase lands inside the worktree with no other code change.
+        """
+        self.project_dir = Path(new_project_dir)
+        self.specs_dir = self.project_dir / "specs"
 
     def _load_review_panel(self, code_review_cfg: dict) -> None:
         """Resolve `code_review.panel` into concrete reviewer model IDs.
@@ -327,6 +446,21 @@ class BuildConfig:
     @property
     def rubric_path(self) -> Path:
         return self.change_dir / "rubric.md"
+
+    @property
+    def unknowns_path(self) -> Path:
+        return self.change_dir / "unknowns.md"
+
+    @property
+    def explainers_active(self) -> bool:
+        """Whether the B1 explainer pass runs. The CLI flag wins over config.yaml
+        (same precedence as every other flag/config pair here)."""
+        return self.gates.explainers_enabled and not self.skip_explainers
+
+    @property
+    def prototype_dir(self) -> Path:
+        """The only directory the prototype agent may write to."""
+        return self.change_dir / "prototype"
 
     def state_file_path(self) -> Path:
         return self.change_dir / ".build-state.json"
