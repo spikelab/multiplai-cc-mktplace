@@ -63,6 +63,27 @@ def _is_advanced_model(model: str) -> bool:
 DEFAULT_MODEL = pick_model("opus", task="buildme")
 
 
+def _normalize_prototype_toggle(value) -> str:
+    """Map a config.yaml `prototype.enabled` value to "auto" | "true" | "false".
+
+    YAML turns `enabled: true` into a bool and `enabled: auto` into a string, so
+    both spellings arrive here. Anything unrecognized falls back to "auto" with
+    a warning — an unreadable toggle should leave the applicability rule in
+    charge, not silently disable the stage.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value).strip().lower()
+    if text in ("auto", "true", "false"):
+        return text
+    if text in ("yes", "on", "1"):
+        return "true"
+    if text in ("no", "off", "0"):
+        return "false"
+    log.warning("Unrecognized prototype.enabled value %r — using 'auto'", value)
+    return "auto"
+
+
 @dataclass
 class GateToggles:
     """Per-gate on/off switches from config.yaml."""
@@ -77,6 +98,11 @@ class GateToggles:
     # B1 explainer gate: write unknowns.md before depending on anything new to
     # this project. Default ON — reading the explainers is the anti-slop step.
     explainers_enabled: bool = True
+    # Prototype-first stage: "auto" (run when gates.prototype_required says the
+    # change has a UI or a user-visible output format), "true" (always), or
+    # "false" (never). Tri-state rather than bool because the useful default is
+    # "decide from the change", not on/off.
+    prototype: str = "auto"
 
 
 @dataclass
@@ -102,6 +128,10 @@ class BuildConfig:
     # unknowns.md is still written (recording the skip) so the artifact DAG
     # stays satisfied and the absence is visible rather than silent.
     skip_explainers: bool = False
+    # Prototype-first stage: "auto" | "true" | "false". Resolved from
+    # specs/config.yaml (`prototype: {enabled: ...}`) with --prototype /
+    # --no-prototype winning over it.
+    prototype_mode: str = "auto"
 
     # Project context (from specs/config.yaml)
     project_name: str = ""
@@ -152,6 +182,12 @@ class BuildConfig:
         )
         config.specs_dir = config.project_dir / "specs"
         config._load_specs_config()
+        # config.yaml supplies the default; the CLI flags override it.
+        config.prototype_mode = config.gates.prototype
+        if getattr(args, "prototype", False):
+            config.prototype_mode = "true"
+        if getattr(args, "no_prototype", False):
+            config.prototype_mode = "false"
         # Env override wins over config.yaml (same precedence as CLAUDE_MODEL
         # in detect_tier); ceiling-capped like every other model resolution.
         env_review_model = os.environ.get("BUILDME_REVIEW_MODEL")
@@ -201,12 +237,14 @@ class BuildConfig:
         test_quality = data.get("test_quality", {})
         e2e_test = data.get("e2e_test", {})
         explainers = data.get("explainers", {}) or {}
+        prototype = data.get("prototype", {}) or {}
         self.gates = GateToggles(
             code_review_per_block=code_review.get("per_block", True),
             security_review_per_block=security_review.get("per_block", True),
             test_quality_enabled=test_quality.get("enabled", True),
             e2e_test_entry_point_check=e2e_test.get("entry_point_check", True),
             explainers_enabled=explainers.get("enabled", True),
+            prototype=_normalize_prototype_toggle(prototype.get("enabled", "auto")),
         )
 
     def _discover_test_command(self) -> None:
@@ -263,6 +301,11 @@ class BuildConfig:
         """Whether the B1 explainer pass runs. The CLI flag wins over config.yaml
         (same precedence as every other flag/config pair here)."""
         return self.gates.explainers_enabled and not self.skip_explainers
+
+    @property
+    def prototype_dir(self) -> Path:
+        """The only directory the prototype agent may write to."""
+        return self.change_dir / "prototype"
 
     def state_file_path(self) -> Path:
         return self.change_dir / ".build-state.json"

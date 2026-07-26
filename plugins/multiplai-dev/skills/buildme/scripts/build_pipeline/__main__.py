@@ -51,6 +51,24 @@ def _add_skip_explainers_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_prototype_flags(p: argparse.ArgumentParser) -> None:
+    """Override the prototype stage's auto-detection in either direction.
+    Without a flag, `prototype: {enabled: auto|true|false}` in
+    specs/config.yaml decides; with neither, the applicability rule does."""
+    group = p.add_mutually_exclusive_group()
+    group.add_argument(
+        "--prototype",
+        action="store_true",
+        help="Always run the prototype stage before the build, whatever the "
+             "change type.",
+    )
+    group.add_argument(
+        "--no-prototype",
+        action="store_true",
+        help="Skip the prototype stage (the skip and its reason are logged).",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="build_pipeline",
@@ -73,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_trust_repo_flag(build)
     _add_lenient_review_flag(build)
     _add_skip_explainers_flag(build)
+    _add_prototype_flags(build)
 
     # --- spec-generate ---
     spec = sub.add_parser("spec-generate", help="Artifact generation pipeline")

@@ -320,6 +320,166 @@ def agent_status_gate(output: str, agent_name: str) -> GateResult:
     )
 
 
+# --- Prototype-first stage ---
+
+# Words that name a user-visible output format. Deliberately narrower than the
+# rubric's backend keyword set: bare "schema" and "model" are ordinary
+# database/backend vocabulary, so matching them would make every DB change
+# "needs a prototype". The phrases here describe something a person looks at —
+# a rendered page, a printed/exported document, a shaped response.
+_OUTPUT_FORMAT_RE = re.compile(
+    r"\b(report|reports|export|exports|dashboard|mockup|wireframe|"
+    r"screenshot|printout|invoice|receipt|spreadsheet|pdf|"
+    r"cli output|command.line output|terminal output|console output|"
+    r"stdout|sample output|output format|output schema|response schema|"
+    r"json schema|rendered (?:page|view|output|document)|"
+    r"user.visible|user.facing (?:output|format|document))\b",
+    re.IGNORECASE,
+)
+
+
+def prototype_required(change_dir: Path) -> bool:
+    """Whether this change should prove its shape with a cheap prototype first.
+
+    True when the change type is frontend or fullstack (there is a UI to look
+    at), or when the proposal/design describe a user-visible output format.
+    Pure function — reads the artifacts already on disk, makes no LLM call.
+    """
+    from .rubric import detect_change_type
+
+    change_type = detect_change_type(change_dir)
+    if change_type in ("frontend", "fullstack"):
+        log.info("Prototype required: change_type=%s", change_type)
+        return True
+
+    for filename in ("proposal.md", "design.md"):
+        path = change_dir / filename
+        if not path.exists():
+            continue
+        match = _OUTPUT_FORMAT_RE.search(path.read_text())
+        if match:
+            log.info(
+                "Prototype required: %s mentions user-visible output (%r)",
+                filename, match.group(0),
+            )
+            return True
+
+    log.info("Prototype not required: change_type=%s, no output-format mention", change_type)
+    return False
+
+
+# The REQUIRED slots a prototype agent closes its NOTES.md with. Same convention
+# as the implementation agents' STATUS/TESTS_RUN/GREEN/FILES slots parsed by
+# parse_agent_status.
+PROTOTYPE_SLOTS = ("PROVES", "DISPROVES", "OPEN_QUESTIONS", "STATUS")
+
+_SLOT_HEADER_RE = re.compile(
+    r"^\s*(?:[-*]\s*|#{1,6}\s*|\*\*)?(" + "|".join(PROTOTYPE_SLOTS) + r")\*{0,2}\s*:",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# Slot values that say "nothing here". A slot filled with "none" is a real
+# answer (the agent looked and found nothing) but carries no content to act on.
+_EMPTY_SLOT_VALUES = {"", "none", "none.", "n/a", "na", "-", "—", "(none)", "nothing", "tbd"}
+
+
+def parse_prototype_notes(text: str) -> dict[str, str]:
+    """Parse a prototype NOTES.md into its REQUIRED slots.
+
+    Returns a dict keyed by lowercased slot name (proves, disproves,
+    open_questions, status) with the slot's text, which may span several lines
+    up to the next slot header. Missing slots are absent from the dict.
+    """
+    notes: dict[str, str] = {}
+    matches = list(_SLOT_HEADER_RE.finditer(text or ""))
+    for i, match in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        value = text[match.end():end].strip()
+        notes[match.group(1).lower()] = value
+    return notes
+
+
+def slot_has_content(value: str | None) -> bool:
+    """Whether a slot carries something actionable ("none" does not)."""
+    if value is None:
+        return False
+    stripped = value.strip().strip("*_` ").lower()
+    return stripped not in _EMPTY_SLOT_VALUES
+
+
+def prototype_gate(prototype_dir: Path) -> GateResult:
+    """Gate the prototype stage's output.
+
+    Passes when the directory holds at least one artifact file besides NOTES.md
+    (the thing that actually proves the shape) and NOTES.md reports what the
+    prototype PROVES plus its OPEN_QUESTIONS. A NOTES.md with no artifact
+    beside it is a description of a prototype, not a prototype.
+    """
+    if not prototype_dir.exists():
+        return GateResult(
+            passed=False,
+            reason=f"Prototype directory not created: {prototype_dir}",
+            action="retry_prototype",
+        )
+
+    notes_path = prototype_dir / "NOTES.md"
+    if not notes_path.exists():
+        return GateResult(
+            passed=False,
+            reason=f"Prototype NOTES.md missing in {prototype_dir}",
+            action="retry_prototype",
+        )
+
+    artifacts = [
+        p for p in sorted(prototype_dir.rglob("*"))
+        if p.is_file() and p != notes_path
+    ]
+    if not artifacts:
+        return GateResult(
+            passed=False,
+            reason="Prototype produced no artifact file besides NOTES.md — "
+                   "nothing to look at, so nothing is proven.",
+            action="retry_prototype",
+        )
+
+    notes = parse_prototype_notes(notes_path.read_text())
+    missing = [s for s in PROTOTYPE_SLOTS if s.lower() not in notes]
+    if missing:
+        return GateResult(
+            passed=False,
+            reason=f"Prototype NOTES.md is missing REQUIRED slots: {missing}",
+            action="retry_prototype",
+            metadata={"artifacts": [str(a) for a in artifacts]},
+        )
+
+    if not slot_has_content(notes.get("proves")):
+        return GateResult(
+            passed=False,
+            reason="Prototype NOTES.md has an empty PROVES: slot — the artifact "
+                   "must state what shape it proves.",
+            action="retry_prototype",
+            metadata={"artifacts": [str(a) for a in artifacts]},
+        )
+
+    if not (notes.get("open_questions") or "").strip():
+        return GateResult(
+            passed=False,
+            reason="Prototype NOTES.md has an empty OPEN_QUESTIONS: slot — write "
+                   "the remaining questions, or 'none'.",
+            action="retry_prototype",
+            metadata={"artifacts": [str(a) for a in artifacts]},
+        )
+
+    return GateResult(
+        passed=True,
+        reason=f"Prototype produced {len(artifacts)} artifact file(s) with complete NOTES.md",
+        metadata={
+            "artifacts": [str(a) for a in artifacts],
+            "status": notes.get("status", ""),
+        },
+    )
+
+
 def review_score_gate(review: ReviewResult) -> GateResult:
     """Two-verdict gate: spec compliance (nothing missing/misunderstood) AND
     score threshold (weighted avg >= 3.5, no dimension at 1)."""

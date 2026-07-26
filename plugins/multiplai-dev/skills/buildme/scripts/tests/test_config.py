@@ -354,3 +354,76 @@ class TestSkipExplainersFlag:
         from build_pipeline.__main__ import build_parser
 
         assert build_parser().parse_args(["build"]).skip_explainers is False
+
+
+class TestPrototypeToggle:
+    """`prototype: {enabled: auto|true|false}` in specs/config.yaml, with the
+    --prototype / --no-prototype CLI flags overriding it."""
+
+    def _write_config(self, tmp_path, body):
+        specs = tmp_path / "specs"
+        specs.mkdir(parents=True, exist_ok=True)
+        (specs / "config.yaml").write_text(body)
+        return specs
+
+    def test_defaults_to_auto(self, tmp_path):
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = tmp_path / "specs"
+        config._load_specs_config()
+        assert config.gates.prototype == "auto"
+
+    def test_reads_auto_from_config_yaml(self, tmp_path):
+        self._write_config(tmp_path, "prototype:\n  enabled: auto\n")
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = tmp_path / "specs"
+        config._load_specs_config()
+        assert config.gates.prototype == "auto"
+
+    def test_reads_boolean_from_config_yaml(self, tmp_path):
+        self._write_config(tmp_path, "prototype:\n  enabled: false\n")
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = tmp_path / "specs"
+        config._load_specs_config()
+        assert config.gates.prototype == "false"
+
+    def test_unrecognized_value_falls_back_to_auto(self, tmp_path):
+        self._write_config(tmp_path, "prototype:\n  enabled: sometimes\n")
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = tmp_path / "specs"
+        config._load_specs_config()
+        assert config.gates.prototype == "auto"
+
+    def test_cli_flag_overrides_config_yaml(self, tmp_path):
+        import argparse
+        self._write_config(tmp_path, "prototype:\n  enabled: true\n")
+        args = argparse.Namespace(
+            mode="scratch", project_dir=str(tmp_path), change="c",
+            auto=False, spec_only=False, skip_research=False,
+            lenient_review=False, prototype=False, no_prototype=True,
+        )
+        config = BuildConfig.from_cli_args(args)
+        assert config.prototype_mode == "false"
+
+    def test_no_flags_takes_the_config_value(self, tmp_path):
+        import argparse
+        self._write_config(tmp_path, "prototype:\n  enabled: true\n")
+        args = argparse.Namespace(
+            mode="scratch", project_dir=str(tmp_path), change="c",
+            auto=False, spec_only=False, skip_research=False,
+            lenient_review=False, prototype=False, no_prototype=False,
+        )
+        config = BuildConfig.from_cli_args(args)
+        assert config.prototype_mode == "true"
+
+    def test_prototype_dir_is_inside_the_change(self, tmp_path):
+        config = BuildConfig(project_dir=tmp_path, change_name="my-change")
+        config.specs_dir = tmp_path / "specs"
+        assert config.prototype_dir == config.change_dir / "prototype"
+
+    def test_cli_parser_exposes_the_flags(self):
+        from build_pipeline.__main__ import build_parser
+        parser = build_parser()
+        assert parser.parse_args(["build", "--no-prototype"]).no_prototype is True
+        assert parser.parse_args(["build", "--prototype"]).prototype is True
+        with pytest.raises(SystemExit):
+            parser.parse_args(["build", "--prototype", "--no-prototype"])

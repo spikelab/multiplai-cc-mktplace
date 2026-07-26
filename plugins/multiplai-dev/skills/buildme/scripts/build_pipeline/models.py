@@ -15,6 +15,13 @@ class BuildPhase(str, Enum):
     RESEARCH = "research"
     SPEC_GENERATION = "spec_generation"
     DESIGN_AUDIT = "design_audit"
+    # Cheap shape proof (mockup / sample output / CLI transcript) before the
+    # expensive TDD build. Ordinal position matters: state.is_phase_complete
+    # compares positions in this enum, so PROTOTYPE sits where it runs — after
+    # the design audit, before the human review checkpoint. Checkpoints written
+    # before this phase existed still load (the stored value is a phase name,
+    # not an index) and resume at their recorded phase.
+    PROTOTYPE = "prototype"
     REVIEW = "review"
     TDD_BUILD = "tdd_build"
     COMPLETE = "complete"

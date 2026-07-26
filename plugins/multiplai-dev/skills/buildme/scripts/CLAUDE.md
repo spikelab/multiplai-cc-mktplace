@@ -25,6 +25,7 @@
 | File | Functions | What They Do |
 |------|-----------|-------------|
 | `spec_steps.py` | `generate_artifact()`, `run_design_audit()`, `run_tasks_audit()`, `run_codebase_analysis()` | Spec generation + adversarial audits (design audit and tasks-shape audit, both wired — the tasks audit forces one regeneration pass on horizontal-decomposition findings). `run_codebase_analysis()` (3-agent) is **not wired**. |
+| `prototype_steps.py` | `run_prototype()`, `apply_prototype_findings()`, `primary_prototype_artifact()` | Prototype-first stage (BuildPhase.PROTOTYPE, between DESIGN_AUDIT and REVIEW). One agent writes a mockup / sample output / CLI transcript + `NOTES.md` inside `specs/changes/<name>/prototype/` — the write boundary is enforced in code (`_files_outside`), not only in the prompt. `apply_prototype_findings()` folds the notes' DISPROVES/OPEN_QUESTIONS back into design.md and tasks.md with **one** regeneration pass each. |
 | `tdd_steps.py` | `run_test_writer()`, `run_implementer()`, `run_refactorer()`, `run_integration_fix()` | TDD agent spawning with tool allowlists |
 | `review_steps.py` | `run_code_review()`, `run_security_review()`, `run_review_fix()` | `run_code_review()` is **wired** as the active per-block review — `tdd_engine._run_quality_review` calls it with the block's actual diff, rubric, spec context, and coding standards (honors `config.review_model`). `run_security_review()` / `run_review_fix()` remain **not wired**. |
 
@@ -39,6 +40,7 @@ Templates are Python f-strings with `{placeholders}`. Each template is a constan
 | `implementation.py` | IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM, REFACTOR_PROMPT, APPLY_PROMPT |
 | `review.py` | CODE_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT |
 | `design_audit.py` | DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT |
+| `prototype.py` | PROTOTYPE_PROMPT |
 | `rubric_prompts.py` | RUBRIC_PROMPT |
 
 ## Testing

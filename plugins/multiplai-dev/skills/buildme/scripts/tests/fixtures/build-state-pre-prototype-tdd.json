@@ -1,0 +1,38 @@
+{
+  "change_name": "legacy-change",
+  "mode": "scratch",
+  "tier": "advanced",
+  "phase": "review",
+  "bootstrap_done": true,
+  "interview_summary": "Add a retry column to the jobs table.",
+  "research_path": null,
+  "spec_gen": {
+    "completed_artifacts": ["proposal", "requirements", "design", "tasks", "rubric"],
+    "research_path": null,
+    "codebase_analysis_path": null,
+    "tasks_audit_done": true
+  },
+  "tdd": {
+    "blocks": [
+      {
+        "number": 1,
+        "name": "Retry column",
+        "description": "Add the column and the migration",
+        "status": "done"
+      },
+      {
+        "number": 2,
+        "name": "Re-enqueue worker",
+        "description": "Worker picks up failed jobs",
+        "status": "pending"
+      }
+    ],
+    "current_block": 1,
+    "baseline_tests_pass": true,
+    "final_review_done": false,
+    "e2e_done": false
+  },
+  "state_file": "",
+  "started_at": "2026-07-20T09:14:03.117412+00:00",
+  "updated_at": "2026-07-20T10:02:11.554311+00:00"
+}
