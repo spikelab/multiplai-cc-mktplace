@@ -328,7 +328,14 @@ cmd_uitest() {
   fi
   # xcodebuild refuses a pre-existing -resultBundlePath. Clean it LOCALLY: this
   # is a plain filesystem op on the shared mount (container or Mac), never sent
-  # over the gateway.
+  # over the gateway. Guard the recursive delete: a bundle path is always
+  # *.xcresult, so a mistyped --result-bundle (~/Documents) must fail loudly
+  # instead of being deleted.
+  case "$result_bundle" in
+    *.xcresult) ;;
+    *) echo "ERROR: --result-bundle must end in .xcresult (refusing to delete: $result_bundle)" >&2
+       exit 1 ;;
+  esac
   rm -rf "$result_bundle"
   mkdir -p "$(dirname "$result_bundle")"
 
@@ -369,7 +376,13 @@ cmd_screenshots() {
     output="$(pwd)/.uitest-artifacts/screenshots"
   fi
   # Clean + recreate the output dir LOCALLY (shared mount) so stale attachments
-  # from a prior run don't linger.
+  # from a prior run don't linger. Guard the recursive delete against the
+  # catastrophic --output typos (/, $HOME, the project dir itself).
+  case "$output" in
+    /|"$HOME"|"$(pwd)")
+      echo "ERROR: refusing to delete $output — pass a dedicated screenshots directory via --output" >&2
+      exit 1 ;;
+  esac
   rm -rf "$output"
   mkdir -p "$output"
 
