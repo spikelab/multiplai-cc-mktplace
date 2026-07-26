@@ -330,7 +330,10 @@ class TestInjections:
         md = render_injections_markdown(
             injection_stats(decisions), decisions, None, trace=5
         )
-        assert '- prompt: "why does it inject stuff"' in md
+        # The prompt is now fenced as untrusted data rather than inlined.
+        assert "- prompt:" in md
+        assert '<untrusted-content source="routing prompt">' in md
+        assert "why does it inject stuff" in md
         assert "predate plugin 0.5.3" not in md
         assert "needs the session transcript" not in md
 
