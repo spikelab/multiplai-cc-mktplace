@@ -14,6 +14,7 @@
 | `state.py` | BuildState with checkpoint/resume | No |
 | `models.py` | Pydantic models for all structured data | No |
 | `gates.py` | Quality gate assertions (pure code) | No |
+| `git_ops.py` | Every `git`/`gh` invocation: worktree+branch setup, explicit-path commits, push, `gh pr create`. `shell=False`, fixed argv, never merges/force-pushes/deletes. | No |
 | `sdk.py` | `llm_call()` + `agent_call()` adapters over `multiplai_core.run_agent()` | Yes (SDK) |
 | `rubric.py` | Rubric generation and change type detection | Via sdk |
 | _(logging)_ | Uses shared `log_utils.setup_logging()` from hooks/ | No |
