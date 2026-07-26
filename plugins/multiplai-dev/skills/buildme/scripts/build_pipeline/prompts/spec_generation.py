@@ -79,6 +79,9 @@ You are generating a design document for an spec-driven change.
 ## Existing Codebase Analysis
 {codebase_analysis}
 
+## Findings To Address
+{audit_findings}
+
 ## Instructions
 {instruction}
 

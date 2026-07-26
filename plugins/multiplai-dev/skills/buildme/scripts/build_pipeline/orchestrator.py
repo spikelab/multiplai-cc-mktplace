@@ -20,7 +20,7 @@ from .change_manager import ChangeManager
 from .config import BuildConfig
 from .models import BuildPhase
 from .progress import ProgressWriter
-from .state import BuildState
+from .state import BuildState, SpecGenState
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +124,13 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             state.advance_to(BuildPhase.DESIGN_AUDIT, state_path)
             print("PHASE:DESIGN_AUDIT:COMPLETE", flush=True)
 
+        # Phase: Prototype — a cheap artifact that proves the shape before the
+        # expensive TDD build. Phase failure is never build failure.
+        if not state.is_phase_complete(BuildPhase.PROTOTYPE):
+            await _run_prototype_phase(config, state, progress, state_path)
+            state.advance_to(BuildPhase.PROTOTYPE, state_path)
+            print("PHASE:PROTOTYPE:COMPLETE", flush=True)
+
         # Stop if --spec-only
         if config.spec_only:
             log.info("DONE pipeline=spec-only")
@@ -142,6 +149,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 # anything is built on top of them.
                 if config.unknowns_path.exists():
                     print(f"REVIEW:READ_FIRST:{config.unknowns_path}", flush=True)
+                _print_prototype_review_paths(config)
                 log.info("DONE phase=REVIEW")
             state.advance_to(BuildPhase.REVIEW, state_path)
             print("PHASE:REVIEW:COMPLETE", flush=True)
@@ -193,6 +201,109 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         log.error("FAIL pipeline change=%s error=%s", config.change_name, e, exc_info=True)
         print(f"ERROR:{e}", file=sys.stderr, flush=True)
         return 1
+
+
+def prototype_decision(config) -> tuple[bool, str]:
+    """Whether to run the prototype stage, and the reason either way.
+
+    "false" / "true" come from `--no-prototype` / `--prototype` or
+    `prototype: {enabled: ...}` in specs/config.yaml; "auto" defers to
+    gates.prototype_required (frontend/fullstack, or a user-visible output
+    format). The reason is always logged, so a skip is a recorded decision
+    rather than a silent absence.
+    """
+    mode = getattr(config, "prototype_mode", "auto")
+    if mode == "false":
+        return False, "disabled (--no-prototype / config.yaml prototype.enabled: false)"
+    if mode == "true":
+        return True, "forced on (--prototype / config.yaml prototype.enabled: true)"
+
+    from .gates import prototype_required
+
+    if prototype_required(config.change_dir):
+        return True, "auto: change has a UI or a user-visible output format"
+    return False, "auto: no UI and no user-visible output format in proposal/design"
+
+
+async def _run_prototype_phase(
+    config: BuildConfig, state: BuildState, progress: ProgressWriter, state_path: Path,
+) -> None:
+    """Run the prototype stage and feed its notes back into design/tasks.
+
+    Never raises: a failed prototype fails the phase, writes a diagnosis to
+    build-progress.md, and lets the build continue.
+    """
+    should_run, reason = prototype_decision(config)
+    if not should_run:
+        log.info("SKIP phase=PROTOTYPE reason=%s", reason)
+        print(f"PHASE:PROTOTYPE:SKIPPED:{reason}", flush=True)
+        return
+
+    log.info("START phase=PROTOTYPE reason=%s", reason)
+    from .llm_steps.prototype_steps import apply_prototype_findings, run_prototype
+
+    try:
+        result = await run_prototype(config)
+    except Exception as proto_err:  # non-fatal by design
+        log.warning("Prototype stage failed (non-fatal): %s", proto_err)
+        _log_prototype_diagnosis(progress, config, str(proto_err))
+        return
+
+    if not result.passed:
+        log.warning("FAIL phase=PROTOTYPE reason=%s", result.reason)
+        _log_prototype_diagnosis(progress, config, result.reason)
+        return
+
+    log.info("DONE phase=PROTOTYPE — %s", result.reason)
+
+    # One regeneration pass of design.md/tasks.md from the notes.
+    if state.spec_gen is None:
+        state.spec_gen = SpecGenState()
+    if state.spec_gen.prototype_done:
+        log.info("SKIP phase=PROTOTYPE_FEEDBACK reason=recorded-complete-in-state")
+        return
+    try:
+        regenerated = await apply_prototype_findings(config, state)
+        log.info("DONE phase=PROTOTYPE_FEEDBACK regenerated=%d", regenerated)
+    except Exception as feedback_err:  # non-fatal
+        log.warning("Prototype feedback pass failed (non-fatal): %s", feedback_err)
+        _log_prototype_diagnosis(progress, config, str(feedback_err))
+        return
+    state.spec_gen.prototype_done = True
+    state.checkpoint(state_path)
+
+
+def _log_prototype_diagnosis(progress: ProgressWriter, config: BuildConfig, reason: str) -> None:
+    """Record why the prototype phase failed where the user will read it."""
+    print(f"PHASE:PROTOTYPE:FAILED:{reason}", flush=True)
+    try:
+        progress.log_diagnosis(
+            "prototype",
+            f"Prototype stage did not produce a usable artifact.\n"
+            f"Reason: {reason}\n"
+            f"Expected under: {config.prototype_dir}\n"
+            f"The build continues — the prototype is an aid, not a dependency.",
+        )
+    except OSError as e:
+        log.warning("Could not write prototype diagnosis to progress file: %s", e)
+
+
+def _print_prototype_review_paths(config: BuildConfig) -> None:
+    """Print the prototype's `file://` path at the non-auto review checkpoint.
+
+    The pipeline runs inside a container whose localhost is not the user's, so
+    a served URL would be unreachable; the shared filesystem mount is the
+    channel that always works.
+    """
+    from .llm_steps.prototype_steps import primary_prototype_artifact
+
+    artifact = primary_prototype_artifact(config.prototype_dir)
+    if artifact is None:
+        return
+    print(f"PROTOTYPE:file://{artifact.resolve()}", flush=True)
+    notes = config.prototype_dir / "NOTES.md"
+    if notes.exists():
+        print(f"PROTOTYPE_NOTES:file://{notes.resolve()}", flush=True)
 
 
 async def _run_bootstrap(

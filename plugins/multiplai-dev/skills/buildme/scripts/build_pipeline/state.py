@@ -33,6 +33,10 @@ class SpecGenState(BaseModel):
     # existence would mark the artifact DONE and skip the gate on resume.
     # Old checkpoints default to False (re-running the gate is idempotent).
     explainers_done: bool = False
+    # Same durability argument for the prototype feedback pass: design.md and
+    # tasks.md already exist when the prototype notes are folded back in, so
+    # file existence proves nothing. Old checkpoints default to False.
+    prototype_done: bool = False
 
 
 class TDDState(BaseModel):

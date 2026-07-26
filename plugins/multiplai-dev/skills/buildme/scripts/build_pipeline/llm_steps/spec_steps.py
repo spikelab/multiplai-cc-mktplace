@@ -43,8 +43,10 @@ async def generate_artifact(
         interview_summary: For proposal generation
         research: Research findings for proposal generation
         codebase_analysis: Existing code analysis for design generation
-        audit_findings: Tasks-shape audit findings — injected on the one
-            regeneration pass after run_tasks_audit reports layering
+        audit_findings: Findings injected on a single regeneration pass —
+            tasks-shape audit findings (run_tasks_audit) or prototype notes
+            (prototype_steps.apply_prototype_findings). Used by `design` and
+            `tasks`.
 
     Returns:
         Generated markdown content.
@@ -116,6 +118,7 @@ def _build_prompt(
             proposal_content=proposal_content,
             specs_content=specs_content,
             codebase_analysis=codebase_analysis or "(new project)",
+            audit_findings=audit_findings or "(none — first pass)",
             instruction=instruction,
             template=template,
         )
