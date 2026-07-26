@@ -50,12 +50,25 @@ STATUS: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
 TESTS_RUN: <the exact command you ran>
 GREEN: <the suite's result line, verbatim — e.g. "42 passed in 3.1s">
 FILES: <files you created or modified, comma-separated>
+SURPRISES: <what did not match the spec/design, or "none">
+SPEC_IMPACT: <none | clarify | contradicts>
 ```
 
 Use DONE when every test passes; DONE_WITH_CONCERNS when they pass but
 something is worth flagging (state what under the slot); NEEDS_CONTEXT or
 BLOCKED per the section above. The pipeline re-runs the suite itself — these
 slots feed the reviewer and the progress log, so report what actually happened.
+
+SURPRISES and SPEC_IMPACT close the loop back to the spec. Write down anything
+the spec or design did not prepare you for — a contract that turned out
+different, a dependency that behaved unexpectedly, an ordering the design left
+open. Use `clarify` when the spec was silent or ambiguous and you had to pick,
+and `contradicts` when the block could only be built by doing something the
+spec/design does not say or says otherwise. `none` is the right answer when the
+spec described the work accurately. These notes are collected into
+implementation-notes.md and become a proposed spec delta at the end of the
+build — nobody edits the spec from them automatically, so an honest note costs
+you nothing and saves the next build.
 """
 
 IMPLEMENTER_PROMPT_MINIMUM = """\
@@ -103,12 +116,25 @@ STATUS: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
 TESTS_RUN: <the exact command you ran>
 GREEN: <the suite's result line, verbatim — e.g. "42 passed in 3.1s">
 FILES: <files you created or modified, comma-separated>
+SURPRISES: <what did not match the spec/design, or "none">
+SPEC_IMPACT: <none | clarify | contradicts>
 ```
 
 Use DONE when every test passes; DONE_WITH_CONCERNS when they pass but
 something is worth flagging (state what under the slot); NEEDS_CONTEXT or
 BLOCKED per the section above. The pipeline re-runs the suite itself — these
 slots feed the reviewer and the progress log, so report what actually happened.
+
+SURPRISES and SPEC_IMPACT close the loop back to the spec. Write down anything
+the spec or design did not prepare you for — a contract that turned out
+different, a dependency that behaved unexpectedly, an ordering the design left
+open. Use `clarify` when the spec was silent or ambiguous and you had to pick,
+and `contradicts` when the block could only be built by doing something the
+spec/design does not say or says otherwise. `none` is the right answer when the
+spec described the work accurately. These notes are collected into
+implementation-notes.md and become a proposed spec delta at the end of the
+build — nobody edits the spec from them automatically, so an honest note costs
+you nothing and saves the next build.
 """
 
 REFACTOR_PROMPT = """\

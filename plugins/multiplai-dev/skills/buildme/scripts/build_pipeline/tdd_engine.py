@@ -18,6 +18,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import hashlib
+
+from . import budget as budget_mod
+from .budget import BudgetExceededError
+from . import board
 from .change_manager import extract_global_constraints
 from .config import BuildConfig
 from .gates import (
@@ -25,12 +30,15 @@ from .gates import (
     agent_status_gate,
     baseline_test_gate,
     integration_gate,
+    parse_implementation_note,
     red_gate,
     review_iteration_gate,
     review_score_gate,
     run_test_suite,
+    unchanged_tests_gate,
     wiring_task_gate,
 )
+from .llm_steps.respec_steps import append_implementation_note
 from .llm_steps.review_steps import run_code_review
 from .llm_steps.tdd_steps import (
     run_implementer,
@@ -43,17 +51,34 @@ from .models import (
     BlockStatus,
     BuildPhase,
     FinalReviewVerdict,
+    FindingAdjudication,
     GateResult,
     ReviewResult,
     TestQualityAudit,
 )
 from .progress import ProgressWriter
-from .prompts.review import FINAL_REVIEW_PROMPT
+from .prompts.review import FINAL_REVIEW_PROMPT, FINDING_ADJUDICATION_PROMPT
 from .prompts.test_writing import TEST_QUALITY_PROMPT
 from .sdk import llm_call_structured
 from .state import BuildState, TDDState
 
 log = logging.getLogger(__name__)
+
+
+def _mark_block(
+    state: BuildState, block_idx: int, status: BlockStatus, config: BuildConfig,
+) -> None:
+    """Set a block's status, checkpoint, and refresh the board card.
+
+    Every block status is In Development (board.py's docstring says why —
+    notably REVIEWING is an in-process review with no pushed branch, so it is
+    not In Review). The board write still happens on each change so
+    `.board.json` stays current when the TDD engine runs standalone; it emits a
+    `BOARD:` line only when the card actually moves columns.
+    """
+    state.mark_block_status(block_idx, status, config.state_file_path())
+    board.record(config, state, BuildPhase.TDD_BUILD, block_status=status,
+                 note=f"block {block_idx + 1} {status.value}")
 
 
 def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -> str | None:
@@ -63,13 +88,28 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
     Returns short SHA of the new commit, or None if there was nothing to
     commit or the commit failed (logged as warning — never raises).
 
-    Stages everything EXCEPT buildme's own bookkeeping files (build-progress.md
-    and .build-state.json) so they don't leak into the user's per-block commits.
+    Stages everything EXCEPT buildme's own bookkeeping files (build-progress.md,
+    .build-state.json and .board.json) so they don't leak into the user's
+    per-block commits.
+
+    NOTE (git lifecycle): this is the pipeline's ONE whole-tree stage — a
+    pathspec-limited `git add -A -- . :(exclude)…`, not a bare `git add -A`.
+    Every other commit path (git_ops.commit_paths, used for the spec stages
+    and the archive move) stages explicit paths only. It is kept whole-tree
+    here because a TDD block's output is not fully enumerable from the agent's
+    self-reported FILES: slot, and dropping a produced file would be worse
+    than sweeping one in — and since the build now runs inside its own
+    worktree, "everything under ." IS this build's own work.
     """
     cwd = str(config.project_dir)
     # Exclude the bookkeeping files via :(exclude) pathspecs, relative to the repo.
     excludes: list[str] = []
-    for bookkeeping in (config.progress_file_path(), config.state_file_path()):
+    bookkeeping_files = (
+        config.progress_file_path(),
+        config.state_file_path(),
+        config.change_dir / ".board.json",
+    )
+    for bookkeeping in bookkeeping_files:
         try:
             rel = bookkeeping.relative_to(config.project_dir)
         except ValueError:
@@ -136,7 +176,24 @@ EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 MAX_REVIEW_DIFF_CHARS = 150_000
 
 
+# Python-only, on purpose: this regex feeds the weak-test *scan*, which looks
+# for `def test_*`. Widening it to Swift/TS would hand non-Python source to a
+# Python-shaped scan and fail every block on "no test functions found".
 _TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]+\.py|[^/]+_test\.py|conftest\.py)$")
+
+# Language-agnostic, used only for integrity hashing. The integrity gate does
+# not parse test source — it only needs to know which paths are tests — so it
+# must cover every language buildme runs on, or the gate silently no-ops (empty
+# `before` → "not checked") on a Swift or TypeScript repo.
+_TEST_PATH_RE = re.compile(
+    r"(^|/)("
+    r"test_[^/]+\.py|[^/]+_test\.py|conftest\.py"        # Python
+    r"|[^/]+_test\.go"                                    # Go
+    r"|[^/]+Tests?\.swift"                                # Swift
+    r"|[^/]+\.(test|spec)\.[cm]?[jt]sx?"                  # JS/TS
+    r")$"
+    r"|(^|/)(tests?|__tests__|Tests)/"                    # anything under a tests dir
+)
 MAX_TEST_SCAN_CHARS = 200_000
 
 
@@ -175,6 +232,60 @@ def _read_block_test_files(config: BuildConfig, block: BlockInfo) -> str:
 
     content = "\n\n".join(parts)
     return content[:MAX_TEST_SCAN_CHARS]
+
+
+def _list_block_test_files(config: BuildConfig, block: BlockInfo) -> list[str] | None:
+    """Repo-relative paths of the test files this block added or modified.
+
+    Returns None when git could not be asked (non-zero exit, timeout, not a
+    repo) — distinct from `[]`, which means "asked, and this block touched no
+    test files". Collapsing the two made a transient git failure look like the
+    agent had deleted every test file; see `_snapshot_test_files`.
+    """
+    target = block.baseline_commit or "HEAD"
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--name-only", target],
+            cwd=str(config.project_dir), capture_output=True, text=True, timeout=60,
+        )
+        if proc.returncode != 0:
+            log.warning("Could not list changed files for block %d: %s",
+                        block.number, proc.stderr.strip())
+            return None
+        names = proc.stdout.splitlines()
+    except Exception as e:
+        log.warning("Could not list changed files for block %d: %s", block.number, e)
+        return None
+    return [n.strip() for n in names if _TEST_PATH_RE.search(n.strip())]
+
+
+def _snapshot_test_files(config: BuildConfig, block: BlockInfo) -> dict[str, str] | None:
+    """{repo-relative path: sha256} for the block's test files, right now.
+
+    Taken the moment the RED gate passes and re-taken at each later checkpoint;
+    comparing the two is how `unchanged_tests_gate` sees a moved bar. Content
+    hashing rather than mtime because a git checkout or a formatter run moves
+    mtimes without changing what the test asserts.
+
+    A file that vanished between listing and reading is simply omitted, which
+    `unchanged_tests_gate` reads as a deletion — the correct interpretation.
+
+    Returns None when the file list itself could not be obtained. That is NOT a
+    deletion: an unavailable `after` snapshot compared against a populated
+    `before` would report every test file as deleted and fail the block on a git
+    hiccup. The caller treats None as "gate could not run".
+    """
+    names = _list_block_test_files(config, block)
+    if names is None:
+        return None
+    snapshot: dict[str, str] = {}
+    for name in names:
+        path = config.project_dir / name
+        try:
+            snapshot[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as e:
+            log.debug("Could not hash test file %s: %s", name, e)
+    return snapshot
 
 
 def _capture_block_diff(config: BuildConfig, block: BlockInfo) -> str:
@@ -450,6 +561,19 @@ def assemble_context(
             rel = req_file.relative_to(config.change_dir)
             parts.append(f"\n## Requirements: {rel}\n{req_file.read_text()}")
 
+    # Unknowns — the explainer document for dependencies new to this project.
+    # test_writer ONLY: the payoff of the B1 gate is that the documented edge
+    # cases (empty/malformed/oversized/concurrent/offline) arrive as tests. The
+    # implementer gets them indirectly through those tests, and the refactorer
+    # has no use for them — shipping the document to every role would just
+    # inflate prompts.
+    if role == "test_writer" and config.unknowns_path.exists():
+        parts.append(
+            "\n## Unknowns — dependencies new to this project\n"
+            "Write a test for every edge case below that this block touches.\n\n"
+            + config.unknowns_path.read_text()
+        )
+
     # Rubric (for reviewers — include for all so agents know quality bar)
     if config.rubric_path.exists():
         parts.append(f"\n## Evaluation Rubric\n{config.rubric_path.read_text()}")
@@ -531,7 +655,91 @@ async def _audit_test_quality(test_files_content: str, contracts: str, config: B
         contracts=contracts or "(none provided)",
     )
     return await llm_call_structured(prompt, TestQualityAudit, model=config.model,
-                                       effort=config.review_effort, max_retries=1)
+                                     effort=config.review_effort, max_retries=1,
+                                     budget_label="test_quality_audit")
+
+
+async def _adjudicate_review_findings(
+    review: ReviewResult,
+    block: BlockInfo,
+    config: BuildConfig,
+    diff: str,
+    build_context: str = "",
+) -> ReviewResult:
+    """Accept or reject each reviewer finding before anything acts on it.
+
+    Mirrors `_audit_test_quality`: a cheap coarse signal (there, a regex scan;
+    here, a fresh-context reviewer) is confirmed or overturned by a judge with
+    more context before the pipeline spends work on it.
+
+    The asymmetry is deliberate. Reviewers run in *fresh* contexts because that
+    is what makes them catch errors the implementer's own context hides — and
+    it is also why roughly a quarter of what they propose is wrong: they cannot
+    see the decisions the build already made. The adjudicator runs on the main
+    model WITH that context. Reviewers propose; the orchestrator disposes.
+
+    Returns a copy of *review* whose `findings` are the accepted ones and whose
+    `rejected_findings` hold the rest. The gate and the fix loop read only
+    `findings`, so a rejected finding cannot reach a fix agent.
+
+    Failure is fail-OPEN, deliberately: if the adjudicator errors, every
+    finding stays accepted. The alternative — dropping findings when the judge
+    is unavailable — would silently weaken review exactly when something is
+    already going wrong.
+    """
+    candidates = review.findings_or_derived()
+    if not candidates:
+        return review.model_copy(update={"findings": []})
+    if not config.adjudicate_findings:
+        # Off means "do not act on unadjudicated findings", NOT "apply them
+        # blind" — the invariant is that nothing reaches a fix agent unjudged.
+        log.info("Finding adjudication disabled — %d finding(s) dropped, not applied",
+                 len(candidates))
+        return review.model_copy(update={"findings": [], "rejected_findings": candidates})
+
+    findings_text = "\n".join(
+        f"[{i}] ({f.severity}, confidence {f.confidence:.2f}"
+        + (f", raised by {len(f.reviewers)} reviewers" if len(f.reviewers) > 1 else "")
+        + f") {f.claim}"
+        + (f"\n     location: {f.file_path}:{f.line}" if f.file_path else "")
+        + (f"\n     evidence: {f.evidence}" if f.evidence else "")
+        for i, f in enumerate(candidates)
+    )
+    block_context = f"Block {block.number}: {block.name}\n{block.description}"
+    prompt = FINDING_ADJUDICATION_PROMPT.format(
+        block_context=block_context,
+        diff=diff or "(no diff captured)",
+        build_context=build_context or "(no additional build context)",
+        findings=findings_text,
+    )
+    try:
+        adjudication = await llm_call_structured(
+            prompt, FindingAdjudication, model=config.model,
+            effort=config.review_effort, max_retries=1,
+            budget_label="adjudication",
+        )
+    except Exception as e:
+        log.warning(
+            "Finding adjudication failed for block %d (%s) — keeping all %d findings",
+            block.number, e, len(candidates),
+        )
+        return review.model_copy(update={"findings": candidates})
+
+    accepted_idx = adjudication.accepted_indices(len(candidates))
+    reasons = {v.index: v.reason for v in adjudication.verdicts}
+    accepted, rejected = [], []
+    for i, finding in enumerate(candidates):
+        if i in accepted_idx:
+            accepted.append(finding)
+        else:
+            rejected.append(finding.model_copy(
+                update={"evidence": f"{finding.evidence}\nREJECTED: {reasons.get(i, '')}".strip()}
+            ))
+    log.info(
+        "Adjudication block=%d: %d/%d findings accepted, %d rejected",
+        block.number, len(accepted), len(candidates), len(rejected),
+    )
+    return review.model_copy(update={"findings": accepted, "rejected_findings": rejected})
 
 
 async def _enforce_test_quality(
@@ -566,7 +774,7 @@ async def _enforce_test_quality(
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_AUDIT error=%s",
                   block.number, block.name, e)
         progress.log_agent("TestQualityAuditor", block.name, f"ERROR: {e}")
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
     if audit.passed:
@@ -599,7 +807,7 @@ async def _enforce_test_quality(
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_RETRY error=%s",
                   block.number, block.name, retry.error)
         progress.log_agent("TestWriter", block.name, "TIMEOUT" if retry.timed_out else "FAILED")
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
     sha = _git_commit_block_phase(config, "test", block)
     if sha:
@@ -616,7 +824,7 @@ async def _enforce_test_quality(
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_REAUDIT error=%s",
                   block.number, block.name, e)
         progress.log_agent("TestQualityAuditor", block.name, f"ERROR: {e}")
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
     if re_audit.passed:
         return True
@@ -624,7 +832,7 @@ async def _enforce_test_quality(
     log.error("FAIL block=%d name=%s phase=TEST_QUALITY reason=still-weak-after-retry",
               block.number, block.name)
     progress.log_agent("TestQualityAuditor", block.name, "STILL WEAK after retry — block failed")
-    state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+    _mark_block(state, block_idx, BlockStatus.FAILED, config)
     return False
 
 
@@ -654,6 +862,19 @@ async def _enforce_red_gate(
         gate = red_gate(output, exit_code)
         if gate.passed:
             block.red_evidence = _trim_evidence(output)
+            # Freeze the bar the moment it is proven to be a bar. Everything
+            # after this point — the implement phase and every review-fix
+            # iteration — can write to these files, so this hash map is the
+            # only later evidence of whether they did.
+            # None (git unavailable) degrades to {}, which `unchanged_tests_gate`
+            # reads as "no snapshot → gate could not run". Storing None would
+            # violate the model's dict contract and crash the len() below.
+            block.test_file_hashes = _snapshot_test_files(config, block) or {}
+            if not block.test_file_hashes:
+                log.warning("Test integrity: no snapshot for block %d — the gate will "
+                            "report 'not checked' for this block", block.number)
+            log.info("Test integrity: snapshotted %d test file(s) for block %d",
+                     len(block.test_file_hashes), block.number)
             state.checkpoint(config.state_file_path())
             log.info("RED confirmed block=%d name=%s (%s)", block.number, block.name, gate.reason)
             progress.log_agent("RedGate", block.name, "RED CONFIRMED")
@@ -690,7 +911,7 @@ async def _enforce_red_gate(
                 log.error("FAIL block=%d name=%s phase=RED_GATE_RETRY error=%s",
                           block.number, block.name, retry.error)
                 progress.log_agent("TestWriter", block.name, "TIMEOUT" if retry.timed_out else "FAILED")
-                state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+                _mark_block(state, block_idx, BlockStatus.FAILED, config)
                 return False
             sha = _git_commit_block_phase(config, "test", block)
             if sha:
@@ -700,7 +921,89 @@ async def _enforce_red_gate(
     log.error("FAIL block=%d name=%s phase=RED_GATE reason=%s",
               block.number, block.name, gate.reason)
     progress.log_agent("RedGate", block.name, f"FAILED after retry: {gate.reason}")
-    state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+    _mark_block(state, block_idx, BlockStatus.FAILED, config)
+    return False
+
+
+def _record_implementation_note(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    role: str,
+    output: str,
+) -> bool:
+    """Capture an agent's SURPRISES:/SPEC_IMPACT: slots.
+
+    The note is persisted on the block (surviving resume) and appended to
+    implementation-notes.md immediately, so an interrupted build still leaves
+    the learning on disk for the respec step. A `contradicts` note is logged
+    and written to build-progress.md as a warning.
+
+    Returns False only when the build must stop: a contradiction under
+    `respec: {halt_on_contradiction: true}`. Recording never fails the build
+    on its own.
+    """
+    note = parse_implementation_note(
+        output, block_number=block.number, block_name=block.name, role=role,
+    )
+    if note is None:
+        return True
+
+    # A resumed mid-block run re-parses the same agent report: recording the
+    # identical note (same role/block/surprises/spec_impact) again would
+    # duplicate it on the block, in implementation-notes.md, and ultimately in
+    # the respec prompt. Skip the recording — but never the contradiction
+    # handling below, so a resume cannot sneak past a configured halt.
+    if note in block.notes:
+        log.info(
+            "Implementation note already recorded block=%d role=%s — skipping duplicate",
+            block.number, role,
+        )
+    else:
+        block.notes.append(note)
+        state.checkpoint(config.state_file_path())
+        try:
+            append_implementation_note(config.change_dir, note)
+        except OSError as e:
+            # The note is on the block/state and run_respec_audit merges state
+            # notes back in, so nothing is lost; failing a green block over
+            # the markdown copy is not worth it.
+            log.warning("Could not append implementation note to disk: %s", e)
+
+        if not note.contradicts:
+            log.info(
+                "Implementation note block=%d role=%s spec_impact=%s",
+                block.number, role, note.spec_impact,
+            )
+            progress.log_spec_impact(block.name, role, note.spec_impact, note.surprises)
+        else:
+            log.warning(
+                "SPEC_IMPACT: contradicts reported by %s on block %d (%s): %s",
+                role, block.number, block.name, note.surprises,
+            )
+            progress.log_spec_impact(block.name, role, note.spec_impact, note.surprises)
+
+    if not note.contradicts:
+        return True
+
+    if not config.gates.respec_halt_on_contradiction:
+        return True
+
+    diagnosis = (
+        f"Build stopped: the {role} reported SPEC_IMPACT: contradicts on block "
+        f"{block.number} ({block.name}) and respec.halt_on_contradiction is on.\n"
+        f"The block could only be built by doing something the spec/design does "
+        f"not say (or says otherwise), so the spec is decided in conversation "
+        f"rather than steered around in code.\n\n"
+        f"Reported surprise:\n{note.surprises}\n\n"
+        f"Next: reshape the requirements/design for this block, or set "
+        f"`respec: {{halt_on_contradiction: false}}` in specs/config.yaml to let "
+        f"the build continue and collect the delta into respec.md instead."
+    )
+    log.error("FAIL block=%d name=%s reason=spec_contradiction role=%s",
+              block.number, block.name, role)
+    progress.log_diagnosis(block.name, diagnosis)
     return False
 
 
@@ -754,7 +1057,7 @@ async def run_block_tdd(
 
     # --- Phase A: Write tests ---
     if block.status == BlockStatus.PENDING:
-        state.mark_block_status(block_idx, BlockStatus.TESTING, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.TESTING, config)
         progress.log_block(block.number, total, block.name, "TESTING")
 
     log.info("START block=%d/%d name=%s phase=TEST_WRITE", block.number, total, block.name)
@@ -788,7 +1091,7 @@ async def run_block_tdd(
         log.error("FAIL block=%d name=%s phase=TEST_WRITE reason=%s error=%s",
                   block.number, block.name, reason, test_result.error)
         progress.log_agent("TestWriter", block.name, "TIMEOUT" if test_result.timed_out else "FAILED")
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
     # The agent's own STATUS slot: NEEDS_CONTEXT/BLOCKED is it saying the work
@@ -799,11 +1102,17 @@ async def run_block_tdd(
                   block.number, block.name, status.metadata.get("status"))
         progress.log_agent("TestWriter", block.name, str(status.metadata.get("status")))
         progress.log_diagnosis(block.name, status.reason)
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
     log.info("DONE block=%d name=%s phase=TEST_WRITE", block.number, block.name)
     progress.log_agent("TestWriter", block.name, "COMPLETE")
+
+    if not _record_implementation_note(
+        block, config, state, progress, "test_writer", test_result.output,
+    ):
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
+        return False
 
     test_sha = _git_commit_block_phase(config, "test", block)
     if test_sha:
@@ -828,7 +1137,7 @@ async def run_block_tdd(
 
     # --- Phase B: Implement ---
     log.info("START block=%d name=%s phase=IMPLEMENT", block.number, block.name)
-    state.mark_block_status(block_idx, BlockStatus.IMPLEMENTING, config.state_file_path())
+    _mark_block(state, block_idx, BlockStatus.IMPLEMENTING, config)
     progress.log_block(block.number, total, block.name, "IMPLEMENTING")
 
     impl_context = assemble_context(block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None)
@@ -851,7 +1160,7 @@ async def run_block_tdd(
         log.error("FAIL block=%d name=%s phase=IMPLEMENT reason=%s error=%s",
                   block.number, block.name, reason, impl_result.error)
         progress.log_agent("Implementer", block.name, "TIMEOUT" if impl_result.timed_out else "FAILED")
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
     impl_status = agent_status_gate(impl_result.output, "Implementer")
@@ -860,12 +1169,24 @@ async def run_block_tdd(
                   block.number, block.name, impl_status.metadata.get("status"))
         progress.log_agent("Implementer", block.name, str(impl_status.metadata.get("status")))
         progress.log_diagnosis(block.name, impl_status.reason)
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
     log.info("DONE block=%d name=%s phase=IMPLEMENT turns=%d elapsed=%.0fs",
              block.number, block.name, impl_result.turns_used, impl_result.elapsed_seconds)
     progress.log_agent("Implementer", block.name, "COMPLETE")
+
+    # Kept in state so the reviewer sees the implementer's own account as a
+    # claim to verify, and so the test-integrity gate can find a declared
+    # TEST CHANGE REQUIRED reason after a resume.
+    block.implementer_report = _trim_evidence(impl_result.output)
+    state.checkpoint(config.state_file_path())
+
+    if not _record_implementation_note(
+        block, config, state, progress, "implementer", impl_result.output,
+    ):
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
+        return False
 
     impl_sha = _git_commit_block_phase(config, "impl", block)
     if impl_sha:
@@ -897,6 +1218,67 @@ async def run_block_tdd(
             progress.log_agent("Refactorer", block.name, "COMPLETE")
 
     return True
+
+
+def _enforce_test_integrity(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    block_idx: int,
+    window: str,
+    report: str,
+) -> bool:
+    """Apply `unchanged_tests_gate` at one of the two writable windows.
+
+    *window* is "implement" or "review-fix N" — both are checked, because the
+    review-fix agent IS the implementer, so passing the first check only means
+    the tests survived until the first review, not until the block is done.
+
+    *report* is the output of the agent that wrote during THIS window only, not
+    the accumulated `block.implementer_report`. Scanning the accumulation would
+    let one `TEST CHANGE REQUIRED:` declared during implement silently
+    authorize every later review-fix mutation for the rest of the block — the
+    exact hole the per-window re-baseline exists to close.
+
+    A flagged (declared) change passes but is recorded on the block, so
+    `_run_quality_review` can hand it to the reviewer as an unverified claim.
+    """
+    after = _snapshot_test_files(config, block)
+    if after is None:
+        # Git could not be asked. Comparing a populated `before` against an
+        # absent `after` would report every test file as deleted and fail the
+        # block on a git hiccup, so report the gate as unrun instead.
+        log.warning("Test integrity could not run after %s for block %d: "
+                    "test file list unavailable", window, block.number)
+        progress.log_agent("TestIntegrity", block.name, f"NOT CHECKED ({window})")
+        return True
+    gate = unchanged_tests_gate(block.test_file_hashes, after, report)
+    if gate.metadata.get("flagged"):
+        for claim in gate.metadata.get("claims", []):
+            if claim not in block.test_change_claims:
+                block.test_change_claims.append(claim)
+        # Re-baseline to the declared state so the NEXT window measures from
+        # here — otherwise one declared change would excuse every later silent
+        # one for the rest of the block.
+        block.test_file_hashes = after
+        state.checkpoint(config.state_file_path())
+        log.warning("Test files changed during %s for block %d with a declared reason: %s",
+                    window, block.number, gate.reason)
+        progress.log_agent("TestIntegrity", block.name,
+                           f"FLAGGED ({window}) — declared change, sent to reviewer")
+        return True
+    if gate.passed:
+        log.debug("Test integrity OK after %s for block %d (%s)",
+                  window, block.number, gate.reason)
+        return True
+
+    log.error("FAIL block=%d name=%s phase=TEST_INTEGRITY window=%s reason=%s",
+              block.number, block.name, window, gate.reason)
+    progress.log_agent("TestIntegrity", block.name, f"FAILED ({window})")
+    progress.log_diagnosis(block.name, gate.reason)
+    state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+    return False
 
 
 async def _run_integration_and_review(
@@ -953,8 +1335,15 @@ async def _run_integration_and_review(
                 f"Last fix agent report:\n{last_fix_output or '(no fix agent completed)'}"
             )
             progress.log_diagnosis(block.name, diagnosis)
-            state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
+
+    # --- Test-integrity gate (window 1: the implement phase) ---
+    # Checked BEFORE GREEN evidence is accepted. A green suite proves nothing
+    # if the suite is no longer the one that went red.
+    if not _enforce_test_integrity(block, config, state, progress, block_idx,
+                                   "implement", block.implementer_report):
+        return False
 
     # GREEN evidence: the suite passing with the implementation in place —
     # the counterpart to the RED evidence captured before implementation.
@@ -963,7 +1352,7 @@ async def _run_integration_and_review(
     progress.log_evidence("GREEN", block.name, block.green_evidence)
 
     # --- Quality review loop ---
-    state.mark_block_status(block_idx, BlockStatus.REVIEWING, config.state_file_path())
+    _mark_block(state, block_idx, BlockStatus.REVIEWING, config)
     progress.log_block(block.number, total, block.name, "REVIEWING")
 
     review_passed = False
@@ -972,6 +1361,18 @@ async def _run_integration_and_review(
         if not iter_gate.passed:
             log.warning("Review loop exhausted for block %s", block.name)
             break
+
+        # A runaway review/fix loop is the classic budget sink: each iteration
+        # is a full panel review PLUS a full implementer run. Check before
+        # spending, so the stop lands on a boundary rather than mid-call.
+        try:
+            budget_mod.check(phase=f"review iteration {iteration + 1} of block {block.number}")
+        except BudgetExceededError as e:
+            log.error("FAIL block=%d name=%s phase=REVIEW reason=budget_exhausted",
+                      block.number, block.name)
+            progress.log_diagnosis(block.name, f"{e}\n{e.diagnosis}")
+            state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+            return False
 
         # Run review (via llm_call_structured). Propagates SDK failures —
         # no silent fallback to fabricated passing scores.
@@ -983,12 +1384,19 @@ async def _run_integration_and_review(
                 block.number, block.name, iteration + 1, e,
             )
             progress.log_review(block.name, iteration + 1, 0.0, False)
-            state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
+
+        # Reviewers propose; the orchestrator disposes. THE core invariant:
+        # no reviewer suggestion may reach a fix agent unadjudicated.
+        review = await _adjudicate_review_findings(
+            review, block, config, _capture_block_diff(config, block),
+            build_context=_global_constraints_text(config),
+        )
         block.review_scores = review
         block.review_iterations = iteration + 1
 
-        score_gate = review_score_gate(review)
+        score_gate = review_score_gate(review, config.review_gate)
         progress.log_review(block.name, iteration + 1, review.weighted_average, score_gate.passed)
 
         if score_gate.passed:
@@ -998,12 +1406,17 @@ async def _run_integration_and_review(
         log.info("Review iteration %d failed for block %s: %s", iteration + 1, block.name, score_gate.reason)
         if iteration + 1 >= MAX_REVIEW_ITERATIONS:
             break  # no fix agent after the last review — its work would go unreviewed
-        # Spawn fix agent for the failing dimensions
+        # Spawn fix agent for the failing dimensions PLUS the findings that
+        # survived adjudication. Rejected findings are absent by construction.
+        accepted_text = review.findings_text()
+        fix_brief = score_gate.reason
+        if accepted_text:
+            fix_brief += f"\n\n## Adjudicated findings (accepted — fix these)\n{accepted_text}"
         context = assemble_context(block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None)
         fix = await run_implementer(
             block_name=block.name,
-            block_description=f"Fix review issues: {score_gate.reason}",
-            failing_tests=score_gate.reason,
+            block_description=f"Fix review issues: {fix_brief}",
+            failing_tests=fix_brief,
             context_bundle=context,
             test_command=config.test_command,
             prompt_style=config.implementer_prompt_style,
@@ -1013,6 +1426,24 @@ async def _run_integration_and_review(
         )
         if not fix.success and fix.timed_out:
             log.warning("Fix agent timed out during review iteration %d", iteration + 1)
+        if fix.output:
+            # The fix agent is an implementer too — its report is where a
+            # TEST CHANGE REQUIRED declaration for this window would appear.
+            block.implementer_report = _trim_evidence(
+                f"{block.implementer_report}\n\n[review-fix {iteration + 1}]\n{fix.output}"
+            )
+
+        # --- Test-integrity gate (window 2: this review-fix iteration) ---
+        # Checked every iteration, not just once: the fix agent has the same
+        # unrestricted write access as the original implementer, and it runs
+        # AFTER the tests were quality-audited.
+        # Only THIS iteration's fix output counts as a declaration — see
+        # `_enforce_test_integrity`'s *report* contract.
+        if not _enforce_test_integrity(
+            block, config, state, progress, block_idx,
+            f"review-fix {iteration + 1}", fix.output or "",
+        ):
+            return False
 
     if not review_passed:
         if config.lenient_review:
@@ -1028,10 +1459,10 @@ async def _run_integration_and_review(
                       "after %d iterations", block.number, block.name, MAX_REVIEW_ITERATIONS)
             progress.log_block(block.number, total, block.name, "FAILED — review exhausted")
             print(f"BLOCK:{block.number}/{total}:{block.name}:REVIEW_EXHAUSTED")
-            state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
 
-    state.mark_block_status(block_idx, BlockStatus.DONE, config.state_file_path())
+    _mark_block(state, block_idx, BlockStatus.DONE, config)
     log.info("DONE block=%d/%d name=%s", block.number, total, block.name)
     progress.log_block(block.number, total, block.name, "COMPLETE")
     print(f"BLOCK:{block.number}/{total}:{block.name}:COMPLETE")
@@ -1085,6 +1516,19 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
     if block.green_evidence:
         report_parts.append(f"### GREEN evidence (suite after implementation)\n"
                             f"```\n{block.green_evidence}\n```")
+    if block.test_change_claims:
+        # Same treatment as RED/GREEN: the implementer said the test had to
+        # change, and that assertion is exactly what needs checking. A green
+        # suite is not evidence here — it is the thing under suspicion.
+        claims = "\n".join(f"- {c}" for c in block.test_change_claims)
+        report_parts.append(
+            "### DECLARED TEST CHANGES (unverified claims — verify against the diff)\n"
+            "The implementer modified test files after they passed the RED gate and "
+            "declared these reasons. Check the diff: does each change preserve what "
+            "the test was asserting, or does it weaken the bar the implementation "
+            "had to clear?\n"
+            f"{claims}"
+        )
 
     return await run_code_review(
         diff,
@@ -1104,10 +1548,21 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
     state_path = config.state_file_path()
     progress = ProgressWriter(config.progress_file_path())
 
+    # Ceilings first, so every call below is accounted against them.
+    budget_mod.configure(
+        max_tokens=config.budget_max_tokens,
+        max_usd=config.budget_max_usd,
+    )
+
     # Load or create state
     if state_path.exists():
         state = BuildState.load(state_path)
-        log.info("START phase=TDD_ENGINE resumed=true block=%d", state.tdd.current_block if state.tdd else 0)
+        # A resumed build inherits what the earlier run already spent —
+        # a fresh budget on resume would make the ceiling unenforceable.
+        budget_mod.get_budget().load_state(state.budget)
+        log.info("START phase=TDD_ENGINE resumed=true block=%d spent=%d tokens",
+                 state.tdd.current_block if state.tdd else 0,
+                 budget_mod.get_budget().total_tokens)
     else:
         state = BuildState(
             change_name=config.change_name,
@@ -1134,6 +1589,10 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
 
     total_blocks = len(state.tdd.blocks) if state.tdd else 0
     progress.initialize(config.change_name, config.mode, config.tier, total_blocks)
+    # The card is In Development for the whole engine run (a no-op emission
+    # when the orchestrator already put it there).
+    board.record(config, state, BuildPhase.TDD_BUILD, progress=progress,
+                 note=f"{total_blocks} block(s)")
 
     # --- Baseline test gate ---
     if state.tdd and not state.tdd.baseline_tests_pass:
@@ -1164,6 +1623,17 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
         if block.status == BlockStatus.DONE:
             state.advance_block(state_path)
             continue
+
+        # Block boundary is the cheapest place to stop: nothing is half-done,
+        # and the state file already holds the spend so a resume with a raised
+        # ceiling picks up here rather than restarting.
+        try:
+            budget_mod.check(phase=f"block {block.number} of {total_blocks}")
+        except BudgetExceededError as e:
+            log.error("FAIL phase=TDD_ENGINE reason=budget_exhausted block=%d", block.number)
+            progress.log_phase("BUDGET", f"STOPPED: {e}\n{e.diagnosis}")
+            state.checkpoint(state_path)
+            return EXIT_BUILD_FAILURE
 
         log.info("Starting block %d/%d: %s", block.number, total_blocks, block.name)
 
@@ -1227,7 +1697,12 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
 
     # Success
     state.advance_to(BuildPhase.COMPLETE, state_path)
-    log.info("DONE phase=TDD_ENGINE blocks=%d", total_blocks)
+    # Report the spend even when nothing stopped: a build that finished at 95%
+    # of its ceiling is the one worth knowing about before the next run.
+    spend = budget_mod.get_budget()
+    log.info("DONE phase=TDD_ENGINE blocks=%d tokens=%d cost_usd=%.2f calls=%d",
+             total_blocks, spend.total_tokens, spend.cost_usd, spend.calls)
+    progress.log_phase("BUDGET", spend.diagnosis())
     progress.log_phase("COMPLETE", f"All {total_blocks} blocks implemented successfully")
     state.cleanup(state_path)
     return EXIT_SUCCESS
@@ -1259,6 +1734,36 @@ def _capture_full_build_diff(config: BuildConfig, state: BuildState) -> str:
     return diff
 
 
+def _build_trajectory_text(state: BuildState) -> str:
+    """Per-block history for the final review's trajectory judgment.
+
+    The cumulative diff alone shows the destination, not the path. Whether a
+    block needed three review iterations, or declared a test change, or ran a
+    panel that disagreed with itself, is the signal that separates "arrived
+    somewhere fine" from "drifted there" — and it is only visible here.
+    """
+    if not state.tdd or not state.tdd.blocks:
+        return "(no per-block trajectory recorded)"
+    lines: list[str] = []
+    for b in state.tdd.blocks:
+        parts = [f"- Block {b.number} ({b.name}): {b.status.value}"]
+        if b.review_iterations:
+            parts.append(f"{b.review_iterations} review iteration(s)")
+        if b.review_scores is not None:
+            parts.append(f"final weighted score {b.review_scores.weighted_average:.1f}")
+            if b.review_scores.rejected_findings:
+                parts.append(
+                    f"{len(b.review_scores.rejected_findings)} finding(s) rejected by the orchestrator"
+                )
+        if b.test_change_claims:
+            parts.append(
+                "TEST FILES CHANGED after RED, declared reason(s): "
+                + "; ".join(b.test_change_claims)
+            )
+        lines.append(" — ".join(parts))
+    return "\n".join(lines)
+
+
 async def _run_final_review(config: BuildConfig, state: BuildState) -> GateResult | None:
     """Final comprehensive review over the full build diff.
 
@@ -1279,11 +1784,13 @@ async def _run_final_review(config: BuildConfig, state: BuildState) -> GateResul
     prompt = FINAL_REVIEW_PROMPT.format(
         diff=diff or "(no diff captured)",
         rubric=rubric,
+        trajectory=_build_trajectory_text(state),
     )
     model = getattr(config, "review_model", None) or config.model
     try:
         verdict = await llm_call_structured(prompt, FinalReviewVerdict, model=model,
-                                           effort=config.review_effort, max_retries=1)
+                                            effort=config.review_effort, max_retries=1,
+                                            budget_label="final_review")
     except Exception as e:
         log.error("Final review errored (failing closed): %s", e)
         return GateResult(

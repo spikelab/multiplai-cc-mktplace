@@ -47,6 +47,68 @@ class TestCreateChange:
         path = cm.create_change("my_feature_name")
         assert path.name == "my-feature-name"
 
+    def test_repairs_dir_missing_metadata(self, cm, specs_dir):
+        """A pre-existing dir without .change.yaml (junk from an older
+        pipeline) must not suppress the metadata — retry writes it."""
+        junk = specs_dir / "changes" / "retried"
+        junk.mkdir(parents=True)
+        (junk / ".board.json").write_text("{}")
+        path = cm.create_change("retried")
+        assert path == junk
+        assert (path / ".change.yaml").exists()
+        assert "spec-driven" in (path / ".change.yaml").read_text()
+        assert (path / ".board.json").exists(), "existing files must survive the repair"
+
+
+class TestNormalizeChangeName:
+    def test_empty_input_stays_empty(self):
+        from build_pipeline.change_manager import normalize_change_name
+        assert normalize_change_name("") == ""
+
+    def test_traversal_is_stripped(self):
+        from build_pipeline.change_manager import normalize_change_name
+        assert normalize_change_name("../../etc") == "etc"
+
+    def test_refuses_name_that_normalizes_to_nothing(self):
+        """'!!!' → '' would collapse change_dir to specs/changes and the
+        branch to 'buildme/', dying late with a raw git error."""
+        from build_pipeline.change_manager import normalize_change_name
+        with pytest.raises(ValueError) as exc:
+            normalize_change_name("!!!")
+        assert "no usable characters" in str(exc.value)
+
+    def test_cli_refuses_empty_normalized_change_early(self, tmp_path, capsys):
+        """The refusal happens at the CLI entry point, before any phase runs."""
+        from build_pipeline.__main__ import main
+        rc = main(["build", "--change", "!!!", "--project-dir", str(tmp_path)])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "ERROR:" in err and "no usable characters" in err
+        assert list(tmp_path.iterdir()) == [], "nothing may be created behind the refusal"
+
+
+class TestArchivedChangeDirs:
+    def test_anchored_match_ignores_suffix_collisions(self, specs_dir):
+        """`foo` must not match `2026-07-26-bar-foo` — a loose `*-foo` glob
+        would cross two changes' archives."""
+        from build_pipeline.change_manager import archived_change_dirs
+        (specs_dir / "archive" / "2026-07-26-bar-foo").mkdir(parents=True)
+        (specs_dir / "archive" / "2026-07-20-foo").mkdir()
+        (specs_dir / "archive" / "2026-07-25-foo").mkdir()
+        (specs_dir / "archive" / "not-a-date-foo").mkdir()
+        assert archived_change_dirs(specs_dir, "foo") == [
+            specs_dir / "archive" / "2026-07-20-foo",
+            specs_dir / "archive" / "2026-07-25-foo",
+        ]
+        assert archived_change_dirs(specs_dir, "bar-foo") == [
+            specs_dir / "archive" / "2026-07-26-bar-foo",
+        ]
+
+    def test_no_archive_root_or_empty_name(self, tmp_path):
+        from build_pipeline.change_manager import archived_change_dirs
+        assert archived_change_dirs(tmp_path / "specs", "foo") == []
+        assert archived_change_dirs(tmp_path / "specs", "") == []
+
 
 class TestArtifactStatus:
     def test_empty_change(self, cm, specs_dir):
@@ -72,6 +134,7 @@ class TestArtifactStatus:
         (change / "design.md").write_text("x")
         (change / "requirements").mkdir(exist_ok=True)
         (change / "requirements" / "cap1.md").write_text("x")
+        (change / "unknowns.md").write_text("x")
         (change / "tasks.md").write_text("x")
         (change / "rubric.md").write_text("x")
         status = cm.artifact_status(change)
@@ -84,14 +147,33 @@ class TestArtifactStatus:
         status = cm.artifact_status(change)
         assert status["tasks"] == ArtifactStatus.BLOCKED
 
-    def test_tasks_ready_with_requirements_and_design(self, cm, specs_dir):
+    def test_tasks_blocked_without_unknowns(self, cm, specs_dir):
+        """The explainer gate is a hard DAG dependency: tasks cannot be written
+        before the edge cases of anything new are on disk."""
         change = cm.create_change("test")
         (change / "proposal.md").write_text("x")
         (change / "design.md").write_text("x")
         (change / "requirements").mkdir(exist_ok=True)
         (change / "requirements" / "cap1.md").write_text("x")
         status = cm.artifact_status(change)
+        assert status["unknowns"] == ArtifactStatus.READY
+        assert status["tasks"] == ArtifactStatus.BLOCKED
+
+    def test_tasks_ready_with_requirements_design_and_unknowns(self, cm, specs_dir):
+        change = cm.create_change("test")
+        (change / "proposal.md").write_text("x")
+        (change / "design.md").write_text("x")
+        (change / "requirements").mkdir(exist_ok=True)
+        (change / "requirements" / "cap1.md").write_text("x")
+        (change / "unknowns.md").write_text("x")
+        status = cm.artifact_status(change)
         assert status["tasks"] == ArtifactStatus.READY
+
+    def test_unknowns_requires_design(self, cm, specs_dir):
+        change = cm.create_change("test")
+        (change / "proposal.md").write_text("x")
+        status = cm.artifact_status(change)
+        assert status["unknowns"] == ArtifactStatus.BLOCKED
 
 
 class TestReadyArtifacts:

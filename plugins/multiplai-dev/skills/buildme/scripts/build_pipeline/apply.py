@@ -113,6 +113,7 @@ async def run_apply(config: BuildConfig, args) -> int:
             effort=config.agent_effort,
             max_turns=50,
             cwd=str(config.project_dir),
+            budget_label="apply",
         )
 
         if result.success:

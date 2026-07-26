@@ -11,12 +11,15 @@ Flow:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import sys
 from pathlib import Path
 
 from .change_manager import ChangeManager, ARTIFACT_DAG
+from .dependencies import NewDependency, design_decisions_text, detect_new_dependencies
+from .gates import unknowns_gate
 from .models import ArtifactStatus, BuildPhase
 from .rubric import detect_change_type, generate_rubric
 from .state import BuildState, SpecGenState
@@ -125,6 +128,44 @@ async def _generate_all_artifacts(
             )
             log.info("DONE artifact=%s", artifact_id)
 
+    # Unknowns-gate resume durability: same problem as the tasks audit below —
+    # the gate runs after unknowns.md is written, so a crash mid-gate leaves
+    # the artifact DONE and the DAG loop never re-enters it. The checkpoint,
+    # not file existence, is the record that the gate ran.
+    if state.spec_gen and not state.spec_gen.explainers_done:
+        unknowns_path = change_dir / "unknowns.md"
+        if not getattr(config, "explainers_active", True):
+            # --skip-explainers on a resumed build: never run detection or the
+            # gate's LLM regeneration — that is exactly what the flag exists
+            # to prevent. Write the skip-marker document when the crash
+            # predates it (mirroring _generate_unknowns) so the DAG stays
+            # satisfiable.
+            log.info("SKIP phase=UNKNOWNS_GATE reason=explainers-disabled")
+            if not unknowns_path.exists():
+                unknowns_path.write_text(
+                    f"{UNKNOWNS_HEADER}\n{EXPLAINERS_SKIPPED_LINE}\n"
+                )
+            state.spec_gen.explainers_done = True
+            state.checkpoint(config.state_file_path())
+        elif unknowns_path.exists():
+            log.info(
+                "Unknowns gate not recorded complete — running it now "
+                "(resume durability)"
+            )
+            deps = detect_new_dependencies(change_dir, config.project_dir)
+            if deps:
+                await _audit_unknowns(
+                    change_dir,
+                    cm.artifact_context(change_dir, "unknowns"),
+                    config,
+                    unknowns_path,
+                    deps,
+                )
+            state.spec_gen.explainers_done = True
+            state.checkpoint(config.state_file_path())
+    elif state.spec_gen:
+        log.info("SKIP phase=UNKNOWNS_GATE reason=recorded-complete-in-state")
+
     # Tasks-audit resume durability: the audit runs after tasks.md is
     # written, so a crash mid-audit leaves the artifact DONE (file exists)
     # and the DAG loop above never re-enters it. The checkpoint state — not
@@ -160,8 +201,16 @@ async def _generate_single_artifact(
     """Generate a single artifact, handling requirements specially (one per capability)."""
     context = cm.artifact_context(change_dir, artifact_id)
 
+    # Thread the explainers into the task breakdown: the edge cases are only
+    # worth writing down if the blocks that touch them name them as acceptance
+    # criteria (which is what turns them into tests).
+    if artifact_id == "tasks":
+        context["unknowns_content"] = read_unknowns(change_dir)
+
     if artifact_id == "requirements":
         await _generate_requirements(cm, change_dir, config, state)
+    elif artifact_id == "unknowns":
+        await _generate_unknowns(cm, change_dir, config, state)
     elif artifact_id == "rubric":
         await _generate_rubric(change_dir, config, state)
     else:
@@ -241,6 +290,176 @@ async def _generate_requirements(
 
         req_file.write_text(content)
         log.info("Wrote requirements: %s", req_file)
+
+
+UNKNOWNS_HEADER = "# Unknowns — what we are about to depend on\n"
+NO_NEW_DEPENDENCIES_LINE = "No dependencies new to this project."
+EXPLAINERS_SKIPPED_LINE = (
+    "Explainers skipped (--skip-explainers / explainers.enabled: false)."
+)
+
+
+def read_unknowns(change_dir: Path) -> str:
+    """unknowns.md's text, or a placeholder when it hasn't been written."""
+    path = change_dir / "unknowns.md"
+    if path.exists():
+        return path.read_text()
+    return "(no unknowns document)"
+
+
+def _dependency_list_text(deps: list[NewDependency]) -> str:
+    return "\n".join(
+        f"- `{d.name}` — named in {', '.join(d.mentioned_in) or 'the specs'}; {d.evidence}"
+        for d in deps
+    ) or "(none)"
+
+
+async def _generate_unknowns(
+    cm: ChangeManager,
+    change_dir: Path,
+    config,
+    state: BuildState,
+) -> None:
+    """Write unknowns.md — one explainer per dependency new to this project.
+
+    B1: before the build depends on a new tool/library/service, write down its
+    contract and its edge cases (the Whisper-silence class of surprise). One
+    concurrent LLM call per detected dependency, then the structural gate with
+    its single regeneration pass.
+
+    Both "nothing new" and "explainers switched off" still write the file: the
+    artifact DAG stays satisfied and the absence is a recorded finding rather
+    than a silent skip.
+    """
+    from .llm_steps.spec_steps import run_explainer
+
+    output_path = change_dir / "unknowns.md"
+
+    if not getattr(config, "explainers_active", True):
+        log.info("SKIP phase=EXPLAINERS reason=disabled")
+        print("PHASE: explainers_skipped")
+        output_path.write_text(f"{UNKNOWNS_HEADER}\n{EXPLAINERS_SKIPPED_LINE}\n")
+        if state.spec_gen:
+            state.spec_gen.explainers_done = True
+        return
+
+    log.info("START phase=EXPLAINERS")
+    print("PHASE: explainers")
+    deps = detect_new_dependencies(change_dir, config.project_dir)
+
+    if not deps:
+        log.info("DONE phase=EXPLAINERS dependencies=0")
+        output_path.write_text(
+            f"{UNKNOWNS_HEADER}\n{NO_NEW_DEPENDENCIES_LINE}\n\n"
+            "The proposal's Impact section and the design's Decisions section "
+            "name nothing that is absent from this project's manifests.\n"
+        )
+        print("PHASE: explainers_complete — 0 new dependencies")
+        if state.spec_gen:
+            state.spec_gen.explainers_done = True
+        return
+
+    log.info(
+        "Explaining %d new dependencies: %s",
+        len(deps), ", ".join(d.name for d in deps),
+    )
+    usage_context = design_decisions_text(change_dir)
+    results = await asyncio.gather(
+        *[run_explainer(dep, config, usage_context=usage_context) for dep in deps],
+        return_exceptions=True,
+    )
+
+    sections: list[str] = []
+    for dep, result in zip(deps, results):
+        if isinstance(result, BaseException):
+            # A failed explainer is a recorded hole, not a silent one — the gate
+            # sees the empty section and drives the regeneration pass.
+            log.warning("Explainer failed for %s: %s", dep.name, result)
+            sections.append(
+                f"## {dep.name}\n\n"
+                f"### What it is\n(explainer call failed: {result})\n\n"
+                f"### The contract we rely on\n(not written)\n\n"
+                f"### Edge cases & failure modes\n\n"
+                f"### Assumptions we are making\n\n"
+                f"### How we would find out cheaply\n(not written)\n"
+            )
+        else:
+            sections.append(str(result).strip())
+
+    output_path.write_text(
+        UNKNOWNS_HEADER + "\n" + "\n\n".join(sections).strip() + "\n"
+    )
+    log.info("Wrote artifact: %s", output_path)
+
+    context = cm.artifact_context(change_dir, "unknowns")
+    await _audit_unknowns(change_dir, context, config, output_path, deps)
+    if state.spec_gen:
+        state.spec_gen.explainers_done = True
+
+
+async def _audit_unknowns(
+    change_dir: Path,
+    context: dict,
+    config,
+    output_path: Path,
+    deps: list[NewDependency],
+) -> None:
+    """Gate unknowns.md; regenerate ONCE when a required list came back empty.
+
+    Same single-pass shape as ``_audit_tasks_shape``: the gate's findings are
+    injected into exactly one regeneration call. A regenerated document that
+    still fails is logged and stands — there is no re-audit loop, so a
+    stubbornly incomplete explainer costs one extra call, not an unbounded
+    number.
+    """
+    from .llm_steps.spec_steps import generate_artifact
+
+    log.info("START phase=UNKNOWNS_GATE")
+    print("PHASE: unknowns_gate")
+    result = unknowns_gate(output_path.read_text(), deps)
+    if result.passed:
+        log.info("DONE phase=UNKNOWNS_GATE findings=0")
+        return
+
+    findings = result.metadata.get("findings", [])
+    log.warning(
+        "DONE phase=UNKNOWNS_GATE findings=%d — one regeneration pass",
+        len(findings),
+    )
+    for finding in findings:
+        log.warning("  finding %s", finding)
+
+    context = dict(context)
+    context["current_unknowns"] = output_path.read_text()
+    context["dependency_list"] = _dependency_list_text(deps)
+    findings_text = "\n".join(f"- {f}" for f in findings) or result.reason
+
+    try:
+        content = await generate_artifact(
+            "unknowns", context, config, audit_findings=findings_text,
+        )
+    except Exception as regen_err:
+        log.warning(
+            "Unknowns regeneration failed (non-fatal, first pass stands): %s",
+            regen_err,
+        )
+        print(f"PHASE: unknowns_regeneration_failed — {regen_err}")
+        return
+
+    output_path.write_text(content)
+    log.info("Rewrote artifact after unknowns gate: %s", output_path)
+    print(f"PHASE: unknowns_regenerated — {len(findings)} findings")
+
+    # Report-only re-check: no second regeneration, so the pass count is fixed
+    # at one no matter how incomplete the document remains.
+    recheck = unknowns_gate(content, deps)
+    if not recheck.passed:
+        log.warning(
+            "Unknowns still incomplete after the single regeneration pass "
+            "(accepted, no loop): %s",
+            recheck.reason,
+        )
+        print("PHASE: unknowns_still_incomplete — accepted after one pass")
 
 
 # Placeholder text that defers specification to the implementer. Deterministic
@@ -331,6 +550,17 @@ async def _audit_tasks_shape(
         return
     output_path.write_text(content)
     log.info("Rewrote artifact after shape audit: %s", output_path)
+    # One commit per regeneration pass, so the branch history shows the audit
+    # actually changed something. No-op unless the pipeline owns a branch.
+    from . import git_ops
+    try:
+        rel = str(change_dir.relative_to(config.project_dir))
+    except ValueError:
+        rel = ""
+    if rel:
+        git_ops.commit_stage(
+            config, "docs(specs): regenerate tasks.md after shape audit", [rel],
+        )
     print(f"PHASE: tasks_regenerated_after_shape_audit — {len(findings)} findings")
 
 
