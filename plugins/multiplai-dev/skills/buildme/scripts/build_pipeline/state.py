@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import BaseModel, Field
 
+from . import budget
 from .models import BlockInfo, BlockStatus, BuildPhase
 
 log = logging.getLogger(__name__)
@@ -77,6 +78,11 @@ class BuildState(BaseModel):
     spec_gen: SpecGenState | None = None
     tdd: TDDState | None = None
 
+    # Cumulative spend, snapshotted on every checkpoint. A resumed build
+    # restores it (see run_tdd_engine) — otherwise resume would hand a runaway
+    # build a fresh budget and the ceiling would never bind.
+    budget: dict = Field(default_factory=dict)
+
     # Checkpointing
     state_file: str = ""
     started_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -87,6 +93,7 @@ class BuildState(BaseModel):
         target = path or Path(self.state_file)
         if not target.name:
             return
+        self.budget = budget.get_budget().to_state()
         self.updated_at = datetime.now(timezone.utc).isoformat()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(self.model_dump_json(indent=2))

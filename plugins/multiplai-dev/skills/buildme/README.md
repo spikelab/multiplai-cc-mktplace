@@ -635,8 +635,10 @@ Gates are pure functions (no LLM calls) that return pass/fail decisions:
 | `prototype_gate` | After the prototype agent | One retry, then the *phase* fails with a diagnosis — never the build |
 | Baseline test | Before block 1 | Abort (existing tests broken) |
 | Weak test detection | After test writer | Retry with feedback |
-| Quality review (inline, scored) | After implementer | Retry implementation (max 3) |
+| Test integrity | After GREEN, and after every review-fix | Fail the block (tests were edited after they gated it) |
+| Quality review (graded, panel-merged) | After implementer | Retry implementation (max 3) |
 | Integration | After block done | Integration fix agent (max 2) |
+| Budget | Each block boundary | Stop with a per-phase spend diagnosis |
 | Entry point | Post-TDD | Warn (manual step needed) |
 
 `gates.py` also carries two parsers used by the loop back to the spec:
@@ -644,10 +646,86 @@ Gates are pure functions (no LLM calls) that return pass/fail decisions:
 `parse_implementation_note` (`SURPRISES:`/`SPEC_IMPACT:` →
 `models.ImplementationNote`).
 
-The per-block review is a single scored quality review (inline in
-`tdd_engine._run_quality_review`) checked against the rubric. A separate
-security-review step exists in the code (`run_security_review`) but is **not
-currently wired** — there is no distinct security gate.
+The per-block review is a two-verdict review (spec compliance + rubric
+scores), optionally run as a panel of reviewers in fresh contexts and merged.
+A separate security-review step exists in the code (`run_security_review`) but
+is **not currently wired** — there is no distinct security gate.
+
+### Test integrity
+
+The implementer's tools are per-tool, not per-path, so test files stay
+writable for the whole implement phase — and the review-fix agent is the same
+implementer, so every fix iteration re-opens that window. An agent measured by
+"the tests pass" can make them pass by editing them.
+
+Buildme sha256-hashes the block's test files the moment the RED gate passes
+and re-checks them at both windows. A silent change fails the block. An
+implementer that genuinely needs a test to change declares it —
+`TEST CHANGE REQUIRED: <reason>` in its report — which downgrades the gate to a
+flag, re-baselines the hashes, and hands the reason to the reviewer as an
+unverified claim to check against the diff.
+
+### Reviewer panel and finding adjudication
+
+Reviewers see the diff and the spec in a fresh context, which is exactly why
+they catch what the implementer missed *and* why roughly a quarter of what
+they raise is wrong — they cannot see the decisions the build already made.
+
+So a review emits discrete **findings**, and the orchestrator (which does have
+the build's context) adjudicates each one before anything acts on it. Rejected
+findings are recorded on the block and never reach a fix agent. Turning
+adjudication off **drops** findings rather than applying them blind.
+
+With a panel configured, each member reviews independently and the results
+merge: dimension scores average, with confidence scaled down by how much the
+panel disagreed; identical findings combine confidence (noisy-or) and keep the
+harshest severity anyone assigned. Spec verdicts are unioned, not intersected
+— the reason to run a panel is that reviewers find disjoint sets.
+
+Two consequences worth knowing before you configure one:
+
+- **A panel can pass a block one harsh reviewer would have failed.** Scores
+  disagreeing 5-vs-1 collapse that dimension's confidence to zero, which the
+  graded gate reads as "no information" (neutral), not as a verdict — so one
+  member's "critical" is fully neutralized by another's "fine". Severity still
+  survives on the *findings* path (noisy-or keeps the harshest), which is what
+  reaches a fix agent. If you want one dissenter to be able to sink a block,
+  use a single reviewer.
+- **A member that fails is dropped, not fatal.** The review proceeds on the
+  survivors with a warning, and only an all-members-failed panel fails the
+  block — otherwise adding members would make the pipeline *less* reliable.
+  A dimension only one member scored is discounted for lack of corroboration.
+
+### Budget
+
+Every other loop bound in the pipeline is an iteration count, which does not
+bound spend: three review iterations over a huge diff with a three-member
+panel costs an order of magnitude more than three over a small one. The
+`budget:` ceilings add the missing axis. Spend is checked at block boundaries
+(nothing is half-done there), warns once at 80%, and stops with a
+per-phase breakdown of where the tokens went. The spend is checkpointed into
+`.build-state.json`, so a resumed build does not get a fresh budget.
+
+### Configuring reviews and budget
+
+All optional — the defaults reproduce the pre-existing behavior exactly.
+
+```yaml
+# specs/config.yaml
+code_review:
+  model: opus              # single stronger reviewer (existing)
+  panel:                   # OR a panel — one full-diff call per member
+    - model: opus
+    - model: sonnet
+  adjudicate: true         # default; false DROPS findings, never auto-applies
+  gate:
+    min_weighted_average: 3.5
+    critical_score: 1.0
+
+budget:
+  max_tokens: 5000000      # omit for unlimited (the previous behavior)
+  max_usd: 25
+```
 
 ## State & Recovery
 
@@ -699,6 +777,7 @@ If the build crashes, restarting with the same `--change` name loads state and s
 | `dependencies.py` | Detects dependencies new to *this* project (manifests + imports) | No |
 | `git_ops.py` | Every `git`/`gh` call: worktree, branch, commits, push, PR | No |
 | `board.py` | Board seam: `column_for`, `.board.json`, `BOARD:` line | No |
+| `budget.py` | Per-build token/cost accounting + circuit-breaker | No |
 | `sdk.py` | `llm_call()` + `agent_call()` wrappers | Yes |
 | `rubric.py` | Rubric generation, change type detection | Via sdk |
 | `progress.py` | Tail-able progress file writer | No |
@@ -707,7 +786,7 @@ If the build crashes, restarting with the same `--change` name loads state and s
 | `llm_steps/prototype_steps.py` | Prototype agent + folding its notes back into design/tasks | Yes |
 | `llm_steps/tdd_steps.py` | Test writer, implementer, refactorer | Yes |
 | `llm_steps/respec_steps.py` | Implementation-notes file + the `respec.md` proposal | Yes |
-| `llm_steps/review_steps.py` | Code review (wired); security review / review fix (not wired) | Yes |
+| `llm_steps/review_steps.py` | Per-block code review + panel merge (wired); security review (not wired) | Yes |
 | `prompts/*.py` | Prompt templates with `{placeholders}` | — |
 
 ## Testing

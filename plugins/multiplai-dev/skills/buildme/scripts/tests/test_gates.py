@@ -18,8 +18,10 @@ from build_pipeline.gates import (
     wiring_task_gate,
     baseline_test_gate,
     integration_gate,
+    parse_test_change_claims,
+    unchanged_tests_gate,
 )
-from build_pipeline.models import ReviewResult, ReviewScore
+from build_pipeline.models import ReviewGatePolicy, ReviewResult, ReviewScore
 
 
 class TestReviewScoreGate:
@@ -312,6 +314,119 @@ class TestAgentStatusGate:
         assert "no STATUS slot" in r.reason
 
 
+class TestTestIntegrityGate:
+    """The tests that gate a block must be the tests that gated it."""
+
+    def test_unchanged_tests_pass(self):
+        snap = {"tests/test_a.py": "abc", "tests/test_b.py": "def"}
+        r = unchanged_tests_gate(snap, dict(snap))
+        assert r.passed
+        assert r.metadata["checked"] is True
+
+    def test_mutated_test_file_fails(self):
+        r = unchanged_tests_gate({"tests/test_a.py": "abc"}, {"tests/test_a.py": "MUTATED"})
+        assert not r.passed
+        assert r.action == "restore_tests"
+        assert "tests/test_a.py" in r.reason
+
+    def test_deleted_test_file_fails(self):
+        r = unchanged_tests_gate({"tests/test_a.py": "abc"}, {})
+        assert not r.passed
+        assert "deleted" in r.reason
+
+    def test_no_snapshot_reports_not_run_rather_than_failing(self):
+        """An unverifiable gate must not fail a block on absent evidence."""
+        r = unchanged_tests_gate({}, {"tests/test_a.py": "abc"})
+        assert r.passed
+        assert r.metadata["checked"] is False
+
+    def test_declared_change_flags_instead_of_failing(self):
+        r = unchanged_tests_gate(
+            {"tests/test_a.py": "abc"},
+            {"tests/test_a.py": "changed"},
+            implementer_report="TEST CHANGE REQUIRED: the test asserted the wrong error type",
+        )
+        assert r.passed
+        assert r.action == "flag_test_change_claim"
+        assert r.metadata["flagged"] is True
+        assert r.metadata["claims"] == ["the test asserted the wrong error type"]
+
+    def test_declaration_is_a_claim_not_a_licence(self):
+        """The declared reason reaches the reviewer as an unverified claim."""
+        r = unchanged_tests_gate(
+            {"tests/test_a.py": "abc"},
+            {"tests/test_a.py": "changed"},
+            implementer_report="TEST CHANGE REQUIRED: because",
+        )
+        assert "unverified claim" in r.reason
+
+    def test_new_test_files_are_not_a_violation(self):
+        """Adding tests is fine; only changing the gating ones is not."""
+        r = unchanged_tests_gate(
+            {"tests/test_a.py": "abc"},
+            {"tests/test_a.py": "abc", "tests/test_new.py": "xyz"},
+        )
+        assert r.passed
+
+
+class TestParseTestChangeClaims:
+    def test_extracts_each_declaration(self):
+        report = (
+            "Did the work.\n"
+            "TEST CHANGE REQUIRED: fixture path was wrong\n"
+            "More prose.\n"
+            "TEST CHANGE REQUIRED: assertion contradicted the spec\n"
+        )
+        assert parse_test_change_claims(report) == [
+            "fixture path was wrong",
+            "assertion contradicted the spec",
+        ]
+
+    def test_empty_report(self):
+        assert parse_test_change_claims("") == []
+        assert parse_test_change_claims("no marker here") == []
+
+
+class TestGradedReviewGate:
+    def _scores(self, *specs):
+        return [
+            ReviewScore(dimension=d, weight=w, score=s, evidence="e", confidence=c)
+            for d, w, s, c in specs
+        ]
+
+    def test_default_confidence_reproduces_binary_behavior(self):
+        """Every existing fixture scores exactly as it did before grading."""
+        r = ReviewResult(scores=self._scores(("A", 2, 4, 1.0), ("B", 1, 3, 1.0)))
+        gate = review_score_gate(r)
+        assert gate.passed
+        assert gate.metadata["graded"] is False
+
+    def test_low_confidence_bad_score_stops_counting(self):
+        """Low confidence is weak evidence, not strong evidence of badness."""
+        r = ReviewResult(scores=self._scores(("A", 2, 1, 0.0)))
+        gate = review_score_gate(r)
+        assert gate.passed  # shrunk all the way to the neutral 3.5
+        assert gate.metadata["graded"] is True
+
+    def test_confident_critical_still_fails(self):
+        r = ReviewResult(scores=self._scores(("A", 2, 1, 1.0)))
+        gate = review_score_gate(r)
+        assert not gate.passed
+        assert gate.action == "fix_critical_dimension"
+
+    def test_spec_compliance_is_a_hard_floor_regardless_of_scores(self):
+        r = ReviewResult(
+            scores=self._scores(("A", 2, 5, 1.0)),
+            missing=["the retry path is not implemented"],
+        )
+        gate = review_score_gate(r)
+        assert not gate.passed
+        assert gate.action == "fix_spec_compliance"
+
+    def test_policy_thresholds_override_defaults(self):
+        r = ReviewResult(scores=self._scores(("A", 2, 3, 1.0)))
+        assert not review_score_gate(r).passed
+        assert review_score_gate(r, ReviewGatePolicy(min_weighted_average=3.0)).passed
 # --- Unknowns / explainer gate (B1) -------------------------------------------
 
 COMPLETE_SECTION = """\

@@ -33,6 +33,7 @@ from multiplai_core.agent_runner import (
 from multiplai_core.aio import hard_timeout, swallow_task_result as _swallow_task_result  # noqa: F401
 from multiplai_core.text import extract_json  # noqa: F401
 
+from . import budget
 from .models import AgentResult
 
 log = logging.getLogger(__name__)
@@ -130,6 +131,19 @@ def _require_trusted_repo() -> None:
         )
 
 
+def _record_partial(error: AgentRunError, label: str) -> None:
+    """Charge the budget for tokens a *failed* call already burned.
+
+    The runaway spend this ledger guards against is made of exactly these:
+    a review that times out after a 150k-char prompt cost real money and
+    would otherwise be invisible. `budget.record()` never raises, so this is
+    safe on an error path.
+    """
+    partial = getattr(error, "partial", None)
+    if partial is not None:
+        budget.record(partial.usage, label=label)
+
+
 async def llm_call(
     prompt: str,
     *,
@@ -138,6 +152,7 @@ async def llm_call(
     system_prompt: str | None = None,
     allowed_tools: list[str] | None = None,
     call_timeout: float = DEFAULT_LLM_CALL_TIMEOUT_S,
+    budget_label: str = "",
 ) -> str:
     """Single-turn LLM call. Returns text response. No tools by default.
 
@@ -171,18 +186,24 @@ async def llm_call(
                 component="buildme",
             )
         except AgentRunTimeout as e:
+            # A call that dies after burning a 150k-char review prompt is
+            # exactly the spend the budget exists to catch, so account for the
+            # partial usage before propagating (same rule as `agent_call`).
+            _record_partial(e, budget_label or "llm")
             log.error("FAIL sdk_call=llm reason=timeout after %.0fs\n--- CLI stderr ---\n%s",
                       call_timeout, e.stderr_tail)
             raise LLMCallTimeoutError(
                 f"LLM call exceeded {call_timeout:.0f}s timeout"
             ) from e
         except AgentRunError as e:
+            _record_partial(e, budget_label or "llm")
             log.error("FAIL sdk_call=llm error=%s\n--- CLI stderr ---\n%s",
                       e.reason, e.stderr_tail)
             raise LLMCallError(
                 f"SDK query failed: {e.reason}\n--- CLI stderr ---\n{e.stderr_tail}"
             ) from e
 
+    budget.record(result.usage, label=budget_label or "llm")
     log.info("DONE sdk_call=llm result_chars=%d", len(result.text))
     return result.text
 
@@ -195,6 +216,7 @@ async def agent_call(
     max_turns: int = 50,
     cwd: str | None = None,
     call_timeout: float = DEFAULT_AGENT_CALL_TIMEOUT_S,
+    budget_label: str = "",
 ) -> AgentResult:
     """Multi-turn agent call with file tools. For TDD agents.
 
@@ -228,6 +250,8 @@ async def agent_call(
             elapsed = time.monotonic() - start
             partial = e.partial
             timed_out = isinstance(e, AgentRunTimeout)
+            # A failed agent still burned tokens up to the failure point.
+            _record_partial(e, budget_label or "agent")
             log.error("FAIL sdk_call=agent reason=%s elapsed=%.0fs turns=%d\n--- CLI stderr ---\n%s",
                       "timeout" if timed_out else e.reason, elapsed,
                       partial.turns if partial else 0, e.stderr_tail)
@@ -247,6 +271,7 @@ async def agent_call(
             )
 
     elapsed = time.monotonic() - start
+    budget.record(result.usage, label=budget_label or "agent")
     log.info("DONE sdk_call=agent turns=%d elapsed=%.0fs files_changed=%d",
              result.turns, elapsed, len(result.files_changed))
     return AgentResult(
@@ -266,13 +291,15 @@ async def llm_call_structured(
     max_retries: int = 1,
     system_prompt: str | None = None,
     call_timeout: float = DEFAULT_LLM_CALL_TIMEOUT_S,
+    budget_label: str = "",
 ) -> T:
     """LLM call with Pydantic-validated structured output."""
     current_prompt = prompt
     last_error: Exception | None = None
 
     for attempt in range(max_retries + 1):
-        raw = await llm_call(current_prompt, model=model, system_prompt=system_prompt, call_timeout=call_timeout)
+        raw = await llm_call(current_prompt, model=model, system_prompt=system_prompt,
+                             call_timeout=call_timeout, budget_label=budget_label)
         try:
             payload = extract_json(raw)
             return schema.model_validate(payload)

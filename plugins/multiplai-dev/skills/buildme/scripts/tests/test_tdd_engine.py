@@ -21,6 +21,12 @@ from build_pipeline.tdd_engine import (
     _run_final_review,
     _run_integration_and_review,
     _run_quality_review,
+    _adjudicate_review_findings,
+    _build_trajectory_text,
+    _enforce_test_integrity,
+    _snapshot_test_files,
+    _TEST_FILE_RE,
+    _TEST_PATH_RE,
     _verify_entry_point,
     EMPTY_TREE_SHA,
     WEAK_TEST_PATTERNS,
@@ -29,13 +35,17 @@ from build_pipeline.tdd_engine import (
     EXIT_BUILD_FAILURE,
     EXIT_AGENT_TIMEOUT,
 )
+from build_pipeline import budget as budget_mod
 from build_pipeline.config import BuildConfig
 from build_pipeline.models import (
     AgentResult,
     BlockInfo,
     BlockStatus,
     FinalReviewVerdict,
+    FindingAdjudication,
+    FindingVerdict,
     GateResult,
+    ReviewFinding,
     ReviewResult,
     ReviewScore,
     WeakTestFinding,
@@ -1431,39 +1441,41 @@ class TestExitCodes:
         assert EXIT_AGENT_TIMEOUT == 3
 
 
+@pytest.fixture
+def tdd_setup(tmp_path):
+    """A minimal one-block change, ready for run_tdd_engine."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    specs_root = project_dir / "specs"
+    change_dir = specs_root / "changes" / "feat"
+    change_dir.mkdir(parents=True)
+
+    # Write tasks.md
+    (change_dir / "tasks.md").write_text(
+        "## 1. Setup\n\nInit the project.\n\nSatisfies: setup\n"
+    )
+
+    config = BuildConfig(
+        project_dir=project_dir,
+        change_name="feat",
+        tier="advanced",
+        test_command="true",  # always passes
+        mode="only",
+        config_dir=tmp_path / "config",
+        core_memory_files=[],
+        stack_memory_files=[],
+        additional_memory_files=[],
+    )
+    config.specs_dir = specs_root
+
+    args = MagicMock()
+    args.block = None
+
+    return config, args
+
+
 class TestRunTDDEngineEntryPoint:
     """Test the main run_tdd_engine entry point with mocked dependencies."""
-
-    @pytest.fixture
-    def tdd_setup(self, tmp_path):
-        project_dir = tmp_path / "project"
-        project_dir.mkdir()
-        specs_root = project_dir / "specs"
-        change_dir = specs_root / "changes" / "feat"
-        change_dir.mkdir(parents=True)
-
-        # Write tasks.md
-        (change_dir / "tasks.md").write_text(
-            "## 1. Setup\n\nInit the project.\n\nSatisfies: setup\n"
-        )
-
-        config = BuildConfig(
-            project_dir=project_dir,
-            change_name="feat",
-            tier="advanced",
-            test_command="true",  # always passes
-            mode="only",
-            config_dir=tmp_path / "config",
-            core_memory_files=[],
-            stack_memory_files=[],
-            additional_memory_files=[],
-        )
-        config.specs_dir = specs_root
-
-        args = MagicMock()
-        args.block = None
-
-        return config, args
 
     @pytest.mark.asyncio
     async def test_no_blocks_returns_failure(self, tmp_path):
@@ -2264,6 +2276,313 @@ class TestReadBlockTestFiles:
         assert scan.metadata["total_tests"] == 0
 
 
+class TestSnapshotTestFiles:
+    def test_hashes_content_not_mtime(self, tmp_path):
+        """A checkout or a formatter moves mtimes without moving the bar."""
+        (tmp_path / "tests").mkdir()
+        f = tmp_path / "tests" / "test_a.py"
+        f.write_text("def test_x(): assert 1")
+        config = BuildConfig(project_dir=tmp_path)
+        block = BlockInfo(number=1, name="B", description="d")
+        with patch("build_pipeline.tdd_engine._list_block_test_files",
+                   return_value=["tests/test_a.py"]):
+            first = _snapshot_test_files(config, block)
+            os.utime(f, (0, 0))
+            second = _snapshot_test_files(config, block)
+        assert first == second
+        assert list(first) == ["tests/test_a.py"]
+
+    def test_content_change_moves_the_hash(self, tmp_path):
+        (tmp_path / "tests").mkdir()
+        f = tmp_path / "tests" / "test_a.py"
+        f.write_text("def test_x(): assert 1")
+        config = BuildConfig(project_dir=tmp_path)
+        block = BlockInfo(number=1, name="B", description="d")
+        with patch("build_pipeline.tdd_engine._list_block_test_files",
+                   return_value=["tests/test_a.py"]):
+            before = _snapshot_test_files(config, block)
+            f.write_text("def test_x(): assert True  # weakened")
+            after = _snapshot_test_files(config, block)
+        assert before != after
+
+    def test_unreadable_file_is_omitted_not_fatal(self, tmp_path):
+        config = BuildConfig(project_dir=tmp_path)
+        block = BlockInfo(number=1, name="B", description="d")
+        with patch("build_pipeline.tdd_engine._list_block_test_files",
+                   return_value=["tests/gone.py"]):
+            assert _snapshot_test_files(config, block) == {}
+
+
+class TestTestPathPatterns:
+    """The integrity regex must cover every language buildme builds for.
+
+    A Python-only pattern makes the gate silently no-op on a Swift or TS repo:
+    zero paths matched → empty snapshot → "not checked" → tests freely editable.
+    """
+
+    @pytest.mark.parametrize("path", [
+        "tests/test_a.py", "src/a_test.py", "tests/conftest.py",
+        "internal/foo_test.go",
+        "AppTests/ParserTests.swift", "Sources/ThingTest.swift",
+        "src/a.test.ts", "src/a.spec.tsx", "src/a.test.mjs",
+        "tests/fixtures/data.json", "__tests__/helper.js", "Tests/Support/Stub.swift",
+    ])
+    def test_matches_test_paths(self, path):
+        assert _TEST_PATH_RE.search(path)
+
+    @pytest.mark.parametrize("path", [
+        "src/main.py", "src/latest.py", "Sources/Parser.swift",
+        "src/protest.go", "src/a.ts", "docs/testing.md",
+    ])
+    def test_ignores_production_paths(self, path):
+        assert not _TEST_PATH_RE.search(path)
+
+    def test_scan_regex_stays_python_only(self):
+        """`_TEST_FILE_RE` feeds the `def test_*` scan — widening it breaks Swift."""
+        assert _TEST_FILE_RE.search("tests/test_a.py")
+        assert not _TEST_FILE_RE.search("AppTests/ParserTests.swift")
+        assert not _TEST_FILE_RE.search("src/a.test.ts")
+
+
+class TestEnforceTestIntegrity:
+    def _fixtures(self, tmp_path, before, after, report=""):
+        config = BuildConfig(project_dir=tmp_path)
+        # specs_dir does not follow project_dir — without this the checkpoint
+        # written by a flagged change lands in the repo, not in tmp_path.
+        config.specs_dir = tmp_path / "specs"
+        block = BlockInfo(number=1, name="B", description="d")
+        block.test_file_hashes = before
+        block.implementer_report = report
+        state = BuildState(change_name="c", mode="scratch", tier="standard",
+                           tdd=TDDState(blocks=[block]))
+        return config, block, state
+
+    def _run(self, config, block, state, after, window="implement", report=None):
+        # `report` defaults to the block's accumulated report only because most
+        # cases exercise the implement window, where they are the same string.
+        if report is None:
+            report = block.implementer_report
+        with patch("build_pipeline.tdd_engine._snapshot_test_files", return_value=after):
+            return _enforce_test_integrity(
+                block, config, state, ProgressWriter(config.progress_file_path()), 0,
+                window, report,
+            )
+
+    def test_unchanged_tests_pass(self, tmp_path):
+        config, block, state = self._fixtures(tmp_path, {"t.py": "h"}, None)
+        assert self._run(config, block, state, {"t.py": "h"}) is True
+
+    def test_silent_mutation_fails_the_block(self, tmp_path):
+        config, block, state = self._fixtures(tmp_path, {"t.py": "h"}, None)
+        assert self._run(config, block, state, {"t.py": "MUTATED"}) is False
+
+    def test_declared_change_passes_and_records_the_claim(self, tmp_path):
+        config, block, state = self._fixtures(
+            tmp_path, {"t.py": "h"}, None,
+            report="TEST CHANGE REQUIRED: the assertion contradicted the spec",
+        )
+        assert self._run(config, block, state, {"t.py": "changed"}) is True
+        assert block.test_change_claims == ["the assertion contradicted the spec"]
+
+    def test_declaration_rebaselines_so_it_excuses_only_itself(self, tmp_path):
+        """One declared change must not excuse every later silent one."""
+        config, block, state = self._fixtures(
+            tmp_path, {"t.py": "h"}, None, report="TEST CHANGE REQUIRED: legit",
+        )
+        self._run(config, block, state, {"t.py": "v2"})
+        assert block.test_file_hashes == {"t.py": "v2"}
+        # A later SILENT change is measured from the re-baselined state. Clear
+        # the report so it is no longer declared.
+        block.implementer_report = ""
+        assert self._run(config, block, state, {"t.py": "v3"}, window="review-fix 1") is False
+
+    def test_declaration_does_not_carry_across_windows(self, tmp_path):
+        """An implement-phase declaration must not authorize a review-fix mutation.
+
+        `block.implementer_report` accumulates every agent's output, so passing
+        it at the later window would find the earlier declaration and pass a
+        silent mutation. Each window sees only its own agent's report.
+        """
+        config, block, state = self._fixtures(
+            tmp_path, {"t.py": "h"}, None, report="TEST CHANGE REQUIRED: legit",
+        )
+        assert self._run(config, block, state, {"t.py": "v2"}) is True
+        # The accumulation still carries the implement-phase declaration...
+        block.implementer_report += "\n\n[review-fix 1]\nfixed the thing"
+        assert "TEST CHANGE REQUIRED" in block.implementer_report
+        # ...but the review-fix window is judged on the fix agent's report only.
+        assert self._run(config, block, state, {"t.py": "v3"},
+                         window="review-fix 1", report="fixed the thing") is False
+
+    def test_unavailable_snapshot_reports_not_checked_rather_than_failing(self, tmp_path):
+        """A git hiccup must not read as 'the agent deleted every test file'."""
+        config, block, state = self._fixtures(tmp_path, {"t.py": "h"}, None)
+        assert self._run(config, block, state, None) is True
+        # And it must not re-baseline away the frozen bar.
+        assert block.test_file_hashes == {"t.py": "h"}
+
+
+class TestBuildTrajectoryText:
+    def test_no_blocks(self):
+        state = BuildState(change_name="c", mode="scratch", tier="standard")
+        assert "no per-block trajectory" in _build_trajectory_text(state)
+
+    def test_surfaces_iterations_scores_and_declared_test_changes(self):
+        block = BlockInfo(number=1, name="Parser", description="d", status=BlockStatus.DONE)
+        block.review_iterations = 3
+        block.review_scores = ReviewResult(
+            scores=[ReviewScore(dimension="Q", weight=2, score=4, evidence="e")],
+            rejected_findings=[ReviewFinding(claim="bogus")],
+        )
+        block.test_change_claims = ["fixture path was wrong"]
+        state = BuildState(change_name="c", mode="scratch", tier="standard",
+                           tdd=TDDState(blocks=[block]))
+        text = _build_trajectory_text(state)
+        assert "Block 1 (Parser)" in text
+        assert "3 review iteration(s)" in text
+        assert "1 finding(s) rejected" in text
+        assert "TEST FILES CHANGED after RED" in text
+        assert "fixture path was wrong" in text
+
+
+class TestAdjudicateReviewFindings:
+    def _inputs(self):
+        review = ReviewResult(
+            scores=[ReviewScore(dimension="Q", weight=2, score=4, evidence="e")],
+            findings=[
+                ReviewFinding(claim="real defect", file_path="a.py", line=1),
+                ReviewFinding(claim="reviewer misread it", file_path="b.py", line=2),
+            ],
+        )
+        block = BlockInfo(number=1, name="B", description="d")
+        return review, block
+
+    @pytest.mark.asyncio
+    async def test_rejected_findings_never_reach_the_fix_loop(self):
+        review, block = self._inputs()
+        config = BuildConfig(model="m")
+        adj = FindingAdjudication(verdicts=[
+            FindingVerdict(index=0, accepted=True, reason="the diff shows it"),
+            FindingVerdict(index=1, accepted=False, reason="already handled elsewhere"),
+        ])
+        with patch("build_pipeline.tdd_engine.llm_call_structured",
+                   new_callable=AsyncMock, return_value=adj):
+            out = await _adjudicate_review_findings(review, block, config, "diff", "ctx")
+        assert [f.claim for f in out.findings] == ["real defect"]
+        assert [f.claim for f in out.rejected_findings] == ["reviewer misread it"]
+        assert "already handled elsewhere" in out.rejected_findings[0].evidence
+
+    @pytest.mark.asyncio
+    async def test_adjudicator_failure_is_fail_open(self):
+        """Dropping findings when the judge is unavailable would weaken review
+        exactly when something is already going wrong."""
+        review, block = self._inputs()
+        config = BuildConfig(model="m")
+        with patch("build_pipeline.tdd_engine.llm_call_structured",
+                   new_callable=AsyncMock, side_effect=RuntimeError("boom")):
+            out = await _adjudicate_review_findings(review, block, config, "diff", "ctx")
+        assert len(out.findings) == 2
+
+    @pytest.mark.asyncio
+    async def test_disabled_drops_findings_rather_than_applying_them_blind(self):
+        review, block = self._inputs()
+        config = BuildConfig(model="m")
+        config.adjudicate_findings = False
+        with patch("build_pipeline.tdd_engine.llm_call_structured",
+                   new_callable=AsyncMock) as call:
+            out = await _adjudicate_review_findings(review, block, config, "diff", "ctx")
+        call.assert_not_awaited()
+        assert out.findings == []
+        assert len(out.rejected_findings) == 2
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_adjudicate_skips_the_call(self):
+        config = BuildConfig(model="m")
+        block = BlockInfo(number=1, name="B", description="d")
+        review = ReviewResult(scores=[])
+        with patch("build_pipeline.tdd_engine.llm_call_structured",
+                   new_callable=AsyncMock) as call:
+            out = await _adjudicate_review_findings(review, block, config, "diff", "ctx")
+        call.assert_not_awaited()
+        assert out.findings == []
+
+
+class TestBudgetCircuitBreaker:
+    """The engine stops on a spent budget at the block boundary."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_budget(self, monkeypatch):
+        # The baseline gate runs the repo's test_command, which needs the trust
+        # opt-in; without it these tests would fail for the wrong reason.
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        budget_mod.reset()
+        yield
+        budget_mod.reset()
+
+    @pytest.mark.asyncio
+    async def test_exhausted_budget_stops_before_the_first_block(self, tdd_setup):
+        config, args = tdd_setup
+        config.budget_max_tokens = 100
+
+        class _Usage:
+            input_tokens, output_tokens = 500, 0
+            cache_read_tokens = cache_creation_tokens = 0
+            cost_usd = 0.0
+
+        # Spend it during the baseline phase, before any block starts.
+        budget_mod.configure(max_tokens=100)
+        budget_mod.record(_Usage(), label="spec")
+
+        with patch("build_pipeline.tdd_engine.run_test_writer",
+                   new_callable=AsyncMock) as writer:
+            result = await run_tdd_engine(config, args)
+
+        assert result == EXIT_BUILD_FAILURE
+        # Stopped at the boundary — no agent was spawned for the block.
+        writer.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_spend_survives_a_resume(self, tdd_setup):
+        """A fresh budget on resume would make the ceiling unenforceable."""
+        config, args = tdd_setup
+        config.budget_max_tokens = 100
+
+        class _Usage:
+            input_tokens, output_tokens = 500, 0
+            cache_read_tokens = cache_creation_tokens = 0
+            cost_usd = 0.0
+
+        budget_mod.configure(max_tokens=100)
+        budget_mod.record(_Usage(), label="spec")
+        with patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock):
+            await run_tdd_engine(config, args)
+        assert config.state_file_path().exists()
+
+        # Simulate a new process picking the build back up.
+        budget_mod.reset()
+        with patch("build_pipeline.tdd_engine.run_test_writer",
+                   new_callable=AsyncMock) as writer:
+            result = await run_tdd_engine(config, args)
+        assert result == EXIT_BUILD_FAILURE
+        writer.assert_not_awaited()
+        assert budget_mod.get_budget().total_tokens == 500
+
+    @pytest.mark.asyncio
+    async def test_no_ceiling_configured_never_stops_a_block(self, tdd_setup):
+        config, args = tdd_setup  # budget_max_tokens defaults to None
+
+        class _Usage:
+            input_tokens, output_tokens = 10_000_000, 0
+            cache_read_tokens = cache_creation_tokens = 0
+            cost_usd = 0.0
+
+        budget_mod.record(_Usage())
+        fail = AgentResult(success=False, error="stop here")
+        with patch("build_pipeline.tdd_engine.run_test_writer",
+                   new_callable=AsyncMock, return_value=fail) as writer:
+            await run_tdd_engine(config, args)
+        # Reached the block: the budget did not intercept it.
+        writer.assert_awaited()
 CONTRADICTION_REPORT = """\
 Implemented the uploader against the failing tests.
 

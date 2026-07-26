@@ -4,6 +4,7 @@ import json
 import pytest
 from pathlib import Path
 
+from build_pipeline import budget
 from build_pipeline.state import BuildState, TDDState, SpecGenState
 from build_pipeline.models import BuildPhase, BlockInfo, BlockStatus, ImplementationNote
 
@@ -98,6 +99,29 @@ class TestTDDState:
         assert loaded.tdd.blocks[1].status == BlockStatus.TESTING
 
 
+class TestBudgetSnapshot:
+    """Spend rides along with the state file, so resume cannot reset it."""
+
+    class _Usage:
+        input_tokens, output_tokens = 300, 100
+        cache_read_tokens = cache_creation_tokens = 0
+        cost_usd = 1.25
+
+    def test_checkpoint_snapshots_the_live_budget(self, tmp_path):
+        budget.reset()
+        budget.record(self._Usage(), label="review")
+        state = BuildState(change_name="c", mode="scratch", tier="standard")
+        path = tmp_path / "state.json"
+        state.checkpoint(path)
+        budget.reset()
+
+        reloaded = BuildState.load(path)
+        assert reloaded.budget["total_tokens"] == 400
+        assert reloaded.budget["by_label"] == {"review": 400}
+
+    def test_absent_budget_defaults_to_empty(self):
+        budget.reset()
+        assert BuildState(change_name="c", mode="scratch", tier="standard").budget == {}
 FIXTURES = Path(__file__).parent / "fixtures"
 
 

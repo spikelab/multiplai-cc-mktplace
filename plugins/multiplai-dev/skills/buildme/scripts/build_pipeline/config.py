@@ -13,6 +13,7 @@ from typing import Literal
 import yaml
 
 from .env import pick_model, resolve_model
+from .models import ReviewGatePolicy
 
 log = logging.getLogger(__name__)
 
@@ -195,6 +196,27 @@ class BuildConfig:
     # push-for-reviewer: these are NOT added to implementer prompts.
     standards_files: list[str] = field(default_factory=list)
 
+    # Resolved reviewer models for the per-block review panel, from
+    # `code_review.panel` in specs/config.yaml. Empty = single reviewer on
+    # review_model-or-model, i.e. the pre-panel behavior. A panel is opt-in
+    # because each member is another full-diff call.
+    review_panel: list[str] = field(default_factory=list)
+
+    # Thresholds for the graded review gate (`code_review.gate`). Defaults
+    # reproduce the previous hardcoded binary behavior.
+    review_gate: ReviewGatePolicy = field(default_factory=ReviewGatePolicy)
+
+    # Orchestrator adjudication of reviewer findings (`code_review.adjudicate`).
+    # On by default: reviewers propose, the orchestrator disposes. Turning it
+    # off does NOT auto-apply findings — it drops them, because applying an
+    # unadjudicated reviewer suggestion is the thing this pipeline must never do.
+    adjudicate_findings: bool = True
+
+    # Per-build ceilings from `budget:` in specs/config.yaml. None = unlimited
+    # (the pre-budget behavior).
+    budget_max_tokens: int | None = None
+    budget_max_usd: float | None = None
+
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> BuildConfig:
         tier, model_name = detect_tier()
@@ -264,6 +286,10 @@ class BuildConfig:
         code_review_cfg = data.get("code_review", {}) or {}
         if code_review_cfg.get("model") and not self.review_model:
             self.review_model = resolve_model(code_review_cfg["model"])
+        self._load_review_panel(code_review_cfg)
+        self._load_review_gate(code_review_cfg)
+        self.adjudicate_findings = bool(code_review_cfg.get("adjudicate", True))
+        self._load_budget(data.get("budget", {}) or {})
 
         # Gate toggles
         code_review = data.get("code_review", {})
@@ -317,6 +343,64 @@ class BuildConfig:
         """
         self.project_dir = Path(new_project_dir)
         self.specs_dir = self.project_dir / "specs"
+
+    def _load_review_panel(self, code_review_cfg: dict) -> None:
+        """Resolve `code_review.panel` into concrete reviewer model IDs.
+
+        Accepts either a list of dicts (`- model: opus`) or bare strings. Each
+        entry is ceiling-capped by `resolve_model` like every other model
+        resolution here, EXCEPT provider-qualified entries (`openai:gpt-5`),
+        which pass through untouched — the ceiling ranks the Claude family
+        only, and the point of a cross-family panel member is that it is not
+        in that family.
+        """
+        entries = code_review_cfg.get("panel") or []
+        if not isinstance(entries, list):
+            log.warning("code_review.panel is not a list — ignoring")
+            return
+        panel: list[str] = []
+        for entry in entries:
+            name = entry.get("model") if isinstance(entry, dict) else entry
+            if not name or not isinstance(name, str):
+                log.warning("Skipping malformed code_review.panel entry: %r", entry)
+                continue
+            panel.append(name if ":" in name else resolve_model(name))
+        self.review_panel = panel
+        if panel:
+            log.info("Review panel configured: %s", panel)
+
+    def _load_review_gate(self, code_review_cfg: dict) -> None:
+        """Load graded-gate thresholds, keeping the defaults on bad input."""
+        gate_cfg = code_review_cfg.get("gate") or {}
+        if not isinstance(gate_cfg, dict):
+            log.warning("code_review.gate is not a mapping — using defaults")
+            return
+        try:
+            self.review_gate = ReviewGatePolicy(
+                **{
+                    k: v
+                    for k, v in gate_cfg.items()
+                    if k in ReviewGatePolicy.model_fields
+                }
+            )
+        except Exception as e:
+            # A typo'd threshold must not silently loosen the gate.
+            log.warning("Invalid code_review.gate (%s) — using defaults", e)
+
+    def _load_budget(self, budget_cfg: dict) -> None:
+        """Load per-build ceilings. Absent/unparseable → unlimited (as before)."""
+        if not isinstance(budget_cfg, dict):
+            return
+        raw_tokens = budget_cfg.get("max_tokens")
+        raw_usd = budget_cfg.get("max_usd")
+        try:
+            self.budget_max_tokens = int(raw_tokens) if raw_tokens else None
+        except (TypeError, ValueError):
+            log.warning("Invalid budget.max_tokens=%r — ignoring", raw_tokens)
+        try:
+            self.budget_max_usd = float(raw_usd) if raw_usd else None
+        except (TypeError, ValueError):
+            log.warning("Invalid budget.max_usd=%r — ignoring", raw_usd)
 
     def _discover_test_command(self) -> None:
         """Auto-detect test command if not specified in config."""
