@@ -11,6 +11,7 @@ Examples:
     init_skill.py custom-skill --path /custom/location
 """
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -270,22 +271,31 @@ def init_skill(skill_name, path):
     return skill_dir
 
 
-def main():
-    if len(sys.argv) < 4 or sys.argv[2] != '--path':
-        print("Usage: init_skill.py <skill-name> --path <path>")
-        print("\nSkill name requirements:")
-        print("  - Hyphen-case identifier (e.g., 'data-analyzer')")
-        print("  - Lowercase letters, digits, and hyphens only")
-        print("  - Max 40 characters")
-        print("  - Must match directory name exactly")
-        print("\nExamples:")
-        print("  init_skill.py my-new-skill --path skills/public")
-        print("  init_skill.py my-api-helper --path skills/private")
-        print("  init_skill.py custom-skill --path /custom/location")
-        sys.exit(1)
+def main(argv=None):
+    # Hand-rolled argv slicing meant `--help` fell through to the usage text
+    # and exited 1 — indistinguishable from a bad invocation. argparse gets
+    # this right for free.
+    parser = argparse.ArgumentParser(
+        prog="init_skill.py",
+        description="Scaffold a new skill directory from the standard template.",
+        epilog=(
+            "Skill name requirements: hyphen-case identifier "
+            "(e.g. 'data-analyzer'), lowercase letters/digits/hyphens only, "
+            "max 40 characters, must match the directory name exactly.\n\n"
+            "Examples:\n"
+            "  init_skill.py my-new-skill --path skills/public\n"
+            "  init_skill.py my-api-helper --path skills/private\n"
+            "  init_skill.py custom-skill --path /custom/location"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("skill_name", help="hyphen-case name for the new skill")
+    parser.add_argument("--path", required=True,
+                        help="directory the skill will be created under")
+    args = parser.parse_args(argv)
 
-    skill_name = sys.argv[1]
-    path = sys.argv[3]
+    skill_name = args.skill_name
+    path = args.path
 
     print(f"🚀 Initializing skill: {skill_name}")
     print(f"   Location: {path}")

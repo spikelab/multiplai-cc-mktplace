@@ -70,7 +70,8 @@ ${CLAUDE_PLUGIN_ROOT}/skills/transcribe/scripts/transcribe.sh /path/to/audio/fil
 The script detects containers explicitly (`MULTIPLAI_CONTAINER=1`, set by the multiplai container image, with `/.dockerenv` as a generic-Docker fallback) and bridges to the macOS host via SSH for Metal GPU access. Same pattern as `swift-host.sh`. Plain Linux is NOT treated as a container — it gets the platform-requirement message above instead of a bridge error.
 
 Requirements for container use:
-- SSH key at `/home/agent/.ssh/build_key` (or set `TRANSCRIBE_KEY`)
+- SSH key at `/home/agent/.ssh/build_key` (or set `TRANSCRIBE_KEY`, falling back
+  to `SSH_BUILD_KEY` — the shared host-bridge key used by the other host skills)
 - `mlx-whisper` allowed in the host's SSH gateway (`~/.local/bin/container-build-gateway.sh`)
 - Workspace mounted at identical paths (default with `dclaude.sh`)
 

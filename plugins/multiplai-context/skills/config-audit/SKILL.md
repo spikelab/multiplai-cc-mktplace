@@ -106,6 +106,29 @@ and makes any changes themselves.
    gate reads and the nudge fires forever. If a previous state file
    exists, the script overwrites it — only the latest run matters.
 
+## Delete scaffolding aggressively — capabilities get absorbed
+
+The strongest reason a rule should go is not that it was wrong, but that the
+model outgrew it. Prompt scaffolding is written for the model in front of you;
+the next one absorbs the capability and the instruction becomes dead weight —
+still consuming context on every invocation, still constraining a model that
+would do better unconstrained.
+
+So when auditing, ask of each rule: **would a current model do this correctly
+without being told?** If yes, it is a removal candidate even though nothing
+about it is *wrong*. Step-by-step procedures for things models now do natively,
+defensive phrasing against failure modes that no longer occur, and worked
+examples of formats the model already produces are the usual finds.
+
+This is why the cadence is 60 days rather than quarterly: it is pinned to how
+often models ship, not to how often configuration rots. When a model upgrade
+lands between audits, the re-test checklist in
+`$CLAUDE_CONFIG_DIR/reference/dev/skill-dev.md` → Model-Upgrade Re-Test
+Checklist covers the same ground for skills specifically.
+
+A skill or ruleset that *shrinks* after a model upgrade is the expected
+outcome, not a sign something was lost.
+
 ## Constraints
 
 - **Never apply changes.** This skill must NOT apply, edit, or delete any
