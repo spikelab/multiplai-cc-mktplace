@@ -63,8 +63,11 @@ jobs:
         with:
           python-version: '3.12'
 
+      # `--depth=0` is not a valid git argument ("depth 0 is not a positive
+      # number") — the full history comes from `fetch-depth: 0` on the checkout
+      # above. This fetch only needs to make the base ref itself resolvable.
       - name: Fetch the base branch
-        run: git fetch --no-tags --depth=0 origin "${{ github.base_ref }}"
+        run: git fetch --no-tags origin "${{ github.base_ref }}"
 
       # Label and body are passed through the environment rather than
       # interpolated into the shell: a PR body is attacker-controlled text.
