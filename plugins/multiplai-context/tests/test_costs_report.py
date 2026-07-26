@@ -203,6 +203,29 @@ def test_cache_report_threshold_is_configurable(monkeypatch, capsys):
     assert json.loads(out)["flagged"] == ["buildme"]
 
 
+def test_cache_report_honours_group_as_well_as_by(monkeypatch, capsys):
+    """`--group` is normalized into `args.by` AFTER the cache branch returns,
+    so `--report cache --group session` used to group by component silently."""
+    append_records([
+        _cache_rec("m1", component="buildme", inp=900, cr=100),
+        _cache_rec("m2", component="deep-research", inp=100, cr=900),
+    ])
+    code, out = _run(monkeypatch, capsys, "--all", "--report", "cache",
+                     "--group", "model", "--json")
+    assert code == 0
+    rows = json.loads(out)["rows"]
+    assert set(rows) == {"claude-opus-4-8"}   # grouped by model, not component
+
+
+def test_cache_report_rejects_a_group_axis_it_cannot_use(monkeypatch, capsys):
+    append_records([_cache_rec("m1", component="buildme", inp=900, cr=100)])
+    monkeypatch.setattr(sys, "argv", ["costs_report.py", "--all", "--report", "cache",
+                                      "--group", "task", "--json"])
+    code = costs_report.main()
+    assert code == 2
+    assert "cannot group by" in capsys.readouterr().err
+
+
 def test_cache_report_text_output(monkeypatch, capsys):
     append_records([_cache_rec("m1", component="buildme", inp=900, cr=100)])
     code, out = _run(monkeypatch, capsys, "--all", "--report", "cache")
@@ -267,6 +290,20 @@ class TestFetchPrMap:
         costs_report.fetch_pr_map(tmp_path, runner=runner)
         costs_report.fetch_pr_map(tmp_path, runner=runner)
         assert len(calls) == 1
+
+    def test_an_empty_map_is_not_cached(self, tmp_path):
+        """On disk, a cached {} is indistinguishable from "we couldn't find
+        out" — caching it would suppress the lookup for the whole TTL right
+        when the repo's first PR appears."""
+        calls = []
+
+        def runner(cmd, cwd):
+            calls.append(cmd)
+            return self._proc("[]")
+
+        assert costs_report.fetch_pr_map(tmp_path, runner=runner) == {}
+        assert costs_report.fetch_pr_map(tmp_path, runner=runner) == {}
+        assert len(calls) == 2
 
     def test_expired_cache_refetches(self, tmp_path):
         calls = []

@@ -245,11 +245,15 @@ def fetch_pr_map(repo_dir: Path, *, ttl_s: int = _PR_CACHE_TTL_S,
         prior = mapping.get(branch)
         if prior is None or pr.get("number", 0) > prior["number"]:
             mapping[branch] = {"number": pr.get("number", 0), "outcome": outcome}
-    try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps(mapping))
-    except OSError:
-        pass
+    # Don't cache an empty map: on disk it is indistinguishable from a cached
+    # "we couldn't find out", so a repo that genuinely has no PRs yet would
+    # suppress the lookup for the whole TTL right when its first PR appears.
+    if mapping:
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(mapping))
+        except OSError:
+            pass
     return mapping
 
 
@@ -558,8 +562,15 @@ def main() -> int:
             print(f"No ledger records found under {costs_dir()} for the selected window.",
                   file=sys.stderr)
             return 1
-        return _cache_report(records, args.by or "component", args.cache_threshold,
-                             args.json, window)
+        # `--group` is the same axis as `--by` for this report. Read both here:
+        # the `args.by = args.group` normalization below runs AFTER this branch,
+        # so `--report cache --group session` silently grouped by component.
+        if args.group and args.group not in _GROUPERS:
+            print(f"--report cache cannot group by {args.group!r}; "
+                  f"choose from {', '.join(sorted(_GROUPERS))}.", file=sys.stderr)
+            return 2
+        return _cache_report(records, args.by or args.group or "component",
+                             args.cache_threshold, args.json, window)
     if args.group == "task":
         return _task_report(records, args.pr_join, args.json, window)
     if args.group:

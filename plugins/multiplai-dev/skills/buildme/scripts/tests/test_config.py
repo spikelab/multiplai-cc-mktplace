@@ -338,6 +338,13 @@ class TestConfEffort:
         with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=medium\n"), clear=True):
             assert conf_effort("buildme.review", conf_effort("buildme")) == "medium"
 
+    def test_unknown_effort_is_ignored_not_passed_through(self, tmp_path):
+        """`resolve_effort` ranks an unknown name at the high tier, so the
+        ceiling never trips and the typo would reach the SDK verbatim."""
+        with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=turbo\n"), clear=True):
+            assert conf_effort("buildme") is None
+            assert conf_effort("buildme", "medium") == "medium"
+
 
 class TestBuildConfigEffortFields:
     def test_defaults_are_unset_without_a_conf(self, tmp_path):
@@ -357,3 +364,17 @@ class TestBuildConfigEffortFields:
             # spec/agent inherit the pipeline-wide value
             assert config.spec_effort == "low"
             assert config.agent_effort == "low"
+
+    def test_explicit_root_effort_reaches_every_step(self, tmp_path):
+        """The fallback lives in __post_init__, so a directly-constructed
+        config propagates too — per-field conf reads would have ignored it."""
+        with patch.dict(os.environ, {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}, clear=True):
+            config = BuildConfig(effort="low")
+            assert (config.spec_effort, config.review_effort, config.agent_effort) == \
+                ("low", "low", "low")
+
+    def test_an_explicit_step_effort_still_wins_over_the_root(self, tmp_path):
+        with patch.dict(os.environ, {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}, clear=True):
+            config = BuildConfig(effort="low", review_effort="max")
+            assert config.review_effort == "max"
+            assert config.spec_effort == "low"
