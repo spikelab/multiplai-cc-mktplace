@@ -500,8 +500,11 @@ _SPEC_IMPACT_RE = re.compile(
 )
 
 # Placeholder answers that mean "nothing to report" — treated as an empty
-# SURPRISES slot rather than as content.
-_EMPTY_SURPRISES = {"", "none", "n/a", "na", "nothing", "-", "—", "(none)", "none."}
+# SURPRISES slot rather than as content. Shares the prototype gate's
+# empty-slot vocabulary (_EMPTY_SLOT_VALUES) minus "tbd": in a prototype's
+# PROVES: slot "tbd" is a non-answer, but an implementer writing "tbd" under
+# SURPRISES is deferring something real, which the respec loop must keep.
+_EMPTY_SURPRISES = _EMPTY_SLOT_VALUES - {"tbd"}
 
 
 def _clean_surprises(raw: str) -> str:
