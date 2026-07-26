@@ -3,8 +3,10 @@
 A state seam plus a JSON file. Nothing here renders a board, schedules cards,
 or talks to any board service; it answers one question (`column_for`) and
 records the answer to `specs/changes/<name>/.board.json` plus a
-`BOARD:<change>:<Column>` stdout line, alongside the existing `PHASE:`
-protocol.
+`BOARD:<slug>:<Column>` stdout line, alongside the existing `PHASE:`
+protocol. The middle field is the normalized change slug (never contains
+`:`); column values contain spaces, so consumers must split on the first two
+`:` only and take the last field greedily.
 
 ## What the pipeline actually drives — read this before trusting a column
 
@@ -26,8 +28,9 @@ Set, but only at the edges:
 
   * **Accepted** — the mapping for `BuildPhase.INIT` (a card that exists and
     has not started). The pipeline does not write a card this early: the
-    change directory does not exist yet at INIT, and creating it would
-    suppress `.change.yaml`. In practice the first recorded column is Shaping.
+    change directory does not exist yet at INIT, and this module never
+    creates one (no card without a change dir — see `_record`). In practice
+    the first recorded column is Shaping.
   * **Cancelled** — recorded by `record_failure` **only** when the run ended
     unrecoverably, defined as "no resumable checkpoint survives"
     (`.build-state.json` is gone). An ordinary failed phase leaves the
@@ -53,12 +56,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from .change_manager import normalize_change_name
+from .change_manager import archived_change_dirs, normalize_change_name
 from .models import BlockStatus, BoardColumn, BuildPhase
 
 log = logging.getLogger(__name__)
@@ -154,10 +158,12 @@ def board_path(specs_dir: Path, change_name: str) -> Path:
     active = specs_dir / "changes" / norm / BOARD_FILENAME
     if active.parent.is_dir():
         return active
-    archived = sorted(
-        d for d in (specs_dir / "archive").glob(f"*-{norm}")
-        if d.is_dir() and (d / BOARD_FILENAME).exists()
-    )
+    # Anchored to exactly YYYY-MM-DD-<slug> (archived_change_dirs) — a loose
+    # suffix match would let change `foo` write onto `…-bar-foo`'s card.
+    archived = [
+        d for d in archived_change_dirs(specs_dir, change_name)
+        if (d / BOARD_FILENAME).exists()
+    ]
     if archived:
         return archived[-1] / BOARD_FILENAME
     return active
@@ -204,6 +210,17 @@ def record(
 
 def _record(config, state, col: BoardColumn, note: str, progress) -> BoardColumn | None:
     path = board_path(config.specs_dir, config.change_name)
+    # No card without a change dir. Creating the directory here would pollute
+    # whatever repo config currently points at (a pre-bootstrap failure runs
+    # against the caller's SOURCE repo) with a changes/<name>/ that holds only
+    # .board.json — junk this pipeline never cleans up.
+    if not path.parent.is_dir():
+        log.info(
+            "No change dir for '%s' — skipping board record of %s",
+            config.change_name, col.value,
+        )
+        return None
+
     now = datetime.now(timezone.utc).isoformat()
     card = read_card(path)
     moved = card is None or card.column != col
@@ -226,14 +243,18 @@ def _record(config, state, col: BoardColumn, note: str, progress) -> BoardColumn
     card.worktree_path = state.worktree_path or card.worktree_path
     card.pr_url = state.pr_url or card.pr_url
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(card.model_dump_json(indent=2))
+    # Atomic: a crash mid-write must never leave truncated JSON — read_card
+    # treats a corrupt card as absent, which would silently wipe the history.
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(card.model_dump_json(indent=2))
+    os.replace(tmp, path)
 
     if not moved:
         return None
 
-    print(f"BOARD:{config.change_name}:{col.value}", flush=True)
-    log.info("BOARD change=%s column=%s owner=%s", config.change_name, col.value, card.owner_agent)
+    slug = normalize_change_name(config.change_name)
+    print(f"BOARD:{slug}:{col.value}", flush=True)
+    log.info("BOARD change=%s column=%s owner=%s", slug, col.value, card.owner_agent)
     if progress is not None:
         try:
             progress.log_board(col.value, card.owner_agent, note)
@@ -249,6 +270,10 @@ def record_failure(config, state, reason: str = "", progress=None) -> BoardColum
     `.build-state.json` is gone, so nothing can pick the card back up. While a
     checkpoint exists the card deliberately stays in its last column, which is
     where a resume continues from.
+
+    A *completed* build also has no checkpoint (post-success cleanup deletes
+    it) — the orchestrator never calls this once its build-succeeded signal is
+    set, so a late crash after cleanup cannot be misrecorded as Cancelled.
     """
     raw = state.state_file or ""
     state_file = Path(raw) if raw else config.state_file_path()

@@ -20,7 +20,9 @@ Candidates are then subtracted against, in order:
 
 1. the Python standard library (``sys.stdlib_module_names``) — this is the
    precision gate that keeps a `json` / `pathlib` / `asyncio` mention from
-   minting an explainer;
+   minting an explainer. Applied only when the manifests leave Python
+   plausible (pyproject/requirements present, or no manifest at all): in a
+   pure JS/Rust project `secrets` or `queue` are real package names;
 2. language, runtime, and format words that name no dependency at all
    (``python``, ``npm``, ``git``, ``yaml``, …);
 3. tokens that are plainly not package names — file paths, filenames with a
@@ -82,12 +84,33 @@ _DECISIONS_RE = re.compile(
 _BACKTICK_RE = re.compile(r"`([^`\n]{1,80})`")
 
 # "use X rather than Y" / "instead of Y" — Y is a rejected alternative, not a
-# dependency. Only matched when the phrase precedes the token on the same line.
+# dependency. The cue must directly GOVERN the token: only a phrase within a
+# few glue words immediately before it counts, and another backticked token in
+# between re-binds the cue to that token instead. So "Instead of `pandas`, we
+# use `polars`." rejects pandas without also swallowing the adopted polars.
 _NEGATION_RE = re.compile(
     r"(rather than|instead of|not adding|no need for|avoid(?:ing)?|"
     r"decided against|ruled out|as opposed to)\b",
     re.IGNORECASE,
 )
+_NEGATION_WINDOW = 40  # chars before the token examined for a governing cue
+_NEGATION_MAX_GLUE_WORDS = 2  # e.g. "rather than adding `tomli`"
+
+
+def _negated(line: str, token_start: int) -> bool:
+    """Whether a negation cue directly governs the token at ``token_start``."""
+    window = line[max(0, token_start - _NEGATION_WINDOW):token_start]
+    cue = None
+    for cue in _NEGATION_RE.finditer(window):
+        pass  # keep the cue closest to the token
+    if cue is None:
+        return False
+    between = window[cue.end():]
+    # A backticked token between the cue and this one means the cue governs
+    # THAT token, not this one.
+    if "`" in between:
+        return False
+    return len(between.split()) <= _NEGATION_MAX_GLUE_WORDS
 
 
 def _section(text: str, pattern: re.Pattern[str]) -> str:
@@ -156,7 +179,7 @@ def _aliases(canonical_name: str) -> set[str]:
     return {a for a in out if a}
 
 
-def _is_plausible_dependency(token: str, canonical_name: str) -> bool:
+def _is_plausible_dependency(canonical_name: str, *, python_ecosystem: bool = True) -> bool:
     if len(canonical_name) < 2:
         return False
     if not _NAME_RE.match(canonical_name):
@@ -166,12 +189,16 @@ def _is_plausible_dependency(token: str, canonical_name: str) -> bool:
     if canonical_name in _GENERIC_TERMS:
         return False
     # Stdlib is never "new" — this is the gate that stops an explainer firing
-    # on every `pathlib` / `asyncio` / `json` mention in a real change.
-    module_head = canonical_name.replace("-", "_").split(".")[0]
-    if module_head in sys.stdlib_module_names:
-        return False
-    if canonical_name.replace("-", "_") in sys.stdlib_module_names:
-        return False
+    # on every `pathlib` / `asyncio` / `json` mention in a real change. It
+    # only applies where Python is plausible: `secrets` or `queue` are real
+    # npm/cargo package names, so a pure JS/Rust project must not have its
+    # dependencies swallowed by Python's stdlib list.
+    if python_ecosystem:
+        module_head = canonical_name.replace("-", "_").split(".")[0]
+        if module_head in sys.stdlib_module_names:
+            return False
+        if canonical_name.replace("-", "_") in sys.stdlib_module_names:
+            return False
     return True
 
 
@@ -186,6 +213,14 @@ _MANIFESTS = (
     "Cargo.toml",
     "go.mod",
 )
+
+# Manifests that make the project a Python one — the condition for applying
+# the stdlib subtraction in _is_plausible_dependency. A project with no
+# manifest at all keeps the subtraction (it may yet become Python, and the
+# stdlib filter is the conservative default).
+_PYTHON_MANIFESTS = frozenset({
+    "pyproject.toml", "requirements.txt", "requirements-dev.txt",
+})
 
 
 def _declared_in_pyproject(path: Path) -> set[str]:
@@ -464,6 +499,7 @@ def detect_new_dependencies(
 
     declared, manifests = declared_dependencies(project_dir)
     in_use = project_module_names(project_dir) | existing_import_names(project_dir)
+    python_ecosystem = not manifests or any(m in _PYTHON_MANIFESTS for m in manifests)
 
     mentions: dict[str, list[str]] = {}
     for label, section_text in sources:
@@ -471,7 +507,9 @@ def detect_new_dependencies(
             for match in _BACKTICK_RE.finditer(line):
                 raw = match.group(1)
                 canonical_name = _canonical(raw)
-                if not _is_plausible_dependency(raw, canonical_name):
+                if not _is_plausible_dependency(
+                    canonical_name, python_ecosystem=python_ecosystem,
+                ):
                     continue
                 if _aliases(canonical_name) & declared:
                     continue
@@ -479,7 +517,7 @@ def detect_new_dependencies(
                     continue
                 # "use `tomllib` rather than adding `tomli`" — the rejected
                 # alternative is not something we depend on.
-                if _NEGATION_RE.search(line[: match.start()]):
+                if _negated(line, match.start()):
                     log.debug(
                         "Skipping '%s' — rejected alternative in: %s",
                         canonical_name, line.strip()[:120],
@@ -514,6 +552,15 @@ def detect_new_dependencies(
         ", ".join(d.name for d in result) or "none",
     )
     return result
+
+
+def design_decisions_text(change_dir: Path) -> str:
+    """The design's ``## Decisions`` section body ("" when absent).
+
+    Feeds the explainer's usage_context slot — how this project intends to use
+    the dependency, so the explainer researches the relevant edge cases.
+    """
+    return _section(_read(change_dir / "design.md"), _DECISIONS_RE).strip()
 
 
 def _read(path: Path) -> str:

@@ -1018,6 +1018,7 @@ class TestGitCommitScoping:
         (project_dir / "module.py").write_text("x = 1\n")
         config.progress_file_path().write_text("# progress\n")
         config.state_file_path().write_text("{}\n")
+        (config.change_dir / ".board.json").write_text("{}\n")
 
         sha = _git_commit_block_phase(config, "impl", BlockInfo(number=1, name="B", description="d"))
         assert sha is not None
@@ -1029,6 +1030,7 @@ class TestGitCommitScoping:
         assert "module.py" in committed
         assert "build-progress.md" not in committed
         assert not any(".build-state.json" in f for f in committed)
+        assert not any(".board.json" in f for f in committed)
 
         # The bookkeeping files must remain untracked afterward.
         tracked = subprocess.run(
@@ -1036,6 +1038,7 @@ class TestGitCommitScoping:
         ).stdout
         assert "build-progress.md" not in tracked
         assert ".build-state.json" not in tracked
+        assert ".board.json" not in tracked
 
 
 class TestRedGateWiring:
@@ -2420,6 +2423,50 @@ class TestImplementationNotesLoop:
 
         assert not (config.change_dir / "implementation-notes.md").exists()
         assert block.notes == []
+
+    def test_resume_does_not_duplicate_an_identical_note(self, setup):
+        """A resumed mid-block run re-parses the same agent report — the note
+        must land once on the block and once in implementation-notes.md."""
+        from build_pipeline.tdd_engine import _record_implementation_note
+
+        config, state, progress, block = setup
+        for _ in range(2):
+            assert _record_implementation_note(
+                block, config, state, progress, "implementer", CONTRADICTION_REPORT,
+            ) is True
+
+        assert len(block.notes) == 1
+        notes_text = (config.change_dir / "implementation-notes.md").read_text()
+        assert notes_text.count("## Block 1 — Uploader (implementer)") == 1
+
+    def test_distinct_notes_are_both_recorded(self, setup):
+        from build_pipeline.tdd_engine import _record_implementation_note
+
+        config, state, progress, block = setup
+        _record_implementation_note(
+            block, config, state, progress, "test_writer", CLARIFY_TEST_REPORT,
+        )
+        _record_implementation_note(
+            block, config, state, progress, "implementer", CONTRADICTION_REPORT,
+        )
+        assert len(block.notes) == 2
+
+    def test_duplicate_contradiction_still_halts_when_configured(self, setup):
+        """Dedupe skips the recording, never the halt — a resume must not
+        sneak past halt_on_contradiction."""
+        from build_pipeline.tdd_engine import _record_implementation_note
+
+        config, state, progress, block = setup
+        config.gates.respec_halt_on_contradiction = True
+        first = _record_implementation_note(
+            block, config, state, progress, "implementer", CONTRADICTION_REPORT,
+        )
+        second = _record_implementation_note(
+            block, config, state, progress, "implementer", CONTRADICTION_REPORT,
+        )
+        assert first is False
+        assert second is False
+        assert len(block.notes) == 1
 
 
 class TestReportContractSlots:

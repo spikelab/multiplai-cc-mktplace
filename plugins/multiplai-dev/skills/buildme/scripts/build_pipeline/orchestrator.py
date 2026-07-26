@@ -34,7 +34,11 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     # and bootstrap would create a second worktree.
     _rebind_to_existing_worktree(config)
 
-    state_path = config.state_file_path()
+    # The checkpoint normally lives at specs/changes/<name>/.build-state.json,
+    # but after an --auto archive with publish still pending it has traveled
+    # with the change dir into specs/archive/ — _existing_state_path finds it
+    # in either place.
+    state_path = _existing_state_path(config) or config.state_file_path()
     progress = ProgressWriter(config.progress_file_path())
 
     # Resume or create state
@@ -50,6 +54,12 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         )
 
     cm = ChangeManager(config.specs_dir)
+
+    # Set the moment the build's outcome is decided as success (spec-only done,
+    # or publish resolved). From then on the checkpoint is deliberately gone,
+    # so a late exception (progress cleanup, stdout) must NOT be recorded as
+    # Cancelled — the card's real column (e.g. In Review) already stands.
+    build_succeeded = False
 
     try:
         # Phase: Bootstrap
@@ -167,6 +177,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # Stop if --spec-only
         if config.spec_only:
             log.info("DONE pipeline=spec-only")
+            build_succeeded = True
             state.cleanup(state_path)
             print("RESULT:SUCCESS:spec-only", flush=True)
             return 0
@@ -250,35 +261,58 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         # an uncommitted rename sitting in the worktree.
         state.advance_to(BuildPhase.PUBLISH, state_path)
         if config.auto:
-            log.info("START phase=ARCHIVE reason=--auto")
-            # Clean state before archive moves the directory it lives in
-            state.cleanup(state_path)
-            archive_dest = cm.archive_change(config.change_dir)
-            log.info("DONE phase=ARCHIVE dest=%s", archive_dest)
-            git_ops.commit_stage(
-                config,
-                f"chore(specs): archive {config.change_name}",
-                ["specs"],
-            )
-            print("PHASE:ARCHIVE:COMPLETE", flush=True)
+            if config.change_dir.exists():
+                log.info("START phase=ARCHIVE reason=--auto")
+                # The checkpoint travels with the move (commit_stage's
+                # bookkeeping excludes keep it out of the archive commit).
+                archive_dest = cm.archive_change(config.change_dir)
+                log.info("DONE phase=ARCHIVE dest=%s", archive_dest)
+                git_ops.commit_stage(
+                    config,
+                    f"chore(specs): archive {config.change_name}",
+                    ["specs"],
+                )
+                print("PHASE:ARCHIVE:COMPLETE", flush=True)
+            else:
+                # Resumed after a publish failure: a previous attempt already
+                # archived — the checkpoint's location is the archived dir.
+                archive_dest = state_path.parent
+                log.info("SKIP phase=ARCHIVE reason=already-archived dest=%s", archive_dest)
+            # Re-point the checkpoint at where the move put it. It stays alive
+            # until publish is done — a failed push/PR must leave something a
+            # re-run can resume from.
+            state_path = archive_dest / state_path.name
+            state.state_file = str(state_path)
+            publish_docs_dir = archive_dest
         else:
-            state.cleanup(state_path)
             log.info(
                 "Archive skipped (manual). Run `buildme archive --change %s` when ready.",
                 config.change_name,
             )
             print(f"PHASE:ARCHIVE:PENDING:{config.change_name}", flush=True)
+            publish_docs_dir = config.change_dir
 
         # Phase: Publish (push branch + open draft PR). Non-fatal by
         # construction — a failure leaves the branch and worktree intact with
         # the exact manual commands in build-progress.md, and the build still
-        # reports success for the code it produced.
-        published = _run_publish(config, state, progress)
+        # reports success for the code it produced. Runs BEFORE state.cleanup:
+        # a failed publish keeps the checkpoint, so a re-run adopts this
+        # worktree/branch and retries instead of colliding on the branch.
+        published = _run_publish(
+            config, state, progress, state_path=state_path, docs_dir=publish_docs_dir,
+        )
         state.phase = BuildPhase.COMPLETE
+        build_succeeded = True
         if published:
+            state.cleanup(state_path)
             # Only clear the progress file when there is nothing left for a
             # human to do — an unpushed branch's diagnosis must survive.
             progress.cleanup()
+        else:
+            # Leave a resumable PUBLISH checkpoint (pr_url and branch already
+            # persisted by _run_publish / advance_to above).
+            state.phase = BuildPhase.PUBLISH
+            state.checkpoint(state_path)
         print("RESULT:SUCCESS", flush=True)
         if state.worktree_path:
             print(f"WORKTREE:{state.worktree_path}", flush=True)
@@ -294,8 +328,11 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
         log.error("FAIL pipeline change=%s error=%s", config.change_name, e, exc_info=True)
         print(f"ERROR:{e}", file=sys.stderr, flush=True)
         # Cancelled only if nothing survives to resume from; otherwise the card
-        # stays in its last column and a re-run picks it up there.
-        board.record_failure(config, state, f"pipeline error: {e}", progress=progress)
+        # stays in its last column and a re-run picks it up there. Once the
+        # build succeeded the missing checkpoint is the normal post-success
+        # cleanup, not an unrecoverable failure — never Cancelled then.
+        if not build_succeeded:
+            board.record_failure(config, state, f"pipeline error: {e}", progress=progress)
         return 1
 
 
@@ -329,6 +366,16 @@ async def _run_prototype_phase(
     Never raises: a failed prototype fails the phase, writes a diagnosis to
     build-progress.md, and lets the build continue.
     """
+    # Resume guard, BEFORE the expensive agent run: prototype_done is
+    # checkpointed after the feedback pass, so a crash between that checkpoint
+    # and advance_to(PROTOTYPE) would otherwise re-run the agent here and then
+    # skip the feedback pass — discarding whatever the fresh run disproved.
+    # The artifact already exists on disk and its findings were applied; skip
+    # the whole re-run.
+    if state.spec_gen and state.spec_gen.prototype_done:
+        log.info("SKIP phase=PROTOTYPE reason=recorded-complete-in-state")
+        return
+
     should_run, reason = prototype_decision(config)
     if not should_run:
         log.info("SKIP phase=PROTOTYPE reason=%s", reason)
@@ -352,12 +399,11 @@ async def _run_prototype_phase(
 
     log.info("DONE phase=PROTOTYPE — %s", result.reason)
 
-    # One regeneration pass of design.md/tasks.md from the notes.
+    # One regeneration pass of design.md/tasks.md from the notes. (A completed
+    # feedback pass never reaches here — the guard at the top of this function
+    # skips the whole phase when prototype_done is recorded.)
     if state.spec_gen is None:
         state.spec_gen = SpecGenState()
-    if state.spec_gen.prototype_done:
-        log.info("SKIP phase=PROTOTYPE_FEEDBACK reason=recorded-complete-in-state")
-        return
     try:
         regenerated = await apply_prototype_findings(config)
         log.info("DONE phase=PROTOTYPE_FEEDBACK regenerated=%d", regenerated)
@@ -463,6 +509,7 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
         return
 
     repo = git_ops.preflight(config.project_dir, worktree_requested=True)
+    offset = _project_offset(config.project_dir, repo)
     base = git_ops.default_branch(repo)
     branch, dest = git_ops.resolve_new_branch(repo, config.change_name, base)
     git_ops.create_worktree(repo, branch, dest)
@@ -470,10 +517,12 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
     state.source_repo = str(repo)
     state.branch = branch
     state.worktree_path = str(dest)
-    config.rebind_project_dir(dest)
+    # Re-bind to the SAME subdirectory inside the worktree, not its root — a
+    # nested project (monorepo subpackage) must keep building where it lives.
+    config.rebind_project_dir(dest / offset)
     config.pipeline_branch = branch
     state.state_file = str(config.state_file_path())
-    log.info("Build re-bound to worktree %s on branch %s", dest, branch)
+    log.info("Build re-bound to %s on branch %s", config.project_dir, branch)
     print(f"WORKTREE:{dest}", flush=True)
     print(f"BRANCH:{branch}", flush=True)
 
@@ -494,6 +543,7 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
     repo = git_ops.repo_root(config.project_dir)
     if repo is None:
         return
+    offset = _project_offset(config.project_dir, repo)
     root = git_ops.worktrees_root(repo)
     if not root.is_dir():
         return
@@ -505,17 +555,18 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
     )
     for dest in candidates:
         probe = BuildConfig(
-            mode=config.mode, project_dir=dest, change_name=config.change_name,
+            mode=config.mode, project_dir=dest / offset, change_name=config.change_name,
         )
-        probe.specs_dir = dest / "specs"
-        if not probe.state_file_path().exists():
+        probe.specs_dir = dest / offset / "specs"
+        probe_state = _existing_state_path(probe)
+        if probe_state is None:
             continue
         try:
-            prior = BuildState.load(probe.state_file_path())
+            prior = BuildState.load(probe_state)
         except Exception as e:  # corrupt checkpoint — leave it for a fresh run
-            log.warning("Ignoring unreadable state at %s: %s", probe.state_file_path(), e)
+            log.warning("Ignoring unreadable state at %s: %s", probe_state, e)
             continue
-        config.rebind_project_dir(dest)
+        config.rebind_project_dir(dest / offset)
         config.pipeline_branch = prior.branch or git_ops.current_branch(dest)
         log.info(
             "RESUME re-bound to existing worktree %s (branch=%s) — not creating a new one",
@@ -523,6 +574,52 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
         )
         print(f"WORKTREE:{dest}", flush=True)
         return
+
+
+def _project_offset(project_dir: Path, repo: Path) -> Path:
+    """``project_dir`` relative to its repo root (``Path('.')`` at the root).
+
+    A nested project (monorepo subpackage) must keep building at the SAME
+    subdirectory inside the build's worktree — re-binding to the worktree root
+    would silently relocate the build (specs/, commits, test discovery) to the
+    enclosing repo's root. The offset is exact (both paths come from git), so
+    re-deriving it is correct rather than a guess; the ValueError branch is a
+    refusal for the should-be-impossible case, in this module's
+    refuse-rather-than-guess spirit.
+    """
+    try:
+        return project_dir.resolve().relative_to(repo.resolve())
+    except ValueError:
+        raise git_ops.GitLifecycleError(
+            f"{project_dir} is not inside its own repo root {repo} — cannot "
+            f"derive where the build should live inside the worktree. Refusing "
+            f"to relocate the build to the worktree root."
+        )
+
+
+def _existing_state_path(config: BuildConfig) -> Path | None:
+    """The change's on-disk checkpoint, wherever it currently lives.
+
+    Normally ``specs/changes/<name>/.build-state.json``. After an ``--auto``
+    archive with publish still pending, the checkpoint has traveled with the
+    change dir into ``specs/archive/<date>-<name>/`` — without finding it
+    there, a re-run after a publish failure would restart from scratch and
+    hard-fail on the branch collision.
+    """
+    active = config.state_file_path()
+    if active.exists():
+        return active
+    if not config.change_name:
+        return None
+    from .change_manager import archived_change_dirs
+    # Anchored to exactly YYYY-MM-DD-<slug> — a loose `*-<slug>` glob would
+    # also adopt another change's checkpoint (`foo` matching `…-bar-foo`).
+    archived = [
+        d / active.name
+        for d in archived_change_dirs(config.specs_dir, config.change_name)
+        if (d / active.name).exists()
+    ]
+    return archived[-1] if archived else None
 
 
 def _spec_paths(config: BuildConfig) -> list[str]:
@@ -534,13 +631,21 @@ def _spec_paths(config: BuildConfig) -> list[str]:
         return []
 
 
-def _pr_title_body(config: BuildConfig, state: BuildState) -> tuple[str, str]:
+def _pr_title_body(
+    config: BuildConfig, state: BuildState, docs_dir: Path | None = None,
+) -> tuple[str, str]:
     """PR title from the change name; body from proposal.md's Why, the block
-    list, and links to whichever companion artifacts the build produced."""
+    list, and links to whichever companion artifacts the build produced.
+
+    ``docs_dir`` is where the change's documents live NOW — after an --auto
+    archive that is ``specs/archive/<date>-<name>/``, not ``config.change_dir``
+    (whose files were all moved, so reading through it would lose the Why and
+    every artifact link)."""
+    docs_dir = docs_dir or config.change_dir
     title = f"buildme: {config.change_name}"
     parts: list[str] = []
 
-    why = _proposal_why(config)
+    why = _proposal_why(docs_dir)
     if why:
         parts.append(f"## Why\n\n{why}")
 
@@ -550,12 +655,14 @@ def _pr_title_body(config: BuildConfig, state: BuildState) -> tuple[str, str]:
         )
         parts.append(f"## Blocks\n\n{lines}")
 
-    change_rel = _spec_paths(config)
-    base = change_rel[0] if change_rel else f"specs/changes/{config.change_name}"
+    try:
+        base = str(docs_dir.relative_to(config.project_dir))
+    except ValueError:
+        base = f"specs/changes/{config.change_name}"
     links = [
         f"- `{base}/{name}`"
         for name in ("unknowns.md", "prototype/NOTES.md", "implementation-notes.md", "respec.md")
-        if (config.change_dir / name).exists()
+        if (docs_dir / name).exists()
     ]
     if links:
         parts.append("## Companion artifacts\n\n" + "\n".join(links))
@@ -567,8 +674,8 @@ def _pr_title_body(config: BuildConfig, state: BuildState) -> tuple[str, str]:
     return title, "\n\n".join(parts)
 
 
-def _proposal_why(config: BuildConfig) -> str:
-    proposal = config.change_dir / "proposal.md"
+def _proposal_why(docs_dir: Path) -> str:
+    proposal = docs_dir / "proposal.md"
     if not proposal.exists():
         return ""
     text = proposal.read_text()
@@ -577,13 +684,23 @@ def _proposal_why(config: BuildConfig) -> str:
     return m.group(1).strip() if m else ""
 
 
-def _run_publish(config: BuildConfig, state: BuildState, progress: ProgressWriter) -> bool:
+def _run_publish(
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    state_path: Path | None = None,
+    docs_dir: Path | None = None,
+) -> bool:
     """Push the build's branch and open its PR. Returns False when something
     was left for a human to finish (never raises, never fails the build).
 
     Skipped entirely when the pipeline does not own a branch: push/PR only
     ever act on a branch this pipeline created, which is what keeps
     ``--no-worktree`` identical to the pre-git-lifecycle behavior.
+
+    ``docs_dir`` is where the change's documents currently live (the archived
+    dir after an --auto archive); ``state_path``, when given, is checkpointed
+    as soon as the PR URL is known so it survives crashes and re-runs.
     """
     if not state.branch or not state.worktree_path:
         log.info("SKIP phase=PUBLISH reason=no-pipeline-branch")
@@ -591,7 +708,7 @@ def _run_publish(config: BuildConfig, state: BuildState, progress: ProgressWrite
 
     worktree = Path(state.worktree_path)
     draft = config.git.pr == "draft"
-    title, body = _pr_title_body(config, state)
+    title, body = _pr_title_body(config, state, docs_dir)
     manual = git_ops.manual_finish_commands(
         worktree, state.branch, title, include_pr=config.git.pr != "none", draft=draft,
     )
@@ -643,13 +760,17 @@ def _run_publish(config: BuildConfig, state: BuildState, progress: ProgressWrite
         return False
 
     state.pr_url = url
+    # Persist the PR URL immediately — the in-memory object alone would lose
+    # it on any crash, and a resume/re-run could never learn a PR exists.
+    if state_path is not None:
+        state.checkpoint(state_path)
     log.info("PR opened: %s", url)
     if url:
         print(f"PR:{url}", flush=True)
     # In Review becomes real here and nowhere else: the branch is pushed and a
     # PR exists, so a reviewer can `git fetch` and diff it. Recorded from the
-    # LIVE state — after an --auto archive, pr_url is never written back to
-    # .build-state.json (the state file is already gone).
+    # LIVE state (which now also carries pr_url in its checkpoint until the
+    # post-publish cleanup).
     board.record(
         config, state, column=BoardColumn.IN_REVIEW,
         note=f"branch {state.branch} pushed; PR {url or '(url unknown)'}",

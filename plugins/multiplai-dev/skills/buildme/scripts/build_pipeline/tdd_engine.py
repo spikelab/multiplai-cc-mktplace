@@ -82,8 +82,9 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
     Returns short SHA of the new commit, or None if there was nothing to
     commit or the commit failed (logged as warning — never raises).
 
-    Stages everything EXCEPT buildme's own bookkeeping files (build-progress.md
-    and .build-state.json) so they don't leak into the user's per-block commits.
+    Stages everything EXCEPT buildme's own bookkeeping files (build-progress.md,
+    .build-state.json and .board.json) so they don't leak into the user's
+    per-block commits.
 
     NOTE (git lifecycle): this is the pipeline's ONE whole-tree stage — a
     pathspec-limited `git add -A -- . :(exclude)…`, not a bare `git add -A`.
@@ -97,7 +98,12 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
     cwd = str(config.project_dir)
     # Exclude the bookkeeping files via :(exclude) pathspecs, relative to the repo.
     excludes: list[str] = []
-    for bookkeeping in (config.progress_file_path(), config.state_file_path()):
+    bookkeeping_files = (
+        config.progress_file_path(),
+        config.state_file_path(),
+        config.change_dir / ".board.json",
+    )
+    for bookkeeping in bookkeeping_files:
         try:
             rel = bookkeeping.relative_to(config.project_dir)
         except ValueError:
@@ -767,28 +773,42 @@ def _record_implementation_note(
     if note is None:
         return True
 
-    block.notes.append(note)
-    state.checkpoint(config.state_file_path())
-    try:
-        append_implementation_note(config.change_dir, note)
-    except OSError as e:
-        # The note is already on the block/state; losing the markdown copy is
-        # not worth failing a green block over.
-        log.warning("Could not append implementation note to disk: %s", e)
+    # A resumed mid-block run re-parses the same agent report: recording the
+    # identical note (same role/block/surprises/spec_impact) again would
+    # duplicate it on the block, in implementation-notes.md, and ultimately in
+    # the respec prompt. Skip the recording — but never the contradiction
+    # handling below, so a resume cannot sneak past a configured halt.
+    if note in block.notes:
+        log.info(
+            "Implementation note already recorded block=%d role=%s — skipping duplicate",
+            block.number, role,
+        )
+    else:
+        block.notes.append(note)
+        state.checkpoint(config.state_file_path())
+        try:
+            append_implementation_note(config.change_dir, note)
+        except OSError as e:
+            # The note is on the block/state and run_respec_audit merges state
+            # notes back in, so nothing is lost; failing a green block over
+            # the markdown copy is not worth it.
+            log.warning("Could not append implementation note to disk: %s", e)
+
+        if not note.contradicts:
+            log.info(
+                "Implementation note block=%d role=%s spec_impact=%s",
+                block.number, role, note.spec_impact,
+            )
+            progress.log_spec_impact(block.name, role, note.spec_impact, note.surprises)
+        else:
+            log.warning(
+                "SPEC_IMPACT: contradicts reported by %s on block %d (%s): %s",
+                role, block.number, block.name, note.surprises,
+            )
+            progress.log_spec_impact(block.name, role, note.spec_impact, note.surprises)
 
     if not note.contradicts:
-        log.info(
-            "Implementation note block=%d role=%s spec_impact=%s",
-            block.number, role, note.spec_impact,
-        )
-        progress.log_spec_impact(block.name, role, note.spec_impact, note.surprises)
         return True
-
-    log.warning(
-        "SPEC_IMPACT: contradicts reported by %s on block %d (%s): %s",
-        role, block.number, block.name, note.surprises,
-    )
-    progress.log_spec_impact(block.name, role, note.spec_impact, note.surprises)
 
     if not config.gates.respec_halt_on_contradiction:
         return True

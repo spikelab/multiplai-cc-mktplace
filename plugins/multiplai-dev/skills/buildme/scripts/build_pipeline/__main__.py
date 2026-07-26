@@ -167,6 +167,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # Earliest common entry point for every subcommand that takes --change:
+    # refuse a name that normalizes to nothing (e.g. '!!!') here, cleanly,
+    # instead of dying much later on a 'buildme/' branch or a collapsed
+    # specs/changes path (normalize_change_name raises ValueError for these).
+    change = getattr(args, "change", "") or ""
+    if change:
+        from .change_manager import normalize_change_name
+        try:
+            normalize_change_name(change)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+
     # Propagate the repo-trust opt-in to the agent layer (sdk._repo_is_trusted).
     if getattr(args, "trust_repo", False):
         os.environ["BUILDME_TRUST_REPO"] = "1"

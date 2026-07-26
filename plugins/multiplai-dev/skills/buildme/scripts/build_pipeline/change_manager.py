@@ -38,9 +38,39 @@ def normalize_change_name(name: str) -> str:
 
     Strips path separators, dots, and other non-word characters, so a name can
     never traverse outside specs/changes/ (e.g. '../../foo' → 'foo').
+
+    A non-empty name that normalizes to nothing (e.g. '!!!') is refused with
+    ValueError — silently returning "" would make change_dir collapse to
+    specs/changes and the branch to 'buildme/', dying much later with a raw
+    git error. An empty input stays "" (an unset --change is legitimate).
     """
-    name = re.sub(r"[^\w\s-]", "", name.lower())
-    return re.sub(r"[\s_]+", "-", name).strip("-")
+    slug = re.sub(r"[^\w\s-]", "", name.lower())
+    slug = re.sub(r"[\s_]+", "-", slug).strip("-")
+    if name and not slug:
+        raise ValueError(
+            f"Change name {name!r} contains no usable characters "
+            f"(letters, digits, '-'). Pick a real name, e.g. --change my-feature."
+        )
+    return slug
+
+
+def archived_change_dirs(specs_dir: Path, name: str) -> list[Path]:
+    """All of this change's archive directories, sorted oldest → newest.
+
+    Matches exactly ``specs/archive/YYYY-MM-DD-<slug>`` (the `archive_change`
+    naming scheme). The match is anchored on the whole dirname — a loose
+    ``*-<slug>`` glob would also catch every OTHER change whose slug merely
+    *ends* with this one (change ``foo`` matching ``2026-07-26-bar-foo``),
+    silently crossing two changes' files.
+    """
+    norm = normalize_change_name(name)
+    if not norm:
+        return []
+    pattern = re.compile(rf"^\d{{4}}-\d{{2}}-\d{{2}}-{re.escape(norm)}$")
+    archive_root = specs_dir / "archive"
+    if not archive_root.is_dir():
+        return []
+    return sorted(d for d in archive_root.iterdir() if d.is_dir() and pattern.match(d.name))
 
 
 # The spec-driven artifact DAG — hardcoded since we only use one schema.
@@ -243,13 +273,22 @@ class ChangeManager:
         """Create a change directory with metadata."""
         name = self._normalize_name(name)
         change_dir = self.changes_dir / name
-        if change_dir.exists():
+        metadata_path = change_dir / ".change.yaml"
+        if change_dir.exists() and metadata_path.exists():
             log.info("Change '%s' already exists", name)
             return change_dir
 
+        if change_dir.exists():
+            # A directory without .change.yaml is not a real change — e.g. junk
+            # left by an older pipeline version. Repair it instead of silently
+            # early-returning, which would suppress the metadata forever.
+            log.warning(
+                "Change dir '%s' exists without .change.yaml — writing the missing metadata",
+                name,
+            )
         change_dir.mkdir(parents=True, exist_ok=True)
         metadata = {"schema": "spec-driven", "created": date.today().isoformat()}
-        (change_dir / ".change.yaml").write_text(yaml.dump(metadata, default_flow_style=False))
+        metadata_path.write_text(yaml.dump(metadata, default_flow_style=False))
         log.info("Created change '%s' at %s", name, change_dir)
         return change_dir
 

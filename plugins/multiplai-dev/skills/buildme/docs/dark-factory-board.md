@@ -10,7 +10,7 @@ disagree, the code is right and this file is stale — fix it here.
 
 Line numbers were re-derived on **2026-07-26** against the buildme subtree in
 `plugins/multiplai-dev/skills/buildme/`. Paths are relative to
-`skills/buildme/scripts/`.
+`scripts/build_pipeline/`.
 
 ---
 

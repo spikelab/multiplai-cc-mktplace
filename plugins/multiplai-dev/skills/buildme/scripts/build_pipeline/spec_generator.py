@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from .change_manager import ChangeManager, ARTIFACT_DAG
-from .dependencies import NewDependency, detect_new_dependencies
+from .dependencies import NewDependency, design_decisions_text, detect_new_dependencies
 from .gates import unknowns_gate
 from .models import ArtifactStatus, BuildPhase
 from .rubric import detect_change_type, generate_rubric
@@ -134,7 +134,20 @@ async def _generate_all_artifacts(
     # not file existence, is the record that the gate ran.
     if state.spec_gen and not state.spec_gen.explainers_done:
         unknowns_path = change_dir / "unknowns.md"
-        if unknowns_path.exists():
+        if not getattr(config, "explainers_active", True):
+            # --skip-explainers on a resumed build: never run detection or the
+            # gate's LLM regeneration — that is exactly what the flag exists
+            # to prevent. Write the skip-marker document when the crash
+            # predates it (mirroring _generate_unknowns) so the DAG stays
+            # satisfiable.
+            log.info("SKIP phase=UNKNOWNS_GATE reason=explainers-disabled")
+            if not unknowns_path.exists():
+                unknowns_path.write_text(
+                    f"{UNKNOWNS_HEADER}\n{EXPLAINERS_SKIPPED_LINE}\n"
+                )
+            state.spec_gen.explainers_done = True
+            state.checkpoint(config.state_file_path())
+        elif unknowns_path.exists():
             log.info(
                 "Unknowns gate not recorded complete — running it now "
                 "(resume durability)"
@@ -350,8 +363,9 @@ async def _generate_unknowns(
         "Explaining %d new dependencies: %s",
         len(deps), ", ".join(d.name for d in deps),
     )
+    usage_context = design_decisions_text(change_dir)
     results = await asyncio.gather(
-        *[run_explainer(dep, config) for dep in deps],
+        *[run_explainer(dep, config, usage_context=usage_context) for dep in deps],
         return_exceptions=True,
     )
 

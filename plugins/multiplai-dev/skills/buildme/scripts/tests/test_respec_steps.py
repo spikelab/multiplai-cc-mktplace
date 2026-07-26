@@ -12,10 +12,12 @@ from build_pipeline.llm_steps.respec_steps import (
     DELTA_SECTIONS,
     append_implementation_note,
     ensure_delta_sections,
+    merge_state_notes,
     notes_path,
     run_respec_audit,
 )
-from build_pipeline.models import ImplementationNote
+from build_pipeline.models import BlockInfo, ImplementationNote
+from build_pipeline.state import BuildState, TDDState
 
 LLM_CALL = "build_pipeline.llm_steps.respec_steps.llm_call"
 
@@ -116,6 +118,63 @@ class TestAppendImplementationNote:
         assert "## Block 1 — Uploader (implementer)" in text
         assert "## Block 2 — Auth (test_writer)" in text
         assert "Token TTL was unspecified." in text
+
+
+def _state_with_notes(*notes: ImplementationNote) -> BuildState:
+    block = BlockInfo(number=1, name="Uploader", description="Upload block",
+                      notes=list(notes))
+    return BuildState(
+        change_name="test-change", mode="only", tier="advanced",
+        tdd=TDDState(blocks=[block]),
+    )
+
+
+class TestMergeStateNotes:
+    """The state copy of a note is the real fallback for a failed markdown
+    append — the respec audit must see it."""
+
+    def test_recovers_a_note_missing_from_the_markdown(self):
+        merged = merge_state_notes("", _state_with_notes(_note()))
+        assert "# Implementation Notes" in merged
+        assert "## Block 1 — Uploader (implementer)" in merged
+        assert "raises on timeout" in merged
+
+    def test_identical_note_is_not_duplicated(self, tmp_path):
+        config = _make_config(tmp_path)
+        path = append_implementation_note(config.change_dir, _note())
+        merged = merge_state_notes(path.read_text(), _state_with_notes(_note()))
+        assert merged.count("## Block 1 — Uploader (implementer)") == 1
+
+    def test_no_state_reads_back_exactly_the_file(self):
+        assert merge_state_notes("existing text", None) == "existing text"
+
+    @pytest.mark.asyncio
+    async def test_audit_runs_from_state_notes_when_the_file_is_missing(self, tmp_path):
+        """An append that failed mid-build (OSError) loses the file copy; the
+        audit must still propose from the note persisted on the block."""
+        config = _make_config(tmp_path)
+        _seed_specs(config)
+        state = _state_with_notes(_note())
+
+        with patch(LLM_CALL, new_callable=AsyncMock, return_value=DELTA_RESPONSE) as mock:
+            path = await run_respec_audit(config, state)
+
+        mock.assert_called_once()
+        assert "raises on timeout" in mock.call_args[0][0]
+        assert path == config.change_dir / "respec.md"
+
+    @pytest.mark.asyncio
+    async def test_state_note_already_in_the_file_is_in_the_prompt_once(self, tmp_path):
+        config = _make_config(tmp_path)
+        _seed_specs(config)
+        append_implementation_note(config.change_dir, _note())
+        state = _state_with_notes(_note())
+
+        with patch(LLM_CALL, new_callable=AsyncMock, return_value=DELTA_RESPONSE) as mock:
+            await run_respec_audit(config, state)
+
+        prompt = mock.call_args[0][0]
+        assert prompt.count("## Block 1 — Uploader (implementer)") == 1
 
 
 class TestEnsureDeltaSections:
