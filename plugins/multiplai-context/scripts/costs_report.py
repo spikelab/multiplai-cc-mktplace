@@ -45,6 +45,22 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.costing import costs_dir, iter_ledger
 
 
+def _no_data(message: str, as_json: bool, **fields) -> int:
+    """Report "nothing to show" without breaking the caller's parser.
+
+    `--json` is a promise about the output *shape*, and an empty ledger is a
+    normal state (a fresh machine, a narrow window), not a usage error. Printing
+    only prose left `--json` consumers parsing an empty stdin — which is how CI
+    on a runner with no ledger caught this. Exit stays non-zero so shell callers
+    can still branch on it.
+    """
+    if as_json:
+        print(json.dumps({"error": message, "rows": [], **fields}, indent=2))
+    else:
+        print(message, file=sys.stderr)
+    return 1
+
+
 def _load(args) -> tuple[list[dict], str]:
     """Records for the selected window, plus a human-readable window label.
 
@@ -342,8 +358,8 @@ def _task_report(records: list[dict], pr_join: bool, as_json: bool, window: str)
             pr_map.update(fetch_pr_map(repo))
     rows = task_rows(records, pr_map)
     if not rows:
-        print("No branch-attributed records in the selected window.", file=sys.stderr)
-        return 1
+        return _no_data("No branch-attributed records in the selected window.",
+                        as_json, window=window)
     summary = task_summary(rows)
 
     if as_json:
@@ -436,8 +452,8 @@ def build_summary(states: list[dict]) -> dict:
 def _build_report(project_dir: Path, as_json: bool) -> int:
     states = read_build_states(project_dir)
     if not states:
-        print(f"No buildme state files under {project_dir}/specs/changes/", file=sys.stderr)
-        return 1
+        return _no_data(f"No buildme state files under {project_dir}/specs/changes/",
+                        as_json, project_dir=str(project_dir))
     summary = build_summary(states)
     if as_json:
         print(json.dumps({"project_dir": str(project_dir), "summary": summary,
@@ -513,8 +529,8 @@ def _session_report(records: list[dict], prefix: str, as_json: bool, window: str
     recs = [r for r in records if r.get("session", "").startswith(prefix)]
     sessions = {r["session"] for r in recs}
     if not sessions:
-        print(f"No ledger records for session prefix {prefix!r}", file=sys.stderr)
-        return 1
+        return _no_data(f"No ledger records for session prefix {prefix!r}",
+                        as_json, window=window)
     if len(sessions) > 1:
         print(f"Ambiguous prefix — matches: {', '.join(s[:12] for s in sorted(sessions))}",
               file=sys.stderr)
@@ -525,8 +541,8 @@ def _session_report(records: list[dict], prefix: str, as_json: bool, window: str
 def _branch_report(records: list[dict], branch: str, as_json: bool, window: str) -> int:
     # records arrive pre-filtered to the branch by _load.
     if not records:
-        print(f"No ledger records for branch {branch!r}", file=sys.stderr)
-        return 1
+        return _no_data(f"No ledger records for branch {branch!r}",
+                        as_json, window=window)
     return _bill_report(records, "branch", branch, as_json, window,
                         tables=("model", "session"))
 
@@ -559,9 +575,9 @@ def main() -> int:
 
     if args.report == "cache":
         if not records:
-            print(f"No ledger records found under {costs_dir()} for the selected window.",
-                  file=sys.stderr)
-            return 1
+            return _no_data(
+                f"No ledger records found under {costs_dir()} for the selected window.",
+                args.json, window=window)
         # `--group` is the same axis as `--by` for this report. Read both here:
         # the `args.by = args.group` normalization below runs AFTER this branch,
         # so `--report cache --group session` silently grouped by component.
@@ -582,9 +598,9 @@ def main() -> int:
     if args.branch:
         return _branch_report(records, args.branch, args.json, window)
     if not records:
-        print(f"No ledger records found under {costs_dir()} for the selected window.",
-              file=sys.stderr)
-        return 1
+        return _no_data(
+            f"No ledger records found under {costs_dir()} for the selected window.",
+            args.json, window=window)
 
     total = sum(r.get("cost_usd", 0.0) for r in records)
     if args.by:
