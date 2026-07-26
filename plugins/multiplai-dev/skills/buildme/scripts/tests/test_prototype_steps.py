@@ -95,6 +95,26 @@ class TestRunPrototype:
         assert mock_agent.await_count == 2
 
     @pytest.mark.asyncio
+    async def test_blocked_agent_fails_the_phase_without_a_retry(self, tmp_path):
+        """An honest STATUS: BLOCKED is not a quality problem — re-asking the
+        same unanswerable question cannot succeed, so no retry, and the
+        failure carries the agent's stated blocker."""
+        config = make_config(tmp_path)
+        blocked_notes = (
+            "The proposal never says which fields the report carries.\n"
+            "PROVES: none\nDISPROVES: none\nOPEN_QUESTIONS: none\n"
+            "STATUS: BLOCKED\n"
+        )
+        mock_agent = agent_writing(config, notes=blocked_notes, artifact="")
+        with patch("build_pipeline.llm_steps.prototype_steps.agent_call", mock_agent):
+            result = await run_prototype(config)
+
+        assert not result.passed
+        assert result.action == "prototype_blocked"
+        assert "never says which fields" in result.reason
+        assert mock_agent.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_writes_outside_prototype_dir_are_rejected(self, tmp_path):
         """The write boundary is enforced in code, not just stated in the prompt."""
         config = make_config(tmp_path)

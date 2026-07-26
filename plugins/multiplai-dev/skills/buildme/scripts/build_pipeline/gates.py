@@ -430,6 +430,30 @@ def prototype_gate(prototype_dir: Path) -> GateResult:
             action="retry_prototype",
         )
 
+    notes_text = notes_path.read_text()
+    notes = parse_prototype_notes(notes_text)
+
+    # The prompt invites an honest STATUS: NEEDS_CONTEXT / BLOCKED when the
+    # proposal and design do not say enough to draw the shape. Checked BEFORE
+    # the artifact/slot checks: an agent that could not draw usually leaves
+    # only NOTES.md, and retrying or reporting "empty PROVES" would bury its
+    # stated blocker under a misleading structural failure. `action` is
+    # deliberately not "retry_prototype" — re-asking the same unanswerable
+    # question cannot succeed.
+    status_value = (notes.get("status") or "").strip().strip("*_` ")
+    status_word = status_value.split()[0].upper().rstrip(".,;:") if status_value else ""
+    if status_word in ("BLOCKED", "NEEDS_CONTEXT"):
+        return GateResult(
+            passed=False,
+            reason=(
+                f"Prototype agent reported STATUS: {status_word} — it could not "
+                f"draw the shape from the proposal/design. Its notes:\n"
+                f"{notes_text[-1500:]}"
+            ),
+            action="prototype_blocked",
+            metadata={"status": status_word},
+        )
+
     artifacts = [
         p for p in sorted(prototype_dir.rglob("*"))
         if p.is_file() and p != notes_path
@@ -442,7 +466,6 @@ def prototype_gate(prototype_dir: Path) -> GateResult:
             action="retry_prototype",
         )
 
-    notes = parse_prototype_notes(notes_path.read_text())
     missing = [s for s in PROTOTYPE_SLOTS if s.lower() not in notes]
     if missing:
         return GateResult(
@@ -452,6 +475,15 @@ def prototype_gate(prototype_dir: Path) -> GateResult:
             metadata={"artifacts": [str(a) for a in artifacts]},
         )
 
+    # The three slot content rules deliberately differ:
+    # - PROVES must carry real content ("none" fails, via slot_has_content):
+    #   an artifact that proves nothing about the shape is not a prototype.
+    # - OPEN_QUESTIONS must be non-empty but "none" passes: "I looked and
+    #   nothing is left to decide" is a real answer; only a blank slot means
+    #   the agent never considered the question.
+    # - DISPROVES needs only to be present (the `missing` check above): empty
+    #   and "none" both mean nothing was disproved — there is nothing to act
+    #   on, so nothing further to enforce.
     if not slot_has_content(notes.get("proves")):
         return GateResult(
             passed=False,
@@ -486,15 +518,26 @@ def prototype_gate(prototype_dir: Path) -> GateResult:
 # boundary when reading the free-text SURPRISES slot.
 _REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|SURPRISES|SPEC_IMPACT"
 
+# The colon after a slot label is MANDATORY — every legitimate slot form
+# carries one (`SURPRISES: x`, `- **SURPRISES:** x`, `**SURPRISES**: x`).
+# Requiring it keeps prose that merely mentions the word ("Surprises were
+# minimal this block.", or an echo of the prompt's own coaching sentence)
+# from being recorded as a note, and keeps a continuation line that happens
+# to open with a slot word ("STATUS quo in the repo differs...") from
+# truncating a multiline value. The colon may sit inside or outside the
+# closing ** of a bold label.
+_SLOT_COLON = r"(?::\*{0,2}|\*{1,2}:)"
+
 _SURPRISES_RE = re.compile(
-    r"^\s*(?:[-*]\s*)?(?:\*\*)?SURPRISES:?\*{0,2}\s*[:\-]?[ \t]*"
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?SURPRISES" + _SLOT_COLON + r"[ \t]*"
     r"(.*?)"
-    rf"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:{_REPORT_SLOT_LABELS})\b|\Z)",
+    r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + _REPORT_SLOT_LABELS + r")"
+    + _SLOT_COLON + r"|\Z)",
     re.MULTILINE | re.IGNORECASE | re.DOTALL,
 )
 
 _SPEC_IMPACT_RE = re.compile(
-    r"^\s*(?:[-*]\s*)?(?:\*\*)?SPEC_IMPACT:?\*{0,2}\s*[:\-]?\s*"
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?SPEC_IMPACT" + _SLOT_COLON + r"\s*"
     r"(none|clarify|contradicts)\b",
     re.MULTILINE | re.IGNORECASE,
 )
@@ -608,9 +651,8 @@ _UNKNOWNS_SUBSECTION_RE = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
 _EDGE_CASES_RE = re.compile(r"edge\s*case", re.IGNORECASE)
 _ASSUMPTIONS_RE = re.compile(r"assumption", re.IGNORECASE)
 # A filled list item: a bullet or numbered item with real text after it —
-# template placeholders (`- <case>: <what happens>`) do not count.
+# the (?!<) lookahead refuses template placeholders (`- <case>: <what happens>`).
 _LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?!<)(\S.*)$", re.MULTILINE)
-_PLACEHOLDER_ITEM_RE = re.compile(r"^\s*<.*>\s*$")
 
 
 def _split_sections(text: str, pattern: re.Pattern[str]) -> list[tuple[str, str]]:
@@ -624,13 +666,22 @@ def _split_sections(text: str, pattern: re.Pattern[str]) -> list[tuple[str, str]
 
 
 def _has_filled_list(body: str) -> bool:
-    """True when the body carries at least one list item with real content."""
-    for item in _LIST_ITEM_RE.findall(body or ""):
-        item = item.strip()
-        if not item or _PLACEHOLDER_ITEM_RE.match(item):
-            continue
-        return True
-    return False
+    """True when the body carries at least one list item with real content
+    (the item pattern itself already refuses `<placeholder>` items)."""
+    return _LIST_ITEM_RE.search(body or "") is not None
+
+
+def _heading_names_dep(heading: str, needle: str) -> bool:
+    """Whether a ``## heading`` is THIS dependency's section.
+
+    Whole-token match over package-name characters — `react` must not ride on
+    a `## react-query` heading — while still tolerating decoration around the
+    name (backticks, a trailing ``— what it is`` clause).
+    """
+    return re.search(
+        r"(?<![A-Za-z0-9._+@/-])" + re.escape(needle) + r"(?![A-Za-z0-9._+@/-])",
+        heading.lower(),
+    ) is not None
 
 
 def unknowns_gate(unknowns_text: str, deps) -> GateResult:
@@ -659,7 +710,7 @@ def unknowns_gate(unknowns_text: str, deps) -> GateResult:
     for name in names:
         needle = str(name).lower()
         match = next(
-            (body for heading, body in sections if needle in heading.lower()),
+            (body for heading, body in sections if _heading_names_dep(heading, needle)),
             None,
         )
         if match is None:

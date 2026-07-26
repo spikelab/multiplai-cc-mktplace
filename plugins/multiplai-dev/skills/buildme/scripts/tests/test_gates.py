@@ -426,6 +426,24 @@ class TestUnknownsGate:
         dep = NewDependency(name="mlx-whisper", mentioned_in=["proposal.md § Impact"])
         assert unknowns_gate(_unknowns_doc(COMPLETE_SECTION), [dep]).passed
 
+    def test_dep_cannot_ride_on_another_deps_heading(self):
+        """`react` must not pass via a `## react-query` section — every
+        dependency needs its own heading."""
+        from build_pipeline.gates import unknowns_gate
+        section = COMPLETE_SECTION.replace("## mlx-whisper", "## react-query")
+        r = unknowns_gate(_unknowns_doc(section), ["react", "react-query"])
+        assert not r.passed
+        assert any("no `## react` section" in f for f in r.metadata["findings"])
+
+    def test_decorated_heading_still_matches(self):
+        """Backticks or a trailing clause around the name are fine — the match
+        is whole-token, not exact-string."""
+        from build_pipeline.gates import unknowns_gate
+        section = COMPLETE_SECTION.replace(
+            "## mlx-whisper", "## `mlx-whisper` — local transcription"
+        )
+        assert unknowns_gate(_unknowns_doc(section), ["mlx-whisper"]).passed
+
 
 # --- The gate's single-regeneration-pass wiring (Done-means criterion 3) ------
 # Named test_unknowns_gate_* per the plan's acceptance criteria.
@@ -677,6 +695,34 @@ class TestPrototypeGate:
         assert not r.passed
         assert "REQUIRED slots" in r.reason
 
+    def test_blocked_status_fails_immediately_with_the_stated_blocker(self, tmp_path):
+        """An honest BLOCKED (usually NOTES.md only, no artifact) must surface
+        the agent's stated blocker, not a misleading empty-slot failure."""
+        notes = (
+            "The proposal never says which fields the report carries, so no "
+            "shape can be drawn.\n"
+            "PROVES: none\nDISPROVES: none\nOPEN_QUESTIONS: none\n"
+            "STATUS: BLOCKED\n"
+        )
+        proto = _write_prototype(tmp_path / "prototype", notes, artifact="")
+        r = prototype_gate(proto)
+        assert not r.passed
+        assert r.action == "prototype_blocked"
+        assert r.metadata["status"] == "BLOCKED"
+        assert "STATUS: BLOCKED" in r.reason
+        assert "never says which fields" in r.reason
+
+    def test_needs_context_status_fails_like_blocked(self, tmp_path):
+        notes = (
+            "PROVES: none\nDISPROVES: none\nOPEN_QUESTIONS: none\n"
+            "STATUS: NEEDS_CONTEXT — the design has no Decisions section\n"
+        )
+        proto = _write_prototype(tmp_path / "prototype", notes)
+        r = prototype_gate(proto)
+        assert not r.passed
+        assert r.action == "prototype_blocked"
+        assert r.metadata["status"] == "NEEDS_CONTEXT"
+
 
 class TestParseImplementationNote:
     """The SURPRISES:/SPEC_IMPACT: slots that feed the respec loop."""
@@ -775,3 +821,45 @@ SPEC_IMPACT: contradicts
             role="test_writer",
         )
         assert note.role == "test_writer"
+
+    def test_colonless_coaching_echo_never_outranks_the_real_slot(self):
+        """A real SURPRISES: followed by an echo of the prompt's coaching
+        sentence ("SURPRISES and SPEC_IMPACT close the loop...") must keep the
+        real finding — the colon is what makes a line a slot."""
+        note = self._parse(
+            "SURPRISES: The queue drops duplicates silently.\n"
+            "SPEC_IMPACT: contradicts\n"
+            "\nSURPRISES and SPEC_IMPACT close the loop between the spec and "
+            "what the build learned.\n"
+        )
+        assert note is not None
+        assert "drops duplicates" in note.surprises
+        assert "close the loop" not in note.surprises
+        assert note.spec_impact == "contradicts"
+
+    def test_colonless_prose_mention_records_nothing(self):
+        assert self._parse(
+            "STATUS: DONE\nFILES: a.py\n"
+            "Surprises were minimal this block.\n"
+        ) is None
+
+    def test_continuation_line_starting_with_a_slot_word_is_kept(self):
+        """A multiline value whose continuation line opens with a slot word
+        (no colon) must not be truncated at that line."""
+        note = self._parse(
+            "SURPRISES: The migration assumes a clean schema, but the\n"
+            "STATUS quo in the repo differs: two tables already exist.\n"
+            "SPEC_IMPACT: clarify\n"
+        )
+        assert note is not None
+        assert "STATUS quo in the repo differs" in note.surprises
+        assert note.spec_impact == "clarify"
+
+    def test_leading_bullet_of_the_value_is_not_eaten(self):
+        note = self._parse(
+            "SURPRISES:\n- The API paginates.\n- Tokens expire hourly.\n"
+            "SPEC_IMPACT: clarify\n"
+        )
+        assert note is not None
+        assert "- The API paginates." in note.surprises
+        assert "- Tokens expire hourly." in note.surprises

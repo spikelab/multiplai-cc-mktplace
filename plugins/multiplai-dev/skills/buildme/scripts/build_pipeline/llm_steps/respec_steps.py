@@ -87,6 +87,34 @@ def append_implementation_note(change_dir: Path, note: ImplementationNote) -> Pa
     return path
 
 
+def merge_state_notes(notes_md: str, state) -> str:
+    """Fold the notes persisted on the build state into the markdown notes.
+
+    ``implementation-notes.md`` is appended as the build runs, but an append
+    can fail (OSError) — the copy on each block (``BlockInfo.notes``, kept in
+    the checkpoint) is the fallback that makes such a failure recoverable.
+    A note whose formatted section is already in the markdown is not added
+    again, so a healthy build reads back exactly its file.
+    """
+    tdd = getattr(state, "tdd", None) if state is not None else None
+    blocks = getattr(tdd, "blocks", None) or []
+    merged = notes_md
+    for block in blocks:
+        for note in getattr(block, "notes", None) or []:
+            section = format_implementation_note(note)
+            if section.strip() in merged:
+                continue
+            merged = (
+                merged.rstrip() + "\n" + section
+                if merged.strip() else _NOTES_HEADER + section
+            )
+            log.info(
+                "Respec: recovered note from state (block=%d role=%s) missing from %s",
+                note.block_number, note.role, NOTES_FILENAME,
+            )
+    return merged
+
+
 def ensure_delta_sections(text: str) -> str:
     """Guarantee respec.md carries all three delta headings.
 
@@ -133,13 +161,15 @@ def _write_respec(change_dir: Path, change_name: str, body: str) -> Path:
 async def run_respec_audit(config, state=None) -> Path | None:
     """Propose a spec delta from the build's implementation notes.
 
-    Writes `respec.md` inside the change directory and returns its path
+    Reads `implementation-notes.md` merged with the notes persisted on
+    ``state``'s blocks (the fallback for an append that failed mid-build),
+    writes `respec.md` inside the change directory and returns its path
     (None when the audit could not run). Never modifies any other file.
     """
     change_dir = config.change_dir
     change_name = getattr(config, "change_name", "") or change_dir.name
 
-    notes = _read(notes_path(change_dir)).strip()
+    notes = merge_state_notes(_read(notes_path(change_dir)), state).strip()
     if not notes:
         # A build with no recorded surprises is itself a finding: record the
         # absence rather than silently skipping the artifact.

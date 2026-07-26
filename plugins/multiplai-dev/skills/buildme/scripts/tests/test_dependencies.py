@@ -320,6 +320,50 @@ class TestRejectedAlternatives:
         )
         assert [d.name for d in detect_new_dependencies(change, project)] == ["polars"]
 
+    def test_instead_of_leading_the_sentence_keeps_the_adopted_dep(self, tmp_path, project):
+        """`instead of X` negates only X — the adopted dependency named later
+        in the same sentence must still fire."""
+        (project / "pyproject.toml").write_text('[project]\nname = "demo"\ndependencies = []\n')
+        change = _write_change(
+            tmp_path / "change",
+            decisions="- Instead of `pandas`, we use `polars`.",
+        )
+        assert [d.name for d in detect_new_dependencies(change, project)] == ["polars"]
+
+    def test_distant_negation_cue_does_not_govern_the_token(self, tmp_path, project):
+        """A cue many words back is commentary, not a rejection of this token."""
+        (project / "pyproject.toml").write_text('[project]\nname = "demo"\ndependencies = []\n')
+        change = _write_change(
+            tmp_path / "change",
+            decisions="- We ruled out building our own frame library and adopt `polars`.",
+        )
+        assert [d.name for d in detect_new_dependencies(change, project)] == ["polars"]
+
+
+class TestStdlibFilterIsPythonOnly:
+    """`secrets` / `queue` are Python stdlib names AND real npm/cargo package
+    names — the stdlib subtraction only applies where Python is plausible."""
+
+    def test_stdlib_name_fires_in_a_pure_js_project(self, tmp_path, project):
+        (project / "package.json").write_text(json.dumps({"dependencies": {}}))
+        change = _write_change(tmp_path / "change", decisions="Store tokens via `secrets`.")
+        assert [d.name for d in detect_new_dependencies(change, project)] == ["secrets"]
+
+    def test_stdlib_name_never_fires_in_a_python_project(self, tmp_path, project):
+        (project / "pyproject.toml").write_text('[project]\nname = "demo"\ndependencies = []\n')
+        change = _write_change(tmp_path / "change", decisions="Store tokens via `secrets`.")
+        assert detect_new_dependencies(change, project) == []
+
+    def test_mixed_python_and_js_project_keeps_the_filter(self, tmp_path, project):
+        (project / "pyproject.toml").write_text('[project]\nname = "demo"\ndependencies = []\n')
+        (project / "package.json").write_text(json.dumps({"dependencies": {}}))
+        change = _write_change(tmp_path / "change", decisions="Store tokens via `secrets`.")
+        assert detect_new_dependencies(change, project) == []
+
+    def test_no_manifest_keeps_the_conservative_filter(self, tmp_path, project):
+        change = _write_change(tmp_path / "change", decisions="Store tokens via `secrets`.")
+        assert detect_new_dependencies(change, project) == []
+
 
 class TestManifestFilenamesAreNotDependencies:
     def test_go_mod_and_go_sum_never_fire(self, tmp_path, project):

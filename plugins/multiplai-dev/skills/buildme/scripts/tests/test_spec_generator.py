@@ -773,6 +773,44 @@ class TestUnknownsGateResumeDurability:
 
         assert mock_audit.await_count == 0
 
+    @pytest.mark.asyncio
+    async def test_resume_honors_skip_explainers(self, tmp_path):
+        """--skip-explainers on a resumed build must not run detection or the
+        gate's LLM regeneration — that is what the flag exists to prevent."""
+        cm, change_dir, config, state = self._setup(tmp_path, explainers_done=False)
+        config.explainers_active = False
+        with patch(
+            "build_pipeline.spec_generator._audit_unknowns", new_callable=AsyncMock
+        ) as mock_audit, patch(
+            "build_pipeline.spec_generator.detect_new_dependencies"
+        ) as mock_detect:
+            await _generate_all_artifacts(cm, change_dir, config, state)
+
+        assert mock_audit.await_count == 0
+        mock_detect.assert_not_called()
+        assert state.spec_gen.explainers_done is True
+
+    @pytest.mark.asyncio
+    async def test_resume_with_skip_explainers_writes_the_marker_when_missing(
+        self, tmp_path,
+    ):
+        """A crash before unknowns.md existed + --skip-explainers on the
+        re-run: the skip-marker document is written so the DAG's `tasks`
+        dependency stays satisfiable."""
+        from build_pipeline.spec_generator import EXPLAINERS_SKIPPED_LINE
+
+        cm, change_dir, config, state = self._setup(tmp_path, explainers_done=False)
+        config.explainers_active = False
+        (change_dir / "unknowns.md").unlink()
+        with patch(
+            "build_pipeline.spec_generator._audit_unknowns", new_callable=AsyncMock
+        ) as mock_audit:
+            await _generate_all_artifacts(cm, change_dir, config, state)
+
+        assert mock_audit.await_count == 0
+        assert EXPLAINERS_SKIPPED_LINE in (change_dir / "unknowns.md").read_text()
+        assert state.spec_gen.explainers_done is True
+
     def test_old_checkpoint_without_flag_defaults_to_rerun(self, tmp_path):
         cm, change_dir, config, state = self._setup(tmp_path, explainers_done=False)
         raw = state.model_dump()

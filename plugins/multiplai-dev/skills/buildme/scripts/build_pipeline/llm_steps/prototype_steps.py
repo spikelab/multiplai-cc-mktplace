@@ -80,6 +80,13 @@ async def run_prototype(config) -> GateResult:
         if result.passed:
             log.info("DONE step=PROTOTYPE attempt=%d — %s", attempt, result.reason)
             return result
+        if result.action == "prototype_blocked":
+            # The agent honestly reported BLOCKED/NEEDS_CONTEXT — the specs do
+            # not say enough to draw the shape. A retry re-asks the same
+            # unanswerable question, so fail the phase now with its stated
+            # blocker instead of a misleading empty-slot failure.
+            log.warning("Prototype agent blocked (attempt %d): %s", attempt, result.reason)
+            return result
         log.warning("Prototype gate failed (attempt %d): %s", attempt, result.reason)
 
     return result

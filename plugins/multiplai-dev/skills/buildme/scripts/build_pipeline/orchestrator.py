@@ -366,6 +366,16 @@ async def _run_prototype_phase(
     Never raises: a failed prototype fails the phase, writes a diagnosis to
     build-progress.md, and lets the build continue.
     """
+    # Resume guard, BEFORE the expensive agent run: prototype_done is
+    # checkpointed after the feedback pass, so a crash between that checkpoint
+    # and advance_to(PROTOTYPE) would otherwise re-run the agent here and then
+    # skip the feedback pass — discarding whatever the fresh run disproved.
+    # The artifact already exists on disk and its findings were applied; skip
+    # the whole re-run.
+    if state.spec_gen and state.spec_gen.prototype_done:
+        log.info("SKIP phase=PROTOTYPE reason=recorded-complete-in-state")
+        return
+
     should_run, reason = prototype_decision(config)
     if not should_run:
         log.info("SKIP phase=PROTOTYPE reason=%s", reason)
@@ -389,12 +399,11 @@ async def _run_prototype_phase(
 
     log.info("DONE phase=PROTOTYPE — %s", result.reason)
 
-    # One regeneration pass of design.md/tasks.md from the notes.
+    # One regeneration pass of design.md/tasks.md from the notes. (A completed
+    # feedback pass never reaches here — the guard at the top of this function
+    # skips the whole phase when prototype_done is recorded.)
     if state.spec_gen is None:
         state.spec_gen = SpecGenState()
-    if state.spec_gen.prototype_done:
-        log.info("SKIP phase=PROTOTYPE_FEEDBACK reason=recorded-complete-in-state")
-        return
     try:
         regenerated = await apply_prototype_findings(config)
         log.info("DONE phase=PROTOTYPE_FEEDBACK regenerated=%d", regenerated)

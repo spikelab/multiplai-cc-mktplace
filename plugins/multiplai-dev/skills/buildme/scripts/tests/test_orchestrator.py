@@ -296,6 +296,34 @@ class TestPrototypePhase:
         mock_prototype.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_resume_after_feedback_checkpoint_skips_the_rerun(self, tmp_path):
+        """A crash between the prototype_done checkpoint and
+        advance_to(PROTOTYPE) must not re-run the expensive agent on resume —
+        the artifact exists and its findings were already applied."""
+        from unittest.mock import AsyncMock, patch
+        from build_pipeline.orchestrator import run_orchestrator
+        from build_pipeline.state import SpecGenState
+
+        config = self._config(tmp_path, "resume-proto", "true", self.FRONTEND_PROPOSAL)
+        state = BuildState.load(config.state_file_path())
+        state.spec_gen = SpecGenState(prototype_done=True)
+        state.checkpoint(config.state_file_path())
+
+        mock_prototype = AsyncMock()
+        mock_feedback = AsyncMock()
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   AsyncMock(return_value=[])), \
+                patch("build_pipeline.llm_steps.prototype_steps.run_prototype",
+                      mock_prototype), \
+                patch("build_pipeline.llm_steps.prototype_steps.apply_prototype_findings",
+                      mock_feedback):
+            result = await run_orchestrator(config, self._args(tmp_path, "resume-proto"))
+
+        assert result == 0
+        mock_prototype.assert_not_awaited()
+        mock_feedback.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_prototype_failure_does_not_fail_the_build(self, tmp_path):
         from unittest.mock import AsyncMock, patch
         from build_pipeline.models import GateResult
