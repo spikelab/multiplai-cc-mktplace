@@ -51,11 +51,14 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Gate self-tests
-        run: |
-          uv run --with pytest python -m pytest \
-            plugins/multiplai-dev/skills/skill-creator/scripts/tests/ -q
+      # The media skills' entry points refuse to start without ffmpeg (they
+      # print the platform-appropriate install hint and exit non-zero), so
+      # without it here the gate reports a host-tool gap, not a skill defect.
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
+      # Runs before the self-tests: this step prints the per-skill hint for
+      # anything that fails, where the pytest sweep only reports the names.
       - name: Run the gate over every skill
         run: |
           status=0
@@ -66,6 +69,11 @@ jobs:
             fi
           done
           exit "$status"
+
+      - name: Gate self-tests
+        run: |
+          uv run --with pytest python -m pytest \
+            plugins/multiplai-dev/skills/skill-creator/scripts/tests/ -q
 
       - name: Run the CONTRACT.md pilots
         run: |
@@ -86,6 +94,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # The hooks shell out to `uv run --script` (PEP 723) for the memory
+      # maintainer and the deferred-extraction subprocess. Without uv on PATH
+      # those launches fail — handled, but the lifecycle tests then exercise
+      # the degraded path instead of the real one.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
 
       # multiplai-core is a git dependency, not on PyPI — the test suite
       # imports it directly (the scripts get it via PEP 723 at runtime).

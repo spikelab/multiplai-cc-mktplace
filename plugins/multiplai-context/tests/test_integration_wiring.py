@@ -512,16 +512,16 @@ class TestEndToEndSessionLifecycle:
             env_overrides=plugin_env,
         )
 
-        # At minimum, session_start should succeed (it doesn't need venv deps)
-        # or fail gracefully. All scripts should not produce tracebacks
-        # (except venv-related ones which are expected pre-bootstrap)
+        # Every phase must fail open: a hook may log a handled failure (a
+        # traceback under a WARNING — e.g. no `uv` on PATH so the memory
+        # maintainer can't launch), but must never die on an unhandled one.
+        # Exit code is the discriminator; keying off the traceback's *text*
+        # made this test a catalogue of whatever the environment happened to
+        # be missing.
         for name, result in [("start", result_start), ("prompt", result_prompt),
                              ("stop", result_stop), ("end", result_end)]:
-            # Allow venv-related failures, but not unhandled exceptions
             if "Traceback" in result.stderr:
-                assert ("venv" in result.stderr.lower() or
-                        "ModuleNotFoundError" in result.stderr or
-                        "ensure_venv_python" in result.stderr), \
+                assert result.returncode == 0, \
                     f"Lifecycle phase '{name}' crashed: {result.stderr[:500]}"
 
 
