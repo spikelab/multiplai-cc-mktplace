@@ -1,5 +1,106 @@
 # Changelog
 
+## 0.8.0 — 2026-07-26
+
+Memory evolution (#62), untrusted-log handling (#60), behavioural contracts
+(#61), and outcome-based cost reporting (#59).
+
+### Added
+- **Prospective memory — intentions that fire later** (`scripts/lib/prospective.py`,
+  `templates/prospective.md`, seeded by `/setup`). Every other memory file
+  answers "what is true?"; `memory/prospective.md` answers "what did I say I'd
+  come back to?". One intention per line, two trigger kinds:
+  - `- [due: 2026-09-01] Re-check X (captured 2026-07-26)` — a date. Surfaced
+    as a `SessionStart` nudge from a week before, and for as long as it stays
+    overdue.
+  - `- [on: the runtime moves past v0.5] Re-run the audit (captured 2026-07-26)`
+    — a condition in prose. **Never machine-evaluated.** No code decides
+    whether "the runtime updated" has happened, because a wrong guess fires the
+    reminder at the wrong time; these surface through normal memory routing and
+    on a periodic sweep instead.
+  - Nothing expires automatically and nothing writes to the file behind your
+    back — capture goes through extraction → dream → `/dream-remember` like
+    every other learning. Remove acted-on intentions yourself.
+- **Proactive memory maintainer** (`scripts/memory_maintainer.py`), launched
+  **detached** from `SessionStart` and gated to **at most once per 24h**. Four
+  passes: staleness lint → dream proposal (only when the dream gate is open and
+  a backlog exists) → catalog refresh (only when memory is newer than the
+  catalog) → `now/` status rebuild for the active project (on a Haiku tier —
+  unattended work shouldn't spend the session's model budget). Silent, never
+  blocks session start, and a failed run costs one duplicate pass next session.
+  - **It never writes to `.multiplai/memory/`.** That is the whole safety
+    story: passes 1–2 write proposals to `.multiplai/dreams/` and the health
+    log; 3–4 write derived files that are rebuilt from source.
+    `/dream-remember` remains the only path that edits memory.
+  - Run by hand with `uv run --no-project scripts/memory_maintainer.py
+    [--force] [--dry-run]`. State: `<data_dir>/maintainer_state.yaml`.
+- **Per-fact validity windows** (`scripts/lib/memory_lint.py`). Memory files
+  carry one file-level `**Last Updated:**` stamp, which says when the file was
+  touched, not whether a given fact is still true. Facts may now carry
+  `(as of 2026-07)` and `(as of 2026-07, review by 2026-10)`; the linter reports
+  `expired` (a passed `review by`) and `unmarked` (a volatile-class fact with no
+  annotation). **Warn-only and non-rewriting on purpose** — the volatile-class
+  patterns are heuristics, so a false positive must cost one noisy report line,
+  never a silently rewritten fact. Surfaced by the maintainer and in
+  `/health` (`memory_validity`), and the dream prompt now asks for the
+  annotation on newly proposed volatile lines.
+- **Conflict-triggered supersede edits** (`scripts/lib/conflict_edits.py`). For
+  each CORRECTION / `trust: verified` learning, a deterministic pass finds the
+  existing memory line that learning is about and prepends a
+  `## Conflict Resolutions` section **above** the model's own proposal output,
+  so review sees corrections before new information. Precision over recall by
+  design (`MIN_OVERLAP`): it emits nothing when unsure, and it says plainly that
+  text overlap cannot distinguish "contradicts" from "restates" — both want the
+  same handling (edit in place, don't append a near-duplicate), and which one it
+  is stays the reviewer's call. Fail-open: a crash here never loses a proposal.
+- **Behavioural contracts for skills** (`skills/costs/CONTRACT.md`,
+  `skills/log-doctor/CONTRACT.md`) — the two pilots for the `--contract` mode of
+  `multiplai-dev`'s `promote_skill.py`. Each case is a shell command plus a
+  substring that must appear in its output; they pin the *shape* of the
+  interface (the `--by` dimensions, `--json` being parseable JSON), never the
+  numbers, since a cost ledger changes hourly.
+- **Cost reporting per outcome, not per token** (`scripts/costs_report.py`):
+  - `--group task --pr-join` — a task is a branch whose PR state resolves via
+    `gh` (merged / closed / open / no-pr); the summary divides total cost by
+    merged-PR count with per-task median/p90. A repo `gh` cannot reach degrades
+    to `no-pr` instead of failing the report.
+  - `--group build` — cost per DONE **and** per FAILED buildme block, joined
+    from `specs/changes/*/.build-state.json`. The failed-block figure is the
+    retry-and-loop spend.
+  - `--report cache [--cache-threshold R]` — per project/skill/component cache
+    hit ratio `cr / (in + cr)` and write share, flagging rows under the
+    threshold. Computed from fields already in every ledger record, so it works
+    on historical months. Baseline measured 2026-07-25: **99.7% overall hit
+    ratio**, every SDK component at 100.0% — "already optimal", not a fix.
+  - **Framing rule:** cross-model comparisons are per-outcome only. Different
+    models tokenize differently, so a cheaper per-token model that loops twice
+    is more expensive.
+
+### Changed
+- **Log text is now treated as untrusted input** (`scripts/log_doctor.py`).
+  Anything that reaches a log — an echoed HTTP response, a filename, a
+  traceback carrying a remote payload — can be authored by someone who wants the
+  agent *reading the digest* to act on it. Two defences applied in the script
+  rather than trusted to the reader: (1) log text can no longer break out of its
+  container (C0/C1 controls, ANSI escapes, zero-width and bidi characters
+  stripped; code fences and `untrusted-content` tags defanged), and (2)
+  instruction-shaped spans are marked in place as `⟪INJECTION?⟫` — the analyst
+  still sees the original words, which is the forensic signal, but they arrive
+  labelled. Every digest carries an `UNTRUSTED_NOTICE` stating that fenced
+  content is data, never instructions, and that imperative text inside a fence
+  is a finding to report, not an order to follow.
+- **Config-audit nudge cadence tightened 90 → 60 days** (`session_start.py`,
+  `config_audit.py`, `skills/config-audit/SKILL.md`). The cadence is now pinned
+  to how often *models* ship, not to how fast configuration rots: what the audit
+  removes is scaffolding a newer model no longer needs, and rules written for a
+  model two releases ago still cost tokens and still constrain a model that
+  outgrew them. The skill gained a "delete scaffolding aggressively" section —
+  the test is "would a current model do this correctly without being told?", and
+  a ruleset that *shrinks* after a model upgrade is the expected outcome.
+- `/health` now reports per-fact `memory_validity` findings alongside the
+  file-level mtime freshness. Non-fatal: a lint failure must not take down the
+  report people run when something else is already broken.
+
 ## 0.7.0 — 2026-07-23
 
 ### Added

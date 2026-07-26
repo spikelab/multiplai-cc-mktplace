@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.0 — 2026-07-26
+
+### Security
+- **Fetched page text is now treated as untrusted input**
+  (`research_pipeline/untrusted.py`). Every page this pipeline reads was written
+  by someone who is not the user, and it goes into a prompt inside an
+  `<untrusted-content>` fence — which is only a boundary as long as the content
+  cannot close it. `defang_untrusted()` strips control/ANSI/zero-width/bidi
+  characters and HTML-escapes the fence markers, so a page embedding
+  `</untrusted-content>` (or a code fence, or a chat-role prefix) cannot promote
+  itself from data to instruction. Wording is otherwise untouched — the extractor
+  has to see what the page actually said, including an injection attempt it is
+  asked to report. Applied in `nodes/read.py`; the instruction half lives in
+  `prompts/extract.py` and the `deep-research` / `extract-insights` SKILL.md
+  files. Full convention:
+  [`docs/untrusted-content.md`](../../docs/untrusted-content.md).
+
+### Added
+- **Model × effort as two config axes** (`research_pipeline/config.py`). Per-node
+  model tier *and* reasoning effort are both settable from `multiplai.conf` with
+  no code edit — `[deep-research]` for the whole pipeline, `[deep-research.<node>]`
+  (`parse`, `extract`, …) to override one node. The `MULTIPLAI_MODEL` /
+  `MULTIPLAI_EFFORT` ceilings still cap the result, so a budget run forces
+  everything down and a conf override cannot escape it.
+
+## 0.4.0 — 2026-07-19
+
+Released without a CHANGELOG entry at the time; see
+[#51](https://github.com/spikelab/multiplai-cc-mktplace/pull/51) —
+deep-research hardening: verification loop, adversarial review, cost and cache
+visibility.
+
 ## 0.3.0 — 2026-07-19
 
 extract-insights v2 — coherent argument chain, nuance harvest, readable middle.

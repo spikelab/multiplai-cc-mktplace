@@ -6,6 +6,10 @@ Verification overhaul for buildme. The theme: reviewers **propose** and the
 orchestrator **disposes**; the tests that gate a block must still be the tests
 that gated it; and spend is bounded by money, not just by iteration counts.
 
+The same release carries the skill-engineering gate (#61) — a proposed skill is
+executed before it is installed — and the model × effort config axis for buildme
+(#59).
+
 ### Added
 - **Test-integrity gate** (`gates.unchanged_tests_gate`). The implementer's
   tool grant is per-tool, not per-path, so test files stay writable for the
@@ -42,6 +46,46 @@ that gated it; and spend is bounded by money, not just by iteration counts.
   recorded per phase on every SDK call, checked at block boundaries, warns
   once at 80%, and stops with a breakdown of where the tokens went. It rides
   in `.build-state.json`, so a resumed build does not get a fresh budget.
+
+- **Promotion gate for `/propose-skill` — run the draft, don't vouch for it**
+  (`skill-creator/scripts/promote_skill.py`, #61). An approved skill is now
+  written to a **draft** directory (`/tmp/skill-draft/<name>/`) and installed
+  only after the gate passes. The gate checks frontmatter (required keys, known
+  `model`/`effort` values — a typo there is silently ignored at runtime, so the
+  skill quietly runs on the wrong tier) and **executes every bundled entry point
+  with `--help`, expecting exit 0**. Until this existed, the first person to
+  discover a bad import or a raising `--help` was whoever hit it mid-task, days
+  later, with the authoring context gone.
+  - `--contract` mode runs a skill's `CONTRACT.md` assertions: each case is a
+    shell command plus a substring that must appear in its output. Pilots ship
+    with multiplai-context's `costs` and `log-doctor`.
+  - `quick_validate.py`, `init_skill.py` and `package_skill.py` updated to the
+    same frontmatter rules; bundled `.sh` entry points across the marketplace
+    now answer `--help` with exit 0 because the gate executes them.
+- **`/propose-skill --from-session` — draft from a real trajectory** (#61).
+  Diary entries and learnings are *summaries*: they record that a workflow
+  happened, not the commands, flag values and dead ends it went through, so a
+  skill drafted from them reads plausibly and fails on first use. This mode reads
+  the raw transcript and splits what it finds into **stable steps** (literal
+  commands) and **judgment points** (criteria for deciding, never a hardcoded
+  answer). A step counts as stable only if it was seen done the same way for a
+  *different* input — one occurrence is an anecdote. Dead ends are recorded too:
+  the command that failed, and why, cannot be reconstructed from the successful
+  path.
+- **Model × effort as two config axes for buildme** (`config.py`, #59). Both are
+  set from `multiplai.conf` with no code edit: `[buildme]` (`MODEL=`, `EFFORT=`)
+  for the whole pipeline, plus `[buildme.spec]`, `[buildme.review]` and
+  `[buildme.agent]` for per-step `EFFORT=`. A step section falls back to
+  `[buildme]`, which falls back to the SDK default. The `MULTIPLAI_MODEL` /
+  `MULTIPLAI_EFFORT` ceilings still cap the result, so a conf override cannot
+  escape a budget run.
+- **Model-upgrade re-test checklist** (`e2e-test/SKILL.md`, #61). Skills are
+  prompts, and a prompt tuned against one model is not automatically correct
+  against the next — a bump can change output format, verbosity or how literally
+  an instruction is followed, none of which raises an error. Run on any
+  `MULTIPLAI_MODEL` ceiling change, `model:`/`effort:` frontmatter change, or
+  Claude Code default-model move: smoke-invoke every script, run the `CONTRACT.md`
+  assertions, re-check the frontmatter tier against the cost report.
 
 ### Changed
 - `ReviewScore` gained `confidence` (default 1.0) and `effective_score()`.
@@ -80,6 +124,11 @@ that gated it; and spend is bounded by money, not just by iteration counts.
   documented as the default-policy view and `run_code_review` now logs the
   configured verdict. With `code_review.gate` set, the logged verdict and the
   gate's decision no longer disagree.
+- **`EFFORT=xhigh` is accepted.** `config.KNOWN_EFFORTS` mirrors core's private
+  `_EFFORT_TIERS` and omitted `xhigh`, which sits between `high` and `max` — so a
+  valid SDK effort was rejected with a warning and silently downgraded to the
+  default. (Core's own table carries a comment warning against exactly this
+  omission when the set is copied.)
 - `_merge_scores` rounds half-up explicitly (bare `round()` is banker's
   rounding, so a 2/3 split went to 2 and a 3/4 split to 4) and discounts a
   dimension only one panel member scored — zero spread otherwise read as
