@@ -341,6 +341,13 @@ routing knowledge is in those blocks — apply these generic principles to them:
 - Deduplicate: if the same lesson appears multiple times, merge into one entry. (Don't
   annotate the count.)
 - Resolve contradictions: keep the most recent / most reliable version; note what was superseded.
+- **Date volatile facts.** If a proposed line makes a claim about the *present* that names a
+  changeable value — a price or rate, a version or model generation, who someone works for,
+  "the current/latest/best X" — append `(as of YYYY-MM)`, and add `, review by YYYY-MM` when
+  you can name a date by which it should be re-checked. Memory files carry only a file-level
+  freshness stamp, so an undated volatile fact reads as true forever. Do NOT annotate
+  permanent facts that merely mention a number ("Swift 6.3 rejects covariant Self" is not a
+  volatile fact), and do NOT annotate a fact already marked historical.
 - Most learnings are verified — do NOT label them. Filter out genuinely junk low-trust
   single-occurrence items. If you DO include a weakly-supported item, prefix its title with
   **[warning low confidence]** instead of dropping it.
@@ -400,7 +407,40 @@ async def _generate_proposal(
 
     response = await client.query(system=_PROPOSAL_SYSTEM, messages=messages)
     cleaned = await _critique_proposal(client, response.content, memory_context)
-    return _with_routing_warnings(cleaned, memory_contents)
+    validated = _with_routing_warnings(cleaned, memory_contents)
+    return _with_conflict_resolutions(validated, all_learnings, memory_contents)
+
+
+def _with_conflict_resolutions(
+    proposal: str, all_learnings: str, memory_contents: dict[str, str]
+) -> str:
+    """Prepend the deterministic ``## Conflict Resolutions`` section.
+
+    Generic consolidation *may* notice that a verified correction contradicts an
+    existing memory line. Nothing makes it. This pass finds those pairings in
+    code and puts them where review starts, because a stale line that
+    contradicts a confirmed fact keeps teaching the wrong thing until someone
+    spots it.
+
+    Placed above the model's own output rather than appended: the model's
+    section headings are what a reviewer skims, and a conflict block below them
+    reads as a footnote. Fail-open like the routing gate — a crash here must
+    never lose a generated proposal.
+    """
+    try:
+        from lib.conflict_edits import conflict_section_for
+
+        section = conflict_section_for(all_learnings, memory_contents)
+    except Exception:
+        logger.exception("Conflict-edit pass failed; proposal left unannotated")
+        return proposal
+
+    if not section:
+        return proposal
+
+    logger.info("Conflict-edit pass: %d resolution(s) prepended",
+                section.count("\n### "))
+    return f"{section}\n\n---\n\n{proposal}"
 
 
 def _with_routing_warnings(proposal: str, memory_contents: dict[str, str]) -> str:
