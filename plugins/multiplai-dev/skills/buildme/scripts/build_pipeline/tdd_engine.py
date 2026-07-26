@@ -82,8 +82,9 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
     Returns short SHA of the new commit, or None if there was nothing to
     commit or the commit failed (logged as warning — never raises).
 
-    Stages everything EXCEPT buildme's own bookkeeping files (build-progress.md
-    and .build-state.json) so they don't leak into the user's per-block commits.
+    Stages everything EXCEPT buildme's own bookkeeping files (build-progress.md,
+    .build-state.json and .board.json) so they don't leak into the user's
+    per-block commits.
 
     NOTE (git lifecycle): this is the pipeline's ONE whole-tree stage — a
     pathspec-limited `git add -A -- . :(exclude)…`, not a bare `git add -A`.
@@ -97,7 +98,12 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
     cwd = str(config.project_dir)
     # Exclude the bookkeeping files via :(exclude) pathspecs, relative to the repo.
     excludes: list[str] = []
-    for bookkeeping in (config.progress_file_path(), config.state_file_path()):
+    bookkeeping_files = (
+        config.progress_file_path(),
+        config.state_file_path(),
+        config.change_dir / ".board.json",
+    )
+    for bookkeeping in bookkeeping_files:
         try:
             rel = bookkeeping.relative_to(config.project_dir)
         except ValueError:

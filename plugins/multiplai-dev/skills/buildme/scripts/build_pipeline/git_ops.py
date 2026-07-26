@@ -139,15 +139,18 @@ def branch_exists(repo: Path | str, branch: str) -> bool:
     ).ok
 
 
-def unmerged_commit_count(repo: Path | str, branch: str, base: str) -> int:
-    """Commits on ``branch`` that are not on ``base``. 0 when undeterminable."""
+def unmerged_commit_count(repo: Path | str, branch: str, base: str) -> int | None:
+    """Commits on ``branch`` that are not on ``base``. None when undeterminable —
+    the caller must treat "unknown" as a refusal, never as "empty branch"
+    (classifying a branch we could not inspect as safe-to-shadow would silently
+    weaken the collision refusal)."""
     res = _run(["git", "rev-list", "--count", f"{base}..{branch}"], cwd=repo)
     if not res.ok:
-        return 0
+        return None
     try:
         return int(res.stdout.strip() or "0")
     except ValueError:
-        return 0
+        return None
 
 
 def has_remote(repo: Path | str, name: str = "origin") -> bool:
@@ -212,6 +215,12 @@ def resolve_new_branch(repo: Path, change_name: str, base: str) -> tuple[str, Pa
         dest = worktree_dest(repo, change_name, suffix)
         if branch_exists(repo, branch):
             ahead = unmerged_commit_count(repo, branch, base)
+            if ahead is None:
+                raise GitLifecycleError(
+                    f"Branch '{branch}' already exists and `git rev-list "
+                    f"{base}..{branch}` failed, so it cannot be proven empty. "
+                    f"Refusing to guess — inspect it (or fix '{base}') and re-run."
+                )
             if ahead > 0:
                 raise GitLifecycleError(
                     f"Branch '{branch}' already exists with {ahead} commit(s) not on "
@@ -314,16 +323,33 @@ def commit_paths(worktree: Path, message: str, paths: list[str]) -> str | None:
     return sha or None
 
 
+# Buildme's own bookkeeping files must never be committed, from ANY commit
+# path (the TDD engine enforces the same invariant with its own :(exclude)
+# pathspecs in _git_commit_block_phase). Glob magic so the rule holds at every
+# depth — specs/changes/<name>/ while active, specs/archive/<date>-<name>/
+# after the --auto archive move.
+BOOKKEEPING_EXCLUDES = [
+    ":(exclude,glob)**/.build-state.json",
+    ":(exclude,glob)**/.board.json",
+]
+
+
 def commit_stage(config, message: str, paths: list[str]) -> str | None:
     """Commit a spec-stage change, but only when the pipeline owns the branch.
 
     When the build is running in place (``--no-worktree``) there is no
     pipeline branch and this is a no-op — that is what keeps
     ``--no-worktree`` byte-identical to the pre-git-lifecycle pipeline.
+
+    Bookkeeping files (``.build-state.json``, ``.board.json``) are excluded
+    unconditionally — staging the change directory must never sweep them into
+    the pushed PR.
     """
     if not getattr(config, "pipeline_branch", None):
         return None
-    return commit_paths(Path(config.project_dir), message, paths)
+    if not paths:
+        return None
+    return commit_paths(Path(config.project_dir), message, [*paths, *BOOKKEEPING_EXCLUDES])
 
 
 def push_branch(worktree: Path, branch: str) -> GitResult:

@@ -450,7 +450,7 @@ class TestRespecPhaseWiring:
 
 from build_pipeline import git_ops
 from build_pipeline.git_ops import GitLifecycleError, GitResult
-from tests.test_git_ops import make_bare_origin, make_repo
+from tests.test_git_ops import _git, make_bare_origin, make_repo
 
 
 def _args(tmp_path, change, **over):
@@ -762,6 +762,216 @@ class TestPublishFailureIsNonFatal:
         progress = ProgressWriter(config.progress_file_path())
         assert _run_publish(config, state, progress) is True
         assert "PHASE:PUBLISH:SKIPPED:buildme/nopush" in capsys.readouterr().out
+
+
+async def _bootstrapped_auto_build(tmp_path, change: str, why: str):
+    """A worktree build parked at PUBLISH with a proposal carrying a Why."""
+    repo = make_repo(tmp_path / "proj")
+    make_bare_origin(repo, tmp_path / "origin.git")
+    config = BuildConfig(project_dir=repo, change_name=change, auto=True)
+    config.specs_dir = repo / "specs"
+    state = BuildState(change_name=change, mode="scratch", tier="advanced",
+                       state_file=str(config.state_file_path()))
+    cm = ChangeManager(config.specs_dir)
+    await _run_bootstrap(config, state, cm, config.state_file_path())
+    (config.change_dir / "proposal.md").write_text(
+        f"# P\n\n## Why\n\n{why}\n\n## Impact\n\nnone\n"
+    )
+    (config.change_dir / "respec.md").write_text("delta")
+    # In a real run earlier phases wrote the board card; it travels with the
+    # archive move, which is what keeps board.record from resurrecting an
+    # empty changes/<name>/ during publish.
+    (config.change_dir / ".board.json").write_text("{}\n")
+    state.phase = BuildPhase.PUBLISH
+    state.checkpoint(config.state_file_path())
+    return repo, state
+
+
+class TestAutoPublishPRBody:
+    """The --auto archive moves proposal.md before publish; the PR body must
+    read the documents through the archived location, not the vacated
+    change_dir (which would lose the Why and every artifact link)."""
+
+    @pytest.mark.asyncio
+    async def test_auto_pr_body_survives_the_archive_move(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo, _ = await _bootstrapped_auto_build(
+            tmp_path, "autobody", "Because the queue drops jobs."
+        )
+
+        seen: dict = {}
+
+        def fake_gh(argv, cwd=None, timeout=None):
+            seen["argv"] = argv
+            return GitResult(argv, 0, "https://github.com/o/r/pull/3\n", "")
+
+        monkeypatch.setattr(git_ops, "_run_gh", fake_gh)
+        config2 = BuildConfig(project_dir=repo, change_name="autobody",
+                              mode="only", auto=True)
+        config2.specs_dir = repo / "specs"
+        result = await run_orchestrator(config2, _args(repo, "autobody", auto=True))
+
+        assert result == 0
+        body = seen["argv"][seen["argv"].index("--body") + 1]
+        assert "Because the queue drops jobs." in body
+        assert "respec.md" in body
+        assert "specs/archive/" in body, "links must point at the archived layout"
+        assert not config2.change_dir.exists()  # archived
+        # Successful publish drops the checkpoint, even from its archived home.
+        assert list((config2.specs_dir / "archive").glob("*/.build-state.json")) == []
+
+
+class TestPublishFailureRecovery:
+    """A failed publish must leave a resumable PUBLISH checkpoint (build still
+    exits 0) so a re-run adopts the worktree and retries, instead of
+    hard-failing on the branch collision with an impossible 'Resume it'."""
+
+    @pytest.mark.asyncio
+    async def test_auto_publish_failure_then_rerun_succeeds(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo, state = await _bootstrapped_auto_build(tmp_path, "pubfail", "Why text.")
+        worktree = Path(state.worktree_path)
+
+        monkeypatch.setattr(
+            git_ops, "_run_gh",
+            lambda argv, cwd=None, timeout=None: GitResult(argv, 1, "", "gh: boom"),
+        )
+        config2 = BuildConfig(project_dir=repo, change_name="pubfail",
+                              mode="only", auto=True)
+        config2.specs_dir = repo / "specs"
+        result = await run_orchestrator(config2, _args(repo, "pubfail", auto=True))
+
+        assert result == 0, "publish failure stays non-fatal for the build result"
+        assert "PHASE:PUBLISH:FAILED:pr" in capsys.readouterr().out
+
+        # The checkpoint traveled with the archive move and survived at PUBLISH.
+        archived_states = list(
+            (config2.specs_dir / "archive").glob("*-pubfail/.build-state.json")
+        )
+        assert len(archived_states) == 1
+        resumed = BuildState.load(archived_states[0])
+        assert resumed.phase == BuildPhase.PUBLISH
+        assert resumed.branch == "buildme/pubfail"
+
+        # Re-run with gh healthy: adopts the same worktree, retries, cleans up.
+        before = _worktree_count(repo)
+        monkeypatch.setattr(
+            git_ops, "_run_gh",
+            lambda argv, cwd=None, timeout=None: GitResult(
+                argv, 0, "https://github.com/o/r/pull/8\n", ""
+            ),
+        )
+        config3 = BuildConfig(project_dir=repo, change_name="pubfail",
+                              mode="only", auto=True)
+        config3.specs_dir = repo / "specs"
+        result = await run_orchestrator(config3, _args(repo, "pubfail", auto=True))
+
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "PR:https://github.com/o/r/pull/8" in out
+        assert _worktree_count(repo) == before, "the re-run must not mint a second worktree"
+        assert not archived_states[0].exists(), "checkpoint cleaned after success"
+        # Bookkeeping was never tracked, so the worktree ends clean — no
+        # uncommitted deletion left behind by the cleanup.
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=str(worktree), capture_output=True, text=True,
+        )
+        assert status.stdout.strip() == ""
+
+    @pytest.mark.asyncio
+    async def test_pr_url_is_persisted_to_the_checkpoint(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        make_bare_origin(repo, tmp_path / "origin.git")
+        config = BuildConfig(project_dir=repo, change_name="prurl")
+        config.specs_dir = repo / "specs"
+        state = BuildState(change_name="prurl", mode="scratch", tier="advanced",
+                           state_file=str(config.state_file_path()))
+        cm = ChangeManager(config.specs_dir)
+        await _run_bootstrap(config, state, cm, config.state_file_path())
+        progress = ProgressWriter(config.progress_file_path())
+
+        monkeypatch.setattr(
+            git_ops, "_run_gh",
+            lambda argv, cwd=None, timeout=None: GitResult(
+                argv, 0, "https://github.com/o/r/pull/9\n", ""
+            ),
+        )
+        state_path = config.state_file_path()
+        assert _run_publish(config, state, progress, state_path=state_path) is True
+        saved = BuildState.load(state_path)
+        assert saved.pr_url == "https://github.com/o/r/pull/9"
+
+
+class TestNestedProjectDir:
+    """A project_dir nested inside a larger repo must build at the SAME
+    subdirectory inside the worktree — not silently relocate to the repo root."""
+
+    def _nested_repo(self, tmp_path):
+        repo = make_repo(tmp_path / "mono")
+        pkg = repo / "packages" / "api"
+        pkg.mkdir(parents=True)
+        (pkg / "keep.txt").write_text("k\n")
+        _git(repo, "add", "packages/api/keep.txt")
+        _git(repo, "commit", "-m", "chore: nested pkg")
+        return repo, pkg
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_rebinds_to_same_subdir_inside_worktree(
+        self, tmp_path, monkeypatch
+    ):
+        workspace = tmp_path / "ws"
+        monkeypatch.setenv("WORKSPACE", str(workspace))
+        repo, pkg = self._nested_repo(tmp_path)
+
+        config = BuildConfig(project_dir=pkg, change_name="nested")
+        config.specs_dir = pkg / "specs"
+        state = BuildState(change_name="nested", mode="scratch", tier="advanced",
+                           state_file=str(config.state_file_path()))
+        cm = ChangeManager(config.specs_dir)
+        await _run_bootstrap(config, state, cm, config.state_file_path())
+
+        wt = workspace / ".worktrees" / "buildme-nested"
+        assert state.worktree_path == str(wt)
+        assert config.project_dir == wt / "packages" / "api"
+        assert config.specs_dir == wt / "packages" / "api" / "specs"
+        assert (wt / "packages" / "api" / "specs" / "changes" / "nested").is_dir()
+        assert not (wt / "specs").exists(), "must not build at the repo root"
+        assert not (pkg / "specs").exists(), "source checkout untouched"
+
+    @pytest.mark.asyncio
+    async def test_resume_rebinds_nested_project_to_same_subdir(
+        self, tmp_path, monkeypatch
+    ):
+        workspace = tmp_path / "ws"
+        monkeypatch.setenv("WORKSPACE", str(workspace))
+        repo, pkg = self._nested_repo(tmp_path)
+
+        config1 = BuildConfig(project_dir=pkg, change_name="nested")
+        config1.specs_dir = pkg / "specs"
+        state = BuildState(change_name="nested", mode="scratch", tier="advanced",
+                           state_file=str(config1.state_file_path()))
+        cm = ChangeManager(config1.specs_dir)
+        await _run_bootstrap(config1, state, cm, config1.state_file_path())
+        wt = Path(state.worktree_path)
+        state.phase = BuildPhase.PUBLISH
+        state.checkpoint(config1.state_file_path())
+
+        config2 = BuildConfig(
+            project_dir=pkg, change_name="nested", mode="only",
+            git=GitToggles(worktree=True, push=False, pr="none"),
+        )
+        config2.specs_dir = pkg / "specs"
+        result = await run_orchestrator(config2, _args(pkg, "nested"))
+
+        assert result == 0
+        assert config2.project_dir == wt / "packages" / "api"
+        assert _worktree_count(repo) == 2, "resume must adopt, not create"
 
 
 class TestPRBody:

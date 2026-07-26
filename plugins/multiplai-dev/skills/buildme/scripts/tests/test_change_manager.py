@@ -48,6 +48,33 @@ class TestCreateChange:
         assert path.name == "my-feature-name"
 
 
+class TestNormalizeChangeName:
+    def test_empty_input_stays_empty(self):
+        from build_pipeline.change_manager import normalize_change_name
+        assert normalize_change_name("") == ""
+
+    def test_traversal_is_stripped(self):
+        from build_pipeline.change_manager import normalize_change_name
+        assert normalize_change_name("../../etc") == "etc"
+
+    def test_refuses_name_that_normalizes_to_nothing(self):
+        """'!!!' → '' would collapse change_dir to specs/changes and the
+        branch to 'buildme/', dying late with a raw git error."""
+        from build_pipeline.change_manager import normalize_change_name
+        with pytest.raises(ValueError) as exc:
+            normalize_change_name("!!!")
+        assert "no usable characters" in str(exc.value)
+
+    def test_cli_refuses_empty_normalized_change_early(self, tmp_path, capsys):
+        """The refusal happens at the CLI entry point, before any phase runs."""
+        from build_pipeline.__main__ import main
+        rc = main(["build", "--change", "!!!", "--project-dir", str(tmp_path)])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "ERROR:" in err and "no usable characters" in err
+        assert list(tmp_path.iterdir()) == [], "nothing may be created behind the refusal"
+
+
 class TestArtifactStatus:
     def test_empty_change(self, cm, specs_dir):
         change = cm.create_change("test")

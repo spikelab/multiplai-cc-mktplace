@@ -38,9 +38,20 @@ def normalize_change_name(name: str) -> str:
 
     Strips path separators, dots, and other non-word characters, so a name can
     never traverse outside specs/changes/ (e.g. '../../foo' → 'foo').
+
+    A non-empty name that normalizes to nothing (e.g. '!!!') is refused with
+    ValueError — silently returning "" would make change_dir collapse to
+    specs/changes and the branch to 'buildme/', dying much later with a raw
+    git error. An empty input stays "" (an unset --change is legitimate).
     """
-    name = re.sub(r"[^\w\s-]", "", name.lower())
-    return re.sub(r"[\s_]+", "-", name).strip("-")
+    slug = re.sub(r"[^\w\s-]", "", name.lower())
+    slug = re.sub(r"[\s_]+", "-", slug).strip("-")
+    if name and not slug:
+        raise ValueError(
+            f"Change name {name!r} contains no usable characters "
+            f"(letters, digits, '-'). Pick a real name, e.g. --change my-feature."
+        )
+    return slug
 
 
 # The spec-driven artifact DAG — hardcoded since we only use one schema.

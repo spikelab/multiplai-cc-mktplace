@@ -94,6 +94,11 @@ class TestInspection:
         assert git_ops.branch_exists(repo, "feature")
         assert git_ops.unmerged_commit_count(repo, "feature", "main") == 1
 
+    def test_unmerged_count_is_none_when_undeterminable(self, tmp_path):
+        """A failed rev-list means "unknown", never "empty branch"."""
+        repo = make_repo(tmp_path / "proj")
+        assert git_ops.unmerged_commit_count(repo, "main", "no-such-base") is None
+
     def test_has_remote(self, tmp_path):
         repo = make_repo(tmp_path / "proj")
         assert not git_ops.has_remote(repo)
@@ -154,6 +159,17 @@ class TestResolveNewBranch:
         with pytest.raises(GitLifecycleError) as exc:
             git_ops.resolve_new_branch(repo, "my-change", "main")
         assert "buildme/my-change" in str(exc.value)
+        assert "Refusing" in str(exc.value)
+
+    def test_refuses_when_unmerged_count_is_unknown(self, tmp_path, monkeypatch):
+        """A colliding branch whose commit count cannot be determined is
+        refused, never classified as empty and shadowed with a suffix."""
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        _git(repo, "branch", "buildme/my-change")
+        with pytest.raises(GitLifecycleError) as exc:
+            git_ops.resolve_new_branch(repo, "my-change", "no-such-base")
+        assert "cannot be proven empty" in str(exc.value)
         assert "Refusing" in str(exc.value)
 
 
@@ -263,6 +279,46 @@ class TestCommitPaths:
 
         config.pipeline_branch = "buildme/c"
         assert git_ops.commit_stage(config, "feat: x", ["f.txt"]) is not None
+
+    def test_commit_stage_excludes_bookkeeping_at_any_depth(self, tmp_path):
+        """Staging a whole change (or archive) directory must never sweep
+        .build-state.json / .board.json into the commit."""
+        from build_pipeline.config import BuildConfig
+
+        repo = make_repo(tmp_path / "proj")
+        config = BuildConfig(project_dir=repo, change_name="c")
+        config.specs_dir = repo / "specs"
+        config.pipeline_branch = "buildme/c"
+
+        change_dir = config.change_dir
+        change_dir.mkdir(parents=True)
+        (change_dir / ".change.yaml").write_text("schema: spec-driven\n")
+        (change_dir / "proposal.md").write_text("## Why\nx\n")
+        (change_dir / ".build-state.json").write_text("{}\n")
+        (change_dir / ".board.json").write_text("{}\n")
+        archived = config.specs_dir / "archive" / "2026-01-01-c"
+        archived.mkdir(parents=True)
+        (archived / "design.md").write_text("d\n")
+        (archived / ".build-state.json").write_text("{}\n")
+        (archived / ".board.json").write_text("{}\n")
+
+        sha = git_ops.commit_stage(config, "docs(specs): c", ["specs"])
+        assert sha
+
+        committed = subprocess.run(
+            ["git", "show", "--name-only", "--pretty=format:", "HEAD"],
+            cwd=str(repo), capture_output=True, text=True,
+        ).stdout.split()
+        assert "specs/changes/c/proposal.md" in committed
+        assert "specs/archive/2026-01-01-c/design.md" in committed
+        assert not any(".build-state.json" in f for f in committed)
+        assert not any(".board.json" in f for f in committed)
+        # Never tracked, so a later cleanup unlink leaves no uncommitted deletion.
+        tracked = subprocess.run(
+            ["git", "ls-files"], cwd=str(repo), capture_output=True, text=True,
+        ).stdout
+        assert ".build-state.json" not in tracked
+        assert ".board.json" not in tracked
 
 
 # --- push -----------------------------------------------------------------

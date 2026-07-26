@@ -1018,6 +1018,7 @@ class TestGitCommitScoping:
         (project_dir / "module.py").write_text("x = 1\n")
         config.progress_file_path().write_text("# progress\n")
         config.state_file_path().write_text("{}\n")
+        (config.change_dir / ".board.json").write_text("{}\n")
 
         sha = _git_commit_block_phase(config, "impl", BlockInfo(number=1, name="B", description="d"))
         assert sha is not None
@@ -1029,6 +1030,7 @@ class TestGitCommitScoping:
         assert "module.py" in committed
         assert "build-progress.md" not in committed
         assert not any(".build-state.json" in f for f in committed)
+        assert not any(".board.json" in f for f in committed)
 
         # The bookkeeping files must remain untracked afterward.
         tracked = subprocess.run(
@@ -1036,6 +1038,7 @@ class TestGitCommitScoping:
         ).stdout
         assert "build-progress.md" not in tracked
         assert ".build-state.json" not in tracked
+        assert ".board.json" not in tracked
 
 
 class TestRedGateWiring:
