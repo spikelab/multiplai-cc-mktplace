@@ -15,8 +15,10 @@ from pathlib import Path
 import pytest
 
 from scripts.lib.prospective import (CONDITION_SWEEP_DAYS, LEAD_DAYS,
-                                     PROSPECTIVE_FILENAME, actionable,
-                                     format_line, load, parse, render_nudge)
+                                     PROSPECTIVE_FILENAME, SWEEP_STATE_FILENAME,
+                                     actionable, format_line, load,
+                                     load_sweep_state, parse, render_nudge,
+                                     save_sweep_state, sweep_key)
 
 TODAY = date(2026, 7, 26)
 
@@ -121,10 +123,70 @@ class TestActionable:
         [i] = actionable(parse(text), TODAY)
         assert i.condition == "X happens"
 
-    def test_an_undated_condition_never_sweeps(self):
-        """No capture date means no clock to measure the sweep from; firing
-        anyway would mean firing on every session forever."""
-        assert actionable(parse("- [on: X happens] Do it"), TODAY) == []
+    def test_an_undated_condition_surfaces_once_and_is_then_stamped(self):
+        """Changed deliberately: an undated condition used to be ignored
+        forever. A condition nobody can evaluate and nobody ever sees is
+        indistinguishable from one that was never captured, so it surfaces now
+        and the caller's stamp is what stops it repeating."""
+        [i] = parse("- [on: X happens] Do it")
+        assert actionable([i], TODAY) == [i]
+        stamped = {sweep_key(i): TODAY}
+        assert actionable([i], TODAY, last_surfaced=stamped) == []
+
+    def test_a_missed_sweep_day_does_not_cost_another_full_cycle(self):
+        """The bug this replaces: `% CONDITION_SWEEP_DAYS == 0` fired only on
+        exact multiples, so one missed session — no session that day, a run
+        either side of the UTC rollover, a closed laptop — silently waited
+        another 30 days on the one channel where silence IS the failure."""
+        captured = TODAY - timedelta(days=CONDITION_SWEEP_DAYS + 1)
+        text = f"- [on: X happens] Do it (captured {captured.isoformat()})"
+        assert len(actionable(parse(text), TODAY)) == 1
+
+        way_overdue = TODAY - timedelta(days=CONDITION_SWEEP_DAYS * 3 + 7)
+        text = f"- [on: X happens] Do it (captured {way_overdue.isoformat()})"
+        assert len(actionable(parse(text), TODAY)) == 1
+
+    def test_the_stamp_and_not_the_capture_date_drives_later_sweeps(self):
+        captured = TODAY - timedelta(days=CONDITION_SWEEP_DAYS * 2)
+        [i] = parse(f"- [on: X happens] Do it (captured {captured.isoformat()})")
+        # Surfaced a week ago: not due again yet, even though capture is old.
+        recent = {sweep_key(i): TODAY - timedelta(days=7)}
+        assert actionable([i], TODAY, last_surfaced=recent) == []
+        # Surfaced a full cycle ago: due again.
+        old = {sweep_key(i): TODAY - timedelta(days=CONDITION_SWEEP_DAYS)}
+        assert actionable([i], TODAY, last_surfaced=old) == [i]
+
+    def test_a_stamp_for_a_different_intention_does_not_silence_this_one(self):
+        [mine] = parse("- [on: X happens] Do it (captured 2026-01-01)")
+        assert actionable([mine], TODAY,
+                          last_surfaced={"unrelated :: thing": TODAY}) == [mine]
+
+    def test_sweep_key_survives_reordering_and_reflowing(self):
+        """Keyed on content, not line number: removing a line above, or
+        re-wrapping the line, must not reset the clock."""
+        [a] = parse("- [on: X happens] Do it (captured 2026-01-01)")
+        [b] = parse("junk\n- [on:  X   happens] Do  it (captured 2026-01-01)".split("\n")[1])
+        assert sweep_key(a) == sweep_key(b)
+
+    def test_sweep_state_round_trips(self, tmp_path):
+        path = tmp_path / "sweep.json"
+        save_sweep_state(path, {"a :: b": TODAY})
+        assert load_sweep_state(path) == {"a :: b": TODAY}
+
+    def test_corrupt_sweep_state_degrades_to_never_surfaced(self, tmp_path):
+        """Failing towards noise, never towards silence."""
+        path = tmp_path / "sweep.json"
+        path.write_text("{not json", encoding="utf-8")
+        assert load_sweep_state(path) == {}
+        path.write_text('{"a :: b": "not-a-date", "c :: d": "2026-07-01"}',
+                        encoding="utf-8")
+        assert load_sweep_state(path) == {"c :: d": date(2026, 7, 1)}
+
+    def test_saving_sweep_state_never_raises(self, tmp_path):
+        """Derived state must not be able to abort a session start."""
+        blocked = tmp_path / "file-not-dir"
+        blocked.write_text("x", encoding="utf-8")
+        save_sweep_state(blocked / "sweep.json", {"a :: b": TODAY})
 
 
 class TestNudge:
@@ -256,9 +318,11 @@ class TestSessionStartIntegration:
 
         memory_dir = tmp_path / "memory"
         memory_dir.mkdir()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
         if contents is not None:
             (memory_dir / PROSPECTIVE_FILENAME).write_text(contents, encoding="utf-8")
-        count = session_start._emit_prospective_nudge(memory_dir)
+        count = session_start._emit_prospective_nudge(memory_dir, data_dir)
         return count, capsys.readouterr().out
 
     @staticmethod
@@ -283,3 +347,62 @@ class TestSessionStartIntegration:
         """SessionStart runs before the user types anything. A crash here costs
         the whole session, so this path fails open."""
         assert self._run(tmp_path, capsys, "not: valid [[[ ]]]") == (0, "")
+
+    def _run_twice(self, tmp_path, capsys, contents: str):
+        """Two hook invocations against ONE data dir, as consecutive sessions."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        import session_start
+
+        memory_dir = tmp_path / "memory"
+        memory_dir.mkdir()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (memory_dir / PROSPECTIVE_FILENAME).write_text(contents, encoding="utf-8")
+        first = session_start._emit_prospective_nudge(memory_dir, data_dir)
+        capsys.readouterr()
+        second = session_start._emit_prospective_nudge(memory_dir, data_dir)
+        capsys.readouterr()
+        return first, second, data_dir
+
+    def test_a_swept_condition_is_stamped_and_does_not_repeat_next_session(
+            self, tmp_path, capsys):
+        """The counterpart to dropping the modulo test: `>=` fires every session
+        until something records that it fired."""
+        captured = date.today() - timedelta(days=CONDITION_SWEEP_DAYS + 3)
+        first, second, data_dir = self._run_twice(
+            tmp_path, capsys,
+            f"- [on: the runtime updates] Re-run the audit "
+            f"(captured {captured.isoformat()})")
+        assert (first, second) == (1, 0)
+
+        state = load_sweep_state(data_dir / SWEEP_STATE_FILENAME)
+        assert list(state.values()) == [date.today()]
+
+    def test_a_dated_intention_is_never_stamped(self, tmp_path, capsys):
+        """Dated intentions have a real gate — their due date. Stamping them
+        would silence an overdue item after one sighting."""
+        first, second, data_dir = self._run_twice(
+            tmp_path, capsys, self._line(-4, "Re-check the residency rule"))
+        assert (first, second) == (1, 1)
+        assert not (data_dir / SWEEP_STATE_FILENAME).exists()
+
+    def test_an_unwritable_data_dir_still_emits_the_nudge(self, tmp_path, capsys):
+        """Losing the stamp costs a duplicate nudge. Losing the nudge is the
+        failure this channel exists to prevent, so the print comes first."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        import session_start
+
+        memory_dir = tmp_path / "memory"
+        memory_dir.mkdir()
+        captured = date.today() - timedelta(days=CONDITION_SWEEP_DAYS + 3)
+        (memory_dir / PROSPECTIVE_FILENAME).write_text(
+            f"- [on: X happens] Do it (captured {captured.isoformat()})",
+            encoding="utf-8")
+        not_a_dir = tmp_path / "blocked"
+        not_a_dir.write_text("x", encoding="utf-8")
+
+        count = session_start._emit_prospective_nudge(memory_dir, not_a_dir)
+        assert count == 1
+        assert "SYSTEM NUDGE" in capsys.readouterr().out

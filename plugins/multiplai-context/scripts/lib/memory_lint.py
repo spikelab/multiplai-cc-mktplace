@@ -95,12 +95,18 @@ _SKIP_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|```|\||-{3,}\s*$|\*\*Last Updated)"
 
 _FENCE_RE = re.compile(r"^\s*```")
 
+# How old an `(as of ...)` with no `review by` gets before it is reported. Twelve
+# months is chosen to be uncontroversial: it is long enough that nobody is
+# nagged about a fact they stamped this year, and short enough that a stamp from
+# a previous era stops passing as fresh.
+AS_OF_STALE_DAYS = 365
+
 
 @dataclass(frozen=True)
 class Finding:
     path: Path
     lineno: int
-    kind: str          # "expired" | "unmarked"
+    kind: str          # "expired" | "unmarked" | "undated"
     fact_class: str
     line: str
     detail: str
@@ -177,11 +183,29 @@ def lint_text(text: str, path: Path, today: date) -> list[Finding]:
         match = AS_OF_RE.search(line)
         if match:
             review_by = match.group("review_by")
-            if review_by and _parse_stamp(review_by) < today:
+            if review_by:
+                if _parse_stamp(review_by) < today:
+                    findings.append(Finding(
+                        path=path, lineno=lineno, kind="expired",
+                        fact_class="annotated", line=line,
+                        detail=f"review by {review_by} has passed — re-verify or re-stamp"))
+                continue
+            # `(as of ...)` with NO `review by`: the author dated the fact but
+            # never said when it stops being trustworthy, so nothing can ever
+            # expire it. `(as of 2019-01)` would stay permanently clean — and
+            # the premise of this whole linter is that facts rot on their own
+            # schedule. Reported as its OWN kind, not folded into `expired`:
+            # nothing has passed, so calling it expired would misdescribe it
+            # and blur a real deadline miss with a missing annotation.
+            as_of = _parse_stamp(match.group("as_of"))
+            age_days = (today - as_of).days
+            if age_days > AS_OF_STALE_DAYS:
                 findings.append(Finding(
-                    path=path, lineno=lineno, kind="expired",
+                    path=path, lineno=lineno, kind="undated",
                     fact_class="annotated", line=line,
-                    detail=f"review by {review_by} has passed — re-verify or re-stamp"))
+                    detail=f"'as of {match.group('as_of')}' is {age_days // 30} "
+                           f"months old with no 'review by' — nothing can expire "
+                           f"it; add 'review by YYYY-MM'"))
             continue  # annotated: the author already made a claim about freshness
 
         for name, why in classify(line):
@@ -208,16 +232,22 @@ def summarize(findings: list[Finding], root: Path | None = None) -> str:
         return "memory_lint: clean"
     expired = [f for f in findings if f.kind == "expired"]
     unmarked = [f for f in findings if f.kind == "unmarked"]
+    undated = [f for f in findings if f.kind == "undated"]
     lines: list[str] = []
     if expired:
         lines.append(f"## Expired ({len(expired)})")
         lines.extend(f.render(root) for f in expired)
         lines.append("")
+    if undated:
+        lines.append(f"## Stamped but never expiring ({len(undated)})")
+        lines.extend(f.render(root) for f in undated)
+        lines.append("")
     if unmarked:
         lines.append(f"## Missing validity annotation ({len(unmarked)})")
         lines.extend(f.render(root) for f in unmarked)
         lines.append("")
-    lines.append(f"memory_lint: {len(expired)} expired, {len(unmarked)} unmarked")
+    lines.append(f"memory_lint: {len(expired)} expired, {len(undated)} undated, "
+                 f"{len(unmarked)} unmarked")
     return "\n".join(lines)
 
 

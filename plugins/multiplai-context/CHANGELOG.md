@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.8.1 — 2026-07-26
+
+Post-merge review fixes for memory evolution (findings 7.1–7.4 of
+`INBOX/pr-review-batch-2026-07-26.md`, against #62). No new features.
+
+### Fixed
+- **The condition sweep could silently skip a whole cycle**
+  (`scripts/lib/prospective.py`). The sweep fired on
+  `(today - captured).days % 30 == 0` — only on exact 30-day multiples from
+  capture. Miss that single day (no session, a run either side of the UTC
+  midnight rollover, a closed laptop) and the intention waited another 30 days.
+  For the one memory channel whose stated failure mode is *being silent*, a
+  scheduler that can skip is the wrong shape. Now each intention carries a
+  `last_surfaced` stamp in `prospective_sweep.json` (plugin data dir — derived
+  state, deliberately NOT in the human-edited `prospective.md`) and the test is
+  elapsed-time: `today - last_surfaced >= 30`. Because that condition stays
+  true until something records the surface, an un-stamped sweep now re-fires
+  next session — noise, never silence.
+  - Keyed on the intention's condition + text, not its line number, so
+    reordering or reflowing `prospective.md` doesn't reset the clock.
+  - An intention with neither stamp nor capture date now surfaces once and is
+    stamped, instead of being ignored forever.
+- **The maintainer was spawned on every session start, gate or no gate**
+  (`scripts/session_start.py`). `_launch_maintainer` unconditionally `Popen`'d
+  `uv run … memory_maintainer.py`; the child then checked its own 24h gate and
+  exited. The gate check is a timestamp read, so it now happens **in-process
+  before the spawn** — the child stays authoritative, but ~95% of sessions no
+  longer pay a `uv run` startup (and, on a cold uv cache, a network fetch for
+  the PEP 723 git dependency) to accomplish nothing. A test pins the restated
+  gate constants to the maintainer's own.
+- **Unattended dream proposals accumulated one file per day**
+  (`scripts/memory_maintainer.py`). Generating a proposal correctly does not
+  stamp the dream gate (nothing was applied), so a backlog left unconsolidated
+  for a week produced seven dated proposals — seven proposal + critique model
+  calls — and handed `/dream-remember` a pile to choose between. The pass is now
+  skipped while any un-archived `processed-learnings-*.md` is still waiting.
+- **An ancient `as of` with no `review by` was permanently clean**
+  (`scripts/lib/memory_lint.py`). `(as of 2019-01)` matched the annotation
+  regex and was accepted as complete, so nothing could ever expire it — while
+  the linter's whole premise is that facts rot on their own schedule. Reported
+  after 12 months as a **third kind**, `undated`, not folded into `expired`:
+  nothing has passed, and blurring a missed review date with a missing one would
+  misdescribe both. `--expired-only` still means only genuinely-passed dates.
+- **A trailing `<!-- comment -->` rode into the surfaced intention text**
+  (`scripts/lib/prospective.py`). Closed comments are now stripped from a line
+  before it is matched.
+
+### Changed
+- **Core pin moved `v0.8.1` → `v0.9.0`** across all 23 PEP 723 script headers
+  and `requirements-dev.txt`. The maintainer resolving one core version while
+  the hook that launches it imports another is two versions of the same library
+  in one workflow.
+- README documents the three linter kinds, the end-of-month meaning of a
+  `YYYY-MM` stamp (previously only in a docstring), the elapsed-time sweep, and
+  the pre-spawn gate. `templates/prospective.md` states the sweep cadence and
+  the comment-stripping rule.
+
 ## 0.8.0 — 2026-07-26
 
 Memory evolution (#62), untrusted-log handling (#60), behavioural contracts

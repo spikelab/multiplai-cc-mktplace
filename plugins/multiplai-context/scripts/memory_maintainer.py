@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.8.1"]
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.9.0"]
 # ///
 """Proactive memory maintenance — the passes nobody remembers to run.
 
@@ -165,13 +165,33 @@ def run_lint(memory_dir: Path, dreams_dir: Path, *, dry_run: bool = False) -> Pa
 
 # --- pass 2: dream proposal -------------------------------------------------
 
+def pending_proposals(dreams_dir: Path) -> list[Path]:
+    """Un-archived proposals sitting in *dreams_dir*, oldest first.
+
+    `dream.py` archives a proposal into ``dreams_dir/<disposition>/`` once it
+    has been applied or rejected, so anything still at the top level is
+    awaiting Spike.
+    """
+    if not dreams_dir.is_dir():
+        return []
+    return sorted(p for p in dreams_dir.glob("processed-learnings-*.md")
+                  if p.is_file())
+
+
 def run_dream(script_dir: Path, dream_state: Path, learnings_dir: Path,
-              *, dry_run: bool = False) -> PassResult:
+              dreams_dir: Path, *, dry_run: bool = False) -> PassResult:
     """Generate a consolidation proposal when there is a backlog to consolidate.
 
     Runs plain `dream.py` — deliberately NOT `--auto`. The plan's hard
     constraint is that `/dream-remember` stays the only path that writes to
     memory, and an unattended `--auto` would quietly become a second one.
+
+    Skipped entirely while an un-archived proposal is already waiting.
+    Generating does not (and should not) stamp the dream gate, since nothing
+    was applied — so without this check a backlog left unconsolidated for a
+    week produces seven dated proposal files, each costing a proposal plus a
+    critique model call, and `/dream-remember` is then handed a pile to choose
+    between instead of the one thing to review.
     """
     try:
         from session_start import _dream_gate_open, _learnings_pending
@@ -180,6 +200,12 @@ def run_dream(script_dir: Path, dream_state: Path, learnings_dir: Path,
             return PassResult("dream", False, "dream gate closed (<24h)")
         if not _learnings_pending(learnings_dir, dream_state):
             return PassResult("dream", False, "no pending learnings")
+        waiting = pending_proposals(dreams_dir)
+        if waiting:
+            return PassResult(
+                "dream", False,
+                f"{len(waiting)} proposal(s) already awaiting review "
+                f"(oldest: {waiting[0].name}) — run /dream-remember")
         if dry_run:
             return PassResult("dream", True, "would generate a proposal (dry run)")
 
@@ -299,7 +325,8 @@ def run_maintenance(*, force: bool = False, dry_run: bool = False) -> Maintenanc
     report = MaintenanceReport(gate_open=True)
     report.passes.append(run_lint(memory_dir, paths.dreams_dir(), dry_run=dry_run))
     report.passes.append(run_dream(script_dir, paths.dream_state_file(),
-                                   paths.learnings_dir(), dry_run=dry_run))
+                                   paths.learnings_dir(), paths.dreams_dir(),
+                                   dry_run=dry_run))
     report.passes.append(run_catalog(script_dir, memory_dir, paths.catalogs_dir(),
                                      dry_run=dry_run))
     report.passes.append(run_status(paths.diary_dir(), dry_run=dry_run))
