@@ -25,12 +25,14 @@ from .gates import (
     agent_status_gate,
     baseline_test_gate,
     integration_gate,
+    parse_implementation_note,
     red_gate,
     review_iteration_gate,
     review_score_gate,
     run_test_suite,
     wiring_task_gate,
 )
+from .llm_steps.respec_steps import append_implementation_note
 from .llm_steps.review_steps import run_code_review
 from .llm_steps.tdd_steps import (
     run_implementer,
@@ -714,6 +716,74 @@ async def _enforce_red_gate(
     return False
 
 
+def _record_implementation_note(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    role: str,
+    output: str,
+) -> bool:
+    """Capture an agent's SURPRISES:/SPEC_IMPACT: slots.
+
+    The note is persisted on the block (surviving resume) and appended to
+    implementation-notes.md immediately, so an interrupted build still leaves
+    the learning on disk for the respec step. A `contradicts` note is logged
+    and written to build-progress.md as a warning.
+
+    Returns False only when the build must stop: a contradiction under
+    `respec: {halt_on_contradiction: true}`. Recording never fails the build
+    on its own.
+    """
+    note = parse_implementation_note(
+        output, block_number=block.number, block_name=block.name, role=role,
+    )
+    if note is None:
+        return True
+
+    block.notes.append(note)
+    state.checkpoint(config.state_file_path())
+    try:
+        append_implementation_note(config.change_dir, note)
+    except OSError as e:
+        # The note is already on the block/state; losing the markdown copy is
+        # not worth failing a green block over.
+        log.warning("Could not append implementation note to disk: %s", e)
+
+    if not note.contradicts:
+        log.info(
+            "Implementation note block=%d role=%s spec_impact=%s",
+            block.number, role, note.spec_impact,
+        )
+        progress.log_spec_impact(block.name, role, note.spec_impact, note.surprises)
+        return True
+
+    log.warning(
+        "SPEC_IMPACT: contradicts reported by %s on block %d (%s): %s",
+        role, block.number, block.name, note.surprises,
+    )
+    progress.log_spec_impact(block.name, role, note.spec_impact, note.surprises)
+
+    if not config.gates.respec_halt_on_contradiction:
+        return True
+
+    diagnosis = (
+        f"Build stopped: the {role} reported SPEC_IMPACT: contradicts on block "
+        f"{block.number} ({block.name}) and respec.halt_on_contradiction is on.\n"
+        f"The block could only be built by doing something the spec/design does "
+        f"not say (or says otherwise), so the spec is decided in conversation "
+        f"rather than steered around in code.\n\n"
+        f"Reported surprise:\n{note.surprises}\n\n"
+        f"Next: reshape the requirements/design for this block, or set "
+        f"`respec: {{halt_on_contradiction: false}}` in specs/config.yaml to let "
+        f"the build continue and collect the delta into respec.md instead."
+    )
+    log.error("FAIL block=%d name=%s reason=spec_contradiction role=%s",
+              block.number, block.name, role)
+    progress.log_diagnosis(block.name, diagnosis)
+    return False
+
+
 async def run_block_tdd(
     block: BlockInfo,
     config: BuildConfig,
@@ -814,6 +884,12 @@ async def run_block_tdd(
     log.info("DONE block=%d name=%s phase=TEST_WRITE", block.number, block.name)
     progress.log_agent("TestWriter", block.name, "COMPLETE")
 
+    if not _record_implementation_note(
+        block, config, state, progress, "test_writer", test_result.output,
+    ):
+        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        return False
+
     test_sha = _git_commit_block_phase(config, "test", block)
     if test_sha:
         block.test_commit = test_sha
@@ -874,6 +950,12 @@ async def run_block_tdd(
     log.info("DONE block=%d name=%s phase=IMPLEMENT turns=%d elapsed=%.0fs",
              block.number, block.name, impl_result.turns_used, impl_result.elapsed_seconds)
     progress.log_agent("Implementer", block.name, "COMPLETE")
+
+    if not _record_implementation_note(
+        block, config, state, progress, "implementer", impl_result.output,
+    ):
+        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        return False
 
     impl_sha = _git_commit_block_phase(config, "impl", block)
     if impl_sha:

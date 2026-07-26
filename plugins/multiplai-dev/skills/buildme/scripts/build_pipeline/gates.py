@@ -13,7 +13,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from .models import GateResult, ReviewResult
+from .models import GateResult, ImplementationNote, ReviewResult
 
 log = logging.getLogger(__name__)
 
@@ -477,6 +477,77 @@ def prototype_gate(prototype_dir: Path) -> GateResult:
             "artifacts": [str(a) for a in artifacts],
             "status": notes.get("status", ""),
         },
+    )
+
+
+# --- Implementation notes (SURPRISES: / SPEC_IMPACT: slots) ---
+
+# Every REQUIRED slot label an agent report can carry — used as the stop
+# boundary when reading the free-text SURPRISES slot.
+_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|SURPRISES|SPEC_IMPACT"
+
+_SURPRISES_RE = re.compile(
+    r"^\s*(?:[-*]\s*|\*\*)?SURPRISES:?\*{0,2}\s*[:\-]?[ \t]*"
+    r"(.*?)"
+    rf"(?=^\s*(?:[-*]\s*|\*\*)?(?:{_REPORT_SLOT_LABELS})\b|\Z)",
+    re.MULTILINE | re.IGNORECASE | re.DOTALL,
+)
+
+_SPEC_IMPACT_RE = re.compile(
+    r"^\s*(?:[-*]\s*|\*\*)?SPEC_IMPACT:?\*{0,2}\s*[:\-]?\s*"
+    r"(none|clarify|contradicts)\b",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# Placeholder answers that mean "nothing to report" — treated as an empty
+# SURPRISES slot rather than as content.
+_EMPTY_SURPRISES = {"", "none", "n/a", "na", "nothing", "-", "—", "(none)", "none."}
+
+
+def _clean_surprises(raw: str) -> str:
+    """Strip fences and the prompt's own angle-bracket placeholder from the
+    free-text SURPRISES slot; return "" when it says nothing."""
+    lines = [
+        ln for ln in (raw or "").strip().splitlines()
+        if not ln.strip().startswith("```")
+    ]
+    text = "\n".join(lines).strip()
+    # The agent echoing the template (`SURPRISES: <what did not match ...>`)
+    # is not a finding.
+    if text.startswith("<") and text.endswith(">"):
+        return ""
+    return "" if text.lower() in _EMPTY_SURPRISES else text
+
+
+def parse_implementation_note(
+    output: str,
+    *,
+    block_number: int,
+    block_name: str,
+    role: str,
+) -> ImplementationNote | None:
+    """Build an ImplementationNote from an agent's SURPRISES/SPEC_IMPACT slots.
+
+    Returns None when the agent reported nothing worth recording (no slots, or
+    "none" on both) — the notes file stays signal-only. The last occurrence of
+    each slot wins, so a report that quotes the instructions before answering
+    them never outranks the agent's own answer.
+    """
+    surprises_matches = _SURPRISES_RE.findall(output or "")
+    surprises = _clean_surprises(surprises_matches[-1]) if surprises_matches else ""
+
+    impact_matches = _SPEC_IMPACT_RE.findall(output or "")
+    spec_impact = impact_matches[-1].lower() if impact_matches else "none"
+
+    if not surprises and spec_impact == "none":
+        return None
+
+    return ImplementationNote(
+        block_number=block_number,
+        block_name=block_name,
+        role=role,
+        surprises=surprises,
+        spec_impact=spec_impact,
     )
 
 
