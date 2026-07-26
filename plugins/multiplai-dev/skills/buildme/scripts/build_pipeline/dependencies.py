@@ -27,7 +27,12 @@ Candidates are then subtracted against, in order:
    code/data extension, shell-looking strings;
 4. the project's own top-level modules (a design doc naming `build_pipeline`
    is referring to the project, not to a new dependency);
-5. everything already declared in the project's manifests — ``pyproject.toml``,
+5. everything the project already imports — modules AND imported symbols. A
+   design doc naming `BaseModel` or `log_utils` is naming code the project
+   already uses, not something it is about to take on;
+6. names the sentence explicitly rejects ("use `tomllib` rather than adding
+   `tomli`") — a dependency we decided against is not one we depend on;
+7. everything already declared in the project's manifests — ``pyproject.toml``,
    ``requirements*.txt``, ``package.json``, ``Package.swift``, ``Cargo.toml``,
    ``go.mod``. "New" means new *to this project*, so a library the project
    already ships with is not an unknown.
@@ -76,6 +81,14 @@ _DECISIONS_RE = re.compile(
 )
 _BACKTICK_RE = re.compile(r"`([^`\n]{1,80})`")
 
+# "use X rather than Y" / "instead of Y" — Y is a rejected alternative, not a
+# dependency. Only matched when the phrase precedes the token on the same line.
+_NEGATION_RE = re.compile(
+    r"(rather than|instead of|not adding|no need for|avoid(?:ing)?|"
+    r"decided against|ruled out|as opposed to)\b",
+    re.IGNORECASE,
+)
+
 
 def _section(text: str, pattern: re.Pattern[str]) -> str:
     m = pattern.search(text or "")
@@ -108,8 +121,8 @@ _NAME_RE = re.compile(r"^@?[A-Za-z][A-Za-z0-9._+-]*(?:/[A-Za-z0-9._+-]+)?$")
 # Filenames/paths, not packages.
 _FILE_EXT_RE = re.compile(
     r"\.(py|pyi|js|mjs|cjs|jsx|ts|tsx|swift|rs|go|java|kt|rb|sh|bash|zsh|"
-    r"md|markdown|txt|json|ya?ml|toml|ini|cfg|conf|lock|csv|tsv|xml|html|"
-    r"css|scss|sql|env|log|png|jpg|svg|pdf)$",
+    r"md|markdown|txt|json|ya?ml|toml|ini|cfg|conf|lock|mod|sum|csv|tsv|xml|"
+    r"html|css|scss|sql|env|log|png|jpg|svg|pdf)$",
     re.IGNORECASE,
 )
 
@@ -343,6 +356,91 @@ def project_module_names(project_dir: Path) -> set[str]:
     return names
 
 
+# --- Existing imports ---------------------------------------------------------
+
+_SOURCE_SUFFIXES = frozenset({
+    ".py", ".pyi", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
+    ".swift", ".rs", ".go", ".java", ".kt",
+})
+_SKIP_DIRS = frozenset({
+    ".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", "target", ".build",
+    "vendor", "site-packages", ".worktrees",
+})
+_MAX_SOURCE_FILES = 3000
+
+_IMPORT_RES = (
+    # Python: `import a.b`, `from a.b import X, Y`
+    re.compile(r"^\s*import\s+([\w.]+)", re.MULTILINE),
+    re.compile(r"^\s*from\s+([\w.]+)\s+import\s+(.+)$", re.MULTILINE),
+    # JS/TS: `from 'pkg'`, `require('pkg')`, `import 'pkg'`
+    re.compile(r"""(?:from|import)\s+['"]([^'"]+)['"]"""),
+    re.compile(r"""require\(\s*['"]([^'"]+)['"]"""),
+    # Swift: `import Foo`
+    re.compile(r"^\s*import\s+([A-Za-z_]\w*)", re.MULTILINE),
+    # Rust: `use foo::bar`
+    re.compile(r"^\s*use\s+(\w+)", re.MULTILINE),
+)
+
+
+def existing_import_names(project_dir: Path) -> set[str]:
+    """Module and symbol names the project's own source already imports.
+
+    A design doc naming `BaseModel` or `log_utils` is naming code already in
+    use — not a dependency this change newly takes on. Scanning the source is
+    the cheapest precise signal for that, and it catches submodules and
+    imported symbols no manifest lists.
+    """
+    names: set[str] = set()
+    if not project_dir.is_dir():
+        return names
+
+    scanned = 0
+    stack = [project_dir]
+    while stack and scanned < _MAX_SOURCE_FILES:
+        current = stack.pop()
+        try:
+            entries = list(current.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.is_dir():
+                if entry.name not in _SKIP_DIRS and not entry.name.startswith("."):
+                    stack.append(entry)
+                continue
+            if entry.suffix not in _SOURCE_SUFFIXES:
+                continue
+            scanned += 1
+            if scanned > _MAX_SOURCE_FILES:
+                break
+            try:
+                text = entry.read_text(errors="ignore")
+            except OSError:
+                continue
+            for pattern in _IMPORT_RES:
+                for match in pattern.finditer(text):
+                    for group in match.groups():
+                        if not group:
+                            continue
+                        for piece in re.split(r"[,\s]+", group):
+                            piece = piece.strip("()").strip()
+                            if not piece or piece in ("as", "import"):
+                                continue
+                            # The dotted path AND each of its segments:
+                            # `multiplai_core.log_utils` also registers
+                            # `multiplai_core` and `log_utils`.
+                            for part in [piece, *re.split(r"[./]", piece)]:
+                                canonical_part = _canonical(part)
+                                if canonical_part:
+                                    names.add(canonical_part)
+    if scanned >= _MAX_SOURCE_FILES:
+        log.info(
+            "Import scan stopped at the %d-file cap in %s",
+            _MAX_SOURCE_FILES, project_dir,
+        )
+    return names
+
+
 # --- Public API ---------------------------------------------------------------
 
 def detect_new_dependencies(
@@ -365,21 +463,31 @@ def detect_new_dependencies(
     ]
 
     declared, manifests = declared_dependencies(project_dir)
-    own_modules = project_module_names(project_dir)
+    in_use = project_module_names(project_dir) | existing_import_names(project_dir)
 
     mentions: dict[str, list[str]] = {}
     for label, section_text in sources:
-        for raw in _BACKTICK_RE.findall(section_text):
-            canonical_name = _canonical(raw)
-            if not _is_plausible_dependency(raw, canonical_name):
-                continue
-            if _aliases(canonical_name) & declared:
-                continue
-            if _aliases(canonical_name) & own_modules:
-                continue
-            sites = mentions.setdefault(canonical_name, [])
-            if label not in sites:
-                sites.append(label)
+        for line in section_text.splitlines():
+            for match in _BACKTICK_RE.finditer(line):
+                raw = match.group(1)
+                canonical_name = _canonical(raw)
+                if not _is_plausible_dependency(raw, canonical_name):
+                    continue
+                if _aliases(canonical_name) & declared:
+                    continue
+                if _aliases(canonical_name) & in_use:
+                    continue
+                # "use `tomllib` rather than adding `tomli`" — the rejected
+                # alternative is not something we depend on.
+                if _NEGATION_RE.search(line[: match.start()]):
+                    log.debug(
+                        "Skipping '%s' — rejected alternative in: %s",
+                        canonical_name, line.strip()[:120],
+                    )
+                    continue
+                sites = mentions.setdefault(canonical_name, [])
+                if label not in sites:
+                    sites.append(label)
 
     if manifests:
         evidence_suffix = (
