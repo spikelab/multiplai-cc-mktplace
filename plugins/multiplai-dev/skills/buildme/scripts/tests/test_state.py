@@ -5,7 +5,7 @@ import pytest
 from pathlib import Path
 
 from build_pipeline.state import BuildState, TDDState, SpecGenState
-from build_pipeline.models import BuildPhase, BlockInfo, BlockStatus
+from build_pipeline.models import BuildPhase, BlockInfo, BlockStatus, ImplementationNote
 
 
 class TestBuildState:
@@ -160,3 +160,69 @@ class TestLegacyCheckpointResume:
         assert reloaded.phase == BuildPhase.DESIGN_AUDIT
         assert reloaded.spec_gen.completed_artifacts == s.spec_gen.completed_artifacts
         assert json.loads(out.read_text())["spec_gen"]["prototype_done"] is False
+
+
+class TestRespecPhaseAndNotes:
+    """BuildPhase.RESPEC sits between TDD_BUILD and COMPLETE, and the notes an
+    agent reported survive a checkpoint/resume round trip."""
+
+    def test_respec_is_ordered_after_tdd_build_and_before_complete(self):
+        order = list(BuildPhase)
+        assert order.index(BuildPhase.TDD_BUILD) < order.index(BuildPhase.RESPEC)
+        assert order.index(BuildPhase.RESPEC) < order.index(BuildPhase.COMPLETE)
+
+    def test_tdd_build_does_not_count_respec_as_complete(self):
+        s = BuildState(change_name="t", mode="only", tier="advanced")
+        s.phase = BuildPhase.TDD_BUILD
+        assert s.is_phase_complete(BuildPhase.REVIEW)
+        assert not s.is_phase_complete(BuildPhase.RESPEC)
+
+    def test_completed_build_skips_respec_on_resume(self):
+        s = BuildState(change_name="t", mode="only", tier="advanced")
+        s.phase = BuildPhase.COMPLETE
+        assert s.is_phase_complete(BuildPhase.RESPEC)
+
+    def test_pre_respec_checkpoint_still_loads_and_resumes(self, tmp_path):
+        """A .build-state.json written before BuildPhase.RESPEC existed (no
+        `notes` on blocks, phase from the old enum) loads and resumes."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text(json.dumps({
+            "change_name": "legacy",
+            "mode": "scratch",
+            "tier": "advanced",
+            "phase": "tdd_build",
+            "bootstrap_done": True,
+            "state_file": str(state_file),
+            "tdd": {
+                "blocks": [{
+                    "number": 1, "name": "A", "description": "a", "status": "done",
+                }],
+                "current_block": 0,
+            },
+        }))
+
+        loaded = BuildState.load(state_file)
+        assert loaded.phase == BuildPhase.TDD_BUILD
+        assert loaded.tdd.blocks[0].notes == []
+        assert loaded.is_phase_complete(BuildPhase.REVIEW)
+        assert not loaded.is_phase_complete(BuildPhase.RESPEC)
+
+    def test_block_notes_survive_checkpoint_and_reload(self, tmp_path):
+        state_file = tmp_path / "state.json"
+        block = BlockInfo(number=2, name="Uploader", description="u")
+        block.notes.append(ImplementationNote(
+            block_number=2, block_name="Uploader", role="implementer",
+            surprises="The client raises on timeout.", spec_impact="contradicts",
+        ))
+        s = BuildState(
+            change_name="t", mode="only", tier="advanced",
+            state_file=str(state_file), tdd=TDDState(blocks=[block]),
+        )
+        s.checkpoint(state_file)
+
+        loaded = BuildState.load(state_file)
+        note = loaded.tdd.blocks[0].notes[0]
+        assert note.spec_impact == "contradicts"
+        assert note.contradicts
+        assert note.role == "implementer"
+        assert "raises on timeout" in note.surprises

@@ -4,6 +4,7 @@ import pytest
 from build_pipeline.models import (
     ReviewScore, ReviewResult, ReviewIssue, GateResult,
     BlockInfo, BlockStatus, ArtifactInfo, ArtifactStatus, ChangeStatus,
+    ImplementationNote, SPEC_IMPACT_LEVELS,
 )
 
 
@@ -118,3 +119,35 @@ class TestChangeStatus:
             is_complete=True,
         )
         assert cs.is_complete
+
+
+class TestImplementationNote:
+    def test_contradicts_property(self):
+        note = ImplementationNote(
+            block_number=1, block_name="A", role="implementer",
+            surprises="x", spec_impact="contradicts",
+        )
+        assert note.contradicts
+
+    def test_clarify_and_none_are_not_contradictions(self):
+        for impact in ("none", "clarify"):
+            note = ImplementationNote(
+                block_number=1, block_name="A", role="test_writer",
+                surprises="x", spec_impact=impact,
+            )
+            assert not note.contradicts
+
+    def test_defaults_are_the_quiet_case(self):
+        note = ImplementationNote(block_number=1, block_name="A", role="implementer")
+        assert note.surprises == ""
+        assert note.spec_impact == "none"
+        assert note.spec_impact in SPEC_IMPACT_LEVELS
+
+    def test_block_info_collects_notes(self):
+        block = BlockInfo(number=1, name="A", description="d")
+        assert block.notes == []
+        block.notes.append(ImplementationNote(
+            block_number=1, block_name="A", role="implementer",
+            spec_impact="clarify", surprises="TTL unspecified",
+        ))
+        assert block.notes[0].spec_impact == "clarify"

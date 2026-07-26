@@ -487,14 +487,14 @@ def prototype_gate(prototype_dir: Path) -> GateResult:
 _REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|SURPRISES|SPEC_IMPACT"
 
 _SURPRISES_RE = re.compile(
-    r"^\s*(?:[-*]\s*|\*\*)?SURPRISES:?\*{0,2}\s*[:\-]?[ \t]*"
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?SURPRISES:?\*{0,2}\s*[:\-]?[ \t]*"
     r"(.*?)"
-    rf"(?=^\s*(?:[-*]\s*|\*\*)?(?:{_REPORT_SLOT_LABELS})\b|\Z)",
+    rf"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:{_REPORT_SLOT_LABELS})\b|\Z)",
     re.MULTILINE | re.IGNORECASE | re.DOTALL,
 )
 
 _SPEC_IMPACT_RE = re.compile(
-    r"^\s*(?:[-*]\s*|\*\*)?SPEC_IMPACT:?\*{0,2}\s*[:\-]?\s*"
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?SPEC_IMPACT:?\*{0,2}\s*[:\-]?\s*"
     r"(none|clarify|contradicts)\b",
     re.MULTILINE | re.IGNORECASE,
 )

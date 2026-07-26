@@ -427,3 +427,28 @@ class TestPrototypeToggle:
         assert parser.parse_args(["build", "--prototype"]).prototype is True
         with pytest.raises(SystemExit):
             parser.parse_args(["build", "--prototype", "--no-prototype"])
+
+
+class TestRespecToggle:
+    """`respec: {halt_on_contradiction: ...}` in specs/config.yaml, default off."""
+
+    def test_defaults_to_false(self):
+        assert BuildConfig().gates.respec_halt_on_contradiction is False
+
+    def test_absent_config_section_keeps_the_default(self, tmp_path):
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text("context: demo\n")
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = specs
+        config._load_specs_config()
+        assert config.gates.respec_halt_on_contradiction is False
+
+    def test_enabled_from_specs_config_yaml(self, tmp_path):
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text("respec:\n  halt_on_contradiction: true\n")
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = specs
+        config._load_specs_config()
+        assert config.gates.respec_halt_on_contradiction is True

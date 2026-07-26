@@ -10,6 +10,7 @@ from build_pipeline.gates import (
     prototype_gate,
     prototype_required,
     slot_has_content,
+    parse_implementation_note,
     red_gate,
     review_score_gate,
     review_iteration_gate,
@@ -675,3 +676,102 @@ class TestPrototypeGate:
         r = prototype_gate(proto)
         assert not r.passed
         assert "REQUIRED slots" in r.reason
+
+
+class TestParseImplementationNote:
+    """The SURPRISES:/SPEC_IMPACT: slots that feed the respec loop."""
+
+    IMPL_REPORT = """\
+Implemented the uploader.
+
+STATUS: DONE
+TESTS_RUN: pytest -xvs
+GREEN: 42 passed in 3.1s
+FILES: uploader.py
+SURPRISES: The storage client raises on timeout; the design assumed a
+return code. I wrapped the call to keep the block's tests green.
+SPEC_IMPACT: contradicts
+"""
+
+    def _parse(self, output, role="implementer"):
+        return parse_implementation_note(
+            output, block_number=3, block_name="Uploader", role=role,
+        )
+
+    def test_parses_contradiction_with_multiline_surprises(self):
+        note = self._parse(self.IMPL_REPORT)
+        assert note is not None
+        assert note.spec_impact == "contradicts"
+        assert note.contradicts
+        assert note.block_number == 3
+        assert note.block_name == "Uploader"
+        assert note.role == "implementer"
+        assert "raises on timeout" in note.surprises
+        assert "return code" in note.surprises
+        # The surprises text stops at the next REQUIRED slot.
+        assert "SPEC_IMPACT" not in note.surprises
+
+    def test_none_on_both_slots_records_nothing(self):
+        note = self._parse(
+            "STATUS: DONE\nFILES: a.py\nSURPRISES: none\nSPEC_IMPACT: none\n"
+        )
+        assert note is None
+
+    def test_no_slots_at_all_records_nothing(self):
+        assert self._parse("STATUS: DONE\nFILES: a.py\n") is None
+
+    def test_clarify_is_recorded(self):
+        note = self._parse(
+            "SURPRISES: Token TTL was unspecified; I used 15 minutes.\n"
+            "SPEC_IMPACT: clarify\n"
+        )
+        assert note is not None
+        assert note.spec_impact == "clarify"
+        assert "15 minutes" in note.surprises
+
+    def test_surprises_without_impact_slot_defaults_to_none_but_is_kept(self):
+        note = self._parse("SURPRISES: The API paginates; the design did not say so.\n")
+        assert note is not None
+        assert note.spec_impact == "none"
+        assert "paginates" in note.surprises
+
+    def test_echoed_template_placeholder_is_not_a_finding(self):
+        note = self._parse(
+            "SURPRISES: <what did not match the spec/design, or \"none\">\n"
+            "SPEC_IMPACT: none\n"
+        )
+        assert note is None
+
+    def test_last_occurrence_wins_over_quoted_instructions(self):
+        """A report that restates the template before answering must not have
+        the template outrank the agent's own answer."""
+        output = (
+            "I was asked to end with:\n"
+            "SURPRISES: <what did not match the spec/design, or \"none\">\n"
+            "SPEC_IMPACT: none\n"
+            "\nHere is my report.\n"
+            "STATUS: DONE\n"
+            "SURPRISES: The queue drops duplicates silently.\n"
+            "SPEC_IMPACT: contradicts\n"
+        )
+        note = self._parse(output)
+        assert note is not None
+        assert note.spec_impact == "contradicts"
+        assert "drops duplicates" in note.surprises
+
+    def test_markdown_decorated_slots_are_parsed(self):
+        note = self._parse(
+            "- **SURPRISES:** The CLI writes to stderr, not stdout.\n"
+            "- **SPEC_IMPACT:** clarify\n"
+        )
+        assert note is not None
+        assert note.spec_impact == "clarify"
+        assert "stderr" in note.surprises
+
+    def test_role_is_recorded_for_the_test_writer(self):
+        note = self._parse(
+            "SURPRISES: The scenario names a type that does not exist.\n"
+            "SPEC_IMPACT: contradicts\n",
+            role="test_writer",
+        )
+        assert note.role == "test_writer"
