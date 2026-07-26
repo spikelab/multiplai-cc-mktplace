@@ -69,13 +69,13 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Config-audit state stamping (closes the 90-day SessionStart nudge gate)"
+        description="Config-audit state stamping (closes the 60-day SessionStart nudge gate)"
     )
     parser.add_argument(
         "--stamp",
         action="store_true",
         help="Record that a config audit ran (writes config_audit_state.yaml "
-             "so the 90-day SessionStart gate stops nudging). Used by "
+             "so the 60-day SessionStart gate stops nudging). Used by "
              "/multiplai-context:config-audit as its final step.",
     )
     parser.add_argument(

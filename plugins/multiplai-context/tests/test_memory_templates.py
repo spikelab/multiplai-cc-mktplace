@@ -10,6 +10,13 @@ from conftest import PLUGIN_ROOT
 TEMPLATES_DIR = PLUGIN_ROOT / "templates"
 TEMPLATE_FILES = ["me.md", "technical-pref.md", "preferences.md"]
 
+# Templates this plugin ships that are NOT part of core's onboarding set.
+# Kept separate on purpose: the onboarding three are profile files the user
+# fills in at setup, while prospective.md is a machine-written channel with a
+# different shape — folding it into TEMPLATE_FILES would subject it to the
+# placeholder/section checks below, which don't apply to it.
+LOCAL_TEMPLATE_FILES = ["prospective.md"]
+
 
 class TestTemplateExistence:
     """Verify template files exist."""
@@ -21,9 +28,9 @@ class TestTemplateExistence:
     def test_template_exists(self, filename):
         assert (TEMPLATES_DIR / filename).is_file(), f"Template missing: {filename}"
 
-    def test_exactly_three_templates(self):
+    def test_templates_dir_holds_exactly_the_known_templates(self):
         md_files = [f.name for f in TEMPLATES_DIR.iterdir() if f.suffix == ".md"]
-        assert set(md_files) == set(TEMPLATE_FILES)
+        assert set(md_files) == set(TEMPLATE_FILES) | set(LOCAL_TEMPLATE_FILES)
 
 
 class TestTemplateValidMarkdown:

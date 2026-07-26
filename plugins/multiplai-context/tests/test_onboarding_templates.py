@@ -29,6 +29,9 @@ from conftest import PLUGIN_ROOT, SCRIPTS_DIR
 
 TEMPLATES_DIR = PLUGIN_ROOT / "templates"
 TEMPLATE_FILES = ["me.md", "technical-pref.md", "preferences.md"]
+# Plugin-local templates, not part of core's onboarding set (see
+# setup_write.LOCAL_TEMPLATE_FILENAMES for why they're written but not checked).
+LOCAL_TEMPLATE_FILES = ["prospective.md"]
 SETUP_SKILL_PATH = PLUGIN_ROOT / "skills" / "setup" / "SKILL.md"
 SETUP_CHECK_SCRIPT = SCRIPTS_DIR / "setup_check.py"
 SETUP_WRITE_SCRIPT = SCRIPTS_DIR / "setup_write.py"
@@ -660,13 +663,13 @@ class TestTemplateDirectorySpec:
         assert TEMPLATES_DIR.is_dir()
 
     def test_template_count(self):
-        """Exactly three markdown files in templates directory."""
+        """The templates directory holds exactly the known templates."""
+        expected = sorted(TEMPLATE_FILES + LOCAL_TEMPLATE_FILES)
         md_files = sorted(f.name for f in TEMPLATES_DIR.iterdir() if f.suffix == ".md")
-        assert md_files == sorted(TEMPLATE_FILES), \
-            f"Expected {sorted(TEMPLATE_FILES)}, got {md_files}"
+        assert md_files == expected, f"Expected {expected}, got {md_files}"
 
     def test_no_non_template_files(self):
         """Templates directory should only contain the expected template files."""
         all_files = [f.name for f in TEMPLATES_DIR.iterdir() if f.is_file()]
-        unexpected = set(all_files) - set(TEMPLATE_FILES)
+        unexpected = set(all_files) - set(TEMPLATE_FILES) - set(LOCAL_TEMPLATE_FILES)
         assert not unexpected, f"Unexpected files in templates/: {unexpected}"

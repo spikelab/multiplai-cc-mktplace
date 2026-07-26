@@ -1,6 +1,6 @@
 ---
 name: config-audit
-description: "Subtractive review of the active Claude/multiplai configuration on a ~90-day cadence — classifies every standing rule as still-serving, obsolete, or model-constraining, and writes a removals-first proposal to .multiplai/dreams/ for user review. Does NOT apply changes."
+description: "Subtractive review of the active Claude/multiplai configuration on a ~60-day cadence — classifies every standing rule as still-serving, obsolete, or model-constraining, and writes a removals-first proposal to .multiplai/dreams/ for user review. Does NOT apply changes."
 ---
 
 # Multiplai Config Audit — Subtractive Rule/Config Review
@@ -16,6 +16,21 @@ default question is "why does this rule still exist?", not "what should we add?"
 **This skill never edits configuration.** The only files it writes are the
 proposal (step 4) and the state stamp (step 6). The user reviews the proposal
 and makes any changes themselves.
+
+**Delete aggressively — capability gets absorbed.** The default assumption
+should be that scaffolding written for a previous model generation is now dead
+weight. Every model release absorbs some of what the harness used to supply:
+the step-by-step decomposition, the "check X before Y" reminder, the worked
+example. Anthropic cut Claude Code's own system prompt by roughly 80% on
+exactly this reasoning. A rule that was load-bearing eighteen months ago is,
+by default, suspect today — so when a rule is a *judgment call*, remove it and
+see what breaks, rather than keeping it because it once helped. The asymmetry
+favors deletion: a wrongly-removed rule shows up as a visible regression the
+next session and costs one line to restore, while a wrongly-kept rule is
+invisible — it just quietly taxes every session and caps the model's ceiling
+forever. This bias covers *scaffolding* only — never safety rules, destructive-
+action guards, or anything encoding a fact about the user rather than a
+workaround for a model.
 
 ## Why this exists — three motivating cases
 
@@ -89,7 +104,7 @@ and makes any changes themselves.
    not even "obvious" ones. The proposal is for the user's review; the user
    decides what happens to it.
 
-6. **Stamp the state file** (this is what closes the 90-day SessionStart nudge
+6. **Stamp the state file** (this is what closes the 60-day SessionStart nudge
    gate — never skip it, even when the audit found nothing to remove):
 
    ```bash

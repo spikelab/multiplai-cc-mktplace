@@ -97,6 +97,8 @@ def _lock_path(target: Path) -> Path:
 # still yields every completed <unit> block instead of losing everything.
 # Bake-off on the 4 failed sessions, 2026-07-07: tags 12/12 clean.
 EXTRACTION_PROMPT = """\
+Today's date: {today}
+
 You are analyzing a conversation transcript between a user and an AI \
 assistant ("Claude"). Extract diary entries and learnings grouped by \
 **logical unit of work** — like commits, not turns.
@@ -121,7 +123,7 @@ invest most effort here. Plain prose; no escaping needed.
 </diary>
 <learning>
 trust: verified | high | medium
-type: OBSERVATION | PREFERENCE | CORRECTION | PATTERN | RULE-PROPOSAL
+type: OBSERVATION | PREFERENCE | CORRECTION | PATTERN | RULE-PROPOSAL | INTENTION
 target: one valid memory file name from the list below, or unknown
 description: concise but complete (one sentence, single line)
 action: what to add/change in that file (one sentence, single line)
@@ -152,6 +154,42 @@ When the user corrects Claude's output or assumption:
 - type: CORRECTION, trust: verified
 Signals: "use X not Y", "no, that's wrong", "actually...", explicit contradictions.
 Corrections are highest priority — they prevent recurring mistakes.
+
+## Intention detection (prospective memory)
+
+When the user states something to come back to LATER — a future check, a
+revisit, a "when X happens, do Y":
+- type: INTENTION, target: prospective.md
+Signals: "remind me to...", "revisit this in September", "check back after the
+release", "when the runtime updates, re-run X", "let's decide this next quarter".
+
+Write the description in one of exactly two shapes, so it can be stored
+machine-readably:
+- `due: YYYY-MM-DD — <what to do>` when a date is stated or clearly implied
+  (resolve relative dates like "in September" or "in two weeks" against today's
+  date, given above).
+- `on: <condition in plain words> — <what to do>` when the trigger is an event
+  rather than a date. Do NOT invent a date for a condition; "when X ships" has
+  no date and guessing one produces a reminder that fires at the wrong time.
+
+Only capture intentions the user actually expressed. An open question Claude
+noticed, or work that merely remains unfinished, is not an intention — that
+belongs in the diary.
+
+## Verdict detection (revealed preference)
+
+When the user delivers an explicit verdict on something Claude produced —
+keeping it, killing it, or asking for more of it:
+- type: PREFERENCE, trust: verified, and BEGIN the description with
+  `verdict: keep` / `verdict: kill` / `verdict: expand` followed by ` — ` and
+  what the verdict was about.
+Signals: "this is great, more like this", "never do that again", "drop the
+tables", "keep it this short", "stop adding X", "yes, exactly this".
+
+A verdict on a concrete output beats a stated preference: it is what the user
+did, not what they said they wanted. Do NOT mark ordinary approval to proceed
+("yes", "go ahead", "sounds good") as a verdict — that is consent to an action,
+not a judgment about output style.
 
 ## Rules
 
@@ -263,8 +301,13 @@ async def extract_units(
     # code, f-strings) which would raise KeyError/ValueError and silently
     # kill extraction. Plain replacement never interprets braces. Replace
     # valid_targets first (controlled), transcript last (untrusted).
+    # An INTENTION must resolve "in September" / "in two weeks" to a real date,
+    # and the model has no clock. Without this the relative dates it emits are
+    # anchored to training time, i.e. wrong, i.e. reminders that fire on the
+    # wrong day — worse than no reminder.
     prompt = (
         EXTRACTION_PROMPT
+        .replace("{today}", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         .replace("{valid_targets}", targets_block)
         .replace("{transcript}", text)
     )

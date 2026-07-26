@@ -21,13 +21,13 @@ elapsed since the last dream run and fresh learnings are pending,
 emits a system nudge so the user is prompted to run ``/multiplai-context:dream``
 instead of the consolidation silently falling out of rhythm.
 
-Similarly checks the config-audit 90-day gate: when more than 90 days have
+Similarly checks the config-audit 60-day gate: when more than 60 days have
 elapsed since the last subtractive config/rules review, emits a nudge to run
 ``/multiplai-context:config-audit``. The state file (``config_audit_state.yaml``,
 beside the dream state) is stamped deterministically by that skill via
 ``scripts/config_audit.py --stamp``; when it is missing entirely (fresh
 install) this hook seeds it with ``last_run: now`` instead of nudging, so
-the 90-day clock starts at install.
+the 60-day clock starts at install.
 """
 
 import json
@@ -36,7 +36,7 @@ import subprocess
 import sys
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -50,9 +50,12 @@ logger = setup_logging("session_start")
 _DREAM_GATE_HOURS = 24
 
 # The config-audit cadence is deliberately long: config decay is slow, and
-# the audit is a heavyweight review. 90 days mirrors the "quarterly config
-# review" cadence from the subtractive config-audit skill (gap B1).
-_CONFIG_AUDIT_GATE_DAYS = 90
+# the audit is a heavyweight review. Tightened 90 -> 60 (2026-07-26): the
+# thing the audit removes is scaffolding that newer models no longer need,
+# and model capability now moves faster than a quarterly cadence catches —
+# rules written for a model two releases ago sit in the prompt costing tokens
+# and constraining a model that outgrew them.
+_CONFIG_AUDIT_GATE_DAYS = 60
 
 # Deferred-extraction retry policy. A detached extraction child should
 # finish well within the stale window; markers older than this with no
@@ -101,12 +104,12 @@ def _dream_gate_open(dream_state_file: Path) -> bool:
 
 
 def _config_audit_gate_open(config_audit_state_file: Path) -> bool:
-    """Return True when >=90 days have passed since the last config audit.
+    """Return True when >=60 days have passed since the last config audit.
 
     First run (no state file at all): the gate stays CLOSED. There is no
     record to be stale — nudging "the config audit is due" on every fresh
     install would be false and noisy. Instead the file is seeded with
-    ``last_run: now`` so the 90-day clock starts at install and the first
+    ``last_run: now`` so the 60-day clock starts at install and the first
     nudge arrives when the cadence is genuinely due. Seeding is
     best-effort: if the write fails the gate still stays closed (a
     filesystem hiccup must not turn into a false nudge) and seeding is
@@ -127,7 +130,7 @@ def _config_audit_gate_open(config_audit_state_file: Path) -> bool:
                 {"last_run": datetime.now(timezone.utc).isoformat()},
             )
             logger.info(
-                "Seeded config-audit state %s (first run — 90-day clock starts now)",
+                "Seeded config-audit state %s (first run — 60-day clock starts now)",
                 config_audit_state_file,
             )
         except Exception:
@@ -446,6 +449,32 @@ def _launch_cost_collection(scripts_dir: Path) -> bool:
         return False
 
 
+def _launch_maintainer(scripts_dir: Path) -> bool:
+    """Fire the proactive memory maintainer, detached.
+
+    Same fire-and-forget shape as cost collection: the maintainer's passes
+    include two model calls and a subprocess, none of which may run inside a
+    kill-within-seconds hook. It owns its own 24h gate, so launching on every
+    session start is cheap — the child exits immediately when the gate is
+    closed. Best-effort: maintenance must never block a session from starting.
+    """
+    try:
+        script = scripts_dir / "memory_maintainer.py"
+        if not script.exists():
+            return False
+        subprocess.Popen(
+            ["uv", "run", "--no-project", str(script)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return True
+    except Exception:
+        logger.warning("Could not launch memory maintainer", exc_info=True)
+        return False
+
+
 def _emit_dream_nudge() -> None:
     """Print an additionalContext nudge prompting the user to run /multiplai-context:dream."""
     print(
@@ -462,11 +491,37 @@ def _emit_config_audit_nudge() -> None:
     print(
         "\n--- SYSTEM NUDGE ---\n"
         "Config-audit gate is open (no valid record of a config/rules "
-        "review within the last 90 days). Surface this to the user at the "
+        "review within the last 60 days). Surface this to the user at the "
         "next natural stopping point: 'The periodic config audit looks due "
         "— worth running /multiplai-context:config-audit to prune stale "
         "rules?'"
     )
+
+
+def _emit_prospective_nudge(memory_dir: Path) -> int:
+    """Surface intentions that have come due. Returns how many were surfaced.
+
+    Prospective memory is the one channel where being silent is the failure:
+    an intention nobody surfaces is indistinguishable from one never captured.
+    Unlike the dream and config-audit gates there is no time window to respect
+    — the intention's own due date IS the gate, so this runs every session and
+    stays quiet until something is actually due.
+
+    Never fatal. A malformed prospective.md must not stop a session from
+    starting.
+    """
+    try:
+        from lib.prospective import actionable, load, render_nudge
+
+        today = date.today()
+        due = actionable(load(memory_dir), today)
+        if not due:
+            return 0
+        print(render_nudge(due, today))
+        return len(due)
+    except Exception:
+        logger.exception("Prospective-memory check failed; continuing")
+        return 0
 
 
 def _inject_checkpoint_recovery(
@@ -689,7 +744,7 @@ def main() -> None:
         )
         _emit_dream_nudge()
 
-    # Config-audit gate: emit a nudge when >=90 days have passed since the
+    # Config-audit gate: emit a nudge when >=60 days have passed since the
     # last subtractive config/rules review. State lives beside the dream
     # state and is stamped by config_audit.py --stamp (invoked by the
     # /multiplai-context:config-audit skill); a missing state file is
@@ -699,10 +754,29 @@ def main() -> None:
         logger.info("Config-audit gate open; emitting nudge")
         log_event(
             "nudge", "config_audit",
-            "config-audit gate open (>90 days since last audit) — surfaced to user",
+            "config-audit gate open (>60 days since last audit) — surfaced to user",
             session_id=session_id,
         )
         _emit_config_audit_nudge()
+
+    # Prospective memory: intentions whose due date has arrived. No cadence
+    # gate — the due date is the gate.
+    surfaced = _emit_prospective_nudge(memory_dir)
+    if surfaced:
+        logger.info("Prospective memory: %d intention(s) surfaced", surfaced)
+        log_event(
+            "nudge", "prospective",
+            f"{surfaced} due intention(s) surfaced to user",
+            session_id=session_id,
+        )
+
+    # Proactive memory maintenance. Detached and silent: it produces proposals
+    # and derived files, nothing the user needs to see at session start, and
+    # nothing it does may delay the session.
+    if _launch_maintainer(paths.scripts_dir()):
+        logger.info("Memory maintainer launched (detached)")
+        log_event("maintenance", "memory_maintainer",
+                  "proactive maintenance pass launched", session_id=session_id)
 
     logger.info(
         "Session started: %s (%d memory files on disk; not injected — routed per-prompt)",

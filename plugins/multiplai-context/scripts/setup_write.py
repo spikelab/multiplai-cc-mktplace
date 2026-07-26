@@ -21,8 +21,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from lib.prospective import PROSPECTIVE_FILENAME
 from multiplai_core.config import TEMPLATE_FILENAMES
 from multiplai_core.paths import get_paths
+
+# Templates this plugin ships that are not (yet) in core's TEMPLATE_FILENAMES.
+#
+# Deliberately additive here and *not* in `setup_check.py`: that script's
+# `missing` list drives `all_present`, and adding a filename to it would tell
+# every existing install its memory is incomplete the next time /setup runs.
+# New installs get the file; existing ones get it the first time an INTENTION
+# is applied through /dream-remember, which creates the file anyway.
+LOCAL_TEMPLATE_FILENAMES = (PROSPECTIVE_FILENAME,)
 
 
 def write_memory_files(force: bool = False) -> dict:
@@ -47,7 +57,7 @@ def write_memory_files(force: bool = False) -> dict:
     copied = []
     skipped = []
 
-    for fname in TEMPLATE_FILENAMES:
+    for fname in (*TEMPLATE_FILENAMES, *LOCAL_TEMPLATE_FILENAMES):
         src = templates_dir / fname
         dst = memory_dir / fname
 
