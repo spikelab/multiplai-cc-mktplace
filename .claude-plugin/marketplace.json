@@ -10,7 +10,7 @@
       "name": "multiplai-context",
       "source": "./plugins/multiplai-context",
       "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -73,7 +73,7 @@
       "name": "multiplai-research",
       "source": "./plugins/multiplai-research",
       "description": "Research skill pack: code-driven deep research pipeline, insight extraction, structured interviewing.",
-      "version": "0.3.0",
+      "version": "0.5.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -116,7 +116,7 @@
       "name": "multiplai-media",
       "source": "./plugins/multiplai-media",
       "description": "Media skill pack: audio transcription, YouTube transcripts, screen-recording demo videos, diagrams, host-browser automation.",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -137,7 +137,7 @@
       "name": "multiplai-messaging",
       "source": "./plugins/multiplai-messaging",
       "description": "Messaging skill pack: read/search/post Slack as yourself, and search/read/draft Gmail (never sends).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"

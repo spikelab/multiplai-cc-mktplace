@@ -28,6 +28,11 @@ doesn't. Native Windows (without WSL) isn't supported.
    to `PLANS/dream-actions-{date}.md`; everything else (one-off events, things
    the diary already records) → **filtered out**. You approve before anything
    is written.
+5. **Unattended upkeep** — a [proactive maintainer](#proactive-maintenance)
+   runs detached at most once a day (lint, dream proposal, catalog, `now/`),
+   and [prospective memory](#prospective-memory--intentions-that-fire-later)
+   surfaces intentions whose date has arrived. Neither ever writes to your
+   memory files.
 
 ```
   setup → memory files
@@ -400,13 +405,13 @@ All commands are namespaced under `/multiplai-context:`.
 | `/multiplai-context:dream-remember` | Review the proposal (generating one if needed), approve/reject memory edits and action items, apply approved edits, write approved action items to `PLANS/dream-actions-{date}.md`, clean up processed learnings. |
 | `/multiplai-context:health` | **Is it broken?** Mechanical infrastructure check (deterministic script): active model client, directories present, memory-file freshness by mtime, diary/learnings/dream counts. Fast, cheap, run anytime. |
 | `/multiplai-context:memory-health-audit` | **Is it good?** Analytical effectiveness audit — cross-correlates retrieval logs, diary, learnings, and memory structure to find what's useful, what's wasted, and what to restructure. Slower; run ~monthly. |
-| `/multiplai-context:log-doctor` | **Why is it failing?** Analyzes the runtime logs across subsystems (context_manager, extract_learnings, backfill, dream, lifecycle hooks) to surface failures, anomalies, and degradation, verifies root causes against source, and produces a fix-recommendation report. Can focus on one subsystem or actively probe a functionality to confirm its logs appear. |
+| `/multiplai-context:log-doctor` | **Why is it failing?** Analyzes the runtime logs across subsystems (context_manager, extract_learnings, backfill, dream, lifecycle hooks) to surface failures, anomalies, and degradation, verifies root causes against source, and produces a fix-recommendation report. Can focus on one subsystem or actively probe a functionality to confirm its logs appear. Log text is **untrusted input** — quoted lines arrive inside `untrusted-content` fences, control/bidi characters stripped and instruction-shaped spans marked `⟪INJECTION?⟫`; see [`docs/untrusted-content.md`](../../docs/untrusted-content.md). |
 | `/multiplai-context:refresh-catalogs` | Regenerate catalog indexes. Supports `--force`, `--dry-run`, `--only`. `--only <gen>` is an explicit override — it runs even if that generator's `enable_*` flag is off (e.g. `--only resources` refreshes the resources catalog while `enable_resources` stays `false`). |
 | `/multiplai-context:backfill` | Reconstruct learnings/diary/now summaries from existing Claude Code transcripts. Default window 7 days; `--days N`, `--since DATE`, `--all`. |
 | `/multiplai-context:now` | Rebuild per-project `now/` status snapshots from recent diary entries. Run after a backfill, or any time the injected project state looks stale. |
 | `/multiplai-context:qmd-search` | Manually search the resources knowledge base via qmd (semantic + keyword) — the manual companion to `resources_retrieval=qmd`. |
-| `/multiplai-context:costs` | Report API-equivalent costs for Claude Code usage — per chat, skill, subagent, project, model, or day. Collects fresh data from session transcripts, then reports from the cost ledger. Requires `enable_costs`. |
-| `/multiplai-context:config-audit` | **Subtractive** config/rules review on a ~90-day cadence — enumerates the active config surface (global + workspace `CLAUDE.md`s, `settings.json` env/permissions, hook registrations, memory-file standing rules), classifies each rule as still-serving / obsolete / model-constraining, and writes a removals-first proposal to `.multiplai/dreams/config-audit-YYYY-MM-DD.md`. Never applies changes; stamps `config_audit_state.yaml` to close the SessionStart nudge gate. |
+| `/multiplai-context:costs` | Report API-equivalent costs for Claude Code usage — per chat, skill, subagent, project, model, day, or branch. Also reports **per outcome** (`--group task --pr-join` = cost per merged PR; `--group build` = cost per DONE and per FAILED buildme block) and **cache utilization** (`--report cache`). Cross-model comparisons are per-outcome only — different models tokenize differently, so a cheaper per-token model that loops twice is more expensive. Collects fresh data from session transcripts, then reports from the cost ledger. Requires `enable_costs`. Interface pinned by [`skills/costs/CONTRACT.md`](skills/costs/CONTRACT.md). |
+| `/multiplai-context:config-audit` | **Subtractive** config/rules review on a **60-day** cadence (pinned to how often models ship, not to how fast config rots — what the audit removes is scaffolding a newer model no longer needs) — enumerates the active config surface (global + workspace `CLAUDE.md`s, `settings.json` env/permissions, hook registrations, memory-file standing rules), classifies each rule as still-serving / obsolete / model-constraining, and writes a removals-first proposal to `.multiplai/dreams/config-audit-YYYY-MM-DD.md`. Never applies changes; stamps `config_audit_state.yaml` to close the SessionStart nudge gate. |
 
 ## Where your data lives
 
@@ -415,11 +420,11 @@ Everything stays on your machine under `<workspace>/.multiplai/`
 
 | Subdir | What's in it |
 |--------|--------------|
-| `memory/` | Your memory files. You edit these directly. |
+| `memory/` | Your memory files. You edit these directly. Includes `prospective.md` — [intentions that fire later](#prospective-memory--intentions-that-fire-later). |
 | `diary/YYYY-MM-DD/` | One file per session — a narrative of what happened. |
 | `learnings/` | Extracted insights pending consolidation. |
 | `now/` | Per-project current-state summaries. |
-| `data/` | Runtime state — catalogs, logs, session state. Disposable; recreated as needed. |
+| `data/` | Runtime state — catalogs, logs, session state, gate stamps (`dream_state.yaml`, `config_audit_state.yaml`, `maintainer_state.yaml`). Disposable; recreated as needed. |
 
 Delete any of these any time; the plugin recreates what it needs. If
 `.multiplai/` lives inside a git repo and you don't want diary/learnings
@@ -448,13 +453,110 @@ markdown files, so it won't sweep unrelated work when memory lives inside
 a larger repo. If `memory_dir` isn't a git repo, auto-commit is skipped
 with a log warning and everything else keeps working.
 
+### Fact-level freshness (`as of` / `review by`)
+
+A memory file carries one `**Last Updated:**` stamp. That says when the *file*
+was touched — it says nothing about whether a particular fact inside it is still
+true, and the facts that rot (a price, a version, an employer, "the current best
+X") each rot on their own schedule while the file around them stays accurate.
+
+The convention is one suffix on the fact itself:
+
+```markdown
+- Container image is on v0.4 (as of 2026-07)
+- Flat-tax regime caps at €85k (as of 2026-07, review by 2026-10)
+```
+
+A staleness linter (`scripts/lib/memory_lint.py`) reports two kinds of finding —
+`expired` (a `review by` date that has passed) and `unmarked` (a volatile-class
+fact with no annotation at all). It is **warn-only and never rewrites a file**:
+volatile-class detection is heuristic, so a false positive must cost one noisy
+line in a report, never a silently edited fact. Findings surface in
+`/multiplai-context:health` (as `memory_validity`) and in the maintainer's
+report, and `/multiplai-context:dream` asks for the annotation on newly proposed
+volatile lines.
+
+## Prospective memory — intentions that fire later
+
+Every file under `memory/` answers *what is true*. `memory/prospective.md`
+answers *what did I say I'd come back to* — the September re-check, the "when
+the runtime updates, re-run the audit", the deadline three weeks out. Before it
+existed those lived in the transcript of whichever session mentioned them, i.e.
+until that session ended.
+
+One intention per line, in one of two shapes:
+
+```markdown
+- [due: 2026-09-01] Re-check the tax residency rule (captured 2026-07-26)
+- [on: the runtime moves past v0.5] Re-run the config audit (captured 2026-07-26)
+```
+
+The distinction is the point:
+
+| Kind | Machine-checkable? | How it reaches you |
+|------|:---:|---|
+| `due:` | yes | A `SessionStart` nudge from **a week before** the date, repeated while overdue |
+| `on:` | **no** | Normal memory routing when a prompt touches the topic, plus a periodic re-listing sweep |
+
+`on:` conditions are **never evaluated**. No code decides whether "the runtime
+updated" has happened, because a confident wrong guess fires the reminder at the
+wrong time — which trains you to ignore the channel.
+
+The file is seeded by `/multiplai-context:setup` from
+`templates/prospective.md`. Entries arrive through the normal pipeline
+(extraction → dream → `/dream-remember`), not by hand-editing mid-session.
+**Nothing expires automatically** — delete an intention once it's been acted on;
+a file of dead intentions is a nudge everybody learns to skip. A malformed line
+never blocks a session start.
+
+## Proactive maintenance
+
+Everything else in this plugin is *reactive*: routing fires on a prompt, dream
+fires when you run it, catalogs rebuild when something asks. So maintenance
+happened exactly as often as it was remembered — which, for a background chore,
+means "eventually".
+
+`scripts/memory_maintainer.py` is launched **detached** from every
+`SessionStart` and owns a **24-hour gate**, so the child exits immediately when
+it has already run today. Four passes:
+
+| Pass | What it does | Model call? |
+|---|---|---|
+| 1. Staleness lint | `lib/memory_lint` — expired `review by` dates, unannotated volatile facts | no |
+| 2. Dream proposal | Only when the dream gate is open **and** a learnings backlog exists | yes |
+| 3. Catalog refresh | Only when a memory file is newer than the catalog that indexes it | yes |
+| 4. `now/` rebuild | `synthesize_now` for the **active project only**, on a **Haiku** tier | yes (cheap) |
+
+**It never modifies `.multiplai/memory/`.** That is the whole safety story: an
+unattended pass that could rewrite memory is an unattended pass that can
+silently corrupt it. Passes 1–2 write to `.multiplai/dreams/` and the health
+log; 3–4 write derived files (catalogs, `now/`) that are rebuilt from source and
+hold no unique state. `/multiplai-context:dream-remember` stays the only path
+that edits memory.
+
+It is silent (nothing at session start needs your attention) and best-effort — a
+launch failure, a crashed pass, or an unwritable state file costs at most one
+duplicate run next session and never delays a session. Unreadable state opens
+the gate on purpose: an extra pass costs cents, a wedged gate means maintenance
+that silently never runs again.
+
+Run it by hand, or check what it would do:
+
+```bash
+uv run --no-project scripts/memory_maintainer.py --dry-run
+uv run --no-project scripts/memory_maintainer.py --force
+```
+
+State lives in `<data_dir>/maintainer_state.yaml`; runs appear in the activity
+log as `[maintenance]`.
+
 ## Architecture
 
 ### Lifecycle hooks (`hooks/hooks.json`, official Claude Code schema)
 
 | Event | Script | Role |
 |-------|--------|------|
-| `SessionStart` | `session_start.py` | Init session state; drain deferred extractions; emit the dream-due nudge and the 90-day config-audit nudge. **Does not** dump memory into context. |
+| `SessionStart` | `session_start.py` | Init session state; drain deferred extractions; emit the dream-due nudge, the **60-day** config-audit nudge, and any **due prospective intentions**; launch the **memory maintainer** detached (own 24h gate). **Does not** dump memory into context. |
 | `UserPromptSubmit` | `context_manager.py` | Route the prompt against catalogs and inject only the relevant memory. |
 | `Stop` | `session_stop.py` | Lightweight checkpoint (extraction is deferred, not run here). |
 | `SessionEnd` | `session_end.py` | Write a deferred-extraction marker for the next session to process. |

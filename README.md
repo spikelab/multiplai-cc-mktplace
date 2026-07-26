@@ -13,6 +13,15 @@ everything below tells you exactly what runs where. Per-skill details in the
 capability is missing are in
 [`docs/degradation-contract.md`](docs/degradation-contract.md).
 
+**Two cross-cutting contracts** apply across plugins and are worth reading once:
+
+- [`docs/untrusted-content.md`](docs/untrusted-content.md) — how skills that
+  ingest text somebody else wrote (web pages, email, Slack, browser pages, log
+  lines) fence and defang it, and why fenced text is **data, never
+  instructions**.
+- [`docs/degradation-contract.md`](docs/degradation-contract.md) — what a skill
+  does when a prerequisite is missing.
+
 ## Add the marketplace
 
 ```
@@ -54,7 +63,7 @@ contract](docs/degradation-contract.md)).
 
 | Plugin | Skill | Runs on | Notes |
 |--------|-------|:-------:|-------|
-| multiplai-context | *all hooks & skills* | ✅ | Needs `uv`. First session start resolves deps (allow ~1 min once). `qmd-search` additionally needs qmd installed. The hub session registry the hooks write works identically with or without docker/kit; with no multiplai hub installed the files are simply never read. |
+| multiplai-context | *all hooks & skills* | ✅ | Needs `uv`. First session start resolves deps (allow ~1 min once). `qmd-search` additionally needs qmd installed. The hub session registry the hooks write works identically with or without docker/kit; with no multiplai hub installed the files are simply never read. Session start also launches a **detached memory maintainer** (24h gate, never writes to memory) — see [What runs unattended](#what-runs-unattended). |
 | multiplai-dev | buildme | ✅ | Needs `uv` + network. `--skip-research` if multiplai-research absent. |
 | | code-review, security-review, deepen, think, e2e-test | ✅ | e2e-test frontend mode needs `agent-browser` (npm); backend mode is plain HTTP. |
 | | codebase-walkthrough, learn-stack, skill-creator, plan | ✅ | |
@@ -73,6 +82,23 @@ contract](docs/degradation-contract.md)).
 | | extract-insights, interviewer | ✅ | |
 | multiplai-writing | writing (all modes) | ✅ | Voice memory files optional — asks if missing. |
 
+## What runs unattended
+
+Installing `multiplai-context` starts a small amount of background work. Nothing
+here needs a decision from you, but you should know it exists:
+
+| What | When | Writes to |
+|---|---|---|
+| Deferred learning/diary extraction | Next `SessionStart` after a session ends or pre-compacts | `diary/`, `learnings/` |
+| **Memory maintainer** — staleness lint, dream *proposal*, catalog refresh, `now/` rebuild | Detached at `SessionStart`, **at most once per 24h**, cheap tier | `dreams/`, catalogs, `now/` — **never `memory/`** |
+| Cost collection (when `enable_costs`) | Detached at `SessionStart` | the cost ledger under `data/` |
+| Nudges — dream due, config audit (**60-day** cadence), **prospective intentions** due | `SessionStart`, surfaced to you as text | nothing |
+
+The invariant worth remembering: **`/multiplai-context:dream-remember` is the
+only path that edits your memory files.** Unattended passes produce proposals and
+derived files; you approve every memory write. Details in the
+[plugin README](plugins/multiplai-context/README.md#proactive-maintenance).
+
 ## Repository layout
 
 ```
@@ -87,6 +113,8 @@ contract](docs/degradation-contract.md)).
 │   ├── multiplai-dev/
 │   ├── multiplai-media/
 │   └── multiplai-messaging/
+├── docs/                         # cross-cutting contracts (degradation, untrusted content)
+├── scripts/                      # repo-level checks: lint_skills.py, scan_skills.py
 ├── LICENSE
 └── README.md                     # this file
 ```
@@ -98,6 +126,32 @@ for plugin-specific setup, configuration, and the test suite. Shared Python
 infrastructure (paths, config, logging, model client) lives in
 [`multiplai-core`](https://github.com/spikelab/multiplai-core), consumed via
 PEP 723 inline metadata (`uv run --no-project`).
+
+### Pre-publish checks
+
+Installing a plugin copies these files onto someone else's machine, where they
+run with that person's credentials — and nobody reads every line first. Two
+repo-level checks stand in for that reading; both are deterministic and offline:
+
+```bash
+uv run --no-project scripts/lint_skills.py     # structure: frontmatter, script refs, absolute paths
+uv run --no-project scripts/scan_skills.py     # security: what a skill does vs what its SKILL.md says
+```
+
+- `lint_skills.py` catches malformed frontmatter, unknown `model`/`effort`
+  values (silently ignored at runtime, so the skill quietly runs on the wrong
+  tier), SKILL.md references to renamed scripts, and machine-specific absolute
+  paths baked into shipped files. Exit 1 on any error.
+- `scan_skills.py` reports declared-vs-actual behaviour. **FAIL** (blocks CI) for
+  patterns with no legitimate use in a shipped skill — `curl | bash`,
+  base64-decode-and-execute; **WARN** for behaviour that is fine when declared
+  and suspicious when not — network calls or credential reads absent from the
+  SKILL.md. It is a static scan, not a sandbox: it raises the cost of hiding
+  behaviour, it does not make hiding impossible.
+
+Individual skills can additionally ship a `CONTRACT.md` (assertions on interface
+*shape*, not on values) run by
+`plugins/multiplai-dev/skills/skill-creator/scripts/promote_skill.py --contract`.
 
 **Versioning.** Every version bump in `.claude-plugin/marketplace.json` gets a
 matching annotated git tag `<plugin>@<version>` (e.g. `multiplai-context@0.6.4`)
