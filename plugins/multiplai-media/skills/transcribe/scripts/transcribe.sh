@@ -6,6 +6,17 @@
 
 set -euo pipefail
 
+usage() {
+    echo "Usage: transcribe.sh <audio_file> [output_file] [--override] [--model <model_name>] [--task <transcribe|translate>] [--language <code>]"
+}
+
+# Answer --help before any platform preflight. Usage text is documentation: it
+# has to work on a machine that cannot transcribe (a Linux CI runner, a Mac
+# without mlx_whisper), or `--help` becomes a platform check in disguise.
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+
 # Default models
 DEFAULT_MODEL_EN="mlx-community/whisper-medium.en-mlx-8bit"
 DEFAULT_MODEL_MULTI="mlx-community/whisper-medium-mlx"
@@ -93,10 +104,6 @@ OVERRIDE=false
 MODEL=""
 TASK=""
 LANGUAGE=""
-
-usage() {
-    echo "Usage: transcribe.sh <audio_file> [output_file] [--override] [--model <model_name>] [--task <transcribe|translate>] [--language <code>]"
-}
 
 while [[ $# -gt 0 ]]; do
     case $1 in

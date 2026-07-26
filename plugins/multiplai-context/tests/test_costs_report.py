@@ -521,3 +521,52 @@ class TestP90:
         ], {"feat/a": {"number": 1, "outcome": "merged"},
             "feat/b": {"number": 2, "outcome": "merged"}})
         assert costs_report.task_summary(rows)["p90_merged_task_usd"] == 9.0
+
+
+class TestEmptyLedgerStillEmitsJson:
+    """`--json` is a promise about output shape. An empty ledger is a normal
+    state (fresh machine, narrow window), and printing only prose left JSON
+    consumers parsing empty stdin — which is how CI caught it."""
+
+    def test_summary_json_is_parseable_with_no_records(self, monkeypatch, capsys):
+        code, out = _run(monkeypatch, capsys, "--all", "--json")
+        assert code == 1
+        assert json.loads(out)["rows"] == []
+
+    def test_by_dimension_json_is_parseable_with_no_records(self, monkeypatch, capsys):
+        code, out = _run(monkeypatch, capsys, "--all", "--by", "model", "--json")
+        assert code == 1
+        assert "error" in json.loads(out)
+
+    def test_branch_json_is_parseable_with_no_records(self, monkeypatch, capsys):
+        code, out = _run(monkeypatch, capsys, "--branch", "nope", "--json")
+        assert code == 1
+        assert "nope" in json.loads(out)["error"]
+
+    def test_session_json_is_parseable_with_no_records(self, monkeypatch, capsys):
+        code, out = _run(monkeypatch, capsys, "--all", "--session", "nope", "--json")
+        assert code == 1
+        assert "nope" in json.loads(out)["error"]
+
+    def test_task_json_is_parseable_with_no_records(self, monkeypatch, capsys):
+        code, out = _run(monkeypatch, capsys, "--all", "--group", "task", "--json")
+        assert code == 1
+        assert json.loads(out)["rows"] == []
+
+    def test_cache_json_is_parseable_with_no_records(self, monkeypatch, capsys):
+        code, out = _run(monkeypatch, capsys, "--all", "--report", "cache", "--json")
+        assert code == 1
+        assert "error" in json.loads(out)
+
+    def test_build_json_is_parseable_with_no_state_files(self, monkeypatch, capsys, tmp_path):
+        code, out = _run(monkeypatch, capsys, "--group", "build",
+                         "--project-dir", str(tmp_path), "--json")
+        assert code == 1
+        assert json.loads(out)["project_dir"] == str(tmp_path)
+
+    def test_without_json_the_message_stays_on_stderr(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["costs_report.py", "--all"])
+        assert costs_report.main() == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "No ledger records" in captured.err

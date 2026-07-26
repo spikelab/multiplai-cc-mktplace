@@ -172,8 +172,14 @@ class TestStampMemoryDates:
         far_future = 400_000_000_000  # year ~14000
         try:
             os.utime(p, (far_future, far_future))
-        except OverflowError:
+        except (OverflowError, OSError):
             pytest.skip("filesystem rejects out-of-range mtimes")
+        # ext4 on GitHub runners silently WRAPS the stored value instead of
+        # rejecting it (year ~14000 came back as 2446), which makes the mtime
+        # representable again and the stamp correct. Only the real out-of-range
+        # case exercises the fail-open path.
+        if p.stat().st_mtime < far_future:
+            pytest.skip("filesystem clamped the mtime into datetime's range")
         stamped = context_manager._stamp_memory_dates(
             tmp_path, {"corrupt.md": "content"}
         )
