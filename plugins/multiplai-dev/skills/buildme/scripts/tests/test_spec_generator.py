@@ -606,7 +606,7 @@ class TestGenerateUnknowns:
         ) as mock_explain, patch(
             "build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock
         ) as mock_gen:
-            mock_explain.side_effect = lambda dep, cfg: (
+            mock_explain.side_effect = lambda dep, cfg, usage_context="": (
                 f"## {dep.name}\n\n### Edge cases & failure modes\n- empty input errors\n\n"
                 f"### Assumptions we are making\n- version 1.x is stable\n"
             )
@@ -619,6 +619,33 @@ class TestGenerateUnknowns:
         text = (change_dir / "unknowns.md").read_text()
         assert "## duckdb" in text and "## polars" in text
         assert state.spec_gen.explainers_done is True
+
+    @pytest.mark.asyncio
+    async def test_explainer_receives_design_decisions(self, tmp_path):
+        """usage_context carries the design's Decisions section, not the
+        placeholder — the explainer researches the edge cases of how THIS
+        project will use the dependency."""
+        from build_pipeline.spec_generator import _generate_unknowns
+
+        cm, change_dir, config, state = self._setup(tmp_path, impact="Adds `polars`.")
+        (change_dir / "design.md").write_text(
+            "## Decisions\nStream frames lazily; never collect() whole files.\n"
+        )
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.run_explainer", new_callable=AsyncMock
+        ) as mock_explain, patch(
+            "build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock
+        ) as mock_gen:
+            mock_explain.return_value = (
+                "## polars\n\n### Edge cases & failure modes\n- x\n\n"
+                "### Assumptions we are making\n- y\n"
+            )
+            mock_gen.return_value = "regenerated"
+            await _generate_unknowns(cm, change_dir, config, state)
+
+        assert mock_explain.call_args.kwargs["usage_context"] == (
+            "Stream frames lazily; never collect() whole files."
+        )
 
     @pytest.mark.asyncio
     async def test_no_new_dependencies_records_the_absence(self, tmp_path):

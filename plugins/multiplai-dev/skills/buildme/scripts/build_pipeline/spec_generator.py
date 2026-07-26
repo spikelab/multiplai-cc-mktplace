@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from .change_manager import ChangeManager, ARTIFACT_DAG
-from .dependencies import NewDependency, detect_new_dependencies
+from .dependencies import NewDependency, design_decisions_text, detect_new_dependencies
 from .gates import unknowns_gate
 from .models import ArtifactStatus, BuildPhase
 from .rubric import detect_change_type, generate_rubric
@@ -350,8 +350,9 @@ async def _generate_unknowns(
         "Explaining %d new dependencies: %s",
         len(deps), ", ".join(d.name for d in deps),
     )
+    usage_context = design_decisions_text(change_dir)
     results = await asyncio.gather(
-        *[run_explainer(dep, config) for dep in deps],
+        *[run_explainer(dep, config, usage_context=usage_context) for dep in deps],
         return_exceptions=True,
     )
 

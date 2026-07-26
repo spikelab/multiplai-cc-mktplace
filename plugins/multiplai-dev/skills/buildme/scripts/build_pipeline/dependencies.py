@@ -516,6 +516,15 @@ def detect_new_dependencies(
     return result
 
 
+def design_decisions_text(change_dir: Path) -> str:
+    """The design's ``## Decisions`` section body ("" when absent).
+
+    Feeds the explainer's usage_context slot — how this project intends to use
+    the dependency, so the explainer researches the relevant edge cases.
+    """
+    return _section(_read(change_dir / "design.md"), _DECISIONS_RE).strip()
+
+
 def _read(path: Path) -> str:
     try:
         return path.read_text()
