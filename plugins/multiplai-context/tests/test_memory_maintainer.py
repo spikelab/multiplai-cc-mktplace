@@ -1,0 +1,317 @@
+"""Tests for the proactive memory maintainer.
+
+Two things matter here and they pull in opposite directions. The maintainer
+must actually run unattended (or it's just another thing to remember), and it
+must never touch `.multiplai/memory/` (or an unattended bug rewrites the
+memory nobody was watching). Most of these tests are about the second.
+"""
+
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+import memory_maintainer as mm
+
+NOW = datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def state(tmp_path):
+    return tmp_path / "maintainer_state.yaml"
+
+
+class TestGate:
+    def test_open_when_no_state(self, state):
+        assert mm.gate_open(state, now=NOW)
+
+    def test_closed_just_after_a_run(self, state):
+        mm.stamp(state, now=NOW - timedelta(hours=1))
+        assert not mm.gate_open(state, now=NOW)
+
+    def test_open_after_24h(self, state):
+        mm.stamp(state, now=NOW - timedelta(hours=mm.GATE_HOURS, minutes=1))
+        assert mm.gate_open(state, now=NOW)
+
+    def test_boundary_is_inclusive(self, state):
+        mm.stamp(state, now=NOW - timedelta(hours=mm.GATE_HOURS))
+        assert mm.gate_open(state, now=NOW)
+
+    def test_corrupt_state_opens_the_gate(self, state):
+        """A wedged-shut gate means maintenance silently never runs again —
+        strictly worse than one redundant pass."""
+        state.write_text("last_run: [not, a, timestamp\n", encoding="utf-8")
+        assert mm.gate_open(state, now=NOW)
+
+    def test_naive_timestamp_is_treated_as_utc(self, state):
+        state.write_text("last_run: '2026-07-26T11:00:00'\n", encoding="utf-8")
+        assert not mm.gate_open(state, now=NOW)
+
+    def test_stamp_round_trips(self, state):
+        mm.stamp(state, now=NOW)
+        assert not mm.gate_open(state, now=NOW)
+
+    def test_stamp_failure_is_not_fatal(self, tmp_path):
+        """A read-only data dir must cost one duplicate run, not a crash in an
+        unattended process nobody is watching."""
+        mm.stamp(tmp_path / "nonexistent-file" / "state.yaml", now=NOW)
+
+
+class TestLintPass:
+    def test_writes_a_report_when_there_are_findings(self, tmp_path):
+        memory = tmp_path / "memory"
+        memory.mkdir()
+        (memory / "dev.md").write_text(
+            "- The current best model is Opus 5 (as of 2026-01, review by 2026-02).\n",
+            encoding="utf-8")
+        dreams = tmp_path / "dreams"
+
+        result = mm.run_lint(memory, dreams)
+        assert result.ran
+        report = dreams / "memory-lint-latest.md"
+        assert report.is_file()
+        assert "Expired" in report.read_text(encoding="utf-8")
+
+    def test_clean_tree_writes_nothing(self, tmp_path):
+        """No findings means no file. A report that says "clean" every day is
+        a file people stop opening."""
+        memory = tmp_path / "memory"
+        memory.mkdir()
+        (memory / "dev.md").write_text("- Python is used here.\n", encoding="utf-8")
+        dreams = tmp_path / "dreams"
+
+        assert mm.run_lint(memory, dreams).ran
+        assert not (dreams / "memory-lint-latest.md").exists()
+
+    def test_dry_run_writes_nothing(self, tmp_path):
+        memory = tmp_path / "memory"
+        memory.mkdir()
+        (memory / "dev.md").write_text(
+            "- The current price is EUR 20/mo (as of 2026-01, review by 2026-02).\n",
+            encoding="utf-8")
+        dreams = tmp_path / "dreams"
+
+        assert mm.run_lint(memory, dreams, dry_run=True).ran
+        assert not dreams.exists()
+
+    def test_a_broken_linter_does_not_abort_the_pass(self, tmp_path, monkeypatch):
+        memory = tmp_path / "memory"
+        memory.mkdir()
+        import lib.memory_lint as ml
+        monkeypatch.setattr(ml, "lint_dir", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+        result = mm.run_lint(memory, tmp_path / "dreams")
+        assert not result.ran and "error" in result.detail
+
+
+class TestDreamPass:
+    def _spy(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(mm.subprocess, "run",
+                            lambda cmd, **kw: calls.append(cmd) or
+                            subprocess.CompletedProcess(cmd, 0, "", ""))
+        return calls
+
+    def test_skipped_when_the_dream_gate_is_closed(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        dream_state = tmp_path / "dream_state.yaml"
+        dream_state.write_text(
+            f"last_run: '{datetime.now(timezone.utc).isoformat()}'\n", encoding="utf-8")
+        learnings = tmp_path / "learnings"
+        learnings.mkdir()
+        (learnings / "2026-07-26.md").write_text("- something\n", encoding="utf-8")
+
+        result = mm.run_dream(tmp_path, dream_state, learnings)
+        assert not result.ran and "gate closed" in result.detail
+        assert calls == []
+
+    def test_skipped_when_there_is_no_backlog(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        learnings = tmp_path / "learnings"
+        learnings.mkdir()
+        result = mm.run_dream(tmp_path, tmp_path / "absent.yaml", learnings)
+        assert not result.ran and "no pending" in result.detail
+        assert calls == []
+
+    def test_runs_dream_without_auto(self, tmp_path, monkeypatch):
+        """The hard constraint: `/dream-remember` stays the only path that
+        writes memory. An unattended `--auto` would quietly become a second."""
+        calls = self._spy(monkeypatch)
+        learnings = tmp_path / "learnings"
+        learnings.mkdir()
+        (learnings / "2026-07-26.md").write_text("- something\n", encoding="utf-8")
+
+        result = mm.run_dream(tmp_path, tmp_path / "absent.yaml", learnings)
+        assert result.ran
+        assert len(calls) == 1
+        assert "--auto" not in calls[0] and "--run" not in calls[0]
+        assert calls[0][-1].endswith("dream.py")
+
+    def test_nonzero_exit_is_reported_not_raised(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mm.subprocess, "run",
+                            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "nope"))
+        learnings = tmp_path / "learnings"
+        learnings.mkdir()
+        (learnings / "2026-07-26.md").write_text("- x\n", encoding="utf-8")
+        result = mm.run_dream(tmp_path, tmp_path / "absent.yaml", learnings)
+        assert not result.ran and "exit 1" in result.detail
+
+
+class TestCatalogPass:
+    def test_stale_when_catalog_is_missing(self, tmp_path):
+        memory = tmp_path / "memory"
+        memory.mkdir()
+        assert mm.catalog_is_stale(memory, tmp_path / "memory.json")
+
+    def test_not_stale_when_catalog_is_newer(self, tmp_path):
+        memory = tmp_path / "memory"
+        memory.mkdir()
+        (memory / "dev.md").write_text("x", encoding="utf-8")
+        catalog = tmp_path / "memory.json"
+        catalog.write_text("{}", encoding="utf-8")
+        import os
+        os.utime(catalog, (0, (memory / "dev.md").stat().st_mtime + 100))
+        assert not mm.catalog_is_stale(memory, catalog)
+
+    def test_stale_when_a_memory_file_is_newer(self, tmp_path):
+        memory = tmp_path / "memory"
+        memory.mkdir()
+        catalog = tmp_path / "memory.json"
+        catalog.write_text("{}", encoding="utf-8")
+        f = memory / "dev.md"
+        f.write_text("x", encoding="utf-8")
+        import os
+        os.utime(f, (0, catalog.stat().st_mtime + 100))
+        assert mm.catalog_is_stale(memory, catalog)
+
+    def test_current_catalog_skips_the_rebuild(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(mm.subprocess, "run",
+                            lambda cmd, **kw: calls.append(cmd) or
+                            subprocess.CompletedProcess(cmd, 0, "", ""))
+        memory = tmp_path / "memory"
+        memory.mkdir()
+        catalogs = tmp_path / "catalogs"
+        catalogs.mkdir()
+        (catalogs / "memory.json").write_text("{}", encoding="utf-8")
+
+        result = mm.run_catalog(tmp_path, memory, catalogs)
+        assert not result.ran and calls == []
+
+
+class TestActiveProject:
+    def test_none_without_diary_entries(self, tmp_path):
+        d = tmp_path / "diary"
+        d.mkdir()
+        assert mm.active_project(d) is None
+
+    def test_missing_diary_dir_is_not_an_error(self, tmp_path):
+        assert mm.active_project(tmp_path / "absent") is None
+
+
+class TestMemoryIsNeverModified:
+    """Plan done-condition 4: the maintainer 'demonstrably does not modify
+    `.multiplai/memory/` itself'."""
+
+    def _snapshot(self, d: Path) -> dict:
+        return {p.name: (p.read_bytes(), p.stat().st_mtime)
+                for p in sorted(d.glob("*.md"))}
+
+    def test_a_full_run_leaves_memory_byte_identical(self, tmp_path, monkeypatch):
+        memory = tmp_path / "memory"
+        memory.mkdir()
+        # Content that trips the linter, so the pass with the most reason to
+        # "fix" something is the one under test.
+        (memory / "dev.md").write_text(
+            "- The current best model is Opus 5 (as of 2026-01, review by 2026-02).\n"
+            "- Spike works at Multiplai.\n",
+            encoding="utf-8")
+        before = self._snapshot(memory)
+
+        learnings = tmp_path / "learnings"
+        learnings.mkdir()
+        (learnings / "2026-07-26.md").write_text("- x\n", encoding="utf-8")
+
+        class FakePaths:
+            def data_dir(self): return tmp_path / "data"
+            def memory_dir(self): return memory
+            def dreams_dir(self): return tmp_path / "dreams"
+            def learnings_dir(self): return learnings
+            def catalogs_dir(self): return tmp_path / "catalogs"
+            def diary_dir(self): return tmp_path / "diary"
+            def dream_state_file(self): return tmp_path / "data" / "dream_state.yaml"
+
+        monkeypatch.setattr(mm, "get_paths", lambda: FakePaths())
+        # Every subprocess pass is stubbed: this test is about what the
+        # maintainer writes, not about running a real dream.
+        monkeypatch.setattr(mm.subprocess, "run",
+                            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", ""))
+
+        report = mm.run_maintenance(force=True)
+        assert report.gate_open
+        # Guard against the test going vacuous: if the paths patch stopped
+        # working, no pass would touch memory and this would "pass" for the
+        # wrong reason. The lint pass must have actually read the fixture.
+        lint = next(p for p in report.passes if p.name == "lint")
+        assert lint.ran and "finding" in lint.detail
+        assert self._snapshot(memory) == before
+
+    def test_lint_pass_never_writes_into_the_memory_dir(self, tmp_path):
+        memory = tmp_path / "memory"
+        memory.mkdir()
+        (memory / "dev.md").write_text(
+            "- Currently EUR 20/mo (as of 2026-01, review by 2026-02).\n",
+            encoding="utf-8")
+        mm.run_lint(memory, tmp_path / "dreams")
+        assert [p.name for p in memory.iterdir()] == ["dev.md"]
+
+
+class TestSessionStartWiring:
+    def test_launch_is_detached_and_non_blocking(self, tmp_path, monkeypatch):
+        import session_start
+
+        (tmp_path / "memory_maintainer.py").write_text("", encoding="utf-8")
+        seen = {}
+
+        def fake_popen(cmd, **kwargs):
+            seen["cmd"], seen["kwargs"] = cmd, kwargs
+            return type("P", (), {"stdin": None})()
+
+        monkeypatch.setattr(session_start.subprocess, "Popen", fake_popen)
+        assert session_start._launch_maintainer(tmp_path)
+        assert seen["kwargs"]["start_new_session"] is True
+        assert seen["cmd"][-1].endswith("memory_maintainer.py")
+
+    def test_missing_script_is_a_quiet_no_op(self, tmp_path):
+        import session_start
+        assert not session_start._launch_maintainer(tmp_path)
+
+    def test_launch_failure_never_breaks_session_start(self, tmp_path, monkeypatch):
+        import session_start
+
+        (tmp_path / "memory_maintainer.py").write_text("", encoding="utf-8")
+        monkeypatch.setattr(session_start.subprocess, "Popen",
+                            lambda *a, **k: (_ for _ in ()).throw(OSError("no fork")))
+        assert not session_start._launch_maintainer(tmp_path)
+
+
+class TestCheapTierIsRealNotJustDocumented:
+    def test_synthesize_threads_the_model_through_to_the_client(self):
+        """The docstring claims pass 4 runs on a cheap tier. Before this,
+        `synthesize()` took no model at all and the claim was decoration."""
+        import inspect
+        import synthesize_now
+
+        assert "model" in inspect.signature(synthesize_now.synthesize).parameters
+        src = inspect.getsource(synthesize_now._summarize_project)
+        assert "model" in src and "client.query" in src
+
+    def test_no_model_means_the_client_default(self):
+        """Interactive callers (`/now`, backfill) must keep their old behavior."""
+        import inspect
+        import synthesize_now
+        assert (inspect.signature(synthesize_now.synthesize)
+                .parameters["model"].default is None)

@@ -322,6 +322,28 @@ def run_health_check() -> dict:
         "required_missing": len(required_missing),
     }
 
+    # Per-fact staleness. The file-level mtime above says when a file was
+    # touched; it says nothing about whether the volatile facts *inside* it are
+    # still true, and those rot on their own schedule while the file around
+    # them stays accurate. Never fatal: a lint failure must not take down the
+    # health report that people run when something else is already wrong.
+    try:
+        from lib.memory_lint import lint_dir
+
+        lint_findings = lint_dir(memory_dir)
+        report["memory_validity"] = {
+            "expired": [
+                {"file": f.path.name, "line": f.lineno, "detail": f.detail}
+                for f in lint_findings if f.kind == "expired"
+            ],
+            "unmarked": [
+                {"file": f.path.name, "line": f.lineno, "class": f.fact_class}
+                for f in lint_findings if f.kind == "unmarked"
+            ],
+        }
+    except Exception as exc:  # pragma: no cover - defensive
+        report["memory_validity"] = {"error": str(exc)}
+
     # Diary and learnings status. Renamed in v0.3.0 to reflect the
     # per-day layout: each value is a day file, not a session file.
     report["diary"] = {

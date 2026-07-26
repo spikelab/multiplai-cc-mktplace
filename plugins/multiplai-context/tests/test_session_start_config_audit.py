@@ -1,15 +1,15 @@
-"""Tests for the 90-day config-audit gate at SessionStart.
+"""Tests for the 60-day config-audit gate at SessionStart.
 
 ``_config_audit_gate_open`` semantics:
 
 * **Missing state file** (fresh install): gate CLOSED — the file is seeded
-  with ``last_run: now`` so the 90-day clock starts at install; nudging
+  with ``last_run: now`` so the 60-day clock starts at install; nudging
   "the audit is due" with no record would be false. Seed failures are
   swallowed (still closed, retried next session).
 * **Existing but unusable state** (corrupt YAML, missing/garbage
   ``last_run``): gate OPEN — fail-open recovery, mirroring the dream gate;
   a record existed and was lost, so the user re-stamps by running the skill.
-* **Parseable ``last_run``**: open iff >=90 days old.
+* **Parseable ``last_run``**: open iff >=60 days old.
 
 State is stamped deterministically by ``scripts/config_audit.py --stamp``
 (invoked by the ``/multiplai-context:config-audit`` skill), which resolves
@@ -50,7 +50,7 @@ class TestConfigAuditGate:
         """No state file (fresh install) → gate closed, clock seeded to now.
 
         The day-one dampener: a fresh install has no record to be stale,
-        so it must NOT be nudged; the seed starts the 90-day clock.
+        so it must NOT be nudged; the seed starts the 60-day clock.
         """
         import session_start
 
@@ -95,7 +95,7 @@ class TestConfigAuditGate:
         assert session_start._config_audit_gate_open(f) is True
 
     def test_stale_state_opens_gate(self, tmp_path):
-        """last_run older than 90 days → gate open."""
+        """last_run older than 60 days → gate open."""
         import session_start
 
         f = tmp_path / "config_audit_state.yaml"
@@ -103,12 +103,12 @@ class TestConfigAuditGate:
         _write_state(f, stale)
         assert session_start._config_audit_gate_open(f) is True
 
-    def test_exactly_90_days_opens_gate(self, tmp_path, monkeypatch):
-        """The gate uses >= (not >): last_run EXACTLY 90 days old opens it.
+    def test_exactly_60_days_opens_gate(self, tmp_path, monkeypatch):
+        """The gate uses >= (not >): last_run EXACTLY 60 days old opens it.
 
         Time is frozen inside session_start so the boundary is pinned to
         the instant — a real-clock offset would silently degrade this to
-        a >90d test and never distinguish >= from >.
+        a >60d test and never distinguish >= from >.
         """
         import session_start
 
@@ -121,7 +121,7 @@ class TestConfigAuditGate:
 
         monkeypatch.setattr(session_start, "datetime", _FrozenDatetime)
         f = tmp_path / "config_audit_state.yaml"
-        _write_state(f, (frozen - timedelta(days=90)).isoformat())
+        _write_state(f, (frozen - timedelta(days=60)).isoformat())
         assert session_start._config_audit_gate_open(f) is True
 
     def test_just_under_the_window_closes_gate(self, tmp_path, monkeypatch):

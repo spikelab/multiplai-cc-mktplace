@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+"""Staleness lint for memory files.
+
+Memory files carry a single file-level ``**Last Updated:**`` stamp. That tells
+you when the file was touched, not whether any particular fact in it is still
+true — and the facts that go stale are never the whole file. A price, a version
+number, an employer, a "current best X": each rots on its own schedule while
+the file around it stays accurate, and the file stamp keeps saying "fresh".
+
+The convention this enforces is one suffix on the fact itself:
+
+    (as of 2026-07)                       — when the fact was true
+    (as of 2026-07, review by 2026-10)    — and when to re-check it
+
+Two checks:
+
+  expired    a ``review by`` date that has passed
+  unmarked   a volatile-class fact with no ``as of`` at all
+
+Deliberately warn-only and non-rewriting. A linter that edits memory would be
+applying unreviewed changes to the one artifact the whole pipeline keeps behind
+human review, and the volatile-class patterns below are heuristics — they will
+have false positives, and the cost of a false positive must stay "one noisy
+line in a report", never "a fact silently rewritten".
+
+Exit codes:
+    0 — no findings
+    1 — at least one finding
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from dataclasses import dataclass
+from datetime import date, timedelta
+from pathlib import Path
+
+# `(as of YYYY-MM[-DD][, review by YYYY-MM[-DD]])`. Day is optional on both:
+# most memory facts are month-granular and forcing a day invents precision.
+AS_OF_RE = re.compile(
+    r"\(as of (?P<as_of>\d{4}-\d{2}(?:-\d{2})?)"
+    r"(?:\s*,\s*review by (?P<review_by>\d{4}-\d{2}(?:-\d{2})?))?\)",
+    re.IGNORECASE)
+
+# Volatile-fact detection is a CONJUNCTION, not a disjunction, and this is the
+# whole design.
+#
+# The first draft fired on any line containing a version number, a currency
+# amount, or the word "current". Run against the real memory tree it produced
+# 195 findings, of which essentially all were wrong: "Swift 6.3 rejects
+# covariant Self" is a permanent technical fact that happens to name a version;
+# "<200 files" is a threshold, not a price; "currently" appears in ordinary
+# prose on every other line.
+#
+# What actually rots is a fact that makes a claim about *now* AND names a
+# *specific changeable value*. "The current Opus model is 4.5" rots. "Swift 6.3
+# rejects covariant Self" does not. So a line must match both halves.
+
+# Half one: the sentence claims to describe the present moment.
+CURRENCY_RE = re.compile(
+    r"\b(?:current(?:ly)?|at present|as of now|right now|these days|nowadays|"
+    r"latest|newest|most recent|state of the art|"
+    r"best (?:available|option|choice|model|tool)|"
+    r"works? at|employed (?:at|by)|now (?:costs?|uses?|runs?|lives?))\b",
+    re.IGNORECASE)
+
+# Half two: a specific value that can be superseded.
+CONCRETE_CLASSES: list[tuple[str, re.Pattern, str]] = [
+    ("price",
+     re.compile(r"(?:[$€£]\s?\d[\d,.]*(?:[KkMm]\b)?"
+                r"|\b\d[\d,.]*\s?(?:USD|EUR|GBP)\b)"),
+     "prices change without announcement"),
+    ("version",
+     re.compile(r"\bv?\d+\.\d+(?:\.\d+)?\b(?!\s*%)"),
+     "version numbers are superseded silently"),
+    ("employer",
+     re.compile(r"\b(?:works? at|employed (?:at|by))\s+[A-Z]", re.IGNORECASE),
+     "employment changes and the old fact reads as current"),
+]
+
+# Deadlines are the exception to the conjunction rule: a deadline is volatile by
+# definition, and it carries its own date, so no currency language is needed.
+# It must name an actual date to fire — "don't automate end-to-end on day one"
+# mentions no deadline, it just uses the word "day".
+DEADLINE_RE = re.compile(
+    r"\b(?:deadline|due (?:by|on)|expires? on|renewal|ends? on|valid until)\b"
+    r"[^.\n]{0,40}?\b(?:\d{4}-\d{2}(?:-\d{2})?|"
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}?,?\s*\d{4})",
+    re.IGNORECASE)
+
+# Lines that are structure, not facts.
+_SKIP_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|```|\||-{3,}\s*$|\*\*Last Updated)")
+
+_FENCE_RE = re.compile(r"^\s*```")
+
+
+@dataclass(frozen=True)
+class Finding:
+    path: Path
+    lineno: int
+    kind: str          # "expired" | "unmarked"
+    fact_class: str
+    line: str
+    detail: str
+
+    def render(self, root: Path | None = None) -> str:
+        where = self.path
+        if root:
+            try:
+                where = self.path.relative_to(root)
+            except ValueError:
+                pass
+        excerpt = self.line.strip()
+        if len(excerpt) > 100:
+            excerpt = excerpt[:97] + "..."
+        return f"{where}:{self.lineno}: {self.kind} [{self.fact_class}] {self.detail}\n    {excerpt}"
+
+
+def _parse_stamp(value: str) -> date:
+    """`YYYY-MM` means the *end* of that month, not the 1st.
+
+    A fact marked `review by 2026-10` is not overdue on 2026-10-01 — the whole
+    month is the review window. Treating it as the 1st would make every
+    month-granular annotation fire up to 31 days early, which is exactly the
+    kind of early noise that gets a lint switched off.
+    """
+    parts = value.split("-")
+    if len(parts) == 3:
+        return date(int(parts[0]), int(parts[1]), int(parts[2]))
+    year, month = int(parts[0]), int(parts[1])
+    if month == 12:
+        return date(year, 12, 31)
+    return date(year, month + 1, 1) - timedelta(days=1)
+
+
+# A fact the author has already marked as past. Without this, `**US cost base
+# (historical, no longer current):** ~$4,500/month` fires — on the word
+# "current" inside the phrase disclaiming it. Asking someone to date-stamp a
+# fact they have explicitly labelled stale is the lint arguing with a reader
+# who already did the right thing.
+HISTORICAL_RE = re.compile(
+    r"\b(?:historical|no longer current|formerly|previously|used to be|"
+    r"deprecated|superseded|obsolete|was:|until \d{4})\b", re.IGNORECASE)
+
+
+def classify(line: str) -> list[tuple[str, str]]:
+    """Which volatile classes this line belongs to, if any.
+
+    A dated deadline qualifies on its own. Everything else needs both a claim
+    about the present and a concrete value — see the note above CURRENCY_RE for
+    why the disjunctive version of this was unusable.
+    """
+    if HISTORICAL_RE.search(line):
+        return []
+    if DEADLINE_RE.search(line):
+        return [("deadline", "a passed deadline is worse than no deadline")]
+    if not CURRENCY_RE.search(line):
+        return []
+    return [(name, why) for name, pattern, why in CONCRETE_CLASSES
+            if pattern.search(line)]
+
+
+def lint_text(text: str, path: Path, today: date) -> list[Finding]:
+    findings: list[Finding] = []
+    in_fence = False
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        # Code blocks are full of version numbers and prices that are examples,
+        # not claims about the world.
+        if in_fence or _SKIP_LINE_RE.match(line) or not line.strip():
+            continue
+
+        match = AS_OF_RE.search(line)
+        if match:
+            review_by = match.group("review_by")
+            if review_by and _parse_stamp(review_by) < today:
+                findings.append(Finding(
+                    path=path, lineno=lineno, kind="expired",
+                    fact_class="annotated", line=line,
+                    detail=f"review by {review_by} has passed — re-verify or re-stamp"))
+            continue  # annotated: the author already made a claim about freshness
+
+        for name, why in classify(line):
+            findings.append(Finding(
+                path=path, lineno=lineno, kind="unmarked",
+                fact_class=name, line=line,
+                detail=f"{why}; add '(as of YYYY-MM[, review by YYYY-MM])'"))
+            break  # one finding per line — the first class is enough to act on
+    return findings
+
+
+def lint_dir(memory_dir: Path, today: date | None = None) -> list[Finding]:
+    today = today or date.today()
+    findings: list[Finding] = []
+    for path in sorted(memory_dir.glob("*.md")):
+        if path.name == "CLAUDE.md":
+            continue  # the index, not a fact store
+        findings.extend(lint_text(path.read_text(encoding="utf-8"), path, today))
+    return findings
+
+
+def summarize(findings: list[Finding], root: Path | None = None) -> str:
+    if not findings:
+        return "memory_lint: clean"
+    expired = [f for f in findings if f.kind == "expired"]
+    unmarked = [f for f in findings if f.kind == "unmarked"]
+    lines: list[str] = []
+    if expired:
+        lines.append(f"## Expired ({len(expired)})")
+        lines.extend(f.render(root) for f in expired)
+        lines.append("")
+    if unmarked:
+        lines.append(f"## Missing validity annotation ({len(unmarked)})")
+        lines.extend(f.render(root) for f in unmarked)
+        lines.append("")
+    lines.append(f"memory_lint: {len(expired)} expired, {len(unmarked)} unmarked")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        description="Lint memory files for stale and unannotated volatile facts.")
+    ap.add_argument("memory_dir", nargs="?", type=Path, default=None,
+                    help="memory directory (default: the configured one)")
+    ap.add_argument("--expired-only", action="store_true",
+                    help="report only passed 'review by' dates, not missing annotations")
+    ap.add_argument("--today", default=None,
+                    help="YYYY-MM-DD to evaluate against (testing)")
+    args = ap.parse_args(argv)
+
+    memory_dir = args.memory_dir
+    if memory_dir is None:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+            from multiplai_core.paths import get_paths  # type: ignore
+            memory_dir = get_paths().memory_dir()
+        except Exception:
+            print("memory_lint: no memory directory given and none configured",
+                  file=sys.stderr)
+            return 1
+
+    if not memory_dir.is_dir():
+        print(f"memory_lint: not a directory: {memory_dir}", file=sys.stderr)
+        return 1
+
+    today = (date.fromisoformat(args.today) if args.today else date.today())
+    findings = lint_dir(memory_dir, today)
+    if args.expired_only:
+        findings = [f for f in findings if f.kind == "expired"]
+
+    print(summarize(findings, root=memory_dir))
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

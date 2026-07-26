@@ -158,8 +158,14 @@ def _extractive_summary(project: str, snippets: list[str]) -> str:
     return "\n".join(lines[:MAX_SUMMARY_LINES])
 
 
-async def _summarize_project(client, project: str, entries: list[dict]) -> str:
-    """Use the model client to produce a 3–5 line project status summary."""
+async def _summarize_project(client, project: str, entries: list[dict],
+                             model: str | None = None) -> str:
+    """Use the model client to produce a 3–5 line project status summary.
+
+    *model* lets an unattended caller (the maintainer) pin a cheap tier. When
+    None the client's own default applies, which is what interactive callers
+    (`/now`, backfill) want.
+    """
     snippets = _extract_body_snippets(entries, project)
     combined = "\n\n".join(snippets)
 
@@ -174,9 +180,11 @@ async def _summarize_project(client, project: str, entries: list[dict]) -> str:
     )
 
     try:
+        kwargs = {"model": model} if model else {}
         response = await client.query(
             system=system,
             messages=[{"role": "user", "content": prompt}],
+            **kwargs,
         )
         lines = [
             line.strip() for line in response.content.split("\n") if line.strip()
@@ -220,7 +228,8 @@ def _write_summary(
     os.replace(str(tmp), str(target))
 
 
-async def synthesize(project_filter: str | None = None) -> int:
+async def synthesize(project_filter: str | None = None,
+                     model: str | None = None) -> int:
     """Scan diary, group by project, write per-project status summaries.
 
     When *project_filter* is given, only that project is (re)summarized — used
@@ -251,7 +260,7 @@ async def synthesize(project_filter: str | None = None) -> int:
         try:
             project_path = entries[0].get("working_dir", "")
             if client is not None:
-                summary = await _summarize_project(client, project, entries)
+                summary = await _summarize_project(client, project, entries, model)
             else:
                 snippets = _extract_body_snippets(entries, project)
                 summary = _extractive_summary(project, snippets)
