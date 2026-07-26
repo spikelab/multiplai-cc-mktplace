@@ -3,7 +3,8 @@ name: CI
 # This repo is published — installing a plugin copies these files onto someone
 # else's machine. Until this workflow existed there was no CI of any kind, so
 # nothing checked the tree before it was consumed. Two gates and the existing
-# test suites run on every push and PR.
+# test suites run on every push and PR; a third gate (`changelog-gate`) runs on
+# PRs only, because what it checks is a property of the proposed release.
 
 on:
   push:
@@ -37,6 +38,41 @@ jobs:
         run: |
           python -m pip install --quiet pytest
           python -m pytest scripts/tests/ -q
+
+  changelog-gate:
+    name: changelog-gate
+    # Users update a plugin from Claude Code's `/plugin` menu, which offers the
+    # update by version number and nothing else. A plugin whose behaviour
+    # changed under an unchanged version therefore either ships invisibly or
+    # does not ship at all — and either way the user has nothing to read. The
+    # convention (bump the version, write the notes, tag it) was documented
+    # from the start and checked by nobody; this is the check.
+    #
+    # `pull_request` only, deliberately: gating pushes to `main` would make an
+    # in-flight branch unpushable, and the exemptions below live on the PR.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      # The gate diffs against the merge base, so it needs real history — the
+      # default shallow fetch has none.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Fetch the base branch
+        run: git fetch --no-tags --depth=0 origin "${{ github.base_ref }}"
+
+      # Label and body are passed through the environment rather than
+      # interpolated into the shell: a PR body is attacker-controlled text.
+      - name: Changelog gate
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: python scripts/check_changelog.py --base "origin/${{ github.base_ref }}"
 
   promotion-gate:
     name: Promotion gate over every shipped skill
