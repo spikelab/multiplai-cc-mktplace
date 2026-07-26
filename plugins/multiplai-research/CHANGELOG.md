@@ -1,6 +1,29 @@
 # Changelog
 
-## 0.5.0 — 2026-07-26
+All notable changes to the **multiplai-research** plugin, as seen by someone
+installing or updating it.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Version numbers are this plugin's version in the marketplace manifest
+(`.claude-plugin/marketplace.json`); a released version is tagged
+`multiplai-research@<version>`.
+
+Recorded history starts at **0.2.0**; anything earlier is in `git log` only.
+
+Of the 4 versions recorded here, `0.5.0` carries a git tag — the tagging
+convention started partway through. Dates on untagged versions are the release
+dates recorded at the time, not derived from a tag.
+
+`multiplai-research@0.1.1` predates this file and has no section here.
+
+## [Unreleased]
+
+### Added
+- **A plugin README** (`plugins/multiplai-research/README.md`) — what the pack
+  contains, what each skill needs, and how it degrades without the kit.
+  Not yet in a released version.
+
+## [0.5.0] - 2026-07-26
 
 ### Security
 - **Fetched page text is now treated as untrusted input**
@@ -25,14 +48,14 @@
   `MULTIPLAI_EFFORT` ceilings still cap the result, so a budget run forces
   everything down and a conf override cannot escape it.
 
-## 0.4.0 — 2026-07-19
+## [0.4.0] - 2026-07-19
 
 Released without a CHANGELOG entry at the time; see
 [#51](https://github.com/spikelab/multiplai-cc-mktplace/pull/51) —
 deep-research hardening: verification loop, adversarial review, cost and cache
 visibility.
 
-## 0.3.0 — 2026-07-19
+## [0.3.0] - 2026-07-19
 
 extract-insights v2 — coherent argument chain, nuance harvest, readable middle.
 
@@ -59,7 +82,7 @@ extract-insights v2 — coherent argument chain, nuance harvest, readable middle
   sentence with the speaker named in-sentence; strength tags stay but leading
   bracket-tag pileups are gone. TL;DR and Most Memorable Line are unchanged.
 
-## 0.2.0 — 2026-07-10
+## [0.2.0] - 2026-07-10
 
 Semantic model tiers for the deep-research pipeline (requires multiplai-core ≥ v0.7.0).
 

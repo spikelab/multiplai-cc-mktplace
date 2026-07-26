@@ -1,6 +1,27 @@
 # Changelog
 
-## 0.5.1 — 2026-07-26
+All notable changes to the **multiplai-dev** plugin, as seen by someone
+installing or updating it.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Version numbers are this plugin's version in the marketplace manifest
+(`.claude-plugin/marketplace.json`); a released version is tagged
+`multiplai-dev@<version>`.
+
+Recorded history starts at **0.1.1**; anything earlier is in `git log` only.
+
+Of the 9 versions recorded here, `0.1.1` and `0.5.0` carry a git tag — the
+tagging convention started partway through. Dates on untagged versions are the
+release dates recorded at the time, not derived from a tag.
+
+## [Unreleased]
+
+### Added
+- **A plugin README** (`plugins/multiplai-dev/README.md`) — what the pack
+  contains, what each skill needs, and how it degrades without the kit.
+  Not yet in a released version.
+
+## [0.5.1] - 2026-07-26
 
 ### Added
 - **swift-build: `uitest` + `screenshots` verbs** for GUI self-verification
@@ -12,7 +33,7 @@
   collapse to their declared distribution prefix, and builtins/stdlib members
   no longer surface as "new dependencies".
 
-## 0.5.0 — 2026-07-25
+## [0.5.0] - 2026-07-26
 
 Verification overhaul for buildme. The theme: reviewers **propose** and the
 orchestrator **disposes**; the tests that gate a block must still be the tests
@@ -150,7 +171,7 @@ executed before it is installed — and the model × effort config axis for buil
 - Every new behavior is opt-in via `specs/config.yaml`. With no `panel`, no
   `gate`, and no `budget:` section, the pipeline behaves as it did in 0.4.0.
 
-## 0.4.0 — 2026-07-20
+## [0.4.0] - 2026-07-20
 
 Ports enforcement mechanisms from the `superpowers` plugin's methodology skills
 into buildme's code-driven pipeline. The theme: buildme structurally enforces
@@ -206,7 +227,7 @@ two-verdict rubric.
   entry point under the repo-trust guard instead of reporting an unverified
   pass.
 
-## 0.3.3 — 2026-07-18
+## [0.3.3] - 2026-07-18
 
 ### Added
 - **swift-build: `swift`/`xcodebuild`/`xcrun` passthrough.** `swift-host.sh`
@@ -221,7 +242,7 @@ two-verdict rubric.
   default because diagnostic output (`-version`, `-showBuildSettings`,
   `simctl list`) is the answer, not noise, and xcsift would filter it.
 
-## 0.3.2 — 2026-07-17
+## [0.3.2] - 2026-07-17
 
 Fixes from the 07-12→16 PR audit (`INBOX/pr-audit-multiplai-2026-07-12-to-16.md`).
 
@@ -259,7 +280,7 @@ Fixes from the 07-12→16 PR audit (`INBOX/pr-audit-multiplai-2026-07-12-to-16.m
   spaces / schemes with parens until the container-side unquote fix ships)
   and the `sim screenshot` host-path caveat.
 
-## 0.3.1 — 2026-07-15
+## [0.3.1] - 2026-07-15
 
 ### Fixed
 - **`swift-build` was unusable over the container→host SSH bridge.** The script
@@ -280,7 +301,7 @@ Fixes from the 07-12→16 PR audit (`INBOX/pr-audit-multiplai-2026-07-12-to-16.m
   so Claude reaches for the skill instead of improvising raw `swift --version` /
   `ssh` calls that the gateway denies.
 
-## 0.3.0 — 2026-07-14
+## [0.3.0] - 2026-07-14
 
 ### Added
 - **New skill: `plan`** — author self-contained, executable implementation
@@ -290,7 +311,7 @@ Fixes from the 07-12→16 PR audit (`INBOX/pr-audit-multiplai-2026-07-12-to-16.m
   directly consumable by "implement the plan", goal/autonomous runners,
   or buildme — no parallel goal document needed. Prompt-only, no scripts.
 
-## 0.2.0 — 2026-07-10
+## [0.2.0] - 2026-07-10
 
 Semantic model tiers for the buildme pipeline (requires multiplai-core ≥ v0.7.0).
 
@@ -308,7 +329,7 @@ Semantic model tiers for the buildme pipeline (requires multiplai-core ≥ v0.7.
   stuck on `standard` in production regardless of the pinned model. buildme now
   correctly runs the advanced (per-block) TDD path under an opus ceiling.
 
-## 0.1.1 — 2026-07-09
+## [0.1.1] - 2026-07-09
 
 Correctness fixes for the buildme pipeline from the 2026-07-08 code review.
 All ~190 tests pass; each fix ships with a regression test.

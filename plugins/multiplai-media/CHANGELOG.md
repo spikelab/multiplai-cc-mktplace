@@ -1,8 +1,29 @@
 # Changelog
 
-(First CHANGELOG for this plugin — history before 0.1.5 lives in git log.)
+All notable changes to the **multiplai-media** plugin, as seen by someone
+installing or updating it.
 
-## 0.1.7 — 2026-07-26
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Version numbers are this plugin's version in the marketplace manifest
+(`.claude-plugin/marketplace.json`); a released version is tagged
+`multiplai-media@<version>`.
+
+Recorded history starts at **0.1.5**; anything earlier is in `git log` only.
+
+Of the 3 versions recorded here, `0.1.7` carries a git tag — the tagging
+convention started partway through. Dates on untagged versions are the release
+dates recorded at the time, not derived from a tag.
+
+`multiplai-media@0.1.2` predates this file and has no section here.
+
+## [Unreleased]
+
+### Added
+- **A plugin README** (`plugins/multiplai-media/README.md`) — what the pack
+  contains, what each skill needs, and how it degrades without the kit.
+  Not yet in a released version.
+
+## [0.1.7] - 2026-07-26
 
 ### Security
 - **`host-browser`: page content read out of the browser is untrusted input.**
@@ -19,14 +40,14 @@
   point instead of taking the SKILL.md's word for it.
 - `transcribe` SKILL.md: entry points and usage brought in line with the script.
 
-## 0.1.6 — 2026-07-19
+## [0.1.6] - 2026-07-19
 
 Released without a CHANGELOG entry at the time; see
 [#47](https://github.com/spikelab/multiplai-cc-mktplace/pull/47) —
 host-browser DataDome toolset (`fpcheck`, `dd`, `warmup`, `solve-wait`, curved
 `humanclick`).
 
-## 0.1.5 — 2026-07-17
+## [0.1.5] - 2026-07-17
 
 Fixes from the 07-12→16 PR audit (`INBOX/pr-audit-multiplai-2026-07-12-to-16.md`).
 
