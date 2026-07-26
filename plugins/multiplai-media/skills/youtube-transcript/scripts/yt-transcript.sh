@@ -77,8 +77,16 @@ AUDIO_FALLBACK=false
 TASK=""
 LANGUAGE=""
 
+usage() {
+    echo "Usage: yt-transcript.sh <youtube_url> [output_file] [--timestamps] [--audio-fallback] [--task <transcribe|translate>] [--language <code>]"
+}
+
 while [[ $# -gt 0 ]]; do
     case $1 in
+        -h|--help)
+            usage
+            exit 0
+            ;;
         --timestamps|-t)
             # NOTE: not yet implemented — parsed for forward-compat but the
             # output is currently always de-timestamped flowing text.
@@ -99,7 +107,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -*)
             echo "Error: Unknown option: $1" >&2
-            echo "Usage: yt-transcript.sh <youtube_url> [output_file] [--timestamps] [--audio-fallback] [--task <transcribe|translate>] [--language <code>]" >&2
+            usage >&2
             exit 1
             ;;
         *)
@@ -119,7 +127,7 @@ done
 # --- Validate URL ---
 if [[ -z "$URL" ]]; then
     echo "Error: No YouTube URL provided" >&2
-    echo "Usage: yt-transcript.sh <youtube_url> [output_file] [--timestamps] [--audio-fallback]" >&2
+    usage >&2
     exit 1
 fi
 

@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pyyaml"]
+# ///
 """
 Skill Packager - Creates a distributable .skill file of a skill folder
+
+PyYAML is not in the container's base interpreter, so it is declared inline
+(PEP 723): run as `uv run --script package_skill.py`.
 
 Usage:
     python utils/package_skill.py <path/to/skill-folder> [output-directory]
@@ -10,6 +17,7 @@ Example:
     python utils/package_skill.py skills/public/my-skill ./dist
 """
 
+import argparse
 import sys
 import zipfile
 from pathlib import Path
@@ -82,16 +90,22 @@ def package_skill(skill_path, output_dir=None):
         return None
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python utils/package_skill.py <path/to/skill-folder> [output-directory]")
-        print("\nExample:")
-        print("  python utils/package_skill.py skills/public/my-skill")
-        print("  python utils/package_skill.py skills/public/my-skill ./dist")
-        sys.exit(1)
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="package_skill.py",
+        description="Create a distributable .skill archive from a skill folder.",
+        epilog=("Examples:\n"
+                "  package_skill.py skills/public/my-skill\n"
+                "  package_skill.py skills/public/my-skill ./dist"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("skill_folder", help="path to the skill directory")
+    parser.add_argument("output_directory", nargs="?", default=None,
+                        help="where to write the archive (default: alongside)")
+    args = parser.parse_args(argv)
 
-    skill_path = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else None
+    skill_path = args.skill_folder
+    output_dir = args.output_directory
 
     print(f"📦 Packaging skill: {skill_path}")
     if output_dir:

@@ -97,6 +97,26 @@ class TestFrontmatter:
         assert err == ""
         assert fields is not None and fields["name"] == "alpha" and fields["desc"] == "x"
 
+    def test_unquoted_value_with_colon_space_is_an_error(self, tmp_path):
+        """Real YAML reads `Default window: last 7 days` as a nested mapping.
+
+        Found in the wild in backfill's SKILL.md: the frontmatter failed to
+        load entirely, which this lenient parser happily ignored until the
+        check was added.
+        """
+        body = ("---\nname: alpha\n"
+                "description: Does a thing. Default window: last 7 days.\n"
+                "---\n\n# A\n")
+        repo = make_repo(tmp_path, skills={"alpha": body})
+        assert any("unquoted" in e for e in errors_for(repo))
+
+    def test_quoted_value_with_colon_space_is_fine(self, tmp_path):
+        body = ('---\nname: alpha\n'
+                'description: "Does a thing. Default window: last 7 days."\n'
+                "---\n\n# A\n")
+        repo = make_repo(tmp_path, skills={"alpha": body})
+        assert errors_for(repo) == []
+
     def test_multiline_continuation_joins(self):
         fields, _ = parse_frontmatter(
             "---\nname: a\ndescription: one\n  two\n---\n")

@@ -1,6 +1,6 @@
 ---
 name: backfill
-description: Reconstruct learnings, diary entries, and now/ summaries from existing Claude Code session transcripts. Scans $CLAUDE_CONFIG_DIR/projects/**/*.jsonl, distills transcripts, runs diary-first extraction, and writes to the same files as the live pipeline. Default window: last 7 days; extends via --days N, --since DATE, or --all.
+description: "Reconstruct learnings, diary entries, and now/ summaries from existing Claude Code session transcripts. Scans $CLAUDE_CONFIG_DIR/projects/**/*.jsonl, distills transcripts, runs diary-first extraction, and writes to the same files as the live pipeline. Default window: last 7 days; extends via --days N, --since DATE, or --all."
 ---
 
 # /multiplai-context:backfill

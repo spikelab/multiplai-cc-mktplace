@@ -364,6 +364,10 @@ case "$COMMAND" in
     run_on_host "cd $(q "$(pwd)") && $passthrough"
     ;;
   *)
+    # An explicit --help is a successful request for the usage text; anything
+    # else reaching here is a bad invocation. Same output, different exit code
+    # — callers (and the promotion gate) distinguish the two by status.
+    case "$COMMAND" in -h|--help|help) _help_status=0 ;; *) _help_status=1 ;; esac
     echo "Usage: swift-host.sh [--package-path <dir>] {build|test|sim|swift|xcodebuild|xcrun} [args...]"
     echo ""
     echo "Commands:"
@@ -382,6 +386,6 @@ case "$COMMAND" in
     echo "  --package-path <dir>         Path to Swift package (default: cwd)"
     echo "  --xcsift                     (passthrough only, first arg) pipe output"
     echo "                               through xcsift — use for full builds"
-    exit 1
+    exit "$_help_status"
     ;;
 esac

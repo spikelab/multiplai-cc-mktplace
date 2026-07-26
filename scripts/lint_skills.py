@@ -110,8 +110,20 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str] | None, str]:
             return None, f"unparseable frontmatter line: {line!r}"
         key = key.strip()
         value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'"
+        if quoted:
             value = value[1:-1]
+        elif ": " in value:
+            # Claude Code parses frontmatter as real YAML, where an unquoted
+            # value containing ": " starts a nested mapping and the whole block
+            # fails to load. This parser is lenient enough not to notice, so
+            # the hazard is called out explicitly rather than papered over.
+            # Found in the wild: backfill's "Default window: last 7 days".
+            return None, (
+                f"value for '{key}' contains ': ' but is unquoted — YAML reads "
+                f"this as a nested mapping and the frontmatter fails to parse; "
+                f"wrap the value in double quotes"
+            )
         fields[key] = value
         last_key = key
     return fields, ""
