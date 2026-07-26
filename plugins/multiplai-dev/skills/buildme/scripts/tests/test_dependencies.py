@@ -374,3 +374,117 @@ class TestManifestFilenamesAreNotDependencies:
                    "`Package.swift`, `Cargo.toml`, `go.mod`, `go.sum`, `uv.lock`.",
         )
         assert detect_new_dependencies(change, project) == []
+
+
+class TestDottedPathsCollapseToDistributions:
+    """`rich.console.Console` is the library `rich`, not a fourth dependency."""
+
+    @pytest.fixture
+    def py_project(self, project):
+        (project / "pyproject.toml").write_text('[project]\nname = "demo"\ndependencies = []\n')
+        return project
+
+    def test_dotted_mentions_collapse_to_one_candidate(self, tmp_path, py_project):
+        change = _write_change(
+            tmp_path / "change",
+            impact="Renders via `rich`, `rich.print`, `rich.console.Console` "
+                   "and `rich.table.Table`.",
+        )
+        assert [d.name for d in detect_new_dependencies(change, py_project)] == ["rich"]
+
+    def test_declared_dependency_is_matched_through_its_dotted_form(self, tmp_path, project):
+        (project / "pyproject.toml").write_text(
+            '[project]\nname = "demo"\ndependencies = ["rich"]\n'
+        )
+        change = _write_change(tmp_path / "change", impact="Uses `rich.console.Console`.")
+        assert detect_new_dependencies(change, project) == []
+
+    def test_stdlib_member_access_never_fires(self, tmp_path, py_project):
+        change = _write_change(
+            tmp_path / "change",
+            impact="Walks with `pathlib.Path.rglob` and formats `datetime.datetime`.",
+        )
+        assert detect_new_dependencies(change, py_project) == []
+
+    def test_npm_dotted_package_survives_in_a_js_project(self, tmp_path, project):
+        (project / "package.json").write_text(json.dumps({"dependencies": {}}))
+        change = _write_change(tmp_path / "change", impact="Adds `lodash.debounce`.")
+        assert [d.name for d in detect_new_dependencies(change, project)] == ["lodash.debounce"]
+
+    def test_a_declared_dotted_distribution_is_not_renamed_away_from_itself(
+            self, tmp_path, project):
+        """`ruamel.yaml` is a real dotted PyPI distribution. Collapsing it to
+        `ruamel` would un-match it from its own declaration and fire a bogus
+        explainer named `ruamel`."""
+        (project / "pyproject.toml").write_text(
+            '[project]\nname = "demo"\ndependencies = ["ruamel.yaml"]\n'
+        )
+        change = _write_change(tmp_path / "change", impact="Parses via `ruamel.yaml`.")
+        assert detect_new_dependencies(change, project) == []
+
+    def test_member_access_on_a_declared_dotted_distribution_never_fires(
+            self, tmp_path, project):
+        (project / "pyproject.toml").write_text(
+            '[project]\nname = "demo"\ndependencies = ["zope.interface"]\n'
+        )
+        change = _write_change(
+            tmp_path / "change", impact="Implements `zope.interface.Interface`.")
+        assert detect_new_dependencies(change, project) == []
+
+    def test_an_undeclared_dotted_distribution_still_fires_as_its_head(
+            self, tmp_path, py_project):
+        """With nothing declared there is no way to know `zope.interface` is
+        the distribution name, so the head is the candidate — one explainer,
+        slightly under-named, beats none. (`ruamel.yaml` can't get even that:
+        it is indistinguishable from a YAML filename, and the extension rule
+        wins.)"""
+        change = _write_change(tmp_path / "change", impact="Uses `zope.interface`.")
+        assert [d.name for d in detect_new_dependencies(change, py_project)] == ["zope"]
+
+
+class TestBuiltinsAndMembersNeverFire:
+    @pytest.fixture
+    def py_project(self, project):
+        (project / "pyproject.toml").write_text('[project]\nname = "demo"\ndependencies = []\n')
+        return project
+
+    @pytest.mark.parametrize("token", ["open", "print", "sorted", "isinstance", "property"])
+    def test_builtin_names_never_fire(self, tmp_path, py_project, token):
+        change = _write_change(tmp_path / "change", impact=f"Calls `{token}` directly.")
+        assert detect_new_dependencies(change, py_project) == []
+
+    @pytest.mark.parametrize("token", ["ljust", "rglob", "unlink", "iterdir"])
+    def test_bare_stdlib_member_names_never_fire(self, tmp_path, py_project, token):
+        change = _write_change(tmp_path / "change", impact=f"Uses `{token}` on the result.")
+        assert detect_new_dependencies(change, py_project) == []
+
+    @pytest.mark.parametrize("token", ["st_mtime", "st_size", "st_mode"])
+    def test_stat_struct_fields_never_fire(self, tmp_path, py_project, token):
+        change = _write_change(tmp_path / "change", impact=f"Compares `{token}` values.")
+        assert detect_new_dependencies(change, py_project) == []
+
+    @pytest.mark.parametrize("token", ["skip-explainer", "log-warning", "return-early"])
+    def test_hyphenated_prose_phrases_never_fire(self, tmp_path, py_project, token):
+        change = _write_change(tmp_path / "change", impact=f"We `{token}` in that case.")
+        assert detect_new_dependencies(change, py_project) == []
+
+    def test_builtin_named_package_still_fires_in_a_js_project(self, tmp_path, project):
+        """`open` is a real npm package — the builtin filter is Python-only."""
+        (project / "package.json").write_text(json.dumps({"dependencies": {}}))
+        change = _write_change(tmp_path / "change", impact="Adds `open` for launching URLs.")
+        assert [d.name for d in detect_new_dependencies(change, project)] == ["open"]
+
+    @pytest.mark.parametrize("token", ["make-dir", "get-port", "create-react-app"])
+    def test_verb_headed_npm_package_still_fires_in_a_js_project(
+            self, tmp_path, project, token):
+        """npm is full of real verb-headed distributions — the prose-verb
+        filter is Python-only, like every other Python-shaped heuristic."""
+        (project / "package.json").write_text(json.dumps({"dependencies": {}}))
+        change = _write_change(tmp_path / "change", impact=f"Adds `{token}`.")
+        assert [d.name for d in detect_new_dependencies(change, project)] == [token]
+
+    def test_st_prefixed_npm_package_still_fires_in_a_js_project(self, tmp_path, project):
+        """The stat-struct-field filter is Python-only too."""
+        (project / "package.json").write_text(json.dumps({"dependencies": {}}))
+        change = _write_change(tmp_path / "change", impact="Serves files via `st-cache`.")
+        assert [d.name for d in detect_new_dependencies(change, project)] == ["st-cache"]
