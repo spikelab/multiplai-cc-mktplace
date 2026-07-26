@@ -198,10 +198,11 @@ _STRUCT_FIELD_RE = re.compile(r"^st-[a-z]+$")
 
 # A verb phrase harvested out of prose reads exactly like a hyphenated package
 # name: "add a section" → `add-section`, "scan directory" → `scan-directory`.
-# Deliberately a SMALL imperative list — a long one would start rejecting real
-# packages whose names legitimately open with a verb (`build-essential`,
-# `parse-torrent`), so this is scoped to the verbs that show up in design prose
-# describing what the code will do.
+# Deliberately a SMALL imperative list, and applied in Python ecosystems only —
+# npm is full of real verb-headed distributions (`make-dir`, `get-port`,
+# `create-react-app`), so a JS project must never have its dependencies
+# swallowed by this. Even for Python, the list is scoped to the verbs that show
+# up in design prose describing what the code will do.
 _PROSE_VERBS = frozenset({
     "add", "scan", "get", "set", "run", "make", "build", "parse", "write",
     "read", "create", "delete", "update", "fetch", "load", "save", "render",
@@ -248,13 +249,18 @@ def _aliases(canonical_name: str) -> set[str]:
     return {a for a in out if a}
 
 
-def _collapse(canonical_name: str) -> str:
+def _collapse(canonical_name: str, declared: set[str] | frozenset[str] = frozenset()) -> str:
     """``pkg.sub.thing`` → ``pkg``. A distribution is the head, not the path.
 
     Without this, `rich`, `rich.print`, `rich.console.console` and
     `rich.table.table` were four separate candidates and `rich` was explained
     four times over; and member accesses like `entry.stat` or `str.ljust`
     survived because their head never got tested against the stdlib.
+
+    Some PyPI distributions really are dotted (`zope.interface`,
+    `ruamel.yaml`), so the longest dotted prefix found in *declared* wins over
+    the bare head — a declared `ruamel.yaml` keeps matching its own mentions
+    instead of being renamed to `ruamel` and un-matched.
 
     npm scopes (``@scope/pkg``) and Go module paths keep their slash form —
     those really are the distribution name — so only dots are collapsed.
@@ -265,7 +271,11 @@ def _collapse(canonical_name: str) -> str:
     # the extension rule can reject it, not become a bogus `package` candidate.
     if _FILE_EXT_RE.search(canonical_name):
         return canonical_name
-    return canonical_name.partition(".")[0]
+    parts = canonical_name.split(".")
+    for end in range(len(parts), 1, -1):
+        if ".".join(parts[:end]) in declared:
+            return ".".join(parts[:end])
+    return parts[0]
 
 
 def _is_plausible_dependency(canonical_name: str, *, python_ecosystem: bool = True) -> bool:
@@ -277,20 +287,23 @@ def _is_plausible_dependency(canonical_name: str, *, python_ecosystem: bool = Tr
         return False
     if canonical_name in _GENERIC_TERMS:
         return False
-    # In Python land every dotted token was collapsed to its head before this
-    # point, so a surviving dot means a filename-shaped token we refused to
-    # collapse. Elsewhere dots are legitimate (`lodash.debounce`).
+    # In Python land every dotted token was collapsed before this point, so a
+    # surviving dot means a filename-shaped token we refused to collapse, or a
+    # declared dotted distribution (`ruamel.yaml`) — known, hence not new
+    # either way. Elsewhere dots are legitimate (`lodash.debounce`).
     if python_ecosystem and "." in canonical_name:
         return False
-    if _STRUCT_FIELD_RE.match(canonical_name):
-        return False
-    head_word = canonical_name.split("-", 1)[0]
-    if "-" in canonical_name and head_word in _PROSE_VERBS:
-        return False
-    # Builtins and stdlib members: the two levels `sys.stdlib_module_names`
-    # cannot see. Gated on the Python ecosystem for the same reason the stdlib
-    # check below is — `open` and `register` could be real npm packages.
+    # Every filter below is Python-only, like the stdlib gate at the bottom:
+    # npm is full of verb-headed distributions (`make-dir`, `get-port`,
+    # `create-react-app`), and `open` / `secrets` are real npm packages — a
+    # pure JS/Rust project must not have its dependencies swallowed by
+    # Python-shaped heuristics.
     if python_ecosystem:
+        if _STRUCT_FIELD_RE.match(canonical_name):
+            return False
+        head_word = canonical_name.split("-", 1)[0]
+        if "-" in canonical_name and head_word in _PROSE_VERBS:
+            return False
         if canonical_name in _BUILTIN_NAMES:
             return False
         if canonical_name in _STDLIB_MEMBERS:
@@ -616,7 +629,7 @@ def detect_new_dependencies(
                 # Only in Python land: `lodash.debounce` really is an npm
                 # distribution, so collapsing dots there would rename it.
                 if python_ecosystem:
-                    canonical_name = _collapse(canonical_name)
+                    canonical_name = _collapse(canonical_name, declared)
                 if not _is_plausible_dependency(
                     canonical_name, python_ecosystem=python_ecosystem,
                 ):

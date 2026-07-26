@@ -411,6 +411,36 @@ class TestDottedPathsCollapseToDistributions:
         change = _write_change(tmp_path / "change", impact="Adds `lodash.debounce`.")
         assert [d.name for d in detect_new_dependencies(change, project)] == ["lodash.debounce"]
 
+    def test_a_declared_dotted_distribution_is_not_renamed_away_from_itself(
+            self, tmp_path, project):
+        """`ruamel.yaml` is a real dotted PyPI distribution. Collapsing it to
+        `ruamel` would un-match it from its own declaration and fire a bogus
+        explainer named `ruamel`."""
+        (project / "pyproject.toml").write_text(
+            '[project]\nname = "demo"\ndependencies = ["ruamel.yaml"]\n'
+        )
+        change = _write_change(tmp_path / "change", impact="Parses via `ruamel.yaml`.")
+        assert detect_new_dependencies(change, project) == []
+
+    def test_member_access_on_a_declared_dotted_distribution_never_fires(
+            self, tmp_path, project):
+        (project / "pyproject.toml").write_text(
+            '[project]\nname = "demo"\ndependencies = ["zope.interface"]\n'
+        )
+        change = _write_change(
+            tmp_path / "change", impact="Implements `zope.interface.Interface`.")
+        assert detect_new_dependencies(change, project) == []
+
+    def test_an_undeclared_dotted_distribution_still_fires_as_its_head(
+            self, tmp_path, py_project):
+        """With nothing declared there is no way to know `zope.interface` is
+        the distribution name, so the head is the candidate — one explainer,
+        slightly under-named, beats none. (`ruamel.yaml` can't get even that:
+        it is indistinguishable from a YAML filename, and the extension rule
+        wins.)"""
+        change = _write_change(tmp_path / "change", impact="Uses `zope.interface`.")
+        assert [d.name for d in detect_new_dependencies(change, py_project)] == ["zope"]
+
 
 class TestBuiltinsAndMembersNeverFire:
     @pytest.fixture
@@ -443,3 +473,18 @@ class TestBuiltinsAndMembersNeverFire:
         (project / "package.json").write_text(json.dumps({"dependencies": {}}))
         change = _write_change(tmp_path / "change", impact="Adds `open` for launching URLs.")
         assert [d.name for d in detect_new_dependencies(change, project)] == ["open"]
+
+    @pytest.mark.parametrize("token", ["make-dir", "get-port", "create-react-app"])
+    def test_verb_headed_npm_package_still_fires_in_a_js_project(
+            self, tmp_path, project, token):
+        """npm is full of real verb-headed distributions — the prose-verb
+        filter is Python-only, like every other Python-shaped heuristic."""
+        (project / "package.json").write_text(json.dumps({"dependencies": {}}))
+        change = _write_change(tmp_path / "change", impact=f"Adds `{token}`.")
+        assert [d.name for d in detect_new_dependencies(change, project)] == [token]
+
+    def test_st_prefixed_npm_package_still_fires_in_a_js_project(self, tmp_path, project):
+        """The stat-struct-field filter is Python-only too."""
+        (project / "package.json").write_text(json.dumps({"dependencies": {}}))
+        change = _write_change(tmp_path / "change", impact="Serves files via `st-cache`.")
+        assert [d.name for d in detect_new_dependencies(change, project)] == ["st-cache"]
