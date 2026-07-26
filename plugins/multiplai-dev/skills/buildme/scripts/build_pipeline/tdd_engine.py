@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import board
 from .change_manager import extract_global_constraints
 from .config import BuildConfig
 from .gates import (
@@ -56,6 +57,22 @@ from .sdk import llm_call_structured
 from .state import BuildState, TDDState
 
 log = logging.getLogger(__name__)
+
+
+def _mark_block(
+    state: BuildState, block_idx: int, status: BlockStatus, config: BuildConfig,
+) -> None:
+    """Set a block's status, checkpoint, and refresh the board card.
+
+    Every block status is In Development (board.py's docstring says why —
+    notably REVIEWING is an in-process review with no pushed branch, so it is
+    not In Review). The board write still happens on each change so
+    `.board.json` stays current when the TDD engine runs standalone; it emits a
+    `BOARD:` line only when the card actually moves columns.
+    """
+    state.mark_block_status(block_idx, status, config.state_file_path())
+    board.record(config, state, BuildPhase.TDD_BUILD, block_status=status,
+                 note=f"block {block_idx + 1} {status.value}")
 
 
 def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -> str | None:
@@ -589,7 +606,7 @@ async def _enforce_test_quality(
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_AUDIT error=%s",
                   block.number, block.name, e)
         progress.log_agent("TestQualityAuditor", block.name, f"ERROR: {e}")
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
     if audit.passed:
@@ -621,7 +638,7 @@ async def _enforce_test_quality(
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_RETRY error=%s",
                   block.number, block.name, retry.error)
         progress.log_agent("TestWriter", block.name, "TIMEOUT" if retry.timed_out else "FAILED")
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
     sha = _git_commit_block_phase(config, "test", block)
     if sha:
@@ -638,7 +655,7 @@ async def _enforce_test_quality(
         log.error("FAIL block=%d name=%s phase=TEST_QUALITY_REAUDIT error=%s",
                   block.number, block.name, e)
         progress.log_agent("TestQualityAuditor", block.name, f"ERROR: {e}")
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
     if re_audit.passed:
         return True
@@ -646,7 +663,7 @@ async def _enforce_test_quality(
     log.error("FAIL block=%d name=%s phase=TEST_QUALITY reason=still-weak-after-retry",
               block.number, block.name)
     progress.log_agent("TestQualityAuditor", block.name, "STILL WEAK after retry — block failed")
-    state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+    _mark_block(state, block_idx, BlockStatus.FAILED, config)
     return False
 
 
@@ -711,7 +728,7 @@ async def _enforce_red_gate(
                 log.error("FAIL block=%d name=%s phase=RED_GATE_RETRY error=%s",
                           block.number, block.name, retry.error)
                 progress.log_agent("TestWriter", block.name, "TIMEOUT" if retry.timed_out else "FAILED")
-                state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+                _mark_block(state, block_idx, BlockStatus.FAILED, config)
                 return False
             sha = _git_commit_block_phase(config, "test", block)
             if sha:
@@ -721,7 +738,7 @@ async def _enforce_red_gate(
     log.error("FAIL block=%d name=%s phase=RED_GATE reason=%s",
               block.number, block.name, gate.reason)
     progress.log_agent("RedGate", block.name, f"FAILED after retry: {gate.reason}")
-    state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+    _mark_block(state, block_idx, BlockStatus.FAILED, config)
     return False
 
 
@@ -843,7 +860,7 @@ async def run_block_tdd(
 
     # --- Phase A: Write tests ---
     if block.status == BlockStatus.PENDING:
-        state.mark_block_status(block_idx, BlockStatus.TESTING, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.TESTING, config)
         progress.log_block(block.number, total, block.name, "TESTING")
 
     log.info("START block=%d/%d name=%s phase=TEST_WRITE", block.number, total, block.name)
@@ -876,7 +893,7 @@ async def run_block_tdd(
         log.error("FAIL block=%d name=%s phase=TEST_WRITE reason=%s error=%s",
                   block.number, block.name, reason, test_result.error)
         progress.log_agent("TestWriter", block.name, "TIMEOUT" if test_result.timed_out else "FAILED")
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
     # The agent's own STATUS slot: NEEDS_CONTEXT/BLOCKED is it saying the work
@@ -887,7 +904,7 @@ async def run_block_tdd(
                   block.number, block.name, status.metadata.get("status"))
         progress.log_agent("TestWriter", block.name, str(status.metadata.get("status")))
         progress.log_diagnosis(block.name, status.reason)
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
     log.info("DONE block=%d name=%s phase=TEST_WRITE", block.number, block.name)
@@ -896,7 +913,7 @@ async def run_block_tdd(
     if not _record_implementation_note(
         block, config, state, progress, "test_writer", test_result.output,
     ):
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
     test_sha = _git_commit_block_phase(config, "test", block)
@@ -922,7 +939,7 @@ async def run_block_tdd(
 
     # --- Phase B: Implement ---
     log.info("START block=%d name=%s phase=IMPLEMENT", block.number, block.name)
-    state.mark_block_status(block_idx, BlockStatus.IMPLEMENTING, config.state_file_path())
+    _mark_block(state, block_idx, BlockStatus.IMPLEMENTING, config)
     progress.log_block(block.number, total, block.name, "IMPLEMENTING")
 
     impl_context = assemble_context(block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None)
@@ -944,7 +961,7 @@ async def run_block_tdd(
         log.error("FAIL block=%d name=%s phase=IMPLEMENT reason=%s error=%s",
                   block.number, block.name, reason, impl_result.error)
         progress.log_agent("Implementer", block.name, "TIMEOUT" if impl_result.timed_out else "FAILED")
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
     impl_status = agent_status_gate(impl_result.output, "Implementer")
@@ -953,7 +970,7 @@ async def run_block_tdd(
                   block.number, block.name, impl_status.metadata.get("status"))
         progress.log_agent("Implementer", block.name, str(impl_status.metadata.get("status")))
         progress.log_diagnosis(block.name, impl_status.reason)
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
     log.info("DONE block=%d name=%s phase=IMPLEMENT turns=%d elapsed=%.0fs",
@@ -963,7 +980,7 @@ async def run_block_tdd(
     if not _record_implementation_note(
         block, config, state, progress, "implementer", impl_result.output,
     ):
-        state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+        _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
 
     impl_sha = _git_commit_block_phase(config, "impl", block)
@@ -1050,7 +1067,7 @@ async def _run_integration_and_review(
                 f"Last fix agent report:\n{last_fix_output or '(no fix agent completed)'}"
             )
             progress.log_diagnosis(block.name, diagnosis)
-            state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
 
     # GREEN evidence: the suite passing with the implementation in place —
@@ -1060,7 +1077,7 @@ async def _run_integration_and_review(
     progress.log_evidence("GREEN", block.name, block.green_evidence)
 
     # --- Quality review loop ---
-    state.mark_block_status(block_idx, BlockStatus.REVIEWING, config.state_file_path())
+    _mark_block(state, block_idx, BlockStatus.REVIEWING, config)
     progress.log_block(block.number, total, block.name, "REVIEWING")
 
     review_passed = False
@@ -1080,7 +1097,7 @@ async def _run_integration_and_review(
                 block.number, block.name, iteration + 1, e,
             )
             progress.log_review(block.name, iteration + 1, 0.0, False)
-            state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
         block.review_scores = review
         block.review_iterations = iteration + 1
@@ -1124,10 +1141,10 @@ async def _run_integration_and_review(
                       "after %d iterations", block.number, block.name, MAX_REVIEW_ITERATIONS)
             progress.log_block(block.number, total, block.name, "FAILED — review exhausted")
             print(f"BLOCK:{block.number}/{total}:{block.name}:REVIEW_EXHAUSTED")
-            state.mark_block_status(block_idx, BlockStatus.FAILED, config.state_file_path())
+            _mark_block(state, block_idx, BlockStatus.FAILED, config)
             return False
 
-    state.mark_block_status(block_idx, BlockStatus.DONE, config.state_file_path())
+    _mark_block(state, block_idx, BlockStatus.DONE, config)
     log.info("DONE block=%d/%d name=%s", block.number, total, block.name)
     progress.log_block(block.number, total, block.name, "COMPLETE")
     print(f"BLOCK:{block.number}/{total}:{block.name}:COMPLETE")
@@ -1230,6 +1247,10 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
 
     total_blocks = len(state.tdd.blocks) if state.tdd else 0
     progress.initialize(config.change_name, config.mode, config.tier, total_blocks)
+    # The card is In Development for the whole engine run (a no-op emission
+    # when the orchestrator already put it there).
+    board.record(config, state, BuildPhase.TDD_BUILD, progress=progress,
+                 note=f"{total_blocks} block(s)")
 
     # --- Baseline test gate ---
     if state.tdd and not state.tdd.baseline_tests_pass:

@@ -81,6 +81,16 @@ class ProgressWriter:
             for line in (surprises or "").strip().splitlines()[:20]:
                 f.write(f"{line}\n")
 
+    def log_board(self, column: str, owner_agent: str | None = None, note: str = "") -> None:
+        """Append a board-column transition (the `.board.json` seam's human
+        channel). Only called when the card actually moves columns."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        owner = f" (owner: {owner_agent})" if owner_agent else ""
+        with self.path.open("a") as f:
+            f.write(f"\n## [{self._now()}] BOARD → {column}{owner}\n")
+            if note:
+                f.write(f"{note}\n")
+
     def cleanup(self) -> None:
         if self.path.exists():
             self.path.unlink()

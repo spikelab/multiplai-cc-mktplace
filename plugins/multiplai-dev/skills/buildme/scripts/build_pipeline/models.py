@@ -47,6 +47,31 @@ class BlockStatus(str, Enum):
     FAILED = "failed"
 
 
+class BoardColumn(str, Enum):
+    """The eleven kanban columns of the dark-factory board.
+
+    Values are the column names exactly as the board displays them — the same
+    string lands in `.board.json`'s `column` field and in the
+    `BOARD:<change>:<column>` stdout line, so there is one representation and
+    no translation table.
+
+    The enum is the full vocabulary of the board, NOT a claim about what the
+    pipeline drives. `board.column_for` is the only mapping, and `board.py`'s
+    module docstring states which of these columns the pipeline ever sets.
+    """
+    BACKLOG = "Backlog"
+    ACCEPTED = "Accepted"
+    SHAPING = "Shaping"
+    PLANNING = "Planning"
+    IN_DEVELOPMENT = "In Development"
+    IN_REVIEW = "In Review"
+    TESTING = "Testing"
+    READY_FOR_PROD = "Ready for Prod"
+    DEPLOYING = "Deploying"
+    DEPLOYED = "Deployed"
+    CANCELLED = "Cancelled"
+
+
 class ArtifactStatus(str, Enum):
     DONE = "done"
     READY = "ready"

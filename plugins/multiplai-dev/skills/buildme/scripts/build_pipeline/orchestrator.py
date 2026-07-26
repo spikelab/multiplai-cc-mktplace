@@ -16,10 +16,10 @@ import logging
 import sys
 from pathlib import Path
 
-from . import git_ops
+from . import board, git_ops
 from .change_manager import ChangeManager
 from .config import BuildConfig
-from .models import BuildPhase
+from .models import BoardColumn, BuildPhase
 from .progress import ProgressWriter
 from .state import BuildState, SpecGenState
 
@@ -63,6 +63,10 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             cm = ChangeManager(config.specs_dir)
             log.info("DONE phase=BOOTSTRAP")
             print("PHASE:BOOTSTRAP:COMPLETE", flush=True)
+            # First board record of the run: the card is being shaped. Not
+            # recorded any earlier — at INIT the change directory does not
+            # exist yet, and creating it would suppress .change.yaml.
+            board.record(config, state, BuildPhase.BOOTSTRAP, progress=progress)
 
         # Phase: Interview (handled by SKILL.md wrapper — we receive summary)
         if not state.is_phase_complete(BuildPhase.INTERVIEW_DONE) and config.mode != "only":
@@ -90,6 +94,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 state.advance_to(BuildPhase.INTERVIEW_DONE, state_path)
                 log.info("DONE phase=INTERVIEW")
                 print("PHASE:INTERVIEW:COMPLETE", flush=True)
+                board.record(config, state, BuildPhase.INTERVIEW_DONE, progress=progress)
             elif not config.auto:
                 log.warning("SKIP phase=INTERVIEW reason=no-summary-provided")
                 state.advance_to(BuildPhase.INTERVIEW_DONE, state_path)
@@ -110,6 +115,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 state.advance_to(BuildPhase.RESEARCH, state_path)
             log.info("DONE phase=RESEARCH")
             print("PHASE:RESEARCH:COMPLETE", flush=True)
+            board.record(config, state, BuildPhase.RESEARCH, progress=progress)
 
         # Phase: Spec Generation
         if not state.is_phase_complete(BuildPhase.SPEC_GENERATION) and not config.mode == "only":
@@ -119,6 +125,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             if result != 0:
                 log.error("FAIL phase=SPEC_GENERATION exit_code=%d", result)
                 state.advance_to(BuildPhase.FAILED, state_path)
+                board.record_failure(
+                    config, state, "spec generation failed", progress=progress,
+                )
                 return result
             state.advance_to(BuildPhase.SPEC_GENERATION, state_path)
             # Shaping/planning lands as its own commit so the branch history
@@ -131,6 +140,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             )
             log.info("DONE phase=SPEC_GENERATION")
             print("PHASE:SPEC_GENERATION:COMPLETE", flush=True)
+            board.record(config, state, BuildPhase.SPEC_GENERATION, progress=progress)
 
         # Phase: Design Audit (best-effort — failures don't block the build)
         if not state.is_phase_complete(BuildPhase.DESIGN_AUDIT):
@@ -143,6 +153,8 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 log.warning("Design audit LLM call failed (non-fatal): %s", audit_err)
             state.advance_to(BuildPhase.DESIGN_AUDIT, state_path)
             print("PHASE:DESIGN_AUDIT:COMPLETE", flush=True)
+            # Spec'ing is done being shaped; the card is now being planned.
+            board.record(config, state, BuildPhase.DESIGN_AUDIT, progress=progress)
 
         # Phase: Prototype — a cheap artifact that proves the shape before the
         # expensive TDD build. Phase failure is never build failure.
@@ -150,6 +162,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             await _run_prototype_phase(config, state, progress, state_path)
             state.advance_to(BuildPhase.PROTOTYPE, state_path)
             print("PHASE:PROTOTYPE:COMPLETE", flush=True)
+            board.record(config, state, BuildPhase.PROTOTYPE, progress=progress)
 
         # Stop if --spec-only
         if config.spec_only:
@@ -173,10 +186,14 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 log.info("DONE phase=REVIEW")
             state.advance_to(BuildPhase.REVIEW, state_path)
             print("PHASE:REVIEW:COMPLETE", flush=True)
+            board.record(config, state, BuildPhase.REVIEW, progress=progress)
 
         # Phase: TDD Build
         if not state.is_phase_complete(BuildPhase.TDD_BUILD):
             log.info("START phase=TDD_BUILD")
+            # Recorded BEFORE the engine runs — the card is in development for
+            # the whole build, not only once it succeeds.
+            board.record(config, state, BuildPhase.TDD_BUILD, progress=progress)
             from .tdd_engine import run_tdd_engine
             result = await run_tdd_engine(config, args)
             # Reload state from disk — tdd_engine wrote its own updates (block status, TDD sub-state)
@@ -186,6 +203,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             if result != 0:
                 log.error("FAIL phase=TDD_BUILD exit_code=%d", result)
                 state.advance_to(BuildPhase.FAILED, state_path)
+                board.record_failure(config, state, "TDD build failed", progress=progress)
                 return result
             state.advance_to(BuildPhase.TDD_BUILD, state_path)
             log.info("DONE phase=TDD_BUILD")
@@ -220,6 +238,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             )
             state.advance_to(BuildPhase.RESPEC, state_path)
             print("PHASE:RESPEC:COMPLETE", flush=True)
+            board.record(config, state, BuildPhase.RESPEC, progress=progress)
 
         # Phase: Archive
         # In --auto mode, archive immediately (merge delta specs → main registry,
@@ -274,6 +293,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     except Exception as e:
         log.error("FAIL pipeline change=%s error=%s", config.change_name, e, exc_info=True)
         print(f"ERROR:{e}", file=sys.stderr, flush=True)
+        # Cancelled only if nothing survives to resume from; otherwise the card
+        # stays in its last column and a re-run picks it up there.
+        board.record_failure(config, state, f"pipeline error: {e}", progress=progress)
         return 1
 
 
@@ -624,6 +646,15 @@ def _run_publish(config: BuildConfig, state: BuildState, progress: ProgressWrite
     log.info("PR opened: %s", url)
     if url:
         print(f"PR:{url}", flush=True)
+    # In Review becomes real here and nowhere else: the branch is pushed and a
+    # PR exists, so a reviewer can `git fetch` and diff it. Recorded from the
+    # LIVE state — after an --auto archive, pr_url is never written back to
+    # .build-state.json (the state file is already gone).
+    board.record(
+        config, state, column=BoardColumn.IN_REVIEW,
+        note=f"branch {state.branch} pushed; PR {url or '(url unknown)'}",
+        progress=progress,
+    )
     print("PHASE:PUBLISH:COMPLETE", flush=True)
     return True
 
