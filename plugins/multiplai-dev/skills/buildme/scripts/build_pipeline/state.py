@@ -64,6 +64,15 @@ class BuildState(BaseModel):
     interview_summary: str | None = None
     research_path: str | None = None
 
+    # Git lifecycle — set when the pipeline creates its own worktree/branch.
+    # Persisted so a resume RE-BINDS to the existing worktree instead of
+    # creating a second one. All four default to None, so a .build-state.json
+    # written before the git lifecycle existed still loads.
+    worktree_path: str | None = None
+    branch: str | None = None
+    source_repo: str | None = None
+    pr_url: str | None = None
+
     # Sub-pipeline state
     spec_gen: SpecGenState | None = None
     tdd: TDDState | None = None

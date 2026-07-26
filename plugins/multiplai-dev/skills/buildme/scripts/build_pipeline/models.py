@@ -25,10 +25,15 @@ class BuildPhase(str, Enum):
     REVIEW = "review"
     TDD_BUILD = "tdd_build"
     # Proposes a spec delta from the implementation notes collected during the
-    # build. Sits between TDD_BUILD and COMPLETE because it reads what the
+    # build. Sits between TDD_BUILD and PUBLISH because it reads what the
     # build learned; is_phase_complete compares enum positions, so old
     # checkpoints (which never carry "respec") still order correctly.
     RESPEC = "respec"
+    # Push the build's own branch + open the PR. Ordinal position matters:
+    # state.is_phase_complete compares positions in this enum, so PUBLISH must
+    # sit immediately before COMPLETE (and after every producing phase,
+    # including RESPEC).
+    PUBLISH = "publish"
     COMPLETE = "complete"
     FAILED = "failed"
 
