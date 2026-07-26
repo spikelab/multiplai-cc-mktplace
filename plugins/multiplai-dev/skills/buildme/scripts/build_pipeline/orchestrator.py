@@ -208,6 +208,16 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                     log.warning("Respec audit produced no proposal (non-fatal)")
             except Exception as respec_err:
                 log.warning("Respec audit failed (non-fatal): %s", respec_err)
+            # Commit whatever the post-spec-generation phases left inside
+            # specs/changes/<name> (prototype/, implementation-notes.md,
+            # respec.md). Without --auto there is no archive commit to carry
+            # them, so the pushed branch would otherwise be missing them.
+            # Explicit pathspec; no-op when the pipeline owns no branch.
+            git_ops.commit_stage(
+                config,
+                f"docs(specs): {config.change_name} — build companion artifacts",
+                _spec_paths(config),
+            )
             state.advance_to(BuildPhase.RESPEC, state_path)
             print("PHASE:RESPEC:COMPLETE", flush=True)
 
