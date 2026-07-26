@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.1 — 2026-07-26
+
+### Added
+- **swift-build: `uitest` + `screenshots` verbs** for GUI self-verification
+  (#55) — run XCUITest bundles and capture app screenshots from the container,
+  with rm-rf guards on result-bundle and screenshot output paths.
+
+### Fixed
+- **buildme: explainer detector precision** (#74) — dotted module paths
+  collapse to their declared distribution prefix, and builtins/stdlib members
+  no longer surface as "new dependencies".
+
 ## 0.5.0 — 2026-07-25
 
 Verification overhaul for buildme. The theme: reviewers **propose** and the
