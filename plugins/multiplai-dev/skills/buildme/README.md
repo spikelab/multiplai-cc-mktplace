@@ -27,10 +27,16 @@ BuildMe has two paths depending on task scale:
 The full pipeline runs as a subprocess to keep the parent context lean:
 
 ```
-Interview → Research → Spec Generation → Design Audit → Review → TDD Build
+Interview → Research → Spec Generation (+ unknowns/explainers) → Design Audit
+  → Prototype → Review → TDD Build → Respec → Archive → Publish (push + draft PR)
 ```
 
 Each phase checkpoints state to disk. If the build crashes, restarting resumes from the last completed phase.
+
+The build runs **inside its own git worktree on its own branch** and ends with a
+pushed branch and a draft PR — see [Git Lifecycle](#git-lifecycle). Its kanban
+column is emitted at every transition — see
+[The Board Seam](#the-board-seam) and [`docs/dark-factory-board.md`](docs/dark-factory-board.md).
 
 ## The Full Pipeline
 
@@ -50,11 +56,37 @@ The pipeline generates artifacts in dependency order:
 proposal.md  (no dependencies)
 ├── requirements/*.md  (requires: proposal)
 ├── design.md  (requires: proposal)
-│   └── tasks.md  (requires: requirements + design)
-│       └── rubric.md  (requires: tasks)
+│   └── unknowns.md  (requires: design)
+│       └── tasks.md  (requires: requirements + design + unknowns)
+│           └── rubric.md  (requires: tasks)
 ```
 
 Each artifact is a focused LLM call with the right context. If generation is interrupted, completed artifacts are skipped on resume.
+
+#### The unknowns / explainer gate
+
+Before the build depends on anything **new to this project**,
+`dependencies.detect_new_dependencies()` (a pure function — no LLM) parses the
+proposal's `## Impact` and the design's `## Decisions` for named
+tools/libraries/services/data sources, then subtracts everything already declared
+in the project's manifests (`pyproject.toml`, `package.json`, `Package.swift`,
+`Cargo.toml`, `go.mod`, `requirements.txt`) and already imported in its source.
+
+One explainer call per remaining dependency (with `WebSearch`/`WebFetch`) writes
+its section of `unknowns.md`: **What it is**, **The contract we rely on**,
+**Edge cases & failure modes**, **Assumptions we are making** (each falsifiable),
+**How we would find out cheaply**. When nothing is new, `unknowns.md` records
+that explicitly rather than being skipped silently.
+
+`unknowns_gate` then fails any dependency whose section has an empty Edge cases
+or Assumptions list, triggering exactly **one** regeneration pass for the missing
+sections. Completion is recorded as `spec_gen.explainers_done` so a resume does
+not re-run it.
+
+`unknowns.md` is threaded into the `tasks` generation context and into the
+**test_writer**'s context (and deliberately not the refactorer's) — the payoff is
+that documented edge cases arrive as tests. Controls: `--skip-explainers`,
+`explainers: {enabled: true}` in `specs/config.yaml`. Default **on**.
 
 ### Phase 4: Design Audit
 
@@ -66,11 +98,39 @@ inconsistencies — which are surfaced as warnings before the build.
 > feasibility gate exist in the code (`run_codebase_analysis`, `feasibility_gate`)
 > but are **not currently wired into the pipeline**.
 
-### Phase 5: Review Checkpoint
+### Phase 5: Prototype
+
+The cheapest artifact that proves the shape, **before** the expensive TDD build:
+a single self-contained HTML mockup, a sample output file, or a hand-written
+transcript of the intended CLI/API exchange — no framework, no build step, no
+repo code. One agent writes it, plus `NOTES.md`, inside
+`specs/changes/<name>/prototype/`; the write boundary is enforced in code, not
+only in the prompt.
+
+- **When it runs:** `prototype_required()` says yes for `frontend` / `fullstack`
+  change types, or when the proposal/design mention a user-visible output format
+  (report, export, schema, CLI output, document). Otherwise it is skipped **with
+  a logged reason**. Override with `--prototype` / `--no-prototype` or
+  `prototype: {enabled: auto|true|false}`. `--spec-only` runs include this stage.
+- **NOTES.md REQUIRED slots:** `PROVES:`, `DISPROVES:`, `OPEN_QUESTIONS:`,
+  `STATUS:`.
+- **`prototype_gate`:** at least one artifact file besides `NOTES.md`, and
+  non-empty `PROVES:` and `OPEN_QUESTIONS:`. Failure → one retry, then the
+  *phase* fails with a diagnosis in `build-progress.md` — never the build.
+- **Feedback into the spec:** non-empty `DISPROVES:` / `OPEN_QUESTIONS:` triggers
+  exactly **one** regeneration pass of `design.md` and `tasks.md` with the notes
+  injected as audit findings. Recorded as `spec_gen.prototype_done` for resume.
+
+### Phase 6: Review Checkpoint
 
 Pipeline pauses for human review (unless `--auto`). You can iterate on specs/design before building.
 
-### Phase 6: TDD Build
+Paths are printed in a deliberate order: `REVIEW:READ_FIRST:<unknowns.md>` comes
+**first, above everything else** — reading it is the anti-slop step — followed by
+`PROTOTYPE:file://…` and `PROTOTYPE_NOTES:file://…` (the container's localhost is
+not the user's, so the shared-mount `file://` path is the channel that works).
+
+### Phase 7: TDD Build
 
 For each block in `tasks.md`:
 
@@ -83,11 +143,41 @@ For each block in `tasks.md`:
 
 If review scores are too low, the implementer retries with feedback (up to 3 iterations). If integration fails, a fix agent repairs the damage (up to 2 attempts).
 
-### Phase 7: Final Review
+Each agent report also carries two REQUIRED slots that close the loop back to the
+spec:
+
+```
+SURPRISES: <what did not match the spec/design, or "none">
+SPEC_IMPACT: <none | clarify | contradicts>
+```
+
+`contradicts` means the block could only be built by doing something the
+spec/design does not say (or says otherwise). Each parsed note becomes an
+`ImplementationNote`, is persisted on the block (so it survives resume), and is
+appended to `specs/changes/<name>/implementation-notes.md` **as the build runs** —
+a crashed build still leaves the learning on disk. A `contradicts` note is logged
+as a warning and written to `build-progress.md`; with
+`respec: {halt_on_contradiction: true}` (default **false**) it stops the build
+with a diagnosis instead of steering around the contradiction.
+
+### Phase 8: Final Review
 
 Full code review across the entire change, plus entry-point verification (can the app actually run?).
 
-### Phase 8: Archive
+### Phase 9: Respec
+
+Reads `implementation-notes.md` plus the current `requirements/*.md` and
+`design.md`, and writes `specs/changes/<name>/respec.md`: a proposed delta in the
+same ADDED/MODIFIED/REMOVED Requirements format the archive merge already
+applies, each entry carrying the note that motivated it.
+
+**Propose only — it never edits the specs.** Applying a delta stays a deliberate
+human (or next-change) decision. Non-fatal: an LLM failure logs a warning and the
+build still completes. `respec.md` and `implementation-notes.md` travel with the
+change into `archive/<date>-<name>/` but are **not** merged into `registry/` —
+only `requirements/*.md` merge.
+
+### Phase 10: Archive
 
 With `--auto`, the change is archived automatically at the end:
 - Delta requirements from `changes/{name}/requirements/` are merged into the main `registry/`
@@ -100,6 +190,98 @@ python -m build_pipeline archive --change my-feature --project-dir .
 ```
 
 Or use `--no-merge` to archive without touching the main registry.
+
+### Phase 11: Publish
+
+Pushes the build's branch and opens a **draft** PR. Runs **after** the archive
+move, so the pushed branch carries the archived layout and the move itself is a
+committed change rather than an uncommitted rename sitting in the worktree. See
+[Git Lifecycle](#git-lifecycle).
+
+## Git Lifecycle
+
+Every git and `gh` invocation lives in `git_ops.py`: fixed `argv` lists,
+`shell=False` everywhere, change names normalized before they reach a branch or
+path. It never merges, rebases, resets, force-pushes, or deletes a branch;
+`remove_worktree` exists as a documented helper for a *calling session* and the
+pipeline never calls it.
+
+**Worktree + branch (BOOTSTRAP).** Created before `specs/` exists, so the
+change's artifacts are born on the branch:
+
+- Branch `buildme/<change-name>`; a collision appends `-2`, `-3`, … rather than
+  reusing an existing branch.
+- Worktree at `$WORKSPACE/.worktrees/buildme-<change-name>` when `WORKSPACE` is
+  set, else `<repo>/../.worktrees/buildme-<change-name>`.
+- `config.project_dir` is then re-bound to the worktree and `specs_dir`,
+  `state_file_path`, `progress_file_path` re-derived, so every later phase
+  operates inside the worktree with no other code change. `worktree_path`,
+  `branch`, `source_repo` (and later `pr_url`) are persisted in `BuildState`, so
+  a **resume re-binds to the existing worktree and never creates a second one**.
+- It refuses to start — hard failure with a diagnosis, never a silent fallback —
+  when the repo has uncommitted tracked changes, or the requested branch already
+  exists with unmerged commits.
+- `--no-worktree` keeps the old behavior, including `git init` for a brand-new
+  project directory.
+
+**Commits.** Spec-stage commits (after spec generation, after each regeneration
+pass, for the build's companion artifacts, and for the archive move) stage
+**explicit paths only**. The per-block TDD commits are the pipeline's one
+whole-tree stage — a pathspec-limited `git add -A -- . :(exclude)build-progress.md
+:(exclude).build-state.json`, never a bare `git add -A`.
+
+> **Known gap (deliberate):** the original plan called for committing the
+> agent-reported `FILES:` list per TDD phase. That is not implemented. `FILES:`
+> is agent-self-reported, and dropping a produced file is worse than sweeping one
+> in — and since the build runs inside its own worktree, "everything under `.`"
+> *is* this build's own work.
+
+**Publish.** `git push -u origin <branch>`, then `gh pr create` with a title from
+the change name and a body assembled from `proposal.md`'s Why, the block list,
+and links to whichever companion artifacts exist (`unknowns.md`,
+`prototype/NOTES.md`, `implementation-notes.md`, `respec.md`). `--draft` by
+default so nothing looks merge-ready without a human. `pr_url` is recorded in
+`BuildState` and `.board.json`, and `PR:<url>` is printed on stdout.
+
+**Non-fatal by construction.** No `origin`, an unauthenticated `gh`, or a network
+failure logs a diagnosis, leaves the branch and worktree intact with the exact
+manual commands in `build-progress.md`, and the build still reports success for
+the code it produced.
+
+**Never auto-merge, never delete.** Nothing merges to `main` or staging,
+force-pushes, or removes a worktree — including its own. The worktree survives
+the run and its path is printed (`WORKTREE:<path>`); deleting it is the calling
+session's decision, from the workspace root.
+
+**Controls.** `--no-worktree`, `--no-push`, `--no-pr`, `--pr-ready`, and
+`git: {worktree: true, push: true, pr: draft|ready|none}` in `specs/config.yaml`
+(CLI flags win). Defaults: worktree **on**, push **on**, PR **draft**.
+`--no-worktree --no-push --no-pr` reproduces the pre-git-lifecycle behavior
+exactly; note that `--no-worktree` alone already disables push and PR, because
+those only ever act on a branch the pipeline created.
+
+## The Board Seam
+
+A state seam plus a JSON file — nothing renders a board, schedules cards, or
+talks to a board service.
+
+- `models.BoardColumn` — the eleven kanban columns (Backlog … Cancelled).
+- `board.column_for(phase, block_status)` — the single pure mapping.
+- `specs/changes/<name>/.board.json` — `{card_id, change_name, column,
+  owner_agent, entered_at, branch, worktree_path, pr_url, history: [{column, at,
+  note}]}`, rewritten on every phase transition and block-status change.
+- `BOARD:<change>:<Column>` on stdout, emitted only when the card actually moves.
+
+Driven today: **Shaping → Planning → In Development → In Review**, where In Review
+is entered only once PUBLISH has pushed the branch *and* opened the PR. Backlog,
+Testing, Ready for Prod, Deploying and Deployed are **never** set;
+`BlockStatus` never changes the column. Full accounting, with file:line evidence
+and the roadmap for the columns nobody drives, in
+[`docs/dark-factory-board.md`](docs/dark-factory-board.md).
+
+> In `--auto` runs the archive move precedes PUBLISH, so the final In Review card
+> is written under `specs/archive/<date>-<name>/` and that last write sits
+> uncommitted — the PR is already open by then.
 
 ## Artifact Format
 
@@ -114,10 +296,17 @@ specs/
 │   └── my-feature/                # Active change
 │       ├── .change.yaml           # Metadata
 │       ├── .build-state.json      # Resumable state checkpoint
+│       ├── .board.json            # Kanban card (column, branch, pr_url, history)
 │       ├── proposal.md            # Why this change exists
 │       ├── design.md              # How to implement (architecture decisions)
+│       ├── unknowns.md            # Explainer per dependency new to this project
 │       ├── tasks.md               # Block-by-block work breakdown
 │       ├── rubric.md              # Evaluation criteria
+│       ├── prototype/             # Cheap shape proof, written before the build
+│       │   ├── NOTES.md           #   PROVES/DISPROVES/OPEN_QUESTIONS/STATUS
+│       │   └── mockup.html        #   (or sample output / CLI transcript)
+│       ├── implementation-notes.md # Agent SURPRISES/SPEC_IMPACT, appended live
+│       ├── respec.md              # Proposed spec delta (never auto-applied)
 │       └── requirements/          # BDD scenarios — one file per capability
 │           ├── user-auth.md
 │           └── email-verification.md
@@ -337,9 +526,28 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
 | `--mode brief` | Start from docs/research (load then interview) |
 | `--mode only` | Specs exist, just build |
 | `--auto` | Skip review checkpoint |
-| `--spec-only` | Stop after spec generation + design audit |
+| `--spec-only` | Stop after spec generation + design audit + prototype |
 | `--skip-research` | Skip the research phase |
+| `--skip-explainers` | Skip the unknowns/explainer pass (`unknowns.md` still records the skip) — `build`, `spec-generate` |
+| `--prototype` / `--no-prototype` | Force the prototype stage on / off (mutually exclusive) |
+| `--no-worktree` | Build in place on the current branch; implies no push and no PR |
+| `--no-push` | Do not push the build's branch |
+| `--no-pr` | Do not open a PR after pushing |
+| `--pr-ready` | Open the PR ready-for-review instead of draft |
+| `--lenient-review` | Accept-and-continue instead of failing on low review scores — `build`, `tdd` |
+| `--trust-repo` | Opt-in for auto-approving agents — `build`, `spec-generate`, `tdd`, `apply` |
 | `--block N` | Resume TDD from specific block (tdd/apply only) |
+
+### specs/config.yaml toggles
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `explainers: {enabled}` | `true` | The unknowns/edge-case explainer pass |
+| `prototype: {enabled}` | `auto` | `auto` \| `true` \| `false` — the prototype stage |
+| `respec: {halt_on_contradiction}` | `false` | Stop the build on a `SPEC_IMPACT: contradicts` note |
+| `git: {worktree, push, pr}` | `true, true, draft` | Git lifecycle (`pr`: `draft` \| `ready` \| `none`) |
+
+CLI flags win over `config.yaml` in every case.
 
 ### Exit Codes
 
@@ -384,12 +592,37 @@ Artifacts: proposal ✓ specs ✓ design ✓ tasks ✓ rubric ✓
 The pipeline emits structured lines for the SKILL.md wrapper to parse:
 
 ```
+WORKTREE:/Users/me/knowhere/.worktrees/buildme-password-reset
+BRANCH:buildme/password-reset
 PHASE:BOOTSTRAP:COMPLETE
+BOARD:password-reset:Shaping
 PHASE:SPEC_GENERATION:COMPLETE
+PHASE:DESIGN_AUDIT:COMPLETE
+BOARD:password-reset:Planning
+PHASE:PROTOTYPE:COMPLETE
+REVIEW:READ_FIRST:/…/specs/changes/password-reset/unknowns.md
+PROTOTYPE:file:///…/specs/changes/password-reset/prototype/mockup.html
+PROTOTYPE_NOTES:file:///…/specs/changes/password-reset/prototype/NOTES.md
+PHASE:REVIEW:COMPLETE
+BOARD:password-reset:In Development
 BLOCK:1/2:Reset Request:COMPLETE
 BLOCK:2/2:Token Redemption:COMPLETE
+PHASE:TDD_BUILD:COMPLETE
+PHASE:RESPEC:COMPLETE
+PHASE:ARCHIVE:COMPLETE
+PUSHED:buildme/password-reset
+PR:https://github.com/me/project/pull/42
+BOARD:password-reset:In Review
+PHASE:PUBLISH:COMPLETE
 RESULT:SUCCESS
+WORKTREE:/Users/me/knowhere/.worktrees/buildme-password-reset
 ```
+
+Other lines: `PHASE:ARCHIVE:PENDING:<change>` (non-`--auto` runs),
+`PHASE:PUBLISH:SKIPPED:<branch>` (`--no-push`),
+`PHASE:PUBLISH:FAILED:{no-remote|push|pr}` with `PUBLISH_DIAGNOSIS:<reason>`
+(non-fatal — the manual commands land in `build-progress.md`),
+`ERROR:<message>`.
 
 ## Quality Gates
 
@@ -397,11 +630,19 @@ Gates are pure functions (no LLM calls) that return pass/fail decisions:
 
 | Gate | When | Fail Action |
 |------|------|-------------|
+| `unknowns_gate` | After `unknowns.md` is written | One regeneration pass for the missing sections only (no loop) |
+| `prototype_required` | Before the prototype stage | Not a pass/fail gate — decides whether the stage runs, and logs the reason either way |
+| `prototype_gate` | After the prototype agent | One retry, then the *phase* fails with a diagnosis — never the build |
 | Baseline test | Before block 1 | Abort (existing tests broken) |
 | Weak test detection | After test writer | Retry with feedback |
 | Quality review (inline, scored) | After implementer | Retry implementation (max 3) |
 | Integration | After block done | Integration fix agent (max 2) |
 | Entry point | Post-TDD | Warn (manual step needed) |
+
+`gates.py` also carries two parsers used by the loop back to the spec:
+`parse_agent_status` (`STATUS:`/`TESTS_RUN:`/`GREEN:`/`FILES:`) and
+`parse_implementation_note` (`SURPRISES:`/`SPEC_IMPACT:` →
+`models.ImplementationNote`).
 
 The per-block review is a single scored quality review (inline in
 `tdd_engine._run_quality_review`) checked against the rubric. A separate
@@ -418,12 +659,20 @@ State is checkpointed to `.build-state.json` after every phase transition:
   "mode": "scratch",
   "tier": "advanced",
   "phase": "tdd_build",
+  "worktree_path": "/Users/me/knowhere/.worktrees/buildme-password-reset",
+  "branch": "buildme/password-reset",
+  "source_repo": "/Users/me/knowhere/PROJECTS/project",
+  "pr_url": null,
   "spec_gen": {
-    "completed_artifacts": ["proposal", "specs", "design", "tasks", "rubric"]
+    "completed_artifacts": ["proposal", "requirements", "design", "unknowns", "tasks", "rubric"],
+    "explainers_done": true,
+    "prototype_done": true
   },
   "tdd": {
     "blocks": [
-      {"number": 1, "name": "Reset Request", "status": "done"},
+      {"number": 1, "name": "Reset Request", "status": "done",
+       "notes": [{"block_number": 1, "role": "implementer",
+                  "surprises": "…", "spec_impact": "clarify"}]},
       {"number": 2, "name": "Token Redemption", "status": "testing"}
     ],
     "current_block": 1
@@ -446,14 +695,19 @@ If the build crashes, restarting with the same `--change` name loads state and s
 | `config.py` | BuildConfig, tier detection, test discovery | No |
 | `state.py` | BuildState with checkpoint/resume | No |
 | `models.py` | Pydantic models for structured data | No |
-| `gates.py` | Quality gate assertions (pure code) | No |
+| `gates.py` | Quality gate assertions + agent-report parsers (pure code) | No |
+| `dependencies.py` | Detects dependencies new to *this* project (manifests + imports) | No |
+| `git_ops.py` | Every `git`/`gh` call: worktree, branch, commits, push, PR | No |
+| `board.py` | Board seam: `column_for`, `.board.json`, `BOARD:` line | No |
 | `sdk.py` | `llm_call()` + `agent_call()` wrappers | Yes |
 | `rubric.py` | Rubric generation, change type detection | Via sdk |
 | `progress.py` | Tail-able progress file writer | No |
 | `env.py` | .env loading, model resolution | No |
-| `llm_steps/spec_steps.py` | Artifact generation, design audit | Yes |
+| `llm_steps/spec_steps.py` | Artifact generation, design audit, per-dependency explainer | Yes |
+| `llm_steps/prototype_steps.py` | Prototype agent + folding its notes back into design/tasks | Yes |
 | `llm_steps/tdd_steps.py` | Test writer, implementer, refactorer | Yes |
-| `llm_steps/review_steps.py` | Code/security review helpers (reserved — not wired) | Yes |
+| `llm_steps/respec_steps.py` | Implementation-notes file + the `respec.md` proposal | Yes |
+| `llm_steps/review_steps.py` | Code review (wired); security review / review fix (not wired) | Yes |
 | `prompts/*.py` | Prompt templates with `{placeholders}` | — |
 
 ## Testing
@@ -463,4 +717,6 @@ cd skills/buildme/scripts
 PYTHONPATH=. python -m pytest tests/ -xvs
 ```
 
-166 tests covering config, state, models, gates, change manager, spec generator, and TDD engine. All tests mock LLM calls — no API keys needed.
+688 tests covering config, state, models, gates, change manager, dependency
+detection, spec generator, prototype and respec steps, git lifecycle, board seam,
+and the TDD engine. All tests mock LLM calls (and `gh`) — no API keys needed.
