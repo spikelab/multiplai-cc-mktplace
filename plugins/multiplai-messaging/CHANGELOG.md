@@ -1,8 +1,25 @@
 # Changelog
 
-(First CHANGELOG for this plugin — history before 0.1.2 lives in git log.)
+All notable changes to the **multiplai-messaging** plugin, as seen by someone
+installing or updating it.
 
-## 0.1.2 — 2026-07-26
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Version numbers are this plugin's version in the marketplace manifest
+(`.claude-plugin/marketplace.json`); a released version is tagged
+`multiplai-messaging@<version>`.
+
+Recorded history starts at **0.1.2**; anything earlier is in `git log` only.
+
+`multiplai-messaging@0.1.1` predates this file and has no section here.
+
+## [Unreleased]
+
+### Added
+- **A plugin README** (`plugins/multiplai-messaging/README.md`) — what the pack
+  contains, what each skill needs, and how it degrades without the kit.
+  Not yet in a released version.
+
+## [0.1.2] - 2026-07-26
 
 ### Security
 - **Message content from both channels is now treated as untrusted input**

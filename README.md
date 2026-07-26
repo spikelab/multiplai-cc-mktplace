@@ -1,4 +1,7 @@
-# multiplai
+# multiplai-cc-mktplace
+
+**The Multiplai Claude Code plugin marketplace** — seven installable plugin
+packs, one `/plugin marketplace add` away.
 
 > Part of the **[Multiplai suite](https://github.com/spikelab/multiplai)** — what the suite is, how the five repos fit together, and which part you need.
 
@@ -37,7 +40,23 @@ Then install the plugins you want:
 /plugin install multiplai-dev@multiplai
 ```
 
+The `@multiplai` suffix is the **marketplace's** name (`name` in
+`.claude-plugin/marketplace.json`), not the repository's and not the
+[umbrella repo](https://github.com/spikelab/multiplai)'s — it is what Claude
+Code shows in the `/plugin` menu, so it stays as it is.
+
 ## Plugins
+
+**Seven plugins, 43 skills** (context 12, dev 14, pm 6, media 5, research 3,
+messaging 2, writing 1). This repo is the authoritative source for that number;
+derive it rather than quoting it from memory:
+
+```bash
+ls -d plugins/*/skills/*/ | wc -l     # 43 on 2026-07-26
+```
+
+Each plugin is versioned and released on its own, and each carries its own
+release notes — see [`CHANGELOG.md`](CHANGELOG.md) for the index.
 
 | Plugin | Description |
 |--------|-------------|
@@ -107,7 +126,8 @@ derived files; you approve every memory write. Details in the
 .
 ├── .claude-plugin/
 │   └── marketplace.json          # marketplace manifest (lists plugins)
-├── plugins/
+├── plugins/                      # each: .claude-plugin/plugin.json, skills/,
+│   │                             #        README.md, CHANGELOG.md
 │   ├── multiplai-context/        # hooks/ scripts/ skills/ templates/ tests/
 │   ├── multiplai-pm/             # .claude-plugin/plugin.json + skills/
 │   ├── multiplai-writing/
@@ -116,12 +136,20 @@ derived files; you approve every memory write. Details in the
 │   ├── multiplai-media/
 │   └── multiplai-messaging/
 ├── docs/                         # cross-cutting contracts (degradation, untrusted content)
-├── scripts/                      # repo-level checks: lint_skills.py, scan_skills.py
+├── scripts/                      # repo-level checks: lint_skills.py, scan_skills.py,
+│                                 # check_changelog.py — plus tests/ for all three
+├── CHANGELOG.md                  # index only; the notes live per plugin
+├── CLAUDE.md                     # orientation for an agent working in this repo
+├── SECURITY.md                   # reporting, and what the scanner does not cover
 ├── LICENSE
 └── README.md                     # this file
 ```
 
 ## Development
+
+[`CLAUDE.md`](CLAUDE.md) is the orientation for anyone — human or agent —
+changing this repo: where things live, which gates must pass, and the release
+convention.
 
 See [`plugins/multiplai-context/README.md`](plugins/multiplai-context/README.md)
 for plugin-specific setup, configuration, and the test suite. Shared Python
@@ -155,9 +183,17 @@ Individual skills can additionally ship a `CONTRACT.md` (assertions on interface
 *shape*, not on values) run by
 `plugins/multiplai-dev/skills/skill-creator/scripts/promote_skill.py --contract`.
 
+To report something you find, or to understand what the scanner does *not*
+cover, see [`SECURITY.md`](SECURITY.md).
+
 **Versioning.** Every version bump in `.claude-plugin/marketplace.json` gets a
 matching annotated git tag `<plugin>@<version>` (e.g. `multiplai-context@0.6.4`)
-pointing at the commit where that version lands on `main`.
+pointing at the commit where that version lands on `main`, **and** an entry in
+`plugins/<plugin>/CHANGELOG.md`. The `changelog-gate` CI job enforces the bump
+and the entry on every pull request
+([`scripts/check_changelog.py`](scripts/check_changelog.py), runnable locally);
+the tag is cut by hand at release. Contributor-facing detail, including the
+gate's escape hatch, is in [`CLAUDE.md`](CLAUDE.md#release-convention).
 
 ## License
 

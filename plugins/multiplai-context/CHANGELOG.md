@@ -1,6 +1,24 @@
 # Changelog
 
-## 0.8.1 — 2026-07-26
+All notable changes to the **multiplai-context** plugin, as seen by someone
+installing or updating it.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Version numbers are this plugin's version in the marketplace manifest
+(`.claude-plugin/marketplace.json`); a released version is tagged
+`multiplai-context@<version>`.
+
+Recorded history starts at **0.1.0**; anything earlier is in `git log` only.
+
+Of the 31 versions recorded here, `0.6.4`, `0.6.5` and `0.8.0` carry a git tag
+— the tagging convention started partway through. Dates on untagged versions
+are the release dates recorded at the time, not derived from a tag.
+
+## [Unreleased]
+
+Nothing yet.
+
+## [0.8.1] - 2026-07-26
 
 Post-merge review fixes for memory evolution (findings 7.1–7.4 of
 `INBOX/pr-review-batch-2026-07-26.md`, against #62). No new features.
@@ -57,7 +75,7 @@ Post-merge review fixes for memory evolution (findings 7.1–7.4 of
   the pre-spawn gate. `templates/prospective.md` states the sweep cadence and
   the comment-stripping rule.
 
-## 0.8.0 — 2026-07-26
+## [0.8.0] - 2026-07-26
 
 Memory evolution (#62), untrusted-log handling (#60), behavioural contracts
 (#61), and outcome-based cost reporting (#59).
@@ -158,7 +176,7 @@ Memory evolution (#62), untrusted-log handling (#60), behavioural contracts
   file-level mtime freshness. Non-fatal: a lint failure must not take down the
   report people run when something else is already broken.
 
-## 0.7.0 — 2026-07-23
+## [0.7.0] - 2026-07-23
 
 ### Added
 - **In-file decision record for dream proposals (`## Processed`).** When
@@ -185,7 +203,7 @@ Memory evolution (#62), untrusted-log handling (#60), behavioural contracts
   cleans up learnings only when the proposal is fully decided; Step 6 archives
   only when nothing is left pending (undecided items stay for a later run/GUI).
 
-## 0.6.17 — 2026-07-17
+## [0.6.17] - 2026-07-17
 
 ### Fixed
 - **Single-token false positives in `token_overlap` routing.** Smoothed IDF
@@ -229,7 +247,7 @@ Memory evolution (#62), untrusted-log handling (#60), behavioural contracts
   instead of mirroring the constant (drift-proof, and satisfies the sys.path
   wiring test).
 
-## 0.6.16 — 2026-07-17
+## [0.6.16] - 2026-07-17
 
 ### Fixed
 - **Routing cap-saturation / filler injection.** The `token_overlap` router
@@ -259,7 +277,7 @@ Memory evolution (#62), untrusted-log handling (#60), behavioural contracts
   sets live privately under `<workspace>/.multiplai/data/evals/`, which
   `eval_router.py` now discovers by default.
 
-## 0.6.15 — 2026-07-16
+## [0.6.15] - 2026-07-16
 
 Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
 
@@ -313,7 +331,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   "never applies" test uses an explicit sentence whitelist instead of an
   80-char negation-proximity heuristic.
 
-## 0.6.14 — 2026-07-16
+## [0.6.14] - 2026-07-16
 
 ### Added
 - **Charter-based extraction targets.** The Stop-hook extractor (and
@@ -356,7 +374,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   blocks instead of naming specific memory files that drift. The critic
   now receives the same memory-domain blocks as the proposal pass.
 
-## 0.6.13 — 2026-07-15
+## [0.6.13] - 2026-07-15
 
 ### Fixed
 - **Bumped every `multiplai-core` pin to `@v0.8.1`** (across all PEP 723
@@ -380,7 +398,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   `_generate_proposal` call so a failed report logs an exception and exits
   non-zero instead of vanishing silently.
 
-## 0.6.11 — 2026-07-14
+## [0.6.11] - 2026-07-14
 
 ### Added
 - **qmd `http` execution mode.** A third `qmd_mode` (`http`) POSTs an
@@ -406,7 +424,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   `more`, `understand`, `explain` and morphological variants) that were
   leaking into the lexical keyword arm.
 
-## 0.6.10 — 2026-07-14
+## [0.6.10] - 2026-07-14
 
 ### Added
 - **`/multiplai-context:config-audit` — subtractive config/rules review**
@@ -430,7 +448,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   existing-but-corrupt state opens the gate (fail-open recovery, like
   the dream gate).
 
-## 0.6.9 — 2026-07-14
+## [0.6.9] - 2026-07-14
 
 ### Added
 - **Near-instant compaction via summarizer steering.** The PreCompact hook
@@ -445,7 +463,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   even a manual /compact below the handoff threshold gets its checkpoint
   re-injected. Any doubt → native summary (silent stdout).
 
-## 0.6.8 — 2026-07-12
+## [0.6.8] - 2026-07-12
 
 ### Added
 - **Hub session registry.** The lifecycle hooks now maintain a per-session
@@ -464,7 +482,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   Degradation: works identically with or without docker or the kit;
   with no hub installed the files are simply never read.
 
-## 0.6.6 — 2026-07-10
+## [0.6.6] - 2026-07-10
 
 ### Added
 - **Memory-vs-session conflict surfacing.** Every injected `=== MEMORY ===`
@@ -493,7 +511,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   catalog writer, subprocess hook runner) into `tests/conftest.py` —
   three test suites carried drifting near-copies.
 
-## 0.6.5 — 2026-07-10
+## [0.6.5] - 2026-07-10
 
 ### Added
 - **Reviewed dream proposals are archived out of the dreams root.**
@@ -519,7 +537,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   the Step 8 summary no longer claims an archive on runs where none
   happened.
 
-## 0.6.4 — 2026-07-09
+## [0.6.4] - 2026-07-09
 
 ### Added
 - **Config knobs now do what the README promises.** `catalog_model_diary`
@@ -566,7 +584,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   tautological assertion) and removed a misleading unused `create_client`
   import from `context_manager`.
 
-## 0.6.3 — 2026-07-09
+## [0.6.3] - 2026-07-09
 
 ### Changed
 - **qmd retrieval entries now carry the matching chunk's line number.**
@@ -576,7 +594,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   file. The `qmd-search` skill documents the chunk semantics (`line`,
   `@@` snippet context headers, best-chunk-per-file dedup, `qmd get`).
 
-## 0.6.2 — 2026-07-09
+## [0.6.2] - 2026-07-09
 
 ### Fixed
 - **log-doctor injection traces use the embedded prompt.** Decision traces
@@ -585,7 +603,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   stale as of 0.5.3 — only appears when the scanned lines actually predate
   the embedded prompt (and now says so).
 
-## 0.6.1 — 2026-07-09
+## [0.6.1] - 2026-07-09
 
 ### Added
 - **Cost ledger + `/costs` skill.** A new collector
@@ -614,7 +632,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   `buildme` and `deep-research` pipeline `pyproject.toml` pins moved to
   v0.6.0 to match their new `component=` call sites.
 
-## 0.6.0 — 2026-07-08
+## [0.6.0] - 2026-07-08
 
 ### Added
 - **qmd resources retrieval backend (`resources_retrieval=qmd`).** When
@@ -641,7 +659,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   (bun + qmd install, `qmd init`, collection add, index + embed, smoke
   query). Container setups additionally need the qmd allowlist in the
   multiplai-container SSH-bridge gateway.
-## 0.5.3 — 2026-07-07
+## [0.5.3] - 2026-07-07
 
 ### Fixed
 - **Post-cooldown relevance re-floor — weak co-picks no longer injected once
@@ -672,7 +690,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   trail. Memory still logs unconditionally (the /health contract); skills and
   resources log whenever their corpus is enabled.
 
-## 0.5.2 — 2026-07-07
+## [0.5.2] - 2026-07-07
 
 ### Added
 - **`/log-doctor` skill + `scripts/log_doctor.py`.** Scans the runtime logs
@@ -700,7 +718,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   file). Explains "why did it inject that" cases — e.g. cooldown suppressing
   the top scorers so near-floor files fill the slots.
 
-## 0.5.1 — 2026-07-07
+## [0.5.1] - 2026-07-07
 
 ### Fixed
 - **Learning extraction no longer depends on resolution luck (log-doctor F1).**
@@ -727,7 +745,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   Hook entry points re-bind `setup_logging` with the payload's session id
   instead of leaving `[session:--------]` on every WARNING+ line.
 
-## 0.5.0 — 2026-07-07
+## [0.5.0] - 2026-07-07
 
 ### Added
 - **Context checkpointing & rebuild (MiMo-style long-horizon support).** One
@@ -754,7 +772,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   compact path; band counters reset after every rebuild so each new physical
   window re-checkpoints. In auto mode the `/clear` nudges are suppressed
   (they return only if compaction is overdue/misconfigured).
-## 0.4.3 — 2026-07-06
+## [0.4.3] - 2026-07-06
 
 ### Changed
 - **Bumped `multiplai-core` pin to `@v0.4.0`.** Picks up the library's security
@@ -764,7 +782,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   atomic state writes, robust JSON extraction). All entry-point scripts and
   `requirements*.txt` updated.
 
-## 0.4.2 — 2026-07-05
+## [0.4.2] - 2026-07-05
 
 ### Fixed
 - **Every dispatcher run crashed the diary generator** — the 0.3.x
@@ -774,7 +792,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   contract test asserts every registered generator accepts the dispatcher's
   full run() contract, so future overrides can't regress this.
 
-## 0.4.1 — 2026-07-05
+## [0.4.1] - 2026-07-05
 
 ### Fixed
 - **refresh-catalogs skill doc contradicted the uv migration** — an Operational
@@ -784,7 +802,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   mandate `uv run --no-project`. Also scrubbed stale `venv_dir`/`python
   dream.py` references from the health and dream skill docs.
 
-## 0.4.0 — 2026-07-05
+## [0.4.0] - 2026-07-05
 
 ### Changed
 - **uv + PEP 723 runtime.** The managed plugin venv (`venv_bootstrap`/`venv_guard`)
@@ -886,7 +904,7 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   that made it relevant. Anti tokens that are also the entry's
   `intent_domains` vocabulary are now dropped before the exclusion check.
 
-## 0.3.0 — 2026-05-21
+## [0.3.0] - 2026-05-21
 
 Diary layout aligned with learnings — one file per UTC day.
 
@@ -910,7 +928,7 @@ Diary layout aligned with learnings — one file per UTC day.
   migration tool ships. The internal migration was a one-shot script
   applied to existing on-disk diaries during development and discarded.
 
-## 0.2.1 — 2026-05-21
+## [0.2.1] - 2026-05-21
 
 First public-marketplace-ready release. Focused on safety, transparency,
 and onboarding rather than new features.
@@ -937,7 +955,7 @@ and onboarding rather than new features.
 - `anthropic` dependency pinned to an exact version for reproducible
   installs.
 
-## 0.2.0 — 2026-05-17
+## [0.2.0] - 2026-05-17
 
 Internal release. Highlights for users:
 
@@ -997,7 +1015,7 @@ Internal release. Highlights for users:
   `CLAUDE_PLUGIN_*`/`WORKSPACE` so tests never inherit the host
   workspace.
 
-## 0.1.0 — 2026-05-16
+## [0.1.0] - 2026-05-16
 
 Initial public release of the **multiplai** context-manager plugin,
 distributed via the `multiplai` Claude Code marketplace.
