@@ -118,6 +118,9 @@ You are generating a task breakdown for an spec-driven change.
 ## Design
 {design_content}
 
+## Unknowns — dependencies new to this project, and their edge cases
+{unknowns_content}
+
 ## Task Granularity
 {granularity}
 
@@ -164,6 +167,10 @@ Rules:
 - If {granularity} is "checkboxes": add checkbox items under each block (- [ ] task)
 - If Shape Audit Findings are present, this is a regeneration pass: fix every
   finding by re-slicing the flagged blocks vertically
+- Every edge case listed under Unknowns belongs to the block that first touches
+  that dependency: name it in that block's acceptance criteria so the test
+  writer turns it into a test (e.g. "silence input produces an empty
+  transcript, not hallucinated caption text")
 
 Output ONLY the markdown content. No commentary.
 """

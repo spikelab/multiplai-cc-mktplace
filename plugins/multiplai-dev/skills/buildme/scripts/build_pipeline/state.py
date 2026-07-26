@@ -28,6 +28,11 @@ class SpecGenState(BaseModel):
     # resume re-runs the audit; old checkpoints default to False (idempotent
     # re-audit, safe).
     tasks_audit_done: bool = False
+    # Same durability problem for the unknowns/explainer gate: the gate and its
+    # single regeneration pass run AFTER unknowns.md is written, so file
+    # existence would mark the artifact DONE and skip the gate on resume.
+    # Old checkpoints default to False (re-running the gate is idempotent).
+    explainers_done: bool = False
 
 
 class TDDState(BaseModel):

@@ -72,6 +72,7 @@ class TestArtifactStatus:
         (change / "design.md").write_text("x")
         (change / "requirements").mkdir(exist_ok=True)
         (change / "requirements" / "cap1.md").write_text("x")
+        (change / "unknowns.md").write_text("x")
         (change / "tasks.md").write_text("x")
         (change / "rubric.md").write_text("x")
         status = cm.artifact_status(change)
@@ -84,14 +85,33 @@ class TestArtifactStatus:
         status = cm.artifact_status(change)
         assert status["tasks"] == ArtifactStatus.BLOCKED
 
-    def test_tasks_ready_with_requirements_and_design(self, cm, specs_dir):
+    def test_tasks_blocked_without_unknowns(self, cm, specs_dir):
+        """The explainer gate is a hard DAG dependency: tasks cannot be written
+        before the edge cases of anything new are on disk."""
         change = cm.create_change("test")
         (change / "proposal.md").write_text("x")
         (change / "design.md").write_text("x")
         (change / "requirements").mkdir(exist_ok=True)
         (change / "requirements" / "cap1.md").write_text("x")
         status = cm.artifact_status(change)
+        assert status["unknowns"] == ArtifactStatus.READY
+        assert status["tasks"] == ArtifactStatus.BLOCKED
+
+    def test_tasks_ready_with_requirements_design_and_unknowns(self, cm, specs_dir):
+        change = cm.create_change("test")
+        (change / "proposal.md").write_text("x")
+        (change / "design.md").write_text("x")
+        (change / "requirements").mkdir(exist_ok=True)
+        (change / "requirements" / "cap1.md").write_text("x")
+        (change / "unknowns.md").write_text("x")
+        status = cm.artifact_status(change)
         assert status["tasks"] == ArtifactStatus.READY
+
+    def test_unknowns_requires_design(self, cm, specs_dir):
+        change = cm.create_change("test")
+        (change / "proposal.md").write_text("x")
+        status = cm.artifact_status(change)
+        assert status["unknowns"] == ArtifactStatus.BLOCKED
 
 
 class TestReadyArtifacts:

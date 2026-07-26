@@ -450,6 +450,19 @@ def assemble_context(
             rel = req_file.relative_to(config.change_dir)
             parts.append(f"\n## Requirements: {rel}\n{req_file.read_text()}")
 
+    # Unknowns — the explainer document for dependencies new to this project.
+    # test_writer ONLY: the payoff of the B1 gate is that the documented edge
+    # cases (empty/malformed/oversized/concurrent/offline) arrive as tests. The
+    # implementer gets them indirectly through those tests, and the refactorer
+    # has no use for them — shipping the document to every role would just
+    # inflate prompts.
+    if role == "test_writer" and config.unknowns_path.exists():
+        parts.append(
+            "\n## Unknowns — dependencies new to this project\n"
+            "Write a test for every edge case below that this block touches.\n\n"
+            + config.unknowns_path.read_text()
+        )
+
     # Rubric (for reviewers — include for all so agents know quality bar)
     if config.rubric_path.exists():
         parts.append(f"\n## Evaluation Rubric\n{config.rubric_path.read_text()}")

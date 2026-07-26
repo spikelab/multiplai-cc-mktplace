@@ -147,6 +147,9 @@ class TestResumeSkipsExisting:
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
+        config.project_dir = tmp_path
+        config.explainers_active = True
+        config.project_description = ""
         config.model = "test-model"
         config.tier = "standard"
         config.mode = "scratch"
@@ -201,6 +204,7 @@ class TestTasksAuditResumeDurability:
         # re-enters _generate_single_artifact.
         (change_dir / "proposal.md").write_text("# Proposal")
         (change_dir / "design.md").write_text("# Design")
+        (change_dir / "unknowns.md").write_text("# Unknowns\n\nNo dependencies new to this project.")
         (change_dir / "tasks.md").write_text("## 1. Vertical slice A")
         (change_dir / "rubric.md").write_text("# Rubric")
         req_dir = change_dir / "requirements"
@@ -211,6 +215,9 @@ class TestTasksAuditResumeDurability:
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
+        config.project_dir = tmp_path
+        config.explainers_active = True
+        config.project_description = ""
         config.model = "test-model"
         config.task_granularity = "checkboxes"
         config.state_file_path.return_value = change_dir / ".build-state.json"
@@ -223,9 +230,10 @@ class TestTasksAuditResumeDurability:
             phase=BuildPhase.SPEC_GENERATION,
             spec_gen=SpecGenState(
                 completed_artifacts=[
-                    "proposal", "requirements", "design", "tasks", "rubric",
+                    "proposal", "requirements", "design", "unknowns", "tasks", "rubric",
                 ],
                 tasks_audit_done=audit_done,
+                explainers_done=True,
             ),
         )
         return cm, change_dir, config, state
@@ -286,6 +294,9 @@ class TestTasksAuditResumeDurability:
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
+        config.project_dir = tmp_path
+        config.explainers_active = True
+        config.project_description = ""
         config.model = "test-model"
         config.task_granularity = "checkboxes"
         config.state_file_path.return_value = change_dir / ".build-state.json"
@@ -336,6 +347,9 @@ class TestTasksShapeAudit:
         config.change_name = "test-feature"
         config.specs_dir = specs_dir
         config.change_dir = change_dir
+        config.project_dir = tmp_path
+        config.explainers_active = True
+        config.project_description = ""
         config.model = "test-model"
         config.task_granularity = "checkboxes"
         config.state_file_path.return_value = change_dir / ".build-state.json"

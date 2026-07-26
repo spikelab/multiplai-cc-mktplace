@@ -74,6 +74,9 @@ class GateToggles:
     security_review_per_block: bool = True
     test_quality_enabled: bool = True
     e2e_test_entry_point_check: bool = True
+    # B1 explainer gate: write unknowns.md before depending on anything new to
+    # this project. Default ON — reading the explainers is the anti-slop step.
+    explainers_enabled: bool = True
 
 
 @dataclass
@@ -95,6 +98,10 @@ class BuildConfig:
     # review exhaustion and final-review failures/errors log-and-continue
     # instead of failing the build.
     lenient_review: bool = False
+    # --skip-explainers: skip the B1 unknowns/edge-case explainer pass.
+    # unknowns.md is still written (recording the skip) so the artifact DAG
+    # stays satisfied and the absence is visible rather than silent.
+    skip_explainers: bool = False
 
     # Project context (from specs/config.yaml)
     project_name: str = ""
@@ -141,6 +148,7 @@ class BuildConfig:
             spec_only=getattr(args, "spec_only", False),
             skip_research=getattr(args, "skip_research", False),
             lenient_review=getattr(args, "lenient_review", False),
+            skip_explainers=getattr(args, "skip_explainers", False),
         )
         config.specs_dir = config.project_dir / "specs"
         config._load_specs_config()
@@ -192,11 +200,13 @@ class BuildConfig:
         security_review = data.get("security_review", {})
         test_quality = data.get("test_quality", {})
         e2e_test = data.get("e2e_test", {})
+        explainers = data.get("explainers", {}) or {}
         self.gates = GateToggles(
             code_review_per_block=code_review.get("per_block", True),
             security_review_per_block=security_review.get("per_block", True),
             test_quality_enabled=test_quality.get("enabled", True),
             e2e_test_entry_point_check=e2e_test.get("entry_point_check", True),
+            explainers_enabled=explainers.get("enabled", True),
         )
 
     def _discover_test_command(self) -> None:
@@ -243,6 +253,16 @@ class BuildConfig:
     @property
     def rubric_path(self) -> Path:
         return self.change_dir / "rubric.md"
+
+    @property
+    def unknowns_path(self) -> Path:
+        return self.change_dir / "unknowns.md"
+
+    @property
+    def explainers_active(self) -> bool:
+        """Whether the B1 explainer pass runs. The CLI flag wins over config.yaml
+        (same precedence as every other flag/config pair here)."""
+        return self.gates.explainers_enabled and not self.skip_explainers
 
     def state_file_path(self) -> Path:
         return self.change_dir / ".build-state.json"
