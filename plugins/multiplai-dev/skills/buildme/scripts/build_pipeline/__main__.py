@@ -40,6 +40,17 @@ def _add_lenient_review_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_skip_explainers_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--skip-explainers",
+        action="store_true",
+        help="Skip the unknowns/edge-case explainer pass for dependencies new "
+             "to this project. unknowns.md is still written, recording the skip. "
+             "Default: explainers on (also settable as "
+             "`explainers: {enabled: false}` in specs/config.yaml).",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="build_pipeline",
@@ -61,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--context-files", nargs="*", default=[], help="Brief/context file paths")
     _add_trust_repo_flag(build)
     _add_lenient_review_flag(build)
+    _add_skip_explainers_flag(build)
 
     # --- spec-generate ---
     spec = sub.add_parser("spec-generate", help="Artifact generation pipeline")
@@ -69,6 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     spec.add_argument("--interview-summary", default="", help="Interview summary text")
     spec.add_argument("--research-path", default="", help="Path to research output")
     _add_trust_repo_flag(spec)
+    _add_skip_explainers_flag(spec)
 
     # --- tdd ---
     tdd = sub.add_parser("tdd", help="TDD implementation engine")

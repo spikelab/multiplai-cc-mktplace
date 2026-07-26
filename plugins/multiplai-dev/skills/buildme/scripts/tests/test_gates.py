@@ -305,3 +305,226 @@ class TestAgentStatusGate:
         assert r.passed
         assert r.metadata["status"] is None
         assert "no STATUS slot" in r.reason
+
+
+# --- Unknowns / explainer gate (B1) -------------------------------------------
+
+COMPLETE_SECTION = """\
+## mlx-whisper
+
+### What it is
+A local Whisper implementation on Apple MLX.
+
+### The contract we rely on
+`transcribe(path) -> {"text": str, "segments": list}`.
+
+### Edge cases & failure modes
+- Pure silence: returns hallucinated caption text such as "thanks for watching",
+  not an empty string.
+- Malformed audio: raises RuntimeError from the decoder.
+- Oversized input: memory grows with clip length; >30min OOMs on 16GB.
+- Concurrent use: the model object is not thread-safe.
+- Offline: first run downloads weights and fails without network.
+
+### Assumptions we are making
+- Every clip we pass is under 30 minutes.
+- Weights are cached before the first build runs.
+
+### How we would find out cheaply
+Transcribe a 5-second silent WAV and print the result.
+"""
+
+EMPTY_EDGE_CASES_SECTION = """\
+## mlx-whisper
+
+### What it is
+A local Whisper implementation on Apple MLX.
+
+### The contract we rely on
+`transcribe(path) -> dict`.
+
+### Edge cases & failure modes
+
+### Assumptions we are making
+- Every clip we pass is under 30 minutes.
+
+### How we would find out cheaply
+Transcribe a silent WAV.
+"""
+
+
+def _unknowns_doc(*sections: str) -> str:
+    return "# Unknowns — what we are about to depend on\n\n" + "\n\n".join(sections)
+
+
+class TestUnknownsGate:
+    def test_passes_on_complete_section(self):
+        from build_pipeline.gates import unknowns_gate
+        r = unknowns_gate(_unknowns_doc(COMPLETE_SECTION), ["mlx-whisper"])
+        assert r.passed
+
+    def test_no_dependencies_passes(self):
+        """"Nothing new to this project" is a recorded finding, not a failure."""
+        from build_pipeline.gates import unknowns_gate
+        r = unknowns_gate("# Unknowns\n\nNo dependencies new to this project.\n", [])
+        assert r.passed
+        assert r.metadata["dependencies"] == []
+
+    def test_missing_section_fails(self):
+        from build_pipeline.gates import unknowns_gate
+        r = unknowns_gate(_unknowns_doc(COMPLETE_SECTION), ["mlx-whisper", "polars"])
+        assert not r.passed
+        assert r.action == "regenerate_unknowns"
+        assert any("polars" in f and "no `## polars` section" in f
+                   for f in r.metadata["findings"])
+
+    def test_empty_edge_cases_list_fails(self):
+        from build_pipeline.gates import unknowns_gate
+        r = unknowns_gate(_unknowns_doc(EMPTY_EDGE_CASES_SECTION), ["mlx-whisper"])
+        assert not r.passed
+        assert any("Edge cases" in f for f in r.metadata["findings"])
+
+    def test_empty_assumptions_list_fails(self):
+        from build_pipeline.gates import unknowns_gate
+        text = _unknowns_doc(
+            COMPLETE_SECTION.replace(
+                "- Every clip we pass is under 30 minutes.\n"
+                "- Weights are cached before the first build runs.\n",
+                "",
+            )
+        )
+        r = unknowns_gate(text, ["mlx-whisper"])
+        assert not r.passed
+        assert any("Assumptions" in f for f in r.metadata["findings"])
+
+    def test_unfilled_template_placeholders_do_not_count_as_content(self):
+        """A section left at the template's `- <case>: <what happens>` bullets
+        is an unwritten explainer, not a written one."""
+        from build_pipeline.gates import unknowns_gate
+        section = COMPLETE_SECTION.replace(
+            "- Pure silence: returns hallucinated caption text such as "
+            '"thanks for watching",\n  not an empty string.',
+            "- <case>: <what actually happens>",
+        )
+        # Drop the remaining real bullets so only the placeholder is left.
+        section = "\n".join(
+            line for line in section.splitlines()
+            if not line.startswith(("- Malformed", "- Oversized", "- Concurrent",
+                                    "- Offline", "  not an empty"))
+        )
+        r = unknowns_gate(_unknowns_doc(section), ["mlx-whisper"])
+        assert not r.passed
+
+    def test_accepts_new_dependency_objects(self):
+        from build_pipeline.dependencies import NewDependency
+        from build_pipeline.gates import unknowns_gate
+        dep = NewDependency(name="mlx-whisper", mentioned_in=["proposal.md § Impact"])
+        assert unknowns_gate(_unknowns_doc(COMPLETE_SECTION), [dep]).passed
+
+
+# --- The gate's single-regeneration-pass wiring (Done-means criterion 3) ------
+# Named test_unknowns_gate_* per the plan's acceptance criteria.
+
+def _audit_setup(tmp_path, unknowns_text):
+    from build_pipeline.change_manager import ChangeManager
+    from build_pipeline.dependencies import NewDependency
+    from unittest.mock import MagicMock
+
+    specs_dir = tmp_path / "specs"
+    specs_dir.mkdir()
+    cm = ChangeManager(specs_dir)
+    cm.init_specs()
+    change_dir = cm.create_change("explainer-test")
+    output_path = change_dir / "unknowns.md"
+    output_path.write_text(unknowns_text)
+
+    config = MagicMock()
+    config.model = "test-model"
+    config.change_dir = change_dir
+    config.project_dir = tmp_path
+    config.project_description = ""
+
+    context = cm.artifact_context(change_dir, "unknowns")
+    deps = [NewDependency(name="mlx-whisper")]
+    return change_dir, context, config, output_path, deps
+
+
+@pytest.mark.asyncio
+async def test_unknowns_gate_empty_edge_cases_triggers_exactly_one_regeneration(tmp_path):
+    from unittest.mock import AsyncMock, patch
+    from build_pipeline.spec_generator import _audit_unknowns
+
+    change_dir, context, config, output_path, deps = _audit_setup(
+        tmp_path, _unknowns_doc(EMPTY_EDGE_CASES_SECTION)
+    )
+
+    with patch(
+        "build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock
+    ) as mock_gen:
+        mock_gen.return_value = _unknowns_doc(COMPLETE_SECTION)
+        await _audit_unknowns(change_dir, context, config, output_path, deps)
+
+    assert mock_gen.await_count == 1
+    # The findings reach the regeneration call rather than being logged only.
+    findings_text = mock_gen.await_args.kwargs["audit_findings"]
+    assert "Edge cases" in findings_text
+    # The regenerated document is what lands on disk.
+    assert "thanks for watching" in output_path.read_text()
+
+
+@pytest.mark.asyncio
+async def test_unknowns_gate_second_failure_does_not_loop(tmp_path):
+    """A regenerated document that STILL fails the gate is accepted and logged.
+    One pass, never a retry loop — the cost of a stubborn explainer is bounded."""
+    from unittest.mock import AsyncMock, patch
+    from build_pipeline.spec_generator import _audit_unknowns
+
+    change_dir, context, config, output_path, deps = _audit_setup(
+        tmp_path, _unknowns_doc(EMPTY_EDGE_CASES_SECTION)
+    )
+
+    with patch(
+        "build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock
+    ) as mock_gen:
+        # Still incomplete on the second pass.
+        mock_gen.return_value = _unknowns_doc(EMPTY_EDGE_CASES_SECTION)
+        await _audit_unknowns(change_dir, context, config, output_path, deps)
+
+    assert mock_gen.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_unknowns_gate_passing_document_triggers_no_regeneration(tmp_path):
+    from unittest.mock import AsyncMock, patch
+    from build_pipeline.spec_generator import _audit_unknowns
+
+    change_dir, context, config, output_path, deps = _audit_setup(
+        tmp_path, _unknowns_doc(COMPLETE_SECTION)
+    )
+
+    with patch(
+        "build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock
+    ) as mock_gen:
+        await _audit_unknowns(change_dir, context, config, output_path, deps)
+
+    assert mock_gen.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_unknowns_gate_regeneration_failure_leaves_first_pass_standing(tmp_path):
+    from unittest.mock import AsyncMock, patch
+    from build_pipeline.spec_generator import _audit_unknowns
+
+    change_dir, context, config, output_path, deps = _audit_setup(
+        tmp_path, _unknowns_doc(EMPTY_EDGE_CASES_SECTION)
+    )
+    before = output_path.read_text()
+
+    with patch(
+        "build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock
+    ) as mock_gen:
+        mock_gen.side_effect = RuntimeError("model unavailable")
+        await _audit_unknowns(change_dir, context, config, output_path, deps)
+
+    assert mock_gen.await_count == 1
+    assert output_path.read_text() == before

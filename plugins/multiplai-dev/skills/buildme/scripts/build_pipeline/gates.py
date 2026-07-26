@@ -364,6 +364,111 @@ def review_score_gate(review: ReviewResult) -> GateResult:
     )
 
 
+# --- Unknowns / explainer gate (B1) ---
+
+# A dependency's section is a level-2 heading; its required lists are level-3
+# subsections. Matching is by heading text, so the gate reads the same document
+# a human reads.
+_UNKNOWNS_SECTION_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+_UNKNOWNS_SUBSECTION_RE = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
+_EDGE_CASES_RE = re.compile(r"edge\s*case", re.IGNORECASE)
+_ASSUMPTIONS_RE = re.compile(r"assumption", re.IGNORECASE)
+# A filled list item: a bullet or numbered item with real text after it —
+# template placeholders (`- <case>: <what happens>`) do not count.
+_LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?!<)(\S.*)$", re.MULTILINE)
+_PLACEHOLDER_ITEM_RE = re.compile(r"^\s*<.*>\s*$")
+
+
+def _split_sections(text: str, pattern: re.Pattern[str]) -> list[tuple[str, str]]:
+    """(heading, body) pairs for every heading matched by ``pattern``."""
+    matches = list(pattern.finditer(text or ""))
+    out: list[tuple[str, str]] = []
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        out.append((m.group(1).strip(), text[m.end():end]))
+    return out
+
+
+def _has_filled_list(body: str) -> bool:
+    """True when the body carries at least one list item with real content."""
+    for item in _LIST_ITEM_RE.findall(body or ""):
+        item = item.strip()
+        if not item or _PLACEHOLDER_ITEM_RE.match(item):
+            continue
+        return True
+    return False
+
+
+def unknowns_gate(unknowns_text: str, deps) -> GateResult:
+    """Structural gate on `unknowns.md` — the explainer must actually explain.
+
+    Fails when a detected dependency has no section at all, or when its
+    "Edge cases & failure modes" or "Assumptions we are making" list is empty.
+    Those two lists are the whole point of the explainer (the Whisper-silence
+    class of surprise), so an empty one is an unwritten explainer, not a
+    stylistic nit.
+
+    ``deps`` accepts NewDependency objects or plain name strings. With no
+    dependencies the gate passes — "nothing new to this project" is a recorded
+    finding, not a failure.
+    """
+    names = [getattr(d, "name", d) for d in (deps or [])]
+    if not names:
+        return GateResult(
+            passed=True,
+            reason="No dependencies new to this project — nothing to explain",
+            metadata={"dependencies": []},
+        )
+
+    sections = _split_sections(unknowns_text or "", _UNKNOWNS_SECTION_RE)
+    findings: list[str] = []
+    for name in names:
+        needle = str(name).lower()
+        match = next(
+            (body for heading, body in sections if needle in heading.lower()),
+            None,
+        )
+        if match is None:
+            findings.append(f"`{name}`: no `## {name}` section in unknowns.md")
+            continue
+
+        subsections = _split_sections(match, _UNKNOWNS_SUBSECTION_RE)
+        edge_body = next(
+            (b for h, b in subsections if _EDGE_CASES_RE.search(h)), None
+        )
+        assum_body = next(
+            (b for h, b in subsections if _ASSUMPTIONS_RE.search(h)), None
+        )
+        if edge_body is None:
+            findings.append(f"`{name}`: missing an 'Edge cases & failure modes' subsection")
+        elif not _has_filled_list(edge_body):
+            findings.append(
+                f"`{name}`: 'Edge cases & failure modes' list is empty — needs at "
+                f"least one bullet naming observed behavior on empty, malformed, "
+                f"oversized, concurrent, and offline input"
+            )
+        if assum_body is None:
+            findings.append(f"`{name}`: missing an 'Assumptions we are making' subsection")
+        elif not _has_filled_list(assum_body):
+            findings.append(
+                f"`{name}`: 'Assumptions we are making' list is empty — needs at "
+                f"least one falsifiable claim"
+            )
+
+    if findings:
+        return GateResult(
+            passed=False,
+            reason="Explainer sections incomplete:\n" + "\n".join(f"- {f}" for f in findings),
+            action="regenerate_unknowns",
+            metadata={"findings": findings, "dependencies": names},
+        )
+    return GateResult(
+        passed=True,
+        reason=f"All {len(names)} dependency explainer(s) complete",
+        metadata={"dependencies": names},
+    )
+
+
 def review_iteration_gate(iteration: int, max_iterations: int = 3) -> GateResult:
     """Check if review fix cycles are exhausted."""
     if iteration < max_iterations:

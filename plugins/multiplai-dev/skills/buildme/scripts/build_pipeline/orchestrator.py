@@ -136,6 +136,12 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             if config.auto:
                 log.info("SKIP phase=REVIEW reason=--auto")
             else:
+                # The explainer document goes first, above every other artifact:
+                # reading it is the anti-slop step of the whole checkpoint —
+                # it is where a dependency's real edge cases are stated before
+                # anything is built on top of them.
+                if config.unknowns_path.exists():
+                    print(f"REVIEW:READ_FIRST:{config.unknowns_path}", flush=True)
                 log.info("DONE phase=REVIEW")
             state.advance_to(BuildPhase.REVIEW, state_path)
             print("PHASE:REVIEW:COMPLETE", flush=True)

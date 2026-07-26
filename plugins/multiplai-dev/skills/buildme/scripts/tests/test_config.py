@@ -296,3 +296,61 @@ class TestConfigPaths:
         config = BuildConfig(project_dir=tmp_path, change_name="My Feature")
         config.specs_dir = tmp_path / "specs"
         assert config.change_dir == tmp_path / "specs" / "changes" / "my-feature"
+
+
+class TestExplainerToggle:
+    """B1 explainers default ON; the CLI flag wins over specs/config.yaml."""
+
+    def test_default_is_on(self):
+        assert GateToggles().explainers_enabled
+        assert BuildConfig().explainers_active
+
+    def test_config_yaml_can_disable(self, tmp_path):
+        import yaml
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text(
+            yaml.dump({"context": "demo", "explainers": {"enabled": False}})
+        )
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = specs
+        config._load_specs_config()
+        assert not config.gates.explainers_enabled
+        assert not config.explainers_active
+
+    def test_cli_flag_disables_even_when_config_enables(self, tmp_path):
+        import yaml
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text(
+            yaml.dump({"context": "demo", "explainers": {"enabled": True}})
+        )
+        config = BuildConfig(project_dir=tmp_path, skip_explainers=True)
+        config.specs_dir = specs
+        config._load_specs_config()
+        assert config.gates.explainers_enabled
+        assert not config.explainers_active
+
+    def test_unknowns_path_lives_in_the_change_dir(self, tmp_path):
+        config = BuildConfig(project_dir=tmp_path, change_name="my-change")
+        config.specs_dir = tmp_path / "specs"
+        assert config.unknowns_path == (
+            tmp_path / "specs" / "changes" / "my-change" / "unknowns.md"
+        )
+
+
+class TestSkipExplainersFlag:
+    def test_flag_is_declared_on_build_and_spec_generate(self):
+        from build_pipeline.__main__ import build_parser
+
+        parser = build_parser()
+        for argv in (
+            ["build", "--skip-explainers"],
+            ["spec-generate", "--change", "x", "--skip-explainers"],
+        ):
+            assert parser.parse_args(argv).skip_explainers is True
+
+    def test_default_is_false(self):
+        from build_pipeline.__main__ import build_parser
+
+        assert build_parser().parse_args(["build"]).skip_explainers is False

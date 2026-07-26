@@ -63,7 +63,12 @@ ARTIFACT_DAG: dict[str, dict] = {
     "proposal": {"generates": "proposal.md", "requires": []},
     "requirements": {"generates": "requirements/*.md", "requires": ["proposal"]},
     "design": {"generates": "design.md", "requires": ["proposal"]},
-    "tasks": {"generates": "tasks.md", "requires": ["requirements", "design"]},
+    # Explainer gate (B1): before the build depends on anything new to this
+    # project, write down its contract and edge cases. Sits between design and
+    # tasks so the edge cases are on disk while the task breakdown is written —
+    # and so the test_writer can turn them into tests.
+    "unknowns": {"generates": "unknowns.md", "requires": ["design"]},
+    "tasks": {"generates": "tasks.md", "requires": ["requirements", "design", "unknowns"]},
     "rubric": {"generates": "rubric.md", "requires": ["tasks"]},
 }
 
@@ -122,6 +127,32 @@ TEMPLATES: dict[str, str] = {
 
 <!-- Known risks and trade-offs -->
 """,
+    "unknowns": """\
+# Unknowns — what we are about to depend on
+
+<!-- One `## <dependency>` section per dependency that is new to this project. -->
+
+## <dependency-name>
+
+### What it is
+<!-- One paragraph: what this is and what job it does here. -->
+
+### The contract we rely on
+<!-- The exact API/behavior this change calls, and what it promises to return. -->
+
+### Edge cases & failure modes
+<!-- One bullet per case. Cover: empty input, malformed input, oversized input,
+     concurrent use, and offline/unavailable. Name the OBSERVED behavior, not
+     "may fail" — e.g. "Whisper transcribes silence as 'thanks for watching'". -->
+- <case>: <what actually happens>
+
+### Assumptions we are making
+<!-- One bullet per assumption, each phrased so it can be proven wrong. -->
+- <assumption stated as a falsifiable claim>
+
+### How we would find out cheaply
+<!-- The smallest experiment that tests the assumptions above. -->
+""",
     "tasks": """\
 ## 1. <!-- Block Name -->
 
@@ -171,6 +202,15 @@ INSTRUCTIONS: dict[str, str] = {
     "design": (
         "Create the design document explaining HOW to implement the change. "
         "Sections: Context, Goals/Non-Goals, Decisions (with alternatives), Risks/Trade-offs."
+    ),
+    "unknowns": (
+        "Write one section per dependency that is new to this project, covering: "
+        "What it is, The contract we rely on, Edge cases & failure modes, "
+        "Assumptions we are making, How we would find out cheaply. "
+        "Every Edge cases list and every Assumptions list has at least one bullet. "
+        "Edge cases name observed behavior on empty, malformed, oversized, "
+        "concurrent, and offline/unavailable input. Assumptions are phrased as "
+        "falsifiable claims."
     ),
     "tasks": (
         "Create the task list breaking down implementation into blocks. "

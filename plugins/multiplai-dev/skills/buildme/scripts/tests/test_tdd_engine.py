@@ -318,6 +318,31 @@ class TestAssembleContext:
         assert "Evaluation Rubric" in ctx
         assert "Code quality criteria" in ctx
 
+    def test_test_writer_gets_unknowns_and_refactorer_does_not(self, tmp_path):
+        """B1's payoff: the documented edge cases reach the agent that turns
+        them into tests. The refactorer has no use for them, so the document
+        stays out of its bundle."""
+        config = self._make_config(tmp_path)
+        config.unknowns_path.write_text(
+            "# Unknowns\n\n## mlx-whisper\n\n### Edge cases & failure modes\n"
+            "- Silence transcribes as 'thanks for watching', not an empty string.\n"
+        )
+        block = BlockInfo(number=1, name="X", description="desc")
+
+        writer_ctx = assemble_context(block, config, "test_writer")
+        assert "thanks for watching" in writer_ctx
+        assert "Unknowns — dependencies new to this project" in writer_ctx
+
+        refactorer_ctx = assemble_context(block, config, "refactorer")
+        assert "thanks for watching" not in refactorer_ctx
+        assert "Unknowns" not in refactorer_ctx
+
+    def test_missing_unknowns_file_is_fine(self, tmp_path):
+        config = self._make_config(tmp_path)
+        assert not config.unknowns_path.exists()
+        block = BlockInfo(number=1, name="X", description="desc")
+        assert "Unknowns" not in assemble_context(block, config, "test_writer")
+
     def test_includes_project_description(self, tmp_path):
         config = self._make_config(tmp_path)
         block = BlockInfo(number=1, name="X", description="desc")
