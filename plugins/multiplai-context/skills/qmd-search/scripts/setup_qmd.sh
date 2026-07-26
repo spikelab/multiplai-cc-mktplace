@@ -41,6 +41,10 @@ done
 export PATH="$HOME/.bun/bin:$PATH"
 command -v bun >/dev/null || {
   echo "Installing bun..."
+  # scan-skills: allow curl-bash — upstream bun installer over TLS from the
+  # vendor's own domain; this is the install path bun documents, and the
+  # alternative (vendoring a binary per-arch) is worse to keep current. The
+  # exception is recorded here rather than silently tolerated by the scanner.
   curl -fsSL https://bun.sh/install | bash
   export PATH="$HOME/.bun/bin:$PATH"
 }
