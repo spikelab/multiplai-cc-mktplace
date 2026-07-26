@@ -536,6 +536,17 @@ async def _audit_tasks_shape(
         return
     output_path.write_text(content)
     log.info("Rewrote artifact after shape audit: %s", output_path)
+    # One commit per regeneration pass, so the branch history shows the audit
+    # actually changed something. No-op unless the pipeline owns a branch.
+    from . import git_ops
+    try:
+        rel = str(change_dir.relative_to(config.project_dir))
+    except ValueError:
+        rel = ""
+    if rel:
+        git_ops.commit_stage(
+            config, "docs(specs): regenerate tasks.md after shape audit", [rel],
+        )
     print(f"PHASE: tasks_regenerated_after_shape_audit — {len(findings)} findings")
 
 
