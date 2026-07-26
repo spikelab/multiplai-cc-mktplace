@@ -65,6 +65,7 @@ async def generate_artifact(
     result = await llm_call(
         prompt,
         model=config.model,
+        effort=config.spec_effort,
         system_prompt=(
             "You are a technical specification generator. Your ONLY job is to "
             "generate the requested document content based on the context provided "
@@ -237,7 +238,7 @@ async def run_design_audit(change_dir: Path, config) -> list[dict]:
     )
 
     log.info("Running design audit on %s", change_dir.name)
-    raw = await llm_call(prompt, model=config.model, budget_label="design_audit")
+    raw = await llm_call(prompt, model=config.model, effort=config.spec_effort, budget_label="design_audit")
 
     try:
         gaps = extract_json(raw)
@@ -276,7 +277,7 @@ async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
     )
 
     log.info("Running tasks shape audit on %s", change_dir.name)
-    raw = await llm_call(prompt, model=config.model, budget_label="tasks_audit")
+    raw = await llm_call(prompt, model=config.model, effort=config.spec_effort, budget_label="tasks_audit")
 
     try:
         findings = extract_json(raw)
@@ -336,6 +337,7 @@ async def run_codebase_analysis(project_dir: Path, config) -> str:
         llm_call(
             p,
             model=config.model,
+            effort=config.spec_effort,
             allowed_tools=["Read", "Glob", "Grep"],
             max_turns=5,
             budget_label="codebase_analysis",

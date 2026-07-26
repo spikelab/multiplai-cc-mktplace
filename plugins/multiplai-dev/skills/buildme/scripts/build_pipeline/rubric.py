@@ -97,7 +97,7 @@ async def generate_rubric(change_dir: Path, config) -> str:
     )
 
     log.info("Generating rubric for change_type=%s", change_type)
-    result = await llm_call(prompt, model=config.model, budget_label="rubric")
+    result = await llm_call(prompt, model=config.model, effort=config.spec_effort, budget_label="rubric")
     log.info("Rubric generated (%d chars)", len(result))
     return result
 

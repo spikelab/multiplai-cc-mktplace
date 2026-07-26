@@ -148,6 +148,7 @@ async def llm_call(
     prompt: str,
     *,
     model: str | None = None,
+    effort: str | None = None,
     max_turns: int = 1,
     system_prompt: str | None = None,
     allowed_tools: list[str] | None = None,
@@ -181,6 +182,7 @@ async def llm_call(
                 disallowed_tools=_deny_list(prompt, allowed_tools),
                 max_turns=max_turns,
                 model=model,
+                effort=effort,
                 timeout_s=call_timeout,
                 label="llm",
                 component="buildme",
@@ -213,6 +215,7 @@ async def agent_call(
     *,
     allowed_tools: list[str],
     model: str | None = None,
+    effort: str | None = None,
     max_turns: int = 50,
     cwd: str | None = None,
     call_timeout: float = DEFAULT_AGENT_CALL_TIMEOUT_S,
@@ -239,6 +242,7 @@ async def agent_call(
                 disallowed_tools=_deny_list(prompt, allowed_tools),
                 max_turns=max_turns,
                 model=model,
+                effort=effort,
                 cwd=cwd,  # None → run_agent's isolated hook-sessions dir
                 timeout_s=call_timeout,
                 label="agent",
@@ -288,6 +292,7 @@ async def llm_call_structured(
     schema: type[T],
     *,
     model: str | None = None,
+    effort: str | None = None,
     max_retries: int = 1,
     system_prompt: str | None = None,
     call_timeout: float = DEFAULT_LLM_CALL_TIMEOUT_S,
@@ -298,8 +303,9 @@ async def llm_call_structured(
     last_error: Exception | None = None
 
     for attempt in range(max_retries + 1):
-        raw = await llm_call(current_prompt, model=model, system_prompt=system_prompt,
-                             call_timeout=call_timeout, budget_label=budget_label)
+        raw = await llm_call(current_prompt, model=model, effort=effort,
+                             system_prompt=system_prompt, call_timeout=call_timeout,
+                             budget_label=budget_label)
         try:
             payload = extract_json(raw)
             return schema.model_validate(payload)

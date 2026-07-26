@@ -5,7 +5,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from build_pipeline.config import detect_tier, BuildConfig, GateToggles
+from build_pipeline.config import conf_effort, detect_tier, BuildConfig, GateToggles
 
 
 class TestTierDetection:
@@ -641,3 +641,85 @@ class TestRebindProjectDir:
         assert config.change_dir == wt / "specs" / "changes" / "c"
         assert config.state_file_path() == wt / "specs" / "changes" / "c" / ".build-state.json"
         assert config.progress_file_path() == wt / "build-progress.md"
+
+
+class TestConfEffort:
+    """Effort is the second axis of the same tuning decision as MODEL=; it
+    used to be the half you could not reach from multiplai.conf."""
+
+    @staticmethod
+    def _conf(tmp_path: Path, body: str) -> dict:
+        (tmp_path / "multiplai.conf").write_text(body)
+        return {"CLAUDE_MULTIPLAI_HOME": str(tmp_path), "MULTIPLAI_EFFORT": "high"}
+
+    def test_absent_conf_leaves_effort_unset(self, tmp_path):
+        with patch.dict(os.environ, self._conf(tmp_path, ""), clear=True):
+            assert conf_effort("buildme") is None
+            assert conf_effort("buildme", "low") == "low"
+
+    def test_section_effort_is_returned(self, tmp_path):
+        with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=medium\n"), clear=True):
+            assert conf_effort("buildme") == "medium"
+
+    def test_effort_is_capped_by_the_ceiling(self, tmp_path):
+        """A budget run forces every step down — a conf override must not be
+        the one thing that escapes the ceiling."""
+        env = self._conf(tmp_path, "[buildme]\nEFFORT=high\n")
+        env["MULTIPLAI_EFFORT"] = "low"
+        with patch.dict(os.environ, env, clear=True):
+            assert conf_effort("buildme") == "low"
+
+    def test_blank_value_is_treated_as_unset(self, tmp_path):
+        with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=\n"), clear=True):
+            assert conf_effort("buildme", "medium") == "medium"
+
+    def test_step_section_is_independent_of_the_pipeline_wide_one(self, tmp_path):
+        body = "[buildme]\nEFFORT=low\n[buildme.review]\nEFFORT=high\n"
+        with patch.dict(os.environ, self._conf(tmp_path, body), clear=True):
+            assert conf_effort("buildme") == "low"
+            assert conf_effort("buildme.review", conf_effort("buildme")) == "high"
+
+    def test_step_falls_back_to_the_pipeline_wide_value(self, tmp_path):
+        with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=medium\n"), clear=True):
+            assert conf_effort("buildme.review", conf_effort("buildme")) == "medium"
+
+    def test_unknown_effort_is_ignored_not_passed_through(self, tmp_path):
+        """`resolve_effort` ranks an unknown name at the high tier, so the
+        ceiling never trips and the typo would reach the SDK verbatim."""
+        with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=turbo\n"), clear=True):
+            assert conf_effort("buildme") is None
+            assert conf_effort("buildme", "medium") == "medium"
+
+
+class TestBuildConfigEffortFields:
+    def test_defaults_are_unset_without_a_conf(self, tmp_path):
+        with patch.dict(os.environ, {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}, clear=True):
+            config = BuildConfig()
+            assert config.spec_effort is None
+            assert config.review_effort is None
+            assert config.agent_effort is None
+
+    def test_step_fields_pick_up_their_conf_sections(self, tmp_path):
+        (tmp_path / "multiplai.conf").write_text(
+            "[buildme]\nEFFORT=low\n[buildme.review]\nEFFORT=high\n")
+        with patch.dict(os.environ, {"CLAUDE_MULTIPLAI_HOME": str(tmp_path),
+                                     "MULTIPLAI_EFFORT": "high"}, clear=True):
+            config = BuildConfig()
+            assert config.review_effort == "high"
+            # spec/agent inherit the pipeline-wide value
+            assert config.spec_effort == "low"
+            assert config.agent_effort == "low"
+
+    def test_explicit_root_effort_reaches_every_step(self, tmp_path):
+        """The fallback lives in __post_init__, so a directly-constructed
+        config propagates too — per-field conf reads would have ignored it."""
+        with patch.dict(os.environ, {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}, clear=True):
+            config = BuildConfig(effort="low")
+            assert (config.spec_effort, config.review_effort, config.agent_effort) == \
+                ("low", "low", "low")
+
+    def test_an_explicit_step_effort_still_wins_over_the_root(self, tmp_path):
+        with patch.dict(os.environ, {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}, clear=True):
+            config = BuildConfig(effort="low", review_effort="max")
+            assert config.review_effort == "max"
+            assert config.spec_effort == "low"

@@ -110,6 +110,7 @@ async def run_apply(config: BuildConfig, args) -> int:
             prompt=prompt,
             allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
             model=config.model,
+            effort=config.agent_effort,
             max_turns=50,
             cwd=str(config.project_dir),
             budget_label="apply",

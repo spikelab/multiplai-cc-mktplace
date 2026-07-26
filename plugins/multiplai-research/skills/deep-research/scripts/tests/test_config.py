@@ -7,6 +7,8 @@ from pathlib import Path
 from research_pipeline.__main__ import build_parser
 from research_pipeline.config import (
     DEFAULT_MODEL,
+    _node_effort,
+    conf_effort,
     PARSE_MODEL,
     PRESETS,
     ResearchConfig,
@@ -59,3 +61,71 @@ class TestEffortTiers:
         config = ResearchConfig.from_cli_args(args)
         assert config.efforts["extract"] == "low"
         assert config.efforts["synthesize"] is None
+
+
+# --- Conf-driven reasoning effort ------------------------------------------
+
+
+def _write_conf(tmp_path: Path, monkeypatch, body: str) -> None:
+    monkeypatch.setenv("CLAUDE_MULTIPLAI_HOME", str(tmp_path))
+    monkeypatch.delenv("MULTIPLAI_EFFORT", raising=False)
+    (tmp_path / "multiplai.conf").write_text(body)
+
+
+class TestConfEffort:
+    """Model and effort are two axes of one tuning decision; only the model
+    half used to be settable without a code edit."""
+
+    def test_absent_conf_keeps_the_code_default(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "")
+        assert conf_effort("deep-research.extract", "low") == "low"
+
+    def test_section_effort_overrides_the_default(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "[deep-research.extract]\nEFFORT=medium\n")
+        assert conf_effort("deep-research.extract", "low") == "medium"
+
+    def test_effort_is_capped_by_the_ceiling(self, tmp_path, monkeypatch):
+        """A budget run forces every node down — a conf override must not be
+        the one thing that escapes the ceiling."""
+        _write_conf(tmp_path, monkeypatch, "[deep-research.plan]\nEFFORT=high\n")
+        monkeypatch.setenv("MULTIPLAI_EFFORT", "low")
+        assert conf_effort("deep-research.plan", None) == "low"
+
+    def test_blank_value_is_treated_as_unset(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "[deep-research.extract]\nEFFORT=\n")
+        assert conf_effort("deep-research.extract", "low") == "low"
+
+
+class TestNodeEffortPrecedence:
+    def test_node_section_beats_skill_wide_section(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch,
+                    "[deep-research]\nEFFORT=medium\n[deep-research.extract]\nEFFORT=low\n")
+        assert _node_effort("extract", None) == "low"
+        assert _node_effort("plan", None) == "medium"
+
+    def test_skill_wide_section_beats_the_code_default(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "[deep-research]\nEFFORT=medium\n")
+        assert _node_effort("extract", "low") == "medium"
+
+    def test_nothing_configured_keeps_every_code_default(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "")
+        assert _node_effort("extract", "low") == "low"
+        assert _node_effort("plan", None) is None
+
+
+def test_config_efforts_pick_up_the_conf(tmp_path, monkeypatch):
+    """End-to-end: the conf value reaches the per-node map the nodes read."""
+    _write_conf(tmp_path, monkeypatch, "[deep-research.extract]\nEFFORT=medium\n")
+    config = ResearchConfig(query="q", output_dir=tmp_path,
+                            preset=PRESETS["quick"], date="2026-07-20")
+    assert config.efforts["extract"] == "medium"
+    assert config.efforts["triage_relevance"] == "low"  # untouched default
+
+
+def test_cli_effort_still_overrides_every_node(tmp_path, monkeypatch):
+    """--effort is a whole-run override; the conf tunes per node."""
+    _write_conf(tmp_path, monkeypatch, "[deep-research.extract]\nEFFORT=medium\n")
+    parser = build_parser()
+    args = parser.parse_args(["--query", "q", "--output", str(tmp_path), "--effort", "low"])
+    config = ResearchConfig.from_cli_args(args)
+    assert set(config.efforts.values()) == {"low"}

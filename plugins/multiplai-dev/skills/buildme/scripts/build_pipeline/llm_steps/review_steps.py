@@ -194,7 +194,8 @@ async def run_code_review(
     # all-members-failed panel is a real failure.
     settled = await asyncio.gather(*[
         llm_call_structured(
-            prompt, ReviewResult, model=m, max_retries=1, budget_label="review",
+            prompt, ReviewResult, model=m, effort=config.review_effort,
+            max_retries=1, budget_label="review",
         )
         for m in models
     ], return_exceptions=True)
@@ -261,6 +262,7 @@ async def run_security_review(
         prompt,
         ReviewResult,
         model=config.model,
+        effort=config.review_effort,
         max_retries=1,
         budget_label="security_review",
     )
@@ -309,6 +311,7 @@ async def run_review_fix(
         prompt,
         allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
         model=config.model,
+        effort=config.agent_effort,
         max_turns=20,
         cwd=str(config.project_dir),
         budget_label="review_fix",

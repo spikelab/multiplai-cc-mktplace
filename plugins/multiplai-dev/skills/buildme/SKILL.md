@@ -95,6 +95,32 @@ Parse and relay, from stdout: `WORKTREE:<path>`, `BRANCH:<name>`, `PUSHED:<branc
 deliberately, plus the PR URL (or, on `PUBLISH_DIAGNOSIS:<reason>`, the manual
 push/PR commands from `build-progress.md`).
 
+## Tuning model and effort (multiplai.conf)
+
+Model and effort are two axes of one decision; both are set from
+`multiplai.conf` without a code edit. Sections:
+
+| Section | Tunes |
+|---|---|
+| `[buildme]` | `MODEL=` and `EFFORT=` for the whole pipeline |
+| `[buildme.spec]` | `EFFORT=` for spec generation, audits, rubric |
+| `[buildme.review]` | `EFFORT=` for code review, test-quality audit, final review |
+| `[buildme.agent]` | `EFFORT=` for the TDD agents (test writer, implementer, refactorer, fix) |
+
+```ini
+[buildme]
+MODEL=opus
+EFFORT=medium
+
+[buildme.review]
+EFFORT=high
+```
+
+A step section falls back to `[buildme]`, which falls back to the SDK default
+(unset). The `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT` ceilings still cap the
+result, so a budget run forces everything down and a conf override cannot
+escape it.
+
 ## Scale Assessment (MANDATORY)
 
 After understanding what needs to be built, assess scale before choosing a path:

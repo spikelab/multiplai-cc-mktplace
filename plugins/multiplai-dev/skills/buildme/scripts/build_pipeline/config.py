@@ -12,7 +12,7 @@ from typing import Literal
 
 import yaml
 
-from .env import pick_model, resolve_model
+from .env import load_multiplai_conf, pick_model, resolve_effort, resolve_model
 from .models import ReviewGatePolicy
 
 log = logging.getLogger(__name__)
@@ -62,6 +62,45 @@ def _is_advanced_model(model: str) -> bool:
 # multiplai.conf if present; the family→ID map is the single source of truth in
 # multiplai_core.env, so there is no dated model literal to go stale here.
 DEFAULT_MODEL = pick_model("opus", task="buildme")
+
+
+# The effort names the SDK accepts. Mirrors multiplai_core.env's tier table;
+# kept here because that table is private (`_EFFORT_TIERS`). `xhigh` sits
+# between high and max — dropping it here would reject a valid value, which is
+# the exact mistake core's own table carries a warning about.
+KNOWN_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+
+
+def conf_effort(task: str, default: str | None = None) -> str | None:
+    """``EFFORT=`` for *task* from multiplai.conf, capped by MULTIPLAI_EFFORT.
+
+    The effort twin of ``pick_model``'s ``[task] MODEL=`` override: model and
+    effort are two axes of the same tuning decision, and only the model half
+    was reachable from the conf file. ``[buildme] EFFORT=low`` dials the whole
+    pipeline down; ``[buildme.review] EFFORT=high`` tunes one step.
+
+    Returns *default* when the conf says nothing, so behaviour is unchanged
+    unless someone opts in. The MULTIPLAI_EFFORT ceiling still applies — a
+    budget run forces every step down and a conf override can't escape it.
+
+    An unrecognized value falls back to *default* rather than passing through:
+    `resolve_effort` ranks an unknown name at the "high" tier, so the ceiling
+    never trips and `[buildme] EFFORT=turbo` would otherwise reach the SDK
+    verbatim.
+
+    CONSOLIDATE: `multiplai_core.env.pick_effort` (core #7) is this function
+    with the same normalization. Once that release is pinned, both this and
+    deep-research's copy should call it instead.
+    """
+    section = (load_multiplai_conf().get("_sections", {}) or {}).get(task) or {}
+    requested = (section.get("EFFORT") or "").strip().lower()
+    if not requested:
+        return default
+    if requested not in KNOWN_EFFORTS:
+        log.warning("Unknown [%s] EFFORT=%r in multiplai.conf (expected one of %s) "
+                    "— ignoring", task, requested, ", ".join(sorted(KNOWN_EFFORTS)))
+        return default
+    return resolve_effort(requested)
 
 
 def _normalize_prototype_toggle(value) -> str:
@@ -191,6 +230,22 @@ class BuildConfig:
     # resolve_model, matching the existing model-resolution pattern.
     review_model: str | None = None
 
+    # Reasoning effort, the second axis of the same tuning decision as `model`.
+    # None → SDK default. `[buildme] EFFORT=` sets the pipeline-wide value;
+    # `[buildme.spec]` / `[buildme.review]` / `[buildme.agent]` tune one step.
+    # All four read the conf at construction (not import) time, so the
+    # pipeline-wide value and the per-step ones can never disagree about which
+    # conf they saw.
+    #
+    # `effort` is the root the three per-step fields fall back to, applied in
+    # __post_init__ rather than in each default_factory: a caller that
+    # constructs `BuildConfig(effort="low")` directly must get a low-effort
+    # pipeline, which per-field conf reads would silently ignore.
+    effort: str | None = field(default_factory=lambda: conf_effort("buildme"))
+    spec_effort: str | None = field(default_factory=lambda: conf_effort("buildme.spec"))
+    review_effort: str | None = field(default_factory=lambda: conf_effort("buildme.review"))
+    agent_effort: str | None = field(default_factory=lambda: conf_effort("buildme.agent"))
+
     # Coding-standards docs pushed into the reviewer's context (paths from
     # `standards_files` in specs/config.yaml). Pull-for-implementer,
     # push-for-reviewer: these are NOT added to implementer prompts.
@@ -216,6 +271,14 @@ class BuildConfig:
     # (the pre-budget behavior).
     budget_max_tokens: int | None = None
     budget_max_usd: float | None = None
+
+    def __post_init__(self) -> None:
+        # Per-step effort falls back to the pipeline-wide root, so `effort` is
+        # the one field a caller (or `[buildme] EFFORT=`) has to set to move
+        # every step.
+        for attr in ("spec_effort", "review_effort", "agent_effort"):
+            if getattr(self, attr) is None:
+                setattr(self, attr, self.effort)
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> BuildConfig:
