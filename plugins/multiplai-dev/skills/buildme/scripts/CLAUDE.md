@@ -109,6 +109,18 @@ All tests mock LLM calls — no API keys needed. Tests cover:
 - **Gate names must not start with `test`.** pytest collects any `test*`
   callable imported into a test module as a test case; that is why the test
   integrity gate is `unchanged_tests_gate`.
+- **A panel must never be less reliable than one reviewer.** `run_code_review`
+  gathers with `return_exceptions=True`, drops failed members with a warning,
+  and raises only when every member failed. Without that, N members meant N×
+  the chance of one exception marking the block FAILED — the feature would make
+  the pipeline worse the more you invested in it.
+- **`ReviewResult.passed` is the default-policy view; `review_score_gate` is
+  authoritative.** Any call site holding a `BuildConfig` uses
+  `passed_with(config.review_gate)`, or it reports a verdict the gate doesn't
+  apply the moment `code_review.gate` is configured.
+- **Failed calls are charged to the budget too.** Both `llm_call` and
+  `agent_call` record `e.partial.usage` before propagating; a review that dies
+  after a 150k-char prompt is exactly the spend the breaker exists to catch.
 - **`budget.record()` must never raise.** Accounting cannot be allowed to
   break a build; only the explicit `check()` at loop boundaries stops one.
   Every `llm_call`/`agent_call` passes a `budget_label` so the stop can say

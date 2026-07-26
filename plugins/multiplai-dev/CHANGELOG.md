@@ -52,6 +52,39 @@ that gated it; and spend is bounded by money, not just by iteration counts.
 - All `llm_call`/`agent_call` sites pass a `budget_label`, so a budget stop can
   name the phase that spent the money.
 
+### Fixed
+- **Test-integrity claims are scoped to one window.** `block.implementer_report`
+  accumulates every agent's output, so a `TEST CHANGE REQUIRED:` declared during
+  the implement phase kept passing the claim parse at every later review-fix
+  iteration — one declared change authorized every later silent one, defeating
+  the re-baseline it sits next to. Each window now sees only its own agent's
+  report.
+- **An unavailable test-file list no longer fails the block.** `git` failing
+  (index.lock contention, timeout on a large repo) made every snapshotted file
+  read as deleted and accused the agent of deleting the suite. The snapshot now
+  distinguishes "listed nothing" from "could not list" and reports the gate as
+  not-checked.
+- **The integrity gate covers non-Python projects.** The path pattern was
+  Python-only, so on a Swift/Go/TS repo nothing matched, the snapshot was empty,
+  and the gate reported "not checked" for every block. Hashing now uses a
+  language-agnostic pattern; the `def test_*` weak-test scan keeps the
+  Python-only one.
+- **A failing reviewer panel member no longer fails the block.** The panel
+  gathered without `return_exceptions`, so N members meant N× the chance that
+  one unreachable backend marked the block FAILED. Failed members are dropped
+  with a warning and only an all-members-failed panel raises.
+- **Failed `llm_call`s are charged to the budget.** Only `agent_call` recorded
+  partial usage on failure, so a review that timed out after a 150k-char prompt
+  spent real money invisibly.
+- `ReviewResult.passed_with(policy)` added; the bare `passed` property is
+  documented as the default-policy view and `run_code_review` now logs the
+  configured verdict. With `code_review.gate` set, the logged verdict and the
+  gate's decision no longer disagree.
+- `_merge_scores` rounds half-up explicitly (bare `round()` is banker's
+  rounding, so a 2/3 split went to 2 and a 3/4 split to 4) and discounts a
+  dimension only one panel member scored — zero spread otherwise read as
+  unanimous agreement.
+
 ### Notes
 - Every new behavior is opt-in via `specs/config.yaml`. With no `panel`, no
   `gate`, and no `budget:` section, the pipeline behaves as it did in 0.4.0.

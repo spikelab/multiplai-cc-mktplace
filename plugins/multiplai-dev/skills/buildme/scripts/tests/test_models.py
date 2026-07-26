@@ -84,6 +84,24 @@ class TestTwoVerdictReview:
         assert r.spec_compliant
         assert not r.passed
 
+    def test_passed_with_honours_a_configured_policy(self):
+        """`passed` is the DEFAULT-policy view; a configured gate must win.
+
+        With `code_review.gate` set in specs/config.yaml, a bare `passed` would
+        report a verdict `review_score_gate` does not apply — the two disagree
+        precisely when someone bothered to configure them.
+        """
+        r = ReviewResult(scores=[ReviewScore(dimension="A", weight=1, score=3, evidence="")])
+        assert not r.passed  # 3.0 < the default 3.5 floor
+        lenient = ReviewGatePolicy(min_weighted_average=2.5)
+        assert r.passed_with(lenient)
+        strict = ReviewGatePolicy(min_weighted_average=4.5)
+        assert not r.passed_with(strict)
+
+    def test_passed_with_no_policy_matches_the_property(self):
+        r = ReviewResult(scores=[ReviewScore(dimension="A", weight=1, score=4, evidence="")])
+        assert r.passed_with(None) == r.passed
+
 
 class TestBlockInfo:
     def test_default_status(self):

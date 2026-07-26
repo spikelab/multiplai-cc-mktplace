@@ -108,6 +108,19 @@ def _text_only_disallowed(prompt: str) -> list[str]:
     return list(_TEXT_ONLY_DISALLOWED)
 
 
+def _record_partial(error: AgentRunError, label: str) -> None:
+    """Charge the budget for tokens a *failed* call already burned.
+
+    The runaway spend this ledger guards against is made of exactly these:
+    a review that times out after a 150k-char prompt cost real money and
+    would otherwise be invisible. `budget.record()` never raises, so this is
+    safe on an error path.
+    """
+    partial = getattr(error, "partial", None)
+    if partial is not None:
+        budget.record(partial.usage, label=label)
+
+
 async def llm_call(
     prompt: str,
     *,
@@ -144,12 +157,17 @@ async def llm_call(
                 component="buildme",
             )
         except AgentRunTimeout as e:
+            # A call that dies after burning a 150k-char review prompt is
+            # exactly the spend the budget exists to catch, so account for the
+            # partial usage before propagating (same rule as `agent_call`).
+            _record_partial(e, budget_label or "llm")
             log.error("FAIL sdk_call=llm reason=timeout after %.0fs\n--- CLI stderr ---\n%s",
                       call_timeout, e.stderr_tail)
             raise LLMCallTimeoutError(
                 f"LLM call exceeded {call_timeout:.0f}s timeout"
             ) from e
         except AgentRunError as e:
+            _record_partial(e, budget_label or "llm")
             log.error("FAIL sdk_call=llm error=%s\n--- CLI stderr ---\n%s",
                       e.reason, e.stderr_tail)
             raise LLMCallError(
@@ -214,10 +232,8 @@ async def agent_call(
             elapsed = time.monotonic() - start
             partial = e.partial
             timed_out = isinstance(e, AgentRunTimeout)
-            # A failed agent still burned tokens up to the failure point — the
-            # runaway loop this budget guards against is made of exactly these.
-            if partial is not None:
-                budget.record(partial.usage, label=budget_label or "agent")
+            # A failed agent still burned tokens up to the failure point.
+            _record_partial(e, budget_label or "agent")
             log.error("FAIL sdk_call=agent reason=%s elapsed=%.0fs turns=%d\n--- CLI stderr ---\n%s",
                       "timeout" if timed_out else e.reason, elapsed,
                       partial.turns if partial else 0, e.stderr_tail)

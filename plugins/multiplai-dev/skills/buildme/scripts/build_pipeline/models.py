@@ -187,19 +187,31 @@ class ReviewResult(BaseModel):
         dimension scores already price in."""
         return not self.missing and not self.misunderstood
 
-    @property
-    def passed(self) -> bool:
+    def passed_with(self, policy: ReviewGatePolicy | None = None) -> bool:
         """Both verdicts must hold: spec compliance AND the score threshold.
 
-        Delegates to the default policy so the thresholds live in exactly one
-        place (they used to be duplicated here and in `review_score_gate`).
+        Takes the policy explicitly because `specs/config.yaml:
+        code_review.gate` can move these thresholds. Callers that have a
+        `BuildConfig` MUST pass `config.review_gate` — otherwise this reports
+        the default-policy verdict while `review_score_gate` (which decides the
+        block's fate) applies the configured one, and the two disagree exactly
+        when someone bothered to configure them.
         """
-        pol = ReviewGatePolicy()
+        pol = policy or ReviewGatePolicy()
         return (
             self.spec_compliant
             and self.weighted_average_with(pol) >= pol.min_weighted_average
             and not self.failing_dimensions_with(pol)
         )
+
+    @property
+    def passed(self) -> bool:
+        """The DEFAULT-policy verdict. `review_score_gate` is authoritative.
+
+        Convenience for call sites with no config in hand (tests, ad-hoc
+        inspection). Prefer `passed_with(config.review_gate)`.
+        """
+        return self.passed_with(None)
 
     def failing_dimensions_with(self, policy: ReviewGatePolicy | None = None) -> list[str]:
         pol = policy or ReviewGatePolicy()
@@ -237,7 +249,15 @@ class ReviewResult(BaseModel):
         ]
 
     def findings_text(self) -> str:
-        """Accepted findings rendered for a fix agent's prompt."""
+        """Accepted findings rendered for a fix agent's prompt.
+
+        Reads `self.findings`, which is only the ACCEPTED set because
+        `_adjudicate_review_findings` writes the adjudicated survivors back into
+        it (rejects move to `rejected_findings`). That write-back is load-bearing
+        and this method is why: without it, an unjudged finding would reach a fix
+        agent. Don't "fix" this to read a separate accepted list without moving
+        the write-back too.
+        """
         return "\n".join(
             f"- [{f.severity}] {f.claim}"
             + (f" ({f.file_path}:{f.line})" if f.file_path else "")

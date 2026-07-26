@@ -208,7 +208,13 @@ def get_budget() -> BuildBudget:
 
 
 def configure(*, max_tokens: int | None = None, max_usd: float | None = None) -> BuildBudget:
-    """Set the ceilings for this build (None = unlimited on that axis)."""
+    """Set the ceilings for this build (None = unlimited on that axis).
+
+    Ceilings only — the counters are NOT cleared, so a second build in the same
+    process inherits the first one's spend and can trip the breaker early. Call
+    `reset()` for that (the CLI runs one build per process, so configure() is
+    enough there).
+    """
     _budget.max_tokens = max_tokens
     _budget.max_usd = max_usd
     _budget._warned = False

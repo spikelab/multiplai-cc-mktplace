@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 
 from ..models import AgentResult, ReviewFinding, ReviewResult, ReviewScore
 from ..prompts.review import CODE_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT
@@ -37,8 +38,11 @@ def _merge_scores(results: list[ReviewResult]) -> list[ReviewScore]:
     split (spread 4 on a 1-5 scale) collapses confidence to zero, which the
     graded gate then reads as "no information" rather than as a verdict.
 
-    A single reviewer has zero spread, so its confidence passes through
-    untouched — the N=1 default is byte-identical to the old behavior.
+    A dimension only ONE member of a larger panel scored is discounted by its
+    coverage: nobody corroborated it, and zero spread would otherwise hand an
+    uncorroborated score full confidence — indistinguishable from unanimous
+    agreement. With a single-member panel coverage is 1.0, so the N=1 default
+    stays byte-identical to the old behavior.
     """
     by_dim: dict[str, list[ReviewScore]] = {}
     for r in results:
@@ -51,12 +55,18 @@ def _merge_scores(results: list[ReviewResult]) -> list[ReviewScore]:
         mean = sum(raw) / len(raw)
         spread = (max(raw) - min(raw)) / 4.0  # 4 = full 1..5 range
         agreement = max(0.0, 1.0 - spread)
-        confidence = (sum(s.confidence for s in scores) / len(scores)) * agreement
+        coverage = len(scores) / len(results)
+        confidence = (
+            (sum(s.confidence for s in scores) / len(scores)) * agreement * coverage
+        )
         merged.append(
             ReviewScore(
                 dimension=dim,
                 weight=max(s.weight for s in scores),
-                score=round(mean),
+                # Explicit half-up. Bare round() is banker's rounding, which
+                # sends a 2/3 split to 2 and a 3/4 split to 4 — a tie-break rule
+                # nobody chose and one that differs by dimension.
+                score=math.floor(mean + 0.5),
                 evidence="\n".join(f"[{i + 1}] {s.evidence}" for i, s in enumerate(scores)),
                 confidence=round(min(1.0, max(0.0, confidence)), 3),
             )
@@ -175,19 +185,49 @@ async def run_code_review(
 
     # Concurrent: the panel's whole cost is latency, and sdk.py's semaphore
     # (MAX_CONCURRENT_SDK_CALLS) already bounds how many actually run at once.
-    results = await asyncio.gather(*[
+    #
+    # return_exceptions=True is load-bearing: without it a single member raising
+    # (post-retry, or a cross-family backend that isn't reachable) propagates out
+    # of here and the caller marks the block FAILED — making a 3-member panel ~3×
+    # MORE likely to fail the review than the single-reviewer default, the exact
+    # opposite of the feature's purpose. Survivors are merged; only an
+    # all-members-failed panel is a real failure.
+    settled = await asyncio.gather(*[
         llm_call_structured(
             prompt, ReviewResult, model=m, max_retries=1, budget_label="review",
         )
         for m in models
-    ])
+    ], return_exceptions=True)
 
-    result = merge_panel_results(list(results), models)
+    results: list[ReviewResult] = []
+    survivors: list[str] = []
+    for model_name, outcome in zip(models, settled):
+        if isinstance(outcome, BaseException):
+            log.warning("Review panel member %s failed, dropping it from the merge: %s",
+                        model_name, outcome)
+            continue
+        results.append(outcome)
+        survivors.append(model_name)
+
+    if not results:
+        # Every member failed — there is no review, so raise rather than hand
+        # back an empty ReviewResult that would score 0 and read as "rejected".
+        raise LLMCallError(
+            f"Review panel failed on every member ({', '.join(models)}); see the "
+            f"warnings above for each member's error."
+        )
+    if len(results) < len(models):
+        log.warning("Review panel degraded: %d of %d members returned (%s)",
+                    len(results), len(models), ", ".join(survivors))
+
+    result = merge_panel_results(results, survivors)
     log.info(
         "Code review: panel=%d weighted_avg=%.1f passed=%s issues=%d findings=%d",
         len(models),
         result.weighted_average,
-        result.passed,
+        # The configured policy, not the default — otherwise this line reports a
+        # verdict the gate does not apply (see ReviewResult.passed_with).
+        result.passed_with(getattr(config, "review_gate", None)),
         len(result.issues),
         len(result.findings),
     )

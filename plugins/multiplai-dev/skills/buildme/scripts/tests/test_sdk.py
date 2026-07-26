@@ -1,14 +1,23 @@
-"""Tests for the SDK adapter — tool policy on text-only LLM calls."""
+"""Tests for the SDK adapter — tool policy and failure-path budget accounting."""
+
+from dataclasses import dataclass
 
 import pytest
 from unittest.mock import AsyncMock, patch
 
+from build_pipeline import budget as budget_mod
 from build_pipeline.sdk import (
     _TEXT_ONLY_DISALLOWED,
     _text_only_disallowed,
     llm_call,
+    LLMCallError,
+    LLMCallTimeoutError,
 )
-from multiplai_core.agent_runner import MAX_PROMPT_BYTES
+from multiplai_core.agent_runner import (
+    MAX_PROMPT_BYTES,
+    AgentRunError,
+    AgentRunTimeout,
+)
 
 
 class TestTextOnlyDisallowed:
@@ -52,3 +61,64 @@ class TestLlmCallToolPolicy:
 
         assert run.call_args.kwargs["disallowed_tools"] is None
         assert run.call_args.kwargs["allowed_tools"] == ["Read", "Grep"]
+
+
+class TestFailedCallBudgetAccounting:
+    """A call that dies after burning a 150k-char prompt still cost money.
+
+    `agent_call` already charged partial usage on failure; `llm_call` raised
+    without recording, so exactly the spend the breaker exists to catch — a
+    review that times out on a huge diff — was invisible to it.
+    """
+
+    @dataclass
+    class _Usage:
+        input_tokens: int = 0
+        output_tokens: int = 0
+        cache_read_tokens: int = 0
+        cache_creation_tokens: int = 0
+        cost_usd: float = 0.0
+
+    class _Partial:
+        def __init__(self, usage):
+            self.usage = usage
+            self.text = "partial"
+            self.turns = 1
+            self.files_changed = []
+
+    @pytest.fixture(autouse=True)
+    def _clean_budget(self):
+        budget_mod.reset()
+        yield
+        budget_mod.reset()
+
+    def _error(self, cls):
+        return cls(
+            "boom", reason="boom", stderr_tail="",
+            partial=self._Partial(self._Usage(input_tokens=40_000, output_tokens=100)),
+        )
+
+    @pytest.mark.asyncio
+    async def test_llm_call_error_charges_partial_usage(self):
+        with patch("build_pipeline.sdk.run_agent", new_callable=AsyncMock) as run:
+            run.side_effect = self._error(AgentRunError)
+            with pytest.raises(LLMCallError):
+                await llm_call("hello", budget_label="review")
+        assert budget_mod.get_budget().total_tokens == 40_100
+
+    @pytest.mark.asyncio
+    async def test_llm_call_timeout_charges_partial_usage(self):
+        with patch("build_pipeline.sdk.run_agent", new_callable=AsyncMock) as run:
+            run.side_effect = self._error(AgentRunTimeout)
+            with pytest.raises(LLMCallTimeoutError):
+                await llm_call("hello", budget_label="review")
+        assert budget_mod.get_budget().total_tokens == 40_100
+
+    @pytest.mark.asyncio
+    async def test_a_failure_with_no_partial_is_not_fatal(self):
+        """No usage recorded is fine; accounting must never mask the error."""
+        with patch("build_pipeline.sdk.run_agent", new_callable=AsyncMock) as run:
+            run.side_effect = AgentRunError("boom", reason="boom", stderr_tail="")
+            with pytest.raises(LLMCallError):
+                await llm_call("hello")
+        assert budget_mod.get_budget().total_tokens == 0

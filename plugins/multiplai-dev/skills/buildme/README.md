@@ -441,6 +441,20 @@ panel disagreed; identical findings combine confidence (noisy-or) and keep the
 harshest severity anyone assigned. Spec verdicts are unioned, not intersected
 — the reason to run a panel is that reviewers find disjoint sets.
 
+Two consequences worth knowing before you configure one:
+
+- **A panel can pass a block one harsh reviewer would have failed.** Scores
+  disagreeing 5-vs-1 collapse that dimension's confidence to zero, which the
+  graded gate reads as "no information" (neutral), not as a verdict — so one
+  member's "critical" is fully neutralized by another's "fine". Severity still
+  survives on the *findings* path (noisy-or keeps the harshest), which is what
+  reaches a fix agent. If you want one dissenter to be able to sink a block,
+  use a single reviewer.
+- **A member that fails is dropped, not fatal.** The review proceeds on the
+  survivors with a warning, and only an all-members-failed panel fails the
+  block — otherwise adding members would make the pipeline *less* reliable.
+  A dimension only one member scored is discounted for lack of corroboration.
+
 ### Budget
 
 Every other loop bound in the pipeline is an iteration count, which does not

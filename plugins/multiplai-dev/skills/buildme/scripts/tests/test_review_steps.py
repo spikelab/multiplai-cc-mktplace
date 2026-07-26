@@ -216,6 +216,63 @@ class TestMergePanelResults:
         )
         assert merged.misunderstood == ["same"]
 
+    def test_uncorroborated_dimension_is_discounted(self):
+        """One member scoring a dimension nobody else scored has zero spread.
+
+        Without a coverage discount that reads as unanimous agreement — full
+        confidence from a single unchallenged opinion.
+        """
+        a = _result(scores=[ReviewScore(dimension="Q", weight=2, score=4,
+                                        evidence="a", confidence=1.0)])
+        b = _result(scores=[ReviewScore(dimension="Other", weight=2, score=4,
+                                        evidence="b", confidence=1.0)])
+        merged = merge_panel_results([a, b], ["a", "b"])
+        by_dim = {s.dimension: s for s in merged.scores}
+        assert by_dim["Q"].confidence == 0.5
+        assert by_dim["Other"].confidence == 0.5
+
+    def test_score_rounding_is_half_up_not_bankers(self):
+        """round() would send a 2/3 split to 2 and a 3/4 split to 4."""
+        def pair(x, y):
+            return merge_panel_results(
+                [_result(scores=[ReviewScore(dimension="Q", weight=2, score=x, evidence="a")]),
+                 _result(scores=[ReviewScore(dimension="Q", weight=2, score=y, evidence="b")])],
+                ["a", "b"],
+            ).scores[0].score
+        assert pair(2, 3) == 3
+        assert pair(3, 4) == 4
+
+
+class TestPanelResilience:
+    """A panel must not make the pipeline less reliable than one reviewer."""
+
+    @staticmethod
+    def _panel_config(*models):
+        config = BuildConfig(model="claude-sonnet-4-6")
+        config.review_panel = list(models)
+        return config
+
+    @pytest.mark.asyncio
+    async def test_one_failed_member_is_dropped_and_the_review_proceeds(self):
+        from build_pipeline.sdk import LLMCallError
+        config = self._panel_config("model-a", "model-b")
+        with patch("build_pipeline.llm_steps.review_steps.llm_call_structured",
+                   new_callable=AsyncMock,
+                   side_effect=[LLMCallError("backend unreachable"), REVIEW_OK]):
+            result = await run_code_review("diff", "rubric", config)
+        # Merged from the survivor only, and `panel` names who actually reviewed.
+        assert result.scores == REVIEW_OK.scores
+        assert result.panel == ["model-b"]
+
+    @pytest.mark.asyncio
+    async def test_all_members_failing_raises(self):
+        from build_pipeline.sdk import LLMCallError
+        config = self._panel_config("model-a", "model-b")
+        with patch("build_pipeline.llm_steps.review_steps.llm_call_structured",
+                   new_callable=AsyncMock, side_effect=LLMCallError("down")):
+            with pytest.raises(LLMCallError, match="every member"):
+                await run_code_review("diff", "rubric", config)
+
 
 class TestPanelDispatch:
     @pytest.mark.asyncio
