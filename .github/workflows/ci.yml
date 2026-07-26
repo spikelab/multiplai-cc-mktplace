@@ -1,0 +1,126 @@
+name: CI
+
+# This repo is published — installing a plugin copies these files onto someone
+# else's machine. Until this workflow existed there was no CI of any kind, so
+# nothing checked the tree before it was consumed. Two gates and the existing
+# test suites run on every push and PR.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: Structural lint + security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Both gates are stdlib-only and offline on purpose: a check that guards
+      # publication should not itself depend on the network being up.
+      - name: Structural lint
+        run: python scripts/lint_skills.py
+
+      - name: Security scan
+        run: python scripts/scan_skills.py --all
+
+      - name: Gate self-tests
+        run: |
+          python -m pip install --quiet pytest
+          python -m pytest scripts/tests/ -q
+
+  promotion-gate:
+    name: Promotion gate over every shipped skill
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The gate executes each bundled entry point with --help, and routes
+      # PEP 723 scripts through `uv run --script` so their declared deps are
+      # present. Without uv those scripts die on import and the gate reports a
+      # warning it can't act on.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Gate self-tests
+        run: |
+          uv run --with pytest python -m pytest \
+            plugins/multiplai-dev/skills/skill-creator/scripts/tests/ -q
+
+      - name: Run the gate over every skill
+        run: |
+          status=0
+          for skill in plugins/*/skills/*/; do
+            if ! out=$(python3 plugins/multiplai-dev/skills/skill-creator/scripts/promote_skill.py "$skill"); then
+              echo "$out"
+              status=1
+            fi
+          done
+          exit "$status"
+
+      - name: Run the CONTRACT.md pilots
+        run: |
+          status=0
+          for skill in plugins/*/skills/*/; do
+            [ -f "$skill/CONTRACT.md" ] || continue
+            python3 plugins/multiplai-dev/skills/skill-creator/scripts/promote_skill.py \
+              "$skill" --contract || status=1
+          done
+          exit "$status"
+
+  context-tests:
+    name: multiplai-context tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # multiplai-core is a git dependency, not on PyPI — the test suite
+      # imports it directly (the scripts get it via PEP 723 at runtime).
+      - name: Install dependencies
+        working-directory: plugins/multiplai-context
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet -r requirements-dev.txt
+
+      - name: Run tests
+        working-directory: plugins/multiplai-context
+        run: python -m pytest tests/ -q
+
+  buildme-tests:
+    name: buildme pipeline tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run tests
+        working-directory: plugins/multiplai-dev/skills/buildme/scripts
+        run: uv run --extra dev python -m pytest tests/ -q
+
+  research-tests:
+    name: deep-research pipeline tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run tests
+        working-directory: plugins/multiplai-research/skills/deep-research/scripts
+        run: uv run --extra dev python -m pytest tests/ -q
