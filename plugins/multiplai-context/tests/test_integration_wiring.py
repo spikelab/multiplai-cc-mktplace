@@ -48,7 +48,7 @@ def _all_plugin_files() -> list[Path]:
         return ALL_PLUGIN_FILES_CACHE
 
     exclude_dirs = {"__pycache__", ".git", "node_modules", "data", "venv",
-                    "tests", "specs", ".pytest_cache", ".venv"}
+                    "tests", "specs", ".pytest_cache", ".ruff_cache", ".venv"}
     binary_exts = {".pyc", ".pyo", ".png", ".jpg", ".gif", ".ico", ".woff",
                    ".woff2", ".ttf", ".eot", ".so", ".dylib"}
     result = []
