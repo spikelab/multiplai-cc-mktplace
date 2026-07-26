@@ -25,6 +25,8 @@ from build_pipeline.tdd_engine import (
     _build_trajectory_text,
     _enforce_test_integrity,
     _snapshot_test_files,
+    _TEST_FILE_RE,
+    _TEST_PATH_RE,
     _verify_entry_point,
     EMPTY_TREE_SHA,
     WEAK_TEST_PATTERNS,
@@ -2283,6 +2285,37 @@ class TestSnapshotTestFiles:
             assert _snapshot_test_files(config, block) == {}
 
 
+class TestTestPathPatterns:
+    """The integrity regex must cover every language buildme builds for.
+
+    A Python-only pattern makes the gate silently no-op on a Swift or TS repo:
+    zero paths matched → empty snapshot → "not checked" → tests freely editable.
+    """
+
+    @pytest.mark.parametrize("path", [
+        "tests/test_a.py", "src/a_test.py", "tests/conftest.py",
+        "internal/foo_test.go",
+        "AppTests/ParserTests.swift", "Sources/ThingTest.swift",
+        "src/a.test.ts", "src/a.spec.tsx", "src/a.test.mjs",
+        "tests/fixtures/data.json", "__tests__/helper.js", "Tests/Support/Stub.swift",
+    ])
+    def test_matches_test_paths(self, path):
+        assert _TEST_PATH_RE.search(path)
+
+    @pytest.mark.parametrize("path", [
+        "src/main.py", "src/latest.py", "Sources/Parser.swift",
+        "src/protest.go", "src/a.ts", "docs/testing.md",
+    ])
+    def test_ignores_production_paths(self, path):
+        assert not _TEST_PATH_RE.search(path)
+
+    def test_scan_regex_stays_python_only(self):
+        """`_TEST_FILE_RE` feeds the `def test_*` scan — widening it breaks Swift."""
+        assert _TEST_FILE_RE.search("tests/test_a.py")
+        assert not _TEST_FILE_RE.search("AppTests/ParserTests.swift")
+        assert not _TEST_FILE_RE.search("src/a.test.ts")
+
+
 class TestEnforceTestIntegrity:
     def _fixtures(self, tmp_path, before, after, report=""):
         config = BuildConfig(project_dir=tmp_path)
@@ -2296,10 +2329,15 @@ class TestEnforceTestIntegrity:
                            tdd=TDDState(blocks=[block]))
         return config, block, state
 
-    def _run(self, config, block, state, after, window="implement"):
+    def _run(self, config, block, state, after, window="implement", report=None):
+        # `report` defaults to the block's accumulated report only because most
+        # cases exercise the implement window, where they are the same string.
+        if report is None:
+            report = block.implementer_report
         with patch("build_pipeline.tdd_engine._snapshot_test_files", return_value=after):
             return _enforce_test_integrity(
-                block, config, state, ProgressWriter(config.progress_file_path()), 0, window
+                block, config, state, ProgressWriter(config.progress_file_path()), 0,
+                window, report,
             )
 
     def test_unchanged_tests_pass(self, tmp_path):
@@ -2329,6 +2367,31 @@ class TestEnforceTestIntegrity:
         # the report so it is no longer declared.
         block.implementer_report = ""
         assert self._run(config, block, state, {"t.py": "v3"}, window="review-fix 1") is False
+
+    def test_declaration_does_not_carry_across_windows(self, tmp_path):
+        """An implement-phase declaration must not authorize a review-fix mutation.
+
+        `block.implementer_report` accumulates every agent's output, so passing
+        it at the later window would find the earlier declaration and pass a
+        silent mutation. Each window sees only its own agent's report.
+        """
+        config, block, state = self._fixtures(
+            tmp_path, {"t.py": "h"}, None, report="TEST CHANGE REQUIRED: legit",
+        )
+        assert self._run(config, block, state, {"t.py": "v2"}) is True
+        # The accumulation still carries the implement-phase declaration...
+        block.implementer_report += "\n\n[review-fix 1]\nfixed the thing"
+        assert "TEST CHANGE REQUIRED" in block.implementer_report
+        # ...but the review-fix window is judged on the fix agent's report only.
+        assert self._run(config, block, state, {"t.py": "v3"},
+                         window="review-fix 1", report="fixed the thing") is False
+
+    def test_unavailable_snapshot_reports_not_checked_rather_than_failing(self, tmp_path):
+        """A git hiccup must not read as 'the agent deleted every test file'."""
+        config, block, state = self._fixtures(tmp_path, {"t.py": "h"}, None)
+        assert self._run(config, block, state, None) is True
+        # And it must not re-baseline away the frozen bar.
+        assert block.test_file_hashes == {"t.py": "h"}
 
 
 class TestBuildTrajectoryText:

@@ -142,7 +142,24 @@ EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 MAX_REVIEW_DIFF_CHARS = 150_000
 
 
+# Python-only, on purpose: this regex feeds the weak-test *scan*, which looks
+# for `def test_*`. Widening it to Swift/TS would hand non-Python source to a
+# Python-shaped scan and fail every block on "no test functions found".
 _TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]+\.py|[^/]+_test\.py|conftest\.py)$")
+
+# Language-agnostic, used only for integrity hashing. The integrity gate does
+# not parse test source — it only needs to know which paths are tests — so it
+# must cover every language buildme runs on, or the gate silently no-ops (empty
+# `before` → "not checked") on a Swift or TypeScript repo.
+_TEST_PATH_RE = re.compile(
+    r"(^|/)("
+    r"test_[^/]+\.py|[^/]+_test\.py|conftest\.py"        # Python
+    r"|[^/]+_test\.go"                                    # Go
+    r"|[^/]+Tests?\.swift"                                # Swift
+    r"|[^/]+\.(test|spec)\.[cm]?[jt]sx?"                  # JS/TS
+    r")$"
+    r"|(^|/)(tests?|__tests__|Tests)/"                    # anything under a tests dir
+)
 MAX_TEST_SCAN_CHARS = 200_000
 
 
@@ -183,8 +200,14 @@ def _read_block_test_files(config: BuildConfig, block: BlockInfo) -> str:
     return content[:MAX_TEST_SCAN_CHARS]
 
 
-def _list_block_test_files(config: BuildConfig, block: BlockInfo) -> list[str]:
-    """Repo-relative paths of the test files this block added or modified."""
+def _list_block_test_files(config: BuildConfig, block: BlockInfo) -> list[str] | None:
+    """Repo-relative paths of the test files this block added or modified.
+
+    Returns None when git could not be asked (non-zero exit, timeout, not a
+    repo) — distinct from `[]`, which means "asked, and this block touched no
+    test files". Collapsing the two made a transient git failure look like the
+    agent had deleted every test file; see `_snapshot_test_files`.
+    """
     target = block.baseline_commit or "HEAD"
     try:
         proc = subprocess.run(
@@ -194,15 +217,15 @@ def _list_block_test_files(config: BuildConfig, block: BlockInfo) -> list[str]:
         if proc.returncode != 0:
             log.warning("Could not list changed files for block %d: %s",
                         block.number, proc.stderr.strip())
-            return []
+            return None
         names = proc.stdout.splitlines()
     except Exception as e:
         log.warning("Could not list changed files for block %d: %s", block.number, e)
-        return []
-    return [n.strip() for n in names if _TEST_FILE_RE.search(n.strip())]
+        return None
+    return [n.strip() for n in names if _TEST_PATH_RE.search(n.strip())]
 
 
-def _snapshot_test_files(config: BuildConfig, block: BlockInfo) -> dict[str, str]:
+def _snapshot_test_files(config: BuildConfig, block: BlockInfo) -> dict[str, str] | None:
     """{repo-relative path: sha256} for the block's test files, right now.
 
     Taken the moment the RED gate passes and re-taken at each later checkpoint;
@@ -212,9 +235,17 @@ def _snapshot_test_files(config: BuildConfig, block: BlockInfo) -> dict[str, str
 
     A file that vanished between listing and reading is simply omitted, which
     `unchanged_tests_gate` reads as a deletion — the correct interpretation.
+
+    Returns None when the file list itself could not be obtained. That is NOT a
+    deletion: an unavailable `after` snapshot compared against a populated
+    `before` would report every test file as deleted and fail the block on a git
+    hiccup. The caller treats None as "gate could not run".
     """
+    names = _list_block_test_files(config, block)
+    if names is None:
+        return None
     snapshot: dict[str, str] = {}
-    for name in _list_block_test_files(config, block):
+    for name in names:
         path = config.project_dir / name
         try:
             snapshot[name] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -785,7 +816,13 @@ async def _enforce_red_gate(
             # after this point — the implement phase and every review-fix
             # iteration — can write to these files, so this hash map is the
             # only later evidence of whether they did.
-            block.test_file_hashes = _snapshot_test_files(config, block)
+            # None (git unavailable) degrades to {}, which `unchanged_tests_gate`
+            # reads as "no snapshot → gate could not run". Storing None would
+            # violate the model's dict contract and crash the len() below.
+            block.test_file_hashes = _snapshot_test_files(config, block) or {}
+            if not block.test_file_hashes:
+                log.warning("Test integrity: no snapshot for block %d — the gate will "
+                            "report 'not checked' for this block", block.number)
             log.info("Test integrity: snapshotted %d test file(s) for block %d",
                      len(block.test_file_hashes), block.number)
             state.checkpoint(config.state_file_path())
@@ -1042,6 +1079,7 @@ def _enforce_test_integrity(
     progress: ProgressWriter,
     block_idx: int,
     window: str,
+    report: str,
 ) -> bool:
     """Apply `unchanged_tests_gate` at one of the two writable windows.
 
@@ -1049,11 +1087,25 @@ def _enforce_test_integrity(
     review-fix agent IS the implementer, so passing the first check only means
     the tests survived until the first review, not until the block is done.
 
+    *report* is the output of the agent that wrote during THIS window only, not
+    the accumulated `block.implementer_report`. Scanning the accumulation would
+    let one `TEST CHANGE REQUIRED:` declared during implement silently
+    authorize every later review-fix mutation for the rest of the block — the
+    exact hole the per-window re-baseline exists to close.
+
     A flagged (declared) change passes but is recorded on the block, so
     `_run_quality_review` can hand it to the reviewer as an unverified claim.
     """
     after = _snapshot_test_files(config, block)
-    gate = unchanged_tests_gate(block.test_file_hashes, after, block.implementer_report)
+    if after is None:
+        # Git could not be asked. Comparing a populated `before` against an
+        # absent `after` would report every test file as deleted and fail the
+        # block on a git hiccup, so report the gate as unrun instead.
+        log.warning("Test integrity could not run after %s for block %d: "
+                    "test file list unavailable", window, block.number)
+        progress.log_agent("TestIntegrity", block.name, f"NOT CHECKED ({window})")
+        return True
+    gate = unchanged_tests_gate(block.test_file_hashes, after, report)
     if gate.metadata.get("flagged"):
         for claim in gate.metadata.get("claims", []):
             if claim not in block.test_change_claims:
@@ -1140,7 +1192,8 @@ async def _run_integration_and_review(
     # --- Test-integrity gate (window 1: the implement phase) ---
     # Checked BEFORE GREEN evidence is accepted. A green suite proves nothing
     # if the suite is no longer the one that went red.
-    if not _enforce_test_integrity(block, config, state, progress, block_idx, "implement"):
+    if not _enforce_test_integrity(block, config, state, progress, block_idx,
+                                   "implement", block.implementer_report):
         return False
 
     # GREEN evidence: the suite passing with the implementation in place —
@@ -1234,8 +1287,11 @@ async def _run_integration_and_review(
         # Checked every iteration, not just once: the fix agent has the same
         # unrestricted write access as the original implementer, and it runs
         # AFTER the tests were quality-audited.
+        # Only THIS iteration's fix output counts as a declaration — see
+        # `_enforce_test_integrity`'s *report* contract.
         if not _enforce_test_integrity(
-            block, config, state, progress, block_idx, f"review-fix {iteration + 1}"
+            block, config, state, progress, block_idx,
+            f"review-fix {iteration + 1}", fix.output or "",
         ):
             return False
 

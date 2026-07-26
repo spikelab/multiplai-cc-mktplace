@@ -87,7 +87,19 @@ All tests mock LLM calls — no API keys needed. Tests cover:
 - **`TEST CHANGE REQUIRED:` is an escape hatch, not an authorization.** It
   downgrades the gate to a flag, re-baselines the hashes (so one declared
   change cannot excuse every later silent one), and hands the reason to the
-  reviewer as an unverified claim.
+  reviewer as an unverified claim. The declaration is scoped to **one window**:
+  each `_enforce_test_integrity` call is given only the report of the agent that
+  wrote during that window, never the accumulated `block.implementer_report` —
+  otherwise the re-baseline is defeated by a single implement-phase declaration
+  authorizing every later review-fix mutation.
+- **An unavailable snapshot means "not checked", never "everything was
+  deleted".** `_snapshot_test_files` returns `None` (distinct from `{}`) when
+  git cannot be asked; both windows must pass on `None` rather than compare a
+  populated `before` against nothing and fail the block on a git hiccup.
+- **Two test-path regexes, on purpose.** `_TEST_FILE_RE` is Python-only because
+  it feeds the `def test_*` weak-test scan; `_TEST_PATH_RE` is
+  language-agnostic because integrity hashing never parses source and must
+  cover Swift/Go/TS repos or the gate silently no-ops there.
 - **Confidence shrinks a score toward neutral; it never scales it.**
   Multiplying would make an unsure reviewer look *harsher* (score 2 at 40% →
   0.8, a hard critical fail), which inverts the meaning of low confidence.
