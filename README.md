@@ -1,6 +1,6 @@
 # multiplai
 
-> Part of the **Multiplai suite** — see [ARCHITECTURE.md](./ARCHITECTURE.md) for how the five repos fit together and which part you need.
+> Part of the **[Multiplai suite](https://github.com/spikelab/multiplai)** — what the suite is, how the five repos fit together, and which part you need.
 
 A Claude Code **plugin marketplace** — memory, context, and a themed skill
 library for a full working environment. Designed to pair with
