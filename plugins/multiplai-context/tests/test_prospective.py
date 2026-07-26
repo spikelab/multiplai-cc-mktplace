@@ -182,6 +182,13 @@ class TestActionable:
                         encoding="utf-8")
         assert load_sweep_state(path) == {"c :: d": date(2026, 7, 1)}
 
+    def test_binary_garbage_sweep_state_degrades_the_same_way(self, tmp_path):
+        """Invalid UTF-8 raises UnicodeDecodeError out of read_text — a
+        different exception from malformed JSON, same required behaviour."""
+        path = tmp_path / "sweep.json"
+        path.write_bytes(b"\xff\xfe\x00garbage")
+        assert load_sweep_state(path) == {}
+
     def test_saving_sweep_state_never_raises(self, tmp_path):
         """Derived state must not be able to abort a session start."""
         blocked = tmp_path / "file-not-dir"
@@ -377,6 +384,30 @@ class TestSessionStartIntegration:
         assert (first, second) == (1, 0)
 
         state = load_sweep_state(data_dir / SWEEP_STATE_FILENAME)
+        assert list(state.values()) == [date.today()]
+
+    def test_a_stamp_for_a_deleted_intention_is_pruned_on_save(self, tmp_path, capsys):
+        """The state file must not grow forever: a reword is a new key by
+        design, so without pruning every edit leaves an orphan behind."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        import session_start
+
+        memory_dir = tmp_path / "memory"
+        memory_dir.mkdir()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        captured = date.today() - timedelta(days=CONDITION_SWEEP_DAYS + 3)
+        (memory_dir / PROSPECTIVE_FILENAME).write_text(
+            f"- [on: X happens] Do it (captured {captured.isoformat()})",
+            encoding="utf-8")
+        save_sweep_state(data_dir / SWEEP_STATE_FILENAME,
+                         {"deleted :: long ago": date(2026, 1, 1)})
+
+        assert session_start._emit_prospective_nudge(memory_dir, data_dir) == 1
+        capsys.readouterr()
+        state = load_sweep_state(data_dir / SWEEP_STATE_FILENAME)
+        assert "deleted :: long ago" not in state
         assert list(state.values()) == [date.today()]
 
     def test_a_dated_intention_is_never_stamped(self, tmp_path, capsys):

@@ -572,13 +572,19 @@ def _emit_prospective_nudge(memory_dir: Path, data_dir: Path) -> int:
         today = date.today()
         sweep_file = data_dir / SWEEP_STATE_FILENAME
         stamps = load_sweep_state(sweep_file)
-        due = actionable(load(memory_dir), today, last_surfaced=stamps)
+        intentions = load(memory_dir)
+        due = actionable(intentions, today, last_surfaced=stamps)
         if not due:
             return 0
         print(render_nudge(due, today))
         swept = {sweep_key(i): today for i in due if i.due is None}
         if swept:
-            save_sweep_state(sweep_file, {**stamps, **swept})
+            # Prune stamps for intentions no longer in prospective.md (deleted
+            # or reworded — a reword is a new key by design). Without this the
+            # state file only ever grows.
+            live = {sweep_key(i) for i in intentions if i.due is None}
+            kept = {k: v for k, v in stamps.items() if k in live}
+            save_sweep_state(sweep_file, {**kept, **swept})
         return len(due)
     except Exception:
         logger.exception("Prospective-memory check failed; continuing")

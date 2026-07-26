@@ -178,7 +178,9 @@ def load_sweep_state(path: Path) -> dict[str, date]:
         return {}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (ValueError, OSError):
+        # ValueError covers both JSONDecodeError and the UnicodeDecodeError a
+        # binary-garbage file raises out of read_text.
         return {}
     if not isinstance(raw, dict):
         return {}
