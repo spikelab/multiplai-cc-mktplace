@@ -452,3 +452,98 @@ class TestRespecToggle:
         config.specs_dir = specs
         config._load_specs_config()
         assert config.gates.respec_halt_on_contradiction is True
+
+
+# --- Git lifecycle toggles (work item 4) ---------------------------------
+
+class TestGitToggles:
+    def test_defaults_are_worktree_on_push_on_pr_draft(self):
+        from build_pipeline.config import BuildConfig, GitToggles
+
+        assert GitToggles() == GitToggles(worktree=True, push=True, pr="draft")
+        assert BuildConfig().git.worktree is True
+        assert BuildConfig().pipeline_branch is None
+
+    def test_loaded_from_config_yaml(self, tmp_path):
+        import yaml
+        from build_pipeline.config import BuildConfig
+
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text(yaml.dump({
+            "schema": "spec-driven",
+            "git": {"worktree": False, "push": False, "pr": "ready"},
+        }))
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = specs
+        config._load_specs_config()
+        assert config.git.worktree is False
+        assert config.git.push is False
+        assert config.git.pr == "ready"
+
+    def test_invalid_pr_mode_falls_back_to_draft(self, tmp_path):
+        import yaml
+        from build_pipeline.config import BuildConfig
+
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text(yaml.dump({"git": {"pr": "merge-it"}}))
+        config = BuildConfig(project_dir=tmp_path)
+        config.specs_dir = specs
+        config._load_specs_config()
+        assert config.git.pr == "draft"
+
+    def test_cli_flags_beat_config_yaml(self, tmp_path):
+        import argparse
+        from build_pipeline.config import BuildConfig
+
+        config = BuildConfig(project_dir=tmp_path)
+        config._apply_git_cli_overrides(argparse.Namespace(
+            no_worktree=True, no_push=True, no_pr=True, pr_ready=False,
+        ))
+        assert config.git.worktree is False
+        assert config.git.push is False
+        assert config.git.pr == "none"
+
+    def test_pr_ready_flag(self, tmp_path):
+        import argparse
+        from build_pipeline.config import BuildConfig
+
+        config = BuildConfig(project_dir=tmp_path)
+        config._apply_git_cli_overrides(argparse.Namespace(
+            no_worktree=False, no_push=False, no_pr=False, pr_ready=True,
+        ))
+        assert config.git.pr == "ready"
+
+    def test_absent_flags_leave_defaults(self, tmp_path):
+        import argparse
+        from build_pipeline.config import BuildConfig
+
+        config = BuildConfig(project_dir=tmp_path)
+        config._apply_git_cli_overrides(argparse.Namespace())
+        assert config.git == type(config.git)(worktree=True, push=True, pr="draft")
+
+    def test_cli_parser_exposes_the_flags(self):
+        from build_pipeline.__main__ import build_parser
+
+        args = build_parser().parse_args(
+            ["build", "--no-worktree", "--no-push", "--no-pr", "--pr-ready"]
+        )
+        assert args.no_worktree and args.no_push and args.no_pr and args.pr_ready
+        plain = build_parser().parse_args(["build"])
+        assert not plain.no_worktree and not plain.no_push and not plain.no_pr
+
+
+class TestRebindProjectDir:
+    def test_rebinding_moves_every_derived_path(self, tmp_path):
+        from build_pipeline.config import BuildConfig
+
+        config = BuildConfig(project_dir=tmp_path / "src", change_name="c")
+        config.specs_dir = tmp_path / "src" / "specs"
+        wt = tmp_path / "wt"
+        config.rebind_project_dir(wt)
+        assert config.project_dir == wt
+        assert config.specs_dir == wt / "specs"
+        assert config.change_dir == wt / "specs" / "changes" / "c"
+        assert config.state_file_path() == wt / "specs" / "changes" / "c" / ".build-state.json"
+        assert config.progress_file_path() == wt / "build-progress.md"

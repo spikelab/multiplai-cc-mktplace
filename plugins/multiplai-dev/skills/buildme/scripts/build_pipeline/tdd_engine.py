@@ -67,6 +67,15 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
 
     Stages everything EXCEPT buildme's own bookkeeping files (build-progress.md
     and .build-state.json) so they don't leak into the user's per-block commits.
+
+    NOTE (git lifecycle): this is the pipeline's ONE whole-tree stage — a
+    pathspec-limited `git add -A -- . :(exclude)…`, not a bare `git add -A`.
+    Every other commit path (git_ops.commit_paths, used for the spec stages
+    and the archive move) stages explicit paths only. It is kept whole-tree
+    here because a TDD block's output is not fully enumerable from the agent's
+    self-reported FILES: slot, and dropping a produced file would be worse
+    than sweeping one in — and since the build now runs inside its own
+    worktree, "everything under ." IS this build's own work.
     """
     cwd = str(config.project_dir)
     # Exclude the bookkeeping files via :(exclude) pathspecs, relative to the repo.

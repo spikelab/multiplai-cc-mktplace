@@ -111,6 +111,22 @@ class GateToggles:
 
 
 @dataclass
+class GitToggles:
+    """Git lifecycle switches (`git:` block in specs/config.yaml, overridden by
+    --no-worktree / --no-push / --no-pr / --pr-ready).
+
+    Defaults are the product defaults: the build runs in its own worktree on
+    its own branch, pushes it, and opens a **draft** PR. `worktree=False`
+    reproduces the pre-git-lifecycle pipeline exactly (build in place, no
+    push, no PR — push/PR only ever act on a branch the pipeline created).
+    """
+
+    worktree: bool = True
+    push: bool = True
+    pr: Literal["draft", "ready", "none"] = "draft"
+
+
+@dataclass
 class BuildConfig:
     """Complete configuration for a build pipeline run."""
 
@@ -151,6 +167,15 @@ class BuildConfig:
 
     # Gate toggles
     gates: GateToggles = field(default_factory=GateToggles)
+
+    # Git lifecycle toggles
+    git: GitToggles = field(default_factory=GitToggles)
+
+    # Runtime marker, not user-configurable: set to the branch name once the
+    # pipeline has created its own worktree+branch (or re-bound to one on
+    # resume). None means "we do not own a branch" — every commit/push/PR
+    # helper no-ops, which is what keeps --no-worktree behavior unchanged.
+    pipeline_branch: str | None = None
 
     # Paths (resolved after config load)
     config_dir: Path = field(default_factory=lambda: Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser())
@@ -193,6 +218,10 @@ class BuildConfig:
             config.prototype_mode = "true"
         if getattr(args, "no_prototype", False):
             config.prototype_mode = "false"
+        # CLI flags win over the config.yaml `git:` block (same precedence as
+        # every other override here). Absent flags leave the config.yaml /
+        # dataclass defaults alone.
+        config._apply_git_cli_overrides(args)
         # Env override wins over config.yaml (same precedence as CLAUDE_MODEL
         # in detect_tier); ceiling-capped like every other model resolution.
         env_review_model = os.environ.get("BUILDME_REVIEW_MODEL")
@@ -253,6 +282,41 @@ class BuildConfig:
             prototype=_normalize_prototype_toggle(prototype.get("enabled", "auto")),
             respec_halt_on_contradiction=respec.get("halt_on_contradiction", False),
         )
+
+        # Git lifecycle: git: {worktree: true, push: true, pr: draft|ready|none}
+        git_cfg = data.get("git", {}) or {}
+        pr_mode = str(git_cfg.get("pr", "draft")).lower()
+        if pr_mode not in ("draft", "ready", "none"):
+            log.warning("Invalid git.pr value %r in config.yaml — using 'draft'", pr_mode)
+            pr_mode = "draft"
+        self.git = GitToggles(
+            worktree=bool(git_cfg.get("worktree", True)),
+            push=bool(git_cfg.get("push", True)),
+            pr=pr_mode,
+        )
+
+    def _apply_git_cli_overrides(self, args: argparse.Namespace) -> None:
+        """--no-worktree / --no-push / --no-pr / --pr-ready beat config.yaml."""
+        if getattr(args, "no_worktree", False):
+            self.git.worktree = False
+        if getattr(args, "no_push", False):
+            self.git.push = False
+        if getattr(args, "no_pr", False):
+            self.git.pr = "none"
+        if getattr(args, "pr_ready", False):
+            self.git.pr = "ready"
+
+    def rebind_project_dir(self, new_project_dir: Path) -> None:
+        """Point the whole config at a different checkout of the same project.
+
+        Called once, in BOOTSTRAP, after the build's worktree is created (and
+        on resume when re-binding to an existing one). `specs_dir` is the only
+        derived path stored as a field; `change_dir`, `state_file_path()` and
+        `progress_file_path()` are computed from these two, so every later
+        phase lands inside the worktree with no other code change.
+        """
+        self.project_dir = Path(new_project_dir)
+        self.specs_dir = self.project_dir / "specs"
 
     def _discover_test_command(self) -> None:
         """Auto-detect test command if not specified in config."""

@@ -226,3 +226,74 @@ class TestRespecPhaseAndNotes:
         assert note.contradicts
         assert note.role == "implementer"
         assert "raises on timeout" in note.surprises
+
+
+# --- Git lifecycle state (work item 4) -----------------------------------
+
+class TestGitLifecycleState:
+    def test_new_fields_default_to_none(self):
+        from build_pipeline.state import BuildState
+
+        state = BuildState(change_name="c", mode="scratch", tier="advanced")
+        assert state.worktree_path is None
+        assert state.branch is None
+        assert state.source_repo is None
+        assert state.pr_url is None
+
+    def test_fields_round_trip_through_a_checkpoint(self, tmp_path):
+        from build_pipeline.state import BuildState
+
+        path = tmp_path / ".build-state.json"
+        state = BuildState(
+            change_name="c", mode="scratch", tier="advanced",
+            worktree_path="/ws/.worktrees/buildme-c",
+            branch="buildme/c",
+            source_repo="/proj",
+            pr_url="https://github.com/o/r/pull/1",
+        )
+        state.checkpoint(path)
+        reloaded = BuildState.load(path)
+        assert reloaded.worktree_path == "/ws/.worktrees/buildme-c"
+        assert reloaded.branch == "buildme/c"
+        assert reloaded.source_repo == "/proj"
+        assert reloaded.pr_url == "https://github.com/o/r/pull/1"
+
+    def test_pre_publish_checkpoint_still_loads_and_resumes(self, tmp_path):
+        """A .build-state.json written before BuildPhase.PUBLISH existed (and
+        before the git fields) must load and resume at the right phase."""
+        import json
+        from build_pipeline.models import BuildPhase
+        from build_pipeline.state import BuildState
+
+        legacy = {
+            "change_name": "legacy",
+            "mode": "scratch",
+            "tier": "advanced",
+            "phase": "tdd_build",
+            "bootstrap_done": True,
+            "interview_summary": "old run",
+            "research_path": None,
+            "spec_gen": {"completed_artifacts": ["proposal"], "research_path": None,
+                         "codebase_analysis_path": None},
+            "tdd": None,
+            "state_file": "",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        }
+        path = tmp_path / ".build-state.json"
+        path.write_text(json.dumps(legacy))
+
+        state = BuildState.load(path)
+        assert state.phase == BuildPhase.TDD_BUILD
+        assert state.worktree_path is None and state.branch is None
+        # Everything before TDD_BUILD is complete; TDD_BUILD itself is not.
+        assert state.is_phase_complete(BuildPhase.REVIEW)
+        assert not state.is_phase_complete(BuildPhase.TDD_BUILD)
+        assert not state.is_phase_complete(BuildPhase.PUBLISH)
+
+    def test_publish_sits_immediately_before_complete(self):
+        from build_pipeline.models import BuildPhase
+
+        order = [p.value for p in BuildPhase]
+        assert order.index("tdd_build") < order.index("publish")
+        assert order.index("publish") + 1 == order.index("complete")

@@ -1,9 +1,19 @@
 """Tests for the build orchestrator — mode detection, phase sequencing."""
 
+import argparse
+import subprocess
+from pathlib import Path
+
 import pytest
 
-from build_pipeline.orchestrator import _run_bootstrap
-from build_pipeline.config import BuildConfig
+from build_pipeline.orchestrator import (
+    _pr_title_body,
+    _run_bootstrap,
+    _run_publish,
+    run_orchestrator,
+)
+from build_pipeline.config import BuildConfig, GitToggles
+from build_pipeline.progress import ProgressWriter
 from build_pipeline.state import BuildState
 from build_pipeline.models import BuildPhase
 from build_pipeline.change_manager import ChangeManager
@@ -27,9 +37,12 @@ class TestPhaseOrdering:
 class TestBootstrap:
     @pytest.mark.asyncio
     async def test_creates_git_and_specs(self, tmp_path):
+        # --no-worktree: the pre-git-lifecycle path, which `git init`s a
+        # brand-new project directory.
         config = BuildConfig(
             project_dir=tmp_path,
             change_name="test-change",
+            git=GitToggles(worktree=False),
         )
         config.specs_dir = tmp_path / "specs"
         state = BuildState(
@@ -431,3 +444,348 @@ class TestRespecPhaseWiring:
             rc = await run_orchestrator(config, Namespace(interview_summary=""))
 
         assert rc == 0
+
+
+# --- Git lifecycle (work item 4) -----------------------------------------
+
+from build_pipeline import git_ops
+from build_pipeline.git_ops import GitLifecycleError, GitResult
+from tests.test_git_ops import make_bare_origin, make_repo
+
+
+def _args(tmp_path, change, **over):
+    base = dict(
+        mode="only",
+        change=change,
+        project_dir=str(tmp_path),
+        auto=False,
+        spec_only=False,
+        skip_research=True,
+        interview_summary="",
+        research_path="",
+        context_files=[],
+        session_id="",
+    )
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+def _worktree_count(repo: Path) -> int:
+    return len(git_ops.worktree_paths(repo))
+
+
+class TestBootstrapWorktree:
+    """Criterion 10 — the build runs in its own worktree on its own branch and
+    the caller's checkout is never written to."""
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_creates_worktree_and_leaves_source_clean(
+        self, tmp_path, monkeypatch
+    ):
+        workspace = tmp_path / "ws"
+        monkeypatch.setenv("WORKSPACE", str(workspace))
+        repo = make_repo(tmp_path / "proj")
+
+        config = BuildConfig(project_dir=repo, change_name="my-change")
+        config.specs_dir = repo / "specs"
+        state = BuildState(
+            change_name="my-change", mode="scratch", tier="advanced",
+            state_file=str(config.state_file_path()),
+        )
+        cm = ChangeManager(config.specs_dir)
+
+        await _run_bootstrap(config, state, cm, config.state_file_path())
+
+        expected_wt = workspace / ".worktrees" / "buildme-my-change"
+        assert state.worktree_path == str(expected_wt)
+        assert state.branch == "buildme/my-change"
+        assert state.source_repo == str(repo.resolve())
+        assert expected_wt.is_dir()
+        assert git_ops.current_branch(expected_wt) == "buildme/my-change"
+
+        # Config re-bound: every later phase writes inside the worktree
+        assert config.project_dir == expected_wt
+        assert config.specs_dir == expected_wt / "specs"
+        assert config.pipeline_branch == "buildme/my-change"
+        assert (expected_wt / "specs" / "changes" / "my-change").is_dir()
+
+        # The caller's checkout was never written to
+        assert not (repo / "specs").exists()
+        status = subprocess.run(
+            ["git", "status", "--short"], cwd=str(repo), capture_output=True, text=True
+        )
+        assert status.stdout.strip() == ""
+        assert git_ops.current_branch(repo) == "main"
+
+    @pytest.mark.asyncio
+    async def test_refuses_non_repo_when_worktree_requested(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        project = tmp_path / "plain"
+        project.mkdir()
+        config = BuildConfig(project_dir=project, change_name="c")
+        config.specs_dir = project / "specs"
+        state = BuildState(change_name="c", mode="scratch", tier="advanced")
+        cm = ChangeManager(config.specs_dir)
+        with pytest.raises(GitLifecycleError) as exc:
+            await _run_bootstrap(config, state, cm, config.state_file_path())
+        assert "--no-worktree" in str(exc.value)
+        assert not (project / ".git").exists(), "must not git init behind the refusal"
+
+    @pytest.mark.asyncio
+    async def test_refuses_dirty_source_repo(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        (repo / "README.md").write_text("uncommitted\n")
+        config = BuildConfig(project_dir=repo, change_name="c")
+        config.specs_dir = repo / "specs"
+        state = BuildState(change_name="c", mode="scratch", tier="advanced")
+        cm = ChangeManager(config.specs_dir)
+        with pytest.raises(GitLifecycleError) as exc:
+            await _run_bootstrap(config, state, cm, config.state_file_path())
+        assert "uncommitted changes" in str(exc.value)
+
+
+class TestNoWorktreeIsUnchangedBehavior:
+    """Criterion 11 — `--no-worktree --no-push --no-pr` reproduces the
+    pre-change pipeline: same files, same branch, no extra worktree, no
+    publish output."""
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_file_set_and_branch_unchanged(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        config = BuildConfig(
+            project_dir=repo,
+            change_name="inplace",
+            git=GitToggles(worktree=False, push=False, pr="none"),
+        )
+        config.specs_dir = repo / "specs"
+        state = BuildState(change_name="inplace", mode="scratch", tier="advanced",
+                           state_file=str(config.state_file_path()))
+        cm = ChangeManager(config.specs_dir)
+
+        await _run_bootstrap(config, state, cm, config.state_file_path())
+
+        # No re-binding, no worktree, no branch
+        assert config.project_dir == repo
+        assert config.pipeline_branch is None
+        assert state.branch is None and state.worktree_path is None
+        assert _worktree_count(repo) == 1
+        assert git_ops.current_branch(repo) == "main"
+
+        # Exactly the pre-change on-disk footprint: specs/ under the project dir
+        created = sorted(
+            str(p.relative_to(repo))
+            for p in repo.rglob("*")
+            if ".git" not in p.parts and p.is_file()
+        )
+        assert created == [
+            "README.md",
+            "specs/changes/inplace/.build-state.json",
+            "specs/changes/inplace/.change.yaml",
+            "specs/config.yaml",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_publish_is_skipped_without_a_pipeline_branch(self, tmp_path, capsys):
+        repo = make_repo(tmp_path / "proj")
+        config = BuildConfig(
+            project_dir=repo, change_name="inplace",
+            git=GitToggles(worktree=False, push=False, pr="none"),
+        )
+        config.specs_dir = repo / "specs"
+        state = BuildState(change_name="inplace", mode="scratch", tier="advanced")
+        progress = ProgressWriter(config.progress_file_path())
+        assert _run_publish(config, state, progress) is True
+        out = capsys.readouterr().out
+        assert "PUSHED:" not in out and "PR:" not in out
+        assert not config.progress_file_path().exists()
+
+
+class TestResumeRebinding:
+    """Criterion 12 — a resume re-binds to the existing worktree and never
+    creates a second one."""
+
+    @pytest.mark.asyncio
+    async def test_resume_creates_no_second_worktree(self, tmp_path, monkeypatch):
+        workspace = tmp_path / "ws"
+        monkeypatch.setenv("WORKSPACE", str(workspace))
+        repo = make_repo(tmp_path / "proj")
+
+        # First run: bootstrap creates the worktree
+        config1 = BuildConfig(project_dir=repo, change_name="resumed")
+        config1.specs_dir = repo / "specs"
+        state = BuildState(change_name="resumed", mode="scratch", tier="advanced",
+                           state_file=str(config1.state_file_path()))
+        cm = ChangeManager(config1.specs_dir)
+        await _run_bootstrap(config1, state, cm, config1.state_file_path())
+        worktree = Path(state.worktree_path)
+
+        before = _worktree_count(repo)
+        assert before == 2
+
+        # Mark it far enough along that a resume skips every producing phase
+        state.phase = BuildPhase.PUBLISH
+        state.checkpoint(config1.state_file_path())
+
+        # Second run: a fresh config pointed at the SOURCE repo, as a resuming
+        # session would construct it
+        config2 = BuildConfig(
+            project_dir=repo, change_name="resumed", mode="only",
+            git=GitToggles(worktree=True, push=False, pr="none"),
+        )
+        config2.specs_dir = repo / "specs"
+        result = await run_orchestrator(config2, _args(repo, "resumed"))
+
+        assert result == 0
+        assert _worktree_count(repo) == before, "a resume must not create a second worktree"
+        assert config2.project_dir == worktree
+        assert config2.pipeline_branch == "buildme/resumed"
+
+
+class TestPublishFailureIsNonFatal:
+    """Criterion 13 — a failing `gh` leaves the build successful, the branch
+    and worktree intact, and the exact manual commands in build-progress.md."""
+
+    @pytest.mark.asyncio
+    async def test_gh_failure_keeps_build_successful(self, tmp_path, monkeypatch, capsys):
+        workspace = tmp_path / "ws"
+        monkeypatch.setenv("WORKSPACE", str(workspace))
+        repo = make_repo(tmp_path / "proj")
+        make_bare_origin(repo, tmp_path / "origin.git")
+
+        config = BuildConfig(project_dir=repo, change_name="ghfail")
+        config.specs_dir = repo / "specs"
+        state = BuildState(change_name="ghfail", mode="scratch", tier="advanced",
+                           state_file=str(config.state_file_path()))
+        cm = ChangeManager(config.specs_dir)
+        await _run_bootstrap(config, state, cm, config.state_file_path())
+        worktree = Path(state.worktree_path)
+        state.phase = BuildPhase.PUBLISH
+        state.checkpoint(config.state_file_path())
+
+        monkeypatch.setattr(
+            git_ops, "_run_gh",
+            lambda argv, cwd=None, timeout=None: GitResult(
+                argv, 1, "", "gh: To get started with GitHub CLI, please run: gh auth login"
+            ),
+        )
+
+        config2 = BuildConfig(project_dir=repo, change_name="ghfail", mode="only")
+        config2.specs_dir = repo / "specs"
+        result = await run_orchestrator(config2, _args(repo, "ghfail"))
+
+        assert result == 0, "a gh failure must not fail the build"
+        out = capsys.readouterr().out
+        assert "RESULT:SUCCESS" in out
+        assert "PHASE:PUBLISH:FAILED:pr" in out
+
+        # Branch and worktree survive
+        assert worktree.is_dir()
+        assert git_ops.branch_exists(repo, "buildme/ghfail")
+
+        # The push half did succeed, so only the PR is outstanding
+        progress_text = (worktree / "build-progress.md").read_text()
+        assert "gh auth login" in progress_text
+        assert "git push -u origin buildme/ghfail" in progress_text
+        assert "gh pr create --title 'buildme: ghfail'" in progress_text
+
+    @pytest.mark.asyncio
+    async def test_no_remote_reports_manual_commands_and_invents_nothing(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        workspace = tmp_path / "ws"
+        monkeypatch.setenv("WORKSPACE", str(workspace))
+        repo = make_repo(tmp_path / "proj")  # deliberately no origin
+
+        config = BuildConfig(project_dir=repo, change_name="noremote")
+        config.specs_dir = repo / "specs"
+        state = BuildState(change_name="noremote", mode="scratch", tier="advanced",
+                           state_file=str(config.state_file_path()))
+        cm = ChangeManager(config.specs_dir)
+        await _run_bootstrap(config, state, cm, config.state_file_path())
+        worktree = Path(state.worktree_path)
+        progress = ProgressWriter(config.progress_file_path())
+
+        assert _run_publish(config, state, progress) is False
+        out = capsys.readouterr().out
+        assert "PHASE:PUBLISH:FAILED:no-remote" in out
+        text = (worktree / "build-progress.md").read_text()
+        assert "No 'origin' remote" in text
+        assert "git push -u origin buildme/noremote" in text
+        assert git_ops.has_remote(worktree) is False
+
+    @pytest.mark.asyncio
+    async def test_successful_publish_prints_pr_url_and_records_it(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        workspace = tmp_path / "ws"
+        monkeypatch.setenv("WORKSPACE", str(workspace))
+        repo = make_repo(tmp_path / "proj")
+        make_bare_origin(repo, tmp_path / "origin.git")
+
+        config = BuildConfig(project_dir=repo, change_name="happy")
+        config.specs_dir = repo / "specs"
+        state = BuildState(change_name="happy", mode="scratch", tier="advanced",
+                           state_file=str(config.state_file_path()))
+        cm = ChangeManager(config.specs_dir)
+        await _run_bootstrap(config, state, cm, config.state_file_path())
+        progress = ProgressWriter(config.progress_file_path())
+
+        captured = {}
+
+        def fake_gh(argv, cwd=None, timeout=None):
+            captured["argv"] = argv
+            return GitResult(argv, 0, "https://github.com/o/r/pull/9\n", "")
+
+        monkeypatch.setattr(git_ops, "_run_gh", fake_gh)
+        assert _run_publish(config, state, progress) is True
+        assert state.pr_url == "https://github.com/o/r/pull/9"
+        out = capsys.readouterr().out
+        assert "PR:https://github.com/o/r/pull/9" in out
+        assert "PUSHED:buildme/happy" in out
+        assert "--draft" in captured["argv"], "PRs are draft by default"
+
+    @pytest.mark.asyncio
+    async def test_no_push_skips_publish_entirely(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path / "ws"))
+        repo = make_repo(tmp_path / "proj")
+        config = BuildConfig(
+            project_dir=repo, change_name="nopush",
+            git=GitToggles(worktree=True, push=False, pr="draft"),
+        )
+        config.specs_dir = repo / "specs"
+        state = BuildState(change_name="nopush", mode="scratch", tier="advanced",
+                           state_file=str(config.state_file_path()))
+        cm = ChangeManager(config.specs_dir)
+        await _run_bootstrap(config, state, cm, config.state_file_path())
+        progress = ProgressWriter(config.progress_file_path())
+        assert _run_publish(config, state, progress) is True
+        assert "PHASE:PUBLISH:SKIPPED:buildme/nopush" in capsys.readouterr().out
+
+
+class TestPRBody:
+    def test_body_carries_why_blocks_and_worktree_note(self, tmp_path):
+        repo = make_repo(tmp_path / "proj")
+        config = BuildConfig(project_dir=repo, change_name="bodytest")
+        config.specs_dir = repo / "specs"
+        config.change_dir.mkdir(parents=True)
+        (config.change_dir / "proposal.md").write_text(
+            "# P\n\n## Why\n\nBecause the thing is broken.\n\n## Impact\n\nnone\n"
+        )
+        (config.change_dir / "respec.md").write_text("delta")
+        from build_pipeline.models import BlockInfo
+        from build_pipeline.state import TDDState
+
+        state = BuildState(
+            change_name="bodytest", mode="scratch", tier="advanced",
+            worktree_path=str(repo),
+            tdd=TDDState(blocks=[BlockInfo(number=1, name="First", description="d")]),
+        )
+        title, body = _pr_title_body(config, state)
+        assert title == "buildme: bodytest"
+        assert "Because the thing is broken." in body
+        assert "Block 1: First" in body
+        assert "respec.md" in body
+        assert "unknowns.md" not in body  # absent artifacts are not linked
+        assert "calling session's decision" in body
