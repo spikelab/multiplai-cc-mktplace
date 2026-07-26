@@ -24,6 +24,11 @@ class BuildPhase(str, Enum):
     PROTOTYPE = "prototype"
     REVIEW = "review"
     TDD_BUILD = "tdd_build"
+    # Proposes a spec delta from the implementation notes collected during the
+    # build. Sits between TDD_BUILD and COMPLETE because it reads what the
+    # build learned; is_phase_complete compares enum positions, so old
+    # checkpoints (which never carry "respec") still order correctly.
+    RESPEC = "respec"
     COMPLETE = "complete"
     FAILED = "failed"
 
@@ -163,6 +168,32 @@ class AgentResult(BaseModel):
     elapsed_seconds: float = 0.0
 
 
+# --- Implementation notes (spec ↔ implementation loop) ---
+
+SPEC_IMPACT_LEVELS = ("none", "clarify", "contradicts")
+
+
+class ImplementationNote(BaseModel):
+    """One agent's report of what did not match the spec/design.
+
+    Parsed from the agent's REQUIRED `SURPRISES:` / `SPEC_IMPACT:` slots
+    (gates.parse_implementation_note). Notes accumulate on the block (so they
+    survive resume) and are appended to implementation-notes.md as the build
+    runs, which is what the respec step reads at the end of the build.
+    """
+    block_number: int
+    block_name: str
+    role: str  # test_writer | implementer | refactorer
+    surprises: str = ""
+    spec_impact: str = "none"  # none | clarify | contradicts
+
+    @property
+    def contradicts(self) -> bool:
+        """The block could only be built by doing something the spec does not
+        say (or says otherwise) — the loudest signal for the respec step."""
+        return self.spec_impact == "contradicts"
+
+
 # --- Block state ---
 
 class BlockInfo(BaseModel):
@@ -196,6 +227,10 @@ class BlockInfo(BaseModel):
     # feed the reviewer (as evidence to verify, not trust) and build-progress.md.
     red_evidence: str = ""
     green_evidence: str = ""
+    # Surprises the block's agents reported (SURPRISES:/SPEC_IMPACT: slots).
+    # Persisted here so a resumed build keeps the learning it already
+    # collected; also appended to implementation-notes.md as they arrive.
+    notes: list[ImplementationNote] = Field(default_factory=list)
 
 
 # --- Change artifacts ---

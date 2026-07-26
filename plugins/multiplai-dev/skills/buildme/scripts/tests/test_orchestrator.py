@@ -369,3 +369,65 @@ class TestPrototypeDecision:
         should, reason = prototype_decision(config)
         assert should is True
         assert reason.startswith("auto:")
+
+
+class TestRespecPhaseWiring:
+    """The RESPEC phase runs after TDD_BUILD, is skipped on resume once done,
+    and never fails the build."""
+
+    def test_respec_sits_between_tdd_build_and_complete(self):
+        names = [p.value for p in BuildPhase]
+        assert names.index("tdd_build") < names.index("respec")
+        assert names.index("respec") < names.index("complete")
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_runs_respec_before_archiving(self, tmp_path):
+        from unittest.mock import AsyncMock, patch
+        from argparse import Namespace
+        from build_pipeline.orchestrator import run_orchestrator
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        config = BuildConfig(
+            project_dir=project_dir, change_name="feat", mode="only", auto=False,
+            config_dir=tmp_path / "config",
+        )
+        config.specs_dir = project_dir / "specs"
+        config.change_dir.mkdir(parents=True)
+
+        with patch("build_pipeline.tdd_engine.run_tdd_engine",
+                   new_callable=AsyncMock, return_value=0), \
+             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   new_callable=AsyncMock, return_value=[]), \
+             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                   new_callable=AsyncMock,
+                   return_value=config.change_dir / "respec.md") as mock_respec:
+            rc = await run_orchestrator(config, Namespace(interview_summary=""))
+
+        assert rc == 0
+        mock_respec.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_respec_failure_does_not_fail_the_build(self, tmp_path):
+        from unittest.mock import AsyncMock, patch
+        from argparse import Namespace
+        from build_pipeline.orchestrator import run_orchestrator
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        config = BuildConfig(
+            project_dir=project_dir, change_name="feat", mode="only", auto=False,
+            config_dir=tmp_path / "config",
+        )
+        config.specs_dir = project_dir / "specs"
+        config.change_dir.mkdir(parents=True)
+
+        with patch("build_pipeline.tdd_engine.run_tdd_engine",
+                   new_callable=AsyncMock, return_value=0), \
+             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   new_callable=AsyncMock, return_value=[]), \
+             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                   new_callable=AsyncMock, side_effect=RuntimeError("model down")):
+            rc = await run_orchestrator(config, Namespace(interview_summary=""))
+
+        assert rc == 0

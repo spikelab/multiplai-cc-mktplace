@@ -103,6 +103,11 @@ class GateToggles:
     # "false" (never). Tri-state rather than bool because the useful default is
     # "decide from the change", not on/off.
     prototype: str = "auto"
+    # `respec: {halt_on_contradiction: true}` in specs/config.yaml. When an
+    # agent reports SPEC_IMPACT: contradicts, the build stops with a diagnosis
+    # instead of steering around the spec. Default False — the note is always
+    # recorded and surfaced; halting is the opt-in escalation.
+    respec_halt_on_contradiction: bool = False
 
 
 @dataclass
@@ -238,6 +243,7 @@ class BuildConfig:
         e2e_test = data.get("e2e_test", {})
         explainers = data.get("explainers", {}) or {}
         prototype = data.get("prototype", {}) or {}
+        respec = data.get("respec", {}) or {}
         self.gates = GateToggles(
             code_review_per_block=code_review.get("per_block", True),
             security_review_per_block=security_review.get("per_block", True),
@@ -245,6 +251,7 @@ class BuildConfig:
             e2e_test_entry_point_check=e2e_test.get("entry_point_check", True),
             explainers_enabled=explainers.get("enabled", True),
             prototype=_normalize_prototype_toggle(prototype.get("enabled", "auto")),
+            respec_halt_on_contradiction=respec.get("halt_on_contradiction", False),
         )
 
     def _discover_test_command(self) -> None:

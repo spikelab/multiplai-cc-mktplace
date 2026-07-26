@@ -171,6 +171,26 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             log.info("DONE phase=TDD_BUILD")
             print("PHASE:TDD_BUILD:COMPLETE", flush=True)
 
+        # Phase: Respec (proposal only — never edits the specs; non-fatal)
+        # Reads implementation-notes.md (written as the build ran) and writes
+        # respec.md next to it, before the archive move carries both along.
+        if not state.is_phase_complete(BuildPhase.RESPEC):
+            log.info("START phase=RESPEC")
+            from .llm_steps.respec_steps import run_respec_audit
+            try:
+                respec_path = await run_respec_audit(config, state)
+                if respec_path:
+                    log.info("DONE phase=RESPEC proposal=%s", respec_path)
+                    progress.log_phase(
+                        "RESPEC", f"Proposed spec delta written to {respec_path}",
+                    )
+                else:
+                    log.warning("Respec audit produced no proposal (non-fatal)")
+            except Exception as respec_err:
+                log.warning("Respec audit failed (non-fatal): %s", respec_err)
+            state.advance_to(BuildPhase.RESPEC, state_path)
+            print("PHASE:RESPEC:COMPLETE", flush=True)
+
         # Phase: Archive
         # In --auto mode, archive immediately (merge delta specs → main registry,
         # move change to archive/). Otherwise, leave the change in place so the
