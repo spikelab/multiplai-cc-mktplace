@@ -467,9 +467,17 @@ The convention is one suffix on the fact itself:
 - Flat-tax regime caps at €85k (as of 2026-07, review by 2026-10)
 ```
 
-A staleness linter (`scripts/lib/memory_lint.py`) reports two kinds of finding —
-`expired` (a `review by` date that has passed) and `unmarked` (a volatile-class
-fact with no annotation at all). It is **warn-only and never rewrites a file**:
+Both dates take `YYYY-MM` or `YYYY-MM-DD`, and **a month means the END of that
+month**: `review by 2026-10` is not overdue on 2026-10-01, because the whole
+month is the review window. Treating it as the 1st would make every
+month-granular annotation fire up to 31 days early, which is the kind of steady
+early noise that gets a linter switched off.
+
+A staleness linter (`scripts/lib/memory_lint.py`) reports three kinds of finding
+— `expired` (a `review by` date that has passed), `undated` (an `as of` stamp
+more than a year old with no `review by` at all, so nothing can ever expire it)
+and `unmarked` (a volatile-class fact with no annotation whatsoever). It is
+**warn-only and never rewrites a file**:
 volatile-class detection is heuristic, so a false positive must cost one noisy
 line in a report, never a silently edited fact. Findings surface in
 `/multiplai-context:health` (as `memory_validity`) and in the maintainer's
@@ -496,11 +504,19 @@ The distinction is the point:
 | Kind | Machine-checkable? | How it reaches you |
 |------|:---:|---|
 | `due:` | yes | A `SessionStart` nudge from **a week before** the date, repeated while overdue |
-| `on:` | **no** | Normal memory routing when a prompt touches the topic, plus a periodic re-listing sweep |
+| `on:` | **no** | Normal memory routing when a prompt touches the topic, plus a 30-day re-listing sweep |
 
 `on:` conditions are **never evaluated**. No code decides whether "the runtime
 updated" has happened, because a confident wrong guess fires the reminder at the
 wrong time — which trains you to ignore the channel.
+
+The 30-day sweep measures **elapsed time since the entry was last actually
+shown**, stamped per-intention in `prospective_sweep.json` under the plugin's
+data dir (derived state — never in `prospective.md`, which is yours to edit).
+So a day with no session *delays* a re-listing instead of skipping it: a sweep
+that only fired on exact 30-day multiples lost a whole cycle to one missed day,
+on the one memory channel where being silent is itself the failure. Losing the
+stamp file costs one duplicate nudge, never a swallowed one.
 
 The file is seeded by `/multiplai-context:setup` from
 `templates/prospective.md`. Entries arrive through the normal pipeline
@@ -516,14 +532,17 @@ fires when you run it, catalogs rebuild when something asks. So maintenance
 happened exactly as often as it was remembered — which, for a background chore,
 means "eventually".
 
-`scripts/memory_maintainer.py` is launched **detached** from every
-`SessionStart` and owns a **24-hour gate**, so the child exits immediately when
-it has already run today. Four passes:
+`scripts/memory_maintainer.py` is launched **detached** from `SessionStart` and
+owns a **24-hour gate**. `SessionStart` checks that same gate *in-process first*
+and skips the spawn entirely when it's closed — the child is authoritative, but
+reaching it costs a `uv run` startup, and since the maintainer declares its
+dependencies in a PEP 723 header a cold `uv` cache turns that into a network
+fetch at session start. Four passes:
 
 | Pass | What it does | Model call? |
 |---|---|---|
 | 1. Staleness lint | `lib/memory_lint` — expired `review by` dates, unannotated volatile facts | no |
-| 2. Dream proposal | Only when the dream gate is open **and** a learnings backlog exists | yes |
+| 2. Dream proposal | Only when the dream gate is open, a learnings backlog exists, **and** no un-archived proposal is already waiting | yes |
 | 3. Catalog refresh | Only when a memory file is newer than the catalog that indexes it | yes |
 | 4. `now/` rebuild | `synthesize_now` for the **active project only**, on a **Haiku** tier | yes (cheap) |
 

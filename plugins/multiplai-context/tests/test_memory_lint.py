@@ -36,11 +36,40 @@ class TestExpiry:
         line = "- Opus is the top tier (as of 2026-07, review by 2026-12)"
         assert kinds(line) == []
 
-    def test_as_of_without_review_by_is_clean(self):
-        """The author dated the fact but claimed no expiry — that's a complete
-        annotation, not a half-finished one."""
+    def test_a_recent_as_of_without_review_by_is_clean(self):
+        """The author dated the fact but claimed no expiry. While the stamp is
+        recent that's a complete annotation, not a half-finished one."""
         line = "- Angela works at DRBU (as of 2026-07)"
         assert kinds(line) == []
+
+    def test_an_ancient_as_of_with_no_review_by_is_reported_as_undated(self):
+        """`(as of 2019-01)` with no review date was permanently clean —
+        nothing could ever expire it — while the premise of the whole linter is
+        that facts rot on their own schedule."""
+        assert kinds("- Angela works at DRBU (as of 2019-01)") == ["undated"]
+
+    def test_undated_is_its_own_kind_not_expired(self):
+        """Nothing has passed, so calling it expired would misdescribe it and
+        blur a missed review date with a missing annotation."""
+        [f] = lint_text("- x (as of 2019-01)\n", Path("a.md"), TODAY)
+        assert f.kind == "undated"
+        assert "no 'review by'" in f.detail
+
+    def test_the_undated_threshold_is_a_year(self):
+        # 2025-07 resolves to 2025-07-31 (end of month), 360 days before TODAY.
+        assert kinds("- x (as of 2025-07)") == []
+        # 2025-06 resolves to 2025-06-30, 391 days before TODAY.
+        assert kinds("- x (as of 2025-06)") == ["undated"]
+        assert kinds("- x (as of 2024-01)") == ["undated"]
+
+    def test_an_ancient_as_of_WITH_a_future_review_by_stays_clean(self):
+        """An old stamp is fine when the author said when to re-check it."""
+        assert kinds("- x (as of 2019-01, review by 2027-01)") == []
+
+    def test_expired_only_does_not_report_undated(self):
+        """`--expired-only` means "something has passed". Nothing has."""
+        findings = lint_text("- x (as of 2019-01)\n", Path("a.md"), TODAY)
+        assert [f for f in findings if f.kind == "expired"] == []
 
     def test_day_precision_is_accepted(self):
         assert kinds("x (as of 2026-01-05, review by 2026-03-04)") == ["expired"]
@@ -179,7 +208,7 @@ class TestDirectoryAndOutput:
         out = summarize(lint_dir(tmp_path, TODAY), root=tmp_path)
         assert "## Expired (1)" in out
         assert "## Missing validity annotation (1)" in out
-        assert "1 expired, 1 unmarked" in out
+        assert "1 expired, 0 undated, 1 unmarked" in out
 
     def test_clean_tree_says_clean(self, tmp_path):
         (tmp_path / "a.md").write_text("Nothing volatile here.\n")

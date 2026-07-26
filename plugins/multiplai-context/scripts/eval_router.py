@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.8.1"]
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.9.0"]
 # ///
 """Standalone routing-quality eval for the live memory_router.
 

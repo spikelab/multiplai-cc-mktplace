@@ -28,6 +28,7 @@ formats.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -42,6 +43,9 @@ INTENTION_RE = re.compile(
     r")\]\s*(?P<text>.+?)"
     r"(?:\s*\(captured\s*(?P<captured>\d{4}-\d{2}-\d{2})\))?\s*$")
 
+# A comment opened AND closed on the same line, anywhere in it.
+_CLOSED_COMMENT_RE = re.compile(r"<!--.*?-->")
+
 # How long before its due date an intention starts being surfaced. An intention
 # that appears only on the day it's due is a reminder you get too late to act
 # on; a week is enough to plan around and short enough not to be background
@@ -52,6 +56,12 @@ LEAD_DAYS = 7
 # resurface. Re-surface each one periodically instead, so "when X ships" is
 # re-read occasionally rather than buried forever.
 CONDITION_SWEEP_DAYS = 30
+
+# Where the sweep's per-intention stamps live. Deliberately NOT in
+# prospective.md: that file is human-editable memory, and a machine rewriting
+# it on every session start would fight the user for it and put churn in the
+# memory diff. This is derived state — losing it costs one early re-surface.
+SWEEP_STATE_FILENAME = "prospective_sweep.json"
 
 
 @dataclass(frozen=True)
@@ -116,6 +126,10 @@ def parse(text: str) -> list[Intention]:
             continue
         if stripped.startswith("<!--"):
             continue  # fully-closed single-line comment
+        # A closed comment AFTER the intention is an annotation, not part of
+        # the intention. Left in, it rides into `text` and then into the nudge
+        # ("- [due 2026-09-01] Re-check the rule <!-- ask the accountant -->").
+        stripped = _CLOSED_COMMENT_RE.sub("", stripped).strip()
         match = INTENTION_RE.match(stripped)
         if not match:
             continue
@@ -139,19 +153,91 @@ def load(memory_dir: Path) -> list[Intention]:
     return parse(path.read_text(encoding="utf-8"))
 
 
-def actionable(intentions: list[Intention], today: date) -> list[Intention]:
+def sweep_key(intention: Intention) -> str:
+    """Stable identity for an intention across sessions.
+
+    Keyed on the condition and text, NOT the line number — reordering
+    `prospective.md` or removing a line above must not reset another
+    intention's sweep clock. Whitespace is collapsed so a reflowed line keeps
+    its history; an edit to the wording is a different intention and gets a
+    fresh clock, which is the right default (rewritten intention, re-read it).
+    """
+    condition = " ".join((intention.condition or "").split())
+    text = " ".join(intention.text.split())
+    return f"{condition} :: {text}"
+
+
+def load_sweep_state(path: Path) -> dict[str, date]:
+    """Read the sweep stamps. Any unreadable/garbage entry is simply dropped.
+
+    A missing or corrupt state file must degrade to "never surfaced" (which
+    surfaces, then stamps) and never to "already surfaced" — for this channel
+    the safe direction of failure is noise, not silence.
+    """
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        # ValueError covers both JSONDecodeError and the UnicodeDecodeError a
+        # binary-garbage file raises out of read_text.
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, date] = {}
+    for key, value in raw.items():
+        try:
+            out[str(key)] = date.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def save_sweep_state(path: Path, state: dict[str, date]) -> None:
+    """Persist the sweep stamps. Best-effort by design.
+
+    A failed write costs one duplicate surface next session. Raising here
+    would let derived state abort a session start, which is a far worse trade.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {k: v.isoformat() for k, v in sorted(state.items())}
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def actionable(intentions: list[Intention], today: date, *,
+               last_surfaced: dict[str, date] | None = None) -> list[Intention]:
     """Intentions worth surfacing now, most urgent first.
 
-    Condition-triggered ones are included only on the periodic sweep, and only
-    if they carry a capture date to measure the sweep from — an undated
-    condition would otherwise re-fire on every single session forever.
+    Condition-triggered ones fire on an *elapsed* schedule, not a coincident
+    one: `today - base >= CONDITION_SWEEP_DAYS`, where base is the last time
+    this intention was actually surfaced (from *last_surfaced*), falling back
+    to its capture date. The earlier `% CONDITION_SWEEP_DAYS == 0` test only
+    fired on exact 30-day multiples, so one missed session — no session that
+    day, a run either side of the UTC midnight rollover, a closed laptop —
+    silently cost another full 30 days on the one memory channel where being
+    silent IS the failure.
+
+    Because the test is now "overdue", a fired sweep MUST be stamped by the
+    caller (`save_sweep_state`) or it fires again next session. Not stamping
+    is therefore noisy, not silent — the correct direction to fail in.
+
+    An intention with neither a stamp nor a capture date surfaces on this
+    call and is stamped from here on. That is a deliberate change from the
+    old behaviour of ignoring it forever: a condition nobody can evaluate and
+    nobody ever sees is indistinguishable from one that was never captured.
     """
+    stamps = last_surfaced or {}
     out = [i for i in intentions
            if i.status(today) in {"overdue", "due", "upcoming"}]
     for i in intentions:
-        if i.due is None and i.captured is not None:
-            if (today - i.captured).days % CONDITION_SWEEP_DAYS == 0:
-                out.append(i)
+        if i.due is not None:
+            continue
+        base = stamps.get(sweep_key(i)) or i.captured
+        if base is None or (today - base).days >= CONDITION_SWEEP_DAYS:
+            out.append(i)
     # Overdue first, then by date; conditions last.
     order = {"overdue": 0, "due": 1, "upcoming": 2, "condition": 3}
     return sorted(out, key=lambda i: (order[i.status(today)],

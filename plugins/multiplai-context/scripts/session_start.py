@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.8.1"]
+# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.9.0"]
 # ///
 """Session start hook for multiplai plugin.
 
@@ -57,6 +57,12 @@ _DREAM_GATE_HOURS = 24
 # the next model. A 90-day gate meant a whole release cycle could pass with
 # skills still carrying instructions the model had outgrown.
 _CONFIG_AUDIT_GATE_DAYS = 60
+
+# Mirrors ``memory_maintainer.GATE_HOURS`` / ``STATE_FILENAME``. Restated here
+# so the pre-spawn gate check needs no import of that PEP 723 script; see
+# ``_maintainer_gate_open`` for why the duplication is deliberate.
+_MAINTAINER_GATE_HOURS = 24
+_MAINTAINER_STATE_FILENAME = "maintainer_state.yaml"
 
 # Deferred-extraction retry policy. A detached extraction child should
 # finish well within the stale window; markers older than this with no
@@ -450,16 +456,56 @@ def _launch_cost_collection(scripts_dir: Path) -> bool:
         return False
 
 
-def _launch_maintainer(scripts_dir: Path) -> bool:
-    """Fire the proactive memory maintainer, detached.
+def _maintainer_gate_open(maintainer_state_file: Path) -> bool:
+    """True when >=24h have passed since the last maintenance run.
+
+    Deliberately duplicates the maintainer's own ``gate_open`` rather than
+    importing it: ``memory_maintainer.py`` is a PEP 723 script whose header
+    resolves its own core version under ``uv run``, and importing it into this
+    hook would run it against whichever core the hook process has. The gate is
+    a timestamp comparison — cheap to state twice, and the child re-checks
+    authoritatively anyway, so a disagreement costs at most one no-op child.
+
+    Fail-open on missing/corrupt state, matching the maintainer: the failure
+    mode of an extra pass is a few cents, of a wedged gate is maintenance that
+    silently never runs again.
+    """
+    try:
+        state = load_yaml(maintainer_state_file) or {}
+    except Exception:
+        return True
+    last_run = state.get("last_run")
+    if not last_run:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(str(last_run))
+    except (TypeError, ValueError):
+        return True
+    if last_dt.tzinfo is None:
+        last_dt = last_dt.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - last_dt >= timedelta(
+        hours=_MAINTAINER_GATE_HOURS
+    )
+
+
+def _launch_maintainer(scripts_dir: Path, data_dir: Path) -> bool:
+    """Fire the proactive memory maintainer, detached — if its gate is open.
 
     Same fire-and-forget shape as cost collection: the maintainer's passes
     include two model calls and a subprocess, none of which may run inside a
-    kill-within-seconds hook. It owns its own 24h gate, so launching on every
-    session start is cheap — the child exits immediately when the gate is
-    closed. Best-effort: maintenance must never block a session from starting.
+    kill-within-seconds hook.
+
+    The 24h gate is checked HERE, in-process, before spawning. The child owns
+    the authoritative check, but reaching it costs a `uv run` startup — and
+    since the maintainer's PEP 723 header declares a git dependency, a cold uv
+    cache makes that a network fetch at session start. Paying it to accomplish
+    nothing ~95% of sessions is the whole reason this pre-check exists.
+    Best-effort: maintenance must never block a session from starting.
     """
     try:
+        if not _maintainer_gate_open(data_dir / _MAINTAINER_STATE_FILENAME):
+            logger.debug("Maintainer gate closed (<24h); not spawning")
+            return False
         script = scripts_dir / "memory_maintainer.py"
         if not script.exists():
             return False
@@ -499,7 +545,7 @@ def _emit_config_audit_nudge() -> None:
     )
 
 
-def _emit_prospective_nudge(memory_dir: Path) -> int:
+def _emit_prospective_nudge(memory_dir: Path, data_dir: Path) -> int:
     """Surface intentions that have come due. Returns how many were surfaced.
 
     Prospective memory is the one channel where being silent is the failure:
@@ -508,17 +554,37 @@ def _emit_prospective_nudge(memory_dir: Path) -> int:
     — the intention's own due date IS the gate, so this runs every session and
     stays quiet until something is actually due.
 
+    Condition-triggered intentions have no date to gate on, so they ride a
+    30-day *elapsed* sweep stamped per-intention in ``data_dir``. Stamping is
+    what stops a swept condition re-firing next session, and it happens only
+    for the ones actually printed — so a crash between print and stamp costs a
+    duplicate nudge, never a swallowed one.
+
     Never fatal. A malformed prospective.md must not stop a session from
     starting.
     """
     try:
-        from lib.prospective import actionable, load, render_nudge
+        from lib.prospective import (
+            SWEEP_STATE_FILENAME, actionable, load, load_sweep_state,
+            render_nudge, save_sweep_state, sweep_key,
+        )
 
         today = date.today()
-        due = actionable(load(memory_dir), today)
+        sweep_file = data_dir / SWEEP_STATE_FILENAME
+        stamps = load_sweep_state(sweep_file)
+        intentions = load(memory_dir)
+        due = actionable(intentions, today, last_surfaced=stamps)
         if not due:
             return 0
         print(render_nudge(due, today))
+        swept = {sweep_key(i): today for i in due if i.due is None}
+        if swept:
+            # Prune stamps for intentions no longer in prospective.md (deleted
+            # or reworded — a reword is a new key by design). Without this the
+            # state file only ever grows.
+            live = {sweep_key(i) for i in intentions if i.due is None}
+            kept = {k: v for k, v in stamps.items() if k in live}
+            save_sweep_state(sweep_file, {**kept, **swept})
         return len(due)
     except Exception:
         logger.exception("Prospective-memory check failed; continuing")
@@ -762,7 +828,7 @@ def main() -> None:
 
     # Prospective memory: intentions whose due date has arrived. No cadence
     # gate — the due date is the gate.
-    surfaced = _emit_prospective_nudge(memory_dir)
+    surfaced = _emit_prospective_nudge(memory_dir, data_dir)
     if surfaced:
         logger.info("Prospective memory: %d intention(s) surfaced", surfaced)
         log_event(
@@ -774,7 +840,7 @@ def main() -> None:
     # Proactive memory maintenance. Detached and silent: it produces proposals
     # and derived files, nothing the user needs to see at session start, and
     # nothing it does may delay the session.
-    if _launch_maintainer(paths.scripts_dir()):
+    if _launch_maintainer(paths.scripts_dir(), data_dir):
         logger.info("Memory maintainer launched (detached)")
         log_event("maintenance", "memory_maintainer",
                   "proactive maintenance pass launched", session_id=session_id)
