@@ -69,6 +69,37 @@ def _add_prototype_flags(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_git_lifecycle_flags(p: argparse.ArgumentParser) -> None:
+    """Git lifecycle controls. Defaults: worktree on, push on, PR draft.
+
+    `--no-worktree --no-push --no-pr` reproduces the pre-git-lifecycle
+    pipeline exactly (build in place, on the caller's branch). The buildme
+    SKILL.md wrapper passes --no-worktree when it is already inside one.
+    """
+    p.add_argument(
+        "--no-worktree",
+        action="store_true",
+        help="Build in the project dir on the current branch instead of "
+             "creating a dedicated worktree + branch (pre-0.5 behavior; use "
+             "when already inside a worktree).",
+    )
+    p.add_argument(
+        "--no-push",
+        action="store_true",
+        help="Do not push the build's branch to origin.",
+    )
+    p.add_argument(
+        "--no-pr",
+        action="store_true",
+        help="Do not open a pull request after pushing.",
+    )
+    p.add_argument(
+        "--pr-ready",
+        action="store_true",
+        help="Open the PR ready-for-review instead of the default draft.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="build_pipeline",
@@ -92,6 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_lenient_review_flag(build)
     _add_skip_explainers_flag(build)
     _add_prototype_flags(build)
+    _add_git_lifecycle_flags(build)
 
     # --- spec-generate ---
     spec = sub.add_parser("spec-generate", help="Artifact generation pipeline")
