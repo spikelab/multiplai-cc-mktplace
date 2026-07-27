@@ -160,7 +160,9 @@ explicit [availability guarantee](https://github.com/spikelab/multiplai-core#ava
 ## Uninstall
 
 `/plugin uninstall multiplai-context@multiplai`, then
-`/plugin marketplace remove multiplai`. Your data (plain markdown under
+`/plugin marketplace remove multiplai` (skip that second command if you're
+keeping other multiplai packs — it removes the marketplace they all install
+from). Your data (plain markdown under
 `<workspace>/.multiplai/`) stays on your disk, yours to keep or delete —
 the [plugin README](plugins/multiplai-context/README.md#uninstall) has the
 full picture.

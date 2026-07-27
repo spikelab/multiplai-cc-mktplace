@@ -948,6 +948,9 @@ disk, and removing the plugin is two commands:
 /plugin marketplace remove multiplai
 ```
 
+(Skip the second command if you're keeping other multiplai packs — it
+removes the marketplace they all install from.)
+
 That removes the code and all hooks (nothing runs after the next restart).
 **Your data stays yours**, untouched, at `<workspace>/.multiplai/` (or
 `~/.multiplai/`): `memory/`, `diary/`, `learnings/`, `now/` are all

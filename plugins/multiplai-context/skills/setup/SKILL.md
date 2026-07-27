@@ -70,7 +70,7 @@ default and belongs in the full interview.
    subsequent message.**
 
 4. **Question 2 — workspace.** *"{name}, where should your memory and session
-   state live? Press enter for `~/.multiplai/`, or name a directory you
+   state live? Say **default** for `~/.multiplai/`, or name a directory you
    already work in — state then goes to `<that dir>/.multiplai/`."*
    → `workspace_dir` (optional; if they take the default, skip the settings
    write in step 6 entirely).
@@ -109,6 +109,12 @@ default and belongs in the full interview.
    dump. (Sideloaded installs via `claude --plugin-dir …` ignore
    `pluginConfigs` — pass options as `CLAUDE_PLUGIN_OPTION_<name>` env vars
    there instead.)
+
+   This file configures **all of Claude Code** — a malformed write is worse
+   than no write. So: before writing, copy the existing file to
+   `settings.json.bak` (skip if it didn't exist); after writing, confirm it
+   parses — `python3 -m json.tool <path> > /dev/null` — and restore the
+   backup if it doesn't.
 
    Do **not** mention restarting here — that comes once, in step 7.
 
