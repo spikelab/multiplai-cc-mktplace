@@ -13,15 +13,15 @@ Dream (nightly or on demand via `/multiplai-context:dream`) generates a proposal
 `.multiplai/dreams/`. This skill loads that proposal, walks through it with the user, and
 applies approved changes.
 
-### The proposal file is the decision record (shared with the GUI)
+### The proposal file is the decision record
 
 The proposal `.md` is itself the record of what has been reviewed. When an item is
 decided — applied, edited, or rejected — its block is **moved into a `## Processed`
 section at the end of the file** (via `dream.py --mark-processed`, never by hand). Items
-under `## Processed` are **no longer pending**: this skill and the multiplai-gui GUI both
-skip them, so a proposal can be reviewed partly in the GUI and finished here (or vice
-versa) with no double-applies. That one heading is the entire cross-tool contract — there
-is no sidecar file. A proposal is archived (Step 6) only once **nothing is left pending**.
+under `## Processed` are **no longer pending**: this skill (and any future client) skips
+them, so a proposal can be reviewed in more than one sitting or tool with no
+double-applies. That one heading is the entire cross-tool contract — there is no sidecar
+file. A proposal is archived (Step 6) only once **nothing is left pending**.
 
 ---
 

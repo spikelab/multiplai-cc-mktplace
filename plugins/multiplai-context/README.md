@@ -3,9 +3,12 @@
 A Claude Code plugin for **context routing, continuous learning, session
 awareness, and memory management**. It injects only the memory relevant
 to each prompt, captures learnings from your sessions, keeps a per-session
-diary, and consolidates what it learns back into your memory files.
+diary, and consolidates what it learns back into your memory files — and
+nothing becomes memory without your approval:
+**`/multiplai-context:dream-remember` is the only path that edits your
+memory files.**
 
-This is the first plugin in the [`multiplai`](../../README.md) marketplace.
+This is the heart of the [`multiplai`](../../README.md) marketplace.
 
 **Platforms:** built and tested on macOS and Linux. WSL on Windows is
 expected to work but not actively tested — please open an issue if it
@@ -89,8 +92,30 @@ more. On vanilla Claude Code:
    uv run --no-project <plugin-dir>/scripts/session_start.py </dev/null
    ```
    Every later start is fast (cache hit).
-4. Run `/multiplai-context:setup` in your first session — an onboarding
-   interview that populates your memory files from starter templates.
+4. Run `/multiplai-context:setup` in your first session — two questions
+   (your name, your workspace), settings written, memory seeded.
+   (`/multiplai-context:setup full` runs the deeper interview any time.)
+5. **First recall — see it work.** Setup ends by asking you to restart
+   once: `/exit`, then `claude` again. In the new session, ask:
+
+   > What do you know about me?
+
+   The answer should contain what you just told setup — your name, your
+   workspace — because the relevant memory files now arrive with your
+   prompt as a `MEMORY` block, routed per prompt rather than dumped. To
+   see the routing decision itself:
+
+   ```bash
+   tail -5 <workspace>/.multiplai/data/logs/activity.log
+   ```
+
+   The `[context]` line names exactly which memory files were injected,
+   with relevance scores (anatomy in [Observability](#observability)).
+   Nothing shows up? See [Troubleshooting](#troubleshooting).
+
+That's the whole loop in miniature. From here it compounds: diary and
+learnings accumulate in the background, and `/multiplai-context:dream-remember`
+turns them into memory — with your approval, never without.
 
 **What lands where:** with no configuration, all state roots at
 `~/.multiplai/` — `memory/` (your profile), `diary/` (per-session
@@ -101,9 +126,27 @@ listed under Configuration below; every one has a working default.
 
 ## Configuration
 
-All options are set via the plugin's `userConfig` (Claude Code prompts for
-them at enable time; values are exposed to hooks as
-`CLAUDE_PLUGIN_OPTION_*`).
+Options are collected by `/multiplai-context:setup` (Claude Code does
+**not** prompt for `userConfig` values at enable time —
+[anthropics/claude-code#39455](https://github.com/anthropics/claude-code/issues/39455)),
+or set manually in your `settings.json` under the compound
+`<plugin>@<marketplace>` key — a bare `multiplai` key fails silently:
+
+```json
+{
+  "pluginConfigs": {
+    "multiplai-context@multiplai": {
+      "options": {
+        "workspace_dir": "/path/to/your/workspace"
+      }
+    }
+  }
+}
+```
+
+Values are exposed to hooks as `CLAUDE_PLUGIN_OPTION_*` env vars.
+(Sideloaded installs via `claude --plugin-dir` ignore `pluginConfigs` —
+set the env vars directly.)
 
 ### Quick start: the only options you probably need
 
@@ -556,8 +599,9 @@ that edits memory.
 It is silent (nothing at session start needs your attention) and best-effort — a
 launch failure, a crashed pass, or an unwritable state file costs at most one
 duplicate run next session and never delays a session. Unreadable state opens
-the gate on purpose: an extra pass costs cents, a wedged gate means maintenance
-that silently never runs again.
+the gate on purpose: the cost of one extra pass is small and bounded (see
+[What it costs](#what-it-costs)), a wedged gate means maintenance that
+silently never runs again.
 
 Run it by hand, or check what it would do:
 
@@ -568,6 +612,39 @@ uv run --no-project scripts/memory_maintainer.py --force
 
 State lives in `<data_dir>/maintainer_state.yaml`; runs appear in the activity
 log as `[maintenance]`.
+
+### What it costs
+
+Real numbers, not vibes — derived from the author's own cost ledger
+(`/multiplai-context:costs` data, July 2026, heavy daily multi-session use,
+Sonnet tier, API-equivalent pricing; derived 2026-07-27):
+
+| Unattended work | Typical cost |
+|---|---|
+| Dream proposal (the expensive one; at most 1/day via the maintainer, or when you run `/multiplai-context:dream`) | **≈ $1.00 per proposal** (median $1.04 over 19 runs; max $1.91) |
+| Catalog refresh | **≈ $0.05 per run** (median over 199 runs) |
+| Background calls — diary/learnings extraction, `now/` rebuilds, checkpoint writes | **≈ $0.16 per call** (median over 606 calls; ≈ $4/day at the author's heavy usage — expect far less on normal use) |
+
+Your numbers will differ with usage; once `enable_costs` is on, run
+`/multiplai-context:costs` to see them.
+
+**Whose quota?** Unattended calls go through the Claude **Agent SDK**, i.e.
+the same auth your Claude Code already uses — your subscription quota (or
+whatever credential your CLI is configured with). Only if the SDK is
+unavailable *and* you set the `anthropic_api_key` option do calls bill that
+API key directly. (Verified in `multiplai-core`'s `model_client.py`:
+`AgentSDKClient` is preferred; the `anthropic` client is the explicit
+fallback.)
+
+**The off-switch.** To stop *all* unattended model calls, disable the
+plugin (`/plugin` → manage → disable, or uninstall) — hooks only run while
+it's enabled. Granular switches: `checkpoint_enabled: false` stops the
+checkpoint writer; `memory_router: token_overlap` (the default) means
+routing itself never calls a model; `enable_skills`/`enable_resources`/
+`enable_costs` are off by default and add work only when you turn them on.
+There is currently no single config flag that keeps the hooks running but
+skips extraction/dream/catalog model calls — if no model client is
+available at all, those passes no-op with a one-time warning.
 
 ## Architecture
 
@@ -846,6 +923,39 @@ per-component log **and** stderr — visible under `claude --debug`.
 
 Every line follows the project logging standard:
 `[<UTC ISO-8601>Z] [<component>] [session:<8-char id>] LEVEL: message`.
+
+## Troubleshooting
+
+Symptom → fix. When in doubt, start with `/multiplai-context:health` — it
+checks the plumbing mechanically and names what's missing.
+
+| Symptom | Fix |
+|---|---|
+| **Nothing runs at all — no diary, no injection, no logs.** Hooks disable themselves silently when `uv` is missing. | Install [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh \| sh`), restart the session. |
+| **First session start hangs ~60 seconds.** Cold start: the first hook run resolves `multiplai-core` + PyPI deps into uv's cache. Expected exactly once. | Wait it out, or pre-warm from a shell: `uv run --no-project <plugin-dir>/scripts/session_start.py </dev/null`. Every later start is a cache hit. |
+| **Hooks appear to do nothing.** No visible effect, unsure if anything is installed correctly. | Run `/multiplai-context:health` — it verifies the model client, directories, memory freshness, and diary/learnings counts, and names the broken piece. |
+| **Memory not injected.** You told setup things, but a new session doesn't know them. | Two checks: (1) your `settings.json` key must be the compound `pluginConfigs["multiplai-context@multiplai"]` form — a bare `multiplai` key fails **silently** (see [Configuration](#configuration)); (2) read the `[context]` routing line in the activity log — [Observability](#observability) explains how to tell a healthy route from an abstention or a fallback. |
+| **Settings changed but nothing happened.** | Options are read at session start — restart Claude Code after any `settings.json` change. |
+| **Where are the logs?** | `<workspace>/.multiplai/data/logs/` — `activity.log` is the human-readable stream (`tail -f` it from a second terminal); `hook-errors.log` collects every error. Layout and retention in [Observability](#observability). |
+
+## Uninstall
+
+An easy exit is part of the deal — your data is plain markdown on your own
+disk, and removing the plugin is two commands:
+
+```
+/plugin uninstall multiplai-context@multiplai
+/plugin marketplace remove multiplai
+```
+
+That removes the code and all hooks (nothing runs after the next restart).
+**Your data stays yours**, untouched, at `<workspace>/.multiplai/` (or
+`~/.multiplai/`): `memory/`, `diary/`, `learnings/`, `now/` are all
+human-readable markdown — keep them, grep them, or delete the directory
+and it's as if the plugin was never here. Derived state (catalogs, logs,
+session state) lives under `.multiplai/data/` and in
+`~/.claude/` catalogs — safe to delete any time; the plugin recreates
+what it needs if you come back.
 
 ## Development
 
