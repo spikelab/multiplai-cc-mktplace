@@ -19,6 +19,17 @@ Recorded history starts at **0.1.2**; anything earlier is in `git log` only.
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
 
+## [0.1.4] - 2026-07-27
+
+### Fixed
+- **`gmail`'s one-time OAuth script no longer fetches a five-releases-old
+  `multiplai-core`.** `get_token.py` still pinned v0.5.2 while its sibling
+  `gmail.py` moved to v0.10.0 in 0.1.3 — so running the consent flow resolved
+  and cached a second, stale copy of the library for the sake of one audit log
+  line. Now pinned to v0.10.0 alongside `gmail.py`. The `log_event` signature
+  it calls is byte-identical across both tags, so behaviour is unchanged; what
+  you get back is one core version per skill instead of two.
+
 ## [0.1.3] - 2026-07-27
 
 ### Changed
