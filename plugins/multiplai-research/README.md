@@ -7,8 +7,8 @@ insight extraction, and structured interviewing**. Part of the
 ## Installation
 
 ```
-claude plugin marketplace add spikelab/multiplai-cc-mktplace
-claude plugin install multiplai-research@multiplai
+/plugin marketplace add spikelab/multiplai-cc-mktplace
+/plugin install multiplai-research@multiplai
 ```
 
 ## Skills
