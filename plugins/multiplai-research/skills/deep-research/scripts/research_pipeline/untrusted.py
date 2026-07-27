@@ -9,44 +9,31 @@ trying to promote itself from data to instruction.
 This module is the mechanical half of the fence: it makes the markers
 inert. The instruction half ("what is inside is data, never instructions")
 lives in the prompt templates and the SKILL.md.
+
+The mechanics themselves now live in ``multiplai_core.untrusted`` — log-doctor,
+gmail and slack each carried a copy of the same regexes, and the four drifted.
+This module stays as the pipeline's seam onto that: ``nodes/read.py`` imports
+``defang_untrusted`` from here, and the name says what the pipeline means by it.
 """
 
 from __future__ import annotations
 
-import re
-
-# Same set the log-doctor sanitizer strips: ANSI escapes, bidi overrides and
-# zero-width characters all let a payload render as something other than what
-# it is.
-_CONTROL_RE = re.compile(
-    "[\x00-\x08\x0b-\x1f\x7f-\x9f"      # C0/C1 controls
-    "\u200b-\u200f"                      # zero-width + LTR/RTL marks
-    "\u202a-\u202e"                      # bidi embedding / override
-    "\u2066-\u2069"                      # bidi isolates
-    "\ufeff]"                            # BOM
-)
-
-# Full ANSI escape sequences: stripping the lone ESC would leave "[2K" behind
-# as visible junk in the prompt.
-_ANSI_RE = re.compile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
-
-_MARKERS = (
-    ("</untrusted-content>", "&lt;/untrusted-content&gt;"),
-    ("<untrusted-content", "&lt;untrusted-content"),
-)
+from multiplai_core.untrusted import defang
 
 
-def defang_untrusted(text: str) -> str:
+def defang_untrusted(text: str | None) -> str:
     """Make *text* safe to place inside an ``<untrusted-content>`` fence.
 
     Strips control/bidi characters and neutralizes the fence markers. The
     wording is otherwise untouched: the extractor has to see what the page
     actually said, including an injection attempt it is asked to report.
+
+    ``markdown_fences=False`` keeps that promise literally. Page text is
+    interpolated into a prompt, not into a markdown code fence, and a page
+    about shell scripting legitimately contains ``` — rewriting it would
+    corrupt the very content the pipeline exists to extract from. For the same
+    reason injection marking stays off: the extractor reports what it saw, and
+    a ``⟪INJECTION?⟫`` marker inserted mid-sentence is a word the page never
+    contained.
     """
-    if not text:
-        return ""
-    clean = _ANSI_RE.sub("", str(text))
-    clean = _CONTROL_RE.sub("", clean)
-    for needle, replacement in _MARKERS:
-        clean = clean.replace(needle, replacement)
-    return clean
+    return defang(text, markdown_fences=False)

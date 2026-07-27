@@ -19,6 +19,17 @@ Recorded history starts at **0.1.2**; anything earlier is in `git log` only.
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
 
+## [0.1.3] - 2026-07-27
+
+### Changed
+- **`gmail` and `slack` now defang untrusted text via `multiplai-core`**
+  instead of each carrying its own copy. Output is byte-for-byte what it was:
+  both pass `markdown_fences=False`, because email and Slack messages are
+  printed as plain stdout and mangling a ``` block inside a message would lose
+  what it actually said for no security gain. Core pin moves `v0.5.2` →
+  `v0.10.0` for these two scripts; `get_token.py` stays at `v0.5.2` — it does
+  not touch untrusted text and its pin was not tested here.
+
 ## [0.1.2] - 2026-07-26
 
 ### Security

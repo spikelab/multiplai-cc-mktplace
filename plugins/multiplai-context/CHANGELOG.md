@@ -18,6 +18,18 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.8.2] - 2026-07-27
+
+### Changed
+- **`/log-doctor`'s untrusted-text handling now comes from `multiplai-core`**
+  instead of a copy kept in `log_doctor.py`. Digest output is unchanged, with
+  two improvements inherited from the shared version: a log line saying "ignore
+  **the** previous instructions" is now marked `⟪INJECTION?⟫` (the local copy
+  only matched "ignore all/any previous instructions", so that phrasing slipped
+  through unmarked), and a `source` label containing a `"` can no longer close
+  the fence's tag attribute. Core pin moves `v0.9.0` → `v0.10.0` across all 23
+  scripts and `requirements-dev.txt` together.
+
 ## [0.8.1] - 2026-07-26
 
 Post-merge review fixes for memory evolution (findings 7.1–7.4 of

@@ -32,11 +32,23 @@ Before text goes inside a fence, the script that emits it:
   characters, bidi marks/embeddings/isolates and the BOM — all of which let a
   payload *render* as something other than what it is;
 - defangs the markers that would let the text impersonate structure:
-  `<untrusted-content` / `</untrusted-content>` are HTML-escaped, and (where the
-  output is markdown) ``` and `~~~` fences are neutralized.
+  `<untrusted-content` / `</untrusted-content>` are HTML-escaped, and ``` and
+  `~~~` fences are neutralized **by default** — a producer whose output is not
+  markdown opts out explicitly (`markdown_fences=False`), rather than a producer
+  who needs the protection having to remember to ask for it;
+- escapes `"` in the `source` label, so a channel-supplied label cannot close
+  the attribute and append attributes to the fence's own tag.
 
 Wording is otherwise untouched. The reader has to see what the page actually
 said — including an injection attempt it is being asked to report.
+
+**The mechanics are one implementation, not one per skill.**
+[`multiplai_core.untrusted`](https://github.com/spikelab/multiplai-core) provides
+`defang`, `fence`, `contains_injection`, `markdown_notice` and `bracket_notice`;
+every producer below calls it. Four hand-maintained copies of these regexes
+existed until 2026-07 and had drifted from each other — one of them, for
+instance, never matched "ignore **the** previous instructions". A producer that
+needs different behaviour passes a flag; it does not fork the primitive.
 
 **3. Instruction-shaped spans are marked, not removed.** Where a producer scans
 for known injection patterns it marks them in place (`⟪INJECTION?⟫`) and leaves
@@ -61,7 +73,7 @@ convention that the kit ships).
 | Plugin | Skill | Untrusted channel |
 |---|---|---|
 | multiplai-context | `log-doctor` | Log lines — attacker-reachable via echoed responses, filenames, tracebacks |
-| multiplai-research | `deep-research` | Fetched page text (`research_pipeline/untrusted.py`) |
+| multiplai-research | `deep-research` | Fetched page text (`research_pipeline/untrusted.py`, a thin seam over core) |
 | | `extract-insights` | Source documents and transcripts |
 | multiplai-messaging | `gmail` | Message bodies, subjects, sender names |
 | | `slack` | Message text, channel and user names |
