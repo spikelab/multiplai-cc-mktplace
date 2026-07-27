@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #   "google-auth-oauthlib",
-#   "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.5.2",
+#   "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.10.0",
 # ]
 # ///
 """get_token.py — one-time Gmail OAuth consent. RUN ON THE MAC HOST, not the container.

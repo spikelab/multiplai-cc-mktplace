@@ -21,6 +21,20 @@ release dates recorded at the time, not derived from a tag.
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
 
+## [0.5.3] - 2026-07-27
+
+### Changed
+- **buildme validates effort names against `multiplai-core`'s table instead of
+  a copy of it.** 0.5.2 moved the effort *logic* into core's `pick_effort` but
+  left the list of valid names hand-mirrored in `build_pipeline/config.py`.
+  Core v0.11.0 exports that table, so the copy is gone. No behaviour change
+  today — the two lists agreed — but the drift this removes had a nasty shape:
+  had they ever disagreed, a `[buildme] EFFORT=<name>` that buildme thought
+  valid and core did not would have been resolved to `high` instead of falling
+  back to your default, with no warning. Nothing to do on your side.
+- **Pin: `multiplai-core` v0.9.0 → v0.11.0** (`pyproject.toml` + `uv.lock`) for
+  the exported table. buildme is the only skill in this pack that pins core.
+
 ## [0.5.2] - 2026-07-26
 
 ### Changed

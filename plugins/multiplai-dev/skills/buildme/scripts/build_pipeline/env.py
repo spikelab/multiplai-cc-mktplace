@@ -8,6 +8,8 @@ shared with deep-research). Re-exported here so existing
 from __future__ import annotations
 
 from multiplai_core.env import (  # noqa: F401
+    EFFORT_TIERS,
+    KNOWN_EFFORTS,
     env_candidates as _env_candidates,
     find_project_root,
     load_env,

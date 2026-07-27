@@ -12,7 +12,7 @@ from typing import Literal
 
 import yaml
 
-from .env import load_multiplai_conf, pick_effort, pick_model, resolve_model
+from .env import KNOWN_EFFORTS, load_multiplai_conf, pick_effort, pick_model, resolve_model
 from .models import ReviewGatePolicy
 
 log = logging.getLogger(__name__)
@@ -64,13 +64,14 @@ def _is_advanced_model(model: str) -> bool:
 DEFAULT_MODEL = pick_model("opus", task="buildme")
 
 
-# The effort names the SDK accepts. Mirrors multiplai_core.env's tier table;
-# kept here because that table is private (`_EFFORT_TIERS`) and `pick_effort`
-# normalizes an unknown value *silently* — this local copy exists solely to
-# emit the user-facing warning below before delegating. `xhigh` sits between
-# high and max — dropping it here would reject a valid value, which is the
-# exact mistake core's own table carries a warning about.
-KNOWN_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+# The effort names the SDK accepts — core's own table, imported rather than
+# mirrored (core v0.11.0 exports it; it used to be private `_EFFORT_TIERS`).
+# The name is still bound here because `conf_effort` below needs it to emit a
+# user-facing warning *before* delegating: `pick_effort` normalizes an unknown
+# value silently, which would leave a conf typo undiagnosable. Validating
+# against core's set rather than a copy is the point — a copy that drifts makes
+# `conf_effort` return "high" instead of *default* for a name it wrongly
+# believes is valid.
 
 
 def conf_effort(task: str, default: str | None = None) -> str | None:

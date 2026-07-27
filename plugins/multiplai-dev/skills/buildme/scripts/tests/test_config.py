@@ -5,7 +5,13 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from build_pipeline.config import conf_effort, detect_tier, BuildConfig, GateToggles
+from build_pipeline.config import (
+    KNOWN_EFFORTS,
+    conf_effort,
+    detect_tier,
+    BuildConfig,
+    GateToggles,
+)
 
 
 class TestTierDetection:
@@ -693,11 +699,42 @@ class TestConfEffort:
             assert conf_effort("buildme.review", conf_effort("buildme")) == "medium"
 
     def test_unknown_effort_is_ignored_not_passed_through(self, tmp_path):
-        """`resolve_effort` ranks an unknown name at the high tier, so the
-        ceiling never trips and the typo would reach the SDK verbatim."""
+        """A typo must reach *default*, not the SDK, and not `pick_effort`'s floor.
+
+        `pick_effort` normalizes an unrecognized name to None and then floors to
+        "high", so delegating blindly would send `EFFORT=turbo` to the SDK as
+        "high" — silently plausible, and undiagnosable from the conf side. The
+        `KNOWN_EFFORTS` guard in `conf_effort` is what turns it into a warning
+        plus *default* instead.
+        """
         with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=turbo\n"), clear=True):
             assert conf_effort("buildme") is None
             assert conf_effort("buildme", "medium") == "medium"
+
+    def test_known_efforts_is_cores_table_not_a_copy(self):
+        """The guard must validate against core, or it can disagree with it.
+
+        A local copy that omits a tier rejects a valid value; a copy that keeps
+        a name core dropped sends it to `pick_effort`, which floors it to
+        "high" rather than returning *default* — breaking this function's
+        documented contract for a value it wrongly believes is valid.
+        """
+        from multiplai_core.env import KNOWN_EFFORTS as core_known
+
+        assert KNOWN_EFFORTS is core_known
+
+    def test_xhigh_is_accepted_and_not_capped_below_a_max_ceiling(self, tmp_path):
+        """`xhigh` sits between high and max — the tier an earlier copy dropped."""
+        env = self._conf(tmp_path, 'MULTIPLAI_EFFORT="max"\n[buildme]\nEFFORT=xhigh\n')
+        with patch.dict(os.environ, env, clear=True):
+            assert conf_effort("buildme") == "xhigh"
+
+    def test_conf_ceiling_caps_a_higher_env_effort(self, tmp_path):
+        """The other direction from the ceiling test above: conf global wins."""
+        env = self._conf(tmp_path, 'MULTIPLAI_EFFORT="low"\n[buildme]\nEFFORT=high\n')
+        env["MULTIPLAI_EFFORT"] = "high"
+        with patch.dict(os.environ, env, clear=True):
+            assert conf_effort("buildme") == "low"
 
 
 class TestBuildConfigEffortFields:
