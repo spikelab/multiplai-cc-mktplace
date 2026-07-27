@@ -23,6 +23,18 @@ dates recorded at the time, not derived from a tag.
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
 
+## [0.5.1] - 2026-07-27
+
+### Changed
+- **`deep-research`'s page-text defanging now comes from `multiplai-core`.**
+  `research_pipeline/untrusted.py` stays as the pipeline's seam — `nodes/read.py`
+  still imports `defang_untrusted` from it — but the regexes behind it are the
+  shared ones. Behaviour is unchanged: fetched pages keep `markdown_fences=False`
+  and no injection marking, so a page about shell scripting is not corrupted and
+  the extractor still sees an injection attempt in the page's own words, which is
+  what it is asked to report. Core pin moves `v0.7.0` → `v0.10.0`
+  (`pyproject.toml` + `uv.lock`).
+
 ## [0.5.0] - 2026-07-26
 
 ### Security
