@@ -18,6 +18,49 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.9.0] - 2026-07-27
+
+### Fixed
+- **`/setup` now writes plugin options to the key Claude Code actually
+  reads.** It previously wrote `pluginConfigs.multiplai.options`; the
+  correct key is the compound form
+  `pluginConfigs["multiplai-context@multiplai"].options`. The wrong key
+  fails silently — every option quietly falls back to its default — so if
+  you ran setup before this release and set a custom workspace, check your
+  `settings.json` and move the `options` block under the compound key.
+- The plugin README no longer claims Claude Code prompts for `userConfig`
+  values at enable time (it doesn't —
+  [anthropics/claude-code#39455](https://github.com/anthropics/claude-code/issues/39455)).
+  Options are collected by `/setup` or set manually; the README now shows
+  the correct settings key.
+
+### Changed
+- **`/setup` is now a 2-question quick path by default** — your name and
+  your workspace directory, then one restart at the end (the two mid-flow
+  restart notices are gone). It finishes by walking you to your "first
+  recall": ask a fresh session what it knows about you and see the memory
+  arrive. The complete interview (identity/technical/general preferences,
+  routing scope, project identity, git for memory) is unchanged and now
+  runs via `/multiplai-context:setup full`.
+- The README quickstart now ends at the first recall — what to do, what
+  you should see, and how to read the `[context]` routing line that proves
+  it — instead of ending at configuration tables.
+- `/dream-remember`'s docs no longer name an unreleased GUI; the
+  `## Processed` cross-tool contract is unchanged.
+
+### Added
+- **Troubleshooting** section in the README: `uv` missing, slow first
+  start, hooks apparently doing nothing, memory not injected, settings
+  changes not taking effect, where the logs live.
+- **Uninstall** section in the README: the two commands, what stays on
+  disk, and how to remove everything.
+- **What it costs** section in the README: real ledger-derived figures for
+  the unattended passes (dream proposal ≈ $1, catalog refresh ≈ $0.05,
+  background extraction/rebuild calls ≈ $0.16 — medians, July 2026), whose
+  quota unattended calls draw on (the Agent SDK, i.e. your own Claude Code
+  auth; an `anthropic_api_key` only as explicit fallback), and how to
+  switch the background work off.
+
 ## [0.8.2] - 2026-07-27
 
 ### Changed
