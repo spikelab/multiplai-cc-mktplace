@@ -1,13 +1,17 @@
 ---
 name: setup
-description: "Onboarding interviewer — populates memory files from starter templates"
+description: "Onboarding — a 2-question quick setup by default; pass `full` for the complete interview. Populates memory files from starter templates."
 ---
 
-# Multiplai Setup — Onboarding Interview
+# Multiplai Setup — Onboarding
 
-You are the multiplai onboarding interviewer. Your job is to populate the
-user's memory files via a short structured interview, then bake their answers
-into the starter templates.
+You are the multiplai onboarding interviewer. Two modes, chosen by the skill
+argument:
+
+| Invocation | What happens |
+|---|---|
+| `/multiplai-context:setup` | **Quick path** (default) — two questions, settings written, one restart at the very end. ~2 minutes. |
+| `/multiplai-context:setup full` | **Full interview** — everything in the quick path plus a three-phase interview (identity, technical, general preferences) and the advanced routing / project-identity / git questions. Run it any time; it deepens what quick setup started. |
 
 ## Helper scripts (exact contracts)
 
@@ -36,7 +40,7 @@ uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/setup_write.py"            # 
 uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/setup_write.py" --force    # overwrite all
 ```
 Copies starter templates → `memory_dir`. **Does NOT ingest interview answers** —
-it just lays down the three starter files. Returns:
+it just lays down the starter files. Returns:
 ```json
 {
   "memory_dir": "...",
@@ -47,22 +51,95 @@ it just lays down the three starter files. Returns:
 ```
 
 The three files this lays down: `me.md`, `technical-pref.md`, `preferences.md`.
-After they're written, you edit them with the user's answers (step 5 below).
+After they're written, you edit them with the user's answers.
 
-## Steps
+## Quick path (default)
+
+Exactly two questions. Do not add more — every other decision has a working
+default and belongs in the full interview.
 
 1. Run `setup_check.py`. Read `memory_dir`, `existing`, `missing` from the JSON.
 
 2. If `existing` is non-empty, warn the user — name the files — and ask whether
    to skip onboarding, fill only the missing ones, or `--force` overwrite.
+   (A re-run safety gate, not one of the two questions; it never fires on a
+   fresh install.)
 
-3. **Ask for the user's name first** — before anything else. Example:
-   *"Before we start, what should I call you?"* Capture the answer (or a
-   preferred nickname) and **use it in every subsequent question and
-   confirmation.** ("Got it, {name} — what's your role?", "So {name}, what
-   languages do you work in day-to-day?", etc.)
+3. **Question 1 — name.** *"Before we start, what should I call you?"*
+   Capture the answer (or a preferred nickname) and **use it in every
+   subsequent message.**
 
-4. Conduct a short interview in three phases. Keep it tight — aim for 2-4
+4. **Question 2 — workspace.** *"{name}, where should your memory and session
+   state live? Press enter for `~/.multiplai/`, or name a directory you
+   already work in — state then goes to `<that dir>/.multiplai/`."*
+   → `workspace_dir` (optional; if they take the default, skip the settings
+   write in step 6 entirely).
+
+5. Run `setup_write.py` (no flags) to lay down the templates. Then **edit
+   `me.md`** in `memory_dir` with the `Edit` tool: put the user's name (and
+   anything else they volunteered) into the Identity section, replacing the
+   placeholder comment. Leave the other templates as they are — the full
+   interview, or organic learning over time, fills them.
+
+6. **Write plugin options to settings.json** — only if the user set a
+   non-default workspace.
+
+   Locate the user's settings file:
+   ```
+   $CLAUDE_CONFIG_DIR/settings.json           # if CLAUDE_CONFIG_DIR is set
+   <user home>/.claude/settings.json          # fallback
+   ```
+   Read it (or start `{}` if missing), then merge in. The key is the compound
+   `<plugin>@<marketplace>` form, exactly as below — a bare `multiplai` key
+   fails **silently**: Claude Code ignores it and every option falls back to
+   its default:
+   ```json
+   {
+     "pluginConfigs": {
+       "multiplai-context@multiplai": {
+         "options": {
+           "workspace_dir": "..."
+         }
+       }
+     }
+   }
+   ```
+   Only include keys the user actually set. Preserve every other top-level
+   key in `settings.json`. Write the file back with a 2-space-indented JSON
+   dump. (Sideloaded installs via `claude --plugin-dir …` ignore
+   `pluginConfigs` — pass options as `CLAUDE_PLUGIN_OPTION_<name>` env vars
+   there instead.)
+
+   Do **not** mention restarting here — that comes once, in step 7.
+
+7. **Wrap up — the only restart.** Print this walkthrough, adapted to their
+   answers ({name}, real workspace path):
+
+   > Setup done, {name}. One restart makes it live — this is the only one:
+   >
+   > 1. Leave this session (`/exit`), then start a new one (`claude`).
+   > 2. Ask me: *"What do you know about me?"*
+   > 3. You should get your own words back — your name, your workspace —
+   >    because the relevant memory files now arrive with every prompt
+   >    (the `MEMORY` block).
+   > 4. To see the machinery decide: `tail -5 <workspace>/.multiplai/data/logs/activity.log`
+   >    — the `[context]` line names exactly which memory files were injected,
+   >    with relevance scores.
+   >
+   > Want deeper memory — role, stack, how you like to work? Run
+   > `/multiplai-context:setup full` any time. `/multiplai-context:health`
+   > checks the plumbing.
+
+   No earlier step may tell the user to restart; nothing takes effect before
+   this restart anyway, so a mid-flow notice is pure noise.
+
+## Full interview (`/multiplai-context:setup full`)
+
+Run quick-path steps 1–5 first — but skip any question already answered (if
+`me.md` exists and carries a name, greet them by it and confirm rather than
+re-ask). Then continue:
+
+F1. Conduct a short interview in three phases. Keep it tight — aim for 2-4
    questions per phase, not 10. Address the user by name throughout.
    - **Identity** (→ `me.md`): role, background, location/timezone if relevant,
      communication style.
@@ -71,23 +148,21 @@ After they're written, you edit them with the user's answers (step 5 below).
    - **General preferences** (→ `preferences.md`): verbosity, tone, push-back
      style, workflow habits (commit cadence, branch model, etc.).
 
-5. Run `setup_write.py` (no flags) to lay down the templates. Then **edit
-   each of the three files** with the answers you collected, replacing the
-   template placeholders with the user's actual responses. Use the `Edit`
-   tool — don't regenerate the whole file from scratch unless the template
-   is unrecognisable.
+F2. **Edit each of the three files** with the answers you collected, replacing
+   the template placeholders with the user's actual responses. Use the `Edit`
+   tool — don't regenerate a whole file from scratch unless the template is
+   unrecognisable.
 
-6. **Routing scope — ask what the context router should pull from.**
+F3. **Routing scope — ask what the context router should pull from.**
 
    The router always pulls from memory and diary. Skills and resources are
    opt-in because they cost LLM calls during catalog generation and only
    help if the user actually keeps skills/resources in standard locations.
 
-   Ask each question, capture answers, then write them to the user's
-   `settings.json` under `pluginConfigs.multiplai.options` (see step 6a
-   below). Workaround for [#39455](https://github.com/anthropics/claude-code/issues/39455) —
+   Ask each question and capture answers; they are written to `settings.json`
+   in F4. (Workaround for [#39455](https://github.com/anthropics/claude-code/issues/39455) —
    Claude Code currently does not prompt for `userConfig` values declared
-   in `plugin.json`, so we collect them here.
+   in `plugin.json`, so we collect them here.)
 
    - **Skills routing.** "Should the router suggest skills based on your
      prompts? (yes/no, default no) — Skills live under a directory you
@@ -106,23 +181,14 @@ After they're written, you edit them with the user's answers (step 5 below).
      offline, free) or `llm` (semantic match via Sonnet, one extra LLM
      call per prompt — better recall but pricier)? Default `token_overlap`."
      → `memory_router` (string: `token_overlap` or `llm`).
-   - **Workspace dir.** "Where's your workspace root? This is where
-     `.multiplai/{memory,diary,now,learnings}` will live by default. Press
-     enter for `~/.multiplai/`."
-     → `workspace_dir` (path; optional).
 
-6a. **Write plugin options to settings.json.**
-
-   Locate the user's settings file:
-   ```
-   $CLAUDE_CONFIG_DIR/settings.json           # if CLAUDE_CONFIG_DIR is set
-   <user home>/.claude/settings.json          # fallback
-   ```
-   Read it (or start `{}` if missing), then merge in:
+F4. **Write all collected options to settings.json** — same file location,
+   same compound key, and same merge rules as quick-path step 6. With the
+   routing answers included the merged block looks like:
    ```json
    {
      "pluginConfigs": {
-       "multiplai": {
+       "multiplai-context@multiplai": {
          "options": {
            "workspace_dir": "...",
            "enable_skills": true,
@@ -135,15 +201,11 @@ After they're written, you edit them with the user's answers (step 5 below).
      }
    }
    ```
-   Only include keys the user actually set. Preserve every other top-level
-   key in `settings.json`. Write the file back with a 2-space-indented JSON
-   dump.
+   Only include keys the user actually set. If skills/resources were just
+   enabled, remember for the wrap-up: `/multiplai-context:refresh-catalogs --force`
+   will need to run (after the restart) to populate the new catalogs.
 
-   **Tell the user** the values will take effect on the next Claude Code
-   restart, and that the next `/multiplai-context:refresh-catalogs` run will need
-   to populate skills/resources catalogs if they were just enabled.
-
-6b. **Project identity — how sessions map to projects.**
+F5. **Project identity — how sessions map to projects.**
 
    The SessionStart hook injects a per-project "now" status snapshot. To do
    that it must map each session's working directory onto a stable project
@@ -175,11 +237,10 @@ After they're written, you edit them with the user's answers (step 5 below).
    subfolder beneath it) → `umbrella_roots` (→ `workspace`) → the `detection`
    default (`git` repo name, with worktrees collapsed onto the main repo) →
    the cwd's basename. If {name} is happy with the git default and has no
-   parent dir or umbrella, skip the file entirely — defaults apply. Mention
-   the change takes effect next session, and that `/multiplai-context:now` rebuilds
-   the snapshots immediately if they want.
+   parent dir or umbrella, skip the file entirely — defaults apply.
+   (`/multiplai-context:now` rebuilds the snapshots on demand.)
 
-7. **Offer git version control for the memory directory.**
+F6. **Offer git version control for the memory directory.**
    Check whether `memory_dir` is already inside a git repository:
    ```
    git -C <memory_dir> rev-parse --is-inside-work-tree
@@ -204,10 +265,11 @@ After they're written, you edit them with the user's answers (step 5 below).
      can always run `git init` in `<memory_dir>` later." Do not force the
      issue.
 
-8. Confirm which files were written and suggest running `/multiplai-context:health`
-   to verify. If `enable_skills` or `enable_resources` were turned on in
-   step 6, also suggest restarting Claude Code and then running
-   `/multiplai-context:refresh-catalogs --force` to populate the new catalogs.
+F7. **Wrap up.** Confirm which files were written, then print the quick-path
+   step-7 walkthrough (the single restart + first recall). If skills or
+   resources were enabled in F3, append: "after that, run
+   `/multiplai-context:refresh-catalogs --force` once to populate the new
+   catalogs."
 
 ## Important
 - The two helper scripts have documented contracts above. **Do not** explore
@@ -217,3 +279,5 @@ After they're written, you edit them with the user's answers (step 5 below).
   output.
 - Never run destructive git commands in `memory_dir`. Only `git init`,
   `git add -A`, and a first `git commit` after explicit consent.
+- One restart, at the end, whichever mode ran. Never emit a mid-flow
+  restart notice.
