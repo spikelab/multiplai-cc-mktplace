@@ -7,8 +7,8 @@ Part of the [`multiplai`](../../README.md) marketplace.
 ## Installation
 
 ```
-claude plugin marketplace add spikelab/multiplai-cc-mktplace
-claude plugin install multiplai-pm@multiplai
+/plugin marketplace add spikelab/multiplai-cc-mktplace
+/plugin install multiplai-pm@multiplai
 ```
 
 ## Skills

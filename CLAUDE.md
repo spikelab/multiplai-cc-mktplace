@@ -34,7 +34,7 @@ ls -d plugins/*/skills/*/ | wc -l
 
 Installing a plugin **copies these files onto someone else's machine, where
 they run with that person's credentials**, and nobody reads every line first
-(README.md → "Pre-publish checks"). Everything below follows from that one
+(CONTRIBUTING.md → "Pre-publish checks"). Everything below follows from that one
 fact. A change that is merely *probably* fine here is a change that is probably
 fine on a stranger's laptop with their Slack token loaded.
 

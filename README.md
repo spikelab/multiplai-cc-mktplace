@@ -1,22 +1,49 @@
-# multiplai-cc-mktplace
+# Multiplai
 
-**The Multiplai Claude Code plugin marketplace** — seven installable plugin
-packs, one `/plugin marketplace add` away.
+> Your agent's model of you should be something you edited, not something that accreted while you weren't looking.
 
-> Part of the **[Multiplai suite](https://github.com/spikelab/multiplai)** — what the suite is, how the five repos fit together, and which part you need.
+Multiplai gives Claude Code **persistent, inspectable memory** — plus six
+themed skill packs on top.
 
-A Claude Code **plugin marketplace** — memory, context, and a themed skill
-library for a full working environment. Designed to pair with
-[`multiplai-kit`](https://github.com/spikelab/multiplai-kit) (launcher +
-sandboxed container + workspace conventions).
+- **Memory that's yours.** Everything gets captured; nothing becomes memory
+  without your approval — `/multiplai-context:dream-remember` is the only
+  path that edits your memory files.
+- **No black boxes.** Every routing decision, every unattended pass, every
+  write is logged where you can read it.
+- **Works on vanilla Claude Code.** One command, no Docker:
 
-**Requirements.** One hard prerequisite: the context-plugin hooks and the
-Python-backed skills run via [`uv`](https://docs.astral.sh/uv/) — install it
-first. The kit (launcher, container, workspace layout) is **optional**:
-everything below tells you exactly what runs where. Per-skill details in the
-[compatibility matrix](#compatibility-matrix); the rules skills follow when a
-capability is missing are in
-[`docs/degradation-contract.md`](docs/degradation-contract.md).
+```
+/plugin marketplace add spikelab/multiplai-cc-mktplace
+/plugin install multiplai-context@multiplai
+```
+
+*(2-minute demo lands here — recorded with the suite's own screen-demo skill.)*
+
+**First recall.** Install, run `/multiplai-context:setup` (two questions),
+restart once, then ask the new session *"What do you know about me?"* — and
+get your own words back. That's the loop that everything else builds on;
+the step-by-step walkthrough is in the
+[plugin quickstart](plugins/multiplai-context/README.md#standalone-install-no-kit).
+
+## Requirements
+
+One hard prerequisite: the context-plugin hooks and the Python-backed skills
+run via [`uv`](https://docs.astral.sh/uv/) — install it first
+(`curl -LsSf https://astral.sh/uv/install.sh | sh`). Per-skill details in the
+[compatibility matrix](#compatibility-matrix).
+
+The `@multiplai` suffix in the install command is the **marketplace's** name
+(`name` in `.claude-plugin/marketplace.json`), not the repository's and not
+the [umbrella repo](https://github.com/spikelab/multiplai)'s — it is what
+Claude Code shows in the `/plugin` menu, so it stays as it is. (The same
+commands also work from a shell: `claude plugin marketplace add …` /
+`claude plugin install …`.)
+
+Want the sandboxed container, launcher, and workspace conventions too?
+That's [`multiplai-kit`](https://github.com/spikelab/multiplai-kit) — later,
+if you want it; nothing here needs it. The wider suite — what it is and how
+the five repos fit together — is mapped in the
+[umbrella repo](https://github.com/spikelab/multiplai).
 
 **Two cross-cutting contracts** apply across plugins and are worth reading once:
 
@@ -27,36 +54,11 @@ capability is missing are in
 - [`docs/degradation-contract.md`](docs/degradation-contract.md) — what a skill
   does when a prerequisite is missing.
 
-## Add the marketplace
-
-```
-/plugin marketplace add spikelab/multiplai-cc-mktplace
-```
-
-Then install the plugins you want:
-
-```
-/plugin install multiplai-context@multiplai
-/plugin install multiplai-dev@multiplai
-```
-
-The `@multiplai` suffix is the **marketplace's** name (`name` in
-`.claude-plugin/marketplace.json`), not the repository's and not the
-[umbrella repo](https://github.com/spikelab/multiplai)'s — it is what Claude
-Code shows in the `/plugin` menu, so it stays as it is.
-
 ## Plugins
 
-**Seven plugins, 43 skills** (context 12, dev 14, pm 6, media 5, research 3,
-messaging 2, writing 1). This repo is the authoritative source for that number;
-derive it rather than quoting it from memory:
-
-```bash
-ls -d plugins/*/skills/*/ | wc -l     # 43 on 2026-07-26
-```
-
-Each plugin is versioned and released on its own, and each carries its own
-release notes — see [`CHANGELOG.md`](CHANGELOG.md) for the index.
+Seven plugin packs, 40+ skills. Each plugin is versioned and released on its
+own, and each carries its own release notes — see
+[`CHANGELOG.md`](CHANGELOG.md) for the index.
 
 | Plugin | Description |
 |--------|-------------|
@@ -84,7 +86,7 @@ contract](docs/degradation-contract.md)).
 
 | Plugin | Skill | Runs on | Notes |
 |--------|-------|:-------:|-------|
-| multiplai-context | *all hooks & skills* | ✅ | Needs `uv`. First session start resolves deps (allow ~1 min once). `qmd-search` additionally needs qmd installed. The hub session registry the hooks write works identically with or without docker/kit; with no multiplai hub installed the files are simply never read. Session start also launches a **detached memory maintainer** (24h gate, never writes to memory) — see [What runs unattended](#what-runs-unattended). |
+| multiplai-context | *all hooks & skills* | ✅ | Needs `uv`. First session start resolves deps (allow ~1 min once). `qmd-search` additionally needs qmd installed. The hooks also write a session registry; nothing reads it today (it's for the native cockpit on the roadmap). Session start also launches a **detached memory maintainer** (24h gate, never writes to memory) — see [What runs unattended](#what-runs-unattended). |
 | multiplai-dev | buildme | ✅ | Needs `uv` + network. `--skip-research` if multiplai-research absent. |
 | | code-review, security-review, deepen, think, e2e-test | ✅ | e2e-test frontend mode needs `agent-browser` (npm); backend mode is plain HTTP. |
 | | codebase-walkthrough, learn-stack, skill-creator, plan | ✅ | |
@@ -117,7 +119,10 @@ here needs a decision from you, but you should know it exists:
 
 The invariant worth remembering: **`/multiplai-context:dream-remember` is the
 only path that edits your memory files.** Unattended passes produce proposals and
-derived files; you approve every memory write. Details in the
+derived files; you approve every memory write. What this background work costs
+(real ledger-derived figures), whose quota it draws on, and how to switch it
+off: [What it costs](plugins/multiplai-context/README.md#what-it-costs).
+Details on the passes themselves in the
 [plugin README](plugins/multiplai-context/README.md#proactive-maintenance).
 
 ## Repository layout
@@ -140,60 +145,39 @@ derived files; you approve every memory write. Details in the
 │                                 # check_changelog.py — plus tests/ for all three
 ├── CHANGELOG.md                  # index only; the notes live per plugin
 ├── CLAUDE.md                     # orientation for an agent working in this repo
+├── CONTRIBUTING.md               # gates, release convention, how to contribute
 ├── SECURITY.md                   # reporting, and what the scanner does not cover
 ├── LICENSE
 └── README.md                     # this file
 ```
 
+Shared Python infrastructure (paths, config, logging, model client) lives in
+[`multiplai-core`](https://github.com/spikelab/multiplai-core), consumed via
+PEP 723 inline metadata pinned to immutable tags — its README carries an
+explicit [availability guarantee](https://github.com/spikelab/multiplai-core#availability-guarantee)
+(the repo stays public; release tags are never moved or deleted).
+
+## Uninstall
+
+`/plugin uninstall multiplai-context@multiplai`, then
+`/plugin marketplace remove multiplai` (skip that second command if you're
+keeping other multiplai packs — it removes the marketplace they all install
+from). Your data (plain markdown under
+`<workspace>/.multiplai/`) stays on your disk, yours to keep or delete —
+the [plugin README](plugins/multiplai-context/README.md#uninstall) has the
+full picture.
+
 ## Development
 
 [`CLAUDE.md`](CLAUDE.md) is the orientation for anyone — human or agent —
-changing this repo: where things live, which gates must pass, and the release
-convention.
+changing this repo. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the pre-publish
+gates, versioning/release convention, and test suites.
 
-See [`plugins/multiplai-context/README.md`](plugins/multiplai-context/README.md)
-for plugin-specific setup, configuration, and the test suite. Shared Python
-infrastructure (paths, config, logging, model client) lives in
-[`multiplai-core`](https://github.com/spikelab/multiplai-core), consumed via
-PEP 723 inline metadata (`uv run --no-project`).
+## Community
 
-### Pre-publish checks
-
-Installing a plugin copies these files onto someone else's machine, where they
-run with that person's credentials — and nobody reads every line first. Two
-repo-level checks stand in for that reading; both are deterministic and offline:
-
-```bash
-uv run --no-project scripts/lint_skills.py     # structure: frontmatter, script refs, absolute paths
-uv run --no-project scripts/scan_skills.py     # security: what a skill does vs what its SKILL.md says
-```
-
-- `lint_skills.py` catches malformed frontmatter, unknown `model`/`effort`
-  values (silently ignored at runtime, so the skill quietly runs on the wrong
-  tier), SKILL.md references to renamed scripts, and machine-specific absolute
-  paths baked into shipped files. Exit 1 on any error.
-- `scan_skills.py` reports declared-vs-actual behaviour. **FAIL** (blocks CI) for
-  patterns with no legitimate use in a shipped skill — `curl | bash`,
-  base64-decode-and-execute; **WARN** for behaviour that is fine when declared
-  and suspicious when not — network calls or credential reads absent from the
-  SKILL.md. It is a static scan, not a sandbox: it raises the cost of hiding
-  behaviour, it does not make hiding impossible.
-
-Individual skills can additionally ship a `CONTRACT.md` (assertions on interface
-*shape*, not on values) run by
-`plugins/multiplai-dev/skills/skill-creator/scripts/promote_skill.py --contract`.
-
-To report something you find, or to understand what the scanner does *not*
-cover, see [`SECURITY.md`](SECURITY.md).
-
-**Versioning.** Every version bump in `.claude-plugin/marketplace.json` gets a
-matching annotated git tag `<plugin>@<version>` (e.g. `multiplai-context@0.6.4`)
-pointing at the commit where that version lands on `main`, **and** an entry in
-`plugins/<plugin>/CHANGELOG.md`. The `changelog-gate` CI job enforces the bump
-and the entry on every pull request
-([`scripts/check_changelog.py`](scripts/check_changelog.py), runnable locally);
-the tag is cut by hand at release. Contributor-facing detail, including the
-gate's escape hatch, is in [`CLAUDE.md`](CLAUDE.md#release-convention).
+Questions, ideas, show-and-tell → [GitHub Discussions on the umbrella
+repo](https://github.com/spikelab/multiplai/discussions). Bugs in a plugin
+or skill → [issues here](https://github.com/spikelab/multiplai-cc-mktplace/issues).
 
 ## License
 

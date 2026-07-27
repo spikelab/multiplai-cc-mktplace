@@ -7,8 +7,8 @@ marketplace.
 ## Installation
 
 ```
-claude plugin marketplace add spikelab/multiplai-cc-mktplace
-claude plugin install multiplai-writing@multiplai
+/plugin marketplace add spikelab/multiplai-cc-mktplace
+/plugin install multiplai-writing@multiplai
 ```
 
 ## Skills

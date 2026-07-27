@@ -7,8 +7,8 @@ search/read/draft Gmail (never sends)**. Part of the
 ## Installation
 
 ```
-claude plugin marketplace add spikelab/multiplai-cc-mktplace
-claude plugin install multiplai-messaging@multiplai
+/plugin marketplace add spikelab/multiplai-cc-mktplace
+/plugin install multiplai-messaging@multiplai
 ```
 
 ## Skills
