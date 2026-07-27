@@ -4,7 +4,7 @@
     "name": "Spike",
     "email": "fsm@spikelab.org"
   },
-  "description": "Multiplai \u2014 a suite of Claude Code plugins for memory, context, and workflow. Context manager is the first; more plugins follow.",
+  "description": "Multiplai \u2014 memory you approve, logs you can read, for Claude Code. Seven plugin packs: the memory/context engine plus dev, writing, research, PM, media, and messaging skills.",
   "plugins": [
     {
       "name": "multiplai-context",
