@@ -669,6 +669,15 @@ class TestConfEffort:
         with patch.dict(os.environ, env, clear=True):
             assert conf_effort("buildme") == "low"
 
+    def test_conf_file_global_ceiling_caps_a_conf_set_effort(self, tmp_path):
+        """A MULTIPLAI_EFFORT *global in the conf file* caps conf-set efforts,
+        same as the env var — delegation to core's pick_effort made the two
+        ceilings agree (the local copy only consulted the env var). The env
+        var here says 'high', so a pass proves the conf global did the capping."""
+        body = "MULTIPLAI_EFFORT=low\n[buildme]\nEFFORT=high\n"
+        with patch.dict(os.environ, self._conf(tmp_path, body), clear=True):
+            assert conf_effort("buildme") == "low"
+
     def test_blank_value_is_treated_as_unset(self, tmp_path):
         with patch.dict(os.environ, self._conf(tmp_path, "[buildme]\nEFFORT=\n"), clear=True):
             assert conf_effort("buildme", "medium") == "medium"

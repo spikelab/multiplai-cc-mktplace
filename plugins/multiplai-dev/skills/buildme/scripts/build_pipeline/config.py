@@ -12,7 +12,7 @@ from typing import Literal
 
 import yaml
 
-from .env import load_multiplai_conf, pick_model, resolve_effort, resolve_model
+from .env import load_multiplai_conf, pick_effort, pick_model, resolve_model
 from .models import ReviewGatePolicy
 
 log = logging.getLogger(__name__)
@@ -65,9 +65,11 @@ DEFAULT_MODEL = pick_model("opus", task="buildme")
 
 
 # The effort names the SDK accepts. Mirrors multiplai_core.env's tier table;
-# kept here because that table is private (`_EFFORT_TIERS`). `xhigh` sits
-# between high and max — dropping it here would reject a valid value, which is
-# the exact mistake core's own table carries a warning about.
+# kept here because that table is private (`_EFFORT_TIERS`) and `pick_effort`
+# normalizes an unknown value *silently* — this local copy exists solely to
+# emit the user-facing warning below before delegating. `xhigh` sits between
+# high and max — dropping it here would reject a valid value, which is the
+# exact mistake core's own table carries a warning about.
 KNOWN_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
@@ -80,17 +82,18 @@ def conf_effort(task: str, default: str | None = None) -> str | None:
     pipeline down; ``[buildme.review] EFFORT=high`` tunes one step.
 
     Returns *default* when the conf says nothing, so behaviour is unchanged
-    unless someone opts in. The MULTIPLAI_EFFORT ceiling still applies — a
-    budget run forces every step down and a conf override can't escape it.
+    unless someone opts in — ``None`` means "omit effort, let the SDK decide",
+    a state ``multiplai_core.env.pick_effort`` cannot express, which is why
+    this wrapper exists at all. Normalization and the MULTIPLAI_EFFORT ceiling
+    are ``pick_effort``'s job: a budget run forces every step down and a conf
+    override can't escape it. Delegating to core changed one thing — a
+    ``MULTIPLAI_EFFORT`` *global in the conf file* now caps conf-set efforts
+    too (previously only the env var did); the two ceilings were never meant
+    to disagree.
 
-    An unrecognized value falls back to *default* rather than passing through:
-    `resolve_effort` ranks an unknown name at the "high" tier, so the ceiling
-    never trips and `[buildme] EFFORT=turbo` would otherwise reach the SDK
-    verbatim.
-
-    CONSOLIDATE: `multiplai_core.env.pick_effort` (core #7) is this function
-    with the same normalization. Once that release is pinned, both this and
-    deep-research's copy should call it instead.
+    An unrecognized value falls back to *default* rather than passing through,
+    with a warning — ``pick_effort`` drops unknown names silently, which would
+    leave a `[buildme] EFFORT=turbo` typo undiagnosable from the conf side.
     """
     section = (load_multiplai_conf().get("_sections", {}) or {}).get(task) or {}
     requested = (section.get("EFFORT") or "").strip().lower()
@@ -100,7 +103,7 @@ def conf_effort(task: str, default: str | None = None) -> str | None:
         log.warning("Unknown [%s] EFFORT=%r in multiplai.conf (expected one of %s) "
                     "— ignoring", task, requested, ", ".join(sorted(KNOWN_EFFORTS)))
         return default
-    return resolve_effort(requested)
+    return pick_effort(requested, task=task)
 
 
 def _normalize_prototype_toggle(value) -> str:

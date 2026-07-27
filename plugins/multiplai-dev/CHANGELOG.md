@@ -21,6 +21,18 @@ release dates recorded at the time, not derived from a tag.
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
 
+## [0.5.2] - 2026-07-26
+
+### Changed
+- **buildme: conf-file effort overrides now delegate to `multiplai-core`'s
+  `pick_effort`** instead of a local duplicate, and the pipeline's core pin
+  moves `v0.7.0` → `v0.9.0` (additive releases only; the vendored `uv.lock`
+  moves with it). One behavior change: a `MULTIPLAI_EFFORT` *global in
+  `multiplai.conf`* now caps `[buildme] EFFORT=` overrides the same way the
+  `MULTIPLAI_EFFORT` env var always did — the two ceilings no longer disagree.
+  Defaults are untouched: with no conf `EFFORT=`, effort stays unset and the
+  SDK decides, uncapped, exactly as before.
+
 ## [0.5.1] - 2026-07-26
 
 ### Added
