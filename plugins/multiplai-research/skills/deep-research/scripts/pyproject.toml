@@ -20,7 +20,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "trafilatura>=1.6",
     "tavily-python>=0.5",
-    "exa-py>=1.0",
+    "exa-py>=2.16.2",
 ]
 
 [project.optional-dependencies]
