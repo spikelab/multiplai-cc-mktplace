@@ -12,12 +12,18 @@ Recorded history starts at **0.1.2**; anything earlier is in `git log` only.
 
 `multiplai-messaging@0.1.1` predates this file and has no section here.
 
-## [Unreleased]
+## [0.2.0] - 2026-07-30
 
 ### Added
+- **New skill: `fireflies`** — list Fireflies.ai meetings (including ones
+  shared with you) and pull full meeting transcripts, via the Fireflies
+  GraphQL API with a bearer token (`FIREFLIES_API_KEY`). Read-only and
+  deliberately minimal: exactly two queries (`transcripts`, `transcript`), no
+  summaries, no uploads/deletes, no MCP server. Transcript text, titles and
+  participant names are delivered inside `<untrusted-content>` fences.
+  Stdlib-only Python — no dependencies to install.
 - **A plugin README** (`plugins/multiplai-messaging/README.md`) — what the pack
   contains, what each skill needs, and how it degrades without the kit.
-  Not yet in a released version.
 
 ## [0.1.4] - 2026-07-27
 

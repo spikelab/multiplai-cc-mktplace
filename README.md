@@ -100,6 +100,7 @@ contract](docs/degradation-contract.md)).
 | | host-browser | 🌉 | Drives the host's real Chrome via the `ab` bridge; on a Mac a local CDP Chrome also works. |
 | multiplai-messaging | slack | 🔑 | Your Slack `xoxp` user token. Full standalone setup docs in the skill. |
 | | gmail | 🔑 | Gmail OAuth credentials. Full standalone setup docs in the skill. |
+| | fireflies | 🔑 | Your Fireflies API key (`FIREFLIES_API_KEY`). Stdlib-only, no other setup. |
 | multiplai-pm | job-application, landing-page, pm-jtbd-synthesis, pm-persona-codifier, pm-pr-faq, pm-strategy-memo | ✅ | Personal memory files are optional — skills ask for source material when absent. |
 | multiplai-research | deep-research | ✅ | Zero-config via the Agent SDK; optional 🔑 search-provider keys widen coverage. |
 | | extract-insights, interviewer | ✅ | |

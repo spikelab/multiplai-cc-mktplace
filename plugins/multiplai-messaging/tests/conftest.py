@@ -16,6 +16,7 @@ import pytest
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 _GMAIL = _PLUGIN_ROOT / "skills" / "gmail" / "scripts" / "gmail.py"
 _SLACK = _PLUGIN_ROOT / "skills" / "slack" / "scripts" / "slack_client.py"
+_FIREFLIES = _PLUGIN_ROOT / "skills" / "fireflies" / "scripts" / "fireflies_client.py"
 
 
 def _load(name: str, path: Path):
@@ -35,3 +36,8 @@ def gmail():
 @pytest.fixture(scope="session")
 def slack():
     return _load("slack_client", _SLACK)
+
+
+@pytest.fixture(scope="session")
+def fireflies():
+    return _load("fireflies_client", _FIREFLIES)
