@@ -12,6 +12,40 @@ Recorded history starts at **0.1.2**; anything earlier is in `git log` only.
 
 `multiplai-messaging@0.1.1` predates this file and has no section here.
 
+## [0.2.1] - 2026-07-30
+
+### Security
+
+- **The gmail and slack scripts pinned their third-party dependencies with no
+  version constraint; they now carry floors and major caps.** These scripts
+  resolve their environment through PEP 723 inline metadata at run time, with
+  no lockfile behind them — so a bare package name meant `uv run` installed
+  and executed **whatever PyPI served at that moment**, on the two scripts in
+  this pack that hold your Gmail OAuth credential and your Slack `xoxp` user
+  token. A bad or compromised upstream release would have been picked up on
+  the next invocation, with no signal. Nothing suggests that happened; this
+  closes the path.
+
+  It also makes runs reproducible: until now, two machines on the same commit
+  could execute different library code.
+
+  | Script | Before | After |
+  |---|---|---|
+  | `gmail.py` | `google-api-python-client` | `>=2.198.0,<3` |
+  | `gmail.py` | `google-auth[requests]` | `>=2.56.2,<3` |
+  | `get_token.py` | `google-auth-oauthlib` | `>=1.4.0,<2` |
+  | `slack_client.py` | `slack_sdk>=3.27` | `>=3.27,<4` |
+
+  Slack's `>=3.27` floor is deliberate and unchanged — only the cap is new.
+
+  **Patch-level updates are deliberately left open** rather than pinned exact.
+  PEP 723 blocks are invisible to Dependabot, so nothing would alert you if an
+  exact pin went stale on a known vulnerability; automatic patches are the only
+  route a fix currently has. That monitoring gap is tracked separately in
+  [#99](https://github.com/spikelab/multiplai-cc-mktplace/issues/99).
+
+  No behaviour change, no new setup, nothing to do on your side.
+
 ## [0.2.0] - 2026-07-30
 
 ### Added

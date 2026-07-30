@@ -2,7 +2,12 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#   "slack_sdk>=3.27",
+#   # The >=3.27 floor is deliberate and unchanged; the <4 cap is new. `uv run`
+#   # resolves this block fresh at hook time with no lockfile, so an open upper
+#   # bound would let a major land unannounced on a script holding an xoxp user
+#   # token. Patch-level stays open on purpose — PEP 723 blocks are invisible to
+#   # Dependabot, so automatic patches are the only way a fix arrives (see #99).
+#   "slack_sdk>=3.27,<4",
 #   "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.10.0",
 # ]
 # ///
