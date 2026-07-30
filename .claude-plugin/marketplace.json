@@ -4,7 +4,7 @@
     "name": "Spike",
     "email": "fsm@spikelab.org"
   },
-  "description": "Multiplai \u2014 memory you approve, logs you can read, for Claude Code. Seven plugin packs: the memory/context engine plus dev, writing, research, PM, media, and messaging skills.",
+  "description": "Multiplai — memory you approve, logs you can read, for Claude Code. Seven plugin packs: the memory/context engine plus dev, writing, research, PM, media, and messaging skills.",
   "plugins": [
     {
       "name": "multiplai-context",
@@ -136,8 +136,8 @@
     {
       "name": "multiplai-messaging",
       "source": "./plugins/multiplai-messaging",
-      "description": "Messaging skill pack: read/search/post Slack as yourself, and search/read/draft Gmail (never sends).",
-      "version": "0.1.4",
+      "description": "Messaging skill pack: read/search/post Slack as yourself, search/read/draft Gmail (never sends), and list/pull Fireflies meeting transcripts.",
+      "version": "0.2.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
