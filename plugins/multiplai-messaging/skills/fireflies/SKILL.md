@@ -12,7 +12,11 @@ description: >-
 # Fireflies
 
 Minimal read-only client for Fireflies.ai transcripts. Two verbs, two GraphQL
-queries, nothing else.
+queries, nothing else — **by design, not as a stopgap**. The premise:
+Fireflies records, Claude Code processes. This skill fetches the raw
+transcript so summaries, action items, or any other analysis are produced
+here with the user's own prompts — Fireflies' AI output (summaries, AI apps)
+is deliberately not exposed.
 
 Run everything through the bundled script (stdlib Python, no deps):
 
@@ -68,5 +72,6 @@ filter.
 
 Summaries, action items, uploads, deletes, webhooks, MCP — none of it. This
 skill is exactly `transcripts` (list) + `transcript` (pull), read-only. If the
-user asks for meeting summaries or AI-apps output, say it's out of this
-skill's scope rather than extending the query.
+user asks for a meeting summary or action items, don't extend the query —
+pull the transcript and produce them yourself from it. Fireflies' own AI
+output stays out of scope on purpose.

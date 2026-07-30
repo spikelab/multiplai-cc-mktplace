@@ -17,7 +17,7 @@ transcripts**. Part of the [`multiplai`](../../README.md) marketplace.
 |-------|--------------|
 | `slack` | Read, search, and post to Slack as the user via their own `xoxp` user token — no bot, sees exactly what the user sees. |
 | `gmail` | Work with the user's Gmail inbox. Exactly three operations: search the inbox, read one inbox message, create a draft. It **never sends**, and cannot see anything outside the inbox (archive/sent/spam/all-mail are unreachable). |
-| `fireflies` | List Fireflies.ai meetings (including ones shared with you) and pull full transcripts via the GraphQL API. Read-only, exactly two queries — no summaries, no uploads/deletes, no MCP. |
+| `fireflies` | List Fireflies.ai meetings (including ones shared with you) and pull full transcripts via the GraphQL API. Read-only, exactly two queries — no uploads/deletes, no MCP. Deliberately transcript-only: the premise is that Fireflies records and Claude Code processes — summaries and action items come from your own prompts over the transcript, not from Fireflies' AI output. |
 
 ## Compatibility
 
