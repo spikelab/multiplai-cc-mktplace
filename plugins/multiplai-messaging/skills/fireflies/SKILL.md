@@ -35,7 +35,7 @@ remedy — relay it verbatim; never ask for or echo the key's value.
 
 ```bash
 $FF list --from 2026-07-20 --to 2026-07-27
-$FF list --keyword dolcebot --mine
+$FF list --keyword standup --mine
 $FF pull <id-from-list>
 ```
 

@@ -208,7 +208,7 @@ def cmd_list(ns) -> None:
     query = (
         f"query L({', '.join(decls)}) {{"
         f"  transcripts({', '.join(gql_args)}) {{"
-        f"    id title date duration organizer_email participants"
+        f"    id title date duration organizer_email"
         f"  }}"
         f"}}"
     )
@@ -274,7 +274,7 @@ def _fetch_transcript(tid: str):
     if result:
         return result
 
-    # Some accounts only resolve by meeting_id (Marco's fallback).
+    # Some accounts only resolve by meeting_id.
     log.info("SKIP reason=empty-by-id action=retry-meeting-id")
     try:
         return run("$tid: String!", "meeting_id: $tid")
