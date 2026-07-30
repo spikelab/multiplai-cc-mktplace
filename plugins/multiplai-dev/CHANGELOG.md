@@ -21,6 +21,39 @@ release dates recorded at the time, not derived from a tag.
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
 
+## [0.5.4] - 2026-07-30
+
+### Security
+
+- **buildme's locked dependencies carried 21 known vulnerabilities (9 high);
+  all are now patched.** If you run `/buildme`, the pipeline resolves its
+  environment from `skills/buildme/scripts/uv.lock`, so these were the
+  versions actually executing on your machine. Update the pack to pick up the
+  fix — there is nothing else for you to do.
+
+  Every advisory was in a *transitive* dependency, reached through
+  `claude-agent-sdk → mcp` and its sub-tree; no dependency buildme declares was
+  itself affected. The lock had simply gone a long time without regeneration.
+
+  Worth knowing when judging urgency: most of these advisories describe
+  **server-side** attack surface — MCP's HTTP and WebSocket transports,
+  Starlette request handling, multipart parsing of untrusted uploads. buildme
+  is a local CLI that acts as an MCP *client* and never binds a socket, so
+  that surface was not reachable in normal use. The two with local relevance
+  were a vulnerable OpenSSL bundled in `cryptography`'s wheels and a PyJWT
+  algorithm-confusion flaw (CVE-2026-48526). Patch promptly; no emergency.
+
+  Upgraded: `click` 8.3.2→8.4.2, `cryptography` 46.0.7→49.0.0, `idna`
+  3.11→3.18, `mcp` 1.27.0→1.29.0, `pydantic-settings` 2.13.1→2.14.2, `pyjwt`
+  2.12.1→2.13.0, `python-multipart` 0.0.26→0.0.32, `starlette` 1.0.0→1.3.1,
+  `sse-starlette` 3.3.4→3.4.6, `uvicorn` 0.44.0→0.52.0.
+
+  Deliberately *not* upgraded in the same change: `anthropic`,
+  `claude-agent-sdk`, `pydantic` and `pytest`. A blanket refresh resolves
+  cleanly but moves the pipeline's own runtime, which is a separate risk from
+  a security patch and should be reviewable separately. No behaviour change
+  and no API change in this release.
+
 ## [0.5.3] - 2026-07-27
 
 ### Changed

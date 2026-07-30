@@ -1,0 +1,59 @@
+# Scheduled dependency updates.
+#
+# Why this exists: on 2026-07-30 this repo carried 21 open Dependabot alerts
+# (9 high), every one of them transitive and every one of them in a single
+# lockfile — plugins/multiplai-dev/skills/buildme/scripts/uv.lock — while the
+# sibling deep-research lock in the same repo sat fully patched. Nothing was
+# wrong with the declared dependencies; one lock had simply not been
+# regenerated in a long time and no process existed to notice. Scheduled
+# updates are the fix for that failure mode, so every uv project here is
+# enrolled explicitly.
+#
+# Adding a new plugin with its own pyproject.toml/uv.lock? Add it below —
+# Dependabot does not discover manifests recursively.
+
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/plugins/multiplai-dev/skills/buildme/scripts"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine churn, so the noise stays reviewable. Security
+      # updates are deliberately NOT grouped — Dependabot raises those
+      # separately and immediately regardless of this schedule.
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "uv"
+    directory: "/plugins/multiplai-research/skills/deep-research/scripts"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Test/dev toolchain for the memory engine (pytest + multiplai-core pin).
+  - package-ecosystem: "pip"
+    directory: "/plugins/multiplai-context"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "chore(ci)"
