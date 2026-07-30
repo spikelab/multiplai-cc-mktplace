@@ -23,6 +23,31 @@ dates recorded at the time, not derived from a tag.
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
 
+## [0.5.2] - 2026-07-30
+
+### Fixed
+
+- **deep-research was resolving a `claude-agent-sdk` old enough to fail every
+  run against a current Claude CLI.** If you have seen the pipeline die with
+  `Claude Code returned an error result: success` *after* a full generation —
+  the work done, then thrown away — this is why. The 0.1.x SDK line misparses
+  the terminal result message emitted by Claude CLI 2.x, and it is
+  deterministic, so the retry wrapper could never rescue it.
+
+  The pipeline reaches the SDK only through `multiplai_core.run_agent()`, and
+  `multiplai-core` has long pinned `claude-agent-sdk>=0.2.116,<0.3` in its
+  `[sdk]` extra. deep-research never asked for that extra — it listed
+  `claude-agent-sdk>=0.1.0` beside core as a dependency of its own, which
+  silently undercut core's floor and let the resolver settle on **0.1.56**.
+
+  The dependency is now `multiplai-core[sdk]`, so the floor is stated once, in
+  the package that owns it, and cannot drift again. Resolves to 0.2.128. No
+  configuration change and no API change on your side.
+
+  This is the only package that moved; the pin on `multiplai-core` itself
+  stays at `v0.10.0` deliberately, per the repo's rule that pins are bumped
+  per-consumer and only when tested.
+
 ## [0.5.1] - 2026-07-27
 
 ### Changed
