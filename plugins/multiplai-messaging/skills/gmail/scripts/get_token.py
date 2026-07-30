@@ -2,7 +2,10 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#   "google-auth-oauthlib",
+#   # Floor + major cap — see the note in gmail.py. This script mints the
+#   # OAuth token the rest of the skill uses, so "whatever PyPI serves today"
+#   # is the least acceptable answer here of anywhere in the repo.
+#   "google-auth-oauthlib>=1.4.0,<2",
 #   "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.10.0",
 # ]
 # ///

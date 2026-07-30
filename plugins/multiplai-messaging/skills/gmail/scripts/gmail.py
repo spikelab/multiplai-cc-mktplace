@@ -2,8 +2,14 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#   "google-api-python-client",
-#   "google-auth[requests]",
+#   # Floors + major caps, not bare names. `uv run` resolves this block fresh
+#   # at hook time with no lockfile behind it, so an unconstrained name means
+#   # whatever is newest on PyPI executes here — holding a Gmail OAuth token.
+#   # The caps stop a surprise major; the floors stay open at the patch level
+#   # on purpose, because PEP 723 blocks are invisible to Dependabot and an
+#   # exact pin would silently rot with nothing to raise an alert (see #99).
+#   "google-api-python-client>=2.198.0,<3",
+#   "google-auth[requests]>=2.56.2,<3",
 #   "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.10.0",
 # ]
 # ///
