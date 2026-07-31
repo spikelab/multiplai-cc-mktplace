@@ -804,3 +804,57 @@ class TestCriticBatching:
         result = asyncio.run(mod._critique_proposal(MagicMock(), proposal))
         assert calls["n"] == len(batches)
         assert "## Updates for" in result
+
+
+class TestCriticStats:
+    """A degraded run must not report itself as a complete one.
+
+    A rate-limited fixture run lost 10 of 19 chunks and all 8 critic batches, yet
+    printed `Sources: 5 files, 231 new learning block(s)` — the planned count, not
+    the 122 that actually landed — and said nothing about the review being
+    skipped. Nothing was lost (the other 109 blocks stayed pending), but a user
+    reading that would believe their backlog was done.
+    """
+
+    def test_stats_report_every_batch_and_its_failures(self, dream_env, monkeypatch):
+        mod = _load_dream("dream_critic_stats")
+        proposal = TestCriticBatching._proposal([(f"f{i}.md", 9_000) for i in range(6)])
+        batches = mod._batch_proposal_for_critic(proposal)
+        assert len(batches) > 1
+
+        calls = {"n": 0}
+
+        async def half_fail(client, system, messages, timeout_s=None):
+            calls["n"] += 1
+            if calls["n"] % 2:
+                raise TimeoutError("simulated")
+            return MagicMock(content="NOOP")
+
+        monkeypatch.setattr(mod, "_query", half_fail)
+        stats: dict = {}
+        asyncio.run(mod._critique_proposal(MagicMock(), proposal, "", stats))
+        assert stats["batches"] == len(batches)
+        assert stats["failed"] == sum(1 for i in range(1, len(batches) + 1) if i % 2)
+
+    def test_a_fully_successful_critic_reports_no_failures(self, dream_env, monkeypatch):
+        mod = _load_dream("dream_critic_stats_ok")
+        proposal = TestCriticBatching._proposal([(f"f{i}.md", 9_000) for i in range(6)])
+
+        async def ok(client, system, messages, timeout_s=None):
+            return MagicMock(content="NOOP")
+
+        monkeypatch.setattr(mod, "_query", ok)
+        stats: dict = {}
+        asyncio.run(mod._critique_proposal(MagicMock(), proposal, "", stats))
+        assert stats["failed"] == 0
+
+    def test_stats_is_optional(self, dream_env, monkeypatch):
+        """The other caller passes nothing; it must keep working."""
+        mod = _load_dream("dream_critic_stats_none")
+        proposal = TestCriticBatching._proposal([("only.md", 200)])
+
+        async def ok(client, system, messages, timeout_s=None):
+            return MagicMock(content="NOOP")
+
+        monkeypatch.setattr(mod, "_query", ok)
+        assert asyncio.run(mod._critique_proposal(MagicMock(), proposal)) == proposal

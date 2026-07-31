@@ -42,6 +42,17 @@ Nothing yet.
   to the whole proposal together, exactly as before. If one batch fails, the rest
   of the review still lands instead of the whole pass being lost.
 
+- **`/dream` no longer reports a partial run as a complete one.** When some of a
+  run's work failed — a rate limit, a slow call, a network blip — it still
+  printed the number of learnings it *set out* to process, not the number it
+  actually did, and said nothing about the second-pass review having been
+  skipped. A run that consolidated 122 of 231 learnings announced "231 new
+  learning block(s)", which reads as "your backlog is done" when half of it is
+  still queued. It now says `122 of 231 ... consolidated`, names how many chunks
+  did not finish, and states that the deferred learnings come back on the next
+  run. Nothing about the recovery behaviour changed — those learnings were always
+  safe and always came back; only the reporting was wrong.
+
 ## [0.10.0] - 2026-07-31
 
 ### Changed

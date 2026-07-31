@@ -1282,7 +1282,8 @@ async def _critique_batch(client, batch: str, memory_context: str, sem, index: i
     return raw
 
 
-async def _critique_proposal(client, proposal: str, memory_context: str = "") -> str:
+async def _critique_proposal(client, proposal: str, memory_context: str = "",
+                             stats: dict | None = None) -> str:
     """Run the directive critic over a drafted proposal; return the edited version.
 
     ``memory_context`` carries the same PURPOSE / OWNS DOMAINS / NOT HERE file
@@ -1312,6 +1313,9 @@ async def _critique_proposal(client, proposal: str, memory_context: str = "") ->
             _critique_batch(client, b, memory_context, sem, i, len(batches))
             for i, b in enumerate(batches, 1)
         ))
+        if stats is not None:
+            stats["batches"] = len(batches)
+            stats["failed"] = sum(1 for r in raws if not r)
 
         directives, rejected = [], []
         for raw in raws:
@@ -1473,7 +1477,8 @@ async def dream_report() -> None:
             len(merged.encode("utf-8")),
         )
 
-        cleaned = await _critique_proposal(client, merged, memory_context)
+        critic_stats: dict = {}
+        cleaned = await _critique_proposal(client, merged, memory_context, critic_stats)
         validated = _with_routing_warnings(cleaned, memory_contents)
         pending_text = "\n\n".join(b.text for b in pending)
         proposal = _with_conflict_resolutions(validated, pending_text, memory_contents)
@@ -1508,8 +1513,37 @@ async def dream_report() -> None:
     # the same drafts in again on the next run.
     _clear_staging()
 
+    # Report what was actually consolidated, not what was planned. A run that
+    # loses chunks — to a rate limit, a timeout, an outage — still writes a
+    # useful proposal and still exits 0, because the lost blocks stay pending and
+    # come back next time. But printing "231 new learning block(s)" when 109 of
+    # them were deferred tells the user their backlog is done when it is not.
+    # The ledger is the authority on what landed, so ask it rather than the plan.
+    deferred = learnings_ledger.unprocessed(
+        list(pending), learnings_ledger.load(ledger_path)
+    )
+    consolidated = len(pending) - len(deferred)
+    failed_chunks = len(chunks) - len(drafts)
+
     print(f"Proposal written to {output_file}")
-    print(f"Sources: {len(source_files)} files, {len(pending)} new learning block(s)")
+    if deferred:
+        print(
+            f"Sources: {len(source_files)} files, {consolidated} of {len(pending)} new "
+            f"learning block(s) consolidated"
+        )
+        print(
+            f"  ⚠ {failed_chunks} of {len(chunks)} chunk(s) did not complete — "
+            f"{len(deferred)} block(s) stay pending and are picked up by the next run "
+            f"(see dream.log)"
+        )
+    else:
+        print(f"Sources: {len(source_files)} files, {len(pending)} new learning block(s)")
+    if critic_stats.get("failed"):
+        print(
+            f"  ⚠ second-pass review incomplete: {critic_stats['failed']} of "
+            f"{critic_stats['batches']} batch(es) failed — duplicates and mis-routed "
+            f"items may remain"
+        )
     if folded:
         print(f"Folded in {len(folded)} undecided pending proposal(s) → dreams/superseded/")
     print(f"Targets: {len(target_files)} files ({', '.join(target_files) or 'none'})")
