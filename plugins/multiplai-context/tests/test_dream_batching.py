@@ -705,3 +705,63 @@ class TestThroughputCalibration:
 
         mod._update_throughput(120.0)
         assert not get_paths().dream_state_file().exists()
+
+
+class TestApplierDeadline:
+    """The applier rewrites a whole memory file, so one flat deadline will not do.
+
+    A 283 KB fixture run produced per-file sections of 41 KB
+    (`claude-code-tools.md`), 38 KB (`multiplai.md`), 33 KB (`dolcebot.md`) and
+    27 KB (`writing-workflow.md`). Against the default 900 s every one of those
+    is at risk on a slow call, and the two largest are tight even at the rate
+    that run actually measured. The deadline has to scale with the work.
+    """
+
+    @staticmethod
+    async def _capture(mod, monkeypatch, tmp_path, section_bytes, file_bytes):
+        memory_file = tmp_path / "target.md"
+        memory_file.write_text("y" * file_bytes)
+        seen = {}
+
+        async def fake_query(client, system, messages, timeout_s=None):
+            seen["timeout_s"] = timeout_s
+            return MagicMock(content=memory_file.read_text())
+
+        monkeypatch.setattr(mod, "_query", fake_query)
+        await mod._apply_proposal_to_file(MagicMock(), memory_file, "x" * section_bytes)
+        return seen["timeout_s"]
+
+    def test_a_small_file_keeps_the_standard_deadline(self, dream_env, monkeypatch, tmp_path):
+        mod = _load_dream("dream_apply_small")
+        got = asyncio.run(self._capture(mod, monkeypatch, tmp_path, 400, 3_000))
+        assert got == mod.CHUNK_TIMEOUT_S
+
+    def test_a_large_file_gets_an_escalated_deadline(self, dream_env, monkeypatch, tmp_path):
+        """`claude-code-tools.md`-sized: 41 KB of updates onto a 40 KB file."""
+        mod = _load_dream("dream_apply_large")
+        got = asyncio.run(self._capture(mod, monkeypatch, tmp_path, 41_394, 40_000))
+        assert got > mod.CHUNK_TIMEOUT_S
+
+    def test_the_deadline_is_capped(self, dream_env, monkeypatch, tmp_path):
+        """Past the SDK's own per-attempt ceiling a bigger number buys nothing."""
+        mod = _load_dream("dream_apply_capped")
+        from lib import dream_chunking
+
+        got = asyncio.run(self._capture(mod, monkeypatch, tmp_path, 500_000, 500_000))
+        assert got == dream_chunking.MAX_ESCALATED_TIMEOUT_S
+
+    def test_a_timeout_keeps_the_original_file(self, dream_env, monkeypatch, tmp_path):
+        """Fails open: a blown deadline loses the update, never the file."""
+        mod = _load_dream("dream_apply_failopen")
+        memory_file = tmp_path / "target.md"
+        memory_file.write_text("original content")
+
+        async def boom(client, system, messages, timeout_s=None):
+            raise TimeoutError("simulated applier timeout")
+
+        monkeypatch.setattr(mod, "_query", boom)
+        result = asyncio.run(
+            mod._apply_proposal_to_file(MagicMock(), memory_file, "some updates")
+        )
+        assert result is None
+        assert memory_file.read_text() == "original content"

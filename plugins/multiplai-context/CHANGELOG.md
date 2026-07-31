@@ -18,7 +18,18 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
-## [0.10.1] - 2026-07-31
+## [0.10.2] - 2026-07-31
+
+### Fixed
+- **A big memory file no longer runs out of time while being updated.** Writing
+  approved changes back into a memory file was given the same fixed time limit
+  no matter how much there was to write. Your largest files are exactly the ones
+  that collect the most updates — a recent backlog had 41 KB of pending changes
+  for `claude-code-tools.md` and 38 KB for `multiplai.md` — and on a slow call
+  those could run out of time and be skipped, silently leaving the file
+  untouched while smaller files updated fine. The time limit now scales with how
+  much is actually being written. A file that still runs out is left exactly as
+  it was, never half-written, and the log now names the file and its size.
 
 ### Changed
 - **`/dream-remember` now applies a review per target file instead of per

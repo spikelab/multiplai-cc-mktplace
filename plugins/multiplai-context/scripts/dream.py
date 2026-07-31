@@ -1572,10 +1572,28 @@ async def _apply_proposal_to_file(client, memory_file: Path, proposal_section: s
         }
     ]
 
+    # The applier rewrites the whole file, so its cost scales with section +
+    # current file, not with the section alone. A single call cannot be left on
+    # the default deadline: a 283 KB fixture run produced sections of 41 KB
+    # (`claude-code-tools.md`), 38 KB (`multiplai.md`), 33 KB (`dolcebot.md`) and
+    # 27 KB (`writing-workflow.md`), and at the slow tail that run measured
+    # (25 B/s) every one of those needs more than 900 s. Size the deadline to the
+    # work and escalate, exactly as `plan_chunks` does for an oversized block.
+    from lib import dream_chunking
+
+    n_bytes = len(proposal_section.encode("utf-8")) + len(current_content.encode("utf-8"))
+    timeout_s = min(
+        dream_chunking.MAX_ESCALATED_TIMEOUT_S,
+        max(CHUNK_TIMEOUT_S, dream_chunking.estimate_seconds(n_bytes, _calibrated_throughput())),
+    )
+
     try:
-        response = await client.query(system=_APPLIER_SYSTEM, messages=messages)
+        response = await _query(client, _APPLIER_SYSTEM, messages, timeout_s)
     except Exception:
-        logger.exception("Failed to apply updates to %s", memory_file.name)
+        logger.exception(
+            "Failed to apply updates to %s (%d bytes, %.0fs deadline)",
+            memory_file.name, n_bytes, timeout_s,
+        )
         return None
 
     if not _is_safe_memory_update(current_content, response.content):
