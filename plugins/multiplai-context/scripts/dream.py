@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.10.0"]
+# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
 # ///
 """Dream consolidation script for multiplai plugin.
 
@@ -8,27 +8,40 @@ Default mode (no flags): generates a human-readable change proposal and writes i
 to .multiplai/dreams/ for review. Run /multiplai-context:dream-remember to apply.
 
 --auto: fully autonomous — applies changes directly to memory files without review.
---check: report pending learnings count and exit.
+--check: report pending learnings count, chunk plan and predicted duration, and exit.
+
+The report path is a batching pipeline, not one big call: learnings are parsed
+into `## Session Learnings` blocks, filtered against a ledger of what has already
+been consolidated, packed into timeout-sized chunks, drafted concurrently, and
+merged deterministically into ONE document. Learnings files are never moved or
+deleted here — the ledger, not the filesystem, is what says "already done".
 """
 
 import asyncio
+import fcntl
+import hashlib
+import json
 import os
+import re
+import shutil
 import subprocess
 import sys
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Dream runs over a large backlog (40+ learnings, 20+ memory files) regularly
-# exceed model_client's 600s default per-call ceiling and time out (observed
-# repeatedly through 2026-06-26), forcing a manual env override each run. dream
-# is a separate, long-lived process from the per-prompt hooks, so a generous
-# 30-min default is safe here without loosening the global 600s default that
-# keeps interactive callers (context_manager, session_start) snappy. setdefault
-# preserves an explicit override. Must run before model_client is imported —
-# the timeout is read into a module constant at import time.
-os.environ.setdefault("MULTIPLAI_SDK_CALL_TIMEOUT_S", "1800")
+# Per-CALL ceiling, and the number chunk sizes are derived from. It used to be
+# 1800 s because dream made one serial call over the whole backlog — which is
+# arithmetically guaranteed to time out past ~150 KB at the measured ~85 input
+# bytes/s. Chunking inverts the relationship: the timeout is now the input to
+# `plan_chunks`, which sizes every chunk to finish well inside it, so a lower
+# ceiling makes a stuck call fail fast instead of burning half an hour. Must run
+# before model_client is imported — the timeout is read into a module constant
+# at import time; setdefault preserves an explicit override.
+os.environ.setdefault("MULTIPLAI_SDK_CALL_TIMEOUT_S", "900")
 
 from multiplai_core.paths import get_paths
 from multiplai_core.model_client import create_client
@@ -36,9 +49,244 @@ from multiplai_core.config import load_yaml, save_yaml
 from multiplai_core.log_utils import setup_logging
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
-from lib.dream_processed import has_pending_items, mark_processed
+from lib import learnings_ledger
+from lib.dream_processed import PROCESSED_HEADING, has_pending_items, mark_processed
 
 logger = setup_logging("dream", propagate_loggers=("multiplai_core",))
+
+# The per-chunk deadline handed to `plan_chunks` and to `query(timeout_s=…)`.
+# Kept in step with the MULTIPLAI_SDK_CALL_TIMEOUT_S setdefault above.
+CHUNK_TIMEOUT_S = 900.0
+
+# Each chunk spawns a Claude Code CLI subprocess. Unbounded fan-out over a dozen
+# chunks is a subprocess storm, so the gather runs behind a semaphore.
+DEFAULT_CONCURRENCY = 4
+
+# Weight of the newest observation in the throughput EWMA. Low enough that one
+# slow chunk (a cold model, a retried call) does not swing the next run's plan.
+_THROUGHPUT_EWMA_ALPHA = 0.3
+# Guard rails on the calibrated value: an outlier that poisons the stored EWMA
+# would mis-size every future chunk, and the failure is silent.
+_THROUGHPUT_MIN, _THROUGHPUT_MAX = 10.0, 2000.0
+
+# Set once if the installed multiplai-core predates `query(timeout_s=…)`
+# (< v0.12.0), so the fallback is logged once rather than per chunk.
+_TIMEOUT_KWARG_UNSUPPORTED = False
+
+# Holds the run lock's fd for the process lifetime. Closing it — including by
+# letting it be garbage-collected — releases the lock, so it must stay reachable.
+_RUN_LOCK_FD: int | None = None
+
+
+# ---------------------------------------------------------------------------
+# Run state — lock, staging area, throughput calibration
+# ---------------------------------------------------------------------------
+
+def _state_dir() -> Path:
+    """Dream's git-ignored state bucket: lock, ledger, staged chunk drafts."""
+    return get_paths().skill_state_dir("dream")
+
+
+def _lock_path() -> Path:
+    return _state_dir() / "lock"
+
+
+def acquire_run_lock() -> bool:
+    """Take dream's exclusive run lock. ``True`` if this process may proceed.
+
+    Non-blocking ``flock`` on ``skill_state_dir("dream")/lock`` — **in the
+    workspace, deliberately not in ``/tmp``**. Every Claude session runs in its
+    own OrbStack container, so a ``/tmp`` path is container-local: two sessions
+    invoking ``/dream`` concurrently — the exact scenario this exists for —
+    would lock two *different* files and both proceed. The workspace is one
+    shared filesystem inside the VM's single kernel, so a lock there really does
+    exclude across session containers, and it keys by workspace for free.
+    (``scripts/qmd_refresh.py`` keys on ``/tmp`` and has this hole; do not copy
+    it.)
+
+    The lock is held for the whole run — fold, draft, merge, critic, and the
+    proposal write — and is **released by the OS when the process dies**. There
+    is therefore no stale-lock class of bug and no cleanup path to get wrong:
+    nothing unlinks the file, nothing has to run on the crash path, and a killed
+    run leaves a lock that is already free. The fd is parked in a module global
+    for exactly that reason — closing it would release the lock early.
+
+    Residual limit: a **host-side** process (a dream run from a Mac terminal, or
+    the multiplai-gui hub) locks in a different kernel and is not excluded.
+    Accepted — the hub only ever invokes ``--stamp``/``--archive``, which do not
+    take this lock at all, and host-terminal dream runs are not part of the
+    workflow.
+
+    On contention the holder's start time is read back out of the lock file and
+    reported; the caller exits 0, because a second run is a no-op, not an error.
+    Fails **open** if the lock file cannot be opened or locked at all (read-only
+    or flock-less filesystem): refusing to consolidate is worse than the race
+    the lock prevents.
+    """
+    global _RUN_LOCK_FD
+    path = _lock_path()
+    try:
+        # No O_TRUNC: truncating before the flock attempt would erase the
+        # holder's timestamp — the one thing the contention message needs.
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError:
+        logger.exception("Could not open dream run lock %s — proceeding unlocked", path)
+        return True
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            holder = os.read(fd, 256).decode("utf-8", "replace").strip()
+        except OSError:
+            holder = ""
+        os.close(fd)
+        msg = (
+            "Another dream run is already in progress"
+            + (f" (started {holder})" if holder else "")
+            + " — nothing to do."
+        )
+        logger.info(msg)
+        print(msg)
+        return False
+    except OSError:
+        os.close(fd)
+        logger.exception("flock unavailable on %s — proceeding unlocked", path)
+        return True
+
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, (datetime.now(timezone.utc).isoformat() + "\n").encode("utf-8"))
+        os.fsync(fd)
+    except OSError:
+        logger.warning("Could not stamp the run lock with a start time", exc_info=True)
+    _RUN_LOCK_FD = fd
+    return True
+
+
+def _dream_state_path() -> Path:
+    """Calibration state, kept beside the ledger in the skill state bucket.
+
+    Deliberately NOT ``paths.dream_state_file()``: that file is the *gate* state
+    (``last_run``, ``files_updated``) that ``--stamp`` and the session hooks
+    read, and a run's throughput measurements have no business landing in a
+    record other tools poll for "has dream run recently".
+    """
+    return _state_dir() / "dream_state.yaml"
+
+
+def _calibrated_throughput() -> float | None:
+    """Stored input-bytes-per-second EWMA, or ``None`` if not calibrated yet."""
+    try:
+        state = load_yaml(_dream_state_path()) or {}
+        value = state.get("throughput_bytes_per_s")
+    except Exception:
+        return None
+    if isinstance(value, (int, float)) and _THROUGHPUT_MIN <= value <= _THROUGHPUT_MAX:
+        return float(value)
+    return None
+
+
+def _update_throughput(observed: float) -> None:
+    """Fold one chunk's observed B/s into the stored EWMA.
+
+    Self-calibration matters because the 85 B/s default is one machine's
+    measurement; a slower model or host silently makes every estimate a lie, and
+    the estimate is what decides chunk size.
+    """
+    if not observed or observed <= 0:
+        return
+    observed = min(max(observed, _THROUGHPUT_MIN), _THROUGHPUT_MAX)
+    try:
+        path = _dream_state_path()
+        state = load_yaml(path) or {}
+        prior = _calibrated_throughput()
+        value = observed if prior is None else (
+            (1 - _THROUGHPUT_EWMA_ALPHA) * prior + _THROUGHPUT_EWMA_ALPHA * observed
+        )
+        state["throughput_bytes_per_s"] = round(value, 1)
+        save_yaml(path, state)
+    except Exception:
+        logger.warning("Could not update throughput calibration", exc_info=True)
+
+
+def _runs_dir() -> Path:
+    """Staging area for per-chunk drafts: ``.../dream/runs/<run-id>/``."""
+    return _state_dir() / "runs"
+
+
+def _new_run_id() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
+
+
+def _stage_draft(run_dir: Path, index: int, text: str, keys: list[str], kind: str = "chunk") -> Path:
+    """Persist one draft plus the block keys it consolidated.
+
+    Written **before** the ledger records those keys. Crashing in between costs
+    a re-draft (the resume path discards a staged draft whose blocks are not
+    ledgered), which is the safe direction: duplicated work, never lost input.
+    """
+    run_dir.mkdir(parents=True, exist_ok=True)
+    md = run_dir / f"{kind}-{index:02d}.md"
+    md.write_text(text)
+    (run_dir / f"{kind}-{index:02d}.json").write_text(
+        json.dumps({"kind": kind, "keys": list(keys)})
+    )
+    return md
+
+
+def _resume_staged_drafts(current_run_dir: Path, ledger: dict) -> list[str]:
+    """Drafts left behind by a crashed prior run, ready to join this merge.
+
+    A staged draft is included only when every block it consolidated is recorded
+    in the ledger. If it is not, those blocks are still `unprocessed` and are
+    being re-drafted right now — keeping the stale draft too would put the same
+    learning in front of the reviewer twice, so it is deleted instead.
+    """
+    out: list[str] = []
+    runs = _runs_dir()
+    if not runs.is_dir():
+        return out
+    processed = ledger.get("processed", {})
+    for run_dir in sorted(p for p in runs.iterdir() if p.is_dir()):
+        if run_dir == current_run_dir:
+            continue
+        for md in sorted(run_dir.glob("*.md")):
+            side = md.with_suffix(".json")
+            try:
+                keys = list(json.loads(side.read_text()).get("keys") or [])
+            except (OSError, json.JSONDecodeError):
+                # An unreadable sidecar means "unknown blocks", not "no draft":
+                # keep the content and let the ledger's own dedup handle any
+                # overlap. Dropping it would be the one irreversible choice.
+                logger.warning("Staged draft %s has no readable sidecar — kept anyway", md)
+                keys = []
+            if keys and not all(k in processed for k in keys):
+                logger.warning(
+                    "Discarding staged draft %s — its blocks are not ledgered, "
+                    "so they are being re-drafted this run", md,
+                )
+                md.unlink(missing_ok=True)
+                side.unlink(missing_ok=True)
+                continue
+            try:
+                out.append(md.read_text())
+            except OSError:
+                logger.error("Unreadable staged draft %s — skipped", md, exc_info=True)
+                continue
+            logger.info("Resuming staged draft from an interrupted run: %s", md)
+    return out
+
+
+def _clear_staging() -> None:
+    """Drop every staged run directory once their content is in a written proposal."""
+    runs = _runs_dir()
+    if not runs.is_dir():
+        return
+    for run_dir in runs.iterdir():
+        if run_dir.is_dir():
+            shutil.rmtree(run_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +362,183 @@ def _archive_proposal(proposal_path: Path, dreams_dir: Path, disposition: str = 
         dest = dest_dir / f"{stem}-{n}{suffix}"
     proposal_path.rename(dest)
     return dest
+
+
+def _collect_blocks(learnings_dir: Path) -> tuple[list, list[Path]]:
+    """Parse every learnings file into ``## Session Learnings`` blocks.
+
+    Returns ``(blocks, files)`` in filename order. Nothing is moved or deleted:
+    which blocks are new is a set difference against the ledger, not a question
+    about which files happen to be on disk.
+    """
+    if not learnings_dir.exists():
+        return [], []
+    files = sorted(learnings_dir.glob("*.md"))
+    blocks: list = []
+    for f in files:
+        try:
+            blocks.extend(learnings_ledger.parse_blocks(f.name, f.read_text()))
+        except OSError:
+            logger.warning("Could not read %s — skipped", f, exc_info=True)
+    return blocks, files
+
+
+# ---------------------------------------------------------------------------
+# "dream wrote this, untouched" stamp
+# ---------------------------------------------------------------------------
+#
+# Spike curates a proposal by editing the file directly — deleting whole
+# sections and individual items so that what remains is exactly what he wants
+# applied. A curated proposal has no `## Processed` items, so the fold in
+# `_fold_pending_proposals` would happily absorb it and destroy the curation.
+# The stamp is the guard: fold only a document that is byte-identical to what
+# dream wrote.
+#
+# Content hash, NOT mtime: `.multiplai/dreams/` is git-tracked, and
+# checkout/stash/restore rewrite mtimes — an mtime guard would read untouched
+# proposals as hand-edited and start exactly the `-2` pileup the fold exists to
+# stop. "Differs from what dream wrote" is the real criterion, so hash it.
+
+_GENERATED_MARKER_RE = re.compile(r"^<!-- dream:generated sha256=([0-9a-f]{64}) -->$")
+
+
+def _stamp_generated(text: str) -> str:
+    """Append the ``<!-- dream:generated sha256=… -->`` trailer to a proposal."""
+    body = text.rstrip("\n") + "\n"
+    digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    return f"{body}<!-- dream:generated sha256={digest} -->\n"
+
+
+def _is_unmodified_generated(text: str) -> bool:
+    """True only if *text* still hashes to the value in its own trailer.
+
+    A proposal written by a pre-ledger dream carries no trailer and can never
+    pass — by design. Leaving those alone is the safe default, not a bug.
+    """
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return False
+    m = _GENERATED_MARKER_RE.match(lines[-1].rstrip("\n"))
+    if not m:
+        return False
+    body = "".join(lines[:-1])
+    return hashlib.sha256(body.encode("utf-8")).hexdigest() == m.group(1)
+
+
+# Sections dream re-derives from current state on every run. A folded proposal
+# carries yesterday's copies; merging them in would put two `## Routing Warnings`
+# sections in one document, the stale one first.
+_REGENERATED_SECTIONS = ("## Routing Warnings", "## Conflict Resolutions")
+
+
+def _strip_regenerated(text: str) -> str:
+    """Reduce a finished proposal back to a draft, ready to merge.
+
+    Drops the ``dream:generated`` trailer (it describes the file it was written
+    into, not the content) and any deterministically regenerated section.
+    """
+    out: list[str] = []
+    skipping = False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            skipping = any(line.startswith(h) for h in _REGENERATED_SECTIONS)
+        if skipping:
+            continue
+        if _GENERATED_MARKER_RE.match(line):
+            continue
+        out.append(line)
+    while out and (not out[-1].strip() or out[-1].strip().startswith("---")):
+        out.pop()
+    return "\n".join(out) + "\n"
+
+
+def _has_decided_items(text: str) -> bool:
+    """True if any item block sits under ``## Processed``.
+
+    That heading is the cross-tool decision contract with multiplai-gui. A
+    proposal carrying decisions is off-limits: folding it would discard them,
+    and renumbering it would make a decision the hub has already queued apply to
+    the wrong entry.
+    """
+    in_processed = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == PROCESSED_HEADING:
+            in_processed = True
+            continue
+        if stripped.startswith("## "):
+            in_processed = False
+            continue
+        if in_processed and stripped.startswith("### "):
+            return True
+    return False
+
+
+def _fold_verdict(text: str) -> tuple[bool, str]:
+    """Whether a pending proposal may be folded, and why not when it may not."""
+    if _has_decided_items(text):
+        return False, "it carries decided items under `## Processed`"
+    if not _is_unmodified_generated(text):
+        return False, (
+            "its content differs from what dream wrote (hand-curated, or written "
+            "by a pre-ledger dream that left no `dream:generated` stamp)"
+        )
+    if not has_pending_items(text):
+        return False, "it has no pending items to fold"
+    return True, ""
+
+
+def _fold_pending_proposals(dreams_dir: Path) -> list[str]:
+    """Absorb undecided, untouched pending proposals into this run.
+
+    Called at the START of the run, under the lock, before any drafting — not at
+    write time. The hub writes `## Processed` blocks into a proposal *item by
+    item* during an apply, so "has no decided items" is a claim that decays over
+    a multi-minute run; checking first shrinks the window from minutes to
+    milliseconds. The verdict is re-taken immediately before each individual
+    move, inside the same lock hold, so a proposal that gained a decision during
+    the scan is skipped rather than swallowed.
+
+    Returns the folded documents' text, in filename order. The files themselves
+    move to ``dreams/superseded/`` — a sibling of ``applied/``/``rejected/``,
+    with the same collision-safe suffixing — so the hub's non-recursive glob of
+    the dreams root stops listing them, exactly as archiving does.
+    """
+    folded: list[str] = []
+    if not dreams_dir.is_dir():
+        return folded
+    for path in sorted(dreams_dir.glob("processed-learnings-*.md")):
+        try:
+            text = path.read_text()
+        except OSError:
+            logger.warning("Could not read pending proposal %s — left in place", path.name)
+            continue
+        ok, reason = _fold_verdict(text)
+        if not ok:
+            logger.info("Not folding %s — %s; left pending", path.name, reason)
+            continue
+        # Re-check against the file as it stands right now: the hub may have
+        # written a decision into it since the scan above.
+        try:
+            fresh = path.read_text()
+        except OSError:
+            continue
+        if fresh != text:
+            logger.info("Not folding %s — it changed during the scan; left pending", path.name)
+            continue
+        ok, reason = _fold_verdict(fresh)
+        if not ok:
+            logger.info("Not folding %s — %s; left pending", path.name, reason)
+            continue
+        try:
+            dest = _archive_proposal(path, dreams_dir, "superseded")
+        except OSError:
+            logger.exception("Could not supersede %s — left pending, not folded", path.name)
+            continue
+        folded.append(_strip_regenerated(fresh))
+        logger.info("Folded undecided proposal %s into this run (moved to %s)",
+                    path.name, dest)
+    return folded
 
 
 def _read_memory_files(memory_dir: Path) -> dict[str, str]:
@@ -303,9 +728,19 @@ Changes the toolchain itself should make — NOT memory. Approved ones get writt
 
 ## Filtered Out ({N} items)
 
-- "{short description}": {reason} (diary/event-only / already applied / too specific /
-  task residue / superseded)
+**{reason}**
+- {short title} — {reason} (Source: {learnings_file}:{line})
+- {short title} — {reason} (Source: {learnings_file}:{line})
+
+**{other reason}**
+- {short title} — {reason} (Source: {learnings_file}:{line})
 ```
+
+`## Filtered Out` is an audit trail, so it is EXACTLY ONE LINE PER DROPPED ITEM — grouped
+under its reason, no sub-bullets, no quoted text, no explanation paragraphs. Every dropped
+item gets its own line: a dropped learning is marked consolidated and never resurfaces, so
+a bare count would make the drop silent and permanent. Reasons: diary/event-only, already
+applied, too specific, task residue, superseded, no clear target file.
 
 Title markers (prefix the {short_title}, none in the normal case):
 - **[RULE-PROPOSAL]** — a change to CLAUDE.md behavioral rules; requires individual approval.
@@ -352,7 +787,8 @@ routing knowledge is in those blocks — apply these generic principles to them:
   single-occurrence items. If you DO include a weakly-supported item, prefix its title with
   **[warning low confidence]** instead of dropping it.
 - Filter out: diary/event-only entries, finished-task residue, already-applied facts,
-  one-time fixes with no general pattern, entries with no clear target file.
+  one-time fixes with no general pattern, entries with no clear target file. List each
+  dropped item on its own single line under its reason heading — one line, never more.
 - Route to Action Items any learning that calls for the toolchain to change its own
   code/config/file-structure (A{N} numbering, **Source:** line, same provenance rules). Do NOT
   mirror it as a memory entry UNLESS it also carries a general principle that outlives the
@@ -365,20 +801,15 @@ routing knowledge is in those blocks — apply these generic principles to them:
 """
 
 
-async def _generate_proposal(
-    client,
-    all_learnings: str,
-    memory_contents: dict[str, str],
-    source_files: list[Path],
-) -> str:
-    """Call LLM to produce a structured change proposal from learnings."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    source_names = ", ".join(f.name for f in source_files)
+def _memory_context(memory_contents: dict[str, str]) -> str:
+    """Render the memory-domain block the drafting and critic passes both see.
 
-    # Each file's catalog domain (summary + intent_domains) drives routing; the
-    # headers only pick the section WITHIN the chosen file.
+    Each file's catalog domain (summary + intent_domains + anti_domains) drives
+    routing; the headers only pick the section WITHIN the chosen file. This block
+    is byte-identical across every chunk of a run, so the shared prompt prefix
+    stays cacheable — do not vary it per chunk.
+    """
     catalog = _load_memory_catalog(get_paths().catalogs_dir())
-
     blocks = []
     for name, content in memory_contents.items():
         meta = catalog.get(name, {})
@@ -391,17 +822,66 @@ async def _generate_proposal(
             lines.append("NOT HERE: " + "; ".join(meta["anti_domains"]))
         lines.append(f"SECTIONS:\n{_extract_headers(content)}")
         blocks.append("\n".join(lines))
-    memory_context = "\n\n".join(blocks)
+    return "\n\n".join(blocks)
 
+
+def _draft_prompt_prefix(memory_context: str, source_names: str) -> str:
+    """Everything in the user message that precedes the learnings themselves.
+
+    Constant for the whole run (including the source-file list, which names the
+    run's files rather than the chunk's) so that only the tail of the prompt
+    differs between chunks.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return (
+        f"Today's date: {today}\n"
+        f"Source files: {source_names}\n\n"
+        f"## Current memory file structure:\n\n{memory_context}\n\n"
+        f"## Pending learnings:\n\n"
+    )
+
+
+async def _query(client, system: str, messages: list[dict], timeout_s: float | None):
+    """``client.query`` with a per-call timeout, tolerating an older core.
+
+    ``timeout_s`` on ``query()`` arrives in multiplai-core v0.12.0. Against an
+    older pin the keyword does not exist, so the call is retried without it and
+    every chunk falls back to the module-wide ceiling. Patching
+    ``model_client._SDK_CALL_TIMEOUT_S`` instead is not an option: it is private,
+    and it is racy under ``asyncio.gather`` with concurrent chunks.
+    """
+    global _TIMEOUT_KWARG_UNSUPPORTED
+    if timeout_s and not _TIMEOUT_KWARG_UNSUPPORTED:
+        try:
+            return await client.query(system=system, messages=messages, timeout_s=timeout_s)
+        except TypeError as exc:
+            if "timeout_s" not in str(exc):
+                raise
+            _TIMEOUT_KWARG_UNSUPPORTED = True
+            logger.warning(
+                "Installed multiplai-core has no query(timeout_s=…) (pre-v0.12.0) — "
+                "per-chunk timeouts fall back to MULTIPLAI_SDK_CALL_TIMEOUT_S"
+            )
+    return await client.query(system=system, messages=messages)
+
+
+async def _generate_proposal(
+    client,
+    all_learnings: str,
+    memory_contents: dict[str, str],
+    source_files: list[Path],
+) -> str:
+    """Single-call proposal generation, kept for ``--auto``.
+
+    Report mode uses the chunked pipeline in :func:`_draft_chunks` instead; this
+    stays because ``--auto``'s applier stage is out of scope and shares it.
+    """
+    source_names = ", ".join(f.name for f in source_files)
+    memory_context = _memory_context(memory_contents)
     messages = [
         {
             "role": "user",
-            "content": (
-                f"Today's date: {today}\n"
-                f"Source files: {source_names}\n\n"
-                f"## Current memory file structure:\n\n{memory_context}\n\n"
-                f"## Pending learnings:\n\n{all_learnings}"
-            ),
+            "content": _draft_prompt_prefix(memory_context, source_names) + all_learnings,
         }
     ]
 
@@ -409,6 +889,148 @@ async def _generate_proposal(
     cleaned = await _critique_proposal(client, response.content, memory_context)
     validated = _with_routing_warnings(cleaned, memory_contents)
     return _with_conflict_resolutions(validated, all_learnings, memory_contents)
+
+
+# ---------------------------------------------------------------------------
+# Chunked parallel draft
+# ---------------------------------------------------------------------------
+
+def _concurrency() -> int:
+    raw = os.environ.get("MULTIPLAI_DREAM_CONCURRENCY", "")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_CONCURRENCY
+    return max(1, value)
+
+
+def _plan_line(*, new_bytes: int, total_bytes: int, chunks: list, throughput: float) -> str:
+    """One planning line, logged and printed BEFORE anything is spent."""
+    from lib import dream_chunking
+
+    return dream_chunking.format_plan_line(
+        new_bytes=new_bytes,
+        total_bytes=total_bytes,
+        chunks=chunks,
+        concurrency=_concurrency(),
+        throughput=throughput,
+    )
+
+
+async def _draft_one_chunk(client, chunk, *, prefix: str, sem, run_dir: Path,
+                           ledger_path: Path, proposal_name: str) -> str | None:
+    """Draft one chunk, stage it, and ledger its blocks. ``None`` on failure.
+
+    Staging and recording happen here rather than after the gather so that a
+    crash costs only the in-flight chunks. The order is deliberate: draft on
+    disk first, ledger second.
+    """
+    from lib import dream_chunking
+
+    async with sem:
+        started = time.monotonic()
+        messages = [{"role": "user", "content": prefix + dream_chunking.render_chunk(chunk)}]
+        try:
+            response = await _query(client, _PROPOSAL_SYSTEM, messages, chunk.timeout_s)
+        except Exception:
+            logger.exception(
+                "Chunk %02d failed (%d bytes) — skipped; its blocks stay unprocessed "
+                "for the next run", chunk.index, chunk.n_bytes,
+            )
+            return None
+        elapsed = max(time.monotonic() - started, 1e-6)
+
+    text = (response.content or "").strip()
+    if not text:
+        logger.warning(
+            "Chunk %02d returned nothing (%d bytes, %.0fs) — skipped; its blocks stay "
+            "unprocessed", chunk.index, chunk.n_bytes, elapsed,
+        )
+        return None
+
+    observed = chunk.n_bytes / elapsed
+    logger.info(
+        "Chunk %02d complete: %d bytes in, %d bytes out, %.0fs, %.0f B/s",
+        chunk.index, chunk.n_bytes, len(text.encode("utf-8")), elapsed, observed,
+    )
+    try:
+        _stage_draft(run_dir, chunk.index, text, [b.key for b in chunk.blocks])
+        learnings_ledger.record(ledger_path, list(chunk.blocks), proposal_name)
+    except OSError:
+        logger.exception(
+            "Could not stage/ledger chunk %02d — the draft still joins this merge",
+            chunk.index,
+        )
+    _update_throughput(observed)
+    return text
+
+
+async def _draft_chunks(client, chunks: list, *, memory_context: str, source_names: str,
+                        run_dir: Path, ledger_path: Path, proposal_name: str) -> list[str]:
+    """Draft every chunk concurrently behind a semaphore, in chunk order.
+
+    A failed chunk is skipped: its blocks are never ledgered, so the next run
+    picks them up. Only a run in which EVERY chunk failed re-raises — that is an
+    outage, not a bad block, and swallowing it would write an empty proposal and
+    look like success.
+    """
+    prefix = _draft_prompt_prefix(memory_context, source_names)
+    sem = asyncio.Semaphore(_concurrency())
+    results = await asyncio.gather(*(
+        _draft_one_chunk(
+            client, chunk, prefix=prefix, sem=sem, run_dir=run_dir,
+            ledger_path=ledger_path, proposal_name=proposal_name,
+        )
+        for chunk in chunks
+    ))
+    drafts = [r for r in results if r]
+    if chunks and not drafts:
+        raise RuntimeError(
+            f"All {len(chunks)} draft chunk(s) failed — see the per-chunk tracebacks above"
+        )
+    if len(drafts) < len(chunks):
+        logger.warning(
+            "%d of %d chunks failed; their blocks stay unprocessed for the next run",
+            len(chunks) - len(drafts), len(chunks),
+        )
+    return drafts
+
+
+def _enforce_ledger_coverage(ledger_path: Path, staged_run_dir: Path, merged: list[str]) -> None:
+    """Un-record any block whose draft did not reach the merge.
+
+    The hard invariant of this pipeline: a block marked consolidated but absent
+    from the written proposal is silent learning loss — it never resurfaces and
+    nobody ever sees it. Recording is tied to a staged draft, and the merge input
+    is built from those same staged drafts, so this should be structurally
+    impossible; it is checked anyway, and a violation is repaired by dropping the
+    keys so the next run re-consolidates them.
+    """
+    try:
+        merged_texts = set(merged)
+        orphan: list[str] = []
+        for side in sorted(staged_run_dir.glob("*.json")):
+            md = side.with_suffix(".md")
+            meta = json.loads(side.read_text())
+            keys = list(meta.get("keys") or [])
+            if not keys:
+                continue
+            if not md.exists() or md.read_text() not in merged_texts:
+                orphan.extend(keys)
+        if not orphan:
+            return
+        logger.error(
+            "Ledger coverage violation: %d block(s) were recorded but their draft did "
+            "not reach the merge — un-recording so they are consolidated next run",
+            len(orphan),
+        )
+        ledger = learnings_ledger.load(ledger_path)
+        processed = ledger.get("processed", {})
+        for key in orphan:
+            processed.pop(key, None)
+        learnings_ledger.save(ledger_path, ledger)
+    except (OSError, json.JSONDecodeError):
+        logger.exception("Could not verify ledger coverage")
 
 
 def _with_conflict_resolutions(
@@ -470,18 +1092,24 @@ def _with_routing_warnings(proposal: str, memory_contents: dict[str, str]) -> st
         return proposal
 
 
-# Second pass — bounded surgical critic. The drafting analyst reliably shifts aggregate
-# behavior but still leaves point-in-time residue on individual high-trust KEEP entries
-# (commit SHAs, "Decision (date):", "update X accordingly", one-off paths). This pass
-# operates only on the already-drafted proposal (not the raw backlog), so it's cheap, and
-# it enforces the strip the few-shot examples can't guarantee.
+# Second pass — bounded surgical critic, expressed as DIRECTIVES rather than a rewrite.
+# The critic used to regenerate the entire document to change under 1% of it (measured:
+# 40846 -> 41252 bytes at 173-630 s a pass), which is both the slowest step and the one
+# most able to lose content it was not asked to touch. Emitting one directive per edit
+# makes the cost proportional to the number of edits, and makes every change auditable in
+# the log. `lib/proposal_edits.py` parses and applies them in pure code.
 _CRITIC_SYSTEM = """\
 You are a strict editor doing a SECOND PASS over an already-drafted memory proposal. The
 analyst that drafted it generalizes most things well but still (a) leaves point-in-time
-residue on some KEEP entries and (b) keeps whole past-event records because they embed a
-useful fragment. Your job is to enforce both fixes — be decisive.
+residue on some KEEP entries, (b) keeps whole past-event records because they embed a
+useful fragment, and (c) — because the proposal was drafted in parallel over separate
+slices of the backlog — repeats the same lesson in more than one entry.
 
-## 1. Strip residue (every '### N.' entry)
+You do NOT rewrite the document. You emit EDIT DIRECTIVES, one per line, and nothing else.
+
+## Your five jobs
+
+### 1. Strip residue (every '### N.' entry)
 
 Surgically remove any residual:
 - commit hashes / SHAs ("committed as abc1234", "fixed in def5678")
@@ -489,67 +1117,93 @@ Surgically remove any residual:
 - finished-task imperatives ("update file X", "remove Y now", "... accordingly")
 - one-off absolute paths and over-scoped project / repo / file names, UNLESS the lesson is
   genuinely scoped to that project and useless elsewhere
-Keep the transferable rule, phrased as guidance.
+Keep the transferable rule, phrased as guidance. Emit `REPLACE` with the cleaned text.
 
-## 2. Demote past-event records (be bold)
+### 2. Demote past-event records (be bold)
 
 An entry that is fundamentally a record of a PAST EVENT — a dated decision, a completed
 checklist/migration/cutover, a "we did/decided/shipped X" status — is DIARY, even when it
 embeds a reusable fragment. Do NOT keep the event in order to save the fragment. Instead:
-- If a genuine general rule can be lifted out, REPLACE the entry's text with that rule alone
-  (strip ALL event scaffolding: dates, specific repo/project names, the checklist itself,
-  what was done) and keep the entry with its Source line. Example: "Decision: repos A/B/C go
-  public; pre-public: scrub gho_ token, remove scalestack skill, secret scan" →
-  "Before making any repo public: scrub secrets from git history AND rotate them, and strip
-  employer-specific content."
-- Otherwise MOVE the whole entry to 'Filtered Out' with a one-line reason.
+- If a genuine general rule can be lifted out, `REPLACE` the entry's text with that rule
+  alone (strip ALL event scaffolding: dates, specific repo/project names, the checklist
+  itself, what was done). Example: "Decision: repos A/B/C go public; pre-public: scrub gho_
+  token, remove scalestack skill, secret scan" → "Before making any repo public: scrub
+  secrets from git history AND rotate them, and strip employer-specific content."
+- Otherwise `DROP` it with a one-line reason.
 When unsure whether something is a durable rule or a one-time event, treat it as an EVENT:
-extract any rule, filter the rest. Memory is guidance that changes future action — not a log
+extract any rule, drop the rest. Memory is guidance that changes future action — not a log
 of what happened.
 
 DO keep durable reference facts — how a system is configured, stable identifiers (regions,
 instance/secret names, ports), standing preferences. Those are not events; they inform future
 work. The target is records of things that HAPPENED or were DECIDED at a point in time.
 
-## 3. Reroute mis-filed action items
+### 3. Reroute mis-filed action items
 
 If a memory '### N.' entry is really a change-request to the TOOLCHAIN's own code / config /
 file-structure ("split these files", "delete this orphan", "this script should also check X"),
-the change belongs in '## Action Items' — MOVE it there (create the section if absent),
-reformat as `### A{N}.` with **What:** / **Why:** / **Source:** lines. Leave a memory copy
-behind ONLY if the entry also states a general principle that outlives the change (would guide
-a different future situation); then keep the principle as the memory entry AND the concrete
-change as the action item. If the principle is just the action restated, no memory copy. Do not
-move general knowledge that merely mentions the system.
+the change belongs in '## Action Items' — emit `TO-ACTION`. Do not move general knowledge
+that merely mentions the system.
 
-## 4. Fix catch-all mis-routing
+### 4. Fix catch-all mis-routing
 
 The user message includes each memory file's PURPOSE / OWNS DOMAINS / NOT HERE block. If an
 entry is filed under a file whose NOT-HERE line names its subject, or under a broadly-named
-file when another file's PURPOSE clearly owns the subject, MOVE it to the owning file. Broadly-
-named files are never fallbacks, and a tool/agent having performed the work does not make the
-learning about that tool/agent — route by what the lesson is ABOUT. Only move on a clear
-subject mismatch; do not reshuffle borderline entries.
+file when another file's PURPOSE clearly owns the subject, `MOVE` it to the owning file.
+Broadly-named files are never fallbacks, and a tool/agent having performed the work does not
+make the learning about that tool/agent — route by what the lesson is ABOUT. Only move on a
+clear subject mismatch; do not reshuffle borderline entries.
 
-NEVER alter the **Source:** provenance line — it cites `filename:line` for traceability and
-must stay exact. Strip residue from the entry's generalized text only, never from its Source.
+### 5. Merge cross-slice duplicates (new — read this one carefully)
 
-Do NOT: add new content, change section groupings (beyond the demotions/reroutes above),
-re-judge clean entries, reorder, or touch anything already clean. PRESERVE the exact output
-format and any **[RULE-PROPOSAL]** / **[warning low confidence]** markers, and the
-'## Action Items' section if present. Renumber entries only if you moved one out.
-Return the full cleaned proposal and nothing else.
+This proposal was assembled from several independently drafted slices of the backlog, so the
+SAME lesson learned on two different days can appear as two entries — often under the same
+target file, sometimes worded differently. Nothing upstream can catch that. You are the first
+and only place it is visible.
+
+When two entries state the same rule, `MERGE` them: keep the better-worded one and absorb
+the other. The surviving entry keeps BOTH `**Source:**` lines, so no provenance is lost.
+Merge only genuine restatements of one rule — two related rules about the same subject are
+two entries, not one.
+
+## Directive grammar — emit ONLY these, one per line
+
+REPLACE <file>#<n> <new text for the entry>
+MOVE <file>#<n> -> <other.md>
+TO-ACTION <file>#<n>
+DROP <file>#<n> <reason>
+MERGE <file>#<n> <- <file>#<m>
+NOOP
+
+`<file>` is the target file named in the `## Updates for \\`file\\`` heading; `<n>` is the
+entry's `### N.` number within that file. For an action item use `ACTIONS` as `<file>` and
+its `A{N}` number as `<n>`.
+
+## Hard rules
+
+- Emit directives and NOTHING else. No preamble, no explanation, no markdown fences, no
+  restatement of the proposal. A line that is not a directive is discarded.
+- If the proposal needs no changes, emit exactly: NOOP
+- NEVER touch a `**Source:**` line. It cites `filename:line` for traceability and must stay
+  exact; a directive that would edit or remove one is refused. `MERGE`'s append is the one
+  sanctioned operation — the surviving entry ends up with both Source lines verbatim.
+- One directive per line, one edit per directive. Do not batch several entries into one.
+- Do not invent entries, do not reorder, do not renumber, and do not touch entries that are
+  already clean.
+- Preserve **[RULE-PROPOSAL]** / **[warning low confidence]** markers in any REPLACE text.
 """
 
 
 async def _critique_proposal(client, proposal: str, memory_context: str = "") -> str:
-    """Run the bounded surgical critic over a drafted proposal; return the cleaned version.
+    """Run the directive critic over a drafted proposal; return the edited version.
 
     ``memory_context`` carries the same PURPOSE / OWNS DOMAINS / NOT HERE file
     blocks the drafting pass saw, so the critic's mis-routing check works from
-    the live catalog instead of hardcoded file knowledge. Falls back to the
-    original proposal if the critic call fails — a residue-bearing proposal is
-    still useful, and report mode must not crash on the second pass.
+    the live catalog instead of hardcoded file knowledge.
+
+    Fails **open**, exactly as the rewrite critic did: an unparseable, empty or
+    all-NOOP response keeps the merged draft and logs a warning. A
+    residue-bearing proposal is still useful; a lost one is not.
     """
     content = f"## Drafted proposal:\n\n{proposal}"
     if memory_context:
@@ -559,39 +1213,127 @@ async def _critique_proposal(client, proposal: str, memory_context: str = "") ->
         )
     messages = [{"role": "user", "content": content}]
     try:
+        from lib import proposal_edits
+
         response = await client.query(system=_CRITIC_SYSTEM, messages=messages)
-        cleaned = (response.content or "").strip()
-        # Guard against a degenerate/empty critic response clobbering a good draft.
-        if "## Updates for" in cleaned or "## Filtered Out" in cleaned:
-            logger.info("Critic pass applied (%d -> %d bytes)",
-                        len(proposal.encode("utf-8")), len(cleaned.encode("utf-8")))
-            return cleaned
-        logger.warning("Critic returned no recognizable proposal — keeping original draft")
-        return proposal
+        raw = (response.content or "").strip()
+        if not raw:
+            logger.warning("Critic returned nothing — keeping the merged draft")
+            return proposal
+
+        directives, rejected = proposal_edits.parse_directives(raw)
+        if rejected:
+            logger.info("Critic: %d unparseable line(s) ignored", len(rejected))
+        if not directives:
+            logger.warning(
+                "Critic emitted no usable directives (%d line(s) rejected) — keeping the "
+                "merged draft", len(rejected),
+            )
+            return proposal
+
+        edited, applied, refused = proposal_edits.apply_directives(proposal, directives)
+        for description in applied:
+            logger.info("Critic applied: %s", description)
+        for reason in refused:
+            logger.info("Critic refused: %s", reason)
+        logger.info(
+            "Critic pass: %d applied, %d refused, %d rejected (%d -> %d bytes)",
+            len(applied), len(refused), len(rejected),
+            len(proposal.encode("utf-8")), len(edited.encode("utf-8")),
+        )
+        # Same degenerate-output guard as the rewrite critic: never let the pass
+        # hand back something that no longer looks like a proposal.
+        if "## Updates for" not in edited and "## Filtered Out" not in edited:
+            logger.warning("Critic output lost the proposal structure — keeping the draft")
+            return proposal
+        return edited
     except Exception:
-        logger.exception("Critic pass failed — keeping original draft")
+        logger.exception("Critic pass failed — keeping the merged draft")
         return proposal
+
+
+def _plan_run(learnings_dir: Path) -> tuple[list, list, list[Path], float]:
+    """Shared planning for ``--check`` and a real run — no LLM, no lock, no spend.
+
+    Returns ``(pending_blocks, chunks, files, throughput)``. Keeping one
+    implementation is the point: ``--check``'s prediction is worthless if it is
+    computed differently from what the run actually does.
+    """
+    from lib import dream_chunking
+
+    blocks, files = _collect_blocks(learnings_dir)
+    ledger_path = learnings_ledger.default_ledger_path()
+    ledger = learnings_ledger.load(ledger_path)
+    pending = learnings_ledger.unprocessed(blocks, ledger)
+    throughput = dream_chunking.resolve_throughput(_calibrated_throughput())
+    chunks = dream_chunking.plan_chunks(pending, timeout_s=CHUNK_TIMEOUT_S,
+                                        throughput=throughput)
+    return pending, chunks, files, throughput
 
 
 async def dream_report() -> None:
-    """Generate a change proposal and write it to .multiplai/dreams/ for review."""
+    """Generate ONE change proposal and write it to .multiplai/dreams/ for review.
+
+    Order matters and is load-bearing: lock, plan, fold, draft — everything
+    before the first token is spent. Folding ahead of drafting is what keeps the
+    "no decided items" check honest: the hub writes decisions into a proposal
+    item by item, so checking at write time would be a claim that had decayed
+    over a multi-minute run.
+    """
+    if not acquire_run_lock():
+        return
+
     paths = get_paths()
     learnings_dir = paths.learnings_dir
     memory_dir = paths.memory_dir()
     dreams_dir = paths.dreams_dir()
+    ledger_path = learnings_ledger.default_ledger_path()
 
-    all_learnings, source_files = _read_all_learnings(learnings_dir)
-    if not all_learnings:
-        print("No pending learnings — nothing to propose.")
+    pending, chunks, source_files, throughput = _plan_run(learnings_dir)
+
+    # Resume BEFORE pruning: a staged draft is kept only while its blocks are
+    # ledgered, and pruning drops keys for learnings files that have since been
+    # deleted. Pruning first would discard a perfectly good draft whose source
+    # file is gone — the one case where the draft is the only surviving copy.
+    run_dir = _runs_dir() / _new_run_id()
+    resumed = _resume_staged_drafts(run_dir, learnings_ledger.load(ledger_path))
+
+    # Keys for learnings files that no longer exist are dead weight (--auto and
+    # /dream-remember delete files after applying).
+    pruned = learnings_ledger.prune(ledger_path, {f.name for f in source_files})
+    if pruned:
+        logger.info("Ledger: pruned %d key(s) for deleted learnings files", pruned)
+
+    if not pending and not resumed:
+        logger.info("No new learnings since the last consolidation — nothing to propose")
+        print("No new learnings — nothing to propose.")
         return
 
-    learnings_bytes = len(all_learnings.encode("utf-8"))
-    learnings_lines = len(all_learnings.splitlines())
-    logger.info(
-        "Source learnings: %d files (%d lines, %d bytes): %s",
-        len(source_files), learnings_lines, learnings_bytes,
-        ", ".join(f.name for f in source_files),
-    )
+    total_bytes = 0
+    for f in source_files:
+        try:
+            total_bytes += len(f.read_text().encode("utf-8"))
+        except OSError:
+            pass
+    new_bytes = sum(len(b.text.encode("utf-8")) for b in pending)
+    plan = _plan_line(new_bytes=new_bytes, total_bytes=total_bytes,
+                      chunks=chunks, throughput=throughput)
+    logger.info("%s", plan)
+    print(plan)
+
+    # Fold now, under the lock, before a single token is spent. Stage what was
+    # folded straight away: the files have already left the dreams root, so
+    # crashing before the write would otherwise lose them entirely.
+    folded = _fold_pending_proposals(dreams_dir)
+    for i, text in enumerate(folded, start=1):
+        try:
+            _stage_draft(run_dir, i, text, [], kind="folded")
+        except OSError:
+            logger.warning("Could not stage folded proposal %d", i, exc_info=True)
+
+    dreams_dir.mkdir(parents=True, exist_ok=True)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    output_file = _proposal_output_path(dreams_dir, today)
 
     # Mirror dream_auto(): a crash inside the SDK call — including an
     # SDK-unavailable RuntimeError from create_client itself — must leave a
@@ -606,8 +1348,33 @@ async def dream_report() -> None:
             "Loaded %d memory files for context: %s",
             len(memory_contents), ", ".join(sorted(memory_contents)),
         )
+        memory_context = _memory_context(memory_contents)
 
-        proposal = await _generate_proposal(client, all_learnings, memory_contents, source_files)
+        drafts = await _draft_chunks(
+            client, chunks,
+            memory_context=memory_context,
+            source_names=", ".join(f.name for f in source_files),
+            run_dir=run_dir,
+            ledger_path=ledger_path,
+            proposal_name=output_file.name,
+        )
+
+        merge_input = resumed + drafts + folded
+        _enforce_ledger_coverage(ledger_path, run_dir, resumed + drafts)
+
+        from lib import proposal_merge
+
+        merged = proposal_merge.merge_drafts(merge_input)
+        logger.info(
+            "Merged %d draft(s) (%d fresh, %d resumed, %d folded) into %d bytes",
+            len(merge_input), len(drafts), len(resumed), len(folded),
+            len(merged.encode("utf-8")),
+        )
+
+        cleaned = await _critique_proposal(client, merged, memory_context)
+        validated = _with_routing_warnings(cleaned, memory_contents)
+        pending_text = "\n\n".join(b.text for b in pending)
+        proposal = _with_conflict_resolutions(validated, pending_text, memory_contents)
     except Exception:
         logger.exception("Dream report generation failed")
         raise
@@ -632,14 +1399,17 @@ async def dream_report() -> None:
             "Proposal looks incomplete — missing target updates or Filtered Out section"
         )
 
-    dreams_dir.mkdir(parents=True, exist_ok=True)
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    output_file = _proposal_output_path(dreams_dir, today)
-    output_file.write_text(proposal)
+    output_file.write_text(_stamp_generated(proposal))
     logger.info("Proposal written to %s", output_file)
 
+    # Everything staged is now inside a written proposal; keeping it would fold
+    # the same drafts in again on the next run.
+    _clear_staging()
+
     print(f"Proposal written to {output_file}")
-    print(f"Sources: {len(source_files)} files, ~{learnings_lines} lines")
+    print(f"Sources: {len(source_files)} files, {len(pending)} new learning block(s)")
+    if folded:
+        print(f"Folded in {len(folded)} undecided pending proposal(s) → dreams/superseded/")
     print(f"Targets: {len(target_files)} files ({', '.join(target_files) or 'none'})")
     print("Review with: /multiplai-context:dream-remember")
 
@@ -808,7 +1578,15 @@ async def _apply_proposal_to_file(client, memory_file: Path, proposal_section: s
 
 
 async def dream_auto() -> None:
-    """Apply learnings directly to memory files without review (autonomous mode)."""
+    """Apply learnings directly to memory files without review (autonomous mode).
+
+    Takes the same exclusive run lock as report mode — two concurrent runs
+    writing the same memory files is strictly worse than two writing proposals.
+    The applier stage itself is unchanged; it shares ``_generate_proposal()``.
+    """
+    if not acquire_run_lock():
+        return
+
     paths = get_paths()
     learnings_dir = paths.learnings_dir
     memory_dir = paths.memory_dir()
@@ -926,7 +1704,9 @@ def main() -> None:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Report pending learnings count and exit",
+        help="Report the pending-learnings count, the chunk plan and the predicted "
+             "wall clock, then exit. Takes no run lock, so it answers while a "
+             "consolidation is in progress.",
     )
     parser.add_argument(
         "--auto",
@@ -1031,15 +1811,35 @@ def main() -> None:
         return
 
     if args.check:
+        # Deliberately takes NO lock: the plan is read-only, and its whole point
+        # is to be answerable while a run is in progress.
+        from lib import dream_chunking
+
         paths = get_paths()
-        _, files = _read_all_learnings(paths.learnings_dir)
+        pending, chunks, files, throughput = _plan_run(paths.learnings_dir)
         if not files:
             print("No pending learnings")
             return
-        total_lines = sum(
-            len(f.read_text().splitlines()) for f in files
+        if not pending:
+            print(f"No new learnings ({len(files)} file(s), all blocks already consolidated)")
+            return
+        new_bytes = sum(len(b.text.encode("utf-8")) for b in pending)
+        total_bytes = 0
+        for f in files:
+            try:
+                total_bytes += len(f.read_text().encode("utf-8"))
+            except OSError:
+                pass
+        # Wall clock, not serial time: chunks run `concurrency` at a time, so a
+        # wave costs its slowest chunk rather than the sum of its chunks.
+        eta = dream_chunking.estimate_wall_clock(chunks, _concurrency(), throughput)
+        print(
+            f"Pending learnings: {len(files)} file(s), {len(pending)} new block(s), "
+            f"{new_bytes} new bytes of {total_bytes}"
         )
-        print(f"Pending learnings: {len(files)} files, ~{total_lines} lines")
+        print(_plan_line(new_bytes=new_bytes, total_bytes=total_bytes,
+                         chunks=chunks, throughput=throughput))
+        print(f"Estimated wall clock: ~{eta / 60:.0f} min")
         return
 
     if args.auto or args.run:
