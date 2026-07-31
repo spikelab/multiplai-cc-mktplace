@@ -64,6 +64,34 @@ Nothing yet.
   purpose: a filtered learning is marked consolidated and will not resurface,
   so each drop has to stay visible.
 
+- **`/dream-remember` now applies a review per target file instead of per
+  item.** A large proposal used to cost one script cold start and a fresh
+  read of the same memory file for every single decision — a 70-item review
+  across 14 files ran out of context part-way through and had to hand off,
+  having applied five. The skill now reads each memory file once, applies all
+  of its approved edits, updates `Last Updated` once, and records every
+  decision for that file — approved *and* rejected — in one call. Reviews that
+  previously needed a compaction handoff now finish in one sitting. Nothing
+  about *consent* changed: `[RULE-PROPOSAL]` items are still presented and
+  answered one at a time, and items you neither approved nor rejected stay
+  pending.
+
+### Added
+- **`dream.py --mark-processed --decisions -`** takes a JSON array of
+  decisions on stdin — `{"kind","file","index","status","target"}` per item —
+  and marks them all in one read and one write of the proposal, printing
+  `marked N processed, M unchanged`. The write is atomic, so an interrupted
+  or failed call leaves the proposal exactly as it was rather than
+  half-decided. The existing single-item flags are unchanged and still
+  supported.
+- **`dream.py --gc-learnings`** replaces the skill's judgement call about when
+  it is safe to delete consolidated learnings files. Pure code, no model call:
+  a file is removed only when every `## Session Learnings` record in it has
+  been consolidated **and** no proposal citing it is still pending, so a
+  review you left half-finished keeps the sources its `**Source:**` citations
+  point at. It prints what it removed and why it kept the rest. Step 5 of
+  `/dream-remember` now runs this instead of deciding by hand.
+
 ### Requires
 - `multiplai-core` **v0.12.0** (up from v0.10.0), for the per-call timeout that
   lets one oversized chunk get a longer ceiling without affecting the others,
