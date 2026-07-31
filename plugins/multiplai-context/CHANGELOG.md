@@ -53,6 +53,14 @@ Nothing yet.
   run. Nothing about the recovery behaviour changed — those learnings were always
   safe and always came back; only the reporting was wrong.
 
+- **`/dream --check` no longer overstates how long a run will take.** The
+  estimate assumed chunks run in synchronised batches, waiting for the slowest
+  of each group before starting the next. They don't — a chunk starts as soon as
+  a slot frees up. On a measured 283 KB run that made the prediction 43% too
+  high: 32 minutes announced for what took 23. The estimate now tracks the real
+  run to within a few percent, and the plan line no longer prints a "wave" count
+  that never described how the work was scheduled.
+
 ## [0.10.0] - 2026-07-31
 
 ### Changed
