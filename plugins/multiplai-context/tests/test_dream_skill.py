@@ -420,17 +420,26 @@ class TestStampArchiveWiring:
 
 
 class TestDreamTimeoutDefault:
-    """dream.py raises the SDK call timeout for long batch runs before import."""
+    """dream.py sets the per-CALL SDK timeout before import.
+
+    900 s, not the old 1800: chunk sizes are now derived FROM this ceiling
+    (``plan_chunks(timeout_s=…)``) rather than hoped to fit under it, so a lower
+    value makes a stuck call fail fast instead of burning half an hour.
+    """
 
     @pytest.fixture(autouse=True)
     def load_source(self):
         self.source = (SCRIPTS_DIR / "dream.py").read_text()
 
-    def test_sets_1800s_default(self):
+    def test_sets_900s_default(self):
         assert re.search(
-            r'os\.environ\.setdefault\(\s*["\']MULTIPLAI_SDK_CALL_TIMEOUT_S["\']\s*,\s*["\']1800["\']',
+            r'os\.environ\.setdefault\(\s*["\']MULTIPLAI_SDK_CALL_TIMEOUT_S["\']\s*,\s*["\']900["\']',
             self.source,
         )
+
+    def test_chunk_timeout_matches_the_sdk_ceiling(self):
+        """A chunk sized for a deadline the SDK does not enforce is a timeout."""
+        assert re.search(r"^CHUNK_TIMEOUT_S = 900\.0$", self.source, re.M)
 
     def test_set_before_model_client_import(self):
         setdefault_idx = self.source.index("MULTIPLAI_SDK_CALL_TIMEOUT_S")
