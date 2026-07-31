@@ -9,9 +9,13 @@ ones (dream's `**Source:**` provenance cites them).
 
 import json
 
+import pytest
+
 from lib.learnings_ledger import (
+    LEDGER_VERSION,
     Block,
     block_key,
+    default_ledger_path,
     load,
     parse_blocks,
     prune,
@@ -182,3 +186,105 @@ class TestPrune:
 
     def test_prune_of_empty_ledger_is_a_noop(self, tmp_path):
         assert prune(tmp_path / "ledger.json", {"f.md"}) == 0
+
+    def test_prune_writes_nothing_when_nothing_is_stale(self, tmp_path):
+        """A no-op prune must not rewrite the file — a crash mid-write is the
+        one way to lose the record of what has already been consolidated."""
+        p = tmp_path / "ledger.json"
+        record(p, parse_blocks("f.md", LEARNINGS), "prop.md")
+        before = p.read_bytes()
+        assert prune(p, {"f.md"}) == 0
+        assert p.read_bytes() == before
+
+    def test_entry_with_no_file_field_is_treated_as_stale(self, tmp_path):
+        p = tmp_path / "ledger.json"
+        save(p, {"version": LEDGER_VERSION, "processed": {"abc": {"proposal": "x"}}})
+        assert prune(p, {"f.md"}) == 1
+
+
+class TestBlockRanges:
+    """``start_line``/``end_line`` are the contract lib/dream_chunking.py renders
+    against — a chunk reproduces these numbers verbatim so ``**Source:**``
+    citations resolve in the real file."""
+
+    def test_text_matches_the_file_at_the_reported_lines(self):
+        lines = LEARNINGS.splitlines()
+        for b in parse_blocks("f.md", LEARNINGS):
+            assert b.text.splitlines() == lines[b.start_line - 1:b.end_line]
+
+    def test_ranges_are_inside_the_file(self):
+        n = len(LEARNINGS.splitlines())
+        for b in parse_blocks("f.md", LEARNINGS):
+            assert 1 <= b.start_line <= b.end_line <= n
+
+    def test_an_internal_rule_stays_inside_its_block(self):
+        text = (
+            "## Session Learnings — x\n"
+            "- one\n"
+            "---\n"
+            "- two\n"
+        )
+        (block,) = parse_blocks("f.md", text)
+        assert block.text.splitlines()[-1] == "- two"
+        assert "---" in block.text
+
+
+class TestAtomicity:
+    def test_a_failed_write_leaves_the_previous_ledger_intact(self, tmp_path, monkeypatch):
+        """Losing the ledger silently re-consolidates the whole backlog, so the
+        write is temp-file + ``os.replace`` rather than truncate-in-place."""
+        import lib.learnings_ledger as mod
+
+        p = tmp_path / "ledger.json"
+        record(p, parse_blocks("f.md", LEARNINGS), "prop.md")
+        before = p.read_bytes()
+
+        def boom(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(mod.json, "dump", boom)
+        with pytest.raises(OSError):
+            save(p, {"version": 1, "processed": {"new": {"file": "f.md"}}})
+        assert p.read_bytes() == before
+
+    def test_a_failed_write_leaves_no_temp_file_behind(self, tmp_path, monkeypatch):
+        import lib.learnings_ledger as mod
+
+        p = tmp_path / "ledger.json"
+        save(p, {"version": 1, "processed": {}})
+        monkeypatch.setattr(mod.json, "dump", lambda *_a, **_k: (_ for _ in ()).throw(OSError()))
+        with pytest.raises(OSError):
+            save(p, {"version": 1, "processed": {}})
+        assert [f.name for f in tmp_path.iterdir()] == ["ledger.json"]
+
+
+class TestLedgerShape:
+    def test_version_is_written(self, tmp_path):
+        p = tmp_path / "ledger.json"
+        record(p, parse_blocks("f.md", LEARNINGS), "prop.md")
+        assert json.loads(p.read_text())["version"] == LEDGER_VERSION
+
+    def test_entry_carries_file_proposal_and_timestamp(self, tmp_path):
+        p = tmp_path / "ledger.json"
+        blocks = parse_blocks("2026-07-31.md", LEARNINGS)
+        record(p, blocks, "processed-learnings-2026-07-31.md")
+        entry = load(p)["processed"][blocks[0].key]
+        assert set(entry) == {"file", "proposal", "at"}
+
+    def test_re_recording_keeps_the_first_proposal(self, tmp_path):
+        """The ledger answers 'which proposal did this learning reach the user
+        in?' — the first one, not the latest run that happened to see it."""
+        p = tmp_path / "ledger.json"
+        blocks = parse_blocks("f.md", LEARNINGS)
+        record(p, blocks, "first.md")
+        record(p, blocks, "second.md")
+        assert load(p)["processed"][blocks[0].key]["proposal"] == "first.md"
+
+    def test_default_path_is_the_git_ignored_dream_state_bucket(
+        self, tmp_path, monkeypatch, reset_paths_cache
+    ):
+        monkeypatch.setenv("WORKSPACE", str(tmp_path))
+        path = default_ledger_path()
+        assert path.name == "ledger.json"
+        assert path.parent.name == "dream"
+        assert str(tmp_path) in str(path)
