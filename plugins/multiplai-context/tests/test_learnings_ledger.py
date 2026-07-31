@@ -1,4 +1,4 @@
-"""Tests for lib/dream_ledger.py — the record of what dream already consolidated.
+"""Tests for lib/learnings_ledger.py — the record of what dream already consolidated.
 
 The ledger is what lets dream process only what is new without moving learnings
 files out of the way. Two properties carry the whole design and are asserted
@@ -9,7 +9,7 @@ ones (dream's `**Source:**` provenance cites them).
 
 import json
 
-from lib.dream_ledger import (
+from lib.learnings_ledger import (
     Block,
     block_key,
     load,

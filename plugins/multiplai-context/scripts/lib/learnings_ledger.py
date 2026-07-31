@@ -1,4 +1,13 @@
-"""Block-level ledger of what dream has already consolidated.
+"""Block-level ledger of which LEARNINGS dream has already consolidated.
+
+Named `learnings_ledger`, not `dream_ledger`, on purpose. A `dream_ledger.py`
+was proposed once before as a **sidecar decision record** — which item of a
+proposal was applied or rejected — and abandoned when the move-to-processed
+contract shipped instead (`## Processed` in the proposal file itself, mirrored
+in multiplai-gui's `hub/src/multiplai_hub/dreams.py`). That decision stands and
+this module does not revisit it: it tracks dream's **input**, never its output.
+Nothing here records a decision, and nothing here is read by the GUI.
+
 
 Dream used to glob ``.multiplai/learnings/*.md`` and process whatever it found,
 all or nothing. Feeding it a subset therefore meant physically moving the other
