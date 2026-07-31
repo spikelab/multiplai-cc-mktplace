@@ -81,9 +81,18 @@ class TestEstimates:
         assert estimate_seconds(8500, 85.0) == pytest.approx(100.0)
 
     def test_the_plan_arithmetic_holds(self, monkeypatch):
-        """254 KB at the measured default is the ~50 min the log table showed."""
+        """254 KB of learnings costs the ~94 min of serial work the fixture measured.
+
+        Checked against a real 283 KB / 231-block run rather than the plan's
+        original log table: its 11 successful chunks summed to 5,645 s for
+        257,137 bytes, i.e. 45.5 B/s end to end. The default must predict that
+        within a sane margin — too high and the first run sizes chunks it cannot
+        finish inside the 900 s deadline, which is exactly how that run lost a
+        chunk to a double timeout.
+        """
         monkeypatch.delenv("MULTIPLAI_DREAM_THROUGHPUT", raising=False)
-        assert 2500 < estimate_seconds(254_000) < 3200
+        measured_serial_s = 5_645 * (254_000 / 257_137)
+        assert estimate_seconds(254_000) == pytest.approx(measured_serial_s, rel=0.15)
 
     def test_budget_is_the_documented_fraction_of_the_timeout(self, monkeypatch):
         monkeypatch.delenv("MULTIPLAI_DREAM_THROUGHPUT", raising=False)

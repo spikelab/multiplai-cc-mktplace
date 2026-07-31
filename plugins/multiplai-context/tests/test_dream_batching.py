@@ -705,3 +705,102 @@ class TestThroughputCalibration:
 
         mod._update_throughput(120.0)
         assert not get_paths().dream_state_file().exists()
+
+
+class TestCriticBatching:
+    """The critic is input-bound, so a whole proposal cannot go in one call.
+
+    The unbatched pass was handed a 228 KB prompt by a 283 KB fixture run, burned
+    both 900 s attempts, and degraded to "keep the merged draft" — meaning the
+    second-pass quality gate silently never ran on a large backlog. Batching is
+    only safe if two things hold, and both are asserted here: batches reassemble
+    to the original byte-for-byte, and a `## ` section is never split (a
+    `MERGE <file>#<n> <- <file>#<m>` compares two entries of one file, so
+    splitting a file would hide half its duplicates).
+    """
+
+    @staticmethod
+    def _proposal(sections: list[tuple[str, int]]) -> str:
+        out = []
+        for name, size in sections:
+            out.append(f"## Updates for `{name}`\n\n" + ("x" * size) + "\n\n")
+        return "".join(out)
+
+    def test_batches_reassemble_to_the_original(self, dream_env):
+        mod = _load_dream("dream_critic_reassemble")
+        proposal = self._proposal([(f"f{i}.md", 9_000) for i in range(6)])
+        assert "".join(mod._batch_proposal_for_critic(proposal)) == proposal
+
+    def test_no_batch_splits_a_section(self, dream_env):
+        mod = _load_dream("dream_critic_nosplit")
+        proposal = self._proposal([(f"f{i}.md", 9_000) for i in range(6)])
+        for batch in mod._batch_proposal_for_critic(proposal):
+            # A batch that split a section would start mid-body, not at a heading.
+            assert batch.startswith("## Updates for")
+
+    def test_a_small_proposal_stays_one_call(self, dream_env):
+        mod = _load_dream("dream_critic_small")
+        proposal = self._proposal([("only.md", 100)])
+        assert len(mod._batch_proposal_for_critic(proposal)) == 1
+
+    def test_a_large_proposal_is_split(self, dream_env):
+        mod = _load_dream("dream_critic_split")
+        proposal = self._proposal([(f"f{i}.md", 9_000) for i in range(10)])
+        assert len(mod._batch_proposal_for_critic(proposal)) > 1
+
+    def test_an_oversized_section_gets_its_own_batch_unsplit(self, dream_env):
+        """41 KB single sections are real — `claude-code-tools.md` in the fixture."""
+        mod = _load_dream("dream_critic_oversized")
+        proposal = self._proposal([("small.md", 500), ("huge.md", 60_000)])
+        batches = mod._batch_proposal_for_critic(proposal)
+        huge = [b for b in batches if "huge.md" in b]
+        assert len(huge) == 1
+        assert "".join(batches) == proposal
+
+    def test_directives_from_every_batch_are_applied(self, dream_env, monkeypatch):
+        """A batched critic must not silently drop later batches' edits."""
+        mod = _load_dream("dream_critic_merge")
+        proposal = self._proposal([(f"f{i}.md", 9_000) for i in range(6)])
+        batches = mod._batch_proposal_for_critic(proposal)
+        assert len(batches) > 1, "fixture must actually split for this to mean anything"
+
+        seen = []
+
+        async def fake_query(client, system, messages, timeout_s=None):
+            seen.append(messages[0]["content"])
+            return MagicMock(content=f"DROP f{len(seen) - 1}.md#1 redundant")
+
+        monkeypatch.setattr(mod, "_query", fake_query)
+
+        from lib import proposal_edits
+
+        captured = {}
+
+        def spy(p, d):
+            captured["n"] = len(d)
+            return p, [], []
+
+        monkeypatch.setattr(proposal_edits, "apply_directives", spy)
+        asyncio.run(mod._critique_proposal(MagicMock(), proposal))
+        assert len(seen) == len(batches), "every batch must reach the model"
+        assert captured["n"] == len(batches), "every batch's directive must be applied"
+
+    def test_a_failed_batch_loses_only_its_own_directives(self, dream_env, monkeypatch):
+        mod = _load_dream("dream_critic_partial")
+        proposal = self._proposal([(f"f{i}.md", 9_000) for i in range(6)])
+        batches = mod._batch_proposal_for_critic(proposal)
+        assert len(batches) > 1
+
+        calls = {"n": 0}
+
+        async def flaky(client, system, messages, timeout_s=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise TimeoutError("simulated critic batch timeout")
+            return MagicMock(content="NOOP")
+
+        monkeypatch.setattr(mod, "_query", flaky)
+        # Fails open: the surviving batches still run, and the proposal comes back.
+        result = asyncio.run(mod._critique_proposal(MagicMock(), proposal))
+        assert calls["n"] == len(batches)
+        assert "## Updates for" in result

@@ -1194,6 +1194,94 @@ its `A{N}` number as `<n>`.
 """
 
 
+def _batch_proposal_for_critic(proposal: str) -> list[str]:
+    """Split *proposal* into critic-sized batches, never splitting a ``## `` section.
+
+    The critic is input-bound: it reads a whole proposal and emits only a handful
+    of directive lines. That asymmetry is what made the unbatched pass impossible
+    — a 283 KB fixture run handed it a 228 KB prompt, which burned both 900 s
+    attempts without finishing and silently degraded to "keep the merged draft",
+    so the second-pass quality gate never ran at all on exactly the backlogs that
+    need it most.
+
+    Sections are kept whole because ``MERGE <file>#<n> <- <file>#<m>`` compares
+    two entries of the same file; splitting a file across batches would hide half
+    its duplicates from the comparison. A single section larger than the budget
+    gets a batch of its own rather than being split.
+    """
+    from lib import dream_chunking
+
+    budget = dream_chunking.chunk_budget_bytes(
+        CHUNK_TIMEOUT_S, _calibrated_throughput()
+    )
+    # Keep each "## " heading with its body; the split loses the delimiter, so
+    # re-attach it. Anything before the first heading is the proposal preamble
+    # and rides along with the first batch.
+    parts = re.split(r"^(?=## )", proposal, flags=re.M)
+    sections = [p for p in parts if p.strip()]
+
+    batches: list[str] = []
+    current: list[str] = []
+    current_bytes = 0
+    for section in sections:
+        n = len(section.encode("utf-8"))
+        if current and current_bytes + n > budget:
+            batches.append("".join(current))
+            current, current_bytes = [], 0
+        current.append(section)
+        current_bytes += n
+    if current:
+        batches.append("".join(current))
+    return batches or [proposal]
+
+
+async def _critique_batch(client, batch: str, memory_context: str, sem, index: int,
+                          total: int) -> str:
+    """One critic call over one batch. Returns raw directive text ("" on failure).
+
+    Fails open per batch: a batch that times out loses only its own directives,
+    and the other batches' edits still land.
+    """
+    from lib import dream_chunking
+
+    content = f"## Drafted proposal:\n\n{batch}"
+    if memory_context:
+        content = (
+            f"## Memory file domains (for the mis-routing check):\n\n{memory_context}\n\n"
+            + content
+        )
+    n_bytes = len(batch.encode("utf-8"))
+    # An oversized section cannot be split, so give it the same escalation
+    # plan_chunks gives an oversized block rather than letting it fail outright.
+    budget = dream_chunking.chunk_budget_bytes(CHUNK_TIMEOUT_S, _calibrated_throughput())
+    timeout_s = (
+        min(2.0 * CHUNK_TIMEOUT_S, dream_chunking.MAX_ESCALATED_TIMEOUT_S)
+        if n_bytes > budget
+        else CHUNK_TIMEOUT_S
+    )
+
+    async with sem:
+        started = time.monotonic()
+        try:
+            response = await _query(
+                client, _CRITIC_SYSTEM, [{"role": "user", "content": content}], timeout_s
+            )
+        except Exception:
+            logger.exception(
+                "Critic batch %d/%d failed (%d bytes) — its directives are lost, the "
+                "other batches still apply", index, total, n_bytes,
+            )
+            return ""
+        elapsed = max(time.monotonic() - started, 1e-6)
+
+    raw = (response.content or "").strip()
+    logger.info(
+        "Critic batch %d/%d: %d bytes in, %d directive bytes out, %.0fs",
+        index, total, n_bytes, len(raw.encode("utf-8")), elapsed,
+    )
+    return raw
+
+
 async def _critique_proposal(client, proposal: str, memory_context: str = "") -> str:
     """Run the directive critic over a drafted proposal; return the edited version.
 
@@ -1201,27 +1289,41 @@ async def _critique_proposal(client, proposal: str, memory_context: str = "") ->
     blocks the drafting pass saw, so the critic's mis-routing check works from
     the live catalog instead of hardcoded file knowledge.
 
+    The pass runs in batches (see ``_batch_proposal_for_critic``) and applies
+    every batch's directives to the **whole** proposal in one go. That is safe
+    because a directive addresses ``<file>#<n>`` and ``apply_directives`` sorts
+    back-to-front, so an index can never be shifted by another edit.
+
     Fails **open**, exactly as the rewrite critic did: an unparseable, empty or
     all-NOOP response keeps the merged draft and logs a warning. A
     residue-bearing proposal is still useful; a lost one is not.
     """
-    content = f"## Drafted proposal:\n\n{proposal}"
-    if memory_context:
-        content = (
-            f"## Memory file domains (for the mis-routing check):\n\n{memory_context}\n\n"
-            + content
-        )
-    messages = [{"role": "user", "content": content}]
     try:
         from lib import proposal_edits
 
-        response = await client.query(system=_CRITIC_SYSTEM, messages=messages)
-        raw = (response.content or "").strip()
-        if not raw:
+        batches = _batch_proposal_for_critic(proposal)
+        if len(batches) > 1:
+            logger.info(
+                "Critic: %d bytes over %d batches", len(proposal.encode("utf-8")),
+                len(batches),
+            )
+        sem = asyncio.Semaphore(_concurrency())
+        raws = await asyncio.gather(*(
+            _critique_batch(client, b, memory_context, sem, i, len(batches))
+            for i, b in enumerate(batches, 1)
+        ))
+
+        directives, rejected = [], []
+        for raw in raws:
+            if not raw:
+                continue
+            parsed, bad = proposal_edits.parse_directives(raw)
+            directives.extend(parsed)
+            rejected.extend(bad)
+
+        if not any(raws):
             logger.warning("Critic returned nothing — keeping the merged draft")
             return proposal
-
-        directives, rejected = proposal_edits.parse_directives(raw)
         if rejected:
             logger.info("Critic: %d unparseable line(s) ignored", len(rejected))
         if not directives:

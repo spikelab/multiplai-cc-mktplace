@@ -43,10 +43,18 @@ from lib.learnings_ledger import Block
 
 logger = logging.getLogger(__name__)
 
-# 38 B/s of emitted proposal ÷ a 0.45 proposal-to-learnings ratio. Both numbers
-# come from the log table in the plan, and both were flat across a 12x range of
-# input sizes — which is why a single constant is honest here.
-DEFAULT_THROUGHPUT_BYTES_PER_S = 85.0
+# Learnings bytes consumed per second, i.e. emitted-proposal B/s ÷ the
+# proposal-to-learnings ratio. This only sizes the *first* run on a machine;
+# from run 2 the EWMA in dream_state.yaml takes over.
+#
+# The original 85.0 was 38 B/s ÷ 0.45, both read off the plan's log table. A
+# 283 KB / 231-block fixture run measured both terms lower: 33 B/s emitted, and
+# a 0.72 ratio (183,888 bytes of proposal from 257,137 of learnings) — 46 B/s
+# end to end, and the run's own EWMA settled at 49.0. At 85.0 the cold-start
+# budget is 30.6 KB, which the slow tail of that run (25 B/s on the worst chunk)
+# cannot finish inside the 900 s deadline; one chunk of twelve timed out and
+# burned two full attempts. 50.0 budgets 18 KB, which clears even that tail.
+DEFAULT_THROUGHPUT_BYTES_PER_S = 50.0
 
 # Below the floor the per-call overhead (subprocess spawn, system prompt, memory
 # domain block) dominates the useful payload; above the ceiling a single chunk

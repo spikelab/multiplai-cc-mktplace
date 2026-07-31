@@ -18,6 +18,30 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.10.1] - 2026-07-31
+
+### Fixed
+
+- **`/dream` no longer loses a chunk of learnings on its first run.** The very
+  first run on a machine had to guess how fast drafting goes, and it guessed
+  nearly twice too fast — so it built chunks bigger than it could finish inside
+  the deadline. On a 283 KB backlog one chunk of twelve ran out of time, retried,
+  ran out again, and was skipped. Nothing was lost permanently (a skipped chunk's
+  learnings stay pending and come back next run), but the run took 30 minutes
+  longer than it should have and quietly consolidated less than it reported. The
+  starting guess is now the measured rate. From the second run onward `/dream`
+  has always calibrated itself from your own machine, and still does.
+
+- **The second-pass reviewer now actually runs on large backlogs.** `/dream`
+  drafts a proposal and then re-reads it to merge duplicates, drop
+  point-in-time noise, and re-route items filed under the wrong memory file. On
+  a big backlog that review was handed the entire proposal in one piece — far
+  more than it could read in the time allowed — so it timed out and was skipped,
+  every time, while the log said only "keeping the merged draft". The review is
+  now done in batches, so it runs on backlogs of any size. Its edits are applied
+  to the whole proposal together, exactly as before. If one batch fails, the rest
+  of the review still lands instead of the whole pass being lost.
+
 ## [0.10.0] - 2026-07-31
 
 ### Changed
