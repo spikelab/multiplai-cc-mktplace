@@ -11,6 +11,8 @@ these are not:
    indivisible — half a record is half a lesson and half a line range.
 """
 
+import random
+
 import pytest
 
 from lib.dream_chunking import (
@@ -304,19 +306,25 @@ class TestWallClockMatchesRealRuns:
 
     `_draft_chunks` schedules behind an `asyncio.Semaphore`, so a finished chunk
     frees its slot at once. An earlier version summed per-wave maxima, which
-    assumes a barrier that does not exist and overshot a real 283 KB run by 43%.
-    `--check` exists to answer "worth starting now?", and turning a 23-minute run
-    into a 32-minute one is how someone decides to skip it.
+    assumes a barrier that does not exist.
+
+    The numbers below are the **clean** 283 KB fixture run — 19 chunks, all
+    completed, no retries. An earlier version of this test used a run with a
+    failed chunk in it, which is not a calibration point: a failure burns two
+    full timeout periods on a worker, and no sizing model predicts that.
     """
 
-    # 11 chunks from a real run: (bytes, measured seconds). 257,137 bytes and
-    # 5,645 s of serial work => 45.6 B/s. Chunk phase took 1,362 s at concurrency 4.
+    # 19 chunks from the clean run: (bytes, measured seconds). 287,479 bytes
+    # over 5,875 s of serial work => 48.9 B/s, which is why the 50.0 cold-start
+    # default is close enough. Chunk phase 21:13:30 -> 21:41:15 = 1,665 s at
+    # concurrency 4.
     MEASURED = [
-        (30068, 656), (29548, 647), (23427, 494), (23937, 662), (20531, 450),
-        (29586, 686), (28960, 660), (30169, 630), (916, 40), (28470, 565),
-        (11525, 155),
+        (16832, 296), (17291, 309), (17975, 325), (17611, 361), (6006, 136),
+        (13382, 348), (17968, 318), (17955, 416), (17542, 274), (15219, 241),
+        (17802, 247), (17454, 329), (1722, 52), (17358, 373), (17950, 320),
+        (17393, 403), (4887, 176), (17404, 395), (17728, 556),
     ]
-    ACTUAL_WALL_CLOCK_S = 1362
+    ACTUAL_WALL_CLOCK_S = 1665
 
     def _chunks(self):
         return [
@@ -327,19 +335,64 @@ class TestWallClockMatchesRealRuns:
     def _throughput(self):
         return sum(b for b, _ in self.MEASURED) / sum(s for _, s in self.MEASURED)
 
-    def test_prediction_is_within_10_percent_of_the_measured_run(self):
-        got = estimate_wall_clock(self._chunks(), 4, self._throughput())
-        assert got == pytest.approx(self.ACTUAL_WALL_CLOCK_S, rel=0.10)
+    def test_the_prediction_is_a_floor_the_real_run_cannot_beat(self):
+        """`max(work / m, slowest)` is a lower bound on makespan, not a fit.
 
-    def test_the_old_wave_model_would_have_failed_this(self):
-        """Guards against a well-meaning revert to summing per-wave maxima."""
+        Asserting it as a bound rather than as a tolerance is deliberate: it is
+        a theorem about scheduling, so it holds for runs nobody has measured
+        yet. One measured run is not enough to tune a two-sided fit against.
+        """
+        got = estimate_wall_clock(self._chunks(), 4, self._throughput())
+        assert got <= self.ACTUAL_WALL_CLOCK_S
+
+    def test_the_floor_is_close_enough_to_be_worth_printing(self):
+        """A floor is only useful if it is a tight one.
+
+        The clean run came in 13% above the prediction — list scheduling leaves
+        a tail no lower bound sees. 25% is the point at which `--check` would
+        start misleading someone deciding whether to start a run now.
+        """
+        got = estimate_wall_clock(self._chunks(), 4, self._throughput())
+        assert got >= self.ACTUAL_WALL_CLOCK_S * 0.75
+
+    def test_the_estimate_does_not_depend_on_chunk_order(self):
+        """The property that rules out the per-wave-maxima model.
+
+        Not accuracy — on this run the wave model was +9.8% against this one's
+        -11.8%, so accuracy does not separate them. Order does. The scheduler
+        takes work off the list as slots free and is indifferent to the order it
+        arrived in; summing per-wave maxima is not. An estimate that moves when
+        nothing about the run moved is not measuring the run.
+        """
         chunks, tp, n = self._chunks(), self._throughput(), 4
-        wave_model = sum(
-            max(estimate_seconds(c.n_bytes, tp) for c in chunks[i:i + n])
-            for i in range(0, len(chunks), n)
+        baseline = estimate_wall_clock(chunks, n, tp)
+
+        rng = random.Random(0)
+        for _ in range(200):
+            shuffled = chunks[:]
+            rng.shuffle(shuffled)
+            assert estimate_wall_clock(shuffled, n, tp) == pytest.approx(baseline)
+
+    def test_the_wave_models_answer_moves_by_16_percent_on_order_alone(self):
+        """Quantifies the above exactly, so the guard can't pass for free.
+
+        The extremes are computed, not sampled: the sum of per-group maxima is
+        largest when the biggest chunks each head their own group, and smallest
+        when they cluster into one. For this run that is 1,564 s vs 1,832 s —
+        268 s apart, 16% of a 1,665 s run, with the scheduler doing exactly the
+        same work either way.
+        """
+        tp, n = self._throughput(), 4
+        desc = sorted(
+            (estimate_seconds(c.n_bytes, tp) for c in self._chunks()), reverse=True
         )
-        assert wave_model > self.ACTUAL_WALL_CLOCK_S * 1.3
-        assert estimate_wall_clock(chunks, n, tp) < wave_model
+        n_groups = -(-len(desc) // n)
+        spread_max = sum(desc[:n_groups])
+        spread_min = sum(desc[i] for i in range(0, len(desc), n))
+
+        assert spread_max - spread_min > 0.15 * self.ACTUAL_WALL_CLOCK_S
+        # Ours sits below even the wave model's best case, as a bound should.
+        assert estimate_wall_clock(self._chunks(), n, tp) < spread_min
 
     def test_never_predicts_less_than_the_slowest_chunk(self):
         """No concurrency shortens one indivisible call."""

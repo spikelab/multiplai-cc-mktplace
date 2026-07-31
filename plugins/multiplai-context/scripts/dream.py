@@ -1975,7 +1975,9 @@ def main() -> None:
         )
         print(_plan_line(new_bytes=new_bytes, total_bytes=total_bytes,
                          chunks=chunks, throughput=throughput))
-        print(f"Estimated wall clock: ~{eta / 60:.0f} min")
+        # A floor, not an estimate — see estimate_wall_clock. Saying "at least"
+        # is the difference between under-promising and being wrong.
+        print(f"Estimated wall clock: at least {eta / 60:.0f} min")
         return
 
     if args.auto or args.run:

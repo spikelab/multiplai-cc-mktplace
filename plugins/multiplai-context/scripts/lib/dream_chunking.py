@@ -303,31 +303,36 @@ def _fmt_duration(seconds: float) -> str:
 def estimate_wall_clock(
     chunks: Sequence[Chunk], concurrency: int, throughput: float | None = None
 ) -> float:
-    """Predicted wall clock for running *chunks* ``concurrency``-at-a-time.
-
-    Modelled as total work spread over ``concurrency`` workers, floored by the
+    """A **lower bound** on the wall clock for running *chunks* ``concurrency``
+    -at-a-time: total work spread over ``concurrency`` workers, floored by the
     single slowest chunk (which no amount of parallelism can shorten).
+
+    It is a bound, not a fit, and callers should present it as one. Real list
+    scheduling leaves a tail — the last chunks start late — that no lower bound
+    sees.
 
     This deliberately does **not** model waves. `_draft_chunks` runs behind an
     `asyncio.Semaphore`, so a finished chunk frees its slot immediately and the
-    next one starts — work is scheduled continuously, not in synchronised
-    batches. Summing per-wave maxima assumes a barrier that does not exist and
-    charges every wave for its slowest member while the other three workers sit
-    idle.
+    next one starts; there is no barrier for a wave boundary to sit on.
 
-    Checked against a real 283 KB run whose chunk phase took 1,362 s (11 chunks,
-    257,137 bytes, 5,645 s of serial work at 45.6 B/s, concurrency 4):
+    Measured against the clean 283 KB fixture run — 19 chunks, no retries,
+    5,875 s of serial work at 48.9 B/s, concurrency 4, **chunk phase 1,665 s**:
 
-    ==========================  =========  =================
-    model                       predicted  error vs. measured
-    ==========================  =========  =================
-    per-wave maxima (previous)     1,947 s             +43.0%
-    work ÷ workers (this one)      1,411 s              +3.6%
-    ==========================  =========  =================
+    ==========================  =========  ======
+    model                       predicted  error
+    ==========================  =========  ======
+    per-wave maxima (previous)    1,827 s   +9.8%
+    work ÷ workers (this one)     1,469 s  -11.8%
+    ==========================  =========  ======
 
-    The old model's 43% overshoot is not conservatism worth keeping: `--check`
-    exists to answer "is this worth starting now", and inflating a 23-minute run
-    into a 32-minute one is the kind of answer that makes someone skip it.
+    Note what that table does *not* say: the wave model was not less accurate
+    here. The reason to drop it is that its answer depends on the **order** of
+    the chunk list. Reordering these same 19 chunks moves its estimate anywhere
+    in 1,564–1,832 s — 268 s apart, 16% of the run — while the scheduler does
+    identical work either way, taking chunks off the list as slots free without
+    caring which order they arrived in. An estimate that moves when nothing
+    about the run moved is not measuring the run. This one is order-invariant,
+    and is a true bound.
     """
     n = max(1, int(concurrency))
     if not chunks:
@@ -348,6 +353,12 @@ def format_plan_line(
 
     Everything a human needs to decide "let it run" or "^C": how much is new
     against how much exists, how it was cut up, and how long that will take.
+
+    The duration is printed as ``est. >=Xm`` because
+    :func:`estimate_wall_clock` returns a lower bound. The clean 283 KB run came
+    in 13% above its own prediction; printing a bare ``est. 24m`` for a run that
+    takes 28 promises a precision the model does not have, and the person
+    reading it is deciding whether to wait.
     """
     n = max(1, int(concurrency))
     eta = estimate_wall_clock(chunks, n, throughput)
@@ -359,5 +370,5 @@ def format_plan_line(
     return (
         f"Dream plan: {new_bytes:,} new bytes of {total_bytes:,} total · "
         f"{len(chunks)} chunk(s){note} · concurrency {n} · "
-        f"~{throughput:.0f} B/s · est. {_fmt_duration(eta)}"
+        f"~{throughput:.0f} B/s · est. ≥{_fmt_duration(eta)}"
     )
