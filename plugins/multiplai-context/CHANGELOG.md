@@ -18,6 +18,63 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.10.0] - 2026-07-31
+
+### Changed
+- **`/dream` now handles a backlog of any size, in one run, without moving
+  anything.** It used to read every learnings file and consolidate them in a
+  single model call. That call emits proposal text at a flat rate regardless of
+  how much you feed it, so the run time was essentially your backlog size
+  divided by a constant — and past roughly 150 KB it hit the internal ceiling
+  and failed every time. The only workaround was to move learnings files out of
+  the directory and back a few at a time, which produced one proposal per slice
+  and, on at least one killed run, left files stranded in a hidden backup
+  directory where no later run could see them.
+
+  Dream now splits the backlog into chunks sized from the timeout, drafts them
+  concurrently (4 at a time by default), and merges the results into one
+  document. **No learnings file is moved or deleted by this path anymore.**
+
+- **`/dream` reports what it is about to do before spending anything.** A
+  planning line names how much is new, how many chunks it will take, and the
+  estimated wall clock. `dream.py --check` prints the same plan without
+  starting a run. The estimate self-calibrates from your own observed
+  throughput as runs complete.
+
+- **Re-running after a crash resumes instead of starting over.** Dream keeps a
+  ledger of which learnings it has already consolidated, keyed by content, so a
+  killed run costs only its in-flight chunks. Whitespace-only edits to a
+  learnings file do not orphan its ledger entries.
+
+- **A second `/dream` while one is running is now a no-op**, not a competing
+  writer. It names when the running one started and exits cleanly.
+
+- **You end up with exactly one proposal to review.** An earlier proposal you
+  have not decided on is folded into the new one and moved to
+  `.multiplai/dreams/superseded/`.
+
+  Two kinds of proposal are never touched: one you have already decided items in
+  (it has a `## Processed` section), and **one you have curated by hand**.
+  Curation is detected by content, not modification time — so a `git checkout`
+  or `git stash` in your workspace cannot make dream mistake an untouched
+  proposal for an edited one, and editing a proposal cannot be undone by dream.
+
+- **`## Filtered Out` is now one line per dropped item** instead of a
+  multi-line block, so the section stays skimmable. It is still per-item on
+  purpose: a filtered learning is marked consolidated and will not resurface,
+  so each drop has to stay visible.
+
+### Requires
+- `multiplai-core` **v0.12.0** (up from v0.10.0), for the per-call timeout that
+  lets one oversized chunk get a longer ceiling without affecting the others,
+  and for the `alive` heartbeat that shows a long call is still producing. Set
+  `MULTIPLAI_AGENT_HEARTBEAT_S=0` to silence the heartbeat.
+
+### Tuning
+- `MULTIPLAI_DREAM_CONCURRENCY` (default `4`) — chunks drafted at once. Each is
+  a CLI subprocess; raise it only if your machine has headroom.
+- `MULTIPLAI_DREAM_THROUGHPUT` — override the bytes-per-second estimate.
+
 ## [0.9.0] - 2026-07-27
 
 ### Fixed
