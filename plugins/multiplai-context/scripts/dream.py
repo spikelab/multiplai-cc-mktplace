@@ -9,12 +9,16 @@ to .multiplai/dreams/ for review. Run /multiplai-context:dream-remember to apply
 
 --auto: fully autonomous — applies changes directly to memory files without review.
 --check: report pending learnings count, chunk plan and predicted duration, and exit.
+--gc-learnings: delete learnings files that are fully consolidated and fully
+    decided. Pure code, no model call.
 
 The report path is a batching pipeline, not one big call: learnings are parsed
 into `## Session Learnings` blocks, filtered against a ledger of what has already
 been consolidated, packed into timeout-sized chunks, drafted concurrently, and
 merged deterministically into ONE document. Learnings files are never moved or
 deleted here — the ledger, not the filesystem, is what says "already done".
+Deletion lives in exactly two places: `--auto` after a successful apply, and the
+explicit `--gc-learnings` subcommand.
 """
 
 import asyncio
@@ -50,7 +54,13 @@ from multiplai_core.log_utils import setup_logging
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
 from lib import learnings_ledger
-from lib.dream_processed import PROCESSED_HEADING, has_pending_items, mark_processed
+from lib.dream_processed import (
+    PROCESSED_HEADING,
+    Decision,
+    has_pending_items,
+    mark_many_processed,
+    mark_processed,
+)
 
 logger = setup_logging("dream", propagate_loggers=("multiplai_core",))
 
@@ -1693,8 +1703,111 @@ async def dream_auto() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Learnings garbage collection (--gc-learnings)
+# ---------------------------------------------------------------------------
+
+
+def _gc_learnings() -> None:
+    """Delete learnings files that are fully consolidated **and** fully decided.
+
+    This replaces a judgement call the reviewing skill used to make in prose
+    ("delete the sources, but only if the proposal is now fully decided, else
+    skip this step"). That conditional was easy to get wrong and unrecoverable
+    when it was, so the decision moves into code, per file, with a stated reason
+    for everything kept.
+
+    A file is deleted only when **both** hold:
+
+    (a) every ``## Session Learnings`` record in it hashes to a key the ledger
+        has recorded — i.e. dream has already consolidated all of it. A file
+        appended to since the run (today's, typically) fails this and is kept,
+        which is why the old "today's file exception" no longer needs writing
+        down;
+    (b) every proposal those keys were recorded into has left the dreams root
+        (it is in ``applied/``, ``rejected/`` or ``superseded/``). Beyond
+        retention, this is what keeps a pending review readable: its
+        ``**Source:** <file>:<line>`` citations must still resolve while the
+        reviewer is deciding.
+
+    Anything else is kept. Takes no lock: it neither reads nor writes anything a
+    consolidation run is in the middle of.
+    """
+    paths = get_paths()
+    learnings_dir = paths.learnings_dir
+    files = sorted(learnings_dir.glob("*.md")) if learnings_dir.exists() else []
+    if not files:
+        print("GC learnings: no learnings files")
+        return
+
+    ledger_path = learnings_ledger.default_ledger_path()
+    recorded = learnings_ledger.load(ledger_path).get("processed", {})
+    dreams_dir = paths.dreams_dir()
+    # Non-recursive on purpose: applied/, rejected/ and superseded/ are decided,
+    # and the hub's own listing globs the root the same way.
+    pending = {p.name for p in dreams_dir.glob("*.md")} if dreams_dir.exists() else set()
+
+    deleted: list[str] = []
+    kept: list[tuple[str, str]] = []
+
+    for f in files:
+        try:
+            text = f.read_text()
+        except OSError as exc:
+            kept.append((f.name, f"unreadable ({exc.__class__.__name__})"))
+            continue
+        blocks = learnings_ledger.parse_blocks(f.name, text)
+        if not blocks:
+            kept.append((f.name, "no `## Session Learnings` records to consolidate"))
+            continue
+        missing = sum(1 for b in blocks if b.key not in recorded)
+        if missing:
+            kept.append((f.name, f"{missing}/{len(blocks)} record(s) not yet consolidated"))
+            continue
+        proposals = {recorded[b.key].get("proposal") or "" for b in blocks}
+        if "" in proposals:
+            kept.append((f.name, "ledger entry names no proposal"))
+            continue
+        undecided = sorted(n for n in proposals if Path(n).name in pending)
+        if undecided:
+            kept.append((f.name, "proposal still pending review: " + ", ".join(undecided)))
+            continue
+        try:
+            f.unlink()
+        except OSError as exc:
+            kept.append((f.name, f"could not delete ({exc.__class__.__name__})"))
+            continue
+        deleted.append(f.name)
+
+    if deleted:
+        remaining = {p.name for p in learnings_dir.glob("*.md")}
+        learnings_ledger.prune(ledger_path, remaining)
+
+    print(f"GC learnings: deleted {len(deleted)}, kept {len(kept)}")
+    for name in deleted:
+        print(f"  deleted  {name}")
+    for name, reason in kept:
+        print(f"  kept     {name} — {reason}")
+    logger.info("gc-learnings: deleted=%d kept=%d", len(deleted), len(kept))
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+
+def _load_decisions(source: str) -> list[Decision]:
+    """Parse a JSON array of decisions from stdin (``-``) or a file.
+
+    stdin is the shape the reviewing skill uses: a 70-item review would not fit
+    argv, and a heredoc needs no shell quoting rules written into a SKILL.md.
+    """
+    import json
+
+    raw = sys.stdin.read() if source == "-" else Path(source).read_text()
+    data = json.loads(raw)
+    if not isinstance(data, list):
+        raise ValueError(f"--decisions must be a JSON array, got {type(data).__name__}")
+    return [Decision.from_dict(item) for item in data]
 
 
 def main() -> None:
@@ -1740,12 +1853,23 @@ def main() -> None:
     parser.add_argument(
         "--mark-processed",
         action="store_true",
-        help="Move one decided proposal item into the proposal's `## Processed` "
-             "section — the in-file decision record shared with the multiplai-gui "
-             "GUI. Use with --proposal, --kind, --index, --status (and --file for "
-             "updates). /dream-remember calls this per item as it applies/rejects.",
+        help="Move decided proposal items into the proposal's `## Processed` "
+             "section — the in-file decision record the multiplai-gui hub writes "
+             "too (natively; it does not call this script for it). Batch form: "
+             "--proposal PATH --decisions - with a JSON array on stdin, which is "
+             "what /dream-remember uses, one call per target file. Single-item "
+             "form: --proposal, --kind, --index, --status (and --file for updates).",
     )
     parser.add_argument("--proposal", metavar="PATH", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--decisions",
+        metavar="PATH_OR_DASH",
+        help="With --mark-processed: read a JSON array of decisions from this "
+             "file, or from stdin when given `-`. Each element is "
+             '{"kind","file","index","status","target"} — kind update|action, '
+             "status applied|edited|rejected, file names the `## Updates for` "
+             "group, target the memory file actually written.",
+    )
     parser.add_argument(
         "--kind", choices=("update", "action"), default="update", help=argparse.SUPPRESS
     )
@@ -1755,7 +1879,41 @@ def main() -> None:
         "--status", choices=("applied", "edited", "rejected"), help=argparse.SUPPRESS
     )
     parser.add_argument("--target", metavar="TARGET.md", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--gc-learnings",
+        action="store_true",
+        help="Delete learnings files that are fully consolidated (every record "
+             "in the ledger) and fully decided (no proposal citing them is still "
+             "pending). Pure code, no model call, no lock. Prints what it removed "
+             "and why it kept the rest.",
+    )
     args = parser.parse_args()
+
+    if args.mark_processed and args.decisions:
+        if not args.proposal:
+            print("ERROR: --mark-processed --decisions needs --proposal")
+            sys.exit(2)
+        proposal_path = Path(args.proposal)
+        if not proposal_path.is_file():
+            print(f"ERROR: --proposal path not found: {proposal_path}")
+            sys.exit(1)
+        try:
+            decisions = _load_decisions(args.decisions)
+        except (OSError, ValueError) as exc:
+            print(f"ERROR: --decisions could not be read: {exc}")
+            sys.exit(2)
+        if not decisions:
+            print("marked 0 processed, 0 unchanged")
+            return
+        try:
+            marked, unchanged = mark_many_processed(proposal_path, decisions)
+        except OSError as exc:
+            # The new document is built in memory and swapped in atomically, so
+            # a write failure here leaves the proposal exactly as it was.
+            print(f"ERROR: could not write {proposal_path}: {exc} — proposal unchanged")
+            sys.exit(1)
+        print(f"marked {marked} processed, {unchanged} unchanged")
+        return
 
     if args.mark_processed:
         if not args.proposal or args.index is None or not args.status:
@@ -1808,6 +1966,10 @@ def main() -> None:
                 proposal_path, paths.dreams_dir(), args.archive_as
             )
             print(f"Archived proposal to {archived}")
+        return
+
+    if args.gc_learnings:
+        _gc_learnings()
         return
 
     if args.check:
