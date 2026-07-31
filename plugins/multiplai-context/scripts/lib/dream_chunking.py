@@ -1,11 +1,17 @@
 """Sizing and chunk planning for dream's consolidation pass — pure code, no LLM.
 
 Dream used to hand its whole backlog to one model call and hope it fit. Measured
-from ``dream*.log``, it doesn't: emission is flat at 35–41 bytes of proposal per
-second whatever the input size, and a proposal is ~45% of the learnings that
-produced it, so
+from ``dream*.log``, it doesn't: emission is roughly flat in bytes of proposal
+per second whatever the input size, so cost tracks input size, and
 
-    wall clock ≈ learnings_bytes / 85
+    wall clock ≈ learnings_bytes / throughput
+
+A 283 KB / 231-block fixture run measured that throughput at **46 B/s** across
+its chunks (33 B/s emitted against a 0.72 proposal-to-learnings ratio), and its
+EWMA settled at 49. ``DEFAULT_THROUGHPUT_BYTES_PER_S`` is 50.0 — the cold-start
+guess only, before any measurement exists; ``BUDGET_FRACTION`` is what absorbs
+its optimism. An earlier 85 assumed a 0.45 ratio that run did not reproduce, and
+sized first-run chunks ~1.7x too large.
 
 Against a per-attempt cap that is a fixed number of seconds, that makes failure
 arithmetic rather than luck — 187 KB and 249 KB backlogs both burned two full
@@ -34,7 +40,6 @@ throughput (an EWMA it keeps in ``dream_state.yaml``) and the per-call timeout.
 from __future__ import annotations
 
 import logging
-import math
 import os
 from dataclasses import dataclass
 from typing import Sequence
@@ -300,16 +305,35 @@ def estimate_wall_clock(
 ) -> float:
     """Predicted wall clock for running *chunks* ``concurrency``-at-a-time.
 
-    A wave costs its **slowest** chunk, not the sum of its chunks — summing
-    would report a serial run's cost for a parallel one and make the whole
-    estimate useless for deciding whether to start.
+    Modelled as total work spread over ``concurrency`` workers, floored by the
+    single slowest chunk (which no amount of parallelism can shorten).
+
+    This deliberately does **not** model waves. `_draft_chunks` runs behind an
+    `asyncio.Semaphore`, so a finished chunk frees its slot immediately and the
+    next one starts — work is scheduled continuously, not in synchronised
+    batches. Summing per-wave maxima assumes a barrier that does not exist and
+    charges every wave for its slowest member while the other three workers sit
+    idle.
+
+    Checked against a real 283 KB run whose chunk phase took 1,362 s (11 chunks,
+    257,137 bytes, 5,645 s of serial work at 45.6 B/s, concurrency 4):
+
+    ==========================  =========  =================
+    model                       predicted  error vs. measured
+    ==========================  =========  =================
+    per-wave maxima (previous)     1,947 s             +43.0%
+    work ÷ workers (this one)      1,411 s              +3.6%
+    ==========================  =========  =================
+
+    The old model's 43% overshoot is not conservatism worth keeping: `--check`
+    exists to answer "is this worth starting now", and inflating a 23-minute run
+    into a 32-minute one is the kind of answer that makes someone skip it.
     """
     n = max(1, int(concurrency))
-    total = 0.0
-    for start in range(0, len(chunks), n):
-        wave = chunks[start:start + n]
-        total += max(estimate_seconds(c.n_bytes, throughput) for c in wave)
-    return total
+    if not chunks:
+        return 0.0
+    per_chunk = [estimate_seconds(c.n_bytes, throughput) for c in chunks]
+    return max(sum(per_chunk) / n, max(per_chunk))
 
 
 def format_plan_line(
@@ -326,12 +350,14 @@ def format_plan_line(
     against how much exists, how it was cut up, and how long that will take.
     """
     n = max(1, int(concurrency))
-    waves = math.ceil(len(chunks) / n) if chunks else 0
     eta = estimate_wall_clock(chunks, n, throughput)
     oversized = sum(1 for c in chunks if c.oversized)
     note = f", {oversized} oversized" if oversized else ""
+    # No wave count: chunks run behind a semaphore, so there are no waves to
+    # count. Printing one alongside a non-wave estimate invited exactly the
+    # wrong arithmetic — "5 waves x 6 min" reads as 30 min next to an est. of 24.
     return (
         f"Dream plan: {new_bytes:,} new bytes of {total_bytes:,} total · "
-        f"{len(chunks)} chunk(s){note} · concurrency {n} · {waves} wave(s) · "
+        f"{len(chunks)} chunk(s){note} · concurrency {n} · "
         f"~{throughput:.0f} B/s · est. {_fmt_duration(eta)}"
     )

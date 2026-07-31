@@ -11,8 +11,6 @@ these are not:
    indivisible — half a record is half a lesson and half a line range.
 """
 
-import math
-
 import pytest
 
 from lib.dream_chunking import (
@@ -253,13 +251,11 @@ class TestPlanLine:
     def _chunks(self):
         return plan_chunks(parse_blocks("f.md", make_learnings(200)), 300, throughput=85.0)
 
-    def test_wall_clock_uses_the_slowest_chunk_per_wave(self):
+    def test_concurrency_beats_serial(self):
         chunks = self._chunks()
-        waves = math.ceil(len(chunks) / 4)
+        assert len(chunks) > 4, "needs more chunks than workers to mean anything"
         serial = sum(estimate_seconds(c.n_bytes, 85.0) for c in chunks)
-        parallel = estimate_wall_clock(chunks, 4, 85.0)
-        assert waves > 1
-        assert parallel < serial
+        assert estimate_wall_clock(chunks, 4, 85.0) < serial
 
     def test_concurrency_of_one_is_the_serial_cost(self):
         chunks = self._chunks()
@@ -278,8 +274,11 @@ class TestPlanLine:
         assert "12,345" in line and "254,000" in line
         assert f"{len(chunks)} chunk(s)" in line
         assert "concurrency 4" in line
-        assert f"{math.ceil(len(chunks) / 4)} wave(s)" in line
         assert "est." in line
+        # No wave count: work is scheduled by a semaphore, not in waves, and
+        # printing "5 wave(s)" beside a 24-minute estimate invites reading it
+        # as 5 x 6 min = 30.
+        assert "wave" not in line
 
     def test_oversized_chunks_are_called_out(self):
         big = parse_blocks(
@@ -293,8 +292,57 @@ class TestPlanLine:
         )
         assert "oversized" in line
 
-    def test_no_chunks_reports_zero_waves(self):
+    def test_no_chunks_is_reported_without_crashing(self):
         line = format_plan_line(
             new_bytes=0, total_bytes=0, chunks=[], concurrency=4, throughput=85.0
         )
-        assert "0 chunk(s)" in line and "0 wave(s)" in line
+        assert "0 chunk(s)" in line
+
+
+class TestWallClockMatchesRealRuns:
+    """The estimator is checked against a measured run, not against itself.
+
+    `_draft_chunks` schedules behind an `asyncio.Semaphore`, so a finished chunk
+    frees its slot at once. An earlier version summed per-wave maxima, which
+    assumes a barrier that does not exist and overshot a real 283 KB run by 43%.
+    `--check` exists to answer "worth starting now?", and turning a 23-minute run
+    into a 32-minute one is how someone decides to skip it.
+    """
+
+    # 11 chunks from a real run: (bytes, measured seconds). 257,137 bytes and
+    # 5,645 s of serial work => 45.6 B/s. Chunk phase took 1,362 s at concurrency 4.
+    MEASURED = [
+        (30068, 656), (29548, 647), (23427, 494), (23937, 662), (20531, 450),
+        (29586, 686), (28960, 660), (30169, 630), (916, 40), (28470, 565),
+        (11525, 155),
+    ]
+    ACTUAL_WALL_CLOCK_S = 1362
+
+    def _chunks(self):
+        return [
+            Chunk(index=i, blocks=(), n_bytes=b, timeout_s=900.0, oversized=False)
+            for i, (b, _) in enumerate(self.MEASURED, 1)
+        ]
+
+    def _throughput(self):
+        return sum(b for b, _ in self.MEASURED) / sum(s for _, s in self.MEASURED)
+
+    def test_prediction_is_within_10_percent_of_the_measured_run(self):
+        got = estimate_wall_clock(self._chunks(), 4, self._throughput())
+        assert got == pytest.approx(self.ACTUAL_WALL_CLOCK_S, rel=0.10)
+
+    def test_the_old_wave_model_would_have_failed_this(self):
+        """Guards against a well-meaning revert to summing per-wave maxima."""
+        chunks, tp, n = self._chunks(), self._throughput(), 4
+        wave_model = sum(
+            max(estimate_seconds(c.n_bytes, tp) for c in chunks[i:i + n])
+            for i in range(0, len(chunks), n)
+        )
+        assert wave_model > self.ACTUAL_WALL_CLOCK_S * 1.3
+        assert estimate_wall_clock(chunks, n, tp) < wave_model
+
+    def test_never_predicts_less_than_the_slowest_chunk(self):
+        """No concurrency shortens one indivisible call."""
+        chunks, tp = self._chunks(), self._throughput()
+        slowest = max(estimate_seconds(c.n_bytes, tp) for c in chunks)
+        assert estimate_wall_clock(chunks, 999, tp) >= slowest
