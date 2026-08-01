@@ -18,6 +18,74 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.10.1] - 2026-07-31
+
+### Changed
+
+- **`/dream` now runs 8 consolidation calls at once instead of 4.** On a large
+  backlog four was simply too few to finish in a reasonable time: a measured
+  283 KB backlog is about 98 minutes of model work, which four workers cannot
+  get through in under ~24 minutes no matter how it is scheduled — the actual
+  run took 38. Eight roughly halves that. The trade is that `/dream` now uses
+  more of your machine while it runs; if you would rather it stayed out of the
+  way, `MULTIPLAI_DREAM_CONCURRENCY=4` (or any number) still wins.
+
+### Fixed
+
+- **`/dream` no longer cites the wrong file for some of its sources.** Every
+  entry in a proposal ends with a `**Source:**` line naming the learnings file
+  and line it came from, so you can check an entry before applying it. When a
+  session ran past midnight its notes are saved into the *next* day's file, and
+  `/dream` sometimes cited it under the earlier date — sending you to a file
+  where that line doesn't exist. On a large backlog about 2% of citations were
+  affected. They are now corrected automatically wherever the right file can be
+  identified beyond doubt, and a `## Citation Repairs` section at the end of the
+  proposal lists every correction made. Citations that can't be verified are
+  listed there too, and left exactly as written rather than guessed at.
+
+- **`/dream` no longer loses a chunk of learnings on its first run.** The very
+  first run on a machine had to guess how fast drafting goes, and it guessed
+  nearly twice too fast — so it built chunks bigger than it could finish inside
+  the deadline. On a 283 KB backlog one chunk of twelve ran out of time, retried,
+  ran out again, and was skipped. Nothing was lost permanently (a skipped chunk's
+  learnings stay pending and come back next run), but the run took 30 minutes
+  longer than it should have and quietly consolidated less than it reported. The
+  starting guess is now the measured rate. From the second run onward `/dream`
+  has always calibrated itself from your own machine, and still does.
+
+- **The second-pass reviewer now actually runs on large backlogs.** `/dream`
+  drafts a proposal and then re-reads it to merge duplicates, drop
+  point-in-time noise, and re-route items filed under the wrong memory file. On
+  a big backlog that review was handed the entire proposal in one piece — far
+  more than it could read in the time allowed — so it timed out and was skipped,
+  every time, while the log said only "keeping the merged draft". The review is
+  now done in batches, so it runs on backlogs of any size. Its edits are applied
+  to the whole proposal together, exactly as before. If one batch fails, the rest
+  of the review still lands instead of the whole pass being lost.
+
+- **`/dream` no longer reports a partial run as a complete one.** When some of a
+  run's work failed — a rate limit, a slow call, a network blip — it still
+  printed the number of learnings it *set out* to process, not the number it
+  actually did, and said nothing about the second-pass review having been
+  skipped. A run that consolidated 122 of 231 learnings announced "231 new
+  learning block(s)", which reads as "your backlog is done" when half of it is
+  still queued. It now says `122 of 231 ... consolidated`, names how many chunks
+  did not finish, and states that the deferred learnings come back on the next
+  run. Nothing about the recovery behaviour changed — those learnings were always
+  safe and always came back; only the reporting was wrong.
+
+- **`/dream --check` now tells you its estimate is a minimum, and says so
+  honestly.** The old estimate assumed chunks run in synchronised batches,
+  waiting for the slowest of each group before starting the next. They don't —
+  a chunk starts as soon as a slot frees up, so the old answer changed depending
+  on nothing more than the order the chunks happened to be listed in (a 16%
+  swing on a measured 283 KB run). The new number can't do that. It is a floor
+  rather than a guess, so it now prints as `est. ≥24m` and "at least 24 min":
+  the one run measured against it came in 13% above its own prediction, and a
+  bare figure would have promised a precision it doesn't have. The plan line
+  also drops the "wave" count, which never described how the work was
+  scheduled.
+
 ## [0.10.0] - 2026-07-31
 
 ### Changed
