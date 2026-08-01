@@ -71,6 +71,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import setup_logging, log_event
 from lib.extraction_drain import pending_count, process_deferred_extractions
+from lib.fleet import write_fleet_view
 
 logger = setup_logging("drain_extractions")
 
@@ -131,6 +132,17 @@ def main() -> int:
             f"host drain launched {processed} deferred extraction(s)",
             count=processed,
         )
+    # Refresh the fleet view. This is the walk-away moment — the tab that just
+    # closed is the one whose state Spike was carrying in his head — so
+    # AGENTS.md and fleet.txt should reflect the exit before anything else
+    # runs. The registry is already current (SessionEnd updated `last_event`
+    # before the container died); what the launched children will add later is
+    # the diary entry, which this view does not read.
+    try:
+        write_fleet_view(data_dir)
+    except Exception:
+        logger.warning("Fleet view refresh failed (non-fatal)", exc_info=True)
+
     if args.verbose:
         print(f"[drain] {processed} extraction(s) launched from {data_dir}")
     return 0

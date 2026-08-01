@@ -18,6 +18,43 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.12.0] - 2026-08-01
+
+### Added
+- **A fleet view: one file that says what every agent is doing.** If you run
+  several Claude Code sessions at once, the state of each one has until now
+  lived in your head — the plugin knew *where* each session was (the session
+  registry) and *what* it was doing (the per-session checkpoint), but nothing
+  put the two together where you could read it.
+
+  `.multiplai/data/AGENTS.md` now does. Each session appears under **Needs
+  you** / **Working** / **Idle** / **Ended**, carrying its project, container,
+  branch (worktrees say which one), how long it has been quiet, what it is
+  doing, what it will do next, and which files it has in hand. Below that, a
+  **Collisions** section lists every file two live sessions are both holding —
+  the overlapping-work question answered without any agent talking to another.
+
+  A second file, `.multiplai/data/fleet.txt`, carries the same reading as one
+  short line — `6 fronts · 2 need you · oldest 3d · 1 collision` — cheap enough
+  for a terminal status line to `cat` on every prompt.
+
+  It refreshes by itself: at every session start, and on the host right after
+  your last tab closes. To render it by hand:
+
+  ```
+  uv run --no-project <plugin>/scripts/synthesize_agents.py --stdout
+  ```
+
+  **No model call and no network** — it is pure aggregation of files that
+  already exist, so it costs a few file reads and is safe to run at any time.
+  Both files are a **cache**: delete them and the next run rebuilds them
+  identically. Nothing writes into `AGENTS.md` as state, and anything you add
+  to it by hand is overwritten on the next refresh.
+
+  Sessions that never wrote a checkpoint (most of them — checkpoints only
+  trigger past a context-size band) still appear, with the fields the registry
+  does have.
+
 ## [0.11.0] - 2026-08-01
 
 ### Added

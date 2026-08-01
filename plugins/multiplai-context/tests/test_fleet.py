@@ -1,0 +1,582 @@
+"""Unit tests for lib/fleet.py — the AGENTS.md / fleet.txt aggregator.
+
+Everything here runs against synthetic registry entries and checkpoints in a
+``tmp_path``. **Never against the real `.multiplai/`** — an agent contaminated
+the live workspace that way on 2026-07-30.
+
+The properties worth breaking a build over:
+
+* the outputs are a **cache** — delete them, re-run, get the same bytes back
+  (everything else in the plan rests on `sessions/` + `checkpoints/` staying
+  the only source of truth);
+* a session with no checkpoint still renders, because most sessions never
+  cross a checkpoint token band and a fleet view that silently drops them is
+  worse than none;
+* "needs you" comes from the registry's contracted `waiting_input`, not from a
+  second, parallel notion of the same thing;
+* collisions are real set intersections — one shared file means exactly one
+  line, and disjoint work means silence.
+"""
+
+import json
+import re
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from lib import checkpoint as cp
+from lib import fleet
+
+
+NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Fixture builders
+# ---------------------------------------------------------------------------
+
+def make_session(
+    data_dir,
+    sid,
+    *,
+    kind="stop",
+    ago=timedelta(minutes=5),
+    project="knowhere",
+    hostname="cc-abc123",
+    cwd="/work/knowhere",
+    now=NOW,
+):
+    """Write one registry entry, shaped as the lifecycle hooks write it."""
+    d = data_dir / "sessions"
+    d.mkdir(parents=True, exist_ok=True)
+    ts = (now - ago).isoformat()
+    (d / f"{sid}.json").write_text(json.dumps({
+        "session_id": sid,
+        "hostname": hostname,
+        "cwd": cwd,
+        "project": project,
+        "workspace": "/work",
+        "started_at": ts,
+        "last_event": {"ts": ts, "kind": kind},
+    }))
+    return d / f"{sid}.json"
+
+
+def make_checkpoint(data_dir, sid, *, intent="Doing a thing", nxt="Do the next thing",
+                    files=("src/a.py",)):
+    """Write a checkpoint with the three sections the fleet view reads."""
+    d = data_dir / "checkpoints" / sid
+    d.mkdir(parents=True, exist_ok=True)
+    body = [f"## {s}\n\nplaceholder\n" for s in cp.CHECKPOINT_SECTIONS]
+    text = "".join(body)
+    text = text.replace("## Current intent\n\nplaceholder\n",
+                        f"## Current intent\n\n{intent}\n")
+    text = text.replace("## Next action\n\nplaceholder\n",
+                        f"## Next action\n\n{nxt}\n")
+    listing = "\n".join(f"- `{f}` — because reasons" for f in files)
+    text = text.replace("## Involved files\n\nplaceholder\n",
+                        f"## Involved files\n\n{listing}\n")
+    (d / "checkpoint.md").write_text(text)
+    return d / "checkpoint.md"
+
+
+# ---------------------------------------------------------------------------
+# The section names this module reads
+# ---------------------------------------------------------------------------
+
+def test_the_sections_read_are_sections_the_writer_emits():
+    """fleet.py hardcodes three section names rather than importing the tuple,
+    so the only thing stopping a rename from silently blanking every entry is
+    this assertion."""
+    for name in (fleet._INTENT, fleet._NEXT, fleet._FILES):
+        assert name in cp.CHECKPOINT_SECTIONS
+
+
+# ---------------------------------------------------------------------------
+# Criterion 6 — a session with no checkpoint is a valid entry
+# ---------------------------------------------------------------------------
+
+class TestRegistryOnlyEntries:
+
+    def test_session_without_a_checkpoint_still_renders(self, tmp_path):
+        make_session(tmp_path, "sid-nocp", project="lonely")
+
+        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert "lonely" in md
+        assert "No checkpoint" in md
+
+    def test_it_is_not_silently_dropped(self, tmp_path):
+        make_session(tmp_path, "sid-nocp")
+
+        agents = fleet.collect(tmp_path, NOW).agents
+
+        assert [a.session_id for a in agents] == ["sid-nocp"]
+        assert agents[0].has_checkpoint is False
+        assert agents[0].intent == ""
+
+    def test_registry_fields_survive_the_missing_checkpoint(self, tmp_path):
+        make_session(tmp_path, "sid-nocp", hostname="cc-zz", cwd="/work/thing")
+
+        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert "cc-zz" in md
+        assert "/work/thing" in md
+
+    def test_an_empty_data_dir_renders_an_empty_fleet(self, tmp_path):
+        f = fleet.collect(tmp_path, NOW)
+
+        assert f.agents == []
+        assert fleet.render_fleet_line(f, NOW) == ""
+        assert "# Agents" in fleet.render_agents_md(f, NOW)
+
+    def test_malformed_entries_are_skipped_not_fatal(self, tmp_path):
+        make_session(tmp_path, "good")
+        (tmp_path / "sessions" / "junk.json").write_text("{not json")
+        (tmp_path / "sessions" / "list.json").write_text("[1, 2, 3]")
+
+        agents = fleet.collect(tmp_path, NOW).agents
+
+        assert [a.session_id for a in agents] == ["good"]
+
+    def test_a_truncated_checkpoint_yields_whatever_it_has(self, tmp_path):
+        make_session(tmp_path, "sid")
+        d = tmp_path / "checkpoints" / "sid"
+        d.mkdir(parents=True)
+        (d / "checkpoint.md").write_text("## Current intent\n\nHalf-written when")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.has_checkpoint is True
+        assert agent.intent == "Half-written when"
+        assert agent.next_action == ""
+
+
+# ---------------------------------------------------------------------------
+# Status — derived from the registry's contracted vocabulary
+# ---------------------------------------------------------------------------
+
+class TestStatus:
+
+    def test_notification_means_needs_you(self, tmp_path):
+        make_session(tmp_path, "waiting", kind="notification", project="blocked")
+
+        f = fleet.collect(tmp_path, NOW)
+
+        assert f.agents[0].status == "waiting_input"
+        assert "## Needs you (1)" in fleet.render_agents_md(f, NOW)
+
+    def test_a_two_week_old_notification_is_idle_not_needs_you(self, tmp_path):
+        """Containers die without a SessionEnd (reboot, docker kill, OOM), so
+        the registry holds entries frozen mid-notification for weeks. Counting
+        those as "needs you" produced 24 of them against the real registry —
+        a list nobody can act on, which is a list nobody reads."""
+        make_session(tmp_path, "ghost", kind="notification", ago=timedelta(days=14))
+
+        f = fleet.collect(tmp_path, NOW)
+
+        assert f.agents[0].status == "idle"
+        assert "## Needs you" not in fleet.render_agents_md(f, NOW)
+
+    def test_recent_activity_means_working(self, tmp_path):
+        make_session(tmp_path, "busy", kind="stop", ago=timedelta(hours=2))
+
+        assert fleet.collect(tmp_path, NOW).agents[0].status == "working"
+
+    def test_quiet_for_a_day_means_idle(self, tmp_path):
+        make_session(tmp_path, "quiet", kind="stop", ago=timedelta(hours=30))
+
+        f = fleet.collect(tmp_path, NOW)
+
+        assert f.agents[0].status == "idle"
+        assert "## Idle (1)" in fleet.render_agents_md(f, NOW)
+
+    def test_end_means_ended_regardless_of_recency(self, tmp_path):
+        make_session(tmp_path, "over", kind="end", ago=timedelta(minutes=1))
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.status == "ended"
+        assert agent.live is False
+
+    def test_the_four_statuses_are_the_contracted_ones(self):
+        """`working | waiting_input | idle | ended` is frozen in the
+        multiplai-gui API contract. This view must not coin a fifth."""
+        for kind, ago in (("notification", timedelta(minutes=1)),
+                          ("stop", timedelta(minutes=1)),
+                          ("start", timedelta(days=3)),
+                          ("end", timedelta(minutes=1))):
+            assert fleet._status_of(kind, NOW - ago, NOW) in {
+                "working", "waiting_input", "idle", "ended"
+            }
+
+
+# ---------------------------------------------------------------------------
+# Criterion 5 — collisions
+# ---------------------------------------------------------------------------
+
+class TestCollisions:
+
+    def test_two_sessions_sharing_one_file_produce_exactly_one_line(self, tmp_path):
+        make_session(tmp_path, "a", project="alpha")
+        make_session(tmp_path, "b", project="beta")
+        make_checkpoint(tmp_path, "a", files=("src/shared.py", "src/only-a.py"))
+        make_checkpoint(tmp_path, "b", files=("src/shared.py", "src/only-b.py"))
+
+        f = fleet.collect(tmp_path, NOW)
+        md = fleet.render_agents_md(f, NOW)
+        section = md.split("## Collisions", 1)[1]
+        lines = [ln for ln in section.splitlines() if ln.startswith("- ")]
+
+        assert len(f.collisions) == 1
+        assert f.collisions[0].path == "src/shared.py"
+        assert sorted(f.collisions[0].labels) == ["alpha@a", "beta@b"]
+        assert len(lines) == 1
+
+    def test_two_disjoint_sessions_produce_none(self, tmp_path):
+        make_session(tmp_path, "a")
+        make_session(tmp_path, "b")
+        make_checkpoint(tmp_path, "a", files=("src/only-a.py",))
+        make_checkpoint(tmp_path, "b", files=("src/only-b.py",))
+
+        f = fleet.collect(tmp_path, NOW)
+        md = fleet.render_agents_md(f, NOW)
+
+        assert f.collisions == []
+        assert "_None — no file is held by two live agents._" in md
+
+    def test_an_ended_session_does_not_collide(self, tmp_path):
+        """Two finished sessions that touched the same file is history, not a
+        thing to go look at."""
+        make_session(tmp_path, "a", kind="end")
+        make_session(tmp_path, "b")
+        make_checkpoint(tmp_path, "a", files=("src/shared.py",))
+        make_checkpoint(tmp_path, "b", files=("src/shared.py",))
+
+        assert fleet.collect(tmp_path, NOW).collisions == []
+
+    def test_one_session_listing_a_file_twice_is_not_a_collision(self, tmp_path):
+        make_session(tmp_path, "a")
+        make_checkpoint(tmp_path, "a", files=("src/x.py", "src/x.py"))
+
+        assert fleet.collect(tmp_path, NOW).collisions == []
+
+    def test_three_sessions_on_one_file_is_still_one_line(self, tmp_path):
+        for sid in ("a", "b", "c"):
+            make_session(tmp_path, sid, project=sid)
+            make_checkpoint(tmp_path, sid, files=("src/hot.py",))
+
+        f = fleet.collect(tmp_path, NOW)
+
+        assert len(f.collisions) == 1
+        assert sorted(f.collisions[0].labels) == ["a@a", "b@b", "c@c"]
+
+    def test_two_worktrees_of_one_project_are_told_apart(self, tmp_path):
+        """The common real collision: same project, two tabs. Labelling both
+        "workspace" identifies nobody, which is the same as no collision line."""
+        for sid, wt in (("a", "feat-one"), ("b", "feat-two")):
+            gitdir = tmp_path / "repo" / ".git" / "worktrees" / wt
+            gitdir.mkdir(parents=True)
+            (gitdir / "HEAD").write_text(f"ref: refs/heads/{wt}\n")
+            checkout = tmp_path / wt
+            checkout.mkdir()
+            (checkout / ".git").write_text(f"gitdir: {gitdir}\n")
+            make_session(tmp_path, sid, project="workspace", cwd=str(checkout))
+            make_checkpoint(tmp_path, sid, files=("src/hot.py",))
+
+        labels = fleet.collect(tmp_path, NOW).collisions[0].labels
+
+        assert sorted(labels) == ["workspace@feat-one", "workspace@feat-two"]
+
+    def test_identical_labels_fall_back_to_the_session_id(self, tmp_path):
+        """Two tabs in the same worktree. Nothing but the id distinguishes
+        them, so the label must carry it rather than repeat itself."""
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+        for sid in ("aaaa1111-x", "bbbb2222-y"):
+            make_session(tmp_path, sid, project="workspace", cwd=str(repo))
+            make_checkpoint(tmp_path, sid, files=("src/hot.py",))
+
+        labels = sorted(fleet.collect(tmp_path, NOW).collisions[0].labels)
+
+        assert labels == ["workspace@main (aaaa1111)", "workspace@main (bbbb2222)"]
+
+
+class TestEndedSessions:
+    """Ended sessions are counted, not listed — 105 of them to 35 live against
+    the real registry, which turned the file into a graveyard."""
+
+    def test_they_do_not_get_an_entry(self, tmp_path):
+        make_session(tmp_path, "over", kind="end", project="finished")
+        make_checkpoint(tmp_path, "over", intent="Something long since done")
+
+        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert "Something long since done" not in md
+        assert "## Ended" not in md
+
+    def test_they_are_counted_in_the_header(self, tmp_path):
+        make_session(tmp_path, "live")
+        for i in range(3):
+            make_session(tmp_path, f"over{i}", kind="end")
+
+        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert "1 live" in md
+        assert "3 ended, not listed" in md
+
+    def test_no_ended_sessions_means_no_mention_of_them(self, tmp_path):
+        make_session(tmp_path, "live")
+
+        assert "ended" not in fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+
+# ---------------------------------------------------------------------------
+# Parsing "Involved files"
+# ---------------------------------------------------------------------------
+
+class TestInvolvedFilesParsing:
+
+    def test_backticked_paths_with_prose(self):
+        body = "- `src/a.py` — the thing\n- `docs/b.md` — the other thing\n"
+
+        assert fleet.parse_involved_files(body) == ["src/a.py", "docs/b.md"]
+
+    def test_bare_paths_with_an_em_dash_description(self):
+        body = "- src/a.py — the thing\n- docs/b.md - other\n"
+
+        assert fleet.parse_involved_files(body) == ["src/a.py", "docs/b.md"]
+
+    def test_prose_that_is_not_a_path_is_not_counted(self):
+        """Counting a sentence as a filename would invent collisions."""
+        body = "- none yet\n- TBD\n- `src/real.py` — this one is real\n"
+
+        assert fleet.parse_involved_files(body) == ["src/real.py"]
+
+    def test_duplicates_within_one_checkpoint_collapse(self):
+        body = "- `src/a.py` — x\n- `src/a.py` — y\n"
+
+        assert fleet.parse_involved_files(body) == ["src/a.py"]
+
+    def test_an_empty_section_yields_nothing(self):
+        assert fleet.parse_involved_files("") == []
+        assert fleet.parse_involved_files("_None._") == []
+
+
+# ---------------------------------------------------------------------------
+# fleet.txt — the status-line reading
+# ---------------------------------------------------------------------------
+
+class TestFleetLine:
+
+    def test_it_reads_like_the_plan_says(self, tmp_path):
+        for i in range(4):
+            make_session(tmp_path, f"w{i}", ago=timedelta(hours=1))
+        make_session(tmp_path, "n1", kind="notification")
+        make_session(tmp_path, "n2", kind="notification")
+        make_session(tmp_path, "old", ago=timedelta(days=3))
+        make_checkpoint(tmp_path, "w0", files=("src/hot.py",))
+        make_checkpoint(tmp_path, "w1", files=("src/hot.py",))
+
+        line = fleet.render_fleet_line(fleet.collect(tmp_path, NOW), NOW)
+
+        assert line == "7 fronts · 2 need you · oldest 3d · 1 collision\n"
+
+    def test_zero_valued_segments_are_dropped(self, tmp_path):
+        make_session(tmp_path, "a", ago=timedelta(hours=2))
+
+        line = fleet.render_fleet_line(fleet.collect(tmp_path, NOW), NOW)
+
+        assert line == "1 front · oldest 2h\n"
+
+    def test_no_live_sessions_renders_nothing(self, tmp_path):
+        """A permanent `0 fronts` in every tmux tab is noise, not a reading."""
+        make_session(tmp_path, "over", kind="end")
+
+        assert fleet.render_fleet_line(fleet.collect(tmp_path, NOW), NOW) == ""
+
+    def test_it_is_a_single_line(self, tmp_path):
+        make_session(tmp_path, "a", kind="notification")
+
+        line = fleet.render_fleet_line(fleet.collect(tmp_path, NOW), NOW)
+
+        assert line.count("\n") == 1
+        assert len(line) < 80
+
+    @pytest.mark.parametrize("delta,expected", [
+        (timedelta(seconds=5), "just now"),
+        (timedelta(minutes=12), "12m"),
+        (timedelta(hours=5), "5h"),
+        (timedelta(days=3, hours=4), "3d"),
+    ])
+    def test_age_formatting(self, delta, expected):
+        assert fleet.format_age(delta) == expected
+
+
+# ---------------------------------------------------------------------------
+# Criterion 4 — the cache property
+# ---------------------------------------------------------------------------
+
+class TestCacheProperty:
+
+    def _fleet_dir(self, tmp_path):
+        make_session(tmp_path, "a", project="alpha", kind="notification")
+        make_session(tmp_path, "b", project="beta", ago=timedelta(hours=30))
+        make_session(tmp_path, "c", project="gamma", kind="end")
+        make_checkpoint(tmp_path, "a", files=("src/shared.py",))
+        make_checkpoint(tmp_path, "b", files=("src/shared.py", "src/b.py"))
+        return tmp_path
+
+    def test_delete_both_outputs_and_they_come_back_identical(self, tmp_path):
+        data = self._fleet_dir(tmp_path)
+        agents_path, fleet_path = fleet.write_fleet_view(data, NOW)
+        before = (agents_path.read_text(), fleet_path.read_text())
+
+        agents_path.unlink()
+        fleet_path.unlink()
+        fleet.write_fleet_view(data, NOW)
+
+        assert (agents_path.read_text(), fleet_path.read_text()) == before
+
+    def test_only_the_generation_stamp_differs_across_runs(self, tmp_path):
+        """Proven at the render layer with two different `now` values a second
+        apart: everything except the stamp must be a pure function of the two
+        stores."""
+        data = self._fleet_dir(tmp_path)
+        first = fleet.render_agents_md(fleet.collect(data, NOW), NOW)
+        later = NOW + timedelta(seconds=1)
+        second = fleet.render_agents_md(fleet.collect(data, later), later)
+
+        differing = [
+            (a, b) for a, b in zip(first.splitlines(), second.splitlines()) if a != b
+        ]
+
+        assert len(differing) == 1
+        assert differing[0][0].startswith("_Generated ")
+
+    def test_nothing_written_into_agents_md_survives_a_rerun(self, tmp_path):
+        """AGENTS.md must never become a fourth store. If someone edits it, the
+        next run overwrites — that is the property, not a bug."""
+        data = self._fleet_dir(tmp_path)
+        agents_path, _ = fleet.write_fleet_view(data, NOW)
+        expected = agents_path.read_text()
+
+        agents_path.write_text(expected + "\n## My own notes\n\nremember this\n")
+        fleet.write_fleet_view(data, NOW)
+
+        assert agents_path.read_text() == expected
+
+    def test_ordering_is_stable_when_timestamps_tie(self, tmp_path):
+        """Without a tiebreak, dict/glob ordering would make the cache property
+        flap on filesystems that don't sort."""
+        for sid in ("zzz", "aaa", "mmm"):
+            make_session(tmp_path, sid, ago=timedelta(hours=1))
+
+        once = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+        twice = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert once == twice
+        assert re.findall(r"session `(\w+)`", once) == ["aaa", "mmm", "zzz"]
+
+
+# ---------------------------------------------------------------------------
+# Rendering shape
+# ---------------------------------------------------------------------------
+
+class TestRendering:
+
+    def test_entries_carry_intent_next_action_and_files(self, tmp_path):
+        make_session(tmp_path, "a", project="alpha")
+        make_checkpoint(
+            tmp_path, "a",
+            intent="Rewiring the drain", nxt="Run the gates", files=("src/x.py",),
+        )
+
+        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert "**Doing:** Rewiring the drain" in md
+        assert "**Next:** Run the gates" in md
+        assert "`src/x.py`" in md
+
+    def test_groups_appear_only_when_populated(self, tmp_path):
+        make_session(tmp_path, "a", kind="notification")
+
+        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert "## Needs you (1)" in md
+        assert "## Working" not in md
+        assert "## Idle" not in md
+        assert "## Ended" not in md
+
+    def test_the_header_says_what_the_file_is(self, tmp_path):
+        make_session(tmp_path, "a")
+
+        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert "a cache of" in md
+        assert "delete it and it comes back" in md
+
+    def test_branch_is_read_off_disk_for_an_ordinary_repo(self, tmp_path):
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / ".git" / "HEAD").write_text("ref: refs/heads/feat/thing\n")
+        make_session(tmp_path, "a", cwd=str(repo))
+
+        assert fleet.collect(tmp_path, NOW).agents[0].branch == "feat/thing"
+
+    def test_a_worktree_says_so(self, tmp_path):
+        """Six worktrees of one repo is the normal case here; the branch alone
+        wouldn't tell him which tab is which."""
+        gitdir = tmp_path / "repo" / ".git" / "worktrees" / "mkt-agents"
+        gitdir.mkdir(parents=True)
+        (gitdir / "HEAD").write_text("ref: refs/heads/feat/agents\n")
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        (wt / ".git").write_text(f"gitdir: {gitdir}\n")
+        make_session(tmp_path, "a", cwd=str(wt))
+
+        branch = fleet.collect(tmp_path, NOW).agents[0].branch
+
+        assert branch == "feat/agents (worktree: mkt-agents)"
+
+    def test_a_detached_head_shows_the_short_sha(self, tmp_path):
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / ".git" / "HEAD").write_text("4afbf7ecafe0123456789\n")
+        make_session(tmp_path, "a", cwd=str(repo))
+
+        assert fleet.collect(tmp_path, NOW).agents[0].branch == "4afbf7ec"
+
+    def test_a_cwd_that_is_not_a_repo_is_blank_not_an_error(self, tmp_path):
+        make_session(tmp_path, "a", cwd=str(tmp_path / "nowhere"))
+
+        assert fleet.collect(tmp_path, NOW).agents[0].branch == ""
+
+
+# ---------------------------------------------------------------------------
+# Criterion 3 — where the files land
+# ---------------------------------------------------------------------------
+
+class TestOutputLocation:
+
+    def test_both_files_land_in_the_data_dir(self, tmp_path):
+        make_session(tmp_path, "a")
+
+        agents_path, fleet_path = fleet.write_fleet_view(tmp_path, NOW)
+
+        assert agents_path == tmp_path / "AGENTS.md"
+        assert fleet_path == tmp_path / "fleet.txt"
+        assert agents_path.exists() and fleet_path.exists()
+
+    def test_nothing_is_written_to_now(self, tmp_path):
+        """`now/*.md` is globbed by the hub into one NowCard per filename, so an
+        AGENTS.md there would surface as a bogus project called "AGENTS"."""
+        data = tmp_path / "data"
+        now_dir = tmp_path / "now"
+        now_dir.mkdir()
+        make_session(data, "a")
+
+        fleet.write_fleet_view(data, NOW)
+
+        assert list(now_dir.iterdir()) == []
