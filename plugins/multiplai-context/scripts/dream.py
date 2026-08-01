@@ -899,7 +899,8 @@ async def _generate_proposal(
 
     response = await client.query(system=_PROPOSAL_SYSTEM, messages=messages)
     cleaned = await _critique_proposal(client, response.content, memory_context)
-    validated = _with_routing_warnings(cleaned, memory_contents)
+    sourced = _with_repaired_citations(cleaned, get_paths().learnings_dir)
+    validated = _with_routing_warnings(sourced, memory_contents)
     return _with_conflict_resolutions(validated, all_learnings, memory_contents)
 
 
@@ -1075,6 +1076,56 @@ def _with_conflict_resolutions(
     logger.info("Conflict-edit pass: %d resolution(s) prepended",
                 section.count("\n### "))
     return f"{section}\n\n---\n\n{proposal}"
+
+
+def _with_repaired_citations(proposal: str, learnings_dir: Path) -> str:
+    """Correct ``**Source:**`` citations that name the wrong learnings file.
+
+    A record that opens ``## Session Learnings — 2026-07-28T20:54`` but lives in
+    ``2026-07-29.md`` (its session ran past midnight) is sometimes cited under
+    the timestamp's date rather than the file it was rendered from. The line
+    number stays right, which is what lets `lib/citation_repair` fix the
+    filename deterministically instead of guessing.
+
+    Fail-open like the routing and conflict gates: a crash here must never lose
+    a generated proposal. See `lib/citation_repair` for why it repairs only
+    provably-broken, unambiguously-resolvable citations.
+    """
+    try:
+        from lib import citation_repair
+
+        blocks, files = _collect_blocks(learnings_dir)
+        learnings = {}
+        for f in files:
+            try:
+                learnings[f.name] = f.read_text()
+            except OSError:
+                logger.warning("Could not read %s for citation repair", f.name)
+
+        repaired, findings = citation_repair.repair_citations(
+            proposal, blocks, learnings
+        )
+        section = citation_repair.render_findings(findings)
+    except Exception:
+        logger.exception("Citation repair failed; proposal left as written")
+        return proposal
+
+    if not findings:
+        logger.info("Citations verified — every **Source:** line resolves")
+        return proposal
+
+    fixed = sum(1 for f in findings if f.repaired)
+    logger.info(
+        "Citation repair: %d corrected, %d left unresolved",
+        fixed, len(findings) - fixed,
+    )
+    for finding in findings:
+        if not finding.repaired:
+            logger.warning(
+                "Unverifiable citation %s:%d — %s",
+                finding.cited_file, finding.line, finding.reason,
+            )
+    return f"{repaired.rstrip()}\n\n---\n\n{section}"
 
 
 def _with_routing_warnings(proposal: str, memory_contents: dict[str, str]) -> str:
@@ -1491,7 +1542,11 @@ async def dream_report() -> None:
 
         critic_stats: dict = {}
         cleaned = await _critique_proposal(client, merged, memory_context, critic_stats)
-        validated = _with_routing_warnings(cleaned, memory_contents)
+        # Repair citations before the deterministic sections are attached, so the
+        # regex only ever sees model-written provenance and cannot rewrite a
+        # citation that this code put there itself.
+        sourced = _with_repaired_citations(cleaned, learnings_dir)
+        validated = _with_routing_warnings(sourced, memory_contents)
         pending_text = "\n\n".join(b.text for b in pending)
         proposal = _with_conflict_resolutions(validated, pending_text, memory_contents)
     except Exception:

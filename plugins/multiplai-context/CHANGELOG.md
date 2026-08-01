@@ -32,6 +32,17 @@ Nothing yet.
 
 ### Fixed
 
+- **`/dream` no longer cites the wrong file for some of its sources.** Every
+  entry in a proposal ends with a `**Source:**` line naming the learnings file
+  and line it came from, so you can check an entry before applying it. When a
+  session ran past midnight its notes are saved into the *next* day's file, and
+  `/dream` sometimes cited it under the earlier date — sending you to a file
+  where that line doesn't exist. On a large backlog about 2% of citations were
+  affected. They are now corrected automatically wherever the right file can be
+  identified beyond doubt, and a `## Citation Repairs` section at the end of the
+  proposal lists every correction made. Citations that can't be verified are
+  listed there too, and left exactly as written rather than guessed at.
+
 - **`/dream` no longer loses a chunk of learnings on its first run.** The very
   first run on a machine had to guess how fast drafting goes, and it guessed
   nearly twice too fast — so it built chunks bigger than it could finish inside
