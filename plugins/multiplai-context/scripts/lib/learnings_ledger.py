@@ -23,9 +23,10 @@ consolidates only the records whose hash it has not seen. "Process what's new"
 becomes a set difference, a killed run resumes instead of redoing, and repeated
 runs are idempotent.
 
-Deletion of learnings files stays exactly where it was — ``dream --auto`` after a
-successful apply, and ``/dream-remember`` after review. :func:`prune` then drops
-the orphaned keys.
+Deletion of learnings files happens in exactly two places: ``dream --auto`` after a
+successful apply, and ``dream --gc-learnings``, which removes a file only once
+every record in it is recorded here **and** no proposal citing it is still
+pending. :func:`prune` then drops the orphaned keys.
 
 Concurrency: callers hold dream's exclusive run lock, so the read-modify-write in
 :func:`record` needs no locking of its own. The write is still atomic (temp file

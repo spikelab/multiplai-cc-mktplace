@@ -141,37 +141,57 @@ item the user approved:
 
 Unflagged items proceed normally.
 
-### Applying edits
+### Applying edits — one pass per target file
 
-For each approved update:
+The proposal already groups updates under ``## Updates for `file` ``, so **the target
+file is the unit of work, not the item**. Working item by item re-reads the same memory
+file once per update bound for it and spends a fresh `uv run` cold start on every
+decision; a 70-item review across 14 target files exhausted its context window that way
+and had to hand off mid-review after five files.
 
-1. Read the target memory file fresh (it may have changed since proposal was generated).
-2. Find the right insertion point (section header mentioned in the proposal).
-3. Apply with the Edit tool — one edit at a time per file, in order.
-4. Update "Last Updated" date if present.
-5. Confirm each edit was applied.
-6. **Record it in the proposal** — move the item into `## Processed` so it stops being
-   pending (and shows the same way the GUI would leave it):
+For each target file that has at least one **decided** item (approved or rejected):
+
+1. Read the target memory file **once** — it may have changed since the proposal was
+   generated. Don't re-read it between edits.
+2. Apply that file's approved edits with the Edit tool, in item order, at the insertion
+   point each item names (its `**Section:**`).
+3. Update the file's "Last Updated" date **once**, after the last edit, if present.
+4. Record **every** decision for that file in **one** call — approved *and* rejected.
+   `--decisions -` reads a JSON array from stdin, so a large review hits no argv limit
+   and there are no shell quoting rules to get wrong:
+
    ```bash
    uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --mark-processed \
-     --proposal <exact-proposal-path> --kind update --file <target.md> --index <N> \
-     --status applied --target <target.md>
+     --proposal <exact-proposal-path> --decisions - <<'JSON'
+   [
+     {"kind":"update","file":"technical-pref.md","index":3,"status":"applied","target":"technical-pref.md"},
+     {"kind":"update","file":"technical-pref.md","index":4,"status":"edited","target":"technical-pref.md"},
+     {"kind":"update","file":"technical-pref.md","index":7,"status":"rejected"}
+   ]
+   JSON
    ```
-   Use `--status edited` when the user modified the text before approving. `<N>` is the
-   `### N.` number under that file's `## Updates for` heading.
 
-### Recording rejects
+   - `file` — the ``## Updates for `file` `` group the item is listed under.
+   - `index` — its `### N.` number **within that group**.
+   - `status` — what actually happened: `applied`, `edited` (the user changed the text
+     before approving), or `rejected`.
+   - `target` — the memory file the text actually went to. Usually the same as `file`;
+     it differs only when you rerouted the item. Omit it for rejects.
 
-For each item the user explicitly rejected (and every item on a `none` review), record it
-too — a reject is a decision, and moving it to `## Processed` is what lets Step 6 archive:
+   The command prints `marked N processed, M unchanged` and rewrites the proposal
+   atomically, so a failure leaves it exactly as it was rather than half-decided.
 
-```bash
-uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --mark-processed \
-  --proposal <exact-proposal-path> --kind update --file <target.md> --index <N> --status rejected
-```
+Record per file rather than once at the very end: if the session is interrupted,
+everything already applied is already recorded and the review resumes at the next file
+instead of being re-decided from scratch.
 
-A reject writes nothing to memory. **Items the user neither approved nor rejected stay
-pending** — leave them in place (don't mark them); they remain for a later run or the GUI.
+**A reject is a decision.** Record rejects too — including every item on a `none`
+review — because Step 6 can only archive once nothing is left pending. A reject writes
+nothing to memory. **Items the user neither approved nor rejected stay pending**: leave
+them out of the JSON entirely and they remain for a later run or the GUI.
+
+**Batching is mechanics, never consent.** `[RULE-PROPOSAL]` items are still presented
+and answered one at a time (above). Only the recording is batched.
 
 ---
 
@@ -205,42 +225,59 @@ If the file already exists for today, append new items under the same heading (d
 duplicate the heading). Report the path and count to the user. Skip this step if there are no
 action items or the user approved `none`.
 
-Then **record each decided action item** in the proposal (approved *and* rejected), same as
-memory updates but with `--kind action` (no `--file`):
+Then **record every decided action item** (approved *and* rejected) in **one** call, same
+JSON shape as Step 4 with `"kind":"action"` and no `file`:
 
 ```bash
 uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --mark-processed \
-  --proposal <exact-proposal-path> --kind action --index <N> --status applied   # or rejected
+  --proposal <exact-proposal-path> --decisions - <<'JSON'
+[
+  {"kind":"action","index":1,"status":"applied"},
+  {"kind":"action","index":3,"status":"rejected"}
+]
+JSON
 ```
 
-`<N>` is the `### A{N}.` number.
+`index` is the `### A{N}.` number. Undecided action items stay out of the array.
 
 ---
 
-## Step 5: Clean Up Processed Learnings
+## Step 5: Collect Consolidated Learnings
 
-**Only when the proposal is now fully decided** — i.e. nothing is left pending, every item
-is under `## Processed` (approved *and* rejected). If you deliberately left some items
-pending (the user decided only a subset), **skip this step**: those learnings still back
-the pending items, so keep them until the proposal is finished (here or in the GUI).
+Always run the collector, then report what it removed:
 
-When fully decided:
+```bash
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --gc-learnings
+```
 
-1. Delete ALL `.md` files in `.multiplai/learnings/` that were listed as sources in the proposal.
-   - Today's file exception: delete anyway — the Stop hook recreates it if needed.
-   - Rejected items get deleted too — reviewed-and-rejected is done.
-2. Git history preserves originals for forensic review.
+It is pure code — no model call, no lock — and it makes the keep/delete call **per file,
+in code**, so you never have to. A learnings file is removed only when **both** hold:
 
-**Never bulk-clear the dreams directory.** Cleanup targets `.multiplai/learnings/`
-only — never glob-delete `.multiplai/dreams/processed-learnings-*.md`. A batch or
-recovery run can leave another session's proposal mid-review there; those files are
-not yours to remove, and `dream.py` already writes non-colliding `-2`/`-3` suffixes so
-nothing needs clearing. (Step 6's `--archive` flag moving the ONE proposal file this
-session reviewed into `dreams/applied/` or `dreams/rejected/` is fine and expected —
-dream.py moves the specific path you give it; the ban is on globbing files other
-sessions may own.) If you must stop a running `dream.py`/catalog job, kill its
-specific python PID — **never `pkill -f <script>`**, which also matches the calling
-shell and kills your own session.
+- every `## Session Learnings` record in it has already been consolidated (dream's ledger
+  has its hash), **and**
+- no proposal citing it is still pending in `.multiplai/dreams/` — i.e. every proposal it
+  fed has moved to `applied/`, `rejected/`, or `superseded/`.
+
+Everything else is kept, with the reason printed beside it. Read that output and pass it
+on to the user; don't second-guess it.
+
+This is why the old "delete the sources, but only if the whole proposal is now decided"
+judgement is gone. Getting it wrong deleted the evidence behind a review that was still
+running, and there was no way back. Now: items you deliberately left pending keep their
+source files automatically, so their `**Source:** file:line` citations still resolve for
+whoever finishes the review (here or in the GUI); and a file appended to since the last
+dream run — today's, usually — is kept for the same reason, because its newest records
+are not consolidated yet. Git history preserves whatever does get collected.
+
+**You do not delete learnings files yourself, and you never bulk-clear the dreams
+directory.** Never glob-delete `.multiplai/dreams/processed-learnings-*.md`: a batch or
+recovery run can leave another session's proposal mid-review there, those files are not
+yours to touch, and `dream.py` already writes non-colliding `-2`/`-3` suffixes so nothing
+needs clearing. (Step 6's `--archive` moving the ONE proposal file this session reviewed
+into `dreams/applied/` or `dreams/rejected/` is fine and expected — dream.py moves the
+specific path you give it; the ban is on globbing files other sessions may own.) If you
+must stop a running `dream.py`/catalog job, kill its specific python PID — **never
+`pkill -f <script>`**, which also matches the calling shell and kills your own session.
 
 ---
 
@@ -261,9 +298,10 @@ uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --stamp \
 
 Where `<M>` = number of memory files actually edited and `<N>` = number of updates
 applied. When the user chose `none`, use `--files-updated 0 --learnings-processed 0`
-and add **`--archive-as rejected`** — a fully rejected proposal is reviewed-and-done
-(its learnings are already deleted by Step 5) and must not linger looking pending; it
-lands in `dreams/rejected/` instead of `dreams/applied/`.
+and add **`--archive-as rejected`** — a fully rejected proposal is reviewed-and-done and
+must not linger looking pending; it lands in `dreams/rejected/` instead of
+`dreams/applied/`. (Its learnings are collected by Step 5 on this run or the next one,
+once the archive move makes the proposal no longer pending.)
 
 Pass the exact path recorded in Step 1 — never re-discover the file here (a newer
 pending proposal from another session may have arrived mid-review; see the Step 5
@@ -307,7 +345,7 @@ Print a brief summary:
   - technical-pref.md: N updates
   - preferences.md: N updates
 ✓ Wrote N action items to PLANS/dream-actions-{date}.md
-✓ Deleted N learnings files
+✓ Collected N learnings files (M kept — reason)
 ✓ Archived proposal to .multiplai/dreams/applied/
 ⊘ Skipped N updates (items #X, #Y — not approved)
 ```
@@ -323,5 +361,5 @@ failed or was somehow not performed, say so instead of printing the ✓ line.
 - Be aggressive about deduplication. The same lesson appearing 4× should become ONE entry.
 - Respect trust levels — don't apply untrusted single-occurrence items unless the user explicitly approves.
 - Match the existing style of each memory file exactly.
-- Never silently drop learnings — filtered-out items still get deleted (they're in the proposal's "Filtered Out" section so the user saw them).
+- Never silently drop learnings — filtered-out items are still collected by Step 5 (they're in the proposal's "Filtered Out" section so the user saw them).
 - Do not ask for confirmation on items the user didn't mention in their approval range.

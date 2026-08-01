@@ -18,6 +18,48 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.10.2] - 2026-07-31
+
+### Fixed
+- **A big memory file no longer runs out of time while being updated.** Writing
+  approved changes back into a memory file was given the same fixed time limit
+  no matter how much there was to write. Your largest files are exactly the ones
+  that collect the most updates — a recent backlog had 41 KB of pending changes
+  for `claude-code-tools.md` and 38 KB for `multiplai.md` — and on a slow call
+  those could run out of time and be skipped, silently leaving the file
+  untouched while smaller files updated fine. The time limit now scales with how
+  much is actually being written. A file that still runs out is left exactly as
+  it was, never half-written, and the log now names the file and its size.
+
+### Changed
+- **`/dream-remember` now applies a review per target file instead of per
+  item.** A large proposal used to cost one script cold start and a fresh
+  read of the same memory file for every single decision — a 70-item review
+  across 14 files ran out of context part-way through and had to hand off,
+  having applied five. The skill now reads each memory file once, applies all
+  of its approved edits, updates `Last Updated` once, and records every
+  decision for that file — approved *and* rejected — in one call. Reviews that
+  previously needed a compaction handoff now finish in one sitting. Nothing
+  about *consent* changed: `[RULE-PROPOSAL]` items are still presented and
+  answered one at a time, and items you neither approved nor rejected stay
+  pending.
+
+### Added
+- **`dream.py --mark-processed --decisions -`** takes a JSON array of
+  decisions on stdin — `{"kind","file","index","status","target"}` per item —
+  and marks them all in one read and one write of the proposal, printing
+  `marked N processed, M unchanged`. The write is atomic, so an interrupted
+  or failed call leaves the proposal exactly as it was rather than
+  half-decided. The existing single-item flags are unchanged and still
+  supported.
+- **`dream.py --gc-learnings`** replaces the skill's judgement call about when
+  it is safe to delete consolidated learnings files. Pure code, no model call:
+  a file is removed only when every `## Session Learnings` record in it has
+  been consolidated **and** no proposal citing it is still pending, so a
+  review you left half-finished keeps the sources its `**Source:**` citations
+  point at. It prints what it removed and why it kept the rest. Step 5 of
+  `/dream-remember` now runs this instead of deciding by hand.
+
 ## [0.10.1] - 2026-07-31
 
 ### Changed
