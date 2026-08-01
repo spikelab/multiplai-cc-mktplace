@@ -83,6 +83,49 @@ def _drop_marker(marker_path: str) -> None:
             logger.warning("Could not remove processed marker %s: %s", marker_path, e)
 
 
+def _retire_checkpoint(data_dir: Path, session_id: str, disposition: dict) -> None:
+    """Collect this session's checkpoint, now that the diary supersedes it.
+
+    Called on the one edge that makes it safe: a diary entry for the session
+    now exists on disk. A checkpoint is *live state* — roughly where a session
+    is right now — and the diary is the permanent record of what it did, so
+    past that edge the directory is dead weight. It never was collected: 182
+    of them had accumulated by 2026-07-31, one per session ever run.
+
+    **A parked session is the deliberate exception.** ``AGENTS.md`` renders its
+    intent, next action and files-in-hand from the checkpoint, and a parked
+    session is precisely the one still being listed weeks later — deleting its
+    checkpoint would leave the registry entry it deliberately kept alive with
+    nothing to say. (The other two guards, an in-flight writer and an
+    unconsumed rebuild marker, live in ``checkpoint.retire_checkpoint``: they
+    are facts about the checkpoint store, not about this pipeline.)
+
+    Best-effort by construction. Disk is not worth a diary entry, so nothing
+    here may raise into the extraction path.
+    """
+    if not session_id:
+        return
+    state = (disposition or {}).get("state") or DEFAULT_DISPOSITION
+    if state == "parked":
+        logger.info("Session %s is parked; keeping its checkpoint", session_id)
+        return
+    try:
+        from lib import checkpoint as cp
+
+        removed, kept = cp.retire_checkpoint(data_dir, session_id)
+    except Exception:
+        logger.exception("Checkpoint retirement failed for %s (non-fatal)", session_id)
+        return
+    if kept:
+        logger.info("Kept checkpoint for %s: %s", session_id, kept)
+    elif removed:
+        log_event(
+            "checkpoint", "retire",
+            "retired checkpoint — superseded by the diary entry",
+            session_id=session_id,
+        )
+
+
 async def _refresh_now(cwd: str, session_id: str) -> None:
     """Re-summarize this session's project ``now`` file after a diary write.
 
@@ -228,6 +271,7 @@ async def extract() -> bool:
                 path=str(diary_path),
             )
             await _refresh_now(cwd, session_id)
+            _retire_checkpoint(paths.data_dir(), session_id, disposition)
 
     wrote = append_learnings(units, learnings_file, session_id, timestamp)
     if wrote:
