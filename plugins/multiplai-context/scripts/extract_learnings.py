@@ -25,11 +25,13 @@ from multiplai_core.paths import get_paths
 from multiplai_core.model_client import create_client
 from multiplai_core.log_utils import setup_logging, log_event
 from lib.extraction import (
-    extract_units,
+    DEFAULT_DISPOSITION,
+    extract_units_and_disposition,
     load_target_charters,
     write_diary_entries,
     append_learnings,
 )
+from lib.session_registry import record_disposition
 from lib.transcript_distiller import distill
 
 logger = setup_logging("extract_learnings")
@@ -149,6 +151,11 @@ async def extract() -> bool:
 
     valid_targets = load_target_charters(memory_dir, paths.catalogs_dir())
     units: list[dict] = []
+    # Disposition is session-level but extraction runs per chunk, so only the
+    # FINAL chunk's answer counts — that is the one holding the closing
+    # exchange, and the closing exchange is the entire signal. Earlier chunks
+    # end mid-work and would always say "active".
+    disposition = {"state": DEFAULT_DISPOSITION, "reason": ""}
     llm_failed = False
     if chunks:
         try:
@@ -159,12 +166,14 @@ async def extract() -> bool:
             )
             for i, chunk in enumerate(chunks):
                 try:
-                    chunk_units = await extract_units(
+                    chunk_units, chunk_disposition = await extract_units_and_disposition(
                         chunk,
                         valid_targets=valid_targets,
                         client=client,
                     )
                     units.extend(chunk_units)
+                    if i == len(chunks) - 1:
+                        disposition = chunk_disposition
                 except Exception:
                     logger.exception(
                         "LLM call failed during extraction (chunk %d/%d)",
@@ -174,6 +183,25 @@ async def extract() -> bool:
         except Exception:
             logger.exception("Could not create model client for extraction")
             llm_failed = True
+
+    # Third projection of the same pass, beside the diary and the learnings
+    # backlog. Recorded here rather than down in the write section so that a
+    # session with nothing worth a diary entry — "park it, I'm out" and
+    # little else — still gets labelled. Skipped when the LLM failed: the
+    # marker is retained for retry and a fabricated "active" would be a
+    # guess written as a fact.
+    if not llm_failed and session_id:
+        state = disposition.get("state") or DEFAULT_DISPOSITION
+        if record_disposition(
+            paths.data_dir(), session_id, state, disposition.get("reason", "")
+        ) and state != DEFAULT_DISPOSITION:
+            logger.info("Session %s recorded as %s", session_id, state)
+            log_event(
+                "session", "disposition",
+                f"session left {state}: {disposition.get('reason', '')}".strip(),
+                session_id=session_id,
+                disposition=state,
+            )
 
     if not units:
         if llm_failed:

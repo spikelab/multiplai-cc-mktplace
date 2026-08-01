@@ -191,6 +191,31 @@ did, not what they said they wanted. Do NOT mark ordinary approval to proceed
 ("yes", "go ahead", "sounds good") as a verdict — that is consent to an action,
 not a judgment about output style.
 
+## Session disposition (how the session was left)
+
+AFTER the last <unit> block, emit exactly one:
+
+<disposition>
+state: active | parked | done
+reason: one line — the closing words that decided it
+</disposition>
+
+Judge ONLY from how the conversation ends — the last few exchanges, not the \
+work's overall completeness.
+
+- `done` — the user signalled the work is finished. "we're done", "that's it", \
+"ship it", "merged, thanks", "closing this out".
+- `parked` — the user signalled they are stopping WITHOUT finishing, intending \
+to come back. "park it for now", "let's pick this up tomorrow", "leave it \
+here", "shelve this", "I'll come back to this".
+- `active` — anything else, and the default. No closing signal, an abrupt end, \
+a session that simply stops mid-work, or a question left hanging. **When \
+unsure, emit `active`** — mislabelling live work as finished is the costly \
+error; leaving finished work labelled active costs nothing.
+
+Half-finished work the user did not comment on is `active`, not `parked`: \
+parked means they SAID they were setting it down.
+
 ## Rules
 
 - diary is PRIMARY — learnings are a projection of it
@@ -205,7 +230,8 @@ not a judgment about output style.
 
 ## Output
 
-Output ONLY <unit> blocks (or <no-units/>) — no markdown fences, no explanation.
+Output ONLY <unit> blocks (or <no-units/>), then one <disposition> block — \
+no markdown fences, no explanation.
 """
 
 
@@ -225,6 +251,57 @@ _DIARY_RE = re.compile(r"<diary>\n?(.*?)\n?</diary>", re.DOTALL)
 _LEARNING_RE = re.compile(r"<learning>(.*?)</learning>", re.DOTALL)
 _LEARNING_KEYS = frozenset({"trust", "type", "target", "description", "action"})
 _NO_UNITS_MARKER = "<no-units/>"
+
+# --- Session disposition ----------------------------------------------------
+# How the session was LEFT, which is a different axis from whether its process
+# is running. `Session.status` (working | waiting_input | idle | ended) is
+# liveness and is frozen in the multiplai-gui API contract; a session can be
+# `ended` and `parked`, or `idle` and `done`. This is a NEW key, never an
+# overload of that one.
+#
+# The design is Spike's, and its virtue is that there is no verb to remember
+# at the exact moment you are overwhelmed and leaving: you type "park it for
+# now" as you would anyway, and the extraction pass that is already reading
+# the whole transcript picks it up.
+DISPOSITIONS = ("active", "parked", "done")
+DEFAULT_DISPOSITION = "active"
+
+_DISPOSITION_RE = re.compile(r"<disposition>(.*?)</disposition>", re.DOTALL)
+_DISPOSITION_STATE_RE = re.compile(r"^\s*state\s*:\s*([a-z]+)", re.MULTILINE | re.IGNORECASE)
+_DISPOSITION_REASON_RE = re.compile(r"^\s*reason\s*:\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE)
+
+
+def parse_disposition(raw: str) -> dict:
+    """Read the session-level ``<disposition>`` block, if the model emitted one.
+
+    Returns ``{"state": ..., "reason": ...}``, always. **Never raises and
+    never fails extraction** — this field is a convenience layered on top of
+    a pipeline whose real job is the diary, and an unparseable disposition
+    must not cost a session its diary entry.
+
+    Absent, malformed, or an unrecognised state all fall back to ``active``.
+    That default is deliberately the safe direction: labelling live work
+    "done" hides it from the fleet view and stops the registry protecting it,
+    whereas leaving finished work labelled "active" costs nothing but a line.
+
+    The last block wins. Chunked transcripts are handled by the caller, which
+    keeps only the final chunk's answer — that is the chunk holding the
+    closing exchange, and the closing exchange is the whole signal.
+    """
+    blocks = _DISPOSITION_RE.findall(raw or "")
+    if not blocks:
+        return {"state": DEFAULT_DISPOSITION, "reason": ""}
+
+    body = blocks[-1]
+    state_match = _DISPOSITION_STATE_RE.search(body)
+    state = state_match.group(1).strip().lower() if state_match else ""
+    if state not in DISPOSITIONS:
+        if state:
+            logger.warning("Unrecognised disposition %r; treating as active", state)
+        state = DEFAULT_DISPOSITION
+
+    reason_match = _DISPOSITION_REASON_RE.search(body)
+    return {"state": state, "reason": reason_match.group(1).strip() if reason_match else ""}
 
 
 def _parse_learning(block: str) -> Optional[dict]:
@@ -292,6 +369,28 @@ async def extract_units(
     Returns list of unit dicts with 'timestamp', 'diary_entry', 'learnings'.
     Raises on LLM failure — caller decides whether to continue with
     correction-only output.
+
+    See :func:`extract_units_and_disposition` for the variant that also
+    returns how the session was left.
+    """
+    units, _ = await extract_units_and_disposition(
+        text, valid_targets=valid_targets, client=client
+    )
+    return units
+
+
+async def extract_units_and_disposition(
+    text: str,
+    *,
+    valid_targets: Sequence[Union[str, dict]],
+    client,
+) -> tuple[list[dict], dict]:
+    """:func:`extract_units`, plus the session-level disposition block.
+
+    Two functions rather than one changed signature: ``extract_units`` has
+    several callers and a large test surface, and only the live extraction
+    path cares how the session was left. The disposition rides along on the
+    *same* model response — it costs no extra call.
     """
     targets_block = (
         "\n".join(render_target_line(t) for t in valid_targets)
@@ -327,10 +426,15 @@ async def extract_units(
             }],
         )
         try:
-            return _parse_units(response.content)
+            units = _parse_units(response.content)
         except ExtractionParseError as e:
             last_error = e
             logger.warning("extraction parse failed (attempt %d): %s", attempt + 1, e)
+            continue
+        # Parsed only after the units did: a missing or malformed
+        # disposition falls back to "active" rather than costing the
+        # session its diary entry.
+        return units, parse_disposition(response.content)
     assert last_error is not None  # loop either returned or set last_error
     raise last_error
 

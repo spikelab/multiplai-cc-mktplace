@@ -50,6 +50,16 @@ GC_LIVE_AFTER_DAYS = 30
 
 _EVENT_KINDS = ("start", "stop", "notification", "end")
 
+# How the session was LEFT — a different axis from whether its process is
+# running. ``last_event.kind`` and the hub's ``Session.status``
+# (working | waiting_input | idle | ended) are liveness; this is intent. A
+# session can be ``end``-ed and ``parked``, or quiet and ``done``. Written by
+# the extraction pass from the closing exchange (see ``lib/extraction.py`` →
+# ``parse_disposition``), under its own key so the frozen status vocabulary is
+# never overloaded.
+DISPOSITION_KEY = "disposition"
+_DISPOSITIONS = ("active", "parked", "done")
+
 
 def registry_dir(data_dir: Path) -> Path:
     """Session registry directory: ``<data_dir>/sessions``."""
@@ -217,6 +227,68 @@ def record_event(data_dir: Path, hook_input: dict, kind: str) -> bool:
         return False
 
 
+def record_disposition(data_dir: Path, session_id: str, state: str, reason: str = "") -> bool:
+    """Record how a session was left: ``active | parked | done``.
+
+    A **new key**, never an overload of ``last_event.kind`` or the hub's
+    ``Session.status`` — those are frozen as liveness in the multiplai-gui API
+    contract, and a session can perfectly well be ``ended`` *and* ``parked``.
+
+    Takes the same per-entry flock as :func:`record_event` and preserves every
+    key it does not own, because this write races the hooks: extraction runs
+    minutes after ``SessionEnd``, and the session may have been resumed in the
+    meantime.
+
+    Refuses to create an entry that does not exist. A disposition without a
+    session is not a parked session — it is a stray file that GC would have to
+    learn about. Never raises; returns True when written.
+    """
+    try:
+        if state not in _DISPOSITIONS:
+            logger.warning("Unknown disposition %r; not recorded", state)
+            return False
+        session_id = str(session_id or "").strip()
+        if not session_id or "/" in session_id or session_id in (".", ".."):
+            return False
+
+        path = registry_dir(data_dir) / f"{session_id}.json"
+        if not path.exists():
+            logger.debug("No registry entry for %s; disposition not recorded", session_id)
+            return False
+
+        lock_fd = _lock_entry(path)
+        try:
+            try:
+                entry = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, ValueError):
+                return False
+            if not isinstance(entry, dict):
+                return False
+
+            entry[DISPOSITION_KEY] = {
+                "state": state,
+                "reason": str(reason or "")[:500],
+                "ts": _now_iso(),
+            }
+            atomic_write_json(path, entry)
+            return True
+        finally:
+            _unlock_entry(lock_fd)
+    except Exception:
+        logger.warning("Could not record session disposition", exc_info=True)
+        return False
+
+
+def entry_disposition(entry: dict) -> str:
+    """The disposition state of a parsed entry, defaulting to ``active``."""
+    block = entry.get(DISPOSITION_KEY)
+    if isinstance(block, dict):
+        state = str(block.get("state") or "").strip().lower()
+        if state in _DISPOSITIONS:
+            return state
+    return "active"
+
+
 def _entry_is_stale(
     path: Path, cutoff_ended: datetime, cutoff_live: datetime
 ) -> bool:
@@ -228,6 +300,14 @@ def _entry_is_stale(
     """
     try:
         entry = json.loads(path.read_text(encoding="utf-8"))
+        # A parked session is never stale. Measured asymmetry this fixes:
+        # transcripts survive a year (`cleanupPeriodDays = 365`), so
+        # `claude --resume <id>` works months later — but the registry entry
+        # vanished in 7 to 30 days. A parked idea therefore stayed *resumable*
+        # while becoming *invisible*, which is the original complaint. The
+        # session record IS the parked idea; nothing is copied anywhere.
+        if entry_disposition(entry) == "parked":
+            return False
         last = entry.get("last_event") or {}
         ts = datetime.fromisoformat(str(last.get("ts") or ""))
         if ts.tzinfo is None:
@@ -295,6 +375,10 @@ def gc_stale(
     removed too — they can never become readable again and would otherwise
     accumulate forever. A removed entry's orphaned ``.adopt`` marker goes
     with it.
+
+    **Entries with ``disposition: parked`` are never collected**, at any age.
+    Parking a session is the user saying "I am coming back to this", and the
+    entry is the only record of it — see :func:`_entry_is_stale`.
 
     Concurrency: removal takes the same per-entry flock the writers use and
     RE-CHECKS staleness under it, so an entry can't be deleted out from
