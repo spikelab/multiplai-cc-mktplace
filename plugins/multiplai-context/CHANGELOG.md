@@ -20,6 +20,16 @@ Nothing yet.
 
 ## [0.10.1] - 2026-07-31
 
+### Changed
+
+- **`/dream` now runs 8 consolidation calls at once instead of 4.** On a large
+  backlog four was simply too few to finish in a reasonable time: a measured
+  283 KB backlog is about 98 minutes of model work, which four workers cannot
+  get through in under ~24 minutes no matter how it is scheduled — the actual
+  run took 38. Eight roughly halves that. The trade is that `/dream` now uses
+  more of your machine while it runs; if you would rather it stayed out of the
+  way, `MULTIPLAI_DREAM_CONCURRENCY=4` (or any number) still wins.
+
 ### Fixed
 
 - **`/dream` no longer loses a chunk of learnings on its first run.** The very

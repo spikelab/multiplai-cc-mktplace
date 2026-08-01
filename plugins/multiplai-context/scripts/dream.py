@@ -60,7 +60,19 @@ CHUNK_TIMEOUT_S = 900.0
 
 # Each chunk spawns a Claude Code CLI subprocess. Unbounded fan-out over a dozen
 # chunks is a subprocess storm, so the gather runs behind a semaphore.
-DEFAULT_CONCURRENCY = 4
+#
+# 8, not 4, because 4 cannot finish a real backlog in a tolerable time. Measured
+# on the 283 KB fixture: 48.9 B/s over 19 chunks is 5,875 s of model work, which
+# four workers cannot do in under 24m28s however it is scheduled — the run took
+# 37m55s end to end. Eight halves the floor to ~12m14s (bounded below by the one
+# slowest chunk, 556 s), and the critic's to ~4m (bounded by its slowest batch,
+# 465 s).
+#
+# The cost is eight concurrent CLI subprocesses on a machine that is usually also
+# running the user's own session. That is the trade being made deliberately; the
+# semaphore still bounds it, and MULTIPLAI_DREAM_CONCURRENCY lowers it for anyone
+# who would rather wait than share the CPU.
+DEFAULT_CONCURRENCY = 8
 
 # Weight of the newest observation in the throughput EWMA. Low enough that one
 # slow chunk (a cold model, a retried call) does not swing the next run's plan.

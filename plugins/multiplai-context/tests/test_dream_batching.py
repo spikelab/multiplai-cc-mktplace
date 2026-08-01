@@ -531,11 +531,14 @@ class TestChunkedDraft:
 
     def test_concurrency_default_and_override(self, dream_env, monkeypatch):
         mod = _load_dream("dream_concurrency")
-        assert mod._concurrency() == 4
+        # 8 is measured, not chosen for roundness — see DEFAULT_CONCURRENCY.
+        # Four workers cannot clear a 283 KB backlog in under ~24 min at the
+        # throughput this fixture measured, whatever the scheduling.
+        assert mod._concurrency() == 8
         monkeypatch.setenv("MULTIPLAI_DREAM_CONCURRENCY", "2")
         assert mod._concurrency() == 2
         monkeypatch.setenv("MULTIPLAI_DREAM_CONCURRENCY", "nonsense")
-        assert mod._concurrency() == 4
+        assert mod._concurrency() == 8
 
 
 # ---------------------------------------------------------------------------
