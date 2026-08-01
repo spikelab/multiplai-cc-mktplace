@@ -225,6 +225,60 @@ class TestPendingCount:
     def test_missing_directory_counts_zero(self, tmp_path):
         assert extraction_drain.pending_count(tmp_path / "nothing") == 0
 
+    def test_an_orphan_in_flight_is_not_counted_as_pending(self, drain_dirs):
+        """The distinction the two counters exist to make.
+
+        A marker orphaned by a container that died mid-extraction is real work
+        — ``recover_stale_processing`` will requeue it — but it is invisible to
+        ``pending_count``. A caller that reports only the pending count
+        announces an empty queue and then drains something.
+        """
+        data_dir, _ = drain_dirs
+        orphan = data_dir / "processing_extractions" / "sess-orphan.json"
+        orphan.write_text(json.dumps({"session_id": "sess-orphan"}), encoding="utf-8")
+
+        assert extraction_drain.pending_count(data_dir) == 0
+        assert extraction_drain.processing_count(data_dir) == 1
+
+
+class TestProcessingCount:
+    def test_counts_only_in_flight_markers(self, drain_dirs):
+        data_dir, _ = drain_dirs
+        assert extraction_drain.processing_count(data_dir) == 0
+        _write_marker(data_dir, "sess-a")
+        assert extraction_drain.processing_count(data_dir) == 0
+
+        for sid in ("sess-b", "sess-c"):
+            (data_dir / "processing_extractions" / f"{sid}.json").write_text(
+                json.dumps({"session_id": sid}), encoding="utf-8"
+            )
+        assert extraction_drain.processing_count(data_dir) == 2
+
+    def test_missing_directory_counts_zero(self, tmp_path):
+        assert extraction_drain.processing_count(tmp_path / "nothing") == 0
+
+
+class TestDrainReportsBothQueues:
+    """Regression: the entry point must not report an empty queue and then work.
+
+    ``pending_count`` is sampled *before* ``process_deferred_extractions`` runs
+    its recovery step, so an orphan rescue logged only the pending count and
+    read as `0 marker(s) pending` → `Drained 1`. Verified against the source:
+    the log call has to name both queues.
+    """
+
+    def test_the_log_line_names_both_queues(self):
+        source = (SCRIPTS_DIR / "drain_extractions.py").read_text(encoding="utf-8")
+        assert "processing_count(data_dir)" in source
+        assert "%d pending, %d in flight" in source
+        assert "%d marker(s) pending" not in source
+
+    def test_the_entry_point_imports_both_counters(self):
+        import drain_extractions
+
+        assert drain_extractions.pending_count is extraction_drain.pending_count
+        assert drain_extractions.processing_count is extraction_drain.processing_count
+
 
 class TestSingleImplementation:
     """Criterion 1: the marker-move loop must appear exactly once."""

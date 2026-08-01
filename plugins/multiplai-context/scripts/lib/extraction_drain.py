@@ -94,9 +94,29 @@ def pending_count(data_dir: Path) -> int:
 
     Cheap enough for a caller that wants to decide whether launching a drain
     is worth it at all (the launcher checks this before spending a process).
+
+    **Not the whole queue.** A marker orphaned by a container that died
+    mid-extraction sits in ``processing_extractions/`` and is invisible here
+    until :func:`recover_stale_processing` requeues it — so a caller deciding
+    whether there is work to do must consult :func:`processing_count` as well.
     """
     try:
         return len(list((data_dir / "pending_extractions").glob("*.json")))
+    except OSError:
+        return 0
+
+
+def processing_count(data_dir: Path) -> int:
+    """How many markers are in flight in ``processing_extractions/``.
+
+    Non-zero means either a live child is working (normal, transient) or a
+    child died and left its marker behind — which is real work, recoverable
+    only through :func:`recover_stale_processing`. Reporting it separately
+    from :func:`pending_count` is what stops a drain that is about to recover
+    an orphan from announcing "0 marker(s) pending" first.
+    """
+    try:
+        return len(list((data_dir / "processing_extractions").glob("*.json")))
     except OSError:
         return 0
 

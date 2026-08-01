@@ -51,6 +51,13 @@ Nothing yet.
   diary silently lands in `~/.multiplai/` instead of your workspace, and
   `CLAUDE_CONFIG_DIR` so the Agent SDK finds your existing credentials.
 
+  The startup line reports **both** queues — `(N pending, M in flight)`. A
+  session whose container died mid-extraction leaves its marker in
+  `processing_extractions/`, where the drain can still rescue it but the
+  pending count cannot see it; reporting pending alone made such a run
+  announce `0 marker(s) pending` and then say it had drained one, which reads
+  as a malfunction rather than a recovery.
+
 ## [0.10.0] - 2026-07-31
 
 ### Changed

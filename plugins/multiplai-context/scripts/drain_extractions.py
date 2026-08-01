@@ -70,7 +70,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import setup_logging, log_event
-from lib.extraction_drain import pending_count, process_deferred_extractions
+from lib.extraction_drain import (
+    pending_count,
+    process_deferred_extractions,
+    processing_count,
+)
 
 logger = setup_logging("drain_extractions")
 
@@ -119,8 +123,16 @@ def main() -> int:
     # Run the pass even with an empty queue: recover_stale_processing (inside
     # process_deferred_extractions) requeues markers orphaned by a crashed
     # child, which is how those eventually get retried.
+    #
+    # Report both queues. The pending count alone is measured *before* that
+    # recovery step, so a run that is about to rescue an orphan would announce
+    # "0 marker(s) pending" and then report having drained one — which reads
+    # as a malfunction and cost three by-hand runs to see through (2026-08-01).
     logger.info(
-        "Draining %s (%d marker(s) pending)", data_dir, pending_count(data_dir)
+        "Draining %s (%d pending, %d in flight)",
+        data_dir,
+        pending_count(data_dir),
+        processing_count(data_dir),
     )
     processed = process_deferred_extractions(data_dir, extract_script, wait=args.wait)
 
