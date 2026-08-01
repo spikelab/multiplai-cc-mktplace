@@ -18,6 +18,39 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.11.0] - 2026-08-01
+
+### Added
+- **The diary can now be written the evening you stop working, instead of the
+  next time you open a session.** When a session ends, the plugin leaves a
+  marker and something else has to pick it up and run the (multi-minute)
+  extraction. Until now the only thing that ever picked one up was the *next*
+  `SessionStart` — so closing your last tab on a Friday produced Friday's diary
+  entry on Monday, and a fleet of long-lived tabs could sit on unwritten
+  history for days.
+
+  There is now a standalone `scripts/drain_extractions.py` that drains the same
+  queue from outside a session:
+
+  ```
+  uv run --no-project drain_extractions.py --data-dir <workspace>/.multiplai/data
+  ```
+
+  It takes an optional `--data-dir` (defaulting to the usual path cascade),
+  `--wait` to block until each extraction finishes with its errors visible, and
+  `--verbose` for a one-line summary. Container launchers can call it right
+  after the container exits; you can also just run it by hand when you suspect
+  a session never got written up.
+
+  Session start drains through exactly the same code, so the two paths cannot
+  drift apart, and the dequeue is an atomic rename — a launcher drain and a
+  fresh session firing at the same moment is safe.
+
+  The script's header documents which environment it needs: notably
+  `CLAUDE_PLUGIN_OPTION_workspace_dir` (or `WORKSPACE`), without which the
+  diary silently lands in `~/.multiplai/` instead of your workspace, and
+  `CLAUDE_CONFIG_DIR` so the Agent SDK finds your existing credentials.
+
 ## [0.10.0] - 2026-07-31
 
 ### Changed
