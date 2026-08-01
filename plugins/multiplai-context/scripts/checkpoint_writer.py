@@ -16,7 +16,7 @@ checkpoint are distilled and merged into the prior checkpoint text.
 Invoked detached (``start_new_session=True``) with a JSON payload on stdin:
 
     {"session_id": ..., "transcript_path": ..., "cwd": ..., "tokens": N,
-     "reason": "band"|"refresh"}
+     "reason": "band"|"refresh"|"stale"}
 
 Failure policy: any error leaves the previous checkpoint.md untouched and
 releases the single-flight marker — a stale checkpoint at handoff beats a

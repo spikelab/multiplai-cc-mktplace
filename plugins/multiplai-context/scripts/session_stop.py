@@ -116,6 +116,10 @@ def _checkpoint_pass(hook_input: dict, data_dir: Path) -> str | None:
         return None
 
     reason = cp.checkpoint_trigger(tokens, state, cfg)
+    # Age-based fallback. The band triggers above are token-based, so a tab
+    # that sat at 40K tokens for three days has no checkpoint at all — and
+    # that is exactly the tab whose state you have lost track of.
+    reason = reason or cp.staleness_trigger(data_dir, session_id, state, cfg)
 
     if reason and not cp.writer_inflight(data_dir, session_id):
         cp.claim_writer(data_dir, session_id)
