@@ -83,7 +83,14 @@ def _drop_marker(marker_path: str) -> None:
             logger.warning("Could not remove processed marker %s: %s", marker_path, e)
 
 
-def _retire_checkpoint(data_dir: Path, session_id: str, disposition: dict) -> None:
+def _retire_checkpoint(
+    data_dir: Path,
+    session_id: str,
+    disposition: dict,
+    *,
+    fully_extracted: bool = True,
+    trigger: str = "",
+) -> None:
     """Collect this session's checkpoint, now that the diary supersedes it.
 
     Called on the one edge that makes it safe: a diary entry for the session
@@ -91,6 +98,20 @@ def _retire_checkpoint(data_dir: Path, session_id: str, disposition: dict) -> No
     is right now — and the diary is the permanent record of what it did, so
     past that edge the directory is dead weight. It never was collected: 182
     of them had accumulated by 2026-07-31, one per session ever run.
+
+    Retirement deletes data, so it demands MORE than the diary write did:
+
+    * ``fully_extracted`` — every chunk succeeded AND the final chunk produced
+      a real disposition. A partial failure still writes a diary entry from the
+      surviving units, but that entry covers only part of the session, and a
+      failed final chunk leaves ``disposition`` at the fabricated default —
+      the same fabrication ``record_disposition`` refuses to write must not
+      drive an irreversible delete three lines later.
+    * ``trigger != "pre_compact"`` — a PreCompact-deferred extraction runs
+      against a session that is STILL RUNNING under the same session_id after
+      compaction. Its checkpoint (``state.json``'s ``rebuild_ts``, the
+      incrementally merged ``checkpoint.md``) is live working state, not a
+      leftover.
 
     **A parked session is the deliberate exception.** ``AGENTS.md`` renders its
     intent, next action and files-in-hand from the checkpoint, and a parked
@@ -104,6 +125,18 @@ def _retire_checkpoint(data_dir: Path, session_id: str, disposition: dict) -> No
     here may raise into the extraction path.
     """
     if not session_id:
+        return
+    if not fully_extracted:
+        logger.info(
+            "Extraction for %s was incomplete; keeping its checkpoint "
+            "(the diary does not fully supersede it)", session_id,
+        )
+        return
+    if trigger == "pre_compact":
+        logger.info(
+            "Extraction for %s was compaction-deferred and the session is "
+            "still live; keeping its checkpoint", session_id,
+        )
         return
     state = (disposition or {}).get("state") or DEFAULT_DISPOSITION
     if state == "parked":
@@ -183,6 +216,7 @@ async def extract() -> bool:
 
     marker_path = _field("marker_path")
     session_id = _field("session_id")
+    trigger = _field("trigger")
     setup_logging("extract_learnings", session_id=session_id)
     cwd = _field("cwd")
     transcript_path = _field("transcript_path")
@@ -291,7 +325,15 @@ async def extract() -> bool:
                 path=str(diary_path),
             )
             await _refresh_now(cwd, session_id)
-            _retire_checkpoint(paths.data_dir(), session_id, disposition)
+            _retire_checkpoint(
+                paths.data_dir(), session_id, disposition,
+                # Strictest coherent gate: retirement deletes data, so it
+                # requires a FULLY successful extraction — no failed chunks
+                # (a partial diary does not supersede the checkpoint) and a
+                # real, non-fabricated disposition from the final chunk.
+                fully_extracted=not llm_failed and final_chunk_ok,
+                trigger=trigger,
+            )
 
     wrote = append_learnings(units, learnings_file, session_id, timestamp)
     if wrote:

@@ -564,10 +564,27 @@ def retire_checkpoint(data_dir: Path, session_id: str) -> tuple[bool, str]:
         if marker is not None:
             return False, f"pending rebuild marker {marker.name}"
 
+        # TOCTOU, accepted: between the two guards above and the rmtree below
+        # a concurrent Stop hook could still claim the writer or write a
+        # pending marker for this session. That window only matters for a
+        # LIVE session, and the caller already refuses to retire live
+        # sessions (pre_compact-triggered extractions are skipped upstream),
+        # so reaching here means the session has ended and no new Stop hook
+        # is coming. If the race fires anyway, both losers self-heal: a
+        # writer that loses its directory mid-write recreates it via its
+        # atomic rename on the way out (a later extraction re-retires it),
+        # and a pending marker pointing at a deleted checkpoint.md is caught
+        # by the marker's own staleness/`ttl_hours` handling and the rebuild
+        # path's degrade-on-missing-file behaviour at the next SessionStart.
         shutil.rmtree(sdir)
         logger.info("Retired checkpoint for session %s", session_id)
         return True, ""
-    except OSError as e:
+    except Exception as e:
+        # Broad on purpose: "never raises" is the contract, and this runs
+        # inside the extraction pipeline where an escape would cost the
+        # session's diary entry. OSError covers the filesystem; anything
+        # else (e.g. ValueError from a malformed path) is the same answer —
+        # keep the directory, report why.
         logger.warning("Could not retire checkpoint for %s: %s", session_id, e)
         return False, f"removal failed: {e}"
 

@@ -30,8 +30,15 @@ Nothing yet.
   on one machine, one per session ever run, none ever collected.
 
   Extraction now deletes a session's checkpoint directory once that session's
-  diary entry exists — and only then. Four things keep one alive:
+  diary entry exists — and only then. Six things keep one alive:
 
+  - **The extraction was not fully successful.** A partial LLM failure can
+    still write a diary entry from the chunks that survived, but that entry
+    covers only part of the session — a diary that does not fully supersede
+    the checkpoint never deletes it.
+  - **The session is still running.** An extraction deferred by context
+    compaction runs against a live session; its checkpoint is working state,
+    not a leftover, and is kept untouched.
   - **The session is `parked`.** `AGENTS.md` renders a parked session's intent,
     next action and files-in-hand from its checkpoint, and a parked session is
     precisely the one still listed weeks later. Deleting it would leave an entry

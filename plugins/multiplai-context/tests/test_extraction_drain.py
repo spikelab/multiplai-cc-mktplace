@@ -119,6 +119,33 @@ class TestProcessDeferredExtractions:
         assert payload["transcript_path"] == "/transcripts/sess-a.jsonl"
         assert payload["marker_path"].endswith("processing_extractions/sess-a.json")
 
+    def test_marker_trigger_is_forwarded_to_the_child(self, drain_dirs, monkeypatch):
+        """A PreCompact marker's `trigger` must reach `extract()` — it is how
+        the child knows the session is still live and its checkpoint must not
+        be retired."""
+        data_dir, extract_script = drain_dirs
+        _write_marker(data_dir, "sess-pc", trigger="pre_compact")
+        spy = _PopenSpy()
+        monkeypatch.setattr(extraction_drain.subprocess, "Popen", spy)
+
+        extraction_drain.process_deferred_extractions(data_dir, extract_script)
+
+        payload = json.loads(spy.handles[0].stdin.written.decode())
+        assert payload["trigger"] == "pre_compact"
+
+    def test_a_triggerless_marker_forwards_an_empty_trigger(self, drain_dirs, monkeypatch):
+        """SessionEnd markers carry no `trigger`; the payload still carries
+        the key (empty) so the child never KeyErrors on it."""
+        data_dir, extract_script = drain_dirs
+        _write_marker(data_dir, "sess-a")
+        spy = _PopenSpy()
+        monkeypatch.setattr(extraction_drain.subprocess, "Popen", spy)
+
+        extraction_drain.process_deferred_extractions(data_dir, extract_script)
+
+        payload = json.loads(spy.handles[0].stdin.written.decode())
+        assert payload["trigger"] == ""
+
     def test_missing_extract_script_is_a_noop(self, drain_dirs, monkeypatch):
         data_dir, _ = drain_dirs
         _write_marker(data_dir, "sess-a")
