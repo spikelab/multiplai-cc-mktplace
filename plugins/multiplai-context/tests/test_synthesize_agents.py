@@ -9,6 +9,7 @@ is the one failure mode a fleet view cannot have: you would trust it.
 
 import subprocess
 import sys
+from datetime import datetime, timezone
 
 import pytest
 
@@ -52,7 +53,11 @@ class TestCli:
         assert (tmp_path / "fleet.txt").read_text() == ""
 
     def test_verbose_prints_the_one_line_reading(self, mod, tmp_path, monkeypatch, capsys):
-        make_session(tmp_path, "a", kind="notification")
+        # Anchored to wall-clock time, not test_fleet's frozen NOW: main()
+        # runs against real time, and a notification pinned to a fixed date
+        # ages past the quiet threshold ("needs you" → idle) within a day.
+        make_session(tmp_path, "a", kind="notification",
+                     now=datetime.now(timezone.utc))
         monkeypatch.setattr(
             sys, "argv",
             ["synthesize_agents", "--data-dir", str(tmp_path), "--verbose"],
@@ -115,6 +120,21 @@ class TestWiring:
         drain = import_script("drain_extractions", "drain_extractions.py")
 
         assert drain.write_fleet_view is fleet.write_fleet_view
+
+    def test_the_drain_refreshes_even_without_extract_learnings(self, tmp_path, monkeypatch):
+        """A broken install that cannot extract (extract_learnings.py gone)
+        still exits 1 — but the refresh needs nothing from extraction, so
+        the walk-away view must not be skipped with it."""
+        drain = import_script("drain_extractions", "drain_extractions.py")
+        refreshed = []
+        monkeypatch.setattr(drain, "write_fleet_view", refreshed.append)
+        # Point the script's notion of "beside me" at an empty directory.
+        monkeypatch.setattr(drain, "__file__", str(tmp_path / "empty" / "drain.py"))
+
+        rc = drain.main(["--data-dir", str(tmp_path)])
+
+        assert rc == 1
+        assert refreshed == [tmp_path.resolve()]
 
     def test_session_start_calls_it_in_process(self):
         """A `uv run` subprocess here would pay a cold-start (and possibly a
