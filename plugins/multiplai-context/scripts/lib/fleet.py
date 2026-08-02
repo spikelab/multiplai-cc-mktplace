@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from lib.fsio import atomic_write
-from lib.session_registry import entry_disposition
+from lib.session_registry import entry_disposition_block
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,8 @@ class Agent:
     hostname: str = ""
     cwd: str = ""
     branch: str = ""
+    repo_root: str = ""           # the checkout containing cwd, "" outside git
+    repo_id: str = ""             # main .git dir — shared across worktrees
     started_at: str = ""
     last_ts: datetime | None = None
     last_kind: str = ""
@@ -169,7 +171,9 @@ def split_sections(text: str) -> dict[str, str]:
 
 def _first_line(body: str) -> str:
     for line in body.splitlines():
-        line = line.strip().lstrip("-*").strip()
+        # Remove one leading bullet marker only — `lstrip("-*")` would also
+        # eat the opening `**` of a bold intent.
+        line = re.sub(r"^[-*][ \t]+", "", line.strip()).strip()
         if line:
             return line
     return ""
@@ -187,7 +191,14 @@ def parse_involved_files(body: str) -> list[str]:
         item = m.group("body").strip()
         if item.startswith("`"):
             close = item.find("`", 1)
-            token = item[1:close] if close > 1 else item[1:]
+            if close > 1:
+                token = item[1:close]
+            else:
+                # Unterminated backtick — a truncated or hand-mangled bullet.
+                # Keep only the first whitespace-delimited token so trailing
+                # prose never becomes a "path" in the collision key space.
+                rest = item[1:].split()
+                token = rest[0] if rest else ""
         else:
             # Split on the em-dash/hyphen separator the writer uses, then take
             # the first whitespace-delimited token of what's left.
@@ -204,17 +215,23 @@ def parse_involved_files(body: str) -> list[str]:
     return [p for p in paths if not (p in seen or seen.add(p))]
 
 
-def _branch_of(cwd: str) -> str:
-    """Current branch (or short SHA) for *cwd*, read straight off disk.
+def _git_info(cwd: str) -> tuple[str, str, str]:
+    """``(branch label, checkout root, repo identity)`` for *cwd*, off disk.
 
     No subprocess: this may run from a hook-adjacent path, and `git` costs
-    more than the answer is worth. Handles worktrees, whose ``.git`` is a
-    file pointing at the real gitdir — those render as
+    more than the answer is worth. A linked worktree's ``.git`` is a file
+    pointing at ``<main>/.git/worktrees/<name>`` — those render as
     ``branch (worktree: name)`` because "which of my six worktrees is this"
-    is exactly the question the fleet view exists to answer.
+    is exactly the question the fleet view exists to answer. A submodule's
+    ``.git`` is *also* a file, but points at ``<parent>/.git/modules/<name>``
+    — no ``worktrees/`` component, so it renders as a plain branch.
+
+    The repo identity is the main ``.git`` directory shared by every worktree
+    of one repo; :func:`find_collisions` keys on it so the same relative path
+    in two worktrees intersects.
     """
     if not cwd:
-        return ""
+        return "", "", ""
     try:
         here = Path(cwd)
         for candidate in [here, *here.parents]:
@@ -225,20 +242,29 @@ def _branch_of(cwd: str) -> str:
             if dotgit.is_file():
                 pointer = dotgit.read_text(encoding="utf-8", errors="replace").strip()
                 if not pointer.startswith("gitdir:"):
-                    return ""
+                    return "", "", ""
                 gitdir = Path(pointer.split(":", 1)[1].strip())
-                worktree = gitdir.name
+                if not gitdir.is_absolute():
+                    # Submodules record a relative gitdir pointer.
+                    gitdir = (candidate / gitdir).resolve()
+                if gitdir.parent.name == "worktrees":
+                    worktree = gitdir.name
+                    repo_id = str(gitdir.parent.parent)
+                else:
+                    repo_id = str(gitdir)
             else:
                 gitdir = dotgit
+                repo_id = str(dotgit)
             head = (gitdir / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
             if head.startswith("ref: refs/heads/"):
                 name = head[len("ref: refs/heads/"):]
             else:
                 name = head[:8] or ""
-            return f"{name} (worktree: {worktree})" if worktree else name
+            branch = f"{name} (worktree: {worktree})" if worktree else name
+            return branch, str(candidate), repo_id
     except OSError:
-        return ""
-    return ""
+        return "", "", ""
+    return "", "", ""
 
 
 def _status_of(kind: str, last_ts: datetime | None, now: datetime) -> str:
@@ -292,20 +318,24 @@ def load_agent(entry_path: Path, data_dir: Path, now: datetime) -> Agent | None:
         last_ts = _parse_ts(raw.get("started_at"))
 
     cwd = str(raw.get("cwd") or "")
-    disposition = raw.get("disposition")
-    disposition = disposition if isinstance(disposition, dict) else {}
+    # One parse for both state and reason — two hand-rolled reads of the
+    # same block is how they drift.
+    disp_state, disp_reason = entry_disposition_block(raw)
+    branch, repo_root, repo_id = _git_info(cwd)
     agent = Agent(
         session_id=sid,
         project=str(raw.get("project") or ""),
         hostname=str(raw.get("hostname") or ""),
         cwd=cwd,
-        branch=_branch_of(cwd),
+        branch=branch,
+        repo_root=repo_root,
+        repo_id=repo_id,
         started_at=str(raw.get("started_at") or ""),
         last_ts=last_ts,
         last_kind=last_kind,
         status=_status_of(last_kind, last_ts, now),
-        disposition=entry_disposition(raw),
-        disposition_reason=str(disposition.get("reason") or ""),
+        disposition=disp_state,
+        disposition_reason=disp_reason,
     )
 
     cp = data_dir / "checkpoints" / sid / "checkpoint.md"
@@ -339,23 +369,50 @@ def _label(agent: Agent) -> str:
     return f"{project}@{qualifier}"
 
 
+def _collision_key(agent: Agent, path: str) -> tuple[tuple[str, str], str]:
+    """``(intersection key, display path)`` for one involved-file entry.
+
+    Checkpoints record **absolute** paths (the writer prompt mandates it), so
+    the same logical file edited in two worktrees of one repo appears under
+    two different prefixes — ``/ws/.worktrees/feat-a/src/x.py`` vs
+    ``…/feat-b/src/x.py`` — and raw string intersection would never report the
+    headline collision. Strip the agent's checkout root and key on
+    ``(repo identity, relative path)``; the repo identity is the main ``.git``
+    dir every worktree shares, so worktrees intersect while an unrelated repo's
+    identical relative path does not. Paths outside any detected checkout keep
+    the absolute string as the key, which still catches workspace-shared files.
+    """
+    root = agent.repo_root
+    if root:
+        prefix = root.rstrip("/") + "/"
+        if path.startswith(prefix):
+            rel = path[len(prefix):]
+            return (agent.repo_id or root, rel), rel
+    return ("", path), path
+
+
 def find_collisions(agents: list[Agent]) -> list[Collision]:
     """Files held by two or more **live** agents.
 
     This is the overlapping-work anxiety answered without any agent talking to
-    another agent: a set intersection over what each one already wrote down.
-    Ended sessions are excluded — a file two finished sessions both touched is
-    history, not a collision.
+    another agent: a set intersection over what each one already wrote down —
+    normalized per-agent by :func:`_collision_key` so two worktrees of one
+    repo collide on the logical file, not the raw string. Ended sessions are
+    excluded — a file two finished sessions both touched is history, not a
+    collision.
     """
-    holders: dict[str, list[Agent]] = {}
+    holders: dict[tuple[str, str], list[Agent]] = {}
+    display: dict[tuple[str, str], str] = {}
     for agent in agents:
         if not agent.live:
             continue
         for path in agent.files:
-            holders.setdefault(path, []).append(agent)
+            key, shown = _collision_key(agent, path)
+            holders.setdefault(key, []).append(agent)
+            display.setdefault(key, shown)
 
     out = []
-    for path, owners in holders.items():
+    for key, owners in holders.items():
         if len(owners) < 2:
             continue
         labels = [_label(a) for a in owners]
@@ -364,7 +421,7 @@ def find_collisions(agents: list[Agent]) -> list[Collision]:
         if len(set(labels)) < len(labels):
             labels = [f"{lb} ({a.session_id[:8]})" for lb, a in zip(labels, owners)]
         out.append(Collision(
-            path=path,
+            path=display[key],
             session_ids=[a.session_id for a in owners],
             labels=labels,
         ))
@@ -423,6 +480,18 @@ def format_age(delta: timedelta) -> str:
 _GROUP_ORDER = ("Needs you", "Working", "Parked", "Idle")
 
 
+def _sanitize_reason(reason: str) -> str:
+    """Strip what would break AGENTS.md structure out of an LLM-quoted reason.
+
+    The single-line regex and the registry's 500-char cap already bound the
+    damage; this handles the remainder — a leading ``#`` would open a new
+    heading, and ``|`` reads as a table cell to some renderers. Deliberately
+    minimal: display sanitization, not general markdown escaping.
+    """
+    reason = reason.strip().lstrip("#").strip()
+    return reason.replace("|", "/")
+
+
 def _render_agent(agent: Agent, now: datetime) -> list[str]:
     head = agent.project or agent.cwd or agent.session_id[:8]
     lines = [f"### {head} — {format_age(agent.age(now))}"]
@@ -438,7 +507,8 @@ def _render_agent(agent: Agent, now: datetime) -> list[str]:
     if agent.disposition == "parked":
         # The reason is the user's own closing words, which say more about why
         # this is parked than any intent line reconstructed from the work.
-        reason = f" — {agent.disposition_reason}" if agent.disposition_reason else ""
+        shown = _sanitize_reason(agent.disposition_reason)
+        reason = f" — {shown}" if shown else ""
         lines.append(f"- **Parked**{reason}")
     if agent.intent:
         lines.append(f"- **Doing:** {agent.intent}")
@@ -455,8 +525,11 @@ def _render_agent(agent: Agent, now: datetime) -> list[str]:
 def render_agents_md(fleet: Fleet, now: datetime, generated_at: str | None = None) -> str:
     """The full fleet read.
 
-    Everything below the generation stamp is a pure function of the two
-    stores, which is what makes the file a cache rather than a record.
+    Everything below the generation stamp is a function of the two stores
+    plus *now* — rendered ages are coarse buckets (``5h`` / ``3d``) and
+    statuses have a quiet threshold, so two runs straddling such a boundary
+    can differ beyond the stamp. Between boundaries the output is
+    byte-identical, which is what makes the file a cache rather than a record.
     """
     stamp = generated_at or now.isoformat()
     live = fleet.live
