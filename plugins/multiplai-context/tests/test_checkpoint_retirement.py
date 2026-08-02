@@ -148,6 +148,20 @@ class TestRetireCheckpoint:
     def test_it_never_raises(self, tmp_path):
         assert cp.retire_checkpoint(tmp_path / "no-such-dir", "s1") == (False, "")
 
+    def test_it_never_raises_even_on_non_oserror(self, tmp_path):
+        """The docstring says "never raises", full stop — not "never raises
+        OSError". This runs inside the extraction pipeline, where an escaped
+        exception costs the session's diary entry."""
+        make_checkpoint(tmp_path, "s1")
+
+        with patch.object(cp, "writer_inflight",
+                          side_effect=ValueError("embedded null byte")):
+            removed, reason = cp.retire_checkpoint(tmp_path, "s1")
+
+        assert removed is False
+        assert "removal failed" in reason
+        assert cp.checkpoint_file(tmp_path, "s1").exists()
+
 
 class TestPendingMarkerOwner:
 
@@ -191,7 +205,14 @@ class TestExtractionRetiresCheckpoints:
     re-expressed in the test."""
 
     def _run(self, tmp_path, *, units, disposition, diary_ok=True, llm_ok=True,
-             session_id="s1"):
+             session_id="s1", trigger=None, n_chunks=1, fail_chunks=()):
+        """Drive ``extract()`` with a stubbed pipeline.
+
+        ``n_chunks``/``fail_chunks`` model a multi-chunk transcript where
+        some chunk indices raise (partial LLM failure): each surviving chunk
+        yields *units* and *disposition*; the disposition only counts on the
+        final chunk, exactly as in production.
+        """
         import extract_learnings as el
 
         class _Paths:
@@ -201,8 +222,12 @@ class TestExtractionRetiresCheckpoints:
             def catalogs_dir(self): return tmp_path / "catalogs"
             def data_dir(self): return tmp_path
 
+        calls = {"n": 0}
+
         async def _fake_extract(chunk, **kwargs):
-            if not llm_ok:
+            i = calls["n"]
+            calls["n"] += 1
+            if not llm_ok or i in fail_chunks:
                 raise RuntimeError("model unavailable")
             return units, disposition
 
@@ -215,11 +240,15 @@ class TestExtractionRetiresCheckpoints:
             diary_file.write_text("# Diary\n")
             return diary_file
 
-        stdin = json.dumps({"session_id": session_id, "cwd": "/work/alpha"})
+        payload = {"session_id": session_id, "cwd": "/work/alpha"}
+        if trigger is not None:
+            payload["trigger"] = trigger
+        stdin = json.dumps(payload)
+        chunks = [f"chunk-{i}" for i in range(n_chunks)]
         with patch.object(el, "get_paths", _Paths), \
              patch.object(el, "load_target_charters", lambda *a, **k: []), \
              patch.object(el, "create_client", AsyncMock(return_value=object())), \
-             patch.object(el, "_distill_transcript", lambda *a: ["chunk"]), \
+             patch.object(el, "_distill_transcript", lambda *a: chunks), \
              patch.object(el, "extract_units_and_disposition", _fake_extract), \
              patch.object(el, "write_diary_entries", _fake_diary), \
              patch.object(el, "append_learnings", lambda *a, **k: True), \
@@ -292,6 +321,63 @@ class TestExtractionRetiresCheckpoints:
         assert self._run(tmp_path, units=[], disposition={"state": "active"},
                          llm_ok=False) is False
         assert (sdir / "checkpoint.md").exists()
+
+    def test_a_partial_failure_retains_it(self, tmp_path):
+        """An earlier chunk fails but the final one survives: units exist, the
+        diary IS written and the marker consumed — yet that diary covers only
+        part of the session, so the checkpoint must survive. Retirement
+        demands a FULLY successful extraction; a real disposition alone is
+        not enough."""
+        sdir = make_checkpoint(tmp_path, "s1")
+        diary_file = tmp_path / "diary" / "2026-08-01.md"
+
+        assert self._run(tmp_path, units=[_unit()],
+                         disposition={"state": "done", "reason": "shipped"},
+                         n_chunks=3, fail_chunks={0}) is True
+        assert diary_file.exists()
+        assert (sdir / "checkpoint.md").exists()
+
+    def test_a_failed_final_chunk_retains_it(self, tmp_path):
+        """The final chunk is the entire disposition signal. When it fails,
+        ``disposition`` stays at the fabricated default "active" — the same
+        fabrication `record_disposition` refuses to write must not drive an
+        irreversible delete. Units from earlier chunks still write a diary
+        entry; the checkpoint stays."""
+        sdir = make_checkpoint(tmp_path, "s1")
+        diary_file = tmp_path / "diary" / "2026-08-01.md"
+
+        assert self._run(tmp_path, units=[_unit()],
+                         disposition={"state": "done", "reason": "shipped"},
+                         n_chunks=3, fail_chunks={2}) is True
+        assert diary_file.exists()
+        assert (sdir / "checkpoint.md").exists()
+
+    # --- PreCompact: the session is still running ---------------------------
+
+    def test_a_pre_compact_extraction_retains_it(self, tmp_path):
+        """A PreCompact-deferred extraction runs against a session that is
+        STILL LIVE under the same session_id after compaction. The diary
+        entry is welcome; deleting the live session's `state.json`
+        (`rebuild_ts`) and incrementally merged `checkpoint.md` is not."""
+        sdir = make_checkpoint(tmp_path, "s1")
+        diary_file = tmp_path / "diary" / "2026-08-01.md"
+
+        assert self._run(tmp_path, units=[_unit()],
+                         disposition={"state": "active", "reason": ""},
+                         trigger="pre_compact") is True
+        assert diary_file.exists()
+        assert (sdir / "checkpoint.md").exists()
+        assert (sdir / "state.json").exists()
+
+    def test_a_session_end_trigger_still_retires_it(self, tmp_path):
+        """SessionEnd markers carry no `trigger` (forwarded as "") — the
+        session is over, so the successful-extraction path retires."""
+        sdir = make_checkpoint(tmp_path, "s1")
+
+        self._run(tmp_path, units=[_unit()],
+                  disposition={"state": "done", "reason": "shipped"}, trigger="")
+
+        assert not sdir.exists()
 
     def test_a_session_with_no_units_retires_nothing(self, tmp_path):
         sdir = make_checkpoint(tmp_path, "s1")

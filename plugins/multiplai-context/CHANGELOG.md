@@ -63,8 +63,15 @@ Nothing yet.
   on one machine, one per session ever run, none ever collected.
 
   Extraction now deletes a session's checkpoint directory once that session's
-  diary entry exists — and only then. Four things keep one alive:
+  diary entry exists — and only then. Six things keep one alive:
 
+  - **The extraction was not fully successful.** A partial LLM failure can
+    still write a diary entry from the chunks that survived, but that entry
+    covers only part of the session — a diary that does not fully supersede
+    the checkpoint never deletes it.
+  - **The session is still running.** An extraction deferred by context
+    compaction runs against a live session; its checkpoint is working state,
+    not a leftover, and is kept untouched.
   - **The session is `parked`.** `AGENTS.md` renders a parked session's intent,
     next action and files-in-hand from its checkpoint, and a parked session is
     precisely the one still listed weeks later. Deleting it would leave an entry
@@ -116,6 +123,15 @@ Nothing yet.
   session can be both `ended` and `parked`. If the model says nothing useful,
   or extraction fails outright, the session is `active` and everything else
   behaves exactly as before.
+
+  The label's lifecycle holds up at the edges, too. Resuming a session clears
+  its old departure label — a resumed parked session groups by what it is
+  *doing* again (including "Needs you"), and a resumed done session comes back
+  onto the list. The label survives a long absence: registry cleanup skips any
+  session whose deferred extraction is still queued, so coming back on day 8
+  to a session parked on day 0 still finds it labelled. And on a long
+  transcript, a mid-session extraction hiccup no longer costs the label — only
+  the closing exchange's own chunk decides it.
 
 ## [0.12.0] - 2026-08-01
 
@@ -179,13 +195,29 @@ Nothing yet.
   a session never got written up.
 
   Session start drains through exactly the same code, so the two paths cannot
-  drift apart, and the dequeue is an atomic rename — a launcher drain and a
-  fresh session firing at the same moment is safe.
+  drift apart. Two drains racing is handled end to end: the dequeue is an
+  atomic rename that also refreshes the marker's mtime (staleness is measured
+  from *launch*, so a marker written Friday and drained Monday is not
+  instantly "stale" and re-launched by a concurrent session start), and
+  staleness recovery claims a marker atomically before rewriting it, so two
+  recoverers cannot double-count its retry attempts.
+
+  `--wait` exits nonzero when any extraction child fails, so
+  `drain … --wait && echo ok` actually proves extraction worked. Errors (a
+  missing `extract_learnings.py`, failed children) always print to stderr;
+  `--verbose` gates only the success summary.
 
   The script's header documents which environment it needs: notably
   `CLAUDE_PLUGIN_OPTION_workspace_dir` (or `WORKSPACE`), without which the
   diary silently lands in `~/.multiplai/` instead of your workspace, and
   `CLAUDE_CONFIG_DIR` so the Agent SDK finds your existing credentials.
+
+  The startup line reports **both** queues — `(N pending, M in flight)`. A
+  session whose container died mid-extraction leaves its marker in
+  `processing_extractions/`, where the drain can still rescue it but the
+  pending count cannot see it; reporting pending alone made such a run
+  announce `0 marker(s) pending` and then say it had drained one, which reads
+  as a malfunction rather than a recovery.
 
 ## [0.10.0] - 2026-07-31
 
