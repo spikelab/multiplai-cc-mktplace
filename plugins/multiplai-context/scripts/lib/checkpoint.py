@@ -79,6 +79,25 @@ _DEFAULT_TIMEOUT_S = 240
 # share one rate limit, and the July 6–7 failure cluster was a single 429 from
 # a large backfill, so the cadence stays well under one write per hour per
 # session.
+#
+# Two accepted burst shapes, deliberately without a global cap or jitter:
+#
+# - Thundering herd: after any break longer than stale_hours (overnight,
+#   weekend) every open tab is simultaneously stale, so the first Stop in each
+#   resumed tab spawns a detached writer — N tabs resuming together means N
+#   concurrent writers sharing the interactive rate limit. The single-flight
+#   guard (`writer_inflight`) is per-session only. Bounded by tab count at one
+#   write per tab per stale_hours, so the magnitude stays single-digit (the
+#   July 429 came from a hundreds-of-calls backfill, not this shape).
+#
+# - Writer-failure retries: a failed writer releases its marker without
+#   updating state (checkpoint_writer.py), so the next Stop refires. During an
+#   API outage this retry-every-Stop behaviour previously applied only to
+#   sessions past a token band; the stale trigger intentionally extends it to
+#   every session older than min_session_minutes (including the
+#   corrupt-last_checkpoint_ts path). Same retry pattern as the existing
+#   triggers, wider blast radius — still at most one in-flight writer per
+#   session.
 _DEFAULT_STALE_HOURS = 3.0
 _DEFAULT_MIN_SESSION_MINUTES = 30
 
@@ -385,6 +404,22 @@ def _session_started_at(data_dir: Path, session_id: str) -> datetime | None:
     Returns None when it cannot be read, and the caller then declines to fire:
     a session of unknown age is not evidence of a stale one, and today's
     behaviour (band triggers only) is the safe default.
+
+    Known blind spot — registry GC resets the age anchor. ``gc_stale``
+    collects a non-parked entry after ``GC_LIVE_AFTER_DAYS`` (30 days) of
+    silence, and ``record_event`` runs *before* the checkpoint pass in
+    ``session_stop.main``, so on the user's return the entry is recreated
+    with ``started_at = now``. A tab dormant for more than 30 days — the
+    extreme case the stale trigger exists for — therefore reads as a
+    0-minute-old session and gets no age checkpoint until
+    ``min_session_minutes`` into the resumed work, at which point the
+    trigger self-corrects. Parked sessions are immune (GC never collects
+    ``disposition: parked`` entries, nor ones with a pending extraction
+    marker), so the reset only hits tabs that went silent without being
+    parked. Accepted as graceful degradation: the alternative — GC
+    exemptions keyed to checkpoint state — would couple the registry to
+    this module for a case that self-heals in half an hour. Pinned by
+    ``TestRegistryGcAgeReset``.
     """
     try:
         from lib.session_registry import registry_dir

@@ -32,7 +32,11 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from conftest import import_script
 from lib import checkpoint as cp
+from lib import session_registry as sr
+
+session_stop = import_script("session_stop_staleness_mod", "session_stop.py")
 
 CFG = cp.CheckpointConfig()
 
@@ -283,6 +287,127 @@ class TestSessionStopWiring:
         assert "if reason and not cp.writer_inflight(" in spawn
 
 
+class TestCheckpointPassExecuted:
+    """The wiring, executed. The textual pins above catch reorderings; these
+    run `_checkpoint_pass` for real (writer stubbed) and catch behavioural
+    breaks the string match cannot — a stale fire that never reaches the
+    writer, or a gate that silently swallows the stale path."""
+
+    def _transcript(self, tmp_path, tokens=40_000):
+        """A main-chain assistant record putting the session at *tokens* —
+        below every band, so only the stale trigger can fire."""
+        t = tmp_path / "transcript.jsonl"
+        t.write_text(json.dumps({
+            "type": "assistant",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "ok"}],
+                "usage": {
+                    "input_tokens": 1_000,
+                    "cache_read_input_tokens": tokens - 1_000,
+                    "cache_creation_input_tokens": 0,
+                    "output_tokens": 50,
+                },
+            },
+        }) + "\n")
+        return t
+
+    def _run(self, tmp_path, monkeypatch, transcript):
+        """Execute _checkpoint_pass with the writer stubbed; return payloads."""
+        monkeypatch.delenv("_HOOK_CHILD_SESSION", raising=False)
+        payloads = []
+        monkeypatch.setattr(
+            session_stop, "_spawn_writer", lambda p: payloads.append(p) or True
+        )
+        session_stop._checkpoint_pass(
+            {
+                "session_id": "s1",
+                "transcript_path": str(transcript),
+                "cwd": str(tmp_path),
+            },
+            tmp_path,
+        )
+        return payloads
+
+    def test_a_stale_session_fires_and_reason_reaches_the_writer(
+        self, tmp_path, monkeypatch
+    ):
+        make_registry_entry(tmp_path, age=timedelta(hours=2))
+
+        payloads = self._run(tmp_path, monkeypatch, self._transcript(tmp_path))
+
+        assert len(payloads) == 1
+        assert payloads[0]["reason"] == "stale"
+        assert payloads[0]["session_id"] == "s1"
+        assert payloads[0]["tokens"] == 40_000
+
+    def test_a_young_session_below_every_band_spawns_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        make_registry_entry(tmp_path, age=timedelta(minutes=5))
+
+        payloads = self._run(tmp_path, monkeypatch, self._transcript(tmp_path))
+
+        assert payloads == []
+
+    def test_an_unknown_token_count_blocks_the_stale_path_too(
+        self, tmp_path, monkeypatch
+    ):
+        """The `tokens <= 0` gate sits before the staleness check, so a
+        session whose transcript carries no readable usage records gets no
+        age checkpoint either — unknown size declines to fire, same
+        philosophy as unknown age. Behavioural pin of the documented gate."""
+        make_registry_entry(tmp_path, age=timedelta(hours=2))
+        empty = tmp_path / "transcript.jsonl"
+        empty.write_text("")  # exists, but no usage records → tokens == 0
+
+        payloads = self._run(tmp_path, monkeypatch, empty)
+
+        assert payloads == []
+
+    def test_an_inflight_writer_blocks_a_stale_spawn(self, tmp_path, monkeypatch):
+        """The single-flight guard, executed rather than string-matched."""
+        make_registry_entry(tmp_path, age=timedelta(hours=2))
+        cp.claim_writer(tmp_path, "s1")
+
+        payloads = self._run(tmp_path, monkeypatch, self._transcript(tmp_path))
+
+        assert payloads == []
+
+
+class TestRegistryGcAgeReset:
+    """Registry GC resets the age anchor — pinned, documented behaviour.
+
+    `gc_stale` collects a non-parked entry after `GC_LIVE_AFTER_DAYS` (30) of
+    silence; on resume `record_event` (which runs before the checkpoint pass)
+    recreates it with `started_at = now`, so the longest-dormant tabs read as
+    brand-new and skip their age checkpoint until `min_session_minutes` into
+    the resumed work. Accepted degradation — see `_session_started_at`. If a
+    GC exemption ever changes this, these pins are the ones to flip."""
+
+    def test_a_gcd_entry_recreated_on_resume_reads_as_brand_new(self, tmp_path):
+        make_registry_entry(tmp_path, age=timedelta(days=40))
+        assert sr.gc_stale(tmp_path) == 1  # dormant > GC_LIVE_AFTER_DAYS
+
+        # The user returns: Stop's record_event runs first and recreates
+        # the entry with started_at = now...
+        assert sr.record_event(tmp_path, {"session_id": "s1", "cwd": "/work"}, "stop")
+
+        # ...so the 40-day-dormant session declines to fire.
+        assert cp.staleness_trigger(tmp_path, "s1", {}, CFG) is None
+
+    def test_a_parked_entry_survives_gc_and_keeps_its_age(self, tmp_path):
+        """The common way a tab goes dormant that long is parked — and parked
+        entries are GC-exempt, so their age anchor survives and the trigger
+        fires on resume."""
+        make_registry_entry(tmp_path, age=timedelta(days=40))
+        assert sr.record_disposition(tmp_path, "s1", "parked", "long idea")
+
+        assert sr.gc_stale(tmp_path) == 0
+        assert cp.staleness_trigger(tmp_path, "s1", {}, CFG) == "stale"
+
+
 # ---------------------------------------------------------------------------
 # The cost the plan asked to be stated rather than assumed
 # ---------------------------------------------------------------------------
@@ -294,6 +419,16 @@ class TestWriteVolume:
 
         Each step is one completed turn. A write updates `last_checkpoint_ts`,
         exactly as `checkpoint_writer.py` does.
+
+        Duplication risk, accepted: this simulation re-implements the writer's
+        state bookkeeping (the `last_checkpoint_ts` update on success) and
+        re-anchors the registry file per step instead of injecting a clock —
+        `staleness_trigger` reads `datetime.now` directly, and threading a
+        clock parameter through production code for one test class isn't
+        worth it. If `checkpoint_writer.py`'s state contract changes (e.g.
+        it stops overwriting `last_checkpoint_ts`, or writes it at a
+        different point), this cadence arithmetic diverges from reality and
+        must be updated with it.
         """
         make_registry_entry(tmp_path, age=timedelta(hours=hours))
         started = datetime.now(timezone.utc) - timedelta(hours=hours)

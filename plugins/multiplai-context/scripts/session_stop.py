@@ -113,6 +113,11 @@ def _checkpoint_pass(hook_input: dict, data_dir: Path) -> str | None:
     state = cp.load_state(data_dir, session_id)
     tokens = cp.read_context_tokens(transcript_path, after_ts=state.get("rebuild_ts"))
     if tokens <= 0:
+        # Unknown context size declines to fire — and this gate sits before
+        # the staleness check, so it blocks the age-based trigger too: the
+        # writer payload needs a real token count. Same philosophy as
+        # staleness_trigger's unknown-age handling — no evidence is not
+        # evidence of staleness, and doing nothing is the safe default.
         return None
 
     reason = cp.checkpoint_trigger(tokens, state, cfg)
