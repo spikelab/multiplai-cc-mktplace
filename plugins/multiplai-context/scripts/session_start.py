@@ -663,7 +663,7 @@ def main() -> None:
     # hook has more headroom.
     extract_script = paths.scripts_dir() / "extract_learnings.py"
     try:
-        processed = process_deferred_extractions(data_dir, extract_script)
+        processed = process_deferred_extractions(data_dir, extract_script).launched
         if processed:
             logger.info("Launched %d deferred extraction(s)", processed)
             log_event(
