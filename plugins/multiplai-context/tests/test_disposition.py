@@ -303,6 +303,21 @@ class TestRecordDisposition:
     def test_it_never_raises(self, tmp_path):
         assert sr.record_disposition(tmp_path / "nonexistent", "s1", "parked") is False
 
+    def test_a_missing_entry_warns_when_the_label_matters(self, tmp_path, caplog):
+        """Losing `parked`/`done` is user-visible; losing `active` changes
+        nothing (absent means active) and stays at debug."""
+        import logging
+
+        (tmp_path / "sessions").mkdir()
+
+        with caplog.at_level(logging.DEBUG, logger="lib.session_registry"):
+            sr.record_disposition(tmp_path, "ghost", "parked")
+            sr.record_disposition(tmp_path, "ghost", "active")
+
+        warned = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warned) == 1
+        assert "parked" in warned[0].getMessage()
+
 
 class TestEntryDisposition:
 
@@ -315,6 +330,76 @@ class TestEntryDisposition:
 
     def test_a_real_value_is_read(self):
         assert sr.entry_disposition({"disposition": {"state": "done"}}) == "done"
+
+    def test_the_block_helper_returns_state_and_reason_from_one_parse(self):
+        """The single shared parse — the fleet view once read the same block
+        twice with divergent logic, and the two reads could drift."""
+        assert sr.entry_disposition_block(
+            {"disposition": {"state": "parked", "reason": "tomorrow"}}
+        ) == ("parked", "tomorrow")
+
+    def test_the_block_helper_drops_the_reason_with_an_invalid_state(self):
+        """A reason is only meaningful alongside a valid state — a stray
+        reason attached to `active` would render nonsense."""
+        assert sr.entry_disposition_block(
+            {"disposition": {"state": "nonsense", "reason": "stray"}}
+        ) == ("active", "")
+        assert sr.entry_disposition_block({"disposition": "parked"}) == ("active", "")
+        assert sr.entry_disposition_block({}) == ("active", "")
+
+
+class TestResumeClearsDisposition:
+    """A resume is the user picking the session back up — the old departure
+    label is by definition obsolete (review finding: a resumed parked session
+    rendered under Parked while working, and was excluded from "Needs you";
+    a resumed done session was invisible entirely)."""
+
+    def _resume(self, data_dir, sid):
+        return sr.record_event(
+            data_dir, {"session_id": sid, "cwd": "/work"}, "start"
+        )
+
+    def test_a_start_event_clears_the_stale_label(self, tmp_path):
+        path = _entry(tmp_path, "s1",
+                      disposition={"state": "parked", "reason": "tomorrow"})
+
+        assert self._resume(tmp_path, "s1") is True
+        assert "disposition" not in json.loads(path.read_text())
+
+    def test_other_event_kinds_leave_the_label_alone(self, tmp_path):
+        """Only "start" is the user coming back; a stop/notification/end on
+        a still-parked entry must not strip its GC protection."""
+        path = _entry(tmp_path, "s1", disposition={"state": "parked"})
+
+        for kind in ("stop", "notification", "end"):
+            sr.record_event(tmp_path, {"session_id": "s1", "cwd": "/work"}, kind)
+            assert json.loads(path.read_text())["disposition"]["state"] == "parked"
+
+    def test_a_resumed_parked_session_groups_by_live_status(self, tmp_path):
+        now = datetime.now(timezone.utc)
+        make_session(tmp_path, "p", kind="end", now=now)
+        _add_disposition(tmp_path, "p", "parked", "tomorrow")
+
+        self._resume(tmp_path, "p")
+        # It hits waiting_input: it must re-enter "Needs you", not sit
+        # under Parked where nobody acts on it.
+        sr.record_event(tmp_path, {"session_id": "p", "cwd": "/work"}, "notification")
+
+        f = fleet.collect(tmp_path, now)
+        assert f.agents[0].group == "Needs you"
+        assert "## Parked" not in fleet.render_agents_md(f, now)
+
+    def test_a_resumed_done_session_is_visible_again(self, tmp_path):
+        now = datetime.now(timezone.utc)
+        make_session(tmp_path, "d", kind="end", now=now)
+        _add_disposition(tmp_path, "d", "done", "shipped")
+
+        self._resume(tmp_path, "d")
+
+        f = fleet.collect(tmp_path, now)
+        assert f.agents[0].live is True
+        assert f.agents[0].group == "Working"
+        assert "## Working (1)" in fleet.render_agents_md(f, now)
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +452,66 @@ class TestGcExemption:
         os.utime(path, (old, old))
 
         assert sr.gc_stale(tmp_path) == 1
+
+
+class TestGcVsPendingExtraction:
+    """The day-8 scenario: extraction is always deferred to the next
+    SessionStart, and GC runs synchronously before the drain's children can
+    write `parked`. Without the marker scan, a session parked on day 0 whose
+    owner next opened Claude on day 8 was GC'd minutes before its label
+    arrived — and `record_disposition` refuses to recreate entries."""
+
+    def _marker(self, tmp_path, sid, sub="pending_extractions", name=None):
+        d = tmp_path / sub
+        d.mkdir(parents=True, exist_ok=True)
+        (d / (name or f"{sid}.json")).write_text(json.dumps({
+            "session_id": sid, "cwd": "/work", "transcript_path": "/t.jsonl",
+        }))
+
+    def test_a_pending_marker_protects_a_day8_entry(self, tmp_path):
+        _entry(tmp_path, "s1", kind="end", ago=timedelta(days=8))
+        self._marker(tmp_path, "s1")
+
+        assert sr.gc_stale(tmp_path) == 0
+        assert (tmp_path / "sessions" / "s1.json").exists()
+
+    def test_an_in_flight_marker_protects_too(self, tmp_path):
+        """The drain moves markers to processing_extractions/ before the
+        child finishes; that window is exactly when GC would run next."""
+        _entry(tmp_path, "s1", kind="end", ago=timedelta(days=8))
+        self._marker(tmp_path, "s1", sub="processing_extractions")
+
+        assert sr.gc_stale(tmp_path) == 0
+
+    def test_the_sid_comes_from_the_marker_body_not_its_name(self, tmp_path):
+        """PreCompact markers are named `precompact-<sid>-*.json`; only the
+        JSON `session_id` field is authoritative."""
+        _entry(tmp_path, "s1", kind="end", ago=timedelta(days=8))
+        self._marker(tmp_path, "s1", name="precompact-s1-1234.json")
+
+        assert sr.gc_stale(tmp_path) == 0
+
+    def test_a_quarantined_marker_does_not_protect(self, tmp_path):
+        """After MAX_ATTEMPTS the drain has given up; the entry must age out
+        rather than live forever behind a dead marker."""
+        _entry(tmp_path, "s1", kind="end", ago=timedelta(days=8))
+        self._marker(tmp_path, "s1", sub="failed_extractions")
+
+        assert sr.gc_stale(tmp_path) == 1
+
+    def test_day8_end_to_end_the_parked_label_lands(self, tmp_path):
+        """GC with the marker in place, then the drain's extraction records
+        `parked` and drops the marker: the entry must survive both GC passes
+        — first via the marker, then via the parked exemption."""
+        _entry(tmp_path, "s1", kind="end", ago=timedelta(days=8))
+        self._marker(tmp_path, "s1")
+
+        assert sr.gc_stale(tmp_path) == 0
+        assert sr.record_disposition(tmp_path, "s1", "parked", "back next week")
+        (tmp_path / "pending_extractions" / "s1.json").unlink()
+        assert sr.gc_stale(tmp_path) == 0
+        entry = json.loads((tmp_path / "sessions" / "s1.json").read_text())
+        assert entry["disposition"]["state"] == "parked"
 
 
 # ---------------------------------------------------------------------------
@@ -449,10 +594,30 @@ class TestExtractLearningsWiring:
 
         assert self._state(tmp_path) is None
 
-    def test_a_failure_in_an_earlier_chunk_still_blocks_the_write(self, tmp_path):
+    def test_an_earlier_chunk_failure_does_not_lose_the_disposition(self, tmp_path):
+        """The disposition rides only on the FINAL chunk. When an earlier
+        chunk fails but the closing exchange parsed fine, gating on any-chunk
+        failure lost a valid `parked` forever: the surviving units meant the
+        diary was written and the marker consumed, so there was no retry."""
         _entry(tmp_path, "s1")
 
-        self._run(tmp_path, [RuntimeError("boom"), ([], {"state": "done", "reason": "x"})])
+        self._run(tmp_path, [
+            RuntimeError("boom"),
+            ([], {"state": "parked", "reason": "back tomorrow"}),
+        ])
+
+        assert self._state(tmp_path) == "parked"
+
+    def test_a_final_chunk_failure_still_blocks_the_write(self, tmp_path):
+        """The symmetric case: earlier chunks succeeded, but the chunk that
+        carries the whole signal did not. The default `active` would be a
+        guess written as a fact."""
+        _entry(tmp_path, "s1")
+
+        self._run(tmp_path, [
+            ([], {"state": "active", "reason": ""}),
+            RuntimeError("boom"),
+        ])
 
         assert self._state(tmp_path) is None
 
@@ -460,6 +625,21 @@ class TestExtractLearningsWiring:
         (tmp_path / "sessions").mkdir()
 
         assert self._run(tmp_path, [([], {"state": "parked", "reason": "x"})]) is True
+
+    def test_a_lost_parked_label_warns(self, tmp_path, caplog):
+        """A dropped `parked` is user-visible — the session vanishes from
+        AGENTS.md — so it must not be a debug-level shrug."""
+        import logging
+
+        (tmp_path / "sessions").mkdir()
+
+        with caplog.at_level(logging.WARNING):
+            self._run(tmp_path, [([], {"state": "parked", "reason": "x"})])
+
+        assert any(
+            "parked" in r.getMessage() and r.levelno == logging.WARNING
+            for r in caplog.records
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +719,19 @@ class TestFleetView:
         assert listed == len(f.live) == 4
         assert "4 live" in md
         assert "1 finished, not listed" in md
+
+    def test_a_hostile_reason_cannot_break_the_markdown(self, tmp_path):
+        """The reason is LLM-quoted text; a leading `#` would open a new
+        heading and `|` reads as a table cell. Stripped at render time —
+        the registry keeps the raw value."""
+        make_session(tmp_path, "p", kind="end")
+        _add_disposition(tmp_path, "p", "parked", "## fake heading | cell")
+
+        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert "## fake heading" not in md
+        assert "|" not in md.split("- **Parked**", 1)[1].splitlines()[0]
+        assert "fake heading / cell" in md
 
     def test_a_malformed_disposition_reads_as_active(self, tmp_path):
         make_session(tmp_path, "a", ago=timedelta(minutes=2))

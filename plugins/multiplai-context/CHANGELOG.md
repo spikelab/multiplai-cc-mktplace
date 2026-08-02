@@ -56,6 +56,15 @@ Nothing yet.
   or extraction fails outright, the session is `active` and everything else
   behaves exactly as before.
 
+  The label's lifecycle holds up at the edges, too. Resuming a session clears
+  its old departure label — a resumed parked session groups by what it is
+  *doing* again (including "Needs you"), and a resumed done session comes back
+  onto the list. The label survives a long absence: registry cleanup skips any
+  session whose deferred extraction is still queued, so coming back on day 8
+  to a session parked on day 0 still finds it labelled. And on a long
+  transcript, a mid-session extraction hiccup no longer costs the label — only
+  the closing exchange's own chunk decides it.
+
 ## [0.12.0] - 2026-08-01
 
 ### Added

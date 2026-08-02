@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from lib.fsio import atomic_write
-from lib.session_registry import entry_disposition
+from lib.session_registry import entry_disposition_block
 
 logger = logging.getLogger(__name__)
 
@@ -318,8 +318,9 @@ def load_agent(entry_path: Path, data_dir: Path, now: datetime) -> Agent | None:
         last_ts = _parse_ts(raw.get("started_at"))
 
     cwd = str(raw.get("cwd") or "")
-    disposition = raw.get("disposition")
-    disposition = disposition if isinstance(disposition, dict) else {}
+    # One parse for both state and reason — two hand-rolled reads of the
+    # same block is how they drift.
+    disp_state, disp_reason = entry_disposition_block(raw)
     branch, repo_root, repo_id = _git_info(cwd)
     agent = Agent(
         session_id=sid,
@@ -333,8 +334,8 @@ def load_agent(entry_path: Path, data_dir: Path, now: datetime) -> Agent | None:
         last_ts=last_ts,
         last_kind=last_kind,
         status=_status_of(last_kind, last_ts, now),
-        disposition=entry_disposition(raw),
-        disposition_reason=str(disposition.get("reason") or ""),
+        disposition=disp_state,
+        disposition_reason=disp_reason,
     )
 
     cp = data_dir / "checkpoints" / sid / "checkpoint.md"
@@ -479,6 +480,18 @@ def format_age(delta: timedelta) -> str:
 _GROUP_ORDER = ("Needs you", "Working", "Parked", "Idle")
 
 
+def _sanitize_reason(reason: str) -> str:
+    """Strip what would break AGENTS.md structure out of an LLM-quoted reason.
+
+    The single-line regex and the registry's 500-char cap already bound the
+    damage; this handles the remainder — a leading ``#`` would open a new
+    heading, and ``|`` reads as a table cell to some renderers. Deliberately
+    minimal: display sanitization, not general markdown escaping.
+    """
+    reason = reason.strip().lstrip("#").strip()
+    return reason.replace("|", "/")
+
+
 def _render_agent(agent: Agent, now: datetime) -> list[str]:
     head = agent.project or agent.cwd or agent.session_id[:8]
     lines = [f"### {head} — {format_age(agent.age(now))}"]
@@ -494,7 +507,8 @@ def _render_agent(agent: Agent, now: datetime) -> list[str]:
     if agent.disposition == "parked":
         # The reason is the user's own closing words, which say more about why
         # this is parked than any intent line reconstructed from the work.
-        reason = f" — {agent.disposition_reason}" if agent.disposition_reason else ""
+        shown = _sanitize_reason(agent.disposition_reason)
+        reason = f" — {shown}" if shown else ""
         lines.append(f"- **Parked**{reason}")
     if agent.intent:
         lines.append(f"- **Doing:** {agent.intent}")

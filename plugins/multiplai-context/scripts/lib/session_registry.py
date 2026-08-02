@@ -217,6 +217,14 @@ def record_event(data_dir: Path, hook_input: dict, kind: str) -> bool:
                 if project:
                     entry["project"] = project
             entry["last_event"] = {"ts": now, "kind": kind}
+            # A "start" is the user picking the session back up (resume /
+            # new window on the same id), which makes the old departure
+            # label obsolete by definition: a resumed `parked` session must
+            # group by live status again (and re-enter "Needs you" when
+            # waiting), and a resumed `done` one must be visible. The next
+            # extraction pass re-labels how it is left this time.
+            if kind == "start":
+                entry.pop(DISPOSITION_KEY, None)
 
             atomic_write_json(path, entry)
             return True
@@ -253,7 +261,16 @@ def record_disposition(data_dir: Path, session_id: str, state: str, reason: str 
 
         path = registry_dir(data_dir) / f"{session_id}.json"
         if not path.exists():
-            logger.debug("No registry entry for %s; disposition not recorded", session_id)
+            # A dropped `parked`/`done` is user-visible (the session vanishes
+            # from or lingers in AGENTS.md), so it warrants a warning; a
+            # dropped `active` changes nothing — absent means active.
+            if state != "active":
+                logger.warning(
+                    "No registry entry for %s; %s disposition not recorded",
+                    session_id, state,
+                )
+            else:
+                logger.debug("No registry entry for %s; disposition not recorded", session_id)
             return False
 
         lock_fd = _lock_entry(path)
@@ -261,8 +278,18 @@ def record_disposition(data_dir: Path, session_id: str, state: str, reason: str 
             try:
                 entry = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError, ValueError):
+                if state != "active":
+                    logger.warning(
+                        "Registry entry for %s unreadable under lock; "
+                        "%s disposition not recorded", session_id, state,
+                    )
                 return False
             if not isinstance(entry, dict):
+                if state != "active":
+                    logger.warning(
+                        "Registry entry for %s is not an object; "
+                        "%s disposition not recorded", session_id, state,
+                    )
                 return False
 
             entry[DISPOSITION_KEY] = {
@@ -279,14 +306,26 @@ def record_disposition(data_dir: Path, session_id: str, state: str, reason: str 
         return False
 
 
-def entry_disposition(entry: dict) -> str:
-    """The disposition state of a parsed entry, defaulting to ``active``."""
+def entry_disposition_block(entry: dict) -> tuple[str, str]:
+    """``(state, reason)`` of a parsed entry; state defaults to ``active``.
+
+    The one parse of the disposition block every consumer shares — state and
+    reason must come from the same read or they drift (the fleet view once
+    parsed the block twice with divergent logic). A reason is only meaningful
+    alongside a valid non-default state, so a malformed block yields
+    ``("active", "")``, never a stray reason.
+    """
     block = entry.get(DISPOSITION_KEY)
     if isinstance(block, dict):
         state = str(block.get("state") or "").strip().lower()
         if state in _DISPOSITIONS:
-            return state
-    return "active"
+            return state, str(block.get("reason") or "")
+    return "active", ""
+
+
+def entry_disposition(entry: dict) -> str:
+    """The disposition state of a parsed entry, defaulting to ``active``."""
+    return entry_disposition_block(entry)[0]
 
 
 def _entry_is_stale(
@@ -320,6 +359,39 @@ def _entry_is_stale(
     except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
         mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
         return mtime < cutoff_ended
+
+
+def _pending_extraction_sids(data_dir: Path) -> set[str]:
+    """Session ids whose deferred extraction is still queued or in flight.
+
+    Extraction is what writes the disposition, and it always runs *after* GC
+    within a SessionStart (GC is synchronous, the drain spawns children that
+    finish minutes later). Without this scan, a session parked on day 0 whose
+    owner next opens Claude on day 8 lost its entry before the drain could
+    label it ``parked`` — and :func:`record_disposition` refuses to recreate
+    entries. Markers are on disk before either step runs, so reading them at
+    GC time is the "marker scan before GC" ordering.
+
+    Quarantined markers (``failed_extractions/``) deliberately do NOT protect
+    an entry: after ``MAX_ATTEMPTS`` the drain has given up, so the entry ages
+    out normally rather than living forever behind a dead marker.
+    """
+    sids: set[str] = set()
+    for sub in ("pending_extractions", "processing_extractions"):
+        try:
+            markers = list((data_dir / sub).glob("*.json"))
+        except OSError:
+            continue
+        for m in markers:
+            try:
+                data = json.loads(m.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(data, dict):
+                sid = str(data.get("session_id") or "").strip()
+                if sid:
+                    sids.add(sid)
+    return sids
 
 
 def _sweep_orphans(rdir: Path, cutoff: datetime) -> int:
@@ -380,6 +452,12 @@ def gc_stale(
     Parking a session is the user saying "I am coming back to this", and the
     entry is the only record of it — see :func:`_entry_is_stale`.
 
+    **Entries with a pending/in-flight extraction marker are never collected
+    either** — the deferred extraction is what writes the disposition, and it
+    runs after GC within the same SessionStart. Collecting first would delete
+    the entry a day-8 drain is about to label ``parked`` — see
+    :func:`_pending_extraction_sids`.
+
     Concurrency: removal takes the same per-entry flock the writers use and
     RE-CHECKS staleness under it, so an entry can't be deleted out from
     under a hook/hub mid read-merge-write (the writer we serialized behind
@@ -400,8 +478,11 @@ def gc_stale(
         now = datetime.now(timezone.utc)
         cutoff_ended = now - timedelta(days=days)
         cutoff_live = now - timedelta(days=live_days)
+        protected = _pending_extraction_sids(data_dir)
         for path in list(rdir.glob("*.json")):
             try:
+                if path.stem in protected:
+                    continue
                 if not _entry_is_stale(path, cutoff_ended, cutoff_live):
                     continue
                 lock_fd = _lock_entry(path)
