@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from conftest import SCRIPTS_DIR
 from lib import checkpoint as cp
 from lib import fleet
 
@@ -63,8 +64,14 @@ def make_session(
 
 
 def make_checkpoint(data_dir, sid, *, intent="Doing a thing", nxt="Do the next thing",
-                    files=("src/a.py",)):
-    """Write a checkpoint with the three sections the fleet view reads."""
+                    files=("/work/knowhere/src/a.py",)):
+    """Write a checkpoint with the three sections the fleet view reads.
+
+    ``files`` should be **absolute** paths — that is the format the checkpoint
+    writer mandates ('Involved files': absolute paths), and the format guard
+    below pins. Relative-path fixtures once concealed that raw string
+    intersection could not see the two-worktrees collision case.
+    """
     d = data_dir / "checkpoints" / sid
     d.mkdir(parents=True, exist_ok=True)
     body = [f"## {s}\n\nplaceholder\n" for s in cp.CHECKPOINT_SECTIONS]
@@ -90,6 +97,20 @@ def test_the_sections_read_are_sections_the_writer_emits():
     this assertion."""
     for name in (fleet._INTENT, fleet._NEXT, fleet._FILES):
         assert name in cp.CHECKPOINT_SECTIONS
+
+
+def test_the_writer_still_mandates_absolute_involved_files():
+    """Collision detection normalizes per-agent absolute paths to
+    repo-relative ones, and every collision fixture here uses absolute paths
+    — both on the strength of `checkpoint_writer.py`'s prompt rule
+    "'Involved files': absolute paths". This pins that rule the same way the
+    section-name guard above pins the section names: if the prompt drops or
+    rewords the mandate, the assumption breaks loudly here rather than the
+    fixtures silently drifting from the writer again (which is exactly what
+    concealed the two-worktrees collision gap until 2026-08)."""
+    src = (SCRIPTS_DIR / "checkpoint_writer.py").read_text(encoding="utf-8")
+
+    assert "'Involved files': absolute paths" in src
 
 
 # ---------------------------------------------------------------------------
@@ -220,8 +241,10 @@ class TestCollisions:
     def test_two_sessions_sharing_one_file_produce_exactly_one_line(self, tmp_path):
         make_session(tmp_path, "a", project="alpha")
         make_session(tmp_path, "b", project="beta")
-        make_checkpoint(tmp_path, "a", files=("src/shared.py", "src/only-a.py"))
-        make_checkpoint(tmp_path, "b", files=("src/shared.py", "src/only-b.py"))
+        make_checkpoint(tmp_path, "a", files=("/work/knowhere/src/shared.py",
+                                              "/work/knowhere/src/only-a.py"))
+        make_checkpoint(tmp_path, "b", files=("/work/knowhere/src/shared.py",
+                                              "/work/knowhere/src/only-b.py"))
 
         f = fleet.collect(tmp_path, NOW)
         md = fleet.render_agents_md(f, NOW)
@@ -229,15 +252,15 @@ class TestCollisions:
         lines = [ln for ln in section.splitlines() if ln.startswith("- ")]
 
         assert len(f.collisions) == 1
-        assert f.collisions[0].path == "src/shared.py"
+        assert f.collisions[0].path == "/work/knowhere/src/shared.py"
         assert sorted(f.collisions[0].labels) == ["alpha@a", "beta@b"]
         assert len(lines) == 1
 
     def test_two_disjoint_sessions_produce_none(self, tmp_path):
         make_session(tmp_path, "a")
         make_session(tmp_path, "b")
-        make_checkpoint(tmp_path, "a", files=("src/only-a.py",))
-        make_checkpoint(tmp_path, "b", files=("src/only-b.py",))
+        make_checkpoint(tmp_path, "a", files=("/work/knowhere/src/only-a.py",))
+        make_checkpoint(tmp_path, "b", files=("/work/knowhere/src/only-b.py",))
 
         f = fleet.collect(tmp_path, NOW)
         md = fleet.render_agents_md(f, NOW)
@@ -250,43 +273,73 @@ class TestCollisions:
         thing to go look at."""
         make_session(tmp_path, "a", kind="end")
         make_session(tmp_path, "b")
-        make_checkpoint(tmp_path, "a", files=("src/shared.py",))
-        make_checkpoint(tmp_path, "b", files=("src/shared.py",))
+        make_checkpoint(tmp_path, "a", files=("/work/knowhere/src/shared.py",))
+        make_checkpoint(tmp_path, "b", files=("/work/knowhere/src/shared.py",))
 
         assert fleet.collect(tmp_path, NOW).collisions == []
 
     def test_one_session_listing_a_file_twice_is_not_a_collision(self, tmp_path):
         make_session(tmp_path, "a")
-        make_checkpoint(tmp_path, "a", files=("src/x.py", "src/x.py"))
+        make_checkpoint(tmp_path, "a", files=("/work/knowhere/src/x.py",
+                                              "/work/knowhere/src/x.py"))
 
         assert fleet.collect(tmp_path, NOW).collisions == []
 
     def test_three_sessions_on_one_file_is_still_one_line(self, tmp_path):
         for sid in ("a", "b", "c"):
             make_session(tmp_path, sid, project=sid)
-            make_checkpoint(tmp_path, sid, files=("src/hot.py",))
+            make_checkpoint(tmp_path, sid, files=("/work/knowhere/src/hot.py",))
 
         f = fleet.collect(tmp_path, NOW)
 
         assert len(f.collisions) == 1
         assert sorted(f.collisions[0].labels) == ["a@a", "b@b", "c@c"]
 
-    def test_two_worktrees_of_one_project_are_told_apart(self, tmp_path):
-        """The common real collision: same project, two tabs. Labelling both
-        "workspace" identifies nobody, which is the same as no collision line."""
+    def _two_worktrees(self, tmp_path):
+        """Two worktrees of one repo, each holding the same logical file
+        under its own absolute prefix — the format real checkpoints carry."""
         for sid, wt in (("a", "feat-one"), ("b", "feat-two")):
             gitdir = tmp_path / "repo" / ".git" / "worktrees" / wt
             gitdir.mkdir(parents=True)
             (gitdir / "HEAD").write_text(f"ref: refs/heads/{wt}\n")
             checkout = tmp_path / wt
-            checkout.mkdir()
+            (checkout / "src").mkdir(parents=True)
             (checkout / ".git").write_text(f"gitdir: {gitdir}\n")
             make_session(tmp_path, sid, project="workspace", cwd=str(checkout))
-            make_checkpoint(tmp_path, sid, files=("src/hot.py",))
+            make_checkpoint(tmp_path, sid, files=(str(checkout / "src" / "hot.py"),))
+
+    def test_absolute_paths_in_two_worktrees_still_collide(self, tmp_path):
+        """The headline case. The two checkpoints record
+        ``…/feat-one/src/hot.py`` and ``…/feat-two/src/hot.py`` — absolute
+        paths that never string-match — so the intersection must run on
+        repo-relative paths keyed by the shared main ``.git`` dir."""
+        self._two_worktrees(tmp_path)
+
+        f = fleet.collect(tmp_path, NOW)
+
+        assert len(f.collisions) == 1
+        assert f.collisions[0].path == "src/hot.py"
+
+    def test_two_worktrees_of_one_project_are_told_apart(self, tmp_path):
+        """The common real collision: same project, two tabs. Labelling both
+        "workspace" identifies nobody, which is the same as no collision line."""
+        self._two_worktrees(tmp_path)
 
         labels = fleet.collect(tmp_path, NOW).collisions[0].labels
 
         assert sorted(labels) == ["workspace@feat-one", "workspace@feat-two"]
+
+    def test_the_same_relative_path_in_unrelated_repos_is_not_a_collision(self, tmp_path):
+        """Repo-relative normalization must not manufacture collisions:
+        every Python repo has a ``src/main.py``."""
+        for sid, name in (("a", "alpha"), ("b", "beta")):
+            repo = tmp_path / name
+            (repo / ".git").mkdir(parents=True)
+            (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+            make_session(tmp_path, sid, project=name, cwd=str(repo))
+            make_checkpoint(tmp_path, sid, files=(str(repo / "src" / "main.py"),))
+
+        assert fleet.collect(tmp_path, NOW).collisions == []
 
     def test_identical_labels_fall_back_to_the_session_id(self, tmp_path):
         """Two tabs in the same worktree. Nothing but the id distinguishes
@@ -296,7 +349,7 @@ class TestCollisions:
         (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
         for sid in ("aaaa1111-x", "bbbb2222-y"):
             make_session(tmp_path, sid, project="workspace", cwd=str(repo))
-            make_checkpoint(tmp_path, sid, files=("src/hot.py",))
+            make_checkpoint(tmp_path, sid, files=(str(repo / "src" / "hot.py"),))
 
         labels = sorted(fleet.collect(tmp_path, NOW).collisions[0].labels)
 
@@ -336,12 +389,33 @@ class TestEndedSessions:
 # Parsing "Involved files"
 # ---------------------------------------------------------------------------
 
+class TestFirstLine:
+
+    def test_a_bullet_marker_is_stripped(self):
+        assert fleet._first_line("- Fix the drain\n") == "Fix the drain"
+        assert fleet._first_line("* Fix the drain\n") == "Fix the drain"
+
+    def test_markdown_bold_survives(self):
+        """`lstrip("-*")` used to eat the opening ``**``, rendering a bold
+        intent as ``Refactor** the drain`` in AGENTS.md."""
+        assert fleet._first_line("**Refactor** the drain") == "**Refactor** the drain"
+        assert fleet._first_line("- **Refactor** the drain") == "**Refactor** the drain"
+
+
 class TestInvolvedFilesParsing:
 
     def test_backticked_paths_with_prose(self):
         body = "- `src/a.py` — the thing\n- `docs/b.md` — the other thing\n"
 
         assert fleet.parse_involved_files(body) == ["src/a.py", "docs/b.md"]
+
+    def test_an_unterminated_backtick_yields_the_path_not_the_prose(self):
+        """A truncated bullet like ``- `src/a.py — why it matters`` must not
+        push a garbage "path" with embedded spaces into the Files list and
+        the collision key space."""
+        body = "- `src/a.py — why it matters\n"
+
+        assert fleet.parse_involved_files(body) == ["src/a.py"]
 
     def test_bare_paths_with_an_em_dash_description(self):
         body = "- src/a.py — the thing\n- docs/b.md - other\n"
@@ -376,8 +450,8 @@ class TestFleetLine:
         make_session(tmp_path, "n1", kind="notification")
         make_session(tmp_path, "n2", kind="notification")
         make_session(tmp_path, "old", ago=timedelta(days=3))
-        make_checkpoint(tmp_path, "w0", files=("src/hot.py",))
-        make_checkpoint(tmp_path, "w1", files=("src/hot.py",))
+        make_checkpoint(tmp_path, "w0", files=("/work/knowhere/src/hot.py",))
+        make_checkpoint(tmp_path, "w1", files=("/work/knowhere/src/hot.py",))
 
         line = fleet.render_fleet_line(fleet.collect(tmp_path, NOW), NOW)
 
@@ -424,8 +498,9 @@ class TestCacheProperty:
         make_session(tmp_path, "a", project="alpha", kind="notification")
         make_session(tmp_path, "b", project="beta", ago=timedelta(hours=30))
         make_session(tmp_path, "c", project="gamma", kind="end")
-        make_checkpoint(tmp_path, "a", files=("src/shared.py",))
-        make_checkpoint(tmp_path, "b", files=("src/shared.py", "src/b.py"))
+        make_checkpoint(tmp_path, "a", files=("/work/knowhere/src/shared.py",))
+        make_checkpoint(tmp_path, "b", files=("/work/knowhere/src/shared.py",
+                                              "/work/knowhere/src/b.py"))
         return tmp_path
 
     def test_delete_both_outputs_and_they_come_back_identical(self, tmp_path):
@@ -440,9 +515,10 @@ class TestCacheProperty:
         assert (agents_path.read_text(), fleet_path.read_text()) == before
 
     def test_only_the_generation_stamp_differs_across_runs(self, tmp_path):
-        """Proven at the render layer with two different `now` values a second
-        apart: everything except the stamp must be a pure function of the two
-        stores."""
+        """Proven at the render layer with two `now` values a second apart —
+        close enough that no age bucket or status threshold is crossed.
+        Between such boundaries, everything except the stamp is a function of
+        the two stores alone."""
         data = self._fleet_dir(tmp_path)
         first = fleet.render_agents_md(fleet.collect(data, NOW), NOW)
         later = NOW + timedelta(seconds=1)
@@ -490,14 +566,15 @@ class TestRendering:
         make_session(tmp_path, "a", project="alpha")
         make_checkpoint(
             tmp_path, "a",
-            intent="Rewiring the drain", nxt="Run the gates", files=("src/x.py",),
+            intent="Rewiring the drain", nxt="Run the gates",
+            files=("/work/knowhere/src/x.py",),
         )
 
         md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
 
         assert "**Doing:** Rewiring the drain" in md
         assert "**Next:** Run the gates" in md
-        assert "`src/x.py`" in md
+        assert "`/work/knowhere/src/x.py`" in md
 
     def test_groups_appear_only_when_populated(self, tmp_path):
         make_session(tmp_path, "a", kind="notification")
@@ -539,6 +616,21 @@ class TestRendering:
         branch = fleet.collect(tmp_path, NOW).agents[0].branch
 
         assert branch == "feat/agents (worktree: mkt-agents)"
+
+    def test_a_submodule_is_not_labelled_a_worktree(self, tmp_path):
+        """A submodule checkout *also* has a ``.git`` file pointer, but it
+        targets ``<parent>/.git/modules/<name>`` — only a gitdir under
+        ``worktrees/`` is a worktree."""
+        gitdir = tmp_path / "parent" / ".git" / "modules" / "sub"
+        gitdir.mkdir(parents=True)
+        (gitdir / "HEAD").write_text("ref: refs/heads/main\n")
+        sub = tmp_path / "parent" / "sub"
+        sub.mkdir()
+        # Submodules record the pointer relative to the checkout.
+        (sub / ".git").write_text("gitdir: ../.git/modules/sub\n")
+        make_session(tmp_path, "a", cwd=str(sub))
+
+        assert fleet.collect(tmp_path, NOW).agents[0].branch == "main"
 
     def test_a_detached_head_shows_the_short_sha(self, tmp_path):
         repo = tmp_path / "repo"

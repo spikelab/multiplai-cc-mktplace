@@ -119,6 +119,20 @@ def main(argv: list[str] | None = None) -> int:
     scripts_dir = Path(__file__).parent
     extract_script = scripts_dir / "extract_learnings.py"
 
+    # Refresh the fleet view first. This is the walk-away moment — the tab
+    # that just closed is the one whose state Spike was carrying in his head —
+    # so AGENTS.md and fleet.txt should reflect the exit before anything else
+    # runs. The registry is already current (SessionEnd updated `last_event`
+    # before the container died); what the launched children will add later is
+    # the diary entry, which this view does not read. It needs nothing from
+    # extraction either, which is why it sits above the extract_learnings.py
+    # existence check: a broken install that cannot extract still gets a
+    # current fleet view.
+    try:
+        write_fleet_view(data_dir)
+    except Exception:
+        logger.warning("Fleet view refresh failed (non-fatal)", exc_info=True)
+
     if not extract_script.exists():
         logger.error("extract_learnings.py not found beside %s", __file__)
         # Never gate errors on --verbose: the launcher runs this silently,
@@ -152,19 +166,6 @@ def main(argv: list[str] | None = None) -> int:
             f"host drain launched {result.launched} deferred extraction(s)",
             count=result.launched,
         )
-    # Refresh the fleet view. This is the walk-away moment — the tab that just
-    # closed is the one whose state Spike was carrying in his head — so
-    # AGENTS.md and fleet.txt should reflect the exit before anything else
-    # runs. The registry is already current (SessionEnd updated `last_event`
-    # before the container died); what the launched children will add later is
-    # the diary entry, which this view does not read. Runs before the failure
-    # check on purpose: a failed extraction child changes nothing about what
-    # the fleet view should show.
-    try:
-        write_fleet_view(data_dir)
-    except Exception:
-        logger.warning("Fleet view refresh failed (non-fatal)", exc_info=True)
-
     if result.failed:
         # Only ever nonzero with --wait (fire-and-forget never reaps its
         # children). A scripted check (`drain … --wait && echo ok`) must not
