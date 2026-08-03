@@ -10,7 +10,10 @@ implements the plumbing for the checkpoint lifecycle:
      Stop hook spawns a detached ``checkpoint_writer.py`` that distills the
      transcript into a structured 11-field ``checkpoint.md``. Above the
      handoff threshold the checkpoint keeps refreshing every
-     ``refresh_tokens`` so it never goes stale in marathon sessions.
+     ``refresh_tokens`` so it never goes stale in marathon sessions. A third,
+     age-based trigger covers the opposite shape: a small session left open
+     for days never crosses a band, so ``staleness_trigger`` fires on
+     wall-clock age instead.
   3. **Handoff** — at/above the handoff threshold (default 200K) a pending
      marker is written for the session's project. The user is advised (via
      Stop-hook systemMessage and a per-prompt nudge) to ``/clear``.
@@ -65,6 +68,39 @@ _DEFAULT_REFRESH = 25_000
 _DEFAULT_TTL_HOURS = 6.0
 _DEFAULT_TIMEOUT_S = 240
 
+# Age-based checkpointing (the `stale` trigger). Deliberately NOT ttl_hours:
+# that one means pending-marker expiry and is consumed by
+# ``consume_pending_marker``; conflating the two meanings would silently break
+# rebuild expiry.
+#
+# Defaults are chosen for write volume, not responsiveness. A 4-hour session
+# writes twice — once when it passes the minimum age with no checkpoint at all,
+# once three hours later — against 1–2 today. Extraction and interactive work
+# share one rate limit, and the July 6–7 failure cluster was a single 429 from
+# a large backfill, so the cadence stays well under one write per hour per
+# session.
+#
+# Two accepted burst shapes, deliberately without a global cap or jitter:
+#
+# - Thundering herd: after any break longer than stale_hours (overnight,
+#   weekend) every open tab is simultaneously stale, so the first Stop in each
+#   resumed tab spawns a detached writer — N tabs resuming together means N
+#   concurrent writers sharing the interactive rate limit. The single-flight
+#   guard (`writer_inflight`) is per-session only. Bounded by tab count at one
+#   write per tab per stale_hours, so the magnitude stays single-digit (the
+#   July 429 came from a hundreds-of-calls backfill, not this shape).
+#
+# - Writer-failure retries: a failed writer releases its marker without
+#   updating state (checkpoint_writer.py), so the next Stop refires. During an
+#   API outage this retry-every-Stop behaviour previously applied only to
+#   sessions past a token band; the stale trigger intentionally extends it to
+#   every session older than min_session_minutes (including the
+#   corrupt-last_checkpoint_ts path). Same retry pattern as the existing
+#   triggers, wider blast radius — still at most one in-flight writer per
+#   session.
+_DEFAULT_STALE_HOURS = 3.0
+_DEFAULT_MIN_SESSION_MINUTES = 30
+
 # The 11 checkpoint fields (MiMo Code spec). The writer prompt emits these
 # as H2 sections; validation requires a majority of them to be present.
 CHECKPOINT_SECTIONS = (
@@ -98,6 +134,10 @@ class CheckpointConfig:
     timeout_s: int = _DEFAULT_TIMEOUT_S
     model: str | None = None
     enabled: bool = True
+    # Age-based trigger. ``stale_hours = 0`` disables it entirely, leaving the
+    # token-band behaviour exactly as it was.
+    stale_hours: float = _DEFAULT_STALE_HOURS
+    min_session_minutes: int = _DEFAULT_MIN_SESSION_MINUTES
 
 
 def _opt(name: str) -> str:
@@ -168,6 +208,10 @@ def load_config() -> CheckpointConfig:
         timeout_s=_opt_int("checkpoint_timeout_s", _DEFAULT_TIMEOUT_S),
         model=_opt("checkpoint_model") or None,
         enabled=enabled,
+        stale_hours=max(0.0, _opt_float("checkpoint_stale_hours", _DEFAULT_STALE_HOURS)),
+        min_session_minutes=max(
+            0, _opt_int("checkpoint_min_session_minutes", _DEFAULT_MIN_SESSION_MINUTES)
+        ),
     )
 
 
@@ -345,6 +389,103 @@ def checkpoint_trigger(tokens: int, state: dict, cfg: CheckpointConfig) -> str |
         last_tokens = int(state.get("last_checkpoint_tokens") or 0)
         if tokens - last_tokens >= cfg.refresh_tokens:
             return "refresh"
+    return None
+
+
+def _session_started_at(data_dir: Path, session_id: str) -> datetime | None:
+    """When this session began, per the session registry.
+
+    The registry is the only store that knows: ``state.json`` here is created
+    by the *first checkpoint write*, so for the sessions this matters for — the
+    ones that never checkpointed at all — it does not exist. The registry entry
+    does, because ``record_event`` runs on SessionStart and again on every
+    Stop, creating it if hooks were installed mid-session.
+
+    Returns None when it cannot be read, and the caller then declines to fire:
+    a session of unknown age is not evidence of a stale one, and today's
+    behaviour (band triggers only) is the safe default.
+
+    Known blind spot — registry GC resets the age anchor. ``gc_stale``
+    collects a non-parked entry after ``GC_LIVE_AFTER_DAYS`` (30 days) of
+    silence, and ``record_event`` runs *before* the checkpoint pass in
+    ``session_stop.main``, so on the user's return the entry is recreated
+    with ``started_at = now``. A tab dormant for more than 30 days — the
+    extreme case the stale trigger exists for — therefore reads as a
+    0-minute-old session and gets no age checkpoint until
+    ``min_session_minutes`` into the resumed work, at which point the
+    trigger self-corrects. Parked sessions are immune (GC never collects
+    ``disposition: parked`` entries, nor ones with a pending extraction
+    marker), so the reset only hits tabs that went silent without being
+    parked. Accepted as graceful degradation: the alternative — GC
+    exemptions keyed to checkpoint state — would couple the registry to
+    this module for a case that self-heals in half an hour. Pinned by
+    ``TestRegistryGcAgeReset``.
+    """
+    try:
+        from lib.session_registry import registry_dir
+
+        raw = (registry_dir(data_dir) / f"{session_id}.json").read_text(encoding="utf-8")
+        started = json.loads(raw).get("started_at")
+        ts = datetime.fromisoformat(str(started))
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def staleness_trigger(
+    data_dir: Path, session_id: str, state: dict, cfg: CheckpointConfig
+) -> str | None:
+    """Decide whether a checkpoint is due on *age*. Returns ``"stale"`` or None.
+
+    The gap this closes: the existing triggers are token-based, so a tab that
+    sat at 40K tokens for three days has no checkpoint at all — and that is
+    exactly the tab whose state you have lost track of. ``AGENTS.md`` renders
+    intent, next action and files-in-hand from the checkpoint, so a dormant
+    session was the least visible one in the fleet view precisely when it
+    needed to be the most.
+
+    Fires when the session is at least ``min_session_minutes`` old AND either
+    it has never checkpointed, or its last checkpoint is ``stale_hours`` old.
+    The age gate is what keeps short sessions out; without it every session
+    that ever completes a turn would write one.
+
+    **This is not the per-turn diary that was rejected**, and the difference is
+    structural rather than a matter of degree: the check below is two file
+    reads and a subtraction, the write it may trigger is an overwrite of one
+    file rather than a permanent append, and ``checkpoint_writer.py`` distills
+    only the transcript segment newer than ``last_checkpoint_ts`` — so writing
+    more often makes each write smaller, not the total larger.
+
+    A dormant tab fires no hooks at all, so nothing here can run *during* the
+    three quiet days. That is fine: the last ``Stop`` of a session is the
+    moment the work stopped, so the checkpoint it leaves is at most
+    ``stale_hours`` behind where the session actually ended up.
+    """
+    if not cfg.enabled or cfg.stale_hours <= 0:
+        return None
+
+    started = _session_started_at(data_dir, session_id)
+    if started is None:
+        return None
+    now = datetime.now(timezone.utc)
+    if (now - started).total_seconds() < cfg.min_session_minutes * 60:
+        return None
+
+    last_ts = state.get("last_checkpoint_ts")
+    if not last_ts:
+        # Never checkpointed, and old enough to be worth recording. This is
+        # the dormant-tab case the trigger exists for.
+        return "stale"
+    try:
+        last = datetime.fromisoformat(str(last_ts))
+    except (TypeError, ValueError):
+        # A corrupt timestamp means we cannot tell how old the checkpoint is;
+        # treat it as stale rather than never refreshing this session again.
+        return "stale"
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    if (now - last).total_seconds() >= cfg.stale_hours * 3600:
+        return "stale"
     return None
 
 

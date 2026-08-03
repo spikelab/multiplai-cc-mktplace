@@ -18,6 +18,39 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.15.0] - 2026-08-01
+
+### Added
+- **A tab you left open for days now has a checkpoint saying where it stopped.**
+  Checkpoints used to be triggered by context size alone — bands at 100K and
+  200K tokens — so a session that sat at 40K for three days had none at all.
+  That is backwards: the session whose state you have most thoroughly lost track
+  of was the one the fleet view had least to say about, because `AGENTS.md`
+  reads its intent, next action and files-in-hand from the checkpoint.
+
+  A third trigger now fires on age instead of size. It writes when a session is
+  at least **30 minutes** old and either has never checkpointed or last did so
+  over **3 hours** ago.
+
+  **What it costs:** a four-hour session writes twice instead of once or twice.
+  Checkpoint writes distill only the transcript since the last one and overwrite
+  a single file, so writing more often makes each write smaller rather than
+  making the total larger. There is a test asserting the two-writes-in-four-hours
+  figure, so the cadence cannot drift silently.
+
+  Both numbers are configurable:
+  `CLAUDE_PLUGIN_OPTION_checkpoint_stale_hours` and
+  `CLAUDE_PLUGIN_OPTION_checkpoint_min_session_minutes`. Setting `stale_hours`
+  to `0` turns the age trigger off and restores the previous size-only
+  behaviour exactly. These are **new** settings —
+  `checkpoint_ttl_hours` still means what it always meant (how long a `/clear`
+  handoff marker stays valid) and is unaffected.
+
+  A session idle for three days fires no hooks at all, so nothing runs during
+  the quiet stretch. That is fine: the last completed turn *is* the moment the
+  work stopped, so the checkpoint it leaves behind is at most `stale_hours`
+  behind where the session actually ended up.
+
 ## [0.14.0] - 2026-08-01
 
 ### Changed

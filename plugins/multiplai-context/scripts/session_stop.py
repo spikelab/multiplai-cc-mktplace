@@ -113,9 +113,18 @@ def _checkpoint_pass(hook_input: dict, data_dir: Path) -> str | None:
     state = cp.load_state(data_dir, session_id)
     tokens = cp.read_context_tokens(transcript_path, after_ts=state.get("rebuild_ts"))
     if tokens <= 0:
+        # Unknown context size declines to fire — and this gate sits before
+        # the staleness check, so it blocks the age-based trigger too: the
+        # writer payload needs a real token count. Same philosophy as
+        # staleness_trigger's unknown-age handling — no evidence is not
+        # evidence of staleness, and doing nothing is the safe default.
         return None
 
     reason = cp.checkpoint_trigger(tokens, state, cfg)
+    # Age-based fallback. The band triggers above are token-based, so a tab
+    # that sat at 40K tokens for three days has no checkpoint at all — and
+    # that is exactly the tab whose state you have lost track of.
+    reason = reason or cp.staleness_trigger(data_dir, session_id, state, cfg)
 
     if reason and not cp.writer_inflight(data_dir, session_id):
         cp.claim_writer(data_dir, session_id)

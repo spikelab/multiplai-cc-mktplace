@@ -306,6 +306,15 @@ Long sessions degrade as the context window fills. The checkpoint system
    into the previous checkpoint. Above the handoff threshold the checkpoint
    auto-refreshes every `checkpoint_refresh_tokens`, so marathon /goal
    sessions always have a current one.
+
+   Bands are a poor trigger for a tab you *stopped* using: a session that
+   sat at 40K tokens for three days crosses nothing and so has no
+   checkpoint at all — precisely the session you have most lost track of.
+   So there is also an **age** trigger: once a session is older than
+   `checkpoint_min_session_minutes` and its last checkpoint is older than
+   `checkpoint_stale_hours`, the next Stop writes one. A session whose age
+   cannot be read does *not* trigger it — unknown age is not evidence of
+   staleness, and band-only is the safe default.
 3. **Handoff** — at/above the handoff threshold (default **200K**) a pending
    marker is written for the session's project.
 4. **Rebuild** — the checkpoint is injected into the fresh context window as
@@ -324,6 +333,15 @@ Long sessions degrade as the context window fills. The checkpoint system
      only: a plain NEW session in the project (source `startup`/`resume`)
      never inherits the parked checkpoint — soft continuity for those comes
      from the `now/` project-state injection instead.
+5. **Retire** — a checkpoint is live state; the diary is the permanent
+   record. Once extraction has written a diary entry for that session, the
+   checkpoint says nothing the diary does not, so `data/checkpoints/<sid>/`
+   is deleted. Four things keep one alive: the session is `parked`, the
+   diary write produced nothing, a writer is still in flight, or an
+   unconsumed rebuild marker still points at it — that last one is the
+   walk-away case (cross the handoff threshold, close the tab instead of
+   `/clear`ing), where the checkpoint is exactly what tomorrow rebuilds
+   from.
 
 ### Activation: fully-automatic rebuild
 
@@ -428,7 +446,9 @@ Safety properties, by construction:
 | `checkpoint_tokens` | `100000,200000` | Comma-separated checkpoint bands (absolute tokens) |
 | `checkpoint_handoff_tokens` | last band | Threshold where handoff advice + pending marker kick in (clamped to ≥ last band) |
 | `checkpoint_refresh_tokens` | `25000` | Above the handoff threshold, re-checkpoint every this many tokens of growth |
-| `checkpoint_ttl_hours` | `6` | Pending rebuild marker expiry |
+| `checkpoint_stale_hours` | `3` | Age trigger: re-checkpoint when the last one is this old. `0` disables it, restoring size-only triggering |
+| `checkpoint_min_session_minutes` | `30` | Minimum session age before the staleness trigger applies |
+| `checkpoint_ttl_hours` | `6` | Pending rebuild marker expiry (unrelated to `stale_hours`) |
 | `checkpoint_timeout_s` | `240` | Writer model-call timeout |
 | `checkpoint_model` | plugin default model | Model for the checkpoint writer |
 
@@ -655,12 +675,35 @@ available at all, those passes no-op with a one-time warning.
 | `SessionStart` | `session_start.py` | Init session state; drain deferred extractions; emit the dream-due nudge, the **60-day** config-audit nudge, and any **due prospective intentions**; launch the **memory maintainer** detached (own 24h gate). **Does not** dump memory into context. |
 | `UserPromptSubmit` | `context_manager.py` | Route the prompt against catalogs and inject only the relevant memory. |
 | `Stop` | `session_stop.py` | Lightweight checkpoint (extraction is deferred, not run here). |
-| `SessionEnd` | `session_end.py` | Write a deferred-extraction marker for the next session to process. |
+| `SessionEnd` | `session_end.py` | Write a deferred-extraction marker for a drain to pick up; record the session's disposition. |
 | `PreCompact` | `pre_compact.py` | Enqueue a deferred-extraction marker so pre-compaction learnings survive; clear the re-recommendation cooldown map (injected context is summarized away). |
 
 Heavy LLM extraction never runs inside a kill-within-seconds hook: it is
-deferred via a marker queue and processed by `extract_learnings.py` from
-the next `SessionStart`.
+deferred via a marker queue and run by `extract_learnings.py` as a
+detached subprocess.
+
+#### Draining the queue
+
+`scripts/drain_extractions.py` is a standalone entry point for that queue,
+so it no longer has to wait for a session:
+
+```
+uv run --no-project drain_extractions.py --data-dir <workspace>/.multiplai/data
+```
+
+`--wait` blocks until each extraction finishes with its errors visible;
+`--verbose` prints a one-line summary. A container launcher can call it
+right after the container exits — which is what turns "closing your last
+tab on Friday" into a Friday diary entry rather than a Monday one — and
+you can run it by hand when you suspect a session was never written up.
+`SessionStart` drains through the same `lib/extraction_drain.py`, so the
+two paths cannot drift, and the dequeue is an atomic rename, so a
+launcher drain and a fresh session firing together is safe.
+
+The script's own header documents the environment it needs. The one that
+bites: `CLAUDE_PLUGIN_OPTION_workspace_dir` (or `WORKSPACE`), without
+which the diary silently lands in `~/.multiplai/` instead of your
+workspace — `--data-dir` fixes the queue's location, not the diary's.
 
 ### Key libraries
 
@@ -682,12 +725,14 @@ the next `SessionStart`.
    `data/pending_extractions/`. The hook itself does no LLM work — those
    hooks get killed within seconds by Claude Code, so any multi-second
    call would be unreliable.
-2. **Extract (deferred, async)** — the next `SessionStart` reads the
-   pending markers and spawns `extract_learnings.py` as a *detached
-   background subprocess* (`subprocess.Popen(..., start_new_session=True)`).
-   `SessionStart` returns immediately so your first prompt isn't blocked.
-   The subprocess does the LLM call to produce the diary entry + per-day
-   learnings, writes them, and removes its marker.
+2. **Extract (deferred, async)** — a drain reads the pending markers and
+   spawns `extract_learnings.py` as a *detached background subprocess*
+   (`subprocess.Popen(..., start_new_session=True)`). The subprocess does
+   the LLM call to produce the diary entry + per-day learnings, writes
+   them, and removes its marker. Either the next `SessionStart` drains
+   (returning immediately, so your first prompt isn't blocked) or
+   `drain_extractions.py` does, from outside any session — see
+   [Draining the queue](#draining-the-queue).
 3. **Propose** — `/multiplai-context:dream` reads learnings + diary and writes a
    review proposal to `.multiplai/dreams/`.
 4. **Apply** — `/multiplai-context:dream-remember` walks the proposal with you
@@ -702,9 +747,47 @@ the next `SessionStart`.
 > on extraction; it always catches up asynchronously.
 >
 > If a marker stays in `data/pending_extractions/` across multiple
-> sessions, the next `SessionStart` retries it (up to 3 attempts); a
+> sessions, the next drain retries it (up to 3 attempts); a
 > permanently-failing transcript is moved to `data/failed_extractions/`
-> for inspection.
+> for inspection. A marker in `data/processing_extractions/` older than
+> 15 minutes is treated the same way — that is what a container torn down
+> mid-extraction leaves behind, since the detached child dies with it.
+
+### The fleet view (`data/AGENTS.md`)
+
+Running several sessions at once, the question at the end of the day is
+*which of these needs me?* `scripts/synthesize_agents.py` answers it by
+aggregating the session registry and the checkpoints — no LLM call, pure
+aggregation — into two files:
+
+- **`data/AGENTS.md`** — one section per session, grouped by what you need
+  to do about it: **Needs you** · **Working** · **Parked** · **Idle**.
+  Finished sessions are counted, not listed. A **Collisions** section
+  names every file two live sessions are both holding.
+- **`data/fleet.txt`** — the same reading compressed to one line, cheap
+  enough for a status line to `cat` on every prompt.
+
+It runs alongside the extraction drain, so both refresh after the last
+tab closes as well as at session start.
+
+### Session disposition — "park it for now"
+
+Liveness (*is it running?*) and intent (*am I coming back to it?*) are
+different questions. The extraction pass that already reads your
+transcript for the diary also reads **how you left**, on the same model
+response, and records it under a separate `disposition` key on the
+registry entry: `active` · `parked` · `done` (defaulting to `active`
+whenever it is unsure).
+
+You get this by typing "park it for now" as you would anyway — there is
+no command to remember at the moment you are least likely to remember it.
+Parked sessions get their own heading in `AGENTS.md` and are **exempt
+from registry garbage collection**, which closes a real asymmetry:
+transcripts survive a year, but registry entries used to age out in 7-30
+days, so a parked idea stayed resumable while becoming invisible.
+
+The liveness field (`status`) is untouched by this — it is a separate,
+contracted vocabulary and disposition never writes to it.
 
 ## Observability
 
