@@ -73,6 +73,30 @@ calling checkout:
   failure is non-fatal: the branch and worktree stay intact and the exact manual
   commands land in `build-progress.md`.
 
+Commits you will see on the branch, per block: `test(block-N)`, `impl(block-N)`,
+and — when the block's refactor pass survives verification — `refactor(block-N)`.
+After the last block, one conservative whole-change pass lands as
+`refactor: simplify across blocks`.
+
+## The refactor phase
+
+Every block runs test → implement → **refactor**, on both tiers. The refactor
+step is verified rather than trusted: after the agent finishes, the pipeline
+re-runs the suite and re-hashes every test file. If the suite is not green, or
+any test file changed, the entire refactor diff is discarded (the block is reset
+to its `impl(block-N)` commit) and the build continues with the implementation
+that was already green. A refactor can improve a block or do nothing; it can
+never break one. There is no "the test needed changing" escape hatch inside a
+refactor window — that hatch belongs to the implementer.
+
+After the last block, one **whole-change** pass runs over the cumulative diff,
+before the final review. Its charter is deliberately narrow: remove cross-block
+duplication, dead code and needless indirection, and make naming consistent —
+module boundaries and public signatures stay as designed. It carries the same
+harness (suite green + tests unchanged, or the whole pass is reverted), is
+budget-checked like a block boundary, and is recorded in the checkpoint so a
+resume does not pay for it twice.
+
 ### 🚨 MUST: pass `--no-worktree` when you are already inside a worktree
 
 **Before invoking the pipeline, check whether the current session is running
@@ -105,7 +129,7 @@ Model and effort are two axes of one decision; both are set from
 | `[buildme]` | `MODEL=` and `EFFORT=` for the whole pipeline |
 | `[buildme.spec]` | `EFFORT=` for spec generation, audits, rubric |
 | `[buildme.review]` | `EFFORT=` for code review, test-quality audit, final review |
-| `[buildme.agent]` | `EFFORT=` for the TDD agents (test writer, implementer, refactorer, fix) |
+| `[buildme.agent]` | `EFFORT=` for the TDD agents (test writer, implementer, per-block refactorer, the whole-change refactor pass, fix) |
 
 ```ini
 [buildme]
