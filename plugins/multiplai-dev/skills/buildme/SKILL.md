@@ -205,7 +205,11 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
 git worktree (see [Git lifecycle](#git-lifecycle)).
 
 The pipeline handles: worktree/branch setup, bootstrap, spec generation (via
-change_manager) including the unknowns/explainer pass, design audit, the
+change_manager) including the unknowns/explainer pass, the design audit — which
+critiques the specs for consistency *and* plan quality (over-engineering,
+task granularity, testability, uncovered edge cases) and folds every
+critical/major gap back into one regeneration pass of `design.md` and
+`tasks.md` before re-auditing once, report-only — the
 prototype stage, TDD implementation (test-writer + implementer agents per block),
 integration gates, scored quality reviews, entry point verification, the respec
 proposal, and publishing (push + draft PR).

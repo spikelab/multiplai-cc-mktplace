@@ -28,7 +28,7 @@
 
 | File | Functions | What They Do |
 |------|-----------|-------------|
-| `spec_steps.py` | `generate_artifact()`, `run_explainer()`, `run_design_audit()`, `run_tasks_audit()`, `run_codebase_analysis()` | `run_explainer()` is the B1 explainer gate — one call per `dependencies.detect_new_dependencies()` hit, run concurrently with `WebSearch`/`WebFetch`/`Read`/`Glob`/`Grep`, concatenated into `unknowns.md`; `unknowns_gate` then forces at most one regeneration pass (`spec_generator._audit_unknowns`, recorded as `SpecGenState.explainers_done`). Spec generation + adversarial audits (design audit and tasks-shape audit, both wired — the tasks audit forces one regeneration pass on horizontal-decomposition findings). `run_codebase_analysis()` (3-agent) is **not wired**. |
+| `spec_steps.py` | `generate_artifact()`, `run_explainer()`, `run_design_audit()`, `run_tasks_audit()`, `run_codebase_analysis()` | `run_explainer()` is the B1 explainer gate — one call per `dependencies.detect_new_dependencies()` hit, run concurrently with `WebSearch`/`WebFetch`/`Read`/`Glob`/`Grep`, concatenated into `unknowns.md`; `unknowns_gate` then forces at most one regeneration pass (`spec_generator._audit_unknowns`, recorded as `SpecGenState.explainers_done`). Spec generation + adversarial audits (design audit and tasks-shape audit, both wired — the tasks audit forces one regeneration pass on horizontal-decomposition findings). `run_design_audit()` covers consistency **and** plan quality (over-engineering, granularity, testability, edge cases); its critical/major gaps force one regeneration pass of design.md + tasks.md through the single call site `spec_generator.run_design_audit_stage` (recorded as `SpecGenState.design_audit_regen_done`, then one report-only re-audit). `run_codebase_analysis()` (3-agent) is **not wired**. |
 | `prototype_steps.py` | `run_prototype()`, `apply_prototype_findings()`, `primary_prototype_artifact()` | Prototype-first stage (BuildPhase.PROTOTYPE, between DESIGN_AUDIT and REVIEW). One agent writes a mockup / sample output / CLI transcript + `NOTES.md` inside `specs/changes/<name>/prototype/` — the write boundary is enforced in code (`_files_outside`), not only in the prompt. `apply_prototype_findings()` folds the notes' DISPROVES/OPEN_QUESTIONS back into design.md and tasks.md with **one** regeneration pass each. |
 | `tdd_steps.py` | `run_test_writer()`, `run_implementer()`, `run_refactorer()`, `run_integration_fix()` | TDD agent spawning with tool allowlists. Reports carry the `SURPRISES:` / `SPEC_IMPACT:` REQUIRED slots parsed by `gates.parse_implementation_note`. |
 | `respec_steps.py` | `append_implementation_note()`, `format_implementation_note()`, `notes_path()`, `ensure_delta_sections()`, `run_respec_audit()` | B3 loop back to the spec. Each parsed `ImplementationNote` is appended to `implementation-notes.md` **as the build runs** (a crashed build still leaves the learning on disk). `run_respec_audit()` (BuildPhase.RESPEC, after TDD_BUILD) reads those notes + current requirements/design and writes `respec.md` in ADDED/MODIFIED/REMOVED form — **propose only, never edits the specs**, and non-fatal on LLM failure. |
@@ -62,7 +62,7 @@ All tests mock LLM calls — no API keys needed. Tests cover:
 - Models: review scoring, weighted averages, threshold enforcement
 - Gates: all gate functions with pass/fail scenarios
 - Change Manager: DAG resolution, archiving, delta spec merging
-- Spec Generator: dependency ordering, resume, change type detection
+- Spec Generator: dependency ordering, resume, change type detection, design-audit feedback (one regeneration pass + one report-only re-audit, flag-guarded across both call sites)
 - TDD Engine: block parsing, context assembly, weak test patterns, agent selection
 - Dependencies: manifest/import subtraction, false-positive suppression
 - Prototype / Respec steps: write boundary, gate retry, one-pass regeneration, propose-only respec
@@ -83,6 +83,17 @@ All tests mock LLM calls — no API keys needed. Tests cover:
 
 ## Invariants (do not "simplify" these away)
 
+- **Audit feedback is one pass, decided in one place.** Every audit that
+  rewrites an artifact — the unknowns gate, the tasks-shape audit, the
+  prototype notes, the design audit — regenerates **once**, then re-checks
+  **report-only** and lets the document stand. The regeneration is recorded in
+  `SpecGenState` (`explainers_done`, `tasks_audit_done`, `prototype_done`,
+  `design_audit_regen_done`) rather than inferred from file existence, because
+  the artifact already exists when the audit runs. The design audit is reached
+  from two call sites (`run_spec_generator` and the orchestrator's
+  DESIGN_AUDIT phase); both go through `spec_generator.run_design_audit_stage`
+  and the flag is what makes "one pass" true across them. A loop here is not a
+  better audit — it is an unbounded spec-generation bill.
 - **Adjudication is a correctness requirement, not polish.** Reviewers run in
   fresh contexts, so they cannot see the decisions the build already made and
   roughly a quarter of what they raise is wrong. Findings are *proposals*;

@@ -90,9 +90,29 @@ that documented edge cases arrive as tests. Controls: `--skip-explainers`,
 
 ### Phase 4: Design Audit
 
-A single adversarial audit call reviews the generated artifacts (proposal, specs,
-design, tasks) and returns a list of gaps — missing edge cases and design
-inconsistencies — which are surfaced as warnings before the build.
+An adversarial audit call reviews the generated artifacts (proposal, specs,
+design, tasks) and returns a list of gaps. It checks two things: internal
+consistency (spec↔task alignment, design coherence, placeholders) and **plan
+quality** — abstractions no requirement asks for, blocks that are mis-sized for
+review, decisions with nothing a test can assert on, and edge cases no scenario
+covers.
+
+The gaps are not just logged. Every gap at **critical** or **major** severity is
+fed back into **one** regeneration pass of `design.md` and then `tasks.md`, which
+is committed as its own `docs(specs): regenerate design.md and tasks.md after
+design audit`. The audit then runs once more, **report-only**, so the build log
+records whether the critique landed:
+
+```
+PHASE: design_audit_feedback_applied — 2 artifact(s)
+PHASE: design_audit_recheck — clean
+```
+
+There is no loop. Documents that still have gaps after one pass stand as they
+are — a stubborn gap costs one extra audit call, not an unbounded number. Minor
+gaps are reported and left to the review checkpoint. The pass is recorded in the
+checkpoint (`spec_gen.design_audit_regen_done`), so a resumed build audits and
+reports but never regenerates a second time.
 
 > Note: a separate multi-agent codebase-analysis step and an implementation
 > feasibility gate exist in the code (`run_codebase_analysis`, `feasibility_gate`)
