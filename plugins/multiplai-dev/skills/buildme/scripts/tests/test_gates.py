@@ -978,3 +978,149 @@ SPEC_IMPACT: contradicts
         assert note is not None
         assert "- The API paginates." in note.surprises
         assert "- Tokens expire hourly." in note.surprises
+
+
+# --- Documentation phase (DOCS_IMPACT: slot + freshness warning) ----------
+
+from build_pipeline.gates import (  # noqa: E402
+    docs_freshness_gate,
+    is_doc_path,
+    parse_diff_paths,
+    parse_docs_impact,
+    source_paths_in_diff,
+)
+
+
+def _diff_for(*paths: str) -> str:
+    return "\n".join(
+        f"diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n@@ -1 +1 @@\n-old\n+new"
+        for p in paths
+    )
+
+
+class TestParseDocsImpact:
+    def test_none_is_an_answer_and_parses_to_an_empty_list(self):
+        assert parse_docs_impact("DOCS_IMPACT: none\nSTATUS: DONE\n") == []
+
+    def test_missing_slot_is_distinguishable_from_none(self):
+        assert parse_docs_impact("STATUS: DONE\n") is None
+
+    def test_single_file(self):
+        assert parse_docs_impact("DOCS_IMPACT: README.md\n") == ["README.md"]
+
+    def test_comma_separated_list_is_split_and_stripped(self):
+        assert parse_docs_impact(
+            "DOCS_IMPACT: README.md, CHANGELOG.md , docs/usage.md\nSTATUS: DONE\n"
+        ) == ["README.md", "CHANGELOG.md", "docs/usage.md"]
+
+    def test_bold_bulleted_slot_label_is_accepted(self):
+        assert parse_docs_impact("- **DOCS_IMPACT:** `README.md`\n") == ["README.md"]
+
+    def test_last_occurrence_wins_over_a_quoted_instruction(self):
+        out = parse_docs_impact(
+            "The report must end with DOCS_IMPACT: none as instructed.\n"
+            "DOCS_IMPACT: docs/board.md\n"
+        )
+        assert out == ["docs/board.md"]
+
+    def test_echoed_template_placeholder_is_not_an_answer(self):
+        assert parse_docs_impact("DOCS_IMPACT: <none, or the files you changed>\n") is None
+
+
+class TestDiffPathHelpers:
+    def test_parses_every_touched_path_once(self):
+        assert parse_diff_paths(_diff_for("src/a.py", "README.md")) == [
+            "src/a.py", "README.md",
+        ]
+
+    def test_renames_report_both_sides(self):
+        diff = "diff --git a/old.py b/new.py\n"
+        assert parse_diff_paths(diff) == ["old.py", "new.py"]
+
+    @pytest.mark.parametrize("path", [
+        "README.md", "readme.rst", "CHANGELOG.md", "CHANGELOG",
+        "docs/usage.md", "plugins/x/docs/design.md", "doc/index.md",
+    ])
+    def test_documentation_paths_are_recognised(self, path):
+        assert is_doc_path(path)
+
+    @pytest.mark.parametrize("path", [
+        "src/app.py", "tests/test_app.py", "package.json",
+        "src/readme_parser.py", "src/docs_builder.py",
+    ])
+    def test_source_paths_are_not_documentation(self, path):
+        assert not is_doc_path(path)
+
+    def test_specs_are_the_builds_paperwork_not_source(self):
+        diff = _diff_for("specs/changes/c/design.md", "src/app.py", "README.md")
+        assert source_paths_in_diff(diff) == ["src/app.py"]
+
+
+class TestDocsFreshnessGate:
+    """The warn gate: it reports, it never fails a finished build."""
+
+    def _project(self, tmp_path, *files: str) -> Path:
+        for name in files:
+            (tmp_path / name).write_text("x")
+        return tmp_path
+
+    def test_code_changed_with_a_changelog_and_no_docs_warns(self, tmp_path):
+        project = self._project(tmp_path, "CHANGELOG.md")
+        gate = docs_freshness_gate(_diff_for("src/app.py"), [], project)
+
+        assert gate.passed is True          # never fails
+        assert gate.action == "docs_may_be_stale"
+        assert gate.metadata["warning"] is True
+        assert gate.metadata["changelog"] == "CHANGELOG.md"
+        assert gate.metadata["source_files"] == ["src/app.py"]
+        assert "CHANGELOG.md" in gate.reason
+
+    def test_a_missing_slot_warns_the_same_as_none(self, tmp_path):
+        project = self._project(tmp_path, "CHANGELOG.md")
+        gate = docs_freshness_gate(_diff_for("src/app.py"), None, project)
+        assert gate.passed is True
+        assert gate.action == "docs_may_be_stale"
+
+    def test_never_fails_even_when_it_warns(self, tmp_path):
+        """The whole point of the gate: some changes have no user-visible
+        delta, so a documentation judgment must not fail a built change."""
+        project = self._project(tmp_path, "CHANGELOG.md")
+        for impact in ([], None):
+            assert docs_freshness_gate(_diff_for("src/a.py"), impact, project).passed
+
+    def test_docs_updated_means_no_warning(self, tmp_path):
+        project = self._project(tmp_path, "CHANGELOG.md")
+        gate = docs_freshness_gate(
+            _diff_for("src/app.py"), ["CHANGELOG.md"], project,
+        )
+        assert gate.passed is True
+        assert gate.action is None
+        assert gate.metadata["docs_impact"] == ["CHANGELOG.md"]
+
+    def test_no_changelog_means_no_warning(self, tmp_path):
+        gate = docs_freshness_gate(_diff_for("src/app.py"), [], self._project(tmp_path))
+        assert gate.passed is True
+        assert gate.action is None
+        assert "keeps no changelog" in gate.reason
+
+    def test_changelog_is_matched_case_insensitively(self, tmp_path):
+        project = self._project(tmp_path, "changelog.rst")
+        gate = docs_freshness_gate(_diff_for("src/app.py"), [], project)
+        assert gate.action == "docs_may_be_stale"
+        assert gate.metadata["changelog"] == "changelog.rst"
+
+    def test_docs_only_diff_has_nothing_to_document(self, tmp_path):
+        project = self._project(tmp_path, "CHANGELOG.md")
+        gate = docs_freshness_gate(_diff_for("README.md"), [], project)
+        assert gate.passed is True
+        assert gate.action is None
+        assert gate.metadata["source_files"] == []
+
+    def test_empty_diff_never_warns(self, tmp_path):
+        project = self._project(tmp_path, "CHANGELOG.md")
+        assert docs_freshness_gate("", [], project).action is None
+
+    def test_a_missing_project_dir_never_raises(self, tmp_path):
+        gate = docs_freshness_gate(_diff_for("src/a.py"), [], tmp_path / "gone")
+        assert gate.passed is True
+        assert gate.action is None

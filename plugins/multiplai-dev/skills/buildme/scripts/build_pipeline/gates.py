@@ -640,9 +640,12 @@ def parse_docs_impact(output: str) -> list[str] | None:
 _DIFF_PATH_RE = re.compile(r"^diff --git a/(\S+) b/(\S+)\s*$", re.MULTILINE)
 
 # README*, CHANGELOG*, and anything under a docs/ directory — the same
-# inventory the docs prompt tells the agent to take.
+# inventory the docs prompt tells the agent to take. The name must be readme /
+# changelog plus at most a `.ext` or `-suffix`: a bare `readme*` prefix match
+# would classify `src/readme_parser.py` as documentation and quietly shrink the
+# set of source files the freshness warning is computed from.
 _DOC_PATH_RE = re.compile(
-    r"(?:^|/)(?:readme|changelog)[^/]*$|(?:^|/)docs?/", re.IGNORECASE
+    r"(?:^|/)(?:readme|changelog)(?:[.-][^/]*)?$|(?:^|/)docs?/", re.IGNORECASE
 )
 
 

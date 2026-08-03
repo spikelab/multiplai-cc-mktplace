@@ -474,6 +474,195 @@ class TestRespecPhaseWiring:
         assert rc == 0
 
 
+class TestDocsUpdatePhaseWiring:
+    """DOCS_UPDATE runs between TDD_BUILD and RESPEC, always on, and never
+    fails the build."""
+
+    def test_docs_update_sits_between_tdd_build_and_respec(self):
+        names = [p.value for p in BuildPhase]
+        assert names.index("tdd_build") < names.index("docs_update")
+        assert names.index("docs_update") < names.index("respec")
+
+    @staticmethod
+    def _config(tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        config = BuildConfig(
+            project_dir=project_dir, change_name="feat", mode="only", auto=False,
+            config_dir=tmp_path / "config",
+        )
+        config.specs_dir = project_dir / "specs"
+        config.change_dir.mkdir(parents=True)
+        return config
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_runs_docs_update_before_respec(self, tmp_path, capsys):
+        from unittest.mock import AsyncMock, patch
+        from argparse import Namespace
+        from build_pipeline.models import GateResult
+        from build_pipeline.orchestrator import run_orchestrator
+
+        config = self._config(tmp_path)
+        order: list[str] = []
+
+        async def fake_docs(*a, **kw):
+            order.append("docs")
+            return ["README.md"], GateResult(passed=True, reason="ok")
+
+        async def fake_respec(*a, **kw):
+            order.append("respec")
+            return config.change_dir / "respec.md"
+
+        with patch("build_pipeline.tdd_engine.run_tdd_engine",
+                   new_callable=AsyncMock, return_value=0), \
+             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   new_callable=AsyncMock, return_value=[]), \
+             patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
+                   side_effect=fake_docs), \
+             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                   side_effect=fake_respec):
+            rc = await run_orchestrator(config, Namespace(interview_summary=""))
+
+        assert rc == 0
+        assert order == ["docs", "respec"], "docs must run before the respec pass"
+        assert "PHASE:DOCS_UPDATE:COMPLETE" in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_docs_failure_does_not_fail_the_build(self, tmp_path):
+        from unittest.mock import AsyncMock, patch
+        from argparse import Namespace
+        from build_pipeline.orchestrator import run_orchestrator
+
+        config = self._config(tmp_path)
+
+        with patch("build_pipeline.tdd_engine.run_tdd_engine",
+                   new_callable=AsyncMock, return_value=0), \
+             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   new_callable=AsyncMock, return_value=[]), \
+             patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
+                   new_callable=AsyncMock, side_effect=RuntimeError("model down")), \
+             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                   new_callable=AsyncMock, return_value=None):
+            rc = await run_orchestrator(config, Namespace(interview_summary=""))
+
+        assert rc == 0
+
+    @pytest.mark.asyncio
+    async def test_warning_reaches_stdout(self, tmp_path, capsys):
+        from unittest.mock import AsyncMock, patch
+        from argparse import Namespace
+        from build_pipeline.models import GateResult
+        from build_pipeline.orchestrator import run_orchestrator
+
+        config = self._config(tmp_path)
+        warning = GateResult(
+            passed=True, action="docs_may_be_stale",
+            reason="1 source file(s) changed and CHANGELOG.md exists",
+        )
+
+        with patch("build_pipeline.tdd_engine.run_tdd_engine",
+                   new_callable=AsyncMock, return_value=0), \
+             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   new_callable=AsyncMock, return_value=[]), \
+             patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
+                   new_callable=AsyncMock, return_value=([], warning)), \
+             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                   new_callable=AsyncMock, return_value=None):
+            rc = await run_orchestrator(config, Namespace(interview_summary=""))
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "DOCS_WARNING:1 source file(s) changed" in out
+
+    @pytest.mark.asyncio
+    async def test_phase_records_the_warning_in_the_progress_file(self, tmp_path):
+        """A successful publish deletes the progress file, so the warning is
+        asserted against the phase helper rather than a whole run."""
+        from unittest.mock import AsyncMock, patch
+        from build_pipeline.models import GateResult
+        from build_pipeline.orchestrator import _run_docs_update_phase
+
+        config = self._config(tmp_path)
+        state = BuildState(change_name="feat", mode="only", tier="advanced")
+        progress = ProgressWriter(config.progress_file_path())
+        warning = GateResult(
+            passed=True, action="docs_may_be_stale", reason="CHANGELOG.md may be stale",
+        )
+
+        with patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
+                   new_callable=AsyncMock, return_value=([], warning)):
+            await _run_docs_update_phase(config, state, progress)
+
+        text = config.progress_file_path().read_text()
+        assert "WARNING: CHANGELOG.md may be stale" in text
+        assert state.docs_impact == []
+
+    @pytest.mark.asyncio
+    async def test_phase_records_what_it_updated_on_the_state(self, tmp_path):
+        from unittest.mock import AsyncMock, patch
+        from build_pipeline.models import GateResult
+        from build_pipeline.orchestrator import _run_docs_update_phase
+
+        config = self._config(tmp_path)
+        state = BuildState(change_name="feat", mode="only", tier="advanced")
+        progress = ProgressWriter(config.progress_file_path())
+
+        with patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
+                   new_callable=AsyncMock,
+                   return_value=(["README.md"], GateResult(passed=True, reason="ok"))):
+            await _run_docs_update_phase(config, state, progress)
+
+        assert state.docs_impact == ["README.md"]
+        assert "Updated: README.md" in config.progress_file_path().read_text()
+
+    def test_reported_paths_outside_the_project_are_never_staged(self, tmp_path):
+        """The DOCS_IMPACT list is agent-supplied and becomes `git add` argv."""
+        from build_pipeline.orchestrator import _docs_paths
+
+        project = tmp_path / "project"
+        (project / "docs").mkdir(parents=True)
+        (project / "README.md").write_text("r")
+        (project / "docs" / "usage.md").write_text("u")
+        (tmp_path / "outside.md").write_text("o")
+        config = BuildConfig(project_dir=project, change_name="c")
+
+        assert _docs_paths(config, ["README.md", "docs/usage.md"]) == [
+            "README.md", "docs/usage.md",
+        ]
+        assert _docs_paths(config, ["../outside.md"]) == []
+        assert _docs_paths(config, [str(tmp_path / "outside.md")]) == []
+        assert _docs_paths(config, ["does-not-exist.md"]) == []
+        assert _docs_paths(config, [":(exclude)README.md"]) == []
+        assert _docs_paths(config, ["README.md", "./README.md"]) == ["README.md"]
+
+
+class TestDocsUpdateInThePRBody:
+    def test_pr_body_names_the_documents_the_build_updated(self, tmp_path):
+        from build_pipeline.orchestrator import _pr_title_body
+
+        config = BuildConfig(project_dir=tmp_path, change_name="c")
+        config.specs_dir = tmp_path / "specs"
+        config.change_dir.mkdir(parents=True)
+        state = BuildState(change_name="c", mode="only", tier="advanced")
+        state.docs_impact = ["README.md", "CHANGELOG.md"]
+
+        _, body = _pr_title_body(config, state)
+        assert "## Documentation" in body
+        assert "`README.md`" in body
+        assert "`CHANGELOG.md`" in body
+
+    def test_pr_body_stays_silent_when_no_document_changed(self, tmp_path):
+        from build_pipeline.orchestrator import _pr_title_body
+
+        config = BuildConfig(project_dir=tmp_path, change_name="c")
+        config.specs_dir = tmp_path / "specs"
+        config.change_dir.mkdir(parents=True)
+        state = BuildState(change_name="c", mode="only", tier="advanced")
+
+        _, body = _pr_title_body(config, state)
+        assert "## Documentation" not in body
+
+
 # --- Git lifecycle (work item 4) -----------------------------------------
 
 from build_pipeline import git_ops
