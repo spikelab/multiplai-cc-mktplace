@@ -9,12 +9,16 @@ to .multiplai/dreams/ for review. Run /multiplai-context:dream-remember to apply
 
 --auto: fully autonomous — applies changes directly to memory files without review.
 --check: report pending learnings count, chunk plan and predicted duration, and exit.
+--gc-learnings: delete learnings files that are fully consolidated and fully
+    decided. Pure code, no model call.
 
 The report path is a batching pipeline, not one big call: learnings are parsed
 into `## Session Learnings` blocks, filtered against a ledger of what has already
 been consolidated, packed into timeout-sized chunks, drafted concurrently, and
 merged deterministically into ONE document. Learnings files are never moved or
 deleted here — the ledger, not the filesystem, is what says "already done".
+Deletion lives in exactly two places: `--auto` after a successful apply, and the
+explicit `--gc-learnings` subcommand.
 """
 
 import asyncio
@@ -50,7 +54,13 @@ from multiplai_core.log_utils import setup_logging
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
 from lib import learnings_ledger
-from lib.dream_processed import PROCESSED_HEADING, has_pending_items, mark_processed
+from lib.dream_processed import (
+    PROCESSED_HEADING,
+    Decision,
+    has_pending_items,
+    mark_many_processed,
+    mark_processed,
+)
 
 logger = setup_logging("dream", propagate_loggers=("multiplai_core",))
 
@@ -60,7 +70,19 @@ CHUNK_TIMEOUT_S = 900.0
 
 # Each chunk spawns a Claude Code CLI subprocess. Unbounded fan-out over a dozen
 # chunks is a subprocess storm, so the gather runs behind a semaphore.
-DEFAULT_CONCURRENCY = 4
+#
+# 8, not 4, because 4 cannot finish a real backlog in a tolerable time. Measured
+# on the 283 KB fixture: 48.9 B/s over 19 chunks is 5,875 s of model work, which
+# four workers cannot do in under 24m28s however it is scheduled — the run took
+# 37m55s end to end. Eight halves the floor to ~12m14s (bounded below by the one
+# slowest chunk, 556 s), and the critic's to ~4m (bounded by its slowest batch,
+# 465 s).
+#
+# The cost is eight concurrent CLI subprocesses on a machine that is usually also
+# running the user's own session. That is the trade being made deliberately; the
+# semaphore still bounds it, and MULTIPLAI_DREAM_CONCURRENCY lowers it for anyone
+# who would rather wait than share the CPU.
+DEFAULT_CONCURRENCY = 8
 
 # Weight of the newest observation in the throughput EWMA. Low enough that one
 # slow chunk (a cold model, a retried call) does not swing the next run's plan.
@@ -887,7 +909,8 @@ async def _generate_proposal(
 
     response = await client.query(system=_PROPOSAL_SYSTEM, messages=messages)
     cleaned = await _critique_proposal(client, response.content, memory_context)
-    validated = _with_routing_warnings(cleaned, memory_contents)
+    sourced = _with_repaired_citations(cleaned, get_paths().learnings_dir)
+    validated = _with_routing_warnings(sourced, memory_contents)
     return _with_conflict_resolutions(validated, all_learnings, memory_contents)
 
 
@@ -1065,6 +1088,56 @@ def _with_conflict_resolutions(
     return f"{section}\n\n---\n\n{proposal}"
 
 
+def _with_repaired_citations(proposal: str, learnings_dir: Path) -> str:
+    """Correct ``**Source:**`` citations that name the wrong learnings file.
+
+    A record that opens ``## Session Learnings — 2026-07-28T20:54`` but lives in
+    ``2026-07-29.md`` (its session ran past midnight) is sometimes cited under
+    the timestamp's date rather than the file it was rendered from. The line
+    number stays right, which is what lets `lib/citation_repair` fix the
+    filename deterministically instead of guessing.
+
+    Fail-open like the routing and conflict gates: a crash here must never lose
+    a generated proposal. See `lib/citation_repair` for why it repairs only
+    provably-broken, unambiguously-resolvable citations.
+    """
+    try:
+        from lib import citation_repair
+
+        blocks, files = _collect_blocks(learnings_dir)
+        learnings = {}
+        for f in files:
+            try:
+                learnings[f.name] = f.read_text()
+            except OSError:
+                logger.warning("Could not read %s for citation repair", f.name)
+
+        repaired, findings = citation_repair.repair_citations(
+            proposal, blocks, learnings
+        )
+        section = citation_repair.render_findings(findings)
+    except Exception:
+        logger.exception("Citation repair failed; proposal left as written")
+        return proposal
+
+    if not findings:
+        logger.info("Citations verified — every **Source:** line resolves")
+        return proposal
+
+    fixed = sum(1 for f in findings if f.repaired)
+    logger.info(
+        "Citation repair: %d corrected, %d left unresolved",
+        fixed, len(findings) - fixed,
+    )
+    for finding in findings:
+        if not finding.repaired:
+            logger.warning(
+                "Unverifiable citation %s:%d — %s",
+                finding.cited_file, finding.line, finding.reason,
+            )
+    return f"{repaired.rstrip()}\n\n---\n\n{section}"
+
+
 def _with_routing_warnings(proposal: str, memory_contents: dict[str, str]) -> str:
     """Append the deterministic ``## Routing Warnings`` section to a proposal.
 
@@ -1194,34 +1267,140 @@ its `A{N}` number as `<n>`.
 """
 
 
-async def _critique_proposal(client, proposal: str, memory_context: str = "") -> str:
+def _batch_proposal_for_critic(proposal: str) -> list[str]:
+    """Split *proposal* into critic-sized batches, never splitting a ``## `` section.
+
+    The critic is input-bound: it reads a whole proposal and emits only a handful
+    of directive lines. That asymmetry is what made the unbatched pass impossible
+    — a 283 KB fixture run handed it a 228 KB prompt, which burned both 900 s
+    attempts without finishing and silently degraded to "keep the merged draft",
+    so the second-pass quality gate never ran at all on exactly the backlogs that
+    need it most.
+
+    Sections are kept whole because ``MERGE <file>#<n> <- <file>#<m>`` compares
+    two entries of the same file; splitting a file across batches would hide half
+    its duplicates from the comparison. A single section larger than the budget
+    gets a batch of its own rather than being split.
+    """
+    from lib import dream_chunking
+
+    budget = dream_chunking.chunk_budget_bytes(
+        CHUNK_TIMEOUT_S, _calibrated_throughput()
+    )
+    # Keep each "## " heading with its body; the split loses the delimiter, so
+    # re-attach it. Anything before the first heading is the proposal preamble
+    # and rides along with the first batch.
+    parts = re.split(r"^(?=## )", proposal, flags=re.M)
+    sections = [p for p in parts if p.strip()]
+
+    batches: list[str] = []
+    current: list[str] = []
+    current_bytes = 0
+    for section in sections:
+        n = len(section.encode("utf-8"))
+        if current and current_bytes + n > budget:
+            batches.append("".join(current))
+            current, current_bytes = [], 0
+        current.append(section)
+        current_bytes += n
+    if current:
+        batches.append("".join(current))
+    return batches or [proposal]
+
+
+async def _critique_batch(client, batch: str, memory_context: str, sem, index: int,
+                          total: int) -> str:
+    """One critic call over one batch. Returns raw directive text ("" on failure).
+
+    Fails open per batch: a batch that times out loses only its own directives,
+    and the other batches' edits still land.
+    """
+    from lib import dream_chunking
+
+    content = f"## Drafted proposal:\n\n{batch}"
+    if memory_context:
+        content = (
+            f"## Memory file domains (for the mis-routing check):\n\n{memory_context}\n\n"
+            + content
+        )
+    n_bytes = len(batch.encode("utf-8"))
+    # An oversized section cannot be split, so give it the same escalation
+    # plan_chunks gives an oversized block rather than letting it fail outright.
+    budget = dream_chunking.chunk_budget_bytes(CHUNK_TIMEOUT_S, _calibrated_throughput())
+    timeout_s = (
+        min(2.0 * CHUNK_TIMEOUT_S, dream_chunking.MAX_ESCALATED_TIMEOUT_S)
+        if n_bytes > budget
+        else CHUNK_TIMEOUT_S
+    )
+
+    async with sem:
+        started = time.monotonic()
+        try:
+            response = await _query(
+                client, _CRITIC_SYSTEM, [{"role": "user", "content": content}], timeout_s
+            )
+        except Exception:
+            logger.exception(
+                "Critic batch %d/%d failed (%d bytes) — its directives are lost, the "
+                "other batches still apply", index, total, n_bytes,
+            )
+            return ""
+        elapsed = max(time.monotonic() - started, 1e-6)
+
+    raw = (response.content or "").strip()
+    logger.info(
+        "Critic batch %d/%d: %d bytes in, %d directive bytes out, %.0fs",
+        index, total, n_bytes, len(raw.encode("utf-8")), elapsed,
+    )
+    return raw
+
+
+async def _critique_proposal(client, proposal: str, memory_context: str = "",
+                             stats: dict | None = None) -> str:
     """Run the directive critic over a drafted proposal; return the edited version.
 
     ``memory_context`` carries the same PURPOSE / OWNS DOMAINS / NOT HERE file
     blocks the drafting pass saw, so the critic's mis-routing check works from
     the live catalog instead of hardcoded file knowledge.
 
+    The pass runs in batches (see ``_batch_proposal_for_critic``) and applies
+    every batch's directives to the **whole** proposal in one go. That is safe
+    because a directive addresses ``<file>#<n>`` and ``apply_directives`` sorts
+    back-to-front, so an index can never be shifted by another edit.
+
     Fails **open**, exactly as the rewrite critic did: an unparseable, empty or
     all-NOOP response keeps the merged draft and logs a warning. A
     residue-bearing proposal is still useful; a lost one is not.
     """
-    content = f"## Drafted proposal:\n\n{proposal}"
-    if memory_context:
-        content = (
-            f"## Memory file domains (for the mis-routing check):\n\n{memory_context}\n\n"
-            + content
-        )
-    messages = [{"role": "user", "content": content}]
     try:
         from lib import proposal_edits
 
-        response = await client.query(system=_CRITIC_SYSTEM, messages=messages)
-        raw = (response.content or "").strip()
-        if not raw:
+        batches = _batch_proposal_for_critic(proposal)
+        if len(batches) > 1:
+            logger.info(
+                "Critic: %d bytes over %d batches", len(proposal.encode("utf-8")),
+                len(batches),
+            )
+        sem = asyncio.Semaphore(_concurrency())
+        raws = await asyncio.gather(*(
+            _critique_batch(client, b, memory_context, sem, i, len(batches))
+            for i, b in enumerate(batches, 1)
+        ))
+        if stats is not None:
+            stats["batches"] = len(batches)
+            stats["failed"] = sum(1 for r in raws if not r)
+
+        directives, rejected = [], []
+        for raw in raws:
+            if not raw:
+                continue
+            parsed, bad = proposal_edits.parse_directives(raw)
+            directives.extend(parsed)
+            rejected.extend(bad)
+
+        if not any(raws):
             logger.warning("Critic returned nothing — keeping the merged draft")
             return proposal
-
-        directives, rejected = proposal_edits.parse_directives(raw)
         if rejected:
             logger.info("Critic: %d unparseable line(s) ignored", len(rejected))
         if not directives:
@@ -1371,8 +1550,13 @@ async def dream_report() -> None:
             len(merged.encode("utf-8")),
         )
 
-        cleaned = await _critique_proposal(client, merged, memory_context)
-        validated = _with_routing_warnings(cleaned, memory_contents)
+        critic_stats: dict = {}
+        cleaned = await _critique_proposal(client, merged, memory_context, critic_stats)
+        # Repair citations before the deterministic sections are attached, so the
+        # regex only ever sees model-written provenance and cannot rewrite a
+        # citation that this code put there itself.
+        sourced = _with_repaired_citations(cleaned, learnings_dir)
+        validated = _with_routing_warnings(sourced, memory_contents)
         pending_text = "\n\n".join(b.text for b in pending)
         proposal = _with_conflict_resolutions(validated, pending_text, memory_contents)
     except Exception:
@@ -1406,8 +1590,37 @@ async def dream_report() -> None:
     # the same drafts in again on the next run.
     _clear_staging()
 
+    # Report what was actually consolidated, not what was planned. A run that
+    # loses chunks — to a rate limit, a timeout, an outage — still writes a
+    # useful proposal and still exits 0, because the lost blocks stay pending and
+    # come back next time. But printing "231 new learning block(s)" when 109 of
+    # them were deferred tells the user their backlog is done when it is not.
+    # The ledger is the authority on what landed, so ask it rather than the plan.
+    deferred = learnings_ledger.unprocessed(
+        list(pending), learnings_ledger.load(ledger_path)
+    )
+    consolidated = len(pending) - len(deferred)
+    failed_chunks = len(chunks) - len(drafts)
+
     print(f"Proposal written to {output_file}")
-    print(f"Sources: {len(source_files)} files, {len(pending)} new learning block(s)")
+    if deferred:
+        print(
+            f"Sources: {len(source_files)} files, {consolidated} of {len(pending)} new "
+            f"learning block(s) consolidated"
+        )
+        print(
+            f"  ⚠ {failed_chunks} of {len(chunks)} chunk(s) did not complete — "
+            f"{len(deferred)} block(s) stay pending and are picked up by the next run "
+            f"(see dream.log)"
+        )
+    else:
+        print(f"Sources: {len(source_files)} files, {len(pending)} new learning block(s)")
+    if critic_stats.get("failed"):
+        print(
+            f"  ⚠ second-pass review incomplete: {critic_stats['failed']} of "
+            f"{critic_stats['batches']} batch(es) failed — duplicates and mis-routed "
+            f"items may remain"
+        )
     if folded:
         print(f"Folded in {len(folded)} undecided pending proposal(s) → dreams/superseded/")
     print(f"Targets: {len(target_files)} files ({', '.join(target_files) or 'none'})")
@@ -1562,10 +1775,28 @@ async def _apply_proposal_to_file(client, memory_file: Path, proposal_section: s
         }
     ]
 
+    # The applier rewrites the whole file, so its cost scales with section +
+    # current file, not with the section alone. A single call cannot be left on
+    # the default deadline: a 283 KB fixture run produced sections of 41 KB
+    # (`claude-code-tools.md`), 38 KB (`multiplai.md`), 33 KB (`dolcebot.md`) and
+    # 27 KB (`writing-workflow.md`), and at the slow tail that run measured
+    # (25 B/s) every one of those needs more than 900 s. Size the deadline to the
+    # work and escalate, exactly as `plan_chunks` does for an oversized block.
+    from lib import dream_chunking
+
+    n_bytes = len(proposal_section.encode("utf-8")) + len(current_content.encode("utf-8"))
+    timeout_s = min(
+        dream_chunking.MAX_ESCALATED_TIMEOUT_S,
+        max(CHUNK_TIMEOUT_S, dream_chunking.estimate_seconds(n_bytes, _calibrated_throughput())),
+    )
+
     try:
-        response = await client.query(system=_APPLIER_SYSTEM, messages=messages)
+        response = await _query(client, _APPLIER_SYSTEM, messages, timeout_s)
     except Exception:
-        logger.exception("Failed to apply updates to %s", memory_file.name)
+        logger.exception(
+            "Failed to apply updates to %s (%d bytes, %.0fs deadline)",
+            memory_file.name, n_bytes, timeout_s,
+        )
         return None
 
     if not _is_safe_memory_update(current_content, response.content):
@@ -1693,8 +1924,111 @@ async def dream_auto() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Learnings garbage collection (--gc-learnings)
+# ---------------------------------------------------------------------------
+
+
+def _gc_learnings() -> None:
+    """Delete learnings files that are fully consolidated **and** fully decided.
+
+    This replaces a judgement call the reviewing skill used to make in prose
+    ("delete the sources, but only if the proposal is now fully decided, else
+    skip this step"). That conditional was easy to get wrong and unrecoverable
+    when it was, so the decision moves into code, per file, with a stated reason
+    for everything kept.
+
+    A file is deleted only when **both** hold:
+
+    (a) every ``## Session Learnings`` record in it hashes to a key the ledger
+        has recorded — i.e. dream has already consolidated all of it. A file
+        appended to since the run (today's, typically) fails this and is kept,
+        which is why the old "today's file exception" no longer needs writing
+        down;
+    (b) every proposal those keys were recorded into has left the dreams root
+        (it is in ``applied/``, ``rejected/`` or ``superseded/``). Beyond
+        retention, this is what keeps a pending review readable: its
+        ``**Source:** <file>:<line>`` citations must still resolve while the
+        reviewer is deciding.
+
+    Anything else is kept. Takes no lock: it neither reads nor writes anything a
+    consolidation run is in the middle of.
+    """
+    paths = get_paths()
+    learnings_dir = paths.learnings_dir
+    files = sorted(learnings_dir.glob("*.md")) if learnings_dir.exists() else []
+    if not files:
+        print("GC learnings: no learnings files")
+        return
+
+    ledger_path = learnings_ledger.default_ledger_path()
+    recorded = learnings_ledger.load(ledger_path).get("processed", {})
+    dreams_dir = paths.dreams_dir()
+    # Non-recursive on purpose: applied/, rejected/ and superseded/ are decided,
+    # and the hub's own listing globs the root the same way.
+    pending = {p.name for p in dreams_dir.glob("*.md")} if dreams_dir.exists() else set()
+
+    deleted: list[str] = []
+    kept: list[tuple[str, str]] = []
+
+    for f in files:
+        try:
+            text = f.read_text()
+        except OSError as exc:
+            kept.append((f.name, f"unreadable ({exc.__class__.__name__})"))
+            continue
+        blocks = learnings_ledger.parse_blocks(f.name, text)
+        if not blocks:
+            kept.append((f.name, "no `## Session Learnings` records to consolidate"))
+            continue
+        missing = sum(1 for b in blocks if b.key not in recorded)
+        if missing:
+            kept.append((f.name, f"{missing}/{len(blocks)} record(s) not yet consolidated"))
+            continue
+        proposals = {recorded[b.key].get("proposal") or "" for b in blocks}
+        if "" in proposals:
+            kept.append((f.name, "ledger entry names no proposal"))
+            continue
+        undecided = sorted(n for n in proposals if Path(n).name in pending)
+        if undecided:
+            kept.append((f.name, "proposal still pending review: " + ", ".join(undecided)))
+            continue
+        try:
+            f.unlink()
+        except OSError as exc:
+            kept.append((f.name, f"could not delete ({exc.__class__.__name__})"))
+            continue
+        deleted.append(f.name)
+
+    if deleted:
+        remaining = {p.name for p in learnings_dir.glob("*.md")}
+        learnings_ledger.prune(ledger_path, remaining)
+
+    print(f"GC learnings: deleted {len(deleted)}, kept {len(kept)}")
+    for name in deleted:
+        print(f"  deleted  {name}")
+    for name, reason in kept:
+        print(f"  kept     {name} — {reason}")
+    logger.info("gc-learnings: deleted=%d kept=%d", len(deleted), len(kept))
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+
+def _load_decisions(source: str) -> list[Decision]:
+    """Parse a JSON array of decisions from stdin (``-``) or a file.
+
+    stdin is the shape the reviewing skill uses: a 70-item review would not fit
+    argv, and a heredoc needs no shell quoting rules written into a SKILL.md.
+    """
+    import json
+
+    raw = sys.stdin.read() if source == "-" else Path(source).read_text()
+    data = json.loads(raw)
+    if not isinstance(data, list):
+        raise ValueError(f"--decisions must be a JSON array, got {type(data).__name__}")
+    return [Decision.from_dict(item) for item in data]
 
 
 def main() -> None:
@@ -1740,12 +2074,23 @@ def main() -> None:
     parser.add_argument(
         "--mark-processed",
         action="store_true",
-        help="Move one decided proposal item into the proposal's `## Processed` "
-             "section — the in-file decision record shared with the multiplai-gui "
-             "GUI. Use with --proposal, --kind, --index, --status (and --file for "
-             "updates). /dream-remember calls this per item as it applies/rejects.",
+        help="Move decided proposal items into the proposal's `## Processed` "
+             "section — the in-file decision record the multiplai-gui hub writes "
+             "too (natively; it does not call this script for it). Batch form: "
+             "--proposal PATH --decisions - with a JSON array on stdin, which is "
+             "what /dream-remember uses, one call per target file. Single-item "
+             "form: --proposal, --kind, --index, --status (and --file for updates).",
     )
     parser.add_argument("--proposal", metavar="PATH", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--decisions",
+        metavar="PATH_OR_DASH",
+        help="With --mark-processed: read a JSON array of decisions from this "
+             "file, or from stdin when given `-`. Each element is "
+             '{"kind","file","index","status","target"} — kind update|action, '
+             "status applied|edited|rejected, file names the `## Updates for` "
+             "group, target the memory file actually written.",
+    )
     parser.add_argument(
         "--kind", choices=("update", "action"), default="update", help=argparse.SUPPRESS
     )
@@ -1755,7 +2100,41 @@ def main() -> None:
         "--status", choices=("applied", "edited", "rejected"), help=argparse.SUPPRESS
     )
     parser.add_argument("--target", metavar="TARGET.md", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--gc-learnings",
+        action="store_true",
+        help="Delete learnings files that are fully consolidated (every record "
+             "in the ledger) and fully decided (no proposal citing them is still "
+             "pending). Pure code, no model call, no lock. Prints what it removed "
+             "and why it kept the rest.",
+    )
     args = parser.parse_args()
+
+    if args.mark_processed and args.decisions:
+        if not args.proposal:
+            print("ERROR: --mark-processed --decisions needs --proposal")
+            sys.exit(2)
+        proposal_path = Path(args.proposal)
+        if not proposal_path.is_file():
+            print(f"ERROR: --proposal path not found: {proposal_path}")
+            sys.exit(1)
+        try:
+            decisions = _load_decisions(args.decisions)
+        except (OSError, ValueError) as exc:
+            print(f"ERROR: --decisions could not be read: {exc}")
+            sys.exit(2)
+        if not decisions:
+            print("marked 0 processed, 0 unchanged")
+            return
+        try:
+            marked, unchanged = mark_many_processed(proposal_path, decisions)
+        except OSError as exc:
+            # The new document is built in memory and swapped in atomically, so
+            # a write failure here leaves the proposal exactly as it was.
+            print(f"ERROR: could not write {proposal_path}: {exc} — proposal unchanged")
+            sys.exit(1)
+        print(f"marked {marked} processed, {unchanged} unchanged")
+        return
 
     if args.mark_processed:
         if not args.proposal or args.index is None or not args.status:
@@ -1810,6 +2189,10 @@ def main() -> None:
             print(f"Archived proposal to {archived}")
         return
 
+    if args.gc_learnings:
+        _gc_learnings()
+        return
+
     if args.check:
         # Deliberately takes NO lock: the plan is read-only, and its whole point
         # is to be answerable while a run is in progress.
@@ -1839,7 +2222,9 @@ def main() -> None:
         )
         print(_plan_line(new_bytes=new_bytes, total_bytes=total_bytes,
                          chunks=chunks, throughput=throughput))
-        print(f"Estimated wall clock: ~{eta / 60:.0f} min")
+        # A floor, not an estimate — see estimate_wall_clock. Saying "at least"
+        # is the difference between under-promising and being wrong.
+        print(f"Estimated wall clock: at least {eta / 60:.0f} min")
         return
 
     if args.auto or args.run:
