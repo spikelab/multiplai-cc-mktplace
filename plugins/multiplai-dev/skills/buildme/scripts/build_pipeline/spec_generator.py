@@ -222,10 +222,8 @@ async def _generate_single_artifact(
             config,
             interview_summary=state.interview_summary or "",
             research=state.research_path or "",
-            codebase_analysis=(
-                state.spec_gen.codebase_analysis_path
-                if state.spec_gen else ""
-            ) or "",
+            codebase_analysis=read_codebase_analysis(state),
+            reference_docs=config.reference_docs_text(),
         )
 
         # Write the artifact
@@ -305,6 +303,25 @@ def read_unknowns(change_dir: Path) -> str:
     if path.exists():
         return path.read_text()
     return "(no unknowns document)"
+
+
+def read_codebase_analysis(state: BuildState) -> str:
+    """The CODEBASE_ANALYSIS phase's report, as text for the design prompt.
+
+    The checkpoint stores a *path* (`spec_gen.codebase_analysis_path`); the
+    prompt needs the contents. A path that no longer resolves falls back to
+    the stored string rather than dropping it, and an absent one returns ""
+    so the prompt says "(new project)" exactly as it did before the phase
+    existed.
+    """
+    raw = (state.spec_gen.codebase_analysis_path if state.spec_gen else "") or ""
+    if not raw:
+        return ""
+    path = Path(raw)
+    if path.is_file():
+        return path.read_text()
+    log.warning("Recorded codebase analysis is not a readable file: %s", raw)
+    return raw
 
 
 def _dependency_list_text(deps: list[NewDependency]) -> str:
@@ -540,7 +557,9 @@ async def _audit_tasks_shape(
     )
     try:
         content = await generate_artifact(
-            "tasks", context, config, audit_findings=findings_text,
+            "tasks", context, config,
+            reference_docs=config.reference_docs_text(),
+            audit_findings=findings_text,
         )
     except Exception as regen_err:
         log.warning(

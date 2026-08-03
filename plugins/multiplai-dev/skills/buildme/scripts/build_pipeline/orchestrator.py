@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -127,6 +128,19 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             print("PHASE:RESEARCH:COMPLETE", flush=True)
             board.record(config, state, BuildPhase.RESEARCH, progress=progress)
 
+        # Phase: Codebase Analysis — read the repo that already exists so the
+        # design extends it instead of inventing a parallel structure. Runs
+        # before spec generation because design.md is its only consumer.
+        # Best-effort: a failure here costs grounding, never the build.
+        if not state.is_phase_complete(BuildPhase.CODEBASE_ANALYSIS):
+            log.info("START phase=CODEBASE_ANALYSIS")
+            await _run_codebase_analysis_phase(config, state, progress)
+            state.checkpoint(state_path)
+            state.advance_to(BuildPhase.CODEBASE_ANALYSIS, state_path)
+            log.info("DONE phase=CODEBASE_ANALYSIS")
+            print("PHASE:CODEBASE_ANALYSIS:COMPLETE", flush=True)
+            board.record(config, state, BuildPhase.CODEBASE_ANALYSIS, progress=progress)
+
         # Phase: Spec Generation
         if not state.is_phase_complete(BuildPhase.SPEC_GENERATION) and not config.mode == "only":
             log.info("START phase=SPEC_GENERATION")
@@ -193,6 +207,13 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 # anything is built on top of them.
                 if config.unknowns_path.exists():
                     print(f"REVIEW:READ_FIRST:{config.unknowns_path}", flush=True)
+                # What the design was written against — read before the design
+                # itself, so "why does it extend that module" has an answer.
+                if config.codebase_analysis_path.exists():
+                    print(
+                        f"REVIEW:CODEBASE_ANALYSIS:{config.codebase_analysis_path}",
+                        flush=True,
+                    )
                 _print_prototype_review_paths(config)
                 log.info("DONE phase=REVIEW")
             state.advance_to(BuildPhase.REVIEW, state_path)
@@ -428,6 +449,82 @@ def _log_prototype_diagnosis(progress: ProgressWriter, config: BuildConfig, reas
         )
     except OSError as e:
         log.warning("Could not write prototype diagnosis to progress file: %s", e)
+
+
+# Source extensions that make a directory "a codebase worth analyzing". A
+# project whose only files are specs/, a README and a .gitignore has nothing
+# for the explore agents to read, and three agents reporting "(new project)"
+# is pure spend.
+_SOURCE_SUFFIXES = frozenset({
+    ".py", ".swift", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".java",
+    ".kt", ".rb", ".php", ".cs", ".c", ".h", ".cc", ".cpp", ".hpp", ".m",
+    ".mm", ".scala", ".ex", ".exs", ".sh", ".sql", ".vue", ".svelte",
+})
+
+# Directories never worth walking when deciding "does this project have code".
+_SOURCE_SCAN_SKIP = frozenset({
+    ".git", ".venv", "venv", "node_modules", "__pycache__", ".worktrees",
+    "specs", ".build", "dist", "build", ".mypy_cache", ".pytest_cache",
+    "target", ".tox", ".next",
+})
+
+
+def _has_source_files(project_dir: Path) -> bool:
+    """Whether the project already contains source code to analyze.
+
+    Walks the tree, skipping vendor/build/spec directories, and stops at the
+    first source file — a bootstrapped-but-empty project must not pay for
+    three explore agents.
+    """
+    if not project_dir.is_dir():
+        return False
+    for root, dirs, files in os.walk(project_dir):
+        dirs[:] = [d for d in dirs if d not in _SOURCE_SCAN_SKIP and not d.startswith(".")]
+        for name in files:
+            if Path(name).suffix in _SOURCE_SUFFIXES:
+                return True
+    return False
+
+
+async def _run_codebase_analysis_phase(
+    config: BuildConfig, state: BuildState, progress: ProgressWriter,
+) -> None:
+    """Analyze the existing codebase and record the report for spec generation.
+
+    Never raises: the design falls back to "(new project)" when this produces
+    nothing, which is exactly the pre-phase behavior. Skipped — with the reason
+    logged — in `only` mode (no spec generation to feed) and for a project with
+    no source files yet.
+    """
+    if config.mode == "only":
+        log.info("SKIP phase=CODEBASE_ANALYSIS reason=only-mode-generates-no-specs")
+        return
+    if not _has_source_files(config.project_dir):
+        log.info(
+            "SKIP phase=CODEBASE_ANALYSIS reason=no-source-files-yet dir=%s",
+            config.project_dir,
+        )
+        progress.log_phase(
+            "CODEBASE_ANALYSIS", "skipped — no source files yet (new project)",
+        )
+        return
+
+    from .llm_steps.spec_steps import run_codebase_analysis
+
+    try:
+        analysis = await run_codebase_analysis(config.project_dir, config)
+    except Exception as analysis_err:  # non-fatal: grounding, not correctness
+        log.warning("Codebase analysis failed (non-fatal): %s", analysis_err)
+        return
+
+    output = config.codebase_analysis_path
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(analysis)
+    if state.spec_gen is None:
+        state.spec_gen = SpecGenState()
+    state.spec_gen.codebase_analysis_path = str(output)
+    log.info("Wrote codebase analysis: %s (%d chars)", output, len(analysis))
+    progress.log_phase("CODEBASE_ANALYSIS", f"Codebase analysis written to {output}")
 
 
 def _print_prototype_review_paths(config: BuildConfig) -> None:

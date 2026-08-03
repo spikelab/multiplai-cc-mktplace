@@ -12,8 +12,8 @@ protocol. The middle field is the normalized change slug (never contains
 
 Driven, end to end, by a real build:
 
-  * **Shaping** — bootstrap → interview → research → spec generation
-    (proposal, requirements).
+  * **Shaping** — bootstrap → interview → research → codebase analysis →
+    spec generation (proposal, requirements).
   * **Planning** — design audit → prototype → the review checkpoint
     (design.md / tasks.md / rubric.md, audited).
   * **In Development** — the TDD build and the respec pass.
@@ -92,6 +92,9 @@ _PHASE_COLUMNS: dict[BuildPhase, BoardColumn] = {
     BuildPhase.BOOTSTRAP: BoardColumn.SHAPING,
     BuildPhase.INTERVIEW_DONE: BoardColumn.SHAPING,
     BuildPhase.RESEARCH: BoardColumn.SHAPING,
+    # Reading the existing codebase is still shaping — it produces
+    # codebase-analysis.md, which the design is then written against.
+    BuildPhase.CODEBASE_ANALYSIS: BoardColumn.SHAPING,
     BuildPhase.SPEC_GENERATION: BoardColumn.SHAPING,
     BuildPhase.DESIGN_AUDIT: BoardColumn.PLANNING,
     BuildPhase.PROTOTYPE: BoardColumn.PLANNING,
