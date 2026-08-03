@@ -9,8 +9,14 @@ effort: medium
 # BuildMe
 
 Orchestrate the complete journey from idea to working code via a deterministic
-Python pipeline. Interview → Research → Specs → Design Audit → Prototype →
-Review → TDD Build → Respec → Publish (branch pushed + draft PR).
+Python pipeline. Interview → Research → Codebase Analysis → Specs →
+Design Audit → Prototype → Review → TDD Build → Respec → Publish (branch
+pushed + draft PR).
+
+Before any spec is written, the pipeline reads the repo it is about to change
+(architecture, patterns, integration points) and resolves the reference docs
+for the detected stack and framework, so `design.md` extends the code that
+exists and follows the conventions the project already builds to.
 
 Every build runs **inside its own git worktree on its own branch** and ends by
 pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycle).
@@ -52,6 +58,22 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 `specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: true}`,
 `prototype: {enabled: auto|true|false}`, `respec: {halt_on_contradiction: false}`,
 `git: {worktree: true, push: true, pr: draft|ready|none}`.
+
+`specs/config.yaml` also takes `reference_docs:` — the docs under
+`$CLAUDE_CONFIG_DIR/reference/dev/` that the design and task breakdown are
+written against. Keys are the detected stack (`pyproject`, `Package`,
+`package`, `Cargo`, `go`) or a detected framework (`django`, `react`); each key
+given here **replaces** the built-in list for that key alone:
+
+```yaml
+reference_docs:
+  pyproject: [uv-python-best-practices.md, our-house-style.md]
+```
+
+Frameworks are detected from the manifests, not the manifest *name* — `manage.py`
+or a `django` dependency adds the django docs on top of the python ones. A name
+with no file on disk is skipped; the run prints `REFERENCES:<names>` (or
+`REFERENCES:(none)`) so what actually reached the generator is visible.
 
 ## Git lifecycle
 
@@ -204,8 +226,8 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
 **Important:** Add `--no-worktree` if this session is already running inside a
 git worktree (see [Git lifecycle](#git-lifecycle)).
 
-The pipeline handles: worktree/branch setup, bootstrap, spec generation (via
-change_manager) including the unknowns/explainer pass, design audit, the
+The pipeline handles: worktree/branch setup, bootstrap, codebase analysis, spec
+generation (via change_manager) including the unknowns/explainer pass, design audit, the
 prototype stage, TDD implementation (test-writer + implementer agents per block),
 integration gates, scored quality reviews, entry point verification, the respec
 proposal, and publishing (push + draft PR).
@@ -223,11 +245,17 @@ Work through them **in this order**, and do not skip the first one:
    test-writer turns into tests. Skipping it is the lazy button: the build will
    still run, and it will build on assumptions nobody checked. Surface its
    contents to the user, not just the path.
-2. `PROTOTYPE:file://<path>` and `PROTOTYPE_NOTES:file://<path>` — open the
+2. `REVIEW:CODEBASE_ANALYSIS:<path>` — what the design was written against:
+   the existing architecture, patterns and integration points the three explore
+   agents found. Read it before `design.md`, because "why does it extend that
+   module rather than add a new one" is answered here, not there. Absent for a
+   greenfield project (nothing to analyze) — that absence is itself worth
+   noting to the user.
+3. `PROTOTYPE:file://<path>` and `PROTOTYPE_NOTES:file://<path>` — open the
    prototype in a browser/editor via the shared mount (the container's
    `localhost` is not the user's, so `file://` is the channel that works) and
    read `NOTES.md`'s `PROVES:` / `DISPROVES:` / `OPEN_QUESTIONS:` slots.
-3. Then `design.md`, `tasks.md`, `rubric.md` as usual.
+4. Then `design.md`, `tasks.md`, `rubric.md` as usual.
 
 **Prototype-first is the default for anything with a UI or an output format.**
 The pipeline auto-detects this (frontend/fullstack change types, or a
@@ -241,8 +269,10 @@ genuinely invisible; `--spec-only` runs include the prototype stage.
 ### Step 4: Report results
 
 Parse pipeline stdout for progress lines:
-- `PHASE:<name>:COMPLETE` — phase transitions (now includes `PROTOTYPE`,
-  `RESPEC`, `PUBLISH`)
+- `PHASE:<name>:COMPLETE` — phase transitions (now includes
+  `CODEBASE_ANALYSIS`, `PROTOTYPE`, `RESPEC`, `PUBLISH`)
+- `REFERENCES:<doc names>` — the stack/framework reference docs the specs were
+  generated against, or `(none)`. Emitted once per run
 - `BLOCK:<n>/<total>:<name>:COMPLETE` — block progress
 - `BOARD:<change>:<Column>` — kanban column transitions (see
   [`docs/dark-factory-board.md`](docs/dark-factory-board.md))

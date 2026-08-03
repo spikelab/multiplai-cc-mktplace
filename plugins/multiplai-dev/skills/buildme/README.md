@@ -546,6 +546,7 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
 | `prototype: {enabled}` | `auto` | `auto` \| `true` \| `false` — the prototype stage |
 | `respec: {halt_on_contradiction}` | `false` | Stop the build on a `SPEC_IMPACT: contradicts` note |
 | `git: {worktree, push, pr}` | `true, true, draft` | Git lifecycle (`pr`: `draft` \| `ready` \| `none`) |
+| `reference_docs: {<stack>: [...]}` | built-in map | Which docs under `$CLAUDE_CONFIG_DIR/reference/dev/` the design and tasks are written against. Keys: the detected stack (`pyproject`, `Package`, `package`, `Cargo`, `go`) or framework (`django`, `react`); a key given here replaces the built-in list for that key alone |
 
 CLI flags win over `config.yaml` in every case.
 
