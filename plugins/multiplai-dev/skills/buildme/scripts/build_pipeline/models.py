@@ -420,6 +420,10 @@ class BlockInfo(BaseModel):
     baseline_commit: str | None = None
     test_commit: str | None = None
     impl_commit: str | None = None
+    # Set only when the block's refactor pass survived verification (suite
+    # re-run + test-integrity gate). A discarded refactor leaves this None,
+    # which is how the trajectory can tell "no refactor landed" from "one did".
+    refactor_commit: str | None = None
     review_scores: ReviewResult | None = None
     review_iterations: int = 0
     # Red-green proof captured by the engine (trimmed suite output): RED is

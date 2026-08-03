@@ -596,14 +596,22 @@ class BuildConfig:
 
     @property
     def refactor_phase(self) -> bool:
-        """Whether to run a separate refactor agent. False for advanced tier."""
-        return self.tier != "advanced"
+        """Whether to run a separate refactor agent. True on every tier.
+
+        This property stays the single switch for the per-block refactor step;
+        it used to be off on the advanced tier on the theory that a "write it
+        clean" implementer made a second pass redundant. It is on everywhere
+        now because the refactor step is verified rather than trusted: the
+        block's tests are re-run and `unchanged_tests_gate` is re-applied
+        afterwards, and a refactor that fails either is discarded by resetting
+        to the implementation commit. A pass that can only ever be a no-op or
+        an improvement is worth running on both tiers.
+        """
+        return True
 
     @property
     def tdd_phases(self) -> list[str]:
-        """TDD phases: [test, implement] for advanced, [test, implement, refactor] for standard."""
-        if self.tier == "advanced":
-            return ["test", "implement"]
+        """TDD phases — [test, implement, refactor] on every tier."""
         return ["test", "implement", "refactor"]
 
     @property

@@ -141,15 +141,22 @@ class TestTierProperties:
         c = BuildConfig(tier="standard")
         assert c.agent_scope == "per_task"
 
-    def test_advanced_no_refactor_phase(self):
+    def test_advanced_has_refactor_phase(self):
+        """`refactor_phase` is the single switch and it is on everywhere: the
+        step re-runs the tests and re-hashes them, and discards its own diff
+        when either check fails, so there is no tier it can cost anything on."""
         c = BuildConfig(tier="advanced")
-        assert not c.refactor_phase
-        assert c.tdd_phases == ["test", "implement"]
+        assert c.refactor_phase is True
+        assert c.tdd_phases == ["test", "implement", "refactor"]
 
     def test_standard_has_refactor_phase(self):
         c = BuildConfig(tier="standard")
-        assert c.refactor_phase
+        assert c.refactor_phase is True
         assert c.tdd_phases == ["test", "implement", "refactor"]
+
+    def test_refactor_phase_is_on_for_every_tier(self):
+        for tier in ("advanced", "standard"):
+            assert BuildConfig(tier=tier).refactor_phase is True
 
     def test_advanced_implementer_prompt_clean(self):
         c = BuildConfig(tier="advanced")

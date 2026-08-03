@@ -45,6 +45,11 @@ class TDDState(BaseModel):
     blocks: list[BlockInfo] = Field(default_factory=list)
     current_block: int = 0
     baseline_tests_pass: bool = False
+    # The whole-change refactor pass runs after the block loop and commits its
+    # own result, so nothing on disk records that it happened — a resume would
+    # otherwise re-run it (and pay for it) every time. Old checkpoints default
+    # to False, which re-runs a pass that is idempotent by construction.
+    refactor_all_done: bool = False
     final_review_done: bool = False
     e2e_done: bool = False
 

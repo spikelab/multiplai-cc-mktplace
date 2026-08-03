@@ -13,6 +13,7 @@ from ..prompts.test_writing import TEST_WRITER_PROMPT
 from ..prompts.implementation import (
     IMPLEMENTER_PROMPT_CLEAN,
     IMPLEMENTER_PROMPT_MINIMUM,
+    REFACTOR_ALL_PROMPT,
     REFACTOR_PROMPT,
 )
 from ..sdk import agent_call
@@ -32,7 +33,13 @@ IMPLEMENTER_MAX_TURNS = 50
 IMPLEMENTER_TIMEOUT = 30 * 60  # 30 min
 
 REFACTORER_MAX_TURNS = 30
-REFACTORER_TIMEOUT = 15 * 60  # 15 min
+REFACTORER_TIMEOUT = 15 * 60
+
+# The whole-change pass reads a build-sized diff instead of one block, so it
+# gets more room than the per-block refactorer — but the same tool list, since
+# it does the same kind of work.
+REFACTOR_ALL_MAX_TURNS = 40
+REFACTOR_ALL_TIMEOUT = 25 * 60  # 25 min  # 15 min
 
 
 async def run_test_writer(
@@ -117,9 +124,11 @@ async def run_refactorer(
     effort: str | None = None,
     cwd: str | None = None,
 ) -> AgentResult:
-    """Spawn a refactoring agent (standard tier only).
+    """Spawn a per-block refactoring agent (every tier).
 
-    Cleans up implementation code without breaking tests.
+    Cleans up implementation code without breaking tests. The caller verifies
+    the result (suite re-run + test-integrity gate) and discards the diff if
+    either fails, so this agent is never trusted on its own word.
     """
     prompt = REFACTOR_PROMPT.format(
         block_name=block_name,
@@ -137,6 +146,43 @@ async def run_refactorer(
         cwd=cwd,
         call_timeout=REFACTORER_TIMEOUT,
         budget_label="refactor",
+    )
+
+
+async def run_refactor_all(
+    diff: str,
+    design: str,
+    rubric: str,
+    test_command: str,
+    *,
+    model: str | None = None,
+    effort: str | None = None,
+    cwd: str | None = None,
+) -> AgentResult:
+    """Spawn the one conservative whole-change refactor pass.
+
+    Runs once, after every block is green and reviewed, over the cumulative
+    build diff — the only point at which cross-block duplication is visible.
+    Same tool list as the per-block refactorer, and the same deal: the caller
+    re-runs the suite, re-hashes the tests, and discards the whole diff if
+    either check fails.
+    """
+    prompt = REFACTOR_ALL_PROMPT.format(
+        diff=diff,
+        design=design,
+        rubric=rubric,
+        test_command=test_command,
+    )
+    log.info("Spawning whole-change refactorer")
+    return await agent_call(
+        prompt,
+        allowed_tools=REFACTORER_TOOLS,
+        model=model,
+        effort=effort,
+        max_turns=REFACTOR_ALL_MAX_TURNS,
+        cwd=cwd,
+        call_timeout=REFACTOR_ALL_TIMEOUT,
+        budget_label="refactor_all",
     )
 
 
