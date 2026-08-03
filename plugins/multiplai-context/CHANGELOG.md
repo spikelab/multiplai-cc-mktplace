@@ -72,6 +72,25 @@ Nothing yet.
   the GC cutoffs. The kit README and the suite `ARCHITECTURE.md` link here
   rather than restating it.
 
+- **There is now a single walkthrough of what a session actually does** —
+  README → *The life of a session*. Checkpointing, extraction and the
+  registry were each documented well and separately, which left no page
+  answering the question people actually ask: what happens, in what order,
+  and where does it fork. Ten stages from `docker run` to the deletion of
+  the last registry entry, each fork stated as a branch — the four values
+  of `SessionStart.source` and which two re-inject a checkpoint, the three
+  outcomes of the Stop-hook checkpoint decision, the four ways out of a
+  full context window, the four ways a session can stop, the two drains and
+  the atomic rename that keeps them from colliding, and the retry ladder
+  down to `failed_extractions/`. It closes with every branch point in one
+  table, including the two that turn features off entirely (`uv` missing,
+  no model client).
+
+  Also corrects *Session accounting* → *When it refreshes*, which credited
+  the fleet-view regeneration to `synthesize_agents.py` running alongside
+  the drain. `SessionStart` writes it in-process; the host drain writes it
+  again after a container exits; the script is the on-demand entry point.
+
 ## [0.15.0] - 2026-08-01
 
 ### Added

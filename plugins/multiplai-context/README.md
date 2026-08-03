@@ -705,6 +705,217 @@ bites: `CLAUDE_PLUGIN_OPTION_workspace_dir` (or `WORKSPACE`), without
 which the diary silently lands in `~/.multiplai/` instead of your
 workspace — `--data-dir` fixes the queue's location, not the diary's.
 
+### The life of a session
+
+*One session from launch to the deletion of its last trace, with every
+fork marked.*
+
+The parts are documented separately above — checkpointing, extraction,
+the registry. This is the single pass through all of them, in the order
+things actually happen. No new machinery appears here; it is the map.
+
+```
+  launch ─► SessionStart ─►┌─────────────────────┐─► it stops ─► drain ─► extraction ─► GC
+                           │  prompt ─► turn ─►  │      │           │           │
+              rebuild ◄────┤  Stop / Notification│      │           │           │
+                 ▲         └─────────────────────┘      │           │           │
+                 └──── window fills ◄───────────────────┘           │           │
+                                        diary · learnings · disposition ◄───────┘
+```
+
+Every stage below is **best-effort by construction**: a hook that fails
+logs and exits 0. There is no state in this system whose loss stops a
+session from starting, running, or ending.
+
+#### Stage 0 — before the first hook *(multiplai-kit only)*
+
+`claude.sh` starts a container and blocks on `docker run`. On vanilla
+Claude Code this stage does not exist and nothing is lost except the two
+things marked *(kit)* in Stage 6 and Stage 7.
+
+#### Stage 1 — `SessionStart`
+
+Fires once per physical context window, **not** once per conversation:
+compaction and `/clear` both fire it again. It branches on `source`,
+which is the single most consequential fork in the whole lifecycle:
+
+| `source` | What happened | Checkpoint re-injected? |
+|---|---|---|
+| `startup` | a genuinely new session | **no** |
+| `resume` | `claude --resume <id>` | **no** |
+| `clear` | you ran `/clear` | yes — consumes the pending marker |
+| `compact` | the window was compacted (auto or `/compact`) | yes — marker, or this session's own `checkpoint.md` as fallback |
+
+`startup`/`resume` not inheriting is deliberate, and was decided against
+the opposite behaviour after live testing: a fresh session in a project
+should not silently wake up inside week-old parked work. Soft continuity
+for those comes from the `now/<project>.md` snapshot instead, which is
+injected on *every* source.
+
+Then, in this order, always:
+
+1. **GC the registry** (see [When entries are collected](#5-when-entries-are-collected)) — before anything is written, so a
+   just-started session is never a GC candidate.
+2. **Record the `start` event.** This clears two things: the `.exited`
+   marker (an in-session event proves the process lives) and any
+   `disposition` (picking a session back up makes "parked" obsolete by
+   definition — the next extraction re-labels it).
+3. Detect the model client. **No client → a one-time warning**, and
+   every LLM-backed pass downstream silently no-ops.
+4. Inject `now/<project>.md`, then the checkpoint rebuild if the source
+   allows it.
+5. Launch, detached and each behind its own gate: the qmd index refresh
+   *(only with the qmd backend)*, cost collection *(only with
+   `enable_costs`)*, the **extraction drain** for markers left by earlier
+   sessions, and the **memory maintainer** *(24h gate, checked before
+   spawning so 95% of sessions pay nothing)*.
+6. Write the fleet view — in-process, since it is a pure read of
+   `sessions/` + `checkpoints/` with no model call.
+7. Emit whichever nudges are due: dream *(>24h **and** unprocessed
+   learnings on disk)*, config audit *(>60 days)*, prospective intentions
+   *(their own due date is the gate — no cadence)*.
+
+#### Stage 2 — every prompt you type
+
+Two `UserPromptSubmit` hooks, both fast, neither able to block:
+
+| Hook | Does | Silent when |
+|---|---|---|
+| `context_manager.py` | routes the prompt and injects only the memory it matches | nothing scores above the relevance cutoff |
+| `checkpoint_nudge.py` | tells **Claude** the context budget is nearly spent, so it can finish cleanly and suggest `/clear` at a boundary | below the handoff threshold (the common case), in auto-compact mode, in a child session, or within the cooldown |
+
+#### Stage 3 — every turn's end (`Stop`)
+
+Three things, none of them an LLM call: refresh the liveness timestamp,
+record the `stop` event, and run the checkpoint decision. That decision
+has exactly three outcomes:
+
+| Condition | Result |
+|---|---|
+| crossed a token band (default 100K / 200K), or above handoff and grew by `checkpoint_refresh_tokens` | spawn the **detached** checkpoint writer |
+| no band crossed, but the session is older than `checkpoint_min_session_minutes` **and** its last checkpoint is older than `checkpoint_stale_hours` | spawn it anyway — this is the tab you left open, which crosses no band |
+| context size unreadable (`0` tokens), a writer already in flight, or checkpointing disabled | do nothing |
+
+At or above the handoff threshold it *also* returns a `systemMessage`
+advising `/clear`. That advice is suppressed in auto-compact mode unless
+compaction is demonstrably overdue. **This hook never emits a
+`decision`** — it structurally cannot block a Stop, so `/goal` loops and
+other Stop hooks are unaffected.
+
+#### Stage 4 — when it waits for you (`Notification`)
+
+One job: stamp the entry with a `notification` event. That is what makes
+the session read as **Needs you** in the fleet view, and it is the hub's
+push trigger. No LLM, no state migration.
+
+#### Stage 5 — when the window fills
+
+Four ways out, and which one you get depends entirely on whether
+auto-compaction has been steered (see [Activation](#activation-fully-automatic-rebuild)):
+
+| Path | Trigger | Session id | You do |
+|---|---|---|---|
+| **Auto-compact** *(recommended)* | native compaction near the handoff threshold | unchanged | nothing at all |
+| **`/compact`** | you, manually | unchanged | one command |
+| **`/clear`** | you, manually | **new** | one command; the new session consumes the marker within `checkpoint_ttl_hours`, and only in the same project |
+| **Nothing** | you sail past the threshold | unchanged | keep going — the nudges repeat every `checkpoint_refresh_tokens` and nothing breaks |
+
+On the first two, `PreCompact` fires and does three things in order:
+clears the re-recommendation cooldown map (injected context is about to
+be summarized away, so every file must become eligible again); writes a
+checkpoint **synchronously** — the one place in the system that blocks,
+because this is the last moment the transcript exists; and, only if that
+checkpoint is both valid and fresh, steers the native summarizer to a
+one-sentence stub instead of a multi-KB summary. Any doubt at all — the
+writer timed out, the checkpoint is stale, the context size is
+unreadable — falls back to the full native summary. It also enqueues an
+extraction marker, so learnings survive the compaction that is about to
+discard the transcript.
+
+#### Stage 6 — how it stops
+
+Four ways, one hook. This is the part that surprises people, and it has
+its own section: [How the end of a session is detected](#3-how-the-end-of-a-session-is-detected).
+In brief — `/exit` fires `SessionEnd` and is recorded at once; a killed
+container fires nothing and is caught *(kit)* by the launcher writing an
+`.exited` marker when `docker run` returns; a session you merely walked
+away from is filed as **idle** after 24h, which is a deliberately
+conservative guess rather than a claim that it died.
+
+#### Stage 7 — the drain
+
+`SessionEnd` and `PreCompact` only ever write a marker — both hooks are
+killed within seconds, so neither can afford an LLM call. Something else
+picks the marker up:
+
+| Drain | Runs | Catches |
+|---|---|---|
+| `SessionStart` | next time any session opens | everything, eventually |
+| `drain_extractions.py` *(kit)* | on the host, once the container exits | the last tab of the day, written up that evening instead of next morning |
+
+Both call the same `lib/extraction_drain.py`, and the dequeue is an
+atomic rename, so the two firing at the same instant hand each marker to
+exactly one of them. The retry ladder from there:
+
+```
+pending_extractions/ ──rename──► processing_extractions/ ──► detached extract_learnings.py
+        ▲                                   │                          │
+        └──── requeue after 15 min ─────────┘                   deletes its own
+              (max 3 attempts)                                  marker on success
+                     │
+                     └──► failed_extractions/   (kept for inspection, never retried)
+```
+
+A marker sitting in `processing_extractions/` is the signature of a
+container torn down mid-extraction — the detached child dies with it.
+
+#### Stage 8 — what the extraction leaves behind
+
+One model pass over the transcript produces four things:
+
+| Output | Where | Note |
+|---|---|---|
+| diary entry | `diary/YYYY-MM-DD.md` | the permanent record |
+| learnings | `learnings/YYYY-MM-DD.md` | input to `/multiplai-context:dream` |
+| `disposition` | on the registry entry | `active` · `parked` · `done`, read from how you actually spoke — no command to remember |
+| checkpoint retired | `data/checkpoints/<sid>/` deleted | *only* once the diary supersedes it — see [Retire](#context-checkpointing-long-sessions) for the conditions that keep one alive |
+
+The disposition is gated on the **final** chunk specifically: a partial
+extraction leaves it at the default rather than writing a guess as a
+fact, because a fabricated `active` would silently strip a real `parked`.
+
+#### Stage 9 — how it is seen, and forgotten
+
+The fleet view (`AGENTS.md` + `fleet.txt`) is regenerated from the two
+stores every time a session starts and every time the host drain runs.
+It is pure aggregation — delete both files and the next pass rebuilds
+them byte-for-byte. What lands in which, and why the two count different
+things, is [What you actually see](#4-what-you-actually-see).
+
+Entries are then collected on a schedule that depends on how the session
+ended — 7 days for an observed or recorded end, 30 for one that might
+still be alive, never for a parked one. See
+[When entries are collected](#5-when-entries-are-collected).
+
+#### Branch points at a glance
+
+Everything above that can go two ways, in one table:
+
+| Fork | Branches | Decided by |
+|---|---|---|
+| `uv` present? | hooks run / **every hook is inert** (one warning per day) | the environment |
+| model client present? | extraction, dreams, catalogs run / all no-op | SDK or API key |
+| `SessionStart.source` | `clear`/`compact` rebuild · `startup`/`resume` start clean | Claude Code |
+| child session (subagent)? | excluded from all checkpointing | transcript shape |
+| checkpoint trigger | band · staleness · none | tokens and clock |
+| auto-compaction steered? | silent automatic rebuild / `/clear` advice | two env vars |
+| checkpoint fresh at `PreCompact`? | one-line stub summary / full native summary | sync write + watermark |
+| how it stopped | `SessionEnd` · `.exited` marker *(kit)* · quiet | which of them fired |
+| which drain got there first | in-session / host *(kit)* | atomic rename |
+| extraction outcome | diary + disposition + retire · partial · requeue · quarantine | the model call |
+| disposition | `active` · `parked` · `done` | how you left, read from the transcript |
+| fleet grouping | Needs you · Working · Parked · Idle · not listed | status × disposition |
+
 ### Key libraries
 
 - **`multiplai_core.paths`** — single source of truth for path
@@ -885,8 +1096,11 @@ to age out in 7–30 days. A parked idea stayed *resumable* while becoming
 
 #### 6. When it refreshes
 
-`scripts/synthesize_agents.py` runs alongside the extraction drain, so
-both outputs refresh at session start **and** after the last tab closes.
+`SessionStart` regenerates both files in-process (no model call, so it
+costs a few file reads), and `drain_extractions.py` does the same on the
+host after a container exits — so the view is current at session start
+**and** after the last tab closes. `scripts/synthesize_agents.py` writes
+them on demand; `--stdout` previews `AGENTS.md` without touching disk.
 
 ## Observability
 
