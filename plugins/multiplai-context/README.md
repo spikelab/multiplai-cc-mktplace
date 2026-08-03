@@ -753,59 +753,140 @@ workspace — `--data-dir` fixes the queue's location, not the diary's.
 > 15 minutes is treated the same way — that is what a container torn down
 > mid-extraction leaves behind, since the detached child dies with it.
 
-### The fleet view (`data/AGENTS.md`)
+### Session accounting
+
+*How each session's state is decided, and by whom.*
 
 Running several sessions at once, the question at the end of the day is
-*which of these needs me?* `scripts/synthesize_agents.py` answers it by
-aggregating the session registry and the checkpoints — no LLM call, pure
-aggregation — into two files:
+*which of these needs me?* Everything below exists to answer that one
+question honestly. Read this section before changing any of it — the
+pieces are individually small and it is the *interaction* that gets
+confusing.
 
-- **`data/AGENTS.md`** — one section per session, grouped by what you need
-  to do about it: **Needs you** · **Working** · **Parked** · **Idle**.
-  Finished sessions are counted, not listed. A **Collisions** section
-  names every file two sessions still in play are both holding.
-- **`data/fleet.txt`** — the same reading compressed to one line, cheap
-  enough for a status line to `cat` on every prompt.
+#### 1. What is on disk
 
-It runs alongside the extraction drain, so both refresh after the last
-tab closes as well as at session start.
+One directory, four kinds of file, and a strict rule about who may
+write which:
 
-**The two count different things, deliberately.** `AGENTS.md` *lists*
-everything on the board; `fleet.txt` *counts* only **fronts** — Needs
-you, Working, Parked. Idle is the difference, and it is usually most of
-the entries: a status line has room for one number, so it has to be the
-one you would act on rather than a tally of every tab you have opened
-lately.
+| Path | Written by | Holds |
+|---|---|---|
+| `data/sessions/<sid>.json` | this plugin's lifecycle hooks | the registry entry — project, cwd, container hostname, `started_at`, `last_event`, `disposition` |
+| `data/sessions/<sid>.exited` | **the kit launcher** (`claude.sh`) | nothing. Its *existence* means "the container this session ran in has exited" |
+| `data/sessions/<sid>.adopt` | the multiplai hub | nothing. Its existence means "the hub has taken the driver seat" |
+| `data/checkpoints/<sid>/checkpoint.md` | this plugin's checkpoint writer | what the session is *doing* — intent, next action, files in hand |
 
-**Knowing a session is over.** Hooks report from inside a session, so a
-container killed before its `SessionEnd` could fire — reboot, `docker
-kill`, OOM, closing the tab — used to leave an entry that looked live
-forever. The launcher is the only observer standing outside the
-container, so it drops an empty `<session-id>.exited` marker beside the
-entry when the container exits (the same convention the hub uses for
-`.adopt`); this plugin reads it as *ended* and clears it on the
-session's next event. **Requires multiplai-kit** — without that half,
-sessions that die uncleanly are still listed as idle until they age out
-of the registry.
+**Only this plugin writes the JSON.** Everything outside a session that
+needs to say something leaves an empty marker file next to it instead.
+That is deliberate: the launcher is `bash` on a host that may not have
+`jq`, and a second writer of registry *state* is how two stores start
+disagreeing silently. Markers are a one-bit channel that cannot corrupt
+anything.
 
-### Session disposition — "park it for now"
+`data/AGENTS.md` and `data/fleet.txt` are **outputs, never inputs** —
+pure aggregation over the two stores above, no LLM call. Delete them and
+the next run reconstructs them byte-for-byte.
 
-Liveness (*is it running?*) and intent (*am I coming back to it?*) are
-different questions. The extraction pass that already reads your
-transcript for the diary also reads **how you left**, on the same model
-response, and records it under a separate `disposition` key on the
-registry entry: `active` · `parked` · `done` (defaulting to `active`
-whenever it is unsure).
+#### 2. Three questions, three fields
 
-You get this by typing "park it for now" as you would anyway — there is
-no command to remember at the moment you are least likely to remember it.
-Parked sessions get their own heading in `AGENTS.md` and are **exempt
-from registry garbage collection**, which closes a real asymmetry:
-transcripts survive a year, but registry entries used to age out in 7-30
-days, so a parked idea stayed resumable while becoming invisible.
+They get conflated constantly. They are independent:
 
-The liveness field (`status`) is untouched by this — it is a separate,
-contracted vocabulary and disposition never writes to it.
+| Question | Field | Values |
+|---|---|---|
+| Is its process running, and doing what? | `status` (derived) | `working` · `waiting_input` · `idle` · `ended` |
+| How did *you* leave it? | `disposition` (on the entry) | `active` · `parked` · `done` |
+| So what do I see? | group (derived from both) | **Needs you** · **Working** · **Parked** · **Idle** · not listed |
+
+`status` is frozen — it is the vocabulary the multiplai-gui API contract
+speaks, so nothing here may coin a fifth value. `disposition` is a
+*separate key* precisely so intent can never overwrite liveness: a
+session can perfectly well be ended **and** parked.
+
+You get a disposition by typing "park it for now" as you would anyway —
+the extraction pass that already reads your transcript for the diary
+reads how you left on the same model response. There is no command to
+remember at the moment you are least likely to remember it. It defaults
+to `active` whenever the model is unsure.
+
+#### 3. How the end of a session is detected
+
+This is the part that surprises people, so it is worth stating flatly:
+**a hook is code running inside a session, and a session cannot report
+its own death.** Four ways a session stops, and only one of them fires a
+hook:
+
+| How it stopped | Fires | Recorded as | Noticed |
+|---|---|---|---|
+| `/exit`, Ctrl-D — a clean exit | `SessionEnd` | `last_event.kind = end` | at once |
+| Container killed, reboot, OOM, terminal closed | **nothing** | `.exited` marker from the launcher | when `claude.sh` returns |
+| Still running; you walked away | nothing | quiet ⇒ `idle` | after 24h |
+| Same, on vanilla Claude Code (no kit) | nothing | quiet ⇒ `idle` | after 24h |
+
+Row 2 is the common one under `docker run --rm`, and it is the one that
+used to poison the whole reading: the entry kept a Notification from two
+weeks ago as its last event, which is indistinguishable from an agent
+waiting on you right now. The launcher is the only observer standing
+*outside* the container when it dies, which is why that half lives in
+multiplai-kit and not in a hook.
+
+Rows 3 and 4 are a **guess, deliberately the conservative one**: with no
+evidence of death, a quiet session is filed as idle — still listed, not
+declared over — because it may just be thinking, or you may be at lunch.
+
+**Without multiplai-kit** (vanilla Claude Code, or an older kit) nothing
+writes the marker and row 2 collapses into row 3: uncleanly-killed
+sessions are listed as idle until they age out. Degraded, not broken.
+
+#### 4. What you actually see
+
+Two outputs, and they deliberately count different things:
+
+| Group | Listed in `AGENTS.md` | Counted in `fleet.txt` |
+|---|---|---|
+| Needs you | yes | **yes** |
+| Working | yes | **yes** |
+| Parked | yes | **yes** |
+| Idle | yes | no |
+| ended / `done` | no (counted as "finished") | no |
+
+`AGENTS.md` **lists** everything on the board — the idle section is
+where you go looking for the tab you forgot about. `fleet.txt` is one
+line for a status bar and has room for one number, so it counts
+**fronts**: what has a claim on you. Idle is the difference, and on a
+real registry it is most of the entries.
+
+Parked counts as a front on purpose. Its process is usually long gone,
+but "I am coming back to this" is a claim on you in a way that a tab
+which merely went quiet is not — that is the whole difference between
+parking something and abandoning it.
+
+A **Collisions** section names every file two agents both have in hand.
+Both holders must be fronts *and* have been heard from within 24h: a
+collision is the claim that two agents might **now** write the same
+file, and a file two sessions both touched last week is shared history.
+
+#### 5. When entries are collected
+
+| Entry | Kept for |
+|---|---|
+| `disposition: parked` | forever — parking it is you saying you will be back |
+| extraction still queued or in flight | until the extraction finishes |
+| ended cleanly, or an `.exited` marker | 7 days |
+| anything else (might still be alive) | 30 days |
+
+The 30-day window exists for sessions that *might* still be running. An
+observed exit is as final as a recorded one, so it takes the short
+cutoff — otherwise the longest reprieve goes to exactly the entries that
+most need collecting.
+
+Parked being exempt closes a real asymmetry: transcripts survive a year,
+so `claude --resume <id>` works months later, but registry entries used
+to age out in 7–30 days. A parked idea stayed *resumable* while becoming
+*invisible*.
+
+#### 6. When it refreshes
+
+`scripts/synthesize_agents.py` runs alongside the extraction drain, so
+both outputs refresh at session start **and** after the last tab closes.
 
 ## Observability
 

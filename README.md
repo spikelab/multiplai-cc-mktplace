@@ -86,7 +86,7 @@ contract](docs/degradation-contract.md)).
 
 | Plugin | Skill | Runs on | Notes |
 |--------|-------|:-------:|-------|
-| multiplai-context | *all hooks & skills* | ✅ | Needs `uv`. First session start resolves deps (allow ~1 min once). `qmd-search` additionally needs qmd installed. The hooks also write a session registry; nothing reads it today (it's for the native cockpit on the roadmap). Session start also launches a **detached memory maintainer** (24h gate, never writes to memory) — see [What runs unattended](#what-runs-unattended). |
+| multiplai-context | *all hooks & skills* | ✅ | Needs `uv`. First session start resolves deps (allow ~1 min once). `qmd-search` additionally needs qmd installed. The hooks also write a session registry, which the fleet view reads to say which of your sessions needs you (see [Session accounting](plugins/multiplai-context/README.md#session-accounting)) — with multiplai-kit the launcher additionally marks entries whose container has exited; without it, uncleanly-killed sessions are listed as idle until they age out. Session start also launches a **detached memory maintainer** (24h gate, never writes to memory) — see [What runs unattended](#what-runs-unattended). |
 | multiplai-dev | buildme | ✅ | Needs `uv` + network. `--skip-research` if multiplai-research absent. |
 | | code-review, security-review, deepen, think, e2e-test | ✅ | e2e-test frontend mode needs `agent-browser` (npm); backend mode is plain HTTP. |
 | | codebase-walkthrough, learn-stack, skill-creator, plan | ✅ | |

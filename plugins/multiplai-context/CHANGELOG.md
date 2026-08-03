@@ -61,6 +61,17 @@ Nothing yet.
   real registry this reclaimed 16 entries the old rule would have held for
   another three weeks.
 
+### Changed
+- **Session state is now documented in one place** — README → *Session
+  accounting*. It had accreted across two half-sections and a lot of code
+  comments, which is how you end up with three overlapping notions of "is
+  this session alive" and no single page saying which is which. The new
+  section covers what is on disk and who may write it, the three independent
+  fields (`status` / `disposition` / group), how each of the four ways a
+  session can stop is detected, which groups are listed versus counted, and
+  the GC cutoffs. The kit README and the suite `ARCHITECTURE.md` link here
+  rather than restating it.
+
 ## [0.15.0] - 2026-08-01
 
 ### Added
