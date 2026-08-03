@@ -18,6 +18,54 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.11.0] - 2026-08-01
+
+### Added
+- **The diary can now be written the evening you stop working, instead of the
+  next time you open a session.** When a session ends, the plugin leaves a
+  marker and something else has to pick it up and run the (multi-minute)
+  extraction. Until now the only thing that ever picked one up was the *next*
+  `SessionStart` — so closing your last tab on a Friday produced Friday's diary
+  entry on Monday, and a fleet of long-lived tabs could sit on unwritten
+  history for days.
+
+  There is now a standalone `scripts/drain_extractions.py` that drains the same
+  queue from outside a session:
+
+  ```
+  uv run --no-project drain_extractions.py --data-dir <workspace>/.multiplai/data
+  ```
+
+  It takes an optional `--data-dir` (defaulting to the usual path cascade),
+  `--wait` to block until each extraction finishes with its errors visible, and
+  `--verbose` for a one-line summary. Container launchers can call it right
+  after the container exits; you can also just run it by hand when you suspect
+  a session never got written up.
+
+  Session start drains through exactly the same code, so the two paths cannot
+  drift apart. Two drains racing is handled end to end: the dequeue is an
+  atomic rename that also refreshes the marker's mtime (staleness is measured
+  from *launch*, so a marker written Friday and drained Monday is not
+  instantly "stale" and re-launched by a concurrent session start), and
+  staleness recovery claims a marker atomically before rewriting it, so two
+  recoverers cannot double-count its retry attempts.
+
+  `--wait` exits nonzero when any extraction child fails, so
+  `drain … --wait && echo ok` actually proves extraction worked. Errors (a
+  missing `extract_learnings.py`, failed children) always print to stderr;
+  `--verbose` gates only the success summary.
+
+  The script's header documents which environment it needs: notably
+  `CLAUDE_PLUGIN_OPTION_workspace_dir` (or `WORKSPACE`), without which the
+  diary silently lands in `~/.multiplai/` instead of your workspace, and
+  `CLAUDE_CONFIG_DIR` so the Agent SDK finds your existing credentials.
+
+  The startup line reports **both** queues — `(N pending, M in flight)`. A
+  session whose container died mid-extraction leaves its marker in
+  `processing_extractions/`, where the drain can still rescue it but the
+  pending count cannot see it; reporting pending alone made such a run
+  announce `0 marker(s) pending` and then say it had drained one, which reads
+  as a malfunction rather than a recovery.
 ## [0.10.2] - 2026-07-31
 
 ### Fixed
