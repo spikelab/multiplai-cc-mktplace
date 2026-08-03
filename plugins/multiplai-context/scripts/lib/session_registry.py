@@ -43,9 +43,10 @@ logger = logging.getLogger(__name__)
 # SessionStart (per the hub input contract).
 GC_AFTER_DAYS = 7
 
-# Fallback age-out for entries that never saw a SessionEnd: containers killed
-# without the hook firing (docker kill, reboot, OOM — routine with ephemeral
-# containers) would otherwise accumulate forever as ghost "idle" sessions.
+# Fallback age-out for entries that never saw a SessionEnd AND were never
+# observed to exit: a reboot or a closed terminal kills the launcher along
+# with the container, so nothing writes a marker either. Without this these
+# would accumulate forever as ghost "idle" sessions.
 # Generous window: an idle session with no event at all for this long is dead.
 GC_LIVE_AFTER_DAYS = 30
 
@@ -158,12 +159,19 @@ def is_exited(entry_path: Path, last_ts: datetime | None = None) -> bool:
     """Has the process behind this entry been observed to exit?
 
     Hooks can only ever record what happened *inside* a session, so a session
-    whose container dies without a ``SessionEnd`` — ``docker kill``, reboot,
-    OOM, closing the tab, which is routine with ``--rm`` containers — leaves an
-    entry whose last event is a two-week-old Notification. Read literally that
-    is a live agent waiting on you; read honestly it is a corpse. The only
-    observer that can tell them apart is the one *outside* the session, and it
-    has no hook: the kit launcher, at the instant ``docker run`` returns.
+    whose container dies without a ``SessionEnd`` — ``docker kill``/``stop``,
+    an OOM-kill, a container crash, all routine with ``--rm`` — leaves an entry
+    whose last event is a two-week-old Notification. Read literally that is a
+    live agent waiting on you; read honestly it is a corpse. The only observer
+    that can tell them apart is the one *outside* the session, and it has no
+    hook: the kit launcher, at the instant ``docker run`` returns.
+
+    **What this does NOT cover**, because the launcher must survive to write
+    it: a reboot or a closed terminal kills ``claude.sh`` together with the
+    container (it installs no HUP/TERM trap), so no marker appears and the
+    entry ages out on the long ``GC_LIVE_AFTER_DAYS`` cutoff instead. A clean
+    quit sets *both* this marker and an ``end`` event; they agree, and GC
+    treats them identically.
 
     So the launcher drops an empty marker file beside the entry. A **marker
     rather than an `end` event** on purpose: the launcher is `bash` on a host
@@ -508,9 +516,9 @@ def gc_stale(
     """Delete registry entries whose session ended more than *days* ago.
 
     Entries whose last event is anything other than ``end`` age out after
-    *live_days* instead — sessions whose container died without a SessionEnd
-    (docker kill, reboot, OOM) would otherwise linger forever as adoptable
-    ghosts. When such a death was actually *observed* — a ``.exited`` marker
+    *live_days* instead — sessions that stopped without a SessionEnd and
+    without an observed exit (a reboot or a closed terminal takes the launcher
+    down too) would otherwise linger forever as adoptable ghosts. When such a death was actually *observed* — a ``.exited`` marker
     from the launcher, see :func:`is_exited` — the entry takes the short
     *days* cutoff instead, because there is nothing left to wait for.
     Unparseable entries older than the *days* window (by mtime) are removed

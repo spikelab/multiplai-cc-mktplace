@@ -32,8 +32,8 @@ Nothing yet.
 
   - **A container that dies without a `SessionEnd` left an immortal entry.**
     Hooks report from inside a session and cannot report their own container
-    being killed — reboot, `docker kill`, OOM, or just closing the tab, all
-    routine with `--rm`. The entry kept its last event (often a Notification)
+    being killed — `docker kill`, an OOM-kill, a container crash, all routine
+    with `--rm`. The entry kept its last event (often a Notification)
     forever, and the fleet view read it as a live agent waiting on you.
 
     The launcher can see what no hook can, so it now leaves a `<sid>.exited`
@@ -41,6 +41,12 @@ Nothing yet.
     reads it as `ended` and clears it on the session's next event. **This
     half needs multiplai-kit at the commit that adds the marker** — without
     it the other two fixes still apply, they just have less to work with.
+
+    Two honest limits, both documented: the launcher has to *survive* to
+    write the marker, so a reboot or a closed terminal (which kill
+    `claude.sh` along with the container) still leave nothing behind and the
+    entry ages out on the 30-day cutoff; and a clean quit sets both an `end`
+    event and a marker, which is the normal shape rather than a conflict.
 
   - **Idle sessions counted as fronts.** `AGENTS.md` still lists every tab
     that is on the board, idle ones included — that is where you go looking
