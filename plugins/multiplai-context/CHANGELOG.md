@@ -18,6 +18,41 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.14.0] - 2026-08-01
+
+### Changed
+- **Checkpoints are now cleaned up once the diary has been written.** A
+  checkpoint is *live state* — roughly where a session is right now, so the next
+  context window can pick it up. The diary is the permanent record of what the
+  session actually did. Those are two artifacts with two lifetimes, but only the
+  diary ever had an ending: every session that crossed a token band left a
+  directory in `.multiplai/data/checkpoints/` forever. There were **182 of them**
+  on one machine, one per session ever run, none ever collected.
+
+  Extraction now deletes a session's checkpoint directory once that session's
+  diary entry exists — and only then. Six things keep one alive:
+
+  - **The extraction was not fully successful.** A partial LLM failure can
+    still write a diary entry from the chunks that survived, but that entry
+    covers only part of the session — a diary that does not fully supersede
+    the checkpoint never deletes it.
+  - **The session is still running.** An extraction deferred by context
+    compaction runs against a live session; its checkpoint is working state,
+    not a leftover, and is kept untouched.
+  - **The session is `parked`.** `AGENTS.md` renders a parked session's intent,
+    next action and files-in-hand from its checkpoint, and a parked session is
+    precisely the one still listed weeks later. Deleting it would leave an entry
+    you deliberately kept with nothing to say.
+  - **The diary write failed** — nothing has superseded anything.
+  - **A checkpoint writer is still running** for that session.
+  - **An unconsumed `/clear` rebuild marker still points at it** — you crossed
+    the handoff threshold and closed the tab instead of clearing, so that
+    checkpoint is what tomorrow's session rebuilds from.
+
+  Nothing you can see changes: no checkpoint is removed while it is still the
+  best available answer to "where was this?", and if the cleanup itself fails,
+  the diary entry is already written and unaffected.
+
 ## [0.13.0] - 2026-08-01
 
 ### Added

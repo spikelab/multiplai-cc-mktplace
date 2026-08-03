@@ -18,6 +18,10 @@ implements the plumbing for the checkpoint lifecycle:
      pending marker (TTL-gated) and injects the checkpoint as
      additionalContext, so the fresh session resumes where the old one left
      off.
+  5. **Retire** — once the session's diary entry is written the checkpoint is
+     superseded, and ``retire_checkpoint`` deletes the directory. Live state
+     and the permanent record are different artifacts with different
+     lifetimes; without step 5 the first one never ends.
 
 Interactive Claude Code cannot be force-restarted from a hook, so the
 rebuild is advisory-then-automatic: advice to /clear, automatic re-seeding
@@ -38,6 +42,7 @@ import dataclasses
 import json
 import logging
 import os
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -482,6 +487,106 @@ def reset_session_counters(data_dir: Path, session_id: str) -> None:
     sdir = session_dir(data_dir, session_id)
     for name in ("nudge.json", "claude_nudge.json"):
         (sdir / name).unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Retirement — the checkpoint's end of life
+# ---------------------------------------------------------------------------
+#
+# A checkpoint is *live state*: roughly where a session is right now, so the
+# next window can resume it. Once the diary entry for that session exists, the
+# permanent narrative record has superseded it and the directory is dead weight
+# — 182 of them on disk at plan time (2026-07-31), one per session ever run,
+# none ever collected.
+#
+# The two guards below are this module's, because they are facts about the
+# checkpoint layout. The caller owns the pipeline-level ones (diary written?
+# session parked?) — see ``extract_learnings.py``.
+
+def pending_marker_owner(data_dir: Path, session_id: str) -> Path | None:
+    """The pending handoff marker still pointing at *session_id*, if any.
+
+    Markers are keyed by project, not session, so this scans them. Small by
+    construction: one file per project, and each is claimed-and-removed by the
+    next SessionStart there.
+
+    Why it gates retirement: the walk-away case is exactly the one that
+    collides. A session crosses the handoff threshold, gets the ``/clear``
+    advice, and the tab is closed instead — leaving an unconsumed marker.
+    Extraction then runs (host-side, minutes later) and would delete the very
+    ``checkpoint.md`` the marker exists to rebuild from, well inside its
+    ``ttl_hours``. ``session_start.py`` degrades safely on the missing file,
+    so the damage is silent: no rebuild, no error, no clue.
+    """
+    pdir = _pending_dir(data_dir)
+    try:
+        markers = sorted(pdir.glob("*.json"))
+    except OSError:
+        return None
+    for marker in markers:
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(payload, dict) and payload.get("session_id") == session_id:
+            return marker
+    return None
+
+
+def retire_checkpoint(data_dir: Path, session_id: str) -> tuple[bool, str]:
+    """Delete ``checkpoints/<session_id>/`` now that the diary supersedes it.
+
+    Returns ``(removed, reason_kept)``, which distinguishes the three outcomes
+    the caller logs differently:
+
+    * ``(True, "")`` — the directory was there and is gone.
+    * ``(False, "")`` — there was nothing to collect. The common case: most
+      sessions never cross a token band, so they never had a checkpoint.
+    * ``(False, "<reason>")`` — deliberately kept. A checkpoint that survives
+      always says why.
+
+    Never raises. Failing to collect a checkpoint costs disk; failing an
+    extraction costs the session's diary entry, and this runs inside that
+    pipeline.
+    """
+    try:
+        if not session_id or "/" in session_id or session_id in (".", ".."):
+            return False, "invalid session id"
+        sdir = session_dir(data_dir, session_id)
+        if not sdir.is_dir():
+            return False, ""
+        if writer_inflight(data_dir, session_id):
+            # A detached checkpoint_writer.py is mid-write. Deleting under it
+            # would race its atomic rename, and the writer would recreate a
+            # half-populated directory on the way out anyway.
+            return False, "writer in flight"
+        marker = pending_marker_owner(data_dir, session_id)
+        if marker is not None:
+            return False, f"pending rebuild marker {marker.name}"
+
+        # TOCTOU, accepted: between the two guards above and the rmtree below
+        # a concurrent Stop hook could still claim the writer or write a
+        # pending marker for this session. That window only matters for a
+        # LIVE session, and the caller already refuses to retire live
+        # sessions (pre_compact-triggered extractions are skipped upstream),
+        # so reaching here means the session has ended and no new Stop hook
+        # is coming. If the race fires anyway, both losers self-heal: a
+        # writer that loses its directory mid-write recreates it via its
+        # atomic rename on the way out (a later extraction re-retires it),
+        # and a pending marker pointing at a deleted checkpoint.md is caught
+        # by the marker's own staleness/`ttl_hours` handling and the rebuild
+        # path's degrade-on-missing-file behaviour at the next SessionStart.
+        shutil.rmtree(sdir)
+        logger.info("Retired checkpoint for session %s", session_id)
+        return True, ""
+    except Exception as e:
+        # Broad on purpose: "never raises" is the contract, and this runs
+        # inside the extraction pipeline where an escape would cost the
+        # session's diary entry. OSError covers the filesystem; anything
+        # else (e.g. ValueError from a malformed path) is the same answer —
+        # keep the directory, report why.
+        logger.warning("Could not retire checkpoint for %s: %s", session_id, e)
+        return False, f"removal failed: {e}"
 
 
 # ---------------------------------------------------------------------------

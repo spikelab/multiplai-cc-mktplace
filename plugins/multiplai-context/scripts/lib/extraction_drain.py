@@ -226,6 +226,11 @@ def process_deferred_extractions(
             "session_id": marker.get("session_id", ""),
             "cwd": marker.get("cwd", ""),
             "transcript_path": marker.get("transcript_path", ""),
+            # What enqueued this marker ("pre_compact" vs a session-end path).
+            # The child needs it: a PreCompact-deferred extraction runs against
+            # a session that is STILL LIVE after compaction, so its checkpoint
+            # must not be retired the way a finished session's is.
+            "trigger": marker.get("trigger", ""),
             # The child removes this marker once the session is handled.
             "marker_path": str(dest),
         }
