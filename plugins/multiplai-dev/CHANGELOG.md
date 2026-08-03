@@ -10,9 +10,9 @@ Version numbers are this plugin's version in the marketplace manifest
 
 Recorded history starts at **0.1.1**; anything earlier is in `git log` only.
 
-Of the 9 versions recorded here, `0.1.1` and `0.5.0` carry a git tag — the
-tagging convention started partway through. Dates on untagged versions are the
-release dates recorded at the time, not derived from a tag.
+Of the 13 versions recorded here, `0.1.1` and `0.5.0`–`0.5.3` carry a git tag —
+the tagging convention started partway through. Dates on untagged versions are
+the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
@@ -20,6 +20,47 @@ release dates recorded at the time, not derived from a tag.
 - **A plugin README** (`plugins/multiplai-dev/README.md`) — what the pack
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
+
+## [0.6.0] - 2026-08-03
+
+### Added
+
+- **`/buildme` now updates your documentation as part of the build, so it
+  arrives in the same pull request as the code.** After the TDD build and
+  before the respec proposal, a new documentation phase reads the whole build
+  diff plus the implementation notes, takes inventory of the documents your
+  project actually keeps (`README*`, `CHANGELOG*`, `docs/**`), and updates
+  whatever the change made stale — described behavior, flags, defaults, file
+  layouts, and usage examples that would no longer work. Where your project
+  keeps a changelog it adds a [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+  entry written from the user's point of view; it creates a `CHANGELOG.md` only
+  when your project's conventions show one is expected. Previously a build
+  shipped code and left the docs for whoever reviewed the PR.
+
+  What it writes lands in its own `docs(<change>): update documentation` commit,
+  and the files are named in the PR body under **Documentation** so a reviewer
+  knows the docs were rewritten rather than assuming they were untouched.
+
+  The phase is **always on** — there is no flag and no `specs/config.yaml`
+  toggle — and it is **non-fatal**: if the model call fails, the build still
+  completes with the code it produced. It also does not pad. "Nothing needed
+  documenting" is a legitimate outcome for a change with no user-visible delta,
+  and the agent says so explicitly.
+
+- **A new `DOCS_WARNING:` line when the documentation may be stale.** When the
+  build changed source files, your project keeps a changelog, and the phase
+  updated nothing, `/buildme` prints a warning naming the changed files and the
+  changelog to check before merging. It is a **warning and never a failure** —
+  a finished build is not failed over a judgment call about documentation.
+
+### Changed
+
+- **`PHASE:DOCS_UPDATE:COMPLETE` joins the progress protocol**, and the kanban
+  card stays in **In Development** through the documentation phase (updating the
+  docs is part of producing the change, not a separate review stage).
+- Builds resumed from a checkpoint written by an earlier version load and run
+  the new phase; a build already past the respec proposal does not go back for
+  it.
 
 ## [0.5.4] - 2026-07-30
 

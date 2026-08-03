@@ -13,7 +13,7 @@
 | `config.py` | BuildConfig, tier detection, test command discovery | No |
 | `state.py` | BuildState with checkpoint/resume | No |
 | `models.py` | Pydantic models for all structured data | No |
-| `gates.py` | Quality gate assertions (pure code) + agent-report parsers (`parse_agent_status`, `parse_implementation_note`). New gates: `unknowns_gate`, `prototype_required`, `prototype_gate`. | No |
+| `gates.py` | Quality gate assertions (pure code) + agent-report parsers (`parse_agent_status`, `parse_implementation_note`, `parse_docs_impact`). New gates: `unknowns_gate`, `prototype_required`, `prototype_gate`, `docs_freshness_gate` (warn-only). | No |
 | `budget.py` | Per-build token/cost ledger + circuit-breaker (module singleton) | No |
 | `dependencies.py` | Pure detection of dependencies **new to this project**: parses the proposal's `## Impact` and design's `## Decisions`, subtracts every manifest (`pyproject.toml`, `package.json`, `Package.swift`, `Cargo.toml`, `go.mod`, `requirements.txt`) and every existing import. Feeds the B1 explainer gate. No LLM, no network. | No |
 | `git_ops.py` | Every `git`/`gh` invocation: worktree+branch setup, explicit-path commits, push, `gh pr create`. `shell=False`, fixed argv, never merges/force-pushes/deletes. | No |
@@ -32,6 +32,7 @@
 | `prototype_steps.py` | `run_prototype()`, `apply_prototype_findings()`, `primary_prototype_artifact()` | Prototype-first stage (BuildPhase.PROTOTYPE, between DESIGN_AUDIT and REVIEW). One agent writes a mockup / sample output / CLI transcript + `NOTES.md` inside `specs/changes/<name>/prototype/` — the write boundary is enforced in code (`_files_outside`), not only in the prompt. `apply_prototype_findings()` folds the notes' DISPROVES/OPEN_QUESTIONS back into design.md and tasks.md with **one** regeneration pass each. |
 | `tdd_steps.py` | `run_test_writer()`, `run_implementer()`, `run_refactorer()`, `run_integration_fix()` | TDD agent spawning with tool allowlists. Reports carry the `SURPRISES:` / `SPEC_IMPACT:` REQUIRED slots parsed by `gates.parse_implementation_note`. |
 | `respec_steps.py` | `append_implementation_note()`, `format_implementation_note()`, `notes_path()`, `ensure_delta_sections()`, `run_respec_audit()` | B3 loop back to the spec. Each parsed `ImplementationNote` is appended to `implementation-notes.md` **as the build runs** (a crashed build still leaves the learning on disk). `run_respec_audit()` (BuildPhase.RESPEC, after TDD_BUILD) reads those notes + current requirements/design and writes `respec.md` in ADDED/MODIFIED/REMOVED form — **propose only, never edits the specs**, and non-fatal on LLM failure. |
+| `docs_steps.py` | `run_docs_update()` | The documentation phase (BuildPhase.DOCS_UPDATE, between TDD_BUILD and RESPEC). One agent with `Read/Write/Edit/Glob/Grep` over the whole build diff (`tdd_engine._capture_full_build_diff`) plus `implementation-notes.md`; it discovers the project's own `README*` / `CHANGELOG*` / `docs/**` and updates whatever the diff made stale. Closes with a REQUIRED `DOCS_IMPACT:` slot parsed by `gates.parse_docs_impact`. **Always on** — no flag, no config toggle — and non-fatal like RESPEC: the code is already built, so a docs failure logs and the build continues (that path still reaches `docs_freshness_gate`, which is exactly when its warning is warranted). |
 | `review_steps.py` | `run_code_review()`, `merge_panel_results()`, `run_security_review()`, `run_review_fix()` | `run_code_review()` is **wired** as the active per-block review — `tdd_engine._run_quality_review` calls it with the block's actual diff, rubric, spec context, and coding standards. Runs every model in `config.review_panel` concurrently (empty panel → one reviewer on `review_model`-or-`model`, byte-identical to the pre-panel behavior), drops members that failed, and folds the survivors with `merge_panel_results()`. `run_security_review()` / `run_review_fix()` remain **not wired**. |
 
 ## Prompt Templates (prompts/)
@@ -47,6 +48,7 @@ Templates are Python f-strings with `{placeholders}`. Each template is a constan
 | `design_audit.py` | DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT |
 | `prototype.py` | PROTOTYPE_PROMPT |
 | `explainer.py` | EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT |
+| `docs_update.py` | DOCS_UPDATE_PROMPT |
 | `respec.py` | RESPEC_PROMPT |
 | `rubric_prompts.py` | RUBRIC_PROMPT |
 
@@ -66,6 +68,7 @@ All tests mock LLM calls — no API keys needed. Tests cover:
 - TDD Engine: block parsing, context assembly, weak test patterns, agent selection
 - Dependencies: manifest/import subtraction, false-positive suppression
 - Prototype / Respec steps: write boundary, gate retry, one-pass regeneration, propose-only respec
+- Docs steps: `DOCS_IMPACT:` parsing, the warn-only freshness gate, non-fatality, and the refusal to stage an agent-reported path from outside the project
 - Git ops: real temp git repos with `gh` mocked — worktree/branch setup, resume re-binding, explicit-path commits, non-fatal push/PR failure
 - Board: every `(phase, block_status)` → column case, including the columns the pipeline never drives
 
@@ -190,9 +193,17 @@ keep old checkpoints loadable (fixtures under `tests/fixtures/` cover this):
 
 ```
 INIT → BOOTSTRAP → INTERVIEW_DONE → RESEARCH → SPEC_GENERATION → DESIGN_AUDIT
-  → PROTOTYPE → REVIEW → TDD_BUILD → RESPEC → PUBLISH → COMPLETE  (or FAILED)
+  → PROTOTYPE → REVIEW → TDD_BUILD → DOCS_UPDATE → RESPEC → PUBLISH
+  → COMPLETE  (or FAILED)
 ```
 
 `PROTOTYPE`, `RESPEC` and `PUBLISH` are the additions from the dark-factory
-lifecycle plan. `PUBLISH` runs **after** the `--auto` archive move, so the pushed
-branch carries the archived layout.
+lifecycle plan. `DOCS_UPDATE` sits between the build and the respec proposal so
+the documentation it writes is committed onto the same branch and lands in the
+same PR as the code it describes. `PUBLISH` runs **after** the `--auto` archive
+move, so the pushed branch carries the archived layout.
+
+`implementation-notes.md`, `respec.md`, `prototype/` and `.board.json` are not
+DAG artifacts, and neither are the documents `DOCS_UPDATE` writes — README,
+CHANGELOG and `docs/**` belong to the project, not to `specs/`, and are
+committed by their phase with an explicit pathspec.

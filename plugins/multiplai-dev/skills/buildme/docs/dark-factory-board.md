@@ -12,6 +12,11 @@ Line numbers were re-derived on **2026-07-26** against the buildme subtree in
 `plugins/multiplai-dev/skills/buildme/`. Paths are relative to
 `scripts/build_pipeline/`.
 
+**Drift notice (2026-08-03):** the `DOCS_UPDATE` phase was inserted between
+`TDD_BUILD` and `RESPEC`, which shifts the line numbers below in `board.py`
+(by ~3) and `orchestrator.py` (by ~15). The **symbol names** are authoritative;
+where a row was updated for this change it cites symbols instead of lines.
+
 ---
 
 ## The board
@@ -52,7 +57,7 @@ pure function over the table at `board.py:86 _PHASE_COLUMNS` (exhaustive over
 | 2 | Accepted | **Mapped, never written.** `BuildPhase.INIT` maps to Accepted, but no card is recorded that early — the change directory does not exist yet at INIT, so the first recorded column is always Shaping. | `board.py:87` (INIT → ACCEPTED); `board.py:26-30`; first actual write is `orchestrator.py:69` at BOOTSTRAP |
 | 3 | Shaping | **Driven.** BOOTSTRAP, INTERVIEW_DONE, RESEARCH and SPEC_GENERATION all map to Shaping and each records the card. Products: `proposal.md`, `requirements/*.md`. | `board.py:88-91`; recorded at `orchestrator.py:69`, `:97`, `:118`, `:143` |
 | 4 | Planning | **Driven.** DESIGN_AUDIT, PROTOTYPE and REVIEW map to Planning. The "reviewed by another eng" half of the column is stood in for by the adversarial design audit and the tasks-shape audit, plus the prototype's findings pass. | `board.py:92-94`; recorded at `orchestrator.py:157`, `:165`, `:189`; audits at `llm_steps/spec_steps.py:209 run_design_audit`, `spec_generator.py:478 _audit_tasks_shape`; prototype at `orchestrator.py:161-165` → `llm_steps/prototype_steps.py:36 run_prototype` |
-| 5 | In Development | **Driven.** TDD_BUILD and RESPEC map to In Development, and the card is recorded **before** the engine runs, so a card is in development for the whole build rather than only once it succeeds. Every block-status change re-records the same column. | `board.py:95-96`; recorded at `orchestrator.py:196` (pre-engine) and `:241`; per-block at `tdd_engine.py:74` |
+| 5 | In Development | **Driven.** TDD_BUILD, DOCS_UPDATE and RESPEC all map to In Development, and the card is recorded **before** the engine runs, so a card is in development for the whole build rather than only once it succeeds. Every block-status change re-records the same column. Updating README/CHANGELOG/`docs/**` is part of producing the change, not a separate review stage, so `DOCS_UPDATE` deliberately shares the column rather than introducing a new one. | `board.py:_PHASE_COLUMNS` (TDD_BUILD / DOCS_UPDATE / RESPEC → IN_DEVELOPMENT); recorded pre-engine in the orchestrator's TDD_BUILD block and again after DOCS_UPDATE and RESPEC; per-block at `tdd_engine.py:74` |
 | 6 | In Review | **Driven, but only on a real push + PR.** `BuildPhase.PUBLISH` itself still maps to In Development; In Review is recorded from the publish step *after* `git push` succeeded **and** `gh pr create` returned. A run with `--no-push`, `--no-pr`, `--no-worktree`, or a failed push finishes in In Development. Its exit condition (merged to staging) is **not** implemented. | `board.py:97-99` (PUBLISH → IN_DEVELOPMENT); push at `orchestrator.py:616`, PR at `:633`, In Review recorded at `orchestrator.py:653-657`; publish skipped with no pipeline branch at `orchestrator.py:588-590` |
 | 7 | Testing | **Never driven.** There is no staging deploy and no QA/E2E agent. The nearest thing is a post-TDD entry-point smoke check, which warns and does not move any card. | `board.py:37-42`; `tdd_engine.py:1457 _verify_entry_point`, called at `tdd_engine.py:1335`, records no board column |
 | 8 | Ready for Prod | **Never driven.** No prod-PR automation exists. | `board.py:37-42`; no `BoardColumn.READY_FOR_PROD` outside `models.py:69` and `board.py:78` |

@@ -207,8 +207,25 @@ git worktree (see [Git lifecycle](#git-lifecycle)).
 The pipeline handles: worktree/branch setup, bootstrap, spec generation (via
 change_manager) including the unknowns/explainer pass, design audit, the
 prototype stage, TDD implementation (test-writer + implementer agents per block),
-integration gates, scored quality reviews, entry point verification, the respec
-proposal, and publishing (push + draft PR).
+integration gates, scored quality reviews, entry point verification, the
+documentation update, the respec proposal, and publishing (push + draft PR).
+
+### The documentation phase (always on)
+
+After the build and before the respec proposal, `DOCS_UPDATE` brings the
+project's own documentation back in line with the code that was just written —
+`README*`, `CHANGELOG*` and `docs/**`, discovered in the project rather than
+assumed. It gets its own `docs(<change>): update documentation` commit, so the
+documentation lands **in the same PR as the code it describes** instead of being
+left for the reviewer to write.
+
+There is no flag and no config toggle: a build that ships code with stale docs
+is the thing this phase exists to prevent. It is non-fatal — a failure here logs
+and the build still succeeds — and it never invents features: `DOCS_IMPACT:
+none` is a legitimate outcome for a change with no user-visible delta. When the
+build changed source, the project keeps a changelog, and nothing was documented,
+the pipeline prints `DOCS_WARNING:<reason>`; relay it, it is a warning and never
+a failure.
 
 ### Step 3b: The review checkpoint (non-`--auto` runs)
 
@@ -242,11 +259,13 @@ genuinely invisible; `--spec-only` runs include the prototype stage.
 
 Parse pipeline stdout for progress lines:
 - `PHASE:<name>:COMPLETE` — phase transitions (now includes `PROTOTYPE`,
-  `RESPEC`, `PUBLISH`)
+  `DOCS_UPDATE`, `RESPEC`, `PUBLISH`)
 - `BLOCK:<n>/<total>:<name>:COMPLETE` — block progress
 - `BOARD:<change>:<Column>` — kanban column transitions (see
   [`docs/dark-factory-board.md`](docs/dark-factory-board.md))
 - `WORKTREE:<path>` / `BRANCH:<name>` / `PUSHED:<branch>` / `PR:<url>` — git lifecycle
+- `DOCS_WARNING:<reason>` — source changed, the project keeps a changelog, and
+  the documentation phase updated nothing (a warning, never a failure)
 - `PUBLISH_DIAGNOSIS:<reason>` — push/PR could not finish; manual commands are in
   `build-progress.md` (the build still succeeded)
 - `RESULT:SUCCESS` — build complete
