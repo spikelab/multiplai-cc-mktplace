@@ -324,6 +324,40 @@ class TestPrototypePhase:
         mock_feedback.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_design_audit_phase_regenerates_specs_on_critical_gaps(self, tmp_path):
+        """The orchestrator's DESIGN_AUDIT phase used to log its gaps and move
+        on. It now goes through run_design_audit_stage, so a critical gap
+        rewrites design.md and tasks.md once."""
+        from unittest.mock import AsyncMock, patch
+        from build_pipeline.orchestrator import run_orchestrator
+
+        config = self._config(tmp_path, "audit-loop", "false", self.BACKEND_PROPOSAL)
+        (config.change_dir / "tasks.md").write_text("## 1. Block v1")
+        gap = {
+            "category": "spec-task-alignment",
+            "severity": "critical",
+            "description": "Scenario 'retry exhausts' has no task block",
+            "suggestion": "Add a block for the exhausted-retry path",
+        }
+
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   new_callable=AsyncMock) as mock_audit, \
+                patch("build_pipeline.llm_steps.spec_steps.generate_artifact",
+                      new_callable=AsyncMock) as mock_gen:
+            mock_audit.side_effect = [[gap], []]
+            mock_gen.side_effect = ["## Decisions\nv2", "## 1. Block v2"]
+            result = await run_orchestrator(config, self._args(tmp_path, "audit-loop"))
+
+        assert result == 0
+        assert mock_gen.await_count == 2
+        assert [c.args[0] for c in mock_gen.call_args_list] == ["design", "tasks"]
+        assert "retry exhausts" in mock_gen.call_args_list[0].kwargs["audit_findings"]
+        # One report-only re-audit after the pass.
+        assert mock_audit.await_count == 2
+        assert (config.change_dir / "design.md").read_text() == "## Decisions\nv2"
+        assert (config.change_dir / "tasks.md").read_text() == "## 1. Block v2"
+
+    @pytest.mark.asyncio
     async def test_prototype_failure_does_not_fail_the_build(self, tmp_path):
         from unittest.mock import AsyncMock, patch
         from build_pipeline.models import GateResult

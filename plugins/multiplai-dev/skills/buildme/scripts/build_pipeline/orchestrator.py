@@ -139,6 +139,14 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                     config, state, "spec generation failed", progress=progress,
                 )
                 return result
+            # Reload state from disk — run_spec_generator loaded its own copy
+            # and checkpointed the spec_gen sub-state (completed artifacts, the
+            # audit/gate completion flags). Advancing our stale copy would
+            # write those back as null, and the design audit below would then
+            # regenerate a second time because design_audit_regen_done was
+            # lost. Same reason the TDD phase reloads.
+            if state_path.exists():
+                state = BuildState.load(state_path)
             state.advance_to(BuildPhase.SPEC_GENERATION, state_path)
             # Shaping/planning lands as its own commit so the branch history
             # reads shaping → planning → implementation rather than one lump.
@@ -152,15 +160,18 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             print("PHASE:SPEC_GENERATION:COMPLETE", flush=True)
             board.record(config, state, BuildPhase.SPEC_GENERATION, progress=progress)
 
-        # Phase: Design Audit (best-effort — failures don't block the build)
+        # Phase: Design Audit (best-effort — failures don't block the build).
+        # The stage runs the audit AND folds critical/major gaps back into
+        # design.md/tasks.md with one regeneration pass; the pass is recorded
+        # in spec_gen.design_audit_regen_done so it happens at most once per
+        # build no matter which call site reaches it first.
         if not state.is_phase_complete(BuildPhase.DESIGN_AUDIT):
             log.info("START phase=DESIGN_AUDIT")
-            from .llm_steps.spec_steps import run_design_audit
-            try:
-                gaps = await run_design_audit(config.change_dir, config)
-                log.info("DONE phase=DESIGN_AUDIT gaps=%d", len(gaps) if gaps else 0)
-            except Exception as audit_err:
-                log.warning("Design audit LLM call failed (non-fatal): %s", audit_err)
+            from .spec_generator import run_design_audit_stage
+            gaps = await run_design_audit_stage(
+                config.change_dir, config, state, state_path,
+            )
+            log.info("DONE phase=DESIGN_AUDIT gaps=%d", len(gaps) if gaps else 0)
             state.advance_to(BuildPhase.DESIGN_AUDIT, state_path)
             print("PHASE:DESIGN_AUDIT:COMPLETE", flush=True)
             # Spec'ing is done being shaped; the card is now being planned.
