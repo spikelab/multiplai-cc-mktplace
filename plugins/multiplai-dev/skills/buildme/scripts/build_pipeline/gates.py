@@ -597,6 +597,151 @@ def parse_implementation_note(
     )
 
 
+# --- Documentation update (DOCS_IMPACT: slot) ---
+
+# The docs agent closes its report with a REQUIRED `DOCS_IMPACT:` slot, in the
+# same shape as the implementation agents' STATUS/SURPRISES slots. The value is
+# either `none` or a comma-separated list of the documentation files it wrote.
+_DOCS_IMPACT_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?DOCS_IMPACT" + _SLOT_COLON + r"[ \t]*(.*)$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# NOTE: this name deliberately does not start with `test` — pytest collects any
+# `test*` callable imported into a test module as a test case (see
+# `unchanged_tests_gate` for the same reason).
+
+
+def parse_docs_impact(output: str) -> list[str] | None:
+    """The documentation files the docs agent reported writing.
+
+    Returns ``None`` when the report carries no `DOCS_IMPACT:` slot at all
+    (the agent never answered), and ``[]`` when it explicitly answered `none`.
+    Both mean "no document was updated", but only one of them is an answer, so
+    the distinction is preserved rather than flattened here.
+
+    The last occurrence wins, so a report that quotes the instructions before
+    answering them never outranks the agent's own answer.
+    """
+    matches = _DOCS_IMPACT_RE.findall(output or "")
+    if not matches:
+        return None
+    raw = matches[-1].strip().strip("*_` ")
+    # The agent echoing the template (`DOCS_IMPACT: <none, or a ...>`) is not
+    # an answer; treat it as an unfilled slot.
+    if raw.startswith("<") and raw.endswith(">"):
+        return None
+    if raw.lower() in _EMPTY_SLOT_VALUES:
+        return []
+    parts = [p.strip().strip("`\"'") for p in re.split(r"[,\n]", raw)]
+    return [p for p in parts if p and p.lower() not in _EMPTY_SLOT_VALUES]
+
+
+_DIFF_PATH_RE = re.compile(r"^diff --git a/(\S+) b/(\S+)\s*$", re.MULTILINE)
+
+# README*, CHANGELOG*, and anything under a docs/ directory — the same
+# inventory the docs prompt tells the agent to take.
+_DOC_PATH_RE = re.compile(
+    r"(?:^|/)(?:readme|changelog)[^/]*$|(?:^|/)docs?/", re.IGNORECASE
+)
+
+
+def parse_diff_paths(diff: str) -> list[str]:
+    """Every file path a unified diff touches, in first-seen order."""
+    seen: dict[str, None] = {}
+    for old, new in _DIFF_PATH_RE.findall(diff or ""):
+        for path in (old, new):
+            seen.setdefault(path, None)
+    return list(seen)
+
+
+def is_doc_path(path: str) -> bool:
+    """Whether a repo-relative path is one of the documents this phase owns."""
+    return _DOC_PATH_RE.search(path or "") is not None
+
+
+def source_paths_in_diff(diff: str) -> list[str]:
+    """Changed paths that are neither documentation nor the build's own specs.
+
+    `specs/` is excluded because those artifacts are the build's paperwork, not
+    the code a reader of the README would notice changing.
+    """
+    return [
+        p for p in parse_diff_paths(diff)
+        if not is_doc_path(p) and not p.startswith("specs/")
+    ]
+
+
+def _changelog_in(project_dir: Path) -> str | None:
+    """The project's changelog file name, or None when it keeps none."""
+    try:
+        entries = sorted(p.name for p in project_dir.iterdir() if p.is_file())
+    except OSError:
+        return None
+    for name in entries:
+        if name.lower().startswith("changelog"):
+            return name
+    return None
+
+
+def docs_freshness_gate(
+    diff: str, docs_impact: list[str] | None, project_dir: Path
+) -> GateResult:
+    """Warn when a build changed source, keeps a changelog, and updated no docs.
+
+    **This gate never fails.** Plenty of real changes have no user-visible
+    delta — an internal refactor, a test-only fix — and failing a finished build
+    over a judgment call about documentation would be worse than the staleness
+    it is trying to catch. It returns a passing GateResult carrying
+    ``action="docs_may_be_stale"``, which the caller prints as a warning for the
+    human reviewing the PR.
+
+    A missing `DOCS_IMPACT:` slot is treated the same as `none`: either way no
+    document was written. `parse_docs_impact` keeps the two distinguishable for
+    callers that care.
+    """
+    if docs_impact:
+        return GateResult(
+            passed=True,
+            reason=f"Documentation updated: {', '.join(docs_impact)}",
+            metadata={"docs_impact": docs_impact},
+        )
+
+    source = source_paths_in_diff(diff)
+    if not source:
+        return GateResult(
+            passed=True,
+            reason="No source files changed in the build diff — nothing to document",
+            metadata={"docs_impact": [], "source_files": []},
+        )
+
+    changelog = _changelog_in(project_dir)
+    if changelog is None:
+        return GateResult(
+            passed=True,
+            reason="No documentation updated and this project keeps no changelog",
+            metadata={"docs_impact": [], "source_files": source},
+        )
+
+    return GateResult(
+        passed=True,
+        action="docs_may_be_stale",
+        reason=(
+            f"{len(source)} source file(s) changed and {changelog} exists, but the "
+            f"documentation phase reported DOCS_IMPACT: none. The docs may now be "
+            f"stale — check {changelog} and the README before merging. "
+            f"Changed: {', '.join(source[:10])}"
+            + (" …" if len(source) > 10 else "")
+        ),
+        metadata={
+            "warning": True,
+            "changelog": changelog,
+            "docs_impact": [],
+            "source_files": source,
+        },
+    )
+
+
 def review_score_gate(
     review: ReviewResult, policy: ReviewGatePolicy | None = None
 ) -> GateResult:

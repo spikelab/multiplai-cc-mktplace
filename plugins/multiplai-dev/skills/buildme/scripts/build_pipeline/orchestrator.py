@@ -220,6 +220,19 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             log.info("DONE phase=TDD_BUILD")
             print("PHASE:TDD_BUILD:COMPLETE", flush=True)
 
+        # Phase: Docs update — README/CHANGELOG/docs catch up with the code the
+        # build just wrote, so the documentation lands in the same PR as the
+        # change it describes instead of being left for the reviewer to write.
+        # Always on (no flag, no config toggle) and non-fatal, like RESPEC: the
+        # code already exists by now, so a documentation failure must not turn a
+        # finished build into a failed one.
+        if not state.is_phase_complete(BuildPhase.DOCS_UPDATE):
+            log.info("START phase=DOCS_UPDATE")
+            await _run_docs_update_phase(config, state, progress)
+            state.advance_to(BuildPhase.DOCS_UPDATE, state_path)
+            print("PHASE:DOCS_UPDATE:COMPLETE", flush=True)
+            board.record(config, state, BuildPhase.DOCS_UPDATE, progress=progress)
+
         # Phase: Respec (proposal only — never edits the specs; non-fatal)
         # Reads implementation-notes.md (written as the build ran) and writes
         # respec.md next to it, before the archive move carries both along.
@@ -413,6 +426,79 @@ async def _run_prototype_phase(
         return
     state.spec_gen.prototype_done = True
     state.checkpoint(state_path)
+
+
+async def _run_docs_update_phase(
+    config: BuildConfig, state: BuildState, progress: ProgressWriter,
+) -> None:
+    """Run the docs agent, commit what it wrote, and surface the freshness warning.
+
+    Never raises: the build's code is already on disk when this runs, so a
+    documentation failure is the phase's failure and never the build's.
+    """
+    from .llm_steps.docs_steps import run_docs_update
+
+    try:
+        files, gate = await run_docs_update(config, state)
+    except Exception as docs_err:  # non-fatal by design
+        log.warning("Docs update failed (non-fatal): %s", docs_err)
+        print(f"PHASE:DOCS_UPDATE:FAILED:{docs_err}", flush=True)
+        _progress_note(progress, "DOCS_UPDATE", f"FAILED (non-fatal): {docs_err}")
+        return
+
+    state.docs_impact = files
+    if files:
+        log.info("DONE phase=DOCS_UPDATE files=%d", len(files))
+        _progress_note(progress, "DOCS_UPDATE", "Updated: " + ", ".join(files))
+        # Its own commit, with an explicit pathspec — the docs are a separate
+        # readable step in the branch history, not a lump with the code.
+        git_ops.commit_stage(
+            config,
+            f"docs({config.change_name}): update documentation",
+            _docs_paths(config, files),
+        )
+    else:
+        log.info("DONE phase=DOCS_UPDATE files=0")
+        _progress_note(progress, "DOCS_UPDATE", "No documentation needed updating")
+
+    if gate.action == "docs_may_be_stale":
+        log.warning("DOCS_UPDATE warning: %s", gate.reason)
+        print(f"DOCS_WARNING:{gate.reason}", flush=True)
+        _progress_note(progress, "DOCS_UPDATE", f"WARNING: {gate.reason}")
+
+
+def _docs_paths(config: BuildConfig, files: list[str]) -> list[str]:
+    """Pathspecs (relative to the project dir) for the documents the agent wrote.
+
+    Only paths that resolve to an existing file **inside** the project survive.
+    This list comes from an agent's report and is the one place it becomes
+    ``git add`` argv, so anything outside the project — or any pathspec-magic
+    string that is not a real file — is dropped with a warning rather than
+    staged.
+    """
+    root = Path(config.project_dir).resolve()
+    out: list[str] = []
+    for entry in files or []:
+        candidate = Path(entry)
+        resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
+        if not resolved.is_relative_to(root) or not resolved.is_file():
+            log.warning(
+                "Ignoring reported docs path (outside the project, or not a file): %s",
+                entry,
+            )
+            continue
+        rel = str(resolved.relative_to(root))
+        if rel not in out:
+            out.append(rel)
+    return out
+
+
+def _progress_note(progress: ProgressWriter, phase: str, text: str) -> None:
+    """Write a progress line; a progress-file failure never breaks a phase."""
+    try:
+        progress.log_phase(phase, text)
+    except OSError as e:
+        log.warning("Could not write %s note to progress file: %s", phase, e)
 
 
 def _log_prototype_diagnosis(progress: ProgressWriter, config: BuildConfig, reason: str) -> None:
@@ -654,6 +740,15 @@ def _pr_title_body(
             f"- Block {b.number}: {b.name} — {b.status.value}" for b in state.tdd.blocks
         )
         parts.append(f"## Blocks\n\n{lines}")
+
+    # Named explicitly so a reviewer knows the documentation in this PR was
+    # rewritten by the build and needs reading, not assumed to be untouched.
+    if state.docs_impact:
+        docs = "\n".join(f"- `{name}`" for name in state.docs_impact)
+        parts.append(
+            "## Documentation\n\nUpdated by the build to match the code in this "
+            f"PR:\n\n{docs}"
+        )
 
     try:
         base = str(docs_dir.relative_to(config.project_dir))
