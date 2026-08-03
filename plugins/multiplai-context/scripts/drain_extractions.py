@@ -75,6 +75,7 @@ from lib.extraction_drain import (
     process_deferred_extractions,
     processing_count,
 )
+from lib.fleet import write_fleet_view
 
 logger = setup_logging("drain_extractions")
 
@@ -117,6 +118,20 @@ def main(argv: list[str] | None = None) -> int:
     data_dir = args.data_dir.expanduser().resolve() if args.data_dir else get_paths().data_dir()
     scripts_dir = Path(__file__).parent
     extract_script = scripts_dir / "extract_learnings.py"
+
+    # Refresh the fleet view first. This is the walk-away moment — the tab
+    # that just closed is the one whose state Spike was carrying in his head —
+    # so AGENTS.md and fleet.txt should reflect the exit before anything else
+    # runs. The registry is already current (SessionEnd updated `last_event`
+    # before the container died); what the launched children will add later is
+    # the diary entry, which this view does not read. It needs nothing from
+    # extraction either, which is why it sits above the extract_learnings.py
+    # existence check: a broken install that cannot extract still gets a
+    # current fleet view.
+    try:
+        write_fleet_view(data_dir)
+    except Exception:
+        logger.warning("Fleet view refresh failed (non-fatal)", exc_info=True)
 
     if not extract_script.exists():
         logger.error("extract_learnings.py not found beside %s", __file__)

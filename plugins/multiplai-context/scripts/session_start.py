@@ -49,6 +49,7 @@ from multiplai_core.log_utils import setup_logging, log_event
 # the same code. Two copies of a marker-move loop is how one of them quietly
 # stops matching the other.
 from lib.extraction_drain import process_deferred_extractions
+from lib.fleet import write_fleet_view
 
 logger = setup_logging("session_start")
 
@@ -673,6 +674,16 @@ def main() -> None:
             )
     except Exception:
         logger.exception("Deferred extraction processing failed (non-fatal)")
+
+    # Refresh the fleet view (data/AGENTS.md + data/fleet.txt). Runs
+    # in-process rather than detached: it is a pure read of sessions/ +
+    # checkpoints/ with no LLM call, so it costs a few file reads — far less
+    # than the `uv run` cold start a subprocess would pay. Also the moment it
+    # matters most, since this hook has just registered a new session.
+    try:
+        write_fleet_view(data_dir)
+    except Exception:
+        logger.warning("Fleet view refresh failed (non-fatal)", exc_info=True)
 
     # Dream gate: emit a nudge when the 24h window has elapsed and
     # fresh learnings are waiting. The nudge is additionalContext only —
