@@ -48,6 +48,13 @@ Nothing yet.
     entry ages out on the 30-day cutoff; and a clean quit sets both an `end`
     event and a marker, which is the normal shape rather than a conflict.
 
+    So this is the narrowest of the three fixes, and it is worth saying which
+    one moved the number: the 36 → 7 improvement below was measured on a real
+    registry with **no markers on disk at all**. It came entirely from the two
+    counting changes, both of which work on vanilla Claude Code. The marker
+    covers a case those two cannot reach — a container killed outright — and
+    only for sessions launched after the kit update.
+
   - **Idle sessions counted as fronts.** `AGENTS.md` still lists every tab
     that is on the board, idle ones included — that is where you go looking
     for the one you forgot about. But `fleet.txt` has room for one number,
@@ -63,9 +70,13 @@ Nothing yet.
 - **Registry GC kept observed-dead entries for 30 days.** The long window
   exists for sessions that might still be alive, and it was being granted to
   exactly the entries that most needed collecting. An entry with an exit
-  marker now takes the same 7-day cutoff as one that ended cleanly. On the
-  real registry this reclaimed 16 entries the old rule would have held for
-  another three weeks.
+  marker now takes the same 7-day cutoff as one that ended cleanly.
+
+  Scope, measured rather than assumed: on a real 118-entry registry this
+  changes **nothing today**, because no marker exists for a session that ran
+  before the launcher started writing them, and a clean quit already recorded
+  `end` and already took the 7-day cutoff. It applies only to sessions
+  launched after the kit update that then die without a `SessionEnd`.
 
 ### Changed
 - **Session state is now documented in one place** — README → *Session
