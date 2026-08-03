@@ -730,8 +730,8 @@ session from starting, running, or ending.
 #### Stage 0 — before the first hook *(multiplai-kit only)*
 
 `claude.sh` starts a container and blocks on `docker run`. On vanilla
-Claude Code this stage does not exist and nothing is lost except the two
-things marked *(kit)* in Stage 6 and Stage 7.
+Claude Code this stage does not exist, and the only thing lost is the
+host-side drain in Stage 7 — every hook below is identical either way.
 
 #### Stage 1 — `SessionStart`
 
@@ -756,10 +756,9 @@ Then, in this order, always:
 
 1. **GC the registry** (see [When entries are collected](#5-when-entries-are-collected)) — before anything is written, so a
    just-started session is never a GC candidate.
-2. **Record the `start` event.** This clears two things: the `.exited`
-   marker (an in-session event proves the process lives) and any
-   `disposition` (picking a session back up makes "parked" obsolete by
-   definition — the next extraction re-labels it).
+2. **Record the `start` event**, which also clears any `disposition`:
+   picking a session back up makes "parked" obsolete by definition, and
+   the next extraction re-labels how you left it this time.
 3. Detect the model client. **No client → a one-time warning**, and
    every LLM-backed pass downstream silently no-ops.
 4. Inject `now/<project>.md`, then the checkpoint rebuild if the source
@@ -834,15 +833,14 @@ discard the transcript.
 
 #### Stage 6 — how it stops
 
-Two observers — the hook inside, the launcher outside — and neither sees
-every case. It has its own section:
-[How the end of a session is detected](#3-how-the-end-of-a-session-is-detected).
-In brief: a clean quit fires `SessionEnd` and is recorded at once; a
-container killed while the launcher survives is caught *(kit)* by an
-`.exited` marker; a reboot or a closed terminal kills both observers and
-is caught by neither; and a session you merely walked away from is filed
-as **idle** after 24h, which is a conservative guess rather than a claim
-that it died.
+One observed case, everything else inferred from silence. It has its own
+section: [How the end of a session is detected](#3-how-the-end-of-a-session-is-detected).
+In brief: a clean quit fires `SessionEnd` and is recorded at once.
+Nothing else records anything — a reboot, a closed terminal, a `docker
+kill`, an OOM, or a session you simply walked away from all look
+identical from outside, and are filed as **idle** after 24h. That is a
+conservative guess rather than a claim that it died, and it is why idle
+is listed but never counted.
 
 #### Stage 7 — the drain
 
@@ -912,7 +910,7 @@ Everything above that can go two ways, in one table:
 | checkpoint trigger | band · staleness · none | tokens and clock |
 | auto-compaction steered? | silent automatic rebuild / `/clear` advice | two env vars |
 | checkpoint fresh at `PreCompact`? | one-line stub summary / full native summary | sync write + watermark |
-| how it stopped | `SessionEnd` · `.exited` marker *(kit)* · quiet | which of them fired |
+| how it stopped | `SessionEnd` fired · silence | whether you quit cleanly |
 | which drain got there first | in-session / host *(kit)* | atomic rename |
 | extraction outcome | diary + disposition + retire · partial · requeue · quarantine | the model call |
 | disposition | `active` · `parked` · `done` | how you left, read from the transcript |
@@ -931,12 +929,8 @@ to that tab.
 | 09:05 | first reply → `Stop` → `last_event: stop` | — |
 | 11:30 | — | launched; `SessionStart(startup)`, `last_event: start` |
 | 12:40 | — | Claude asks a question → `Notification` → `last_event: notification` |
-| 13:10 | done. **Ctrl-C Ctrl-C** → `SessionEnd` writes `last_event: end` + an extraction marker; claude exits; the container exits; `docker run` returns and `claude.sh` writes `A.exited` | still open, still waiting |
-| 13:10 | the launcher's host drain picks up A's marker → detached extraction → diary entry, learnings, `disposition` | — |
-
-Note what A ended up with: **both** signals, `end` *and* `.exited`. They
-agree, and the GC treats them identically — that is the normal shape of a
-clean quit under the kit, not a conflict.
+| 13:10 | done. **Ctrl-C Ctrl-C** → `SessionEnd` writes `last_event: end` and an extraction marker | still open, still waiting |
+| 13:10 | the host drain picks up that marker → detached extraction → diary entry, learnings, `disposition` | — |
 
 Now the readings. A is `ended`, so it drops off the board entirely. B is
 the whole question:
@@ -948,20 +942,24 @@ the whole question:
 | following Tuesday | still **Idle**; still listed | unchanged |
 | +30 days | entry GC'd — B disappears | unchanged |
 
-**B never becomes `ended`.** Nothing ever proves it died: the tab is
-still open, so `docker run` has not returned, so no marker is written and
-no hook fires. All the system can honestly say is "quiet for 25 hours",
-which is `idle` — and idle is *listed but not counted*, because a tab
-that went quiet has no claim on your attention while a session waiting on
-an answer does.
+**B never becomes `ended`, and it cannot.** Nothing proves it died: no
+hook fires for a session that is still sitting there, and none fires for
+one whose container was killed either. All the system can honestly say is
+"quiet for 25 hours", which is `idle`.
 
-If instead you reboot the Mac on Wednesday, B looks **exactly the same**:
-the reboot kills `claude.sh` along with the container, so no `.exited`
-marker is written either. B stays idle until the 30-day GC. That is row 3
-of [How the end of a session is detected](#3-how-the-end-of-a-session-is-detected)
-and it is the honest limit of the mechanism.
+That is why the two outputs count different things. `AGENTS.md` **lists**
+B — the idle section is exactly where you go looking for the tab you
+forgot about. `fleet.txt` does **not count** it, because a tab that went
+quiet has no claim on your attention while a session waiting on an answer
+does. Every entry the system is unsure about lands on the listed-but-not-
+counted side, which is what keeps the one number you actually read honest.
 
-**Why this matters — real numbers.** On a registry of 121 entries
+And if you reboot the Mac on Wednesday, B looks **exactly the same** —
+which is the point of [How the end of a session is detected](#3-how-the-end-of-a-session-is-detected).
+Dead and dormant are indistinguishable from outside, so both are filed
+as the harmless one.
+
+**Why this matters — real numbers.** On a registry of 118 entries
 (82 ended, one session actually running), the pre-0.15.1 line read:
 
 ```
@@ -981,6 +979,10 @@ from 19d to 7h for the same reason: it now measures the oldest *front*,
 not the oldest corpse. All 8 collisions were between pairs of sessions
 last heard from over a week ago, which is shared history, not a live
 conflict over a file.
+
+Worth noting what did **not** contribute: nothing outside the session
+was consulted. The entire improvement is counting the entries already on
+disk correctly, which is why it works identically on vanilla Claude Code.
 
 ### Key libraries
 
@@ -1048,15 +1050,13 @@ write which:
 | Path | Written by | Holds |
 |---|---|---|
 | `data/sessions/<sid>.json` | this plugin's lifecycle hooks | the registry entry — project, cwd, container hostname, `started_at`, `last_event`, `disposition` |
-| `data/sessions/<sid>.exited` | **the kit launcher** (`claude.sh`) | nothing. Its *existence* means "the container this session ran in has exited" |
 | `data/sessions/<sid>.adopt` | the multiplai hub | nothing. Its existence means "the hub has taken the driver seat" |
 | `data/checkpoints/<sid>/checkpoint.md` | this plugin's checkpoint writer | what the session is *doing* — intent, next action, files in hand |
 
-**Only this plugin writes the JSON.** Everything outside a session that
-needs to say something leaves an empty marker file next to it instead.
-That is deliberate: the launcher is `bash` on a host that may not have
-`jq`, and a second writer of registry *state* is how two stores start
-disagreeing silently. Markers are a one-bit channel that cannot corrupt
+**Only this plugin writes the JSON.** Anything outside a session that
+needs to say something leaves an empty marker file next to it instead —
+a second writer of registry *state* is how two stores start disagreeing
+silently, and a marker is a one-bit channel that cannot corrupt
 anything.
 
 `data/AGENTS.md` and `data/fleet.txt` are **outputs, never inputs** —
@@ -1088,41 +1088,35 @@ to `active` whenever the model is unsure.
 
 This is the part that surprises people, so it is worth stating flatly:
 **a hook is code running inside a session, and a session cannot report
-its own death.** There are two observers, they see different things, and
-neither sees everything:
+its own death.** Exactly one way of stopping is observed; everything
+else is inferred from silence:
 
-| How it stopped | Hook fires | Launcher notices | Recorded as | Noticed |
-|---|---|---|---|---|
-| `/exit`, Ctrl-D, Ctrl-C Ctrl-C — a clean quit | `SessionEnd` | yes | `end` **and** an `.exited` marker | at once |
-| `docker kill`/`stop`, OOM-kill, container crash | **nothing** | yes | `.exited` marker only | when `docker run` returns |
-| **Reboot, or you close the terminal** | nothing | **no — it died too** | nothing | quiet ⇒ `idle` after 24h |
-| Still running; you walked away | nothing | n/a — still blocked | nothing | quiet ⇒ `idle` after 24h |
-| Any of the above on vanilla Claude Code (no kit) | as above | no launcher at all | hook events only | quiet ⇒ `idle` after 24h |
+| How it stopped | Fires | Recorded as | Noticed |
+|---|---|---|---|
+| `/exit`, Ctrl-D, Ctrl-C Ctrl-C — a clean quit | `SessionEnd` | `last_event.kind = end` | at once |
+| Reboot, closed terminal, `docker kill`, OOM-kill, crash | **nothing** | nothing | quiet ⇒ `idle` after 24h |
+| Still running; you walked away | nothing | nothing | quiet ⇒ `idle` after 24h |
 
-Row 1 sets both signals, which is fine: they agree, and the GC treats
-them identically.
+Rows 2 and 3 collapsing into the same reading is not an oversight, it is
+the honest answer: **from the outside they are indistinguishable.** A
+session that died and a session sitting at a prompt both look like an
+entry that has not spoken in a while.
 
-Row 2 is what the `.exited` marker exists for. The launcher is the only
-observer standing *outside* the container when it dies, which is why
-that half lives in multiplai-kit and not in a hook.
+So quiet is treated as a **guess, deliberately the conservative one** —
+the entry is filed as `idle`, still listed, not declared over, because
+it may just be thinking or you may be at lunch. What that buys is that
+`idle` is *listed but never counted*: an entry the system is unsure
+about can never inflate the one number you actually read.
 
-**Row 3 is the honest limit of the mechanism, and it is worth knowing.**
-`claude.sh` writes the marker on the line *after* `docker run` returns —
-so it has to still be alive to run it. A reboot or a closed terminal
-kills the launcher and the container together (the script installs no
-`HUP`/`TERM` trap), so nothing is written and the entry falls through to
-the same quiet⇒idle path as row 4. Closing the terminal is a common way
-to end a session, so expect some entries to age out rather than be
-marked.
-
-Rows 3, 4 and 5 are a **guess, deliberately the conservative one**: with
-no evidence of death, a quiet session is filed as idle — still listed,
-not declared over — because it may just be thinking, or you may be at
-lunch.
-
-**Without multiplai-kit** (vanilla Claude Code, or an older kit) nothing
-writes the marker and row 2 collapses into row 3: uncleanly-killed
-sessions are listed as idle until they age out. Degraded, not broken.
+*This was tried the other way.* 0.15.1 briefly had the kit launcher drop
+an `.exited` marker beside the entry when `docker run` returned, on the
+theory that an observer outside the container could close the gap. It
+was removed before release once measured: a clean quit already records
+`end`, and a reboot or a closed terminal kills the launcher along with
+the container, so the marker only ever covered `docker kill` and
+OOM-kills — worth zero entries on a real 118-entry registry, against a
+permanent filename contract between two repos. Counting idle sessions
+correctly did all of the work.
 
 #### 4. What you actually see
 
@@ -1158,13 +1152,12 @@ file, and a file two sessions both touched last week is shared history.
 |---|---|
 | `disposition: parked` | forever — parking it is you saying you will be back |
 | extraction still queued or in flight | until the extraction finishes |
-| ended cleanly, or an `.exited` marker | 7 days |
+| ended cleanly (`SessionEnd` fired) | 7 days |
 | anything else (might still be alive) | 30 days |
 
-The 30-day window exists for sessions that *might* still be running. An
-observed exit is as final as a recorded one, so it takes the short
-cutoff — otherwise the longest reprieve goes to exactly the entries that
-most need collecting.
+The 30-day window exists for sessions that *might* still be running —
+and since nothing outside a session can prove one is not, every entry
+that did not quit cleanly gets it.
 
 Parked being exempt closes a real asymmetry: transcripts survive a year,
 so `claude --resume <id>` works months later, but registry entries used

@@ -41,7 +41,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from lib.fsio import atomic_write
-from lib.session_registry import entry_disposition_block, is_exited
+from lib.session_registry import entry_disposition_block
 
 logger = logging.getLogger(__name__)
 
@@ -297,9 +297,7 @@ def _git_info(cwd: str) -> tuple[str, str, str]:
     return "", "", ""
 
 
-def _status_of(
-    kind: str, last_ts: datetime | None, now: datetime, exited: bool = False
-) -> str:
+def _status_of(kind: str, last_ts: datetime | None, now: datetime) -> str:
     """Map a registry entry onto the contracted liveness vocabulary.
 
     ``working | waiting_input | idle | ended`` is frozen in the multiplai-gui
@@ -309,22 +307,22 @@ def _status_of(
     which is what ``waiting_input`` means.
 
     **Quiet is checked before kind, and that ordering is the whole point.**
-    Containers get killed without a ``SessionEnd`` — reboot, ``docker kill``,
-    OOM — so the registry keeps entries whose last event is a Notification
-    from two weeks ago. Read literally that is 24 agents waiting on you; read
-    honestly it is one live prompt and 23 corpses. A "Needs you" list nobody
-    can act on is worse than no list, because you stop reading it. The API
-    contract's own fallback-discovery rule says the same thing: quiet is idle.
+    Only a clean quit fires ``SessionEnd``; a container killed by a reboot, a
+    closed terminal, ``docker kill`` or the OOM killer records nothing at all,
+    so the registry keeps entries whose last event is a Notification from two
+    weeks ago. Read literally that is 24 agents waiting on you; read honestly
+    it is one live prompt and 23 corpses. A "Needs you" list nobody can act on
+    is worse than no list, because you stop reading it. The API contract's own
+    fallback-discovery rule says the same thing: quiet is idle.
 
-    Quiet is still only a *guess* at death, though, and it is the conservative
-    one — the entry stays on the board as ``idle`` in case the session is
-    merely thinking. *exited* is the observed fact rather than the guess: the
-    launcher watched the process go (see ``session_registry.is_exited``), so
-    the session is ``ended`` however recently it last spoke. It outranks even
-    a notification a second old, because a container that exited one second
-    after prompting you is not waiting for an answer.
+    Quiet is a *guess* at death, and deliberately the conservative one — the
+    entry stays on the board as ``idle`` rather than being declared over,
+    because the session may merely be thinking. Nothing outside a session can
+    do better: a hook is code running inside one, so it cannot report its own
+    process dying, and an external observer that could was measured to buy
+    nothing here (see the 0.15.1 changelog).
     """
-    if kind == "end" or exited:
+    if kind == "end":
         return "ended"
     if last_ts is None:
         return "idle"
@@ -373,7 +371,7 @@ def load_agent(entry_path: Path, data_dir: Path, now: datetime) -> Agent | None:
         started_at=str(raw.get("started_at") or ""),
         last_ts=last_ts,
         last_kind=last_kind,
-        status=_status_of(last_kind, last_ts, now, is_exited(entry_path, last_ts)),
+        status=_status_of(last_kind, last_ts, now),
         disposition=disp_state,
         disposition_reason=disp_reason,
     )

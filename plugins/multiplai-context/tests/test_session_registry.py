@@ -153,45 +153,6 @@ class TestRecordEventUpdates:
         assert _read_entry(tmp_path)["session_id"] == SID
 
 
-class TestExitMarker:
-    """The launcher marks an entry when it watches the container die; any
-    event from inside the session afterwards is proof it came back."""
-
-    def test_is_exited_is_false_without_a_marker(self, tmp_path):
-        sr.record_event(tmp_path, _hook_input(), "start")
-        assert sr.is_exited(_entry_path(tmp_path)) is False
-
-    def test_is_exited_is_true_with_one(self, tmp_path):
-        sr.record_event(tmp_path, _hook_input(), "start")
-        sr.exited_marker(_entry_path(tmp_path)).touch()
-        assert sr.is_exited(_entry_path(tmp_path)) is True
-
-    def test_a_marker_predating_the_last_event_does_not_count(self, tmp_path):
-        path = _entry_path(tmp_path)
-        sr.record_event(tmp_path, _hook_input(), "start")
-        marker = sr.exited_marker(path)
-        marker.touch()
-        stamp = (datetime.now(timezone.utc) - timedelta(hours=2)).timestamp()
-        os.utime(marker, (stamp, stamp))
-
-        assert sr.is_exited(path, datetime.now(timezone.utc)) is False
-
-    @pytest.mark.parametrize("kind", ["start", "stop", "notification", "end"])
-    def test_every_event_kind_clears_it(self, tmp_path, kind):
-        """A resumed session emits whatever hook fires first — clearing only
-        on `start` would leave the marker on any other path."""
-        sr.record_event(tmp_path, _hook_input(), "start")
-        marker = sr.exited_marker(_entry_path(tmp_path))
-        marker.touch()
-
-        sr.record_event(tmp_path, _hook_input(), kind)
-
-        assert not marker.exists()
-
-    def test_clearing_a_missing_marker_is_not_an_error(self, tmp_path):
-        assert sr.record_event(tmp_path, _hook_input(), "start") is True
-
-
 class TestRecordEventRobustness:
 
     def test_atomic_no_tmp_left_behind(self, tmp_path):
@@ -290,42 +251,12 @@ class TestGcStale:
         assert sr.gc_stale(tmp_path) == 1
         assert not (tmp_path / "sessions" / "ghost-idle.json").exists()
 
-    def test_entry_with_an_observed_exit_takes_the_short_cutoff(self, tmp_path):
-        """The entries that most need collecting are exactly the ones killed
-        before SessionEnd could fire — and without this they were the ones
-        granted the 30-day window meant for possibly-live sessions."""
-        old = datetime.now(timezone.utc) - timedelta(days=8)
-        path = _write_entry(tmp_path, "killed", "notification", old)
-        sr.exited_marker(path).touch()
-
-        assert sr.gc_stale(tmp_path) == 1
-        assert not path.exists()
-
-    def test_an_exit_marker_older_than_the_entry_does_not_shorten_it(self, tmp_path):
-        """A resumed session: the marker predates the last event, so it is
-        stale and the entry keeps its full live window."""
-        recent = datetime.now(timezone.utc) - timedelta(days=8)
-        path = _write_entry(tmp_path, "resumed", "notification", recent)
-        marker = sr.exited_marker(path)
-        marker.touch()
-        stamp = (datetime.now(timezone.utc) - timedelta(days=20)).timestamp()
-        os.utime(marker, (stamp, stamp))
-
-        assert sr.gc_stale(tmp_path) == 0
-
     def test_orphan_adopt_marker_removed_with_entry(self, tmp_path):
         old = datetime.now(timezone.utc) - timedelta(days=8)
         path = _write_entry(tmp_path, "adopted", "end", old)
         path.with_suffix(".adopt").touch()
         sr.gc_stale(tmp_path)
         assert not path.with_suffix(".adopt").exists()
-
-    def test_orphan_exit_marker_removed_with_entry(self, tmp_path):
-        old = datetime.now(timezone.utc) - timedelta(days=8)
-        path = _write_entry(tmp_path, "gone", "end", old)
-        sr.exited_marker(path).touch()
-        sr.gc_stale(tmp_path)
-        assert not sr.exited_marker(path).exists()
 
     def test_orphan_lock_file_removed_with_entry(self, tmp_path):
         old = datetime.now(timezone.utc) - timedelta(days=8)
@@ -434,15 +365,6 @@ class TestOrphanSweep:
         rdir = tmp_path / "sessions"
         rdir.mkdir(parents=True)
         orphan = rdir / "ghost.adopt"
-        orphan.touch()
-        self._age(orphan, 8)
-        sr.gc_stale(tmp_path)
-        assert not orphan.exists()
-
-    def test_old_orphan_exit_marker_removed(self, tmp_path):
-        rdir = tmp_path / "sessions"
-        rdir.mkdir(parents=True)
-        orphan = rdir / "ghost.exited"
         orphan.touch()
         self._age(orphan, 8)
         sr.gc_stale(tmp_path)

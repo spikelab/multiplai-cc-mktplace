@@ -28,32 +28,7 @@ Nothing yet.
   as fronts, every one of the nine collisions between pairs of sessions that
   had been dead for three to eighteen days.
 
-  Three separate causes, all fixed:
-
-  - **A container that dies without a `SessionEnd` left an immortal entry.**
-    Hooks report from inside a session and cannot report their own container
-    being killed — `docker kill`, an OOM-kill, a container crash, all routine
-    with `--rm`. The entry kept its last event (often a Notification)
-    forever, and the fleet view read it as a live agent waiting on you.
-
-    The launcher can see what no hook can, so it now leaves a `<sid>.exited`
-    marker beside the entry the moment `docker run` returns; this plugin
-    reads it as `ended` and clears it on the session's next event. **This
-    half needs multiplai-kit at the commit that adds the marker** — without
-    it the other two fixes still apply, they just have less to work with.
-
-    Two honest limits, both documented: the launcher has to *survive* to
-    write the marker, so a reboot or a closed terminal (which kill
-    `claude.sh` along with the container) still leave nothing behind and the
-    entry ages out on the 30-day cutoff; and a clean quit sets both an `end`
-    event and a marker, which is the normal shape rather than a conflict.
-
-    So this is the narrowest of the three fixes, and it is worth saying which
-    one moved the number: the 36 → 7 improvement below was measured on a real
-    registry with **no markers on disk at all**. It came entirely from the two
-    counting changes, both of which work on vanilla Claude Code. The marker
-    covers a case those two cannot reach — a container killed outright — and
-    only for sessions launched after the kit update.
+  Two causes, both fixed:
 
   - **Idle sessions counted as fronts.** `AGENTS.md` still lists every tab
     that is on the board, idle ones included — that is where you go looking
@@ -67,26 +42,15 @@ Nothing yet.
     must therefore be fronts and have been heard from within 24 hours; a file
     two sessions both touched last week is shared history.
 
-- **Registry GC kept observed-dead entries for 30 days.** The long window
-  exists for sessions that might still be alive, and it was being granted to
-  exactly the entries that most needed collecting. An entry with an exit
-  marker now takes the same 7-day cutoff as one that ended cleanly.
-
-  Scope, measured rather than assumed: on a real 118-entry registry this
-  changes **nothing today**, because no marker exists for a session that ran
-  before the launcher started writing them, and a clean quit already recorded
-  `end` and already took the 7-day cutoff. It applies only to sessions
-  launched after the kit update that then die without a `SessionEnd`.
-
 ### Changed
 - **Session state is now documented in one place** — README → *Session
   accounting*. It had accreted across two half-sections and a lot of code
   comments, which is how you end up with three overlapping notions of "is
   this session alive" and no single page saying which is which. The new
   section covers what is on disk and who may write it, the three independent
-  fields (`status` / `disposition` / group), how each of the four ways a
-  session can stop is detected, which groups are listed versus counted, and
-  the GC cutoffs. The kit README and the suite `ARCHITECTURE.md` link here
+  fields (`status` / `disposition` / group), how a session's end is detected
+  (and why only a clean quit is ever *observed*), which groups are listed
+  versus counted, and the GC cutoffs. The suite `ARCHITECTURE.md` links here
   rather than restating it.
 
 - **There is now a single walkthrough of what a session actually does** —
@@ -97,11 +61,13 @@ Nothing yet.
   the last registry entry, each fork stated as a branch — the four values
   of `SessionStart.source` and which two re-inject a checkpoint, the three
   outcomes of the Stop-hook checkpoint decision, the four ways out of a
-  full context window, the four ways a session can stop, the two drains and
+  full context window, the ways a session can stop, the two drains and
   the atomic rename that keeps them from colliding, and the retry ladder
   down to `failed_extractions/`. It closes with every branch point in one
   table, including the two that turn features off entirely (`uv` missing,
-  no model client).
+  no model client). It ends with a worked example — two sessions, one quit
+  and one left open over lunch — tracing what `fleet.txt` reads at each
+  point and why the abandoned one is listed but never counted.
 
   Also corrects *Session accounting* → *When it refreshes*, which credited
   the fleet-view regeneration to `synthesize_agents.py` running alongside

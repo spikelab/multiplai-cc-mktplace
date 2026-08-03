@@ -88,22 +88,6 @@ def make_checkpoint(data_dir, sid, *, intent="Doing a thing", nxt="Do the next t
     return d / "checkpoint.md"
 
 
-def make_exited(data_dir, sid, *, ago=timedelta(0), now=NOW):
-    """Drop the launcher's ``<sid>.exited`` marker beside a registry entry.
-
-    Shaped as ``claude.sh`` writes it: an empty file whose mtime is when the
-    container was seen to exit. *ago* is measured back from *now*, so a marker
-    older than the entry's last event models the take-back case — the session
-    came back and spoke again after the exit was recorded.
-    """
-    marker = data_dir / "sessions" / f"{sid}.exited"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_bytes(b"")
-    stamp = (now - ago).timestamp()
-    os.utime(marker, (stamp, stamp))
-    return marker
-
-
 # ---------------------------------------------------------------------------
 # The section names this module reads
 # ---------------------------------------------------------------------------
@@ -247,64 +231,6 @@ class TestStatus:
             assert fleet._status_of(kind, NOW - ago, NOW) in {
                 "working", "waiting_input", "idle", "ended"
             }
-
-
-# ---------------------------------------------------------------------------
-# The observed exit — a marker the launcher leaves when a container dies
-# ---------------------------------------------------------------------------
-
-class TestObservedExit:
-    """The bug this closes, from the real registry on 2026-08-03: 117 entries,
-    34 of them with no `end` event, rendering as "36 fronts · 5 need you" over
-    a fleet of one running session. Hooks report from inside a session and
-    cannot report their own container being killed, so the only fix is an
-    observer standing outside it — see `session_registry.is_exited`."""
-
-    def test_a_marker_ends_the_session(self, tmp_path):
-        make_session(tmp_path, "killed", kind="notification", ago=timedelta(minutes=2))
-        make_exited(tmp_path, "killed")
-
-        agent = fleet.collect(tmp_path, NOW).agents[0]
-
-        assert agent.status == "ended"
-        assert agent.live is False
-
-    def test_it_outranks_a_notification_one_second_old(self, tmp_path):
-        """A container that exited a second after prompting you is not waiting
-        for an answer — nothing is there to receive it."""
-        make_session(tmp_path, "killed", kind="notification", ago=timedelta(seconds=1))
-        make_exited(tmp_path, "killed")
-
-        f = fleet.collect(tmp_path, NOW)
-
-        assert f.in_group("Needs you") == []
-        assert fleet.render_fleet_line(f, NOW) == ""
-
-    def test_without_a_marker_a_quiet_session_is_still_only_idle(self, tmp_path):
-        """The guess stays conservative: absent evidence of death, a quiet
-        session is listed as idle, not declared over."""
-        make_session(tmp_path, "quiet", ago=timedelta(days=3))
-
-        assert fleet.collect(tmp_path, NOW).agents[0].status == "idle"
-
-    def test_a_marker_older_than_the_last_event_is_ignored(self, tmp_path):
-        """The take-back path: the launcher marks the exit, the user presses
-        Enter, and the session resumes in a new container and speaks again.
-        `record_event` clears the marker — this is the belt to that braces, in
-        case the clear failed on a read-only registry."""
-        make_session(tmp_path, "resumed", ago=timedelta(minutes=5))
-        make_exited(tmp_path, "resumed", ago=timedelta(hours=2))
-
-        assert fleet.collect(tmp_path, NOW).agents[0].status == "working"
-
-    def test_a_marked_session_does_not_collide(self, tmp_path):
-        make_session(tmp_path, "a", ago=timedelta(minutes=2))
-        make_session(tmp_path, "b", ago=timedelta(minutes=2))
-        make_checkpoint(tmp_path, "a", files=("/work/knowhere/src/shared.py",))
-        make_checkpoint(tmp_path, "b", files=("/work/knowhere/src/shared.py",))
-        make_exited(tmp_path, "a")
-
-        assert fleet.collect(tmp_path, NOW).collisions == []
 
 
 # ---------------------------------------------------------------------------
