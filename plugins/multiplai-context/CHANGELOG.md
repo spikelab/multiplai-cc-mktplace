@@ -66,6 +66,115 @@ Nothing yet.
   pending count cannot see it; reporting pending alone made such a run
   announce `0 marker(s) pending` and then say it had drained one, which reads
   as a malfunction rather than a recovery.
+## [0.10.2] - 2026-07-31
+
+### Fixed
+- **A big memory file no longer runs out of time while being updated.** Writing
+  approved changes back into a memory file was given the same fixed time limit
+  no matter how much there was to write. Your largest files are exactly the ones
+  that collect the most updates — a recent backlog had 41 KB of pending changes
+  for `claude-code-tools.md` and 38 KB for `multiplai.md` — and on a slow call
+  those could run out of time and be skipped, silently leaving the file
+  untouched while smaller files updated fine. The time limit now scales with how
+  much is actually being written. A file that still runs out is left exactly as
+  it was, never half-written, and the log now names the file and its size.
+
+### Changed
+- **`/dream-remember` now applies a review per target file instead of per
+  item.** A large proposal used to cost one script cold start and a fresh
+  read of the same memory file for every single decision — a 70-item review
+  across 14 files ran out of context part-way through and had to hand off,
+  having applied five. The skill now reads each memory file once, applies all
+  of its approved edits, updates `Last Updated` once, and records every
+  decision for that file — approved *and* rejected — in one call. Reviews that
+  previously needed a compaction handoff now finish in one sitting. Nothing
+  about *consent* changed: `[RULE-PROPOSAL]` items are still presented and
+  answered one at a time, and items you neither approved nor rejected stay
+  pending.
+
+### Added
+- **`dream.py --mark-processed --decisions -`** takes a JSON array of
+  decisions on stdin — `{"kind","file","index","status","target"}` per item —
+  and marks them all in one read and one write of the proposal, printing
+  `marked N processed, M unchanged`. The write is atomic, so an interrupted
+  or failed call leaves the proposal exactly as it was rather than
+  half-decided. The existing single-item flags are unchanged and still
+  supported.
+- **`dream.py --gc-learnings`** replaces the skill's judgement call about when
+  it is safe to delete consolidated learnings files. Pure code, no model call:
+  a file is removed only when every `## Session Learnings` record in it has
+  been consolidated **and** no proposal citing it is still pending, so a
+  review you left half-finished keeps the sources its `**Source:**` citations
+  point at. It prints what it removed and why it kept the rest. Step 5 of
+  `/dream-remember` now runs this instead of deciding by hand.
+
+## [0.10.1] - 2026-07-31
+
+### Changed
+
+- **`/dream` now runs 8 consolidation calls at once instead of 4.** On a large
+  backlog four was simply too few to finish in a reasonable time: a measured
+  283 KB backlog is about 98 minutes of model work, which four workers cannot
+  get through in under ~24 minutes no matter how it is scheduled — the actual
+  run took 38. Eight roughly halves that. The trade is that `/dream` now uses
+  more of your machine while it runs; if you would rather it stayed out of the
+  way, `MULTIPLAI_DREAM_CONCURRENCY=4` (or any number) still wins.
+
+### Fixed
+
+- **`/dream` no longer cites the wrong file for some of its sources.** Every
+  entry in a proposal ends with a `**Source:**` line naming the learnings file
+  and line it came from, so you can check an entry before applying it. When a
+  session ran past midnight its notes are saved into the *next* day's file, and
+  `/dream` sometimes cited it under the earlier date — sending you to a file
+  where that line doesn't exist. On a large backlog about 2% of citations were
+  affected. They are now corrected automatically wherever the right file can be
+  identified beyond doubt, and a `## Citation Repairs` section at the end of the
+  proposal lists every correction made. Citations that can't be verified are
+  listed there too, and left exactly as written rather than guessed at.
+
+- **`/dream` no longer loses a chunk of learnings on its first run.** The very
+  first run on a machine had to guess how fast drafting goes, and it guessed
+  nearly twice too fast — so it built chunks bigger than it could finish inside
+  the deadline. On a 283 KB backlog one chunk of twelve ran out of time, retried,
+  ran out again, and was skipped. Nothing was lost permanently (a skipped chunk's
+  learnings stay pending and come back next run), but the run took 30 minutes
+  longer than it should have and quietly consolidated less than it reported. The
+  starting guess is now the measured rate. From the second run onward `/dream`
+  has always calibrated itself from your own machine, and still does.
+
+- **The second-pass reviewer now actually runs on large backlogs.** `/dream`
+  drafts a proposal and then re-reads it to merge duplicates, drop
+  point-in-time noise, and re-route items filed under the wrong memory file. On
+  a big backlog that review was handed the entire proposal in one piece — far
+  more than it could read in the time allowed — so it timed out and was skipped,
+  every time, while the log said only "keeping the merged draft". The review is
+  now done in batches, so it runs on backlogs of any size. Its edits are applied
+  to the whole proposal together, exactly as before. If one batch fails, the rest
+  of the review still lands instead of the whole pass being lost.
+
+- **`/dream` no longer reports a partial run as a complete one.** When some of a
+  run's work failed — a rate limit, a slow call, a network blip — it still
+  printed the number of learnings it *set out* to process, not the number it
+  actually did, and said nothing about the second-pass review having been
+  skipped. A run that consolidated 122 of 231 learnings announced "231 new
+  learning block(s)", which reads as "your backlog is done" when half of it is
+  still queued. It now says `122 of 231 ... consolidated`, names how many chunks
+  did not finish, and states that the deferred learnings come back on the next
+  run. Nothing about the recovery behaviour changed — those learnings were always
+  safe and always came back; only the reporting was wrong.
+
+- **`/dream --check` now tells you its estimate is a minimum, and says so
+  honestly.** The old estimate assumed chunks run in synchronised batches,
+  waiting for the slowest of each group before starting the next. They don't —
+  a chunk starts as soon as a slot frees up, so the old answer changed depending
+  on nothing more than the order the chunks happened to be listed in (a 16%
+  swing on a measured 283 KB run). The new number can't do that. It is a floor
+  rather than a guess, so it now prints as `est. ≥24m` and "at least 24 min":
+  the one run measured against it came in 13% above its own prediction, and a
+  bare figure would have promised a precision it doesn't have. The plan line
+  also drops the "wave" count, which never described how the work was
+  scheduled.
 
 ## [0.10.0] - 2026-07-31
 
