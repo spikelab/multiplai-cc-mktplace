@@ -18,6 +18,53 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.13.0] - 2026-08-01
+
+### Added
+- **Say "park it for now" and the session stays on the list.** There is no new
+  command to remember — which is the point, because the moment you want to park
+  something is the moment you are overloaded and walking away, and that is
+  exactly when you will not remember a `/park`.
+
+  The extraction pass that already reads your whole transcript for the diary now
+  also reads how you *left*, from the closing exchange alone, and labels the
+  session one of three ways:
+
+  - **`done`** — you said so. "we're done", "ship it", "merged, thanks".
+  - **`parked`** — you said you were stopping without finishing. "park it for
+    now", "let's pick this up tomorrow", "shelve this".
+  - **`active`** — everything else, including a session that just stops
+    mid-work. This is the default, and anything ambiguous lands here.
+
+  Three things follow. A parked session shows in `AGENTS.md` under its own
+  **Parked** heading — between **Working** and **Idle**, since it is not urgent
+  but it is the pile you *chose* to return to — quoting your own closing words
+  as the reason. It stays there after its container exits, which is the whole
+  point of parking it. And a `done` session drops off the list even if its
+  container is still running.
+
+  Most importantly, **a parked session is never garbage-collected.** Registry
+  entries normally age out in 7 to 30 days, while the transcripts behind them
+  survive a year — so a parked idea used to stay `--resume`-able while becoming
+  invisible, which is the failure this fixes. Nothing is copied anywhere; the
+  session record simply stops expiring.
+
+  It costs no extra model call — the label rides along on the response the
+  diary extraction was already making — and it is written to its own registry
+  key, so a session's liveness (`working`/`idle`/`ended`) is untouched: a
+  session can be both `ended` and `parked`. If the model says nothing useful,
+  or extraction fails outright, the session is `active` and everything else
+  behaves exactly as before.
+
+  The label's lifecycle holds up at the edges, too. Resuming a session clears
+  its old departure label — a resumed parked session groups by what it is
+  *doing* again (including "Needs you"), and a resumed done session comes back
+  onto the list. The label survives a long absence: registry cleanup skips any
+  session whose deferred extraction is still queued, so coming back on day 8
+  to a session parked on day 0 still finds it labelled. And on a long
+  transcript, a mid-session extraction hiccup no longer costs the label — only
+  the closing exchange's own chunk decides it.
+
 ## [0.12.0] - 2026-08-01
 
 ### Added

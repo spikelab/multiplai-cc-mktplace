@@ -25,11 +25,13 @@ from multiplai_core.paths import get_paths
 from multiplai_core.model_client import create_client
 from multiplai_core.log_utils import setup_logging, log_event
 from lib.extraction import (
-    extract_units,
+    DEFAULT_DISPOSITION,
+    extract_units_and_disposition,
     load_target_charters,
     write_diary_entries,
     append_learnings,
 )
+from lib.session_registry import record_disposition
 from lib.transcript_distiller import distill
 
 logger = setup_logging("extract_learnings")
@@ -149,7 +151,20 @@ async def extract() -> bool:
 
     valid_targets = load_target_charters(memory_dir, paths.catalogs_dir())
     units: list[dict] = []
+    # Disposition is session-level but extraction runs per chunk, so only the
+    # FINAL chunk's answer counts — that is the one holding the closing
+    # exchange, and the closing exchange is the entire signal. Earlier chunks
+    # end mid-work and would always say "active".
+    disposition = {"state": DEFAULT_DISPOSITION, "reason": ""}
     llm_failed = False
+    # The disposition write is gated on the FINAL chunk specifically — not on
+    # "no chunk failed". An earlier chunk's failure costs some diary units,
+    # but the closing exchange still parsed fine; gating on any-chunk failure
+    # silently lost a valid `parked` forever (the surviving units meant the
+    # diary was written and the marker consumed, so there was no retry).
+    # With no chunks there was no LLM pass to fail, so the default `active`
+    # is a fact, not a guess.
+    final_chunk_ok = not chunks
     if chunks:
         try:
             client = await create_client()
@@ -159,12 +174,15 @@ async def extract() -> bool:
             )
             for i, chunk in enumerate(chunks):
                 try:
-                    chunk_units = await extract_units(
+                    chunk_units, chunk_disposition = await extract_units_and_disposition(
                         chunk,
                         valid_targets=valid_targets,
                         client=client,
                     )
                     units.extend(chunk_units)
+                    if i == len(chunks) - 1:
+                        disposition = chunk_disposition
+                        final_chunk_ok = True
                 except Exception:
                     logger.exception(
                         "LLM call failed during extraction (chunk %d/%d)",
@@ -174,6 +192,36 @@ async def extract() -> bool:
         except Exception:
             logger.exception("Could not create model client for extraction")
             llm_failed = True
+
+    # Third projection of the same pass, beside the diary and the learnings
+    # backlog. Recorded here rather than down in the write section so that a
+    # session with nothing worth a diary entry — "park it, I'm out" and
+    # little else — still gets labelled. Skipped when the FINAL chunk failed:
+    # the disposition rides only on that chunk, so a fabricated "active"
+    # would be a guess written as a fact (and would strip a parked session's
+    # GC protection on the way).
+    if final_chunk_ok and session_id:
+        state = disposition.get("state") or DEFAULT_DISPOSITION
+        recorded = record_disposition(
+            paths.data_dir(), session_id, state, disposition.get("reason", "")
+        )
+        if recorded and state != DEFAULT_DISPOSITION:
+            logger.info("Session %s recorded as %s", session_id, state)
+            log_event(
+                "session", "disposition",
+                f"session left {state}: {disposition.get('reason', '')}".strip(),
+                session_id=session_id,
+                disposition=state,
+            )
+        elif not recorded and state != DEFAULT_DISPOSITION:
+            # Losing a `parked`/`done` label is user-visible (the session
+            # vanishes from or lingers in AGENTS.md); a missing entry or a
+            # lost lock must not be a debug-level shrug.
+            logger.warning(
+                "Could not record %s disposition for session %s "
+                "(missing registry entry or lock lost); label dropped",
+                state, session_id,
+            )
 
     if not units:
         if llm_failed:

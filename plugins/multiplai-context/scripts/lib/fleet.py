@@ -35,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from lib.fsio import atomic_write
+from lib.session_registry import entry_disposition_block
 
 logger = logging.getLogger(__name__)
 
@@ -75,14 +76,39 @@ class Agent:
     last_ts: datetime | None = None
     last_kind: str = ""
     status: str = "idle"          # working | waiting_input | idle | ended
+    disposition: str = "active"   # active | parked | done — how it was LEFT
+    disposition_reason: str = ""
     intent: str = ""
     next_action: str = ""
     files: list[str] = field(default_factory=list)
     has_checkpoint: bool = False
 
     @property
+    def group(self) -> str:
+        """Which heading this agent renders under, or ``""`` for not listed.
+
+        Liveness and disposition are different axes, and this is the one place
+        they have to meet. Disposition wins, because it is the only one of the
+        two that carries the user's intent: a ``parked`` session stays on the
+        list whatever its process did — that is what parking it means — and a
+        ``done`` one is finished even if its container is still up.
+
+        Deriving the grouping and :attr:`live` from one expression is what
+        keeps the header count and the body in agreement.
+        """
+        if self.disposition == "parked":
+            return "Parked"
+        if self.disposition == "done" or self.status == "ended":
+            return ""
+        if self.status == "waiting_input":
+            return "Needs you"
+        if self.status == "working":
+            return "Working"
+        return "Idle"
+
+    @property
     def live(self) -> bool:
-        return self.status != "ended"
+        return bool(self.group)
 
     def age(self, now: datetime) -> timedelta:
         if self.last_ts is None:
@@ -106,6 +132,13 @@ class Fleet:
 
     def by_status(self, *statuses: str) -> list[Agent]:
         return [a for a in self.agents if a.status in statuses]
+
+    def in_group(self, title: str) -> list[Agent]:
+        return [a for a in self.agents if a.group == title]
+
+    @property
+    def live(self) -> list[Agent]:
+        return [a for a in self.agents if a.live]
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +318,9 @@ def load_agent(entry_path: Path, data_dir: Path, now: datetime) -> Agent | None:
         last_ts = _parse_ts(raw.get("started_at"))
 
     cwd = str(raw.get("cwd") or "")
+    # One parse for both state and reason — two hand-rolled reads of the
+    # same block is how they drift.
+    disp_state, disp_reason = entry_disposition_block(raw)
     branch, repo_root, repo_id = _git_info(cwd)
     agent = Agent(
         session_id=sid,
@@ -298,6 +334,8 @@ def load_agent(entry_path: Path, data_dir: Path, now: datetime) -> Agent | None:
         last_ts=last_ts,
         last_kind=last_kind,
         status=_status_of(last_kind, last_ts, now),
+        disposition=disp_state,
+        disposition_reason=disp_reason,
     )
 
     cp = data_dir / "checkpoints" / sid / "checkpoint.md"
@@ -429,16 +467,29 @@ def format_age(delta: timedelta) -> str:
     return "just now"
 
 
-# Only live agents get an entry. Ended sessions are counted in the header and
-# nothing more: against the real registry there were 105 of them to 35 live,
-# so listing them turned a fleet view into a 700-line graveyard with the
-# answer buried at the top. The registry GCs them within a week anyway, and
-# "what did that finished session decide" is the diary's job, not this file's.
-_GROUPS = (
-    ("Needs you", ("waiting_input",)),
-    ("Working", ("working",)),
-    ("Idle", ("idle",)),
-)
+# Only live agents get an entry. Finished ones — ended, or labelled `done` —
+# are counted in the header and nothing more: against the real registry there
+# were 105 of them to 35 live, so listing them turned a fleet view into a
+# 700-line graveyard with the answer buried at the top. The registry GCs them
+# within a week anyway, and "what did that finished session decide" is the
+# diary's job, not this file's.
+#
+# Parked sits between Working and Idle deliberately. It is not urgent, but it
+# is the pile you chose to come back to — burying it under two dozen tabs that
+# merely went quiet would make parking pointless.
+_GROUP_ORDER = ("Needs you", "Working", "Parked", "Idle")
+
+
+def _sanitize_reason(reason: str) -> str:
+    """Strip what would break AGENTS.md structure out of an LLM-quoted reason.
+
+    The single-line regex and the registry's 500-char cap already bound the
+    damage; this handles the remainder — a leading ``#`` would open a new
+    heading, and ``|`` reads as a table cell to some renderers. Deliberately
+    minimal: display sanitization, not general markdown escaping.
+    """
+    reason = reason.strip().lstrip("#").strip()
+    return reason.replace("|", "/")
 
 
 def _render_agent(agent: Agent, now: datetime) -> list[str]:
@@ -453,6 +504,12 @@ def _render_agent(agent: Agent, now: datetime) -> list[str]:
         meta.append(f"cwd `{agent.cwd}`")
     meta.append(f"session `{agent.session_id}`")
     lines.append("- " + " · ".join(meta))
+    if agent.disposition == "parked":
+        # The reason is the user's own closing words, which say more about why
+        # this is parked than any intent line reconstructed from the work.
+        shown = _sanitize_reason(agent.disposition_reason)
+        reason = f" — {shown}" if shown else ""
+        lines.append(f"- **Parked**{reason}")
     if agent.intent:
         lines.append(f"- **Doing:** {agent.intent}")
     if agent.next_action:
@@ -475,16 +532,16 @@ def render_agents_md(fleet: Fleet, now: datetime, generated_at: str | None = Non
     byte-identical, which is what makes the file a cache rather than a record.
     """
     stamp = generated_at or now.isoformat()
-    live = [a for a in fleet.agents if a.live]
-    needs = fleet.by_status("waiting_input")
-    ended = fleet.by_status("ended")
+    live = fleet.live
+    needs = fleet.in_group("Needs you")
+    finished = [a for a in fleet.agents if not a.live]
 
     counts = (
         f"**{len(live)} live · {len(needs)} need you · "
         f"{len(fleet.collisions)} collision(s)**"
     )
-    if ended:
-        counts += f" · {len(ended)} ended, not listed"
+    if finished:
+        counts += f" · {len(finished)} finished, not listed"
 
     out = [
         "# Agents",
@@ -496,8 +553,8 @@ def render_agents_md(fleet: Fleet, now: datetime, generated_at: str | None = Non
         "",
     ]
 
-    for title, statuses in _GROUPS:
-        group = fleet.by_status(*statuses)
+    for title in _GROUP_ORDER:
+        group = fleet.in_group(title)
         if not group:
             continue
         out.append(f"## {title} ({len(group)})")
@@ -525,13 +582,13 @@ def render_fleet_line(fleet: Fleet, now: datetime) -> str:
     for an empty file, and a permanent "0" in every tab is noise, not a
     reading. Zero-valued segments are dropped for the same reason.
     """
-    live = [a for a in fleet.agents if a.live]
+    live = fleet.live
     if not live:
         return ""
 
     parts = [f"{len(live)} front{'s' if len(live) != 1 else ''}"]
 
-    needs = len(fleet.by_status("waiting_input"))
+    needs = len(fleet.in_group("Needs you"))
     if needs:
         parts.append(f"{needs} need you")
 

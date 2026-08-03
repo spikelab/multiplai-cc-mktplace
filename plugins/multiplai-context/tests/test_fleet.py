@@ -377,12 +377,12 @@ class TestEndedSessions:
         md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
 
         assert "1 live" in md
-        assert "3 ended, not listed" in md
+        assert "3 finished, not listed" in md
 
     def test_no_ended_sessions_means_no_mention_of_them(self, tmp_path):
         make_session(tmp_path, "live")
 
-        assert "ended" not in fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+        assert "finished" not in fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
 
 
 # ---------------------------------------------------------------------------
