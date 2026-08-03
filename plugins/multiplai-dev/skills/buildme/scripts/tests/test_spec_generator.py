@@ -864,3 +864,78 @@ class TestUnknownsThreadedIntoTasks:
 
         context = mock_gen.await_args.args[1]
         assert "empty frame raises SchemaError" in context["unknowns_content"]
+
+
+class TestCodebaseAnalysisReachesTheDesign:
+    """The CODEBASE_ANALYSIS phase stores a *path* on the checkpoint; the
+    design prompt needs the report's text. `read_codebase_analysis` is the
+    seam, and `_generate_single_artifact` must use it — passing the path
+    string would send the design a filename to reason about."""
+
+    def _state(self, path_value) -> BuildState:
+        return BuildState(
+            change_name="c", mode="scratch", tier="standard",
+            spec_gen=SpecGenState(codebase_analysis_path=path_value),
+        )
+
+    def test_reads_the_report_text(self, tmp_path):
+        from build_pipeline.spec_generator import read_codebase_analysis
+
+        report = tmp_path / "codebase-analysis.md"
+        report.write_text("## Architecture\nMODULE-MAP-MARKER")
+        assert "MODULE-MAP-MARKER" in read_codebase_analysis(self._state(str(report)))
+
+    def test_absent_path_is_empty_so_the_prompt_says_new_project(self):
+        from build_pipeline.spec_generator import read_codebase_analysis
+
+        assert read_codebase_analysis(self._state(None)) == ""
+        assert read_codebase_analysis(
+            BuildState(change_name="c", mode="scratch", tier="standard")
+        ) == ""
+
+    def test_unresolvable_path_falls_back_to_the_stored_string(self, tmp_path, caplog):
+        """Older checkpoints (and an archived change dir) may hold a path that
+        no longer resolves — dropping the value silently would be worse."""
+        from build_pipeline.spec_generator import read_codebase_analysis
+
+        with caplog.at_level("WARNING"):
+            out = read_codebase_analysis(self._state(str(tmp_path / "gone.md")))
+        assert out.endswith("gone.md")
+        assert any("not a readable file" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_design_generation_gets_the_text_and_the_reference_docs(self, tmp_path):
+        specs_dir = tmp_path / "specs"
+        specs_dir.mkdir()
+        cm = ChangeManager(specs_dir)
+        cm.init_specs()
+        change_dir = cm.create_change("test-feature")
+        (change_dir / "proposal.md").write_text("## Impact\nNone.\n")
+        report = change_dir / "codebase-analysis.md"
+        report.write_text("## Architecture\nMODULE-MAP-MARKER")
+
+        config = MagicMock()
+        config.change_name = "test-feature"
+        config.specs_dir = specs_dir
+        config.change_dir = change_dir
+        config.project_dir = tmp_path
+        config.model = "test-model"
+        config.reference_docs_text.return_value = "### Reference: house.md\nHOUSE-MARKER"
+        config.state_file_path.return_value = change_dir / ".build-state.json"
+
+        state = BuildState(
+            change_name="test-feature", mode="scratch", tier="standard",
+            state_file=str(change_dir / ".build-state.json"),
+            phase=BuildPhase.SPEC_GENERATION,
+            spec_gen=SpecGenState(codebase_analysis_path=str(report)),
+        )
+
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock
+        ) as mock_gen:
+            mock_gen.return_value = "# design"
+            await _generate_single_artifact(cm, change_dir, "design", config, state)
+
+        kwargs = mock_gen.await_args.kwargs
+        assert "MODULE-MAP-MARKER" in kwargs["codebase_analysis"]
+        assert "HOUSE-MARKER" in kwargs["reference_docs"]

@@ -201,19 +201,7 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             if config.auto:
                 log.info("SKIP phase=REVIEW reason=--auto")
             else:
-                # The explainer document goes first, above every other artifact:
-                # reading it is the anti-slop step of the whole checkpoint —
-                # it is where a dependency's real edge cases are stated before
-                # anything is built on top of them.
-                if config.unknowns_path.exists():
-                    print(f"REVIEW:READ_FIRST:{config.unknowns_path}", flush=True)
-                # What the design was written against — read before the design
-                # itself, so "why does it extend that module" has an answer.
-                if config.codebase_analysis_path.exists():
-                    print(
-                        f"REVIEW:CODEBASE_ANALYSIS:{config.codebase_analysis_path}",
-                        flush=True,
-                    )
+                _print_review_context_paths(config)
                 _print_prototype_review_paths(config)
                 log.info("DONE phase=REVIEW")
             state.advance_to(BuildPhase.REVIEW, state_path)
@@ -525,6 +513,22 @@ async def _run_codebase_analysis_phase(
     state.spec_gen.codebase_analysis_path = str(output)
     log.info("Wrote codebase analysis: %s (%d chars)", output, len(analysis))
     progress.log_phase("CODEBASE_ANALYSIS", f"Codebase analysis written to {output}")
+
+
+def _print_review_context_paths(config: BuildConfig) -> None:
+    """Print the documents the review checkpoint must be read against, in order.
+
+    The explainer goes first, above every other artifact: reading it is the
+    anti-slop step of the whole checkpoint — it is where a dependency's real
+    edge cases are stated before anything is built on top of them. The
+    codebase analysis follows, because it is what the design was written
+    against: "why does it extend that module" is answered there, not in
+    design.md.
+    """
+    if config.unknowns_path.exists():
+        print(f"REVIEW:READ_FIRST:{config.unknowns_path}", flush=True)
+    if config.codebase_analysis_path.exists():
+        print(f"REVIEW:CODEBASE_ANALYSIS:{config.codebase_analysis_path}", flush=True)
 
 
 def _print_prototype_review_paths(config: BuildConfig) -> None:
