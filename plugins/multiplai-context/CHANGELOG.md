@@ -18,6 +18,49 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.15.1] - 2026-08-03
+
+### Fixed
+- **The fleet reading counted dead sessions.** A status line saying
+  `36 fronts · 5 need you · oldest 19d · 9 collisions` over a fleet of one
+  running session is not a reading, it is noise you learn to ignore — and
+  that is what the real registry produced: 117 entries, 34 of them counted
+  as fronts, every one of the nine collisions between pairs of sessions that
+  had been dead for three to eighteen days.
+
+  Three separate causes, all fixed:
+
+  - **A container that dies without a `SessionEnd` left an immortal entry.**
+    Hooks report from inside a session and cannot report their own container
+    being killed — reboot, `docker kill`, OOM, or just closing the tab, all
+    routine with `--rm`. The entry kept its last event (often a Notification)
+    forever, and the fleet view read it as a live agent waiting on you.
+
+    The launcher can see what no hook can, so it now leaves a `<sid>.exited`
+    marker beside the entry the moment `docker run` returns; this plugin
+    reads it as `ended` and clears it on the session's next event. **This
+    half needs multiplai-kit at the commit that adds the marker** — without
+    it the other two fixes still apply, they just have less to work with.
+
+  - **Idle sessions counted as fronts.** `AGENTS.md` still lists every tab
+    that is on the board, idle ones included — that is where you go looking
+    for the one you forgot about. But `fleet.txt` has room for one number,
+    and it now counts only what has a claim on you: **Needs you**, **Working**
+    and **Parked**. The full read's header follows suit (`N front(s) … · N
+    idle`), so the two cannot disagree.
+
+  - **Collisions were reported between long-dead sessions.** A collision is
+    the claim that two agents might *now* write the same file. Both holders
+    must therefore be fronts and have been heard from within 24 hours; a file
+    two sessions both touched last week is shared history.
+
+- **Registry GC kept observed-dead entries for 30 days.** The long window
+  exists for sessions that might still be alive, and it was being granted to
+  exactly the entries that most needed collecting. An entry with an exit
+  marker now takes the same 7-day cutoff as one that ended cleanly. On the
+  real registry this reclaimed 16 entries the old rule would have held for
+  another three weeks.
+
 ## [0.15.0] - 2026-08-01
 
 ### Added

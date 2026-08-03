@@ -763,12 +763,30 @@ aggregation — into two files:
 - **`data/AGENTS.md`** — one section per session, grouped by what you need
   to do about it: **Needs you** · **Working** · **Parked** · **Idle**.
   Finished sessions are counted, not listed. A **Collisions** section
-  names every file two live sessions are both holding.
+  names every file two sessions still in play are both holding.
 - **`data/fleet.txt`** — the same reading compressed to one line, cheap
   enough for a status line to `cat` on every prompt.
 
 It runs alongside the extraction drain, so both refresh after the last
 tab closes as well as at session start.
+
+**The two count different things, deliberately.** `AGENTS.md` *lists*
+everything on the board; `fleet.txt` *counts* only **fronts** — Needs
+you, Working, Parked. Idle is the difference, and it is usually most of
+the entries: a status line has room for one number, so it has to be the
+one you would act on rather than a tally of every tab you have opened
+lately.
+
+**Knowing a session is over.** Hooks report from inside a session, so a
+container killed before its `SessionEnd` could fire — reboot, `docker
+kill`, OOM, closing the tab — used to leave an entry that looked live
+forever. The launcher is the only observer standing outside the
+container, so it drops an empty `<session-id>.exited` marker beside the
+entry when the container exits (the same convention the hub uses for
+`.adopt`); this plugin reads it as *ended* and clears it on the
+session's next event. **Requires multiplai-kit** — without that half,
+sessions that die uncleanly are still listed as idle until they age out
+of the registry.
 
 ### Session disposition — "park it for now"
 

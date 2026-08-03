@@ -23,6 +23,12 @@ Two outputs, deliberately different shapes:
 * ``fleet.txt`` — one short line for the terminal status bar, which re-renders
   constantly and can afford exactly one ``cat``.
 
+They also count different things, which is the one subtlety here. ``AGENTS.md``
+**lists** everything still on the board, idle tabs included. ``fleet.txt``
+**counts** only *fronts* — Needs you, Working, Parked — because a status bar
+has room for one number and it has to be the one you would act on. Idle is the
+difference, and against a real registry it is most of the entries.
+
 Both are a *reading*, not a rule: no thresholds to breach, no "too many agents"
 warning, no recommendation. Just what is true right now.
 """
@@ -35,7 +41,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from lib.fsio import atomic_write
-from lib.session_registry import entry_disposition_block
+from lib.session_registry import entry_disposition_block, is_exited
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +52,11 @@ FLEET_FILENAME = "fleet.txt"
 # One day, because the unit that matters is "did I touch this today" — a
 # 30-minute window would file half a working fleet as idle every lunch break.
 IDLE_AFTER_HOURS = 24
+
+# Two agents holding one file is only a collision while both are still in a
+# position to write it. Same window as IDLE_AFTER_HOURS, and for the same
+# reason: past a day, "we both touched this" is shared history, not a clash.
+COLLISION_MAX_AGE_HOURS = IDLE_AFTER_HOURS
 
 # Checkpoint sections this view reads. The other eight are for context
 # rebuild, not for a fleet glance.
@@ -108,7 +119,22 @@ class Agent:
 
     @property
     def live(self) -> bool:
+        """Is this entry still on the board at all — i.e. does it render?"""
         return bool(self.group)
+
+    @property
+    def front(self) -> bool:
+        """Does this agent have a claim on your attention right now?
+
+        Narrower than :attr:`live`, and the distinction is the whole point of
+        the one-line reading. ``Idle`` is live — a session quiet since Tuesday
+        is still listed, and you may well want it listed — but it is not a
+        front, because a count that folds it in answers "how many tabs have I
+        opened lately" while appearing to answer "how many agents am I
+        running". The second question is the one being asked, and the first
+        one's answer is roughly ten times larger.
+        """
+        return self.group in _FRONT_GROUPS
 
     def age(self, now: datetime) -> timedelta:
         if self.last_ts is None:
@@ -139,6 +165,10 @@ class Fleet:
     @property
     def live(self) -> list[Agent]:
         return [a for a in self.agents if a.live]
+
+    @property
+    def fronts(self) -> list[Agent]:
+        return [a for a in self.agents if a.front]
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +297,9 @@ def _git_info(cwd: str) -> tuple[str, str, str]:
     return "", "", ""
 
 
-def _status_of(kind: str, last_ts: datetime | None, now: datetime) -> str:
+def _status_of(
+    kind: str, last_ts: datetime | None, now: datetime, exited: bool = False
+) -> str:
     """Map a registry entry onto the contracted liveness vocabulary.
 
     ``working | waiting_input | idle | ended`` is frozen in the multiplai-gui
@@ -283,8 +315,16 @@ def _status_of(kind: str, last_ts: datetime | None, now: datetime) -> str:
     honestly it is one live prompt and 23 corpses. A "Needs you" list nobody
     can act on is worse than no list, because you stop reading it. The API
     contract's own fallback-discovery rule says the same thing: quiet is idle.
+
+    Quiet is still only a *guess* at death, though, and it is the conservative
+    one — the entry stays on the board as ``idle`` in case the session is
+    merely thinking. *exited* is the observed fact rather than the guess: the
+    launcher watched the process go (see ``session_registry.is_exited``), so
+    the session is ``ended`` however recently it last spoke. It outranks even
+    a notification a second old, because a container that exited one second
+    after prompting you is not waiting for an answer.
     """
-    if kind == "end":
+    if kind == "end" or exited:
         return "ended"
     if last_ts is None:
         return "idle"
@@ -333,7 +373,7 @@ def load_agent(entry_path: Path, data_dir: Path, now: datetime) -> Agent | None:
         started_at=str(raw.get("started_at") or ""),
         last_ts=last_ts,
         last_kind=last_kind,
-        status=_status_of(last_kind, last_ts, now),
+        status=_status_of(last_kind, last_ts, now, is_exited(entry_path, last_ts)),
         disposition=disp_state,
         disposition_reason=disp_reason,
     )
@@ -391,20 +431,29 @@ def _collision_key(agent: Agent, path: str) -> tuple[tuple[str, str], str]:
     return ("", path), path
 
 
-def find_collisions(agents: list[Agent]) -> list[Collision]:
-    """Files held by two or more **live** agents.
+def find_collisions(agents: list[Agent], now: datetime | None = None) -> list[Collision]:
+    """Files held by two or more agents that are **both still in play**.
 
     This is the overlapping-work anxiety answered without any agent talking to
     another agent: a set intersection over what each one already wrote down —
     normalized per-agent by :func:`_collision_key` so two worktrees of one
-    repo collide on the logical file, not the raw string. Ended sessions are
-    excluded — a file two finished sessions both touched is history, not a
-    collision.
+    repo collide on the logical file, not the raw string.
+
+    "In play" is a front (:attr:`Agent.front`) that has been heard from within
+    ``COLLISION_MAX_AGE_HOURS``, and both halves of that earn their keep.
+    Against the real registry, filtering on liveness alone reported eight
+    collisions of which eight were between pairs of sessions dead for three to
+    eighteen days — a warning that is wrong every time is one you stop reading,
+    which costs more than not having it. A collision is a claim that two agents
+    might *now* write the same file; a dead one cannot, and neither can a
+    parked one that has not moved since last week.
     """
+    now = now or datetime.now(timezone.utc)
+    max_age = timedelta(hours=COLLISION_MAX_AGE_HOURS)
     holders: dict[tuple[str, str], list[Agent]] = {}
     display: dict[tuple[str, str], str] = {}
     for agent in agents:
-        if not agent.live:
+        if not agent.front or agent.age(now) > max_age:
             continue
         for path in agent.files:
             key, shown = _collision_key(agent, path)
@@ -448,7 +497,7 @@ def collect(data_dir: Path, now: datetime | None = None) -> Fleet:
     # depends on this).
     agents.sort(key=lambda a: (-(a.last_ts or datetime.min.replace(
         tzinfo=timezone.utc)).timestamp(), a.session_id))
-    return Fleet(agents=agents, collisions=find_collisions(agents))
+    return Fleet(agents=agents, collisions=find_collisions(agents, now))
 
 
 # ---------------------------------------------------------------------------
@@ -478,6 +527,13 @@ def format_age(delta: timedelta) -> str:
 # is the pile you chose to come back to — burying it under two dozen tabs that
 # merely went quiet would make parking pointless.
 _GROUP_ORDER = ("Needs you", "Working", "Parked", "Idle")
+
+# The groups that count as a *front* (see :attr:`Agent.front`): every group
+# except Idle. Parked is in, and deliberately — its process is usually long
+# gone, but "I am coming back to this" is a claim on you in a way that a tab
+# which merely went quiet is not. That is the entire difference between
+# parking something and abandoning it.
+_FRONT_GROUPS = frozenset(_GROUP_ORDER) - {"Idle"}
 
 
 def _sanitize_reason(reason: str) -> str:
@@ -532,14 +588,21 @@ def render_agents_md(fleet: Fleet, now: datetime, generated_at: str | None = Non
     byte-identical, which is what makes the file a cache rather than a record.
     """
     stamp = generated_at or now.isoformat()
-    live = fleet.live
+    fronts = fleet.fronts
     needs = fleet.in_group("Needs you")
+    idle = fleet.in_group("Idle")
     finished = [a for a in fleet.agents if not a.live]
 
+    # Headline counts what has a claim on you; idle and finished are trailing
+    # context. The status line reads the same way, and the two must agree —
+    # a header saying "34 live" over a bar saying "5 fronts" is how you stop
+    # trusting both.
     counts = (
-        f"**{len(live)} live · {len(needs)} need you · "
+        f"**{len(fronts)} front(s) · {len(needs)} need you · "
         f"{len(fleet.collisions)} collision(s)**"
     )
+    if idle:
+        counts += f" · {len(idle)} idle"
     if finished:
         counts += f" · {len(finished)} finished, not listed"
 
@@ -565,7 +628,7 @@ def render_agents_md(fleet: Fleet, now: datetime, generated_at: str | None = Non
     out.append("## Collisions")
     out.append("")
     if not fleet.collisions:
-        out.append("_None — no file is held by two live agents._")
+        out.append("_None — no file is held by two agents still in play._")
         out.append("")
     else:
         for c in fleet.collisions:
@@ -581,18 +644,23 @@ def render_fleet_line(fleet: Fleet, now: datetime) -> str:
     Empty rather than ``0 fronts`` on purpose: the status line renders nothing
     for an empty file, and a permanent "0" in every tab is noise, not a
     reading. Zero-valued segments are dropped for the same reason.
+
+    Counts **fronts, not live agents** — idle sessions are listed in
+    ``AGENTS.md`` but excluded here (see :attr:`Agent.front`). One line in a
+    status bar has room for one number, so it has to be the number that
+    answers the question the bar appears to be answering.
     """
-    live = fleet.live
-    if not live:
+    fronts = fleet.fronts
+    if not fronts:
         return ""
 
-    parts = [f"{len(live)} front{'s' if len(live) != 1 else ''}"]
+    parts = [f"{len(fronts)} front{'s' if len(fronts) != 1 else ''}"]
 
     needs = len(fleet.in_group("Needs you"))
     if needs:
         parts.append(f"{needs} need you")
 
-    oldest = max(a.age(now) for a in live)
+    oldest = max(a.age(now) for a in fronts)
     parts.append(f"oldest {format_age(oldest)}")
 
     n = len(fleet.collisions)
@@ -617,9 +685,9 @@ def write_fleet_view(data_dir: Path, now: datetime | None = None) -> tuple[Path,
     atomic_write(agents_path, render_agents_md(fleet, now))
     atomic_write(fleet_path, render_fleet_line(fleet, now))
 
-    live = sum(1 for a in fleet.agents if a.live)
     logger.info(
-        "Fleet: %d live of %d session(s), %d collision(s) → %s",
-        live, len(fleet.agents), len(fleet.collisions), agents_path,
+        "Fleet: %d front(s), %d listed of %d session(s), %d collision(s) → %s",
+        len(fleet.fronts), len(fleet.live), len(fleet.agents),
+        len(fleet.collisions), agents_path,
     )
     return agents_path, fleet_path

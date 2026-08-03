@@ -19,6 +19,7 @@ The properties worth breaking a build over:
 """
 
 import json
+import os
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -85,6 +86,22 @@ def make_checkpoint(data_dir, sid, *, intent="Doing a thing", nxt="Do the next t
                         f"## Involved files\n\n{listing}\n")
     (d / "checkpoint.md").write_text(text)
     return d / "checkpoint.md"
+
+
+def make_exited(data_dir, sid, *, ago=timedelta(0), now=NOW):
+    """Drop the launcher's ``<sid>.exited`` marker beside a registry entry.
+
+    Shaped as ``claude.sh`` writes it: an empty file whose mtime is when the
+    container was seen to exit. *ago* is measured back from *now*, so a marker
+    older than the entry's last event models the take-back case — the session
+    came back and spoke again after the exit was recorded.
+    """
+    marker = data_dir / "sessions" / f"{sid}.exited"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_bytes(b"")
+    stamp = (now - ago).timestamp()
+    os.utime(marker, (stamp, stamp))
+    return marker
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +250,122 @@ class TestStatus:
 
 
 # ---------------------------------------------------------------------------
+# The observed exit — a marker the launcher leaves when a container dies
+# ---------------------------------------------------------------------------
+
+class TestObservedExit:
+    """The bug this closes, from the real registry on 2026-08-03: 117 entries,
+    34 of them with no `end` event, rendering as "36 fronts · 5 need you" over
+    a fleet of one running session. Hooks report from inside a session and
+    cannot report their own container being killed, so the only fix is an
+    observer standing outside it — see `session_registry.is_exited`."""
+
+    def test_a_marker_ends_the_session(self, tmp_path):
+        make_session(tmp_path, "killed", kind="notification", ago=timedelta(minutes=2))
+        make_exited(tmp_path, "killed")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.status == "ended"
+        assert agent.live is False
+
+    def test_it_outranks_a_notification_one_second_old(self, tmp_path):
+        """A container that exited a second after prompting you is not waiting
+        for an answer — nothing is there to receive it."""
+        make_session(tmp_path, "killed", kind="notification", ago=timedelta(seconds=1))
+        make_exited(tmp_path, "killed")
+
+        f = fleet.collect(tmp_path, NOW)
+
+        assert f.in_group("Needs you") == []
+        assert fleet.render_fleet_line(f, NOW) == ""
+
+    def test_without_a_marker_a_quiet_session_is_still_only_idle(self, tmp_path):
+        """The guess stays conservative: absent evidence of death, a quiet
+        session is listed as idle, not declared over."""
+        make_session(tmp_path, "quiet", ago=timedelta(days=3))
+
+        assert fleet.collect(tmp_path, NOW).agents[0].status == "idle"
+
+    def test_a_marker_older_than_the_last_event_is_ignored(self, tmp_path):
+        """The take-back path: the launcher marks the exit, the user presses
+        Enter, and the session resumes in a new container and speaks again.
+        `record_event` clears the marker — this is the belt to that braces, in
+        case the clear failed on a read-only registry."""
+        make_session(tmp_path, "resumed", ago=timedelta(minutes=5))
+        make_exited(tmp_path, "resumed", ago=timedelta(hours=2))
+
+        assert fleet.collect(tmp_path, NOW).agents[0].status == "working"
+
+    def test_a_marked_session_does_not_collide(self, tmp_path):
+        make_session(tmp_path, "a", ago=timedelta(minutes=2))
+        make_session(tmp_path, "b", ago=timedelta(minutes=2))
+        make_checkpoint(tmp_path, "a", files=("/work/knowhere/src/shared.py",))
+        make_checkpoint(tmp_path, "b", files=("/work/knowhere/src/shared.py",))
+        make_exited(tmp_path, "a")
+
+        assert fleet.collect(tmp_path, NOW).collisions == []
+
+
+# ---------------------------------------------------------------------------
+# Fronts vs. live — what the one-line reading counts
+# ---------------------------------------------------------------------------
+
+class TestFronts:
+    """`AGENTS.md` lists everything on the board; `fleet.txt` counts only what
+    has a claim on you. Folding idle tabs into that count is what turned one
+    running session into "36 fronts" — the number appeared to answer "how many
+    agents am I running" while answering "how many tabs have I opened lately"."""
+
+    def test_an_idle_session_is_live_but_not_a_front(self, tmp_path):
+        make_session(tmp_path, "quiet", ago=timedelta(days=3))
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.live is True
+        assert agent.front is False
+
+    def test_an_idle_session_is_still_listed(self, tmp_path):
+        """Not counted is not the same as not shown — the full read is where
+        you go looking for the tab you forgot about."""
+        make_session(tmp_path, "quiet", project="forgotten", ago=timedelta(days=3))
+
+        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert "## Idle (1)" in md
+        assert "forgotten" in md
+
+    def test_an_all_idle_fleet_renders_no_line(self, tmp_path):
+        for i in range(9):
+            make_session(tmp_path, f"quiet{i}", ago=timedelta(days=2 + i))
+
+        assert fleet.render_fleet_line(fleet.collect(tmp_path, NOW), NOW) == ""
+
+    def test_working_notification_and_parked_all_count(self, tmp_path):
+        make_session(tmp_path, "w", ago=timedelta(minutes=2))
+        make_session(tmp_path, "n", kind="notification", ago=timedelta(minutes=2))
+        make_session(tmp_path, "i", ago=timedelta(days=3))
+        entry = tmp_path / "sessions" / "p.json"
+        make_session(tmp_path, "p", kind="end")
+        raw = json.loads(entry.read_text())
+        raw["disposition"] = {"state": "parked", "reason": "back to it Monday"}
+        entry.write_text(json.dumps(raw))
+
+        f = fleet.collect(tmp_path, NOW)
+
+        assert {a.session_id for a in f.fronts} == {"w", "n", "p"}
+
+    def test_the_header_names_the_idle_ones_separately(self, tmp_path):
+        make_session(tmp_path, "w", ago=timedelta(minutes=2))
+        make_session(tmp_path, "i", ago=timedelta(days=3))
+
+        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert "1 front(s)" in md
+        assert "1 idle" in md
+
+
+# ---------------------------------------------------------------------------
 # Criterion 5 — collisions
 # ---------------------------------------------------------------------------
 
@@ -266,7 +399,7 @@ class TestCollisions:
         md = fleet.render_agents_md(f, NOW)
 
         assert f.collisions == []
-        assert "_None — no file is held by two live agents._" in md
+        assert "_None — no file is held by two agents still in play._" in md
 
     def test_an_ended_session_does_not_collide(self, tmp_path):
         """Two finished sessions that touched the same file is history, not a
@@ -277,6 +410,39 @@ class TestCollisions:
         make_checkpoint(tmp_path, "b", files=("/work/knowhere/src/shared.py",))
 
         assert fleet.collect(tmp_path, NOW).collisions == []
+
+    def test_two_idle_sessions_do_not_collide(self, tmp_path):
+        """The whole of the real 2026-08-03 reading: all eight reported
+        collisions were between pairs of sessions quiet for three to eighteen
+        days. A warning that is wrong every time is one you stop reading,
+        which costs more than not having it."""
+        make_session(tmp_path, "a", ago=timedelta(days=3))
+        make_session(tmp_path, "b", ago=timedelta(days=18))
+        make_checkpoint(tmp_path, "a", files=("/work/knowhere/src/shared.py",))
+        make_checkpoint(tmp_path, "b", files=("/work/knowhere/src/shared.py",))
+
+        assert fleet.collect(tmp_path, NOW).collisions == []
+
+    def test_one_stale_holder_is_enough_to_drop_it(self, tmp_path):
+        """It takes two agents that might *both* write the file. One of them
+        working right now does not make the other one's week-old claim live."""
+        make_session(tmp_path, "live", ago=timedelta(minutes=2))
+        make_session(tmp_path, "stale", ago=timedelta(days=7))
+        make_checkpoint(tmp_path, "live", files=("/work/knowhere/src/shared.py",))
+        make_checkpoint(tmp_path, "stale", files=("/work/knowhere/src/shared.py",))
+
+        assert fleet.collect(tmp_path, NOW).collisions == []
+
+    def test_the_gate_is_the_idle_window(self, tmp_path):
+        """Just inside COLLISION_MAX_AGE_HOURS still collides — the cut is at
+        the window, not somewhere vaguely near it."""
+        inside = timedelta(hours=fleet.COLLISION_MAX_AGE_HOURS) - timedelta(minutes=1)
+        make_session(tmp_path, "a", ago=inside)
+        make_session(tmp_path, "b", ago=inside)
+        make_checkpoint(tmp_path, "a", files=("/work/knowhere/src/shared.py",))
+        make_checkpoint(tmp_path, "b", files=("/work/knowhere/src/shared.py",))
+
+        assert len(fleet.collect(tmp_path, NOW).collisions) == 1
 
     def test_one_session_listing_a_file_twice_is_not_a_collision(self, tmp_path):
         make_session(tmp_path, "a")
@@ -376,7 +542,7 @@ class TestEndedSessions:
 
         md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
 
-        assert "1 live" in md
+        assert "1 front(s)" in md
         assert "3 finished, not listed" in md
 
     def test_no_ended_sessions_means_no_mention_of_them(self, tmp_path):
@@ -455,7 +621,10 @@ class TestFleetLine:
 
         line = fleet.render_fleet_line(fleet.collect(tmp_path, NOW), NOW)
 
-        assert line == "7 fronts · 2 need you · oldest 3d · 1 collision\n"
+        # Seven sessions, six fronts: `old` went quiet three days ago, so it is
+        # listed in AGENTS.md as idle and left out of the count here. "oldest"
+        # measures the fronts, which is why it reads 1h and not 3d.
+        assert line == "6 fronts · 2 need you · oldest 1h · 1 collision\n"
 
     def test_zero_valued_segments_are_dropped(self, tmp_path):
         make_session(tmp_path, "a", ago=timedelta(hours=2))

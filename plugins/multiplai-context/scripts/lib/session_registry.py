@@ -12,7 +12,8 @@ inspection. Entries live at ``<data_dir>/sessions/<session_id>.json``:
 ``hostname`` equals the container name in kit containers ($HOSTNAME) and the
 plain machine hostname otherwise — it is how the launcher wrapper maps a
 container back to its session. The hub additionally writes
-``<session_id>.adopt`` markers beside the entries; this module never touches
+``<session_id>.adopt`` markers beside the entries, and the kit launcher writes
+``<session_id>.exited`` ones (see :func:`is_exited`); this module never touches
 those beyond GC of orphans, and updates preserve any keys it doesn't own
 (read-merge-write) so hub-written fields survive. Concurrent writers
 serialize on an advisory flock of ``<session_id>.lock`` beside the entry —
@@ -49,6 +50,11 @@ GC_AFTER_DAYS = 7
 GC_LIVE_AFTER_DAYS = 30
 
 _EVENT_KINDS = ("start", "stop", "notification", "end")
+
+# Written beside the entry by whoever can see the session's process die from
+# the outside — in practice the kit launcher, the moment `docker run` returns.
+# See :func:`is_exited` for why this is a marker rather than an `end` event.
+EXITED_SUFFIX = ".exited"
 
 # How the session was LEFT — a different axis from whether its process is
 # running. ``last_event.kind`` and the hub's ``Session.status``
@@ -143,6 +149,54 @@ def _unlock_entry(fd: int | None) -> None:
         pass
 
 
+def exited_marker(entry_path: Path) -> Path:
+    """Path of the ``<sid>.exited`` marker beside a registry entry."""
+    return entry_path.with_suffix(EXITED_SUFFIX)
+
+
+def is_exited(entry_path: Path, last_ts: datetime | None = None) -> bool:
+    """Has the process behind this entry been observed to exit?
+
+    Hooks can only ever record what happened *inside* a session, so a session
+    whose container dies without a ``SessionEnd`` — ``docker kill``, reboot,
+    OOM, closing the tab, which is routine with ``--rm`` containers — leaves an
+    entry whose last event is a two-week-old Notification. Read literally that
+    is a live agent waiting on you; read honestly it is a corpse. The only
+    observer that can tell them apart is the one *outside* the session, and it
+    has no hook: the kit launcher, at the instant ``docker run`` returns.
+
+    So the launcher drops an empty marker file beside the entry. A **marker
+    rather than an `end` event** on purpose: the launcher is `bash` on a host
+    that may have no `jq`, and a second writer of registry *state* is exactly
+    the drift the entry format exists to avoid. This mirrors the hub's existing
+    ``.adopt`` convention — outside observers leave markers, the plugin owns
+    the JSON.
+
+    Marker mtime older than *last_ts* means the session spoke after it was
+    written and is therefore alive: the entry wins. That is belt-and-braces —
+    :func:`record_event` clears the marker on every event — but the clear can
+    fail on a read-only filesystem, and a stale marker that permanently buried
+    a live session would be worse than the bug this fixes.
+    """
+    marker = exited_marker(entry_path)
+    try:
+        stat = marker.stat()
+    except OSError:
+        return False
+    if last_ts is None:
+        return True
+    mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+    return mtime >= last_ts
+
+
+def clear_exited(entry_path: Path) -> None:
+    """Drop the exit marker — any in-session event proves the session lives."""
+    try:
+        exited_marker(entry_path).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _ensure_data_gitignore(data_dir: Path) -> None:
     """Drop a ``*`` .gitignore at the data-dir root if none exists.
 
@@ -227,6 +281,11 @@ def record_event(data_dir: Path, hook_input: dict, kind: str) -> bool:
                 entry.pop(DISPOSITION_KEY, None)
 
             atomic_write_json(path, entry)
+            # An event from inside the session is proof its process is alive,
+            # so any exit the launcher observed is now stale. Cleared on every
+            # kind, not just "start": a session resumed into a new container
+            # emits whatever hook fires first.
+            clear_exited(path)
             return True
         finally:
             _unlock_entry(lock_fd)
@@ -351,7 +410,11 @@ def _entry_is_stale(
         ts = datetime.fromisoformat(str(last.get("ts") or ""))
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        if last.get("kind") == "end":
+        # An observed exit is as final as a recorded one, so it earns the same
+        # short cutoff. Without this, the entries that most need collecting —
+        # the ones killed before their SessionEnd could fire — are precisely
+        # the ones granted the 30-day window meant for possibly-live sessions.
+        if last.get("kind") == "end" or is_exited(path, ts):
             return ts < cutoff_ended
         return ts < cutoff_live
     except FileNotFoundError:
@@ -395,7 +458,7 @@ def _pending_extraction_sids(data_dir: Path) -> set[str]:
 
 
 def _sweep_orphans(rdir: Path, cutoff: datetime) -> int:
-    """Remove ``.adopt``/``.lock`` files whose ``.json`` entry is gone.
+    """Remove ``.adopt``/``.exited``/``.lock`` files whose ``.json`` entry is gone.
 
     Left behind when GC ran without the entry flock (fail-open) or a hub
     crashed between marker and entry. Age-gated by mtime (older than the
@@ -407,7 +470,11 @@ def _sweep_orphans(rdir: Path, cutoff: datetime) -> int:
     under the lock before unlinking.
     """
     removed = 0
-    for orphan in [*rdir.glob("*.adopt"), *rdir.glob("*.lock")]:
+    for orphan in [
+        *rdir.glob("*.adopt"),
+        *rdir.glob(f"*{EXITED_SUFFIX}"),
+        *rdir.glob("*.lock"),
+    ]:
         try:
             if orphan.with_suffix(".json").exists():
                 continue
@@ -443,9 +510,12 @@ def gc_stale(
     Entries whose last event is anything other than ``end`` age out after
     *live_days* instead — sessions whose container died without a SessionEnd
     (docker kill, reboot, OOM) would otherwise linger forever as adoptable
-    ghosts. Unparseable entries older than the *days* window (by mtime) are
-    removed too — they can never become readable again and would otherwise
-    accumulate forever. A removed entry's orphaned ``.adopt`` marker goes
+    ghosts. When such a death was actually *observed* — a ``.exited`` marker
+    from the launcher, see :func:`is_exited` — the entry takes the short
+    *days* cutoff instead, because there is nothing left to wait for.
+    Unparseable entries older than the *days* window (by mtime) are removed
+    too — they can never become readable again and would otherwise accumulate
+    forever. A removed entry's orphaned ``.adopt``/``.exited`` markers go
     with it.
 
     **Entries with ``disposition: parked`` are never collected**, at any age.
@@ -493,6 +563,7 @@ def gc_stale(
                         continue
                     path.unlink(missing_ok=True)
                     path.with_suffix(".adopt").unlink(missing_ok=True)
+                    exited_marker(path).unlink(missing_ok=True)
                     if lock_fd is not None:
                         # We HOLD the flock, so no writer is inside its
                         # critical section; one blocked on it will simply
