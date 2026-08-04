@@ -12,6 +12,19 @@ Recorded history starts at **0.1.2**; anything earlier is in `git log` only.
 
 `multiplai-messaging@0.1.1` predates this file and has no section here.
 
+## [0.3.0] - 2026-08-04
+
+### Changed
+- **`gmail` and `slack` scripts are launched with `uv run --project`.** The
+  SKILL.md snippets you copy (`GM=`, `SLACK=`) have been updated. If you had
+  the old bare `uv run <script>` form saved anywhere, it now fails with
+  `ModuleNotFoundError` — dependencies moved out of the script files and into
+  `scripts/pyproject.toml`, resolved from the repo-root uv workspace.
+
+  These scripts had been pinned to `multiplai-core` v0.10.0 by hand while the
+  rest of the marketplace moved to v0.12.0. There is now one declaration for
+  the whole repo, so that drift cannot recur.
+
 ## [0.2.1] - 2026-07-30
 
 ### Security

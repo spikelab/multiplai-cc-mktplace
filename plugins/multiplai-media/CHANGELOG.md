@@ -23,6 +23,27 @@ dates recorded at the time, not derived from a tag.
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
 
+## [0.2.0] - 2026-08-04
+
+### Changed
+- **`screen-demo`'s `bootstrap.sh` no longer installs anything.** It used to
+  create a virtualenv inside the skill directory whenever PySceneDetect and
+  OpenCV were not importable. That environment reached 229MB, was gitignored
+  so nothing ever surfaced it, and was one of four such environments in this
+  repo.
+
+  Those dependencies are now declared in `scripts/pyproject.toml` and provided
+  by the repo-root uv workspace, so run the pipeline with
+  `uv run --project <repo-root> …`. Bootstrap keeps its ffmpeg check and its
+  host transcription-bridge preflight, and if the Python deps are missing it
+  now says so and names the fix instead of quietly building a second copy.
+
+  **If you have an existing `skills/screen-demo/.venv`, it is now dead weight
+  and can be deleted.**
+
+### Added
+- **`bootstrap.sh --help`**, which it never answered before.
+
 ## [0.1.7] - 2026-07-26
 
 ### Security
