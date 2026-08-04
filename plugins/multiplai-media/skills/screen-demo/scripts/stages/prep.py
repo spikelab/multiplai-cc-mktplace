@@ -11,8 +11,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
-SKILL_ROOT = Path(__file__).resolve().parent.parent.parent
-
 def _cache_root() -> Path:
     ws = os.environ.get("WORKSPACE")
     if ws and Path(ws).is_dir():
@@ -141,18 +139,21 @@ def _silencedetect(audio: Path) -> list[CutCandidate]:
 
 
 def _scenedetect_bin() -> str:
-    """Locate the scenedetect CLI. Prefer one on PATH (baked into the image);
-    otherwise fall back to the skill's bootstrap `.venv` so `python3 pipeline.py`
-    works without the caller having activated the venv."""
+    """Locate the scenedetect CLI.
+
+    Prefer one on PATH — which is where it is when the pipeline runs through
+    `uv run --project`, since scripts/pyproject.toml declares it as a workspace
+    dependency. The old fallback to a skill-local `.venv/bin/scenedetect` is
+    gone along with the venv itself (229MB, gitignored, one of four).
+    """
     on_path = shutil.which("scenedetect")
     if on_path:
         return on_path
-    venv_bin = SKILL_ROOT / ".venv" / "bin" / "scenedetect"
-    if venv_bin.exists():
-        return str(venv_bin)
     raise RuntimeError(
-        "scenedetect not found. Run bootstrap.sh (installs it into the skill "
-        "'.venv'), or bake scenedetect + opencv-python-headless into the image."
+        "scenedetect not found on PATH. Run this pipeline through the uv "
+        "workspace, which provides it: `uv run --project <repo-root> python3 "
+        "pipeline.py …` — or bake scenedetect + opencv-python-headless into "
+        "the image."
     )
 
 
