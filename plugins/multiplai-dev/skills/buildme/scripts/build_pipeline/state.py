@@ -94,6 +94,13 @@ class BuildState(BaseModel):
     source_repo: str | None = None
     pr_url: str | None = None
 
+    # Documentation files the DOCS_UPDATE phase reported writing (empty when it
+    # updated nothing). Persisted because the PR body is written later — after
+    # the archive move, and possibly in a *resumed* process — so an in-memory
+    # value would silently drop the "docs updated" line on any resume. Old
+    # checkpoints default to [].
+    docs_impact: list[str] = Field(default_factory=list)
+
     # Sub-pipeline state
     spec_gen: SpecGenState | None = None
     tdd: TDDState | None = None

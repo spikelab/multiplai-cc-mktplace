@@ -16,7 +16,8 @@ Driven, end to end, by a real build:
     spec generation (proposal, requirements).
   * **Planning** — design audit → prototype → the review checkpoint
     (design.md / tasks.md / rubric.md, audited).
-  * **In Development** — the TDD build and the respec pass.
+  * **In Development** — the TDD build, the documentation update, and the
+    respec pass.
   * **In Review** — entered *only* when the PUBLISH phase has pushed the
     build's branch **and** opened its PR. That is what makes the column real:
     a reviewer can `git fetch` the branch and diff it. A run that finishes
@@ -100,6 +101,9 @@ _PHASE_COLUMNS: dict[BuildPhase, BoardColumn] = {
     BuildPhase.PROTOTYPE: BoardColumn.PLANNING,
     BuildPhase.REVIEW: BoardColumn.PLANNING,
     BuildPhase.TDD_BUILD: BoardColumn.IN_DEVELOPMENT,
+    # Updating README/CHANGELOG/docs is part of producing the change, not a
+    # separate review stage — same column as RESPEC.
+    BuildPhase.DOCS_UPDATE: BoardColumn.IN_DEVELOPMENT,
     BuildPhase.RESPEC: BoardColumn.IN_DEVELOPMENT,
     # PUBLISH is still development until the push+PR actually land; the
     # In Review transition is recorded by the publish step from its result.

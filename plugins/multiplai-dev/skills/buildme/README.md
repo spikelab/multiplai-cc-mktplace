@@ -199,7 +199,35 @@ with a diagnosis instead of steering around the contradiction.
 
 Full code review across the entire change, plus entry-point verification (can the app actually run?).
 
-### Phase 9: Respec
+### Phase 9: Documentation
+
+The build has just changed the code; this phase changes the documents that
+describe it, so **the docs land in the same PR as the code**. An agent takes
+inventory of what the project actually keeps — `README*`, `CHANGELOG*`,
+`docs/**` — reads the whole build diff plus `implementation-notes.md`, and
+updates whatever the diff made stale: changed behavior, flags, defaults, file
+layouts, and usage examples that would no longer work. Where the project keeps
+a changelog it adds a [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+entry written from the user's point of view; it creates one only when the
+project's own conventions show a changelog is expected.
+
+What it writes gets its own commit — `docs(<change>): update documentation`,
+staged with an explicit pathspec — and the files are named in the PR body under
+**Documentation**.
+
+**Always on.** There is no flag and no `config.yaml` toggle: shipping code with
+stale docs is what this phase exists to prevent. It is **non-fatal** (an LLM
+failure logs and the build still completes) and it never pads: the agent closes
+with a REQUIRED `DOCS_IMPACT:` slot, and `none` is a legitimate answer for a
+change with no user-visible delta.
+
+When the build changed source files, the project keeps a changelog, and nothing
+was documented, the deterministic `docs_freshness_gate` prints
+`DOCS_WARNING:<reason>`. It is a **warning and never a failure** — plenty of
+real changes have no user-visible delta, and failing a finished build over a
+documentation judgment call would be worse than the staleness it catches.
+
+### Phase 10: Respec
 
 Reads `implementation-notes.md` plus the current `requirements/*.md` and
 `design.md`, and writes `specs/changes/<name>/respec.md`: a proposed delta in the
@@ -212,7 +240,7 @@ build still completes. `respec.md` and `implementation-notes.md` travel with the
 change into `archive/<date>-<name>/` but are **not** merged into `registry/` —
 only `requirements/*.md` merge.
 
-### Phase 10: Archive
+### Phase 11: Archive
 
 With `--auto`, the change is archived automatically at the end:
 - Delta requirements from `changes/{name}/requirements/` are merged into the main `registry/`
@@ -226,7 +254,7 @@ python -m build_pipeline archive --change my-feature --project-dir .
 
 Or use `--no-merge` to archive without touching the main registry.
 
-### Phase 11: Publish
+### Phase 12: Publish
 
 Pushes the build's branch and opens a **draft** PR. Runs **after** the archive
 move, so the pushed branch carries the archived layout and the move itself is a
@@ -273,8 +301,9 @@ whole-tree stage — a pathspec-limited `git add -A -- . :(exclude)build-progres
 
 **Publish.** `git push -u origin <branch>`, then `gh pr create` with a title from
 the change name and a body assembled from `proposal.md`'s Why, the block list,
-and links to whichever companion artifacts exist (`unknowns.md`,
-`prototype/NOTES.md`, `implementation-notes.md`, `respec.md`). `--draft` by
+links to whichever companion artifacts exist (`unknowns.md`,
+`prototype/NOTES.md`, `implementation-notes.md`, `respec.md`), and a
+**Documentation** section naming the documents the build updated. `--draft` by
 default so nothing looks merge-ready without a human. `pr_url` is recorded in
 `BuildState` and `.board.json`, and `PR:<url>` is printed on stdout.
 
@@ -644,6 +673,7 @@ BOARD:password-reset:In Development
 BLOCK:1/2:Reset Request:COMPLETE
 BLOCK:2/2:Token Redemption:COMPLETE
 PHASE:TDD_BUILD:COMPLETE
+PHASE:DOCS_UPDATE:COMPLETE
 PHASE:RESPEC:COMPLETE
 PHASE:ARCHIVE:COMPLETE
 PUSHED:buildme/password-reset
@@ -654,7 +684,9 @@ RESULT:SUCCESS
 WORKTREE:/Users/me/knowhere/.worktrees/buildme-password-reset
 ```
 
-Other lines: `PHASE:ARCHIVE:PENDING:<change>` (non-`--auto` runs),
+Other lines: `DOCS_WARNING:<reason>` (documentation may be stale — a warning,
+never a failure), `PHASE:DOCS_UPDATE:FAILED:<reason>` (non-fatal),
+`PHASE:ARCHIVE:PENDING:<change>` (non-`--auto` runs),
 `PHASE:PUBLISH:SKIPPED:<branch>` (`--no-push`),
 `PHASE:PUBLISH:FAILED:{no-remote|push|pr}` with `PUBLISH_DIAGNOSIS:<reason>`
 (non-fatal — the manual commands land in `build-progress.md`),
@@ -669,6 +701,7 @@ Gates are pure functions (no LLM calls) that return pass/fail decisions:
 | `unknowns_gate` | After `unknowns.md` is written | One regeneration pass for the missing sections only (no loop) |
 | `prototype_required` | Before the prototype stage | Not a pass/fail gate — decides whether the stage runs, and logs the reason either way |
 | `prototype_gate` | After the prototype agent | One retry, then the *phase* fails with a diagnosis — never the build |
+| `docs_freshness_gate` | After the documentation phase | **Never fails.** Prints `DOCS_WARNING:<reason>` when source changed, a changelog exists, and nothing was documented |
 | Baseline test | Before block 1 | Abort (existing tests broken) |
 | Weak test detection | After test writer | Retry with feedback |
 | Test integrity | After GREEN, and after every review-fix | Fail the block (tests were edited after they gated it) |
@@ -821,6 +854,7 @@ If the build crashes, restarting with the same `--change` name loads state and s
 | `llm_steps/spec_steps.py` | Artifact generation, design audit, per-dependency explainer | Yes |
 | `llm_steps/prototype_steps.py` | Prototype agent + folding its notes back into design/tasks | Yes |
 | `llm_steps/tdd_steps.py` | Test writer, implementer, refactorer | Yes |
+| `llm_steps/docs_steps.py` | The documentation phase — README/CHANGELOG/`docs/**` updated from the build diff | Yes |
 | `llm_steps/respec_steps.py` | Implementation-notes file + the `respec.md` proposal | Yes |
 | `llm_steps/review_steps.py` | Per-block code review + panel merge (wired); security review (not wired) | Yes |
 | `prompts/*.py` | Prompt templates with `{placeholders}` | — |
@@ -832,6 +866,7 @@ cd skills/buildme/scripts
 PYTHONPATH=. python -m pytest tests/ -xvs
 ```
 
-688 tests covering config, state, models, gates, change manager, dependency
-detection, spec generator, prototype and respec steps, git lifecycle, board seam,
-and the TDD engine. All tests mock LLM calls (and `gh`) — no API keys needed.
+969 tests covering config, state, models, gates, change manager, dependency
+detection, spec generator, prototype/docs/respec steps, git lifecycle, board
+seam, and the TDD engine. All tests mock LLM calls (and `gh`) — no API keys
+needed.

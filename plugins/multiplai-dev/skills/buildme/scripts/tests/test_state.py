@@ -337,6 +337,61 @@ class TestRespecPhaseAndNotes:
         assert "raises on timeout" in note.surprises
 
 
+class TestDocsUpdatePhaseAndImpact:
+    """BuildPhase.DOCS_UPDATE sits between TDD_BUILD and RESPEC, and a
+    checkpoint written before it existed still loads and resumes into it."""
+
+    def test_docs_update_is_ordered_between_tdd_build_and_respec(self):
+        order = list(BuildPhase)
+        assert order.index(BuildPhase.TDD_BUILD) < order.index(BuildPhase.DOCS_UPDATE)
+        assert order.index(BuildPhase.DOCS_UPDATE) < order.index(BuildPhase.RESPEC)
+
+    def test_pre_docs_update_fixture_has_no_docs_fields(self):
+        """Guard the guard: regenerating this fixture with the current code
+        would stop it testing backwards compatibility."""
+        raw = (FIXTURES / "build-state-pre-docs-update.json").read_text()
+        assert "docs_update" not in raw
+        assert "docs_impact" not in raw
+
+    def test_legacy_checkpoint_loads_and_resumes_at_docs_update(self):
+        s = BuildState.load(FIXTURES / "build-state-pre-docs-update.json")
+
+        assert s.phase == BuildPhase.TDD_BUILD
+        assert s.change_name == "legacy-change"
+        # A field added after the checkpoint was written takes its default.
+        assert s.docs_impact == []
+        # The TDD build it recorded stays complete...
+        assert s.is_phase_complete(BuildPhase.REVIEW)
+        assert not s.is_phase_complete(BuildPhase.TDD_BUILD)
+        # ...and the new phase is ahead of it rather than silently skipped.
+        assert not s.is_phase_complete(BuildPhase.DOCS_UPDATE)
+        assert not s.is_phase_complete(BuildPhase.RESPEC)
+
+    def test_legacy_checkpoint_past_respec_does_not_go_back_for_docs(self):
+        """A build already past RESPEC has its documentation window behind it;
+        inserting a phase must not send it backwards."""
+        s = BuildState.load(FIXTURES / "build-state-pre-docs-update.json")
+        s.phase = BuildPhase.RESPEC
+        assert s.is_phase_complete(BuildPhase.DOCS_UPDATE)
+
+    def test_legacy_roundtrip_rewrites_with_the_new_field(self, tmp_path):
+        s = BuildState.load(FIXTURES / "build-state-pre-docs-update.json")
+        out = tmp_path / "state.json"
+        s.checkpoint(out)
+
+        assert json.loads(out.read_text())["docs_impact"] == []
+        assert BuildState.load(out).phase == BuildPhase.TDD_BUILD
+
+    def test_docs_impact_round_trips_through_a_checkpoint(self, tmp_path):
+        path = tmp_path / ".build-state.json"
+        s = BuildState(
+            change_name="c", mode="only", tier="advanced",
+            docs_impact=["README.md", "CHANGELOG.md"],
+        )
+        s.checkpoint(path)
+        assert BuildState.load(path).docs_impact == ["README.md", "CHANGELOG.md"]
+
+
 # --- Git lifecycle state (work item 4) -----------------------------------
 
 class TestGitLifecycleState:

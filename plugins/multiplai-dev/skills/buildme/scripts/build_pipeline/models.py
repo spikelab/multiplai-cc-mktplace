@@ -32,6 +32,14 @@ class BuildPhase(str, Enum):
     PROTOTYPE = "prototype"
     REVIEW = "review"
     TDD_BUILD = "tdd_build"
+    # Brings README/CHANGELOG/docs back in line with the code the build just
+    # wrote, so the documentation lands in the same PR as the change it
+    # describes. Ordinal position matters: state.is_phase_complete compares
+    # positions in this enum, so DOCS_UPDATE sits where it runs — after the
+    # TDD build (it reads the whole build diff), before the respec proposal.
+    # Checkpoints written before this phase existed still load (the stored
+    # value is a phase name, not an index) and resume at their recorded phase.
+    DOCS_UPDATE = "docs_update"
     # Proposes a spec delta from the implementation notes collected during the
     # build. Sits between TDD_BUILD and PUBLISH because it reads what the
     # build learned; is_phase_complete compares enum positions, so old

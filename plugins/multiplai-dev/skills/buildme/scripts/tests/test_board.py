@@ -54,6 +54,7 @@ EXPECTED_COLUMNS = {
     BuildPhase.PROTOTYPE: BoardColumn.PLANNING,
     BuildPhase.REVIEW: BoardColumn.PLANNING,
     BuildPhase.TDD_BUILD: BoardColumn.IN_DEVELOPMENT,
+    BuildPhase.DOCS_UPDATE: BoardColumn.IN_DEVELOPMENT,
     BuildPhase.RESPEC: BoardColumn.IN_DEVELOPMENT,
     BuildPhase.PUBLISH: BoardColumn.IN_DEVELOPMENT,
     BuildPhase.COMPLETE: BoardColumn.IN_REVIEW,
