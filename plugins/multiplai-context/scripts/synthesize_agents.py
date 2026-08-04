@@ -1,4 +1,4 @@
-"""Render the fleet view: ``AGENTS.md`` and ``fleet.txt``.
+"""Render the fleet view: ``AGENTS.md``.
 
 Ten concurrent agents in ten tmux tabs is only workable if walking away is
 cheap, and walking away is expensive when the state of each tab lives in your
@@ -12,16 +12,17 @@ inputs of its own. See :mod:`lib.fleet` for the join and the rendering.
 
 Usage::
 
-    uv run --no-project synthesize_agents.py                  # write both files
-    uv run --no-project synthesize_agents.py --stdout         # preview AGENTS.md
-    uv run --no-project synthesize_agents.py --data-dir DIR
+    uv run --all-packages --project <repo-root> synthesize_agents.py            # write it
+    uv run --all-packages --project <repo-root> synthesize_agents.py --stdout   # preview
+    uv run --all-packages --project <repo-root> synthesize_agents.py --data-dir DIR
 
-Outputs land in ``<data_dir>/`` — **not** ``.multiplai/now/``, which the
+The output lands in ``<data_dir>/`` — **not** ``.multiplai/now/``, which the
 multiplai hub globs into one NowCard per filename, where an ``AGENTS.md``
-would surface as a bogus project named "AGENTS".
+would surface as a bogus project named "AGENTS". (``fleet.txt``, the retired
+status-bar line, is deleted here if a pre-digest release left one behind.)
 
-Both outputs are a **cache**. ``sessions/`` and ``checkpoints/`` are the sole
-source of truth; delete these two files and the next run reconstructs them
+The output is a **cache**. ``sessions/`` and ``checkpoints/`` are the sole
+source of truth; delete the file and the next run reconstructs it
 byte-for-byte apart from the generation stamp. Nothing may ever write into
 ``AGENTS.md`` as primary state — that would make it a fourth store, free to
 disagree silently with the other three.
@@ -44,8 +45,8 @@ logger = setup_logging("synthesize_agents")
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Render the fleet view (AGENTS.md + fleet.txt) from the session "
-            "registry and per-session checkpoints. No LLM call."
+            "Render the fleet view (AGENTS.md) from the session registry "
+            "and per-session checkpoints. No LLM call."
         )
     )
     parser.add_argument(
@@ -60,12 +61,12 @@ def main() -> int:
     parser.add_argument(
         "--stdout",
         action="store_true",
-        help="Print AGENTS.md to stdout instead of writing either file.",
+        help="Print AGENTS.md to stdout instead of writing it.",
     )
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Print the one-line fleet reading after writing. Silent otherwise.",
+        help="Print the written path after writing. Silent otherwise.",
     )
     args = parser.parse_args()
 
@@ -79,7 +80,7 @@ def main() -> int:
         return 0
 
     try:
-        _, fleet_path = write_fleet_view(data_dir, now)
+        agents_path = write_fleet_view(data_dir, now)
     except OSError as exc:
         # A read-only or missing data dir is a degraded environment, not a
         # crash: this runs from hooks that must never break a session.
@@ -89,8 +90,7 @@ def main() -> int:
         return 1
 
     if args.verbose:
-        line = fleet_path.read_text(encoding="utf-8").strip()
-        print(f"[agents] {line or 'no live sessions'}")
+        print(f"[agents] wrote {agents_path}")
     return 0
 
 

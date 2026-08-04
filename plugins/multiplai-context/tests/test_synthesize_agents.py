@@ -25,13 +25,13 @@ def mod():
 
 class TestCli:
 
-    def test_it_writes_both_files_under_the_data_dir(self, mod, tmp_path, monkeypatch):
+    def test_it_writes_agents_md_under_the_data_dir(self, mod, tmp_path, monkeypatch):
         make_session(tmp_path, "a")
         monkeypatch.setattr(sys, "argv", ["synthesize_agents", "--data-dir", str(tmp_path)])
 
         assert mod.main() == 0
         assert (tmp_path / "AGENTS.md").exists()
-        assert (tmp_path / "fleet.txt").exists()
+        assert not (tmp_path / "fleet.txt").exists()
 
     def test_stdout_mode_writes_nothing(self, mod, tmp_path, monkeypatch, capsys):
         make_session(tmp_path, "a", project="alpha")
@@ -50,12 +50,9 @@ class TestCli:
         monkeypatch.setattr(sys, "argv", ["synthesize_agents", "--data-dir", str(tmp_path)])
 
         assert mod.main() == 0
-        assert (tmp_path / "fleet.txt").read_text() == ""
+        assert (tmp_path / "AGENTS.md").exists()
 
-    def test_verbose_prints_the_one_line_reading(self, mod, tmp_path, monkeypatch, capsys):
-        # Anchored to wall-clock time, not test_fleet's frozen NOW: main()
-        # runs against real time, and a notification pinned to a fixed date
-        # ages past the quiet threshold ("needs you" → idle) within a day.
+    def test_verbose_prints_the_written_path(self, mod, tmp_path, monkeypatch, capsys):
         make_session(tmp_path, "a", kind="notification",
                      now=datetime.now(timezone.utc))
         monkeypatch.setattr(
@@ -65,7 +62,7 @@ class TestCli:
 
         mod.main()
 
-        assert "1 need you" in capsys.readouterr().out
+        assert "AGENTS.md" in capsys.readouterr().out
 
     def test_it_is_silent_without_verbose(self, mod, tmp_path, monkeypatch, capsys):
         make_session(tmp_path, "a")

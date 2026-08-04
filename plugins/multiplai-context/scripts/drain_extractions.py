@@ -117,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Refresh the fleet view first. This is the walk-away moment — the tab
     # that just closed is the one whose state Spike was carrying in his head —
-    # so AGENTS.md and fleet.txt should reflect the exit before anything else
+    # so AGENTS.md should reflect the exit before anything else
     # runs. The registry is already current (SessionEnd updated `last_event`
     # before the container died); what the launched children will add later is
     # the diary entry, which this view does not read. It needs nothing from

@@ -18,6 +18,21 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.18.0] - 2026-08-04
+
+### Removed
+
+- **`fleet.txt` — the one-line status-bar fleet count — is gone.** A count
+  with no referent (`9 fronts · 4 need you`) tells you there is a fire
+  without telling you where; `/multiplai-context:fleet-status` replaced it
+  with a ranked, actionable digest in 0.17.0. The fleet view now writes
+  `AGENTS.md` only, and **deletes a leftover `fleet.txt`** from an earlier
+  release so a status line still reading it goes blank instead of showing a
+  frozen count. If your status bar shows a fleet segment, it disappears —
+  that is this change, not a breakage; run the skill for the real reading.
+  (The kit's status-line reader is removed in a paired `multiplai-kit`
+  release.)
+
 ## [0.17.1] - 2026-08-04
 
 ### Fixed

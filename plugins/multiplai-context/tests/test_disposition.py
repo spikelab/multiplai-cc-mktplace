@@ -700,7 +700,7 @@ class TestFleetView:
         make_session(tmp_path, "p", kind="end")
         _add_disposition(tmp_path, "p", "parked")
 
-        assert "1 front" in fleet.render_fleet_line(fleet.collect(tmp_path, NOW), NOW)
+        assert len(fleet.collect(tmp_path, NOW).fronts) == 1
 
     def test_the_header_and_the_body_agree(self, tmp_path):
         """Deriving both from `Agent.group` is what stops the count drifting
