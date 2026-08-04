@@ -21,7 +21,7 @@ the release dates recorded at the time, not derived from a tag.
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
 
-## [0.6.0] - 2026-08-03
+## [0.7.0] - 2026-08-04
 
 ### Added
 
@@ -53,6 +53,15 @@ the release dates recorded at the time, not derived from a tag.
   changelog to check before merging. It is a **warning and never a failure** —
   a finished build is not failed over a judgment call about documentation.
 
+- **A second `DOCS_WARNING:` for anything the documentation phase changed but
+  did not report.** The agent can edit any file in the project, but only the
+  files it *names* are committed — so an unreported edit (a source file touched
+  by accident, a document it forgot to list) would otherwise sit in the working
+  tree, absent from the PR and from the diff you review. `/buildme` now names
+  those files instead. They are still not committed: the documentation commit
+  stays limited to explicitly-named paths, which is what makes it safe to build
+  from an agent's own report.
+
 ### Changed
 
 - **`PHASE:DOCS_UPDATE:COMPLETE` joins the progress protocol**, and the kanban
@@ -61,6 +70,11 @@ the release dates recorded at the time, not derived from a tag.
 - Builds resumed from a checkpoint written by an earlier version load and run
   the new phase; a build already past the respec proposal does not go back for
   it.
+- The staleness warning no longer treats *code* that happens to live under a
+  `docs/` directory as documentation. A build that only changed
+  `docs/generator.py` used to report "nothing to document"; a file under
+  `docs/` now has to read like a document (`.md`, `.rst`, `.txt`, …) to count
+  as one.
 
 ## [0.5.4] - 2026-07-30
 

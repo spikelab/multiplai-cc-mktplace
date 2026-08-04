@@ -1708,7 +1708,7 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
     return EXIT_SUCCESS
 
 
-def _capture_full_build_diff(config: BuildConfig, state: BuildState) -> str:
+def capture_build_diff(config: BuildConfig, state: BuildState) -> str:
     """Whole-build diff for the final review: first block's pre-build baseline
     → working tree, capped like the per-block review diff. Returns "" on git
     failure — never raises."""
@@ -1778,7 +1778,7 @@ async def _run_final_review(config: BuildConfig, state: BuildState) -> GateResul
     if not rubric:
         return GateResult(passed=True, reason="No rubric — skipping final review")
 
-    diff = _capture_full_build_diff(config, state)
+    diff = capture_build_diff(config, state)
     if not diff:
         log.warning("No full-build diff captured — final review sees rubric only")
     prompt = FINAL_REVIEW_PROMPT.format(

@@ -32,7 +32,7 @@
 | `prototype_steps.py` | `run_prototype()`, `apply_prototype_findings()`, `primary_prototype_artifact()` | Prototype-first stage (BuildPhase.PROTOTYPE, between DESIGN_AUDIT and REVIEW). One agent writes a mockup / sample output / CLI transcript + `NOTES.md` inside `specs/changes/<name>/prototype/` — the write boundary is enforced in code (`_files_outside`), not only in the prompt. `apply_prototype_findings()` folds the notes' DISPROVES/OPEN_QUESTIONS back into design.md and tasks.md with **one** regeneration pass each. |
 | `tdd_steps.py` | `run_test_writer()`, `run_implementer()`, `run_refactorer()`, `run_integration_fix()` | TDD agent spawning with tool allowlists. Reports carry the `SURPRISES:` / `SPEC_IMPACT:` REQUIRED slots parsed by `gates.parse_implementation_note`. |
 | `respec_steps.py` | `append_implementation_note()`, `format_implementation_note()`, `notes_path()`, `ensure_delta_sections()`, `run_respec_audit()` | B3 loop back to the spec. Each parsed `ImplementationNote` is appended to `implementation-notes.md` **as the build runs** (a crashed build still leaves the learning on disk). `run_respec_audit()` (BuildPhase.RESPEC, after TDD_BUILD) reads those notes + current requirements/design and writes `respec.md` in ADDED/MODIFIED/REMOVED form — **propose only, never edits the specs**, and non-fatal on LLM failure. |
-| `docs_steps.py` | `run_docs_update()` | The documentation phase (BuildPhase.DOCS_UPDATE, between TDD_BUILD and RESPEC). One agent with `Read/Write/Edit/Glob/Grep` over the whole build diff (`tdd_engine._capture_full_build_diff`) plus `implementation-notes.md`; it discovers the project's own `README*` / `CHANGELOG*` / `docs/**` and updates whatever the diff made stale. Closes with a REQUIRED `DOCS_IMPACT:` slot parsed by `gates.parse_docs_impact`. **Always on** — no flag, no config toggle — and non-fatal like RESPEC: the code is already built, so a docs failure logs and the build continues (that path still reaches `docs_freshness_gate`, which is exactly when its warning is warranted). |
+| `docs_steps.py` | `run_docs_update()` | The documentation phase (BuildPhase.DOCS_UPDATE, between TDD_BUILD and RESPEC). One agent with `Read/Write/Edit/Glob/Grep` over the whole build diff (`tdd_engine.capture_build_diff`) plus `implementation-notes.md`; it discovers the project's own `README*` / `CHANGELOG*` / `docs/**` and updates whatever the diff made stale. Closes with a REQUIRED `DOCS_IMPACT:` slot parsed by `gates.parse_docs_impact`. **Always on** — no flag, no config toggle — and non-fatal like RESPEC: the code is already built, so a docs failure logs and the build continues (that path still reaches `docs_freshness_gate`, which is exactly when its warning is warranted). |
 | `review_steps.py` | `run_code_review()`, `merge_panel_results()`, `run_security_review()`, `run_review_fix()` | `run_code_review()` is **wired** as the active per-block review — `tdd_engine._run_quality_review` calls it with the block's actual diff, rubric, spec context, and coding standards. Runs every model in `config.review_panel` concurrently (empty panel → one reviewer on `review_model`-or-`model`, byte-identical to the pre-panel behavior), drops members that failed, and folds the survivors with `merge_panel_results()`. `run_security_review()` / `run_review_fix()` remain **not wired**. |
 
 ## Prompt Templates (prompts/)
@@ -107,6 +107,15 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   wrote during that window, never the accumulated `block.implementer_report` —
   otherwise the re-baseline is defeated by a single implement-phase declaration
   authorizing every later review-fix mutation.
+- **An agent's self-report decides what gets *committed*, never what gets
+  *believed*.** `DOCS_IMPACT:` is the only pathspec the documentation commit
+  uses (`_docs_paths` resolves it, confines it to the project, and requires a
+  real file), because building `git add` argv out of unvalidated agent output is
+  how a pathspec-magic string becomes a command. But the agent holds
+  `Write`/`Edit` over the whole project, so the report is also checked *against*
+  `git status`: anything it changed and did not name is named back to the user
+  as a `DOCS_WARNING:`. Widening the commit to sweep those in would trade the
+  first property for the second — report both, stage only what was declared.
 - **An unavailable snapshot means "not checked", never "everything was
   deleted".** `_snapshot_test_files` returns `None` (distinct from `{}`) when
   git cannot be asked; both windows must pass on `None` rather than compare a

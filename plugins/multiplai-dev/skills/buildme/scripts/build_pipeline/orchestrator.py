@@ -447,6 +447,11 @@ async def _run_docs_update_phase(
         return
 
     state.docs_impact = files
+    # Checkpointed here rather than relying on the caller's advance_to: the PR
+    # body is written much later, possibly in a resumed process, and an
+    # in-memory value would silently drop the "docs updated" section.
+    state.checkpoint(config.state_file_path())
+    staged = _docs_paths(config, files)
     if files:
         log.info("DONE phase=DOCS_UPDATE files=%d", len(files))
         _progress_note(progress, "DOCS_UPDATE", "Updated: " + ", ".join(files))
@@ -455,16 +460,94 @@ async def _run_docs_update_phase(
         git_ops.commit_stage(
             config,
             f"docs({config.change_name}): update documentation",
-            _docs_paths(config, files),
+            staged,
         )
     else:
         log.info("DONE phase=DOCS_UPDATE files=0")
         _progress_note(progress, "DOCS_UPDATE", "No documentation needed updating")
 
+    _warn_on_unreported_writes(config, staged, progress)
+
     if gate.action == "docs_may_be_stale":
         log.warning("DOCS_UPDATE warning: %s", gate.reason)
         print(f"DOCS_WARNING:{gate.reason}", flush=True)
         _progress_note(progress, "DOCS_UPDATE", f"WARNING: {gate.reason}")
+
+
+def _warn_on_unreported_writes(
+    config: BuildConfig, staged: list[str], progress: ProgressWriter,
+) -> None:
+    """Name any file the docs agent changed but did not report.
+
+    The agent holds `Write`/`Edit` over the whole project, and only the paths
+    it *reports* are staged. Anything else it touched — a source file it edited
+    by accident, a document it forgot to name — would otherwise sit uncommitted
+    in the worktree: absent from the PR, absent from the diff a reviewer reads,
+    and gone when the worktree is removed. This does not stage it (the commit
+    stays explicit-path, which is the property that makes an agent's self-report
+    safe to act on); it makes the discrepancy visible.
+
+    Never raises, and never fails the phase — the build's code is already
+    committed by now.
+    """
+    changed = _uncommitted_paths(config)
+    if changed is None:
+        return
+    staged_set = set(staged)
+    unreported = [p for p in changed if p not in staged_set]
+    if not unreported:
+        return
+    shown = ", ".join(unreported[:10]) + (" …" if len(unreported) > 10 else "")
+    log.warning(
+        "DOCS_UPDATE changed %d file(s) it did not report and which were "
+        "therefore NOT committed: %s", len(unreported), shown,
+    )
+    print(f"DOCS_WARNING:unreported changes left uncommitted: {shown}", flush=True)
+    _progress_note(
+        progress, "DOCS_UPDATE",
+        f"WARNING: {len(unreported)} unreported change(s) left uncommitted: {shown}",
+    )
+
+
+def _uncommitted_paths(config: BuildConfig) -> list[str] | None:
+    """Repo-relative paths with uncommitted changes, excluding buildme's own.
+
+    `specs/` is excluded because everything under it is the pipeline's paperwork
+    (the state file, the board card, the change's artifacts), committed by other
+    phases on their own schedule. `build-progress.md` is the pipeline's scratch.
+
+    Returns None when git could not be asked — "unknown" must not be reported as
+    "the agent wrote nothing".
+    """
+    import subprocess
+
+    try:
+        rel_specs = str(config.specs_dir.relative_to(config.project_dir))
+    except ValueError:
+        rel_specs = "specs"
+    excludes = [f":(exclude){rel_specs}", ":(exclude)build-progress.md"]
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain", "--", ".", *excludes],
+            cwd=str(config.project_dir), capture_output=True, text=True, timeout=30,
+        )
+    except Exception as e:
+        log.warning("Could not check for unreported docs writes: %s", e)
+        return None
+    if proc.returncode != 0:
+        log.warning("Could not check for unreported docs writes: %s", proc.stderr.strip())
+        return None
+    paths: list[str] = []
+    for line in proc.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:].strip().strip('"')
+        # Renames are reported as "old -> new"; the new path is the one on disk.
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path and path not in paths:
+            paths.append(path)
+    return paths
 
 
 def _docs_paths(config: BuildConfig, files: list[str]) -> list[str]:

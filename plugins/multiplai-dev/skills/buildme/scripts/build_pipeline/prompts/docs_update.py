@@ -61,4 +61,9 @@ STATUS: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
 reader of the documentation would notice. Use `NEEDS_CONTEXT` or `BLOCKED` when
 you could not tell from the diff and the code what a document should now say;
 saying so is more useful than a guess.
+
+**List every file you wrote to, without exception.** Only the files named here
+get committed; anything you changed and did not list stays out of the pull
+request entirely. If you edited something by accident, list it and say so —
+that is recoverable, and a silent edit is not.
 """

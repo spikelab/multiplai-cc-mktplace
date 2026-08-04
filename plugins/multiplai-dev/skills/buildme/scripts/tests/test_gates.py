@@ -1047,9 +1047,24 @@ class TestDiffPathHelpers:
     @pytest.mark.parametrize("path", [
         "src/app.py", "tests/test_app.py", "package.json",
         "src/readme_parser.py", "src/docs_builder.py",
+        # Living under docs/ does not make a file a document. Every path this
+        # matches stops counting as source in the freshness warning, so code
+        # that happens to sit in a docs tree must not shrink the evidence.
+        "src/docs/generator.py", "docs/conf.py", "docs/_static/theme.css",
+        "doc/scripts/build_index.ts",
     ])
     def test_source_paths_are_not_documentation(self, path):
         assert not is_doc_path(path)
+
+    def test_a_docs_tree_full_of_code_still_warns_about_staleness(self, tmp_path):
+        """The regression this guards: with `docs/**` matched by directory
+        alone, a change to docs/generator.py counted as documentation, the
+        source set came out empty, and the gate reported 'nothing to
+        document' on a build that changed real code."""
+        (tmp_path / "CHANGELOG.md").write_text("# Changelog")
+        diff = _diff_for("docs/generator.py", "docs/usage.md")
+        assert source_paths_in_diff(diff) == ["docs/generator.py"]
+        assert docs_freshness_gate(diff, [], tmp_path).action == "docs_may_be_stale"
 
     def test_specs_are_the_builds_paperwork_not_source(self):
         diff = _diff_for("specs/changes/c/design.md", "src/app.py", "README.md")

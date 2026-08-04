@@ -38,7 +38,7 @@ class TestRunDocsUpdate:
             output="DOCS_IMPACT: README.md, CHANGELOG.md\nSTATUS: DONE\n",
         ))
         with patch("build_pipeline.llm_steps.docs_steps.agent_call", agent), \
-             patch("build_pipeline.tdd_engine._capture_full_build_diff",
+             patch("build_pipeline.tdd_engine.capture_build_diff",
                    return_value=DIFF):
             files, gate = await run_docs_update(config, make_state())
 
@@ -51,7 +51,7 @@ class TestRunDocsUpdate:
         config = make_config(tmp_path)
         agent = AsyncMock(return_value=AgentResult(success=True, output="DOCS_IMPACT: none\n"))
         with patch("build_pipeline.llm_steps.docs_steps.agent_call", agent), \
-             patch("build_pipeline.tdd_engine._capture_full_build_diff", return_value=""):
+             patch("build_pipeline.tdd_engine.capture_build_diff", return_value=""):
             await run_docs_update(config, make_state())
 
         kwargs = agent.await_args.kwargs
@@ -72,7 +72,7 @@ class TestRunDocsUpdate:
         )
         agent = AsyncMock(return_value=AgentResult(success=True, output="DOCS_IMPACT: none\n"))
         with patch("build_pipeline.llm_steps.docs_steps.agent_call", agent), \
-             patch("build_pipeline.tdd_engine._capture_full_build_diff",
+             patch("build_pipeline.tdd_engine.capture_build_diff",
                    return_value=DIFF):
             await run_docs_update(config, make_state())
 
@@ -87,7 +87,7 @@ class TestRunDocsUpdate:
         config = make_config(tmp_path)
         agent = AsyncMock(return_value=AgentResult(success=True, output="DOCS_IMPACT: none\n"))
         with patch("build_pipeline.llm_steps.docs_steps.agent_call", agent), \
-             patch("build_pipeline.tdd_engine._capture_full_build_diff", return_value=""):
+             patch("build_pipeline.tdd_engine.capture_build_diff", return_value=""):
             await run_docs_update(config, make_state())
 
         assert "no implementation notes were recorded" in agent.await_args.args[0]
@@ -100,7 +100,7 @@ class TestRunDocsUpdate:
         (tmp_path / "CHANGELOG.md").write_text("# Changelog\n")
         with patch("build_pipeline.llm_steps.docs_steps.agent_call",
                    AsyncMock(side_effect=RuntimeError("model down"))), \
-             patch("build_pipeline.tdd_engine._capture_full_build_diff",
+             patch("build_pipeline.tdd_engine.capture_build_diff",
                    return_value=DIFF):
             files, gate = await run_docs_update(config, make_state())
 
@@ -114,7 +114,7 @@ class TestRunDocsUpdate:
         with patch("build_pipeline.llm_steps.docs_steps.agent_call",
                    AsyncMock(return_value=AgentResult(
                        success=False, output="", error="timed out"))), \
-             patch("build_pipeline.tdd_engine._capture_full_build_diff", return_value=""):
+             patch("build_pipeline.tdd_engine.capture_build_diff", return_value=""):
             files, gate = await run_docs_update(config, make_state())
 
         assert files == []

@@ -35,9 +35,9 @@ async def run_docs_update(config, state=None) -> tuple[list[str], GateResult]:
     The gate never fails (see `gates.docs_freshness_gate`); the caller prints its
     warning and continues either way.
     """
-    from ..tdd_engine import _capture_full_build_diff
+    from ..tdd_engine import capture_build_diff
 
-    diff = _capture_full_build_diff(config, state) if state is not None else ""
+    diff = capture_build_diff(config, state) if state is not None else ""
     prompt = DOCS_UPDATE_PROMPT.format(
         change_name=getattr(config, "change_name", "") or config.project_dir.name,
         project_dir=config.project_dir,

@@ -639,14 +639,20 @@ def parse_docs_impact(output: str) -> list[str] | None:
 
 _DIFF_PATH_RE = re.compile(r"^diff --git a/(\S+) b/(\S+)\s*$", re.MULTILINE)
 
-# README*, CHANGELOG*, and anything under a docs/ directory — the same
-# inventory the docs prompt tells the agent to take. The name must be readme /
-# changelog plus at most a `.ext` or `-suffix`: a bare `readme*` prefix match
-# would classify `src/readme_parser.py` as documentation and quietly shrink the
-# set of source files the freshness warning is computed from.
-_DOC_PATH_RE = re.compile(
-    r"(?:^|/)(?:readme|changelog)(?:[.-][^/]*)?$|(?:^|/)docs?/", re.IGNORECASE
-)
+# README*, CHANGELOG*, and prose files under a docs/ directory — the same
+# inventory the docs prompt tells the agent to take. Two deliberate
+# tightenings, both guarding the same thing: every path this matches is a path
+# the freshness warning stops counting as source, so a loose match quietly
+# shrinks the evidence the warning is computed from.
+#
+#   * the name must be readme / changelog plus at most a `.ext` or `-suffix` —
+#     a bare `readme*` prefix would classify `src/readme_parser.py` as a doc;
+#   * a path under `docs/` must also *look* like a document — `docs/` holds
+#     generators, conf.py, and theme assets in plenty of projects, and
+#     `src/docs/generator.py` is source code by any reading.
+_DOC_SUFFIXES = (".md", ".markdown", ".rst", ".txt", ".adoc", ".mdx")
+_DOC_NAME_RE = re.compile(r"(?:^|/)(?:readme|changelog)(?:[.-][^/]*)?$", re.IGNORECASE)
+_DOC_DIR_RE = re.compile(r"(?:^|/)docs?/", re.IGNORECASE)
 
 
 def parse_diff_paths(diff: str) -> list[str]:
@@ -660,7 +666,10 @@ def parse_diff_paths(diff: str) -> list[str]:
 
 def is_doc_path(path: str) -> bool:
     """Whether a repo-relative path is one of the documents this phase owns."""
-    return _DOC_PATH_RE.search(path or "") is not None
+    path = path or ""
+    if _DOC_NAME_RE.search(path):
+        return True
+    return bool(_DOC_DIR_RE.search(path)) and path.lower().endswith(_DOC_SUFFIXES)
 
 
 def source_paths_in_diff(diff: str) -> list[str]:

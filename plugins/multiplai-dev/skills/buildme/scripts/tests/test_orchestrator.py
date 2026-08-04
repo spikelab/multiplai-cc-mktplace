@@ -636,6 +636,91 @@ class TestDocsUpdatePhaseWiring:
         assert _docs_paths(config, ["README.md", "./README.md"]) == ["README.md"]
 
 
+class TestDocsAgentWritesItDidNotReport:
+    """The agent holds Write/Edit over the whole project but only its reported
+    paths are staged, so anything else it touched would leave the build without
+    reaching the PR. The commit stays explicit-path — the discrepancy is
+    surfaced, not swept in."""
+
+    @staticmethod
+    def _repo(tmp_path):
+        import subprocess
+        project = tmp_path / "project"
+        (project / "specs").mkdir(parents=True)
+        for cmd in (
+            ["git", "init", "-q", "-b", "main"],
+            ["git", "config", "user.email", "t@e.st"],
+            ["git", "config", "user.name", "T"],
+        ):
+            subprocess.run(cmd, cwd=project, check=True, capture_output=True)
+        (project / "README.md").write_text("v1\n")
+        (project / "src.py").write_text("x = 1\n")
+        subprocess.run(["git", "add", "-A"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=project,
+                       check=True, capture_output=True)
+        config = BuildConfig(project_dir=project, change_name="c")
+        config.specs_dir = project / "specs"
+        return config
+
+    def test_an_unreported_edit_is_named_on_stdout_and_in_the_progress_file(
+        self, tmp_path, capsys,
+    ):
+        from build_pipeline.orchestrator import _warn_on_unreported_writes
+
+        config = self._repo(tmp_path)
+        (config.project_dir / "README.md").write_text("v2\n")   # reported
+        (config.project_dir / "src.py").write_text("x = 2\n")   # NOT reported
+        progress = ProgressWriter(config.progress_file_path())
+
+        _warn_on_unreported_writes(config, ["README.md"], progress)
+
+        out = capsys.readouterr().out
+        assert "DOCS_WARNING:unreported changes left uncommitted" in out
+        assert "src.py" in out
+        assert "README.md" not in out.split("unreported", 1)[1]
+        assert "src.py" in config.progress_file_path().read_text()
+
+    def test_silent_when_everything_changed_was_reported(self, tmp_path, capsys):
+        from build_pipeline.orchestrator import _warn_on_unreported_writes
+
+        config = self._repo(tmp_path)
+        (config.project_dir / "README.md").write_text("v2\n")
+        progress = ProgressWriter(config.progress_file_path())
+
+        _warn_on_unreported_writes(config, ["README.md"], progress)
+
+        assert "DOCS_WARNING" not in capsys.readouterr().out
+
+    def test_the_pipelines_own_scratch_is_never_reported_as_unreported(
+        self, tmp_path, capsys,
+    ):
+        """specs/ and build-progress.md are buildme's paperwork, committed by
+        other phases on their own schedule."""
+        from build_pipeline.orchestrator import _warn_on_unreported_writes
+
+        config = self._repo(tmp_path)
+        config.change_dir.mkdir(parents=True, exist_ok=True)
+        (config.change_dir / ".build-state.json").write_text("{}")
+        config.progress_file_path().write_text("progress\n")
+        progress = ProgressWriter(config.progress_file_path())
+
+        _warn_on_unreported_writes(config, [], progress)
+
+        assert "DOCS_WARNING" not in capsys.readouterr().out
+
+    def test_a_git_failure_is_not_reported_as_the_agent_wrote_nothing(
+        self, tmp_path, capsys,
+    ):
+        from build_pipeline.orchestrator import _uncommitted_paths, _warn_on_unreported_writes
+
+        config = BuildConfig(project_dir=tmp_path / "not-a-repo", change_name="c")
+        progress = ProgressWriter(tmp_path / "progress.md")
+
+        assert _uncommitted_paths(config) is None
+        _warn_on_unreported_writes(config, [], progress)
+        assert "DOCS_WARNING" not in capsys.readouterr().out
+
+
 class TestDocsUpdateInThePRBody:
     def test_pr_body_names_the_documents_the_build_updated(self, tmp_path):
         from build_pipeline.orchestrator import _pr_title_body
