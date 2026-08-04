@@ -1142,12 +1142,12 @@ class TestBlockRefactorVerification:
             return AgentResult(success=True, output=output)
         return _run
 
-    async def _run(self, config, state, progress, block, refactorer):
+    async def _run(self, config, state, progress, block, refactorer, implementer=None):
         """Drive one block with a test writer and implementer that produce real
         files, so the refactor step has a committed baseline to rewind to."""
         write_tests = self._agent_writing(
             config.project_dir, TEST_FILE_REL, ORIGINAL_TEST_SOURCE, "tests written")
-        write_impl = self._agent_writing(
+        write_impl = implementer or self._agent_writing(
             config.project_dir, "module.py", "def add(a, b):\n    return a + b\n", "implemented")
         with patch("build_pipeline.tdd_engine.run_test_writer",
                    new_callable=AsyncMock, side_effect=write_tests), \
@@ -1232,6 +1232,39 @@ class TestBlockRefactorVerification:
         assert (config.project_dir / TEST_FILE_REL).read_text() == ORIGINAL_TEST_SOURCE
         assert block.refactor_commit is None
         assert block.test_change_claims == []
+
+    @pytest.mark.asyncio
+    async def test_implementer_test_change_is_not_blamed_on_the_refactorer(self, setup):
+        """An implementer may legitimately change a test file (the
+        `TEST CHANGE REQUIRED:` path — the change rides in the impl commit).
+        The refactor window is measured from the tree the implementer left
+        behind, not from the RED-gate freeze, so a source-only refactor after
+        such a change must be verified and kept — not discarded with the
+        implementer's edit blamed on the refactorer."""
+        config, state, progress, block = setup
+        changed_test = "def test_addition():\n    assert add(2, 3) == 5  # fixed typo\n"
+
+        def impl_and_fix_test(*_a, **_kw):
+            (config.project_dir / "module.py").write_text(
+                "def add(a, b):\n    return a + b\n")
+            (config.project_dir / TEST_FILE_REL).write_text(changed_test)
+            return AgentResult(
+                success=True,
+                output="implemented\nTEST CHANGE REQUIRED: the test had a typo\n",
+            )
+
+        refactorer = self._agent_writing(
+            config.project_dir, "module.py",
+            "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+        assert await self._run(config, state, progress, block, refactorer,
+                               implementer=impl_and_fix_test) is True
+
+        assert block.refactor_commit is not None
+        assert _git_log_subjects(config.project_dir)[0] == "refactor(block-1): Block1"
+        assert (config.project_dir / "module.py").read_text().startswith("def add(a: int")
+        # The implementer's test change is untouched by the refactor verdict.
+        assert (config.project_dir / TEST_FILE_REL).read_text() == changed_test
 
     @pytest.mark.asyncio
     async def test_failed_refactor_agent_leaves_the_block_alone(self, setup):

@@ -1313,6 +1313,15 @@ async def run_block_tdd(
         if rewind_to is None and _git_tree_clean(config):
             rewind_to = _git_rev_parse_head(config)
 
+        # The integrity baseline for this window is the tree as the implementer
+        # left it — NOT `block.test_file_hashes`, which was frozen at the RED
+        # gate and is only re-baselined by `_enforce_test_integrity` AFTER this
+        # phase. An implementer that legitimately changed a test (the
+        # `TEST CHANGE REQUIRED:` path, committed just above) would otherwise
+        # be blamed on the refactorer, discarding a good refactor every time.
+        # The whole-change pass snapshots its own window the same way.
+        pre_refactor_hashes = _snapshot_test_files(config, block)
+
         refactor_context = assemble_context(block, config, "refactorer", blocks=state.tdd.blocks if state.tdd else None)
         progress.log_agent("Refactorer", block.name, "STARTED")
         refactor_result = await run_refactorer(
@@ -1330,7 +1339,8 @@ async def run_block_tdd(
             reason = "timeout" if refactor_result.timed_out else refactor_result.error
             log.warning("FAIL block=%d name=%s phase=REFACTOR reason=%s (non-fatal)", block.number, block.name, reason)
             progress.log_agent("Refactorer", block.name, "TIMEOUT" if refactor_result.timed_out else "FAILED")
-        elif not _verify_block_refactor(block, config, state, progress, rewind_to):
+        elif not _verify_block_refactor(block, config, state, progress, rewind_to,
+                                        pre_refactor_hashes):
             # Verification failed and the diff was discarded (or could not be):
             # the block keeps the implementation it had. Already logged.
             pass
@@ -1356,6 +1366,7 @@ def _verify_block_refactor(
     state: BuildState,
     progress: ProgressWriter,
     rewind_to: str | None,
+    before: dict[str, str] | None,
 ) -> bool:
     """Prove the block's refactor was behavior-preserving, or throw it away.
 
@@ -1365,11 +1376,13 @@ def _verify_block_refactor(
     1. The suite is re-run through `integration_gate` — the same call that
        produces this block's GREEN evidence a moment later — so "still green"
        means green by the same measurement.
-    2. `unchanged_tests_gate` is re-applied to the block's test hashes with
-       **no report**, so the `TEST CHANGE REQUIRED:` escape hatch is
-       unavailable in this window by construction. The hatch exists for an
-       implementer that discovers a genuinely wrong test; a refactorer is
-       defined as behavior-preserving, so it has no case for touching the
+    2. `unchanged_tests_gate` is re-applied against *before* — the snapshot
+       taken when the refactor window opened (after the impl commit), so a
+       test the implementer legitimately changed is not blamed on the
+       refactorer — with **no report**, so the `TEST CHANGE REQUIRED:` escape
+       hatch is unavailable in this window by construction. The hatch exists
+       for an implementer that discovers a genuinely wrong test; a refactorer
+       is defined as behavior-preserving, so it has no case for touching the
        contract it is being measured against.
 
     A failure discards the refactor diff and returns False. It never fails the
@@ -1381,7 +1394,7 @@ def _verify_block_refactor(
 
     if gate.passed:
         after = _snapshot_test_files(config, block)
-        if after is None:
+        if before is None or after is None:
             # Same reading as everywhere else: an unavailable snapshot means
             # "not checked", never "every test file was deleted".
             log.warning("Test integrity could not run after refactor for block %d: "
@@ -1389,7 +1402,7 @@ def _verify_block_refactor(
             progress.log_agent("TestIntegrity", block.name, "NOT CHECKED (refactor)")
         else:
             # No report argument, deliberately — see the docstring.
-            tests_gate = unchanged_tests_gate(block.test_file_hashes, after, "")
+            tests_gate = unchanged_tests_gate(before, after, "")
             if not tests_gate.passed:
                 detail = f"test files changed during refactor: {tests_gate.reason}"
 
