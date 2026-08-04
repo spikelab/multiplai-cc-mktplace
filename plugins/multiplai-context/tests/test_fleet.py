@@ -434,6 +434,78 @@ class TestCollisions:
 
         assert fleet.collect(tmp_path, NOW).collisions == []
 
+    def test_two_sessions_waiting_on_you_do_not_collide(self, tmp_path):
+        """Fourteen of the sixteen collisions reported on 2026-08-04 were pairs
+        of sessions stopped at a prompt, sharing a document both had merely
+        read. An agent waiting on an answer cannot write anything until it gets
+        one, so it is not holding the file against anybody."""
+        make_session(tmp_path, "a", kind="notification", ago=timedelta(minutes=2))
+        make_session(tmp_path, "b", kind="notification", ago=timedelta(minutes=2))
+        make_checkpoint(tmp_path, "a", files=("/work/knowhere/notes/plan.md",))
+        make_checkpoint(tmp_path, "b", files=("/work/knowhere/notes/plan.md",))
+
+        assert fleet.collect(tmp_path, NOW).collisions == []
+
+    def test_a_parked_session_still_holds_its_files(self, tmp_path):
+        """The deliberate asymmetry with the test above, pinned here so the two
+        readings do not get collapsed by a later tidy-up. ``waiting_input`` is
+        excluded because it *cannot* write until answered; parked work can and
+        does hold its files — arguably harder than running work, since nobody is
+        watching it and the edits are sitting there uncommitted.
+
+        Also asserted in `test_disposition.py::test_a_parked_session_still_collides`,
+        from the disposition side."""
+        make_session(tmp_path, "working", project="alpha", ago=timedelta(minutes=2))
+        entry = make_session(tmp_path, "parked", project="beta", ago=timedelta(minutes=2))
+        raw = json.loads(entry.read_text())
+        raw["disposition"] = {"state": "parked", "reason": "back to it Monday"}
+        entry.write_text(json.dumps(raw))
+        for sid in ("working", "parked"):
+            make_checkpoint(tmp_path, sid, files=("/work/knowhere/src/shared.py",))
+
+        assert len(fleet.collect(tmp_path, NOW).collisions) == 1
+
+    def test_the_shared_checkout_root_is_not_a_collision(self, tmp_path):
+        """The 2026-08-04 phantom: two sessions in one repo each list the
+        checkout root as an involved entry, stripping the prefix leaves ``""``
+        for both, and two empty strings intersect — so every pair of agents in
+        a shared repo reported a collision on a blank path."""
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+        for sid in ("a", "b"):
+            make_session(tmp_path, sid, project="workspace", cwd=str(repo))
+            make_checkpoint(tmp_path, sid, files=(str(repo) + "/",))
+
+        assert fleet.collect(tmp_path, NOW).collisions == []
+
+    def test_a_shared_directory_is_not_a_collision(self, tmp_path):
+        """A directory in common says "same neighbourhood"; the warning claims
+        "same file". Checkpoints list directories freely, so taking them at
+        face value manufactures lines nobody can act on."""
+        make_session(tmp_path, "a", project="alpha")
+        make_session(tmp_path, "b", project="beta")
+        for sid in ("a", "b"):
+            make_checkpoint(tmp_path, sid, files=("/work/knowhere/src/",))
+
+        assert fleet.collect(tmp_path, NOW).collisions == []
+
+    def test_a_real_shared_file_still_collides_under_a_shared_root(self, tmp_path):
+        """The guard against over-correcting: dropping directories and the
+        root must not cost the actual signal sitting next to them."""
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+        for sid in ("aaaa1111-x", "bbbb2222-y"):
+            make_session(tmp_path, sid, project="workspace", cwd=str(repo))
+            make_checkpoint(tmp_path, sid, files=(str(repo) + "/",
+                                                  str(repo / "src" / "hot.py")))
+
+        f = fleet.collect(tmp_path, NOW)
+
+        assert len(f.collisions) == 1
+        assert f.collisions[0].path == "src/hot.py"
+
     def test_identical_labels_fall_back_to_the_session_id(self, tmp_path):
         """Two tabs in the same worktree. Nothing but the id distinguishes
         them, so the label must carry it rather than repeat itself."""

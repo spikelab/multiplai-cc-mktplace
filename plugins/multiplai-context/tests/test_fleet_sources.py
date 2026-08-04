@@ -285,6 +285,25 @@ def test_empty_backlog_is_empty(tmp_path):
     assert backlog_mod.collect_backlog(data, now=NOW).empty
 
 
+def test_only_proposals_count_as_pending_dreams(tmp_path):
+    """`dreams/` also holds `memory-lint-latest.md`, a report and not something
+    to apply. Counting every .md announced a pending dream on a workspace that
+    had none (2026-08-04); a backlog line that names work that does not exist
+    is one you stop believing."""
+    data = tmp_path / ".multiplai" / "data"
+    data.mkdir(parents=True)
+    dreams = tmp_path / ".multiplai" / "dreams"
+    (dreams / "applied").mkdir(parents=True)
+    (dreams / "memory-lint-latest.md").write_text("# lint report\n")
+    (dreams / "applied" / "processed-learnings-2026-07-01.md").write_text("done\n")
+
+    assert backlog_mod.collect_backlog(data, now=NOW).dreams_pending == 0
+
+    (dreams / "processed-learnings-2026-08-04.md").write_text("# proposal\n")
+
+    assert backlog_mod.collect_backlog(data, now=NOW).dreams_pending == 1
+
+
 def test_failed_extractions_are_counted_separately(tmp_path):
     data = tmp_path / ".multiplai" / "data"
     (data / "failed_extractions").mkdir(parents=True)
