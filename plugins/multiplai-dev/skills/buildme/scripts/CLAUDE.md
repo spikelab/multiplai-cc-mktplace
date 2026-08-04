@@ -114,6 +114,15 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   discarded (`reset --hard` to the impl commit, plus a `clean` that excludes
   buildme's bookkeeping) and the block keeps the code that was already green.
   A refactor must never turn a green block red.
+- **A discard only ever moves backwards along the current history.**
+  `_git_discard_to` checks `merge-base --is-ancestor <sha> HEAD` and refuses
+  otherwise. `reset --hard` will jump to any commit, and the refactorer holds
+  `Bash` — so it can commit, move HEAD, or switch branches between the moment
+  the impl sha was captured and the discard. Resetting unchecked would throw
+  away whatever HEAD had actually reached: earlier blocks' commits, or under
+  `--no-worktree` the user's own. Unknown ancestry (git unavailable) reads as
+  "refuse", never as "safe to destroy" — the caller then treats the refactor as
+  *not* reverted.
 - **An unavailable snapshot means "not checked", never "everything was
   deleted".** `_snapshot_test_files` returns `None` (distinct from `{}`) when
   git cannot be asked; both windows must pass on `None` rather than compare a

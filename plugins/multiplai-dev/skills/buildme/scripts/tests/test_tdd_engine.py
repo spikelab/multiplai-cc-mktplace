@@ -16,6 +16,8 @@ from build_pipeline.tdd_engine import (
     run_tdd_engine,
     _capture_block_diff,
     _detect_entry_point,
+    _git_discard_to,
+    _is_ancestor_of_head,
     _read_block_test_files,
     _git_commit_block_phase,
     _run_final_review,
@@ -3290,3 +3292,78 @@ class TestReportContractSlots:
         from build_pipeline.prompts.implementation import IMPLEMENTER_PROMPT_CLEAN
         assert "contradicts" in IMPLEMENTER_PROMPT_CLEAN
         assert "implementation-notes.md" in IMPLEMENTER_PROMPT_CLEAN
+
+
+class TestDiscardToAncestorGuard:
+    """`_git_discard_to` may only ever move backwards along the current history.
+
+    The refactorer holds `Bash`, so between the moment the impl commit is
+    captured and the moment a failed refactor is discarded it can commit, move
+    HEAD, or switch branches. A bare `reset --hard <sha>` would then throw away
+    whatever HEAD had actually reached — earlier blocks' commits, or under
+    `--no-worktree` the user's own work.
+    """
+
+    @pytest.fixture
+    def repo(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        subprocess.run(["git", "init", "-q", "."], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=project, check=True)
+
+        def commit(text):
+            (project / "README.md").write_text(text)
+            subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+            subprocess.run(["git", "commit", "-qm", text], cwd=project, check=True)
+            return subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=project,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+
+        first = commit("one")
+        second = commit("two")
+        config = BuildConfig(project_dir=project)
+        return project, config, first, second, commit
+
+    def test_discards_to_an_ancestor(self, repo):
+        project, config, first, second, _ = repo
+        assert _git_discard_to(config, first, "refactor") is True
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project,
+                              capture_output=True, text=True, check=True).stdout.strip()
+        assert head == first
+
+    def test_head_itself_is_an_ancestor(self, repo):
+        _, config, _, second, _ = repo
+        assert _is_ancestor_of_head(config, second) is True
+        assert _git_discard_to(config, second, "refactor") is True
+
+    def test_refuses_a_sha_on_unrelated_history(self, repo):
+        """The agent switched branches: the impl sha is no longer reachable."""
+        project, config, first, second, _ = repo
+        subprocess.run(["git", "checkout", "-q", "--orphan", "elsewhere"],
+                       cwd=project, check=True)
+        (project / "OTHER.md").write_text("other\n")
+        subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-qm", "orphan"], cwd=project, check=True)
+        before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project,
+                                capture_output=True, text=True, check=True).stdout.strip()
+
+        assert _git_discard_to(config, second, "refactor") is False
+        after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project,
+                               capture_output=True, text=True, check=True).stdout.strip()
+        assert after == before, "HEAD must not move when the sha is unreachable"
+
+    def test_refuses_an_unknown_sha(self, repo):
+        _, config, _, _, _ = repo
+        assert _git_discard_to(config, "0" * 40, "refactor") is False
+
+    def test_refuses_an_empty_sha(self, repo):
+        _, config, _, _, _ = repo
+        assert _is_ancestor_of_head(config, "") is False
+        assert _git_discard_to(config, "", "refactor") is False
+
+    def test_unknown_ancestry_is_never_treated_as_safe(self, tmp_path):
+        """Git could not be asked → "unknown", which must not mean "destroy"."""
+        config = BuildConfig(project_dir=tmp_path / "nonexistent")
+        assert _is_ancestor_of_head(config, "a" * 40) is False

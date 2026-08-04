@@ -178,10 +178,25 @@ def _git_discard_to(config: BuildConfig, sha: str, label: str) -> bool:
     are what keep the clean from deleting .build-state.json out from under a
     running build.
 
+    **Only ever moves backwards along the current history.** `reset --hard` will
+    happily jump to any commit, including one on unrelated history, and the
+    refactorer holds `Bash` — so it can move HEAD, commit, or switch branches
+    between the moment *sha* was captured and this call. Resetting without
+    checking would then discard whatever HEAD had actually reached: earlier
+    blocks' commits, or, under `--no-worktree`, the user's own. So *sha* must
+    still be an ancestor of HEAD, and this refuses when it is not.
+
     Returns False (with a warning) when git refused — never raises. A caller
     that gets False must not treat the refactor as reverted.
     """
     cwd = str(config.project_dir)
+    if not _is_ancestor_of_head(config, sha):
+        log.warning(
+            "Refusing to discard %s: %s is not an ancestor of HEAD — resetting "
+            "would throw away history this pass did not create",
+            label, sha[:8],
+        )
+        return False
     try:
         subprocess.run(
             ["git", "reset", "--hard", sha],
@@ -200,6 +215,25 @@ def _git_discard_to(config: BuildConfig, sha: str, label: str) -> bool:
     except Exception as e:
         log.warning("Could not discard %s (reset to %s): %s", label, sha[:8], e)
         return False
+
+
+def _is_ancestor_of_head(config: BuildConfig, sha: str) -> bool:
+    """Whether *sha* is reachable from HEAD (or is HEAD itself).
+
+    Returns False when git could not be asked. Same reading as everywhere else
+    in this module: "unknown" is never allowed to mean "safe to destroy".
+    """
+    if not sha:
+        return False
+    try:
+        proc = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", sha, "HEAD"],
+            cwd=str(config.project_dir), capture_output=True, timeout=30,
+        )
+    except Exception as e:
+        log.warning("Could not check ancestry of %s: %s", sha[:8], e)
+        return False
+    return proc.returncode == 0
 
 
 def _git_tree_clean(config: BuildConfig) -> bool:
@@ -1880,7 +1914,7 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
     return EXIT_SUCCESS
 
 
-def _capture_full_build_diff(config: BuildConfig, state: BuildState) -> str:
+def capture_build_diff(config: BuildConfig, state: BuildState) -> str:
     """Whole-build diff for the final review: first block's pre-build baseline
     → working tree, capped like the per-block review diff. Returns "" on git
     failure — never raises."""
@@ -1953,7 +1987,7 @@ async def _run_refactor_all(
         state.checkpoint(config.state_file_path())
         return False
 
-    diff = _capture_full_build_diff(config, state)
+    diff = capture_build_diff(config, state)
     if not diff:
         log.info("SKIP phase=REFACTOR_ALL reason=no-diff-captured")
         state.tdd.refactor_all_done = True
@@ -2069,7 +2103,7 @@ async def _run_final_review(config: BuildConfig, state: BuildState) -> GateResul
     if not rubric:
         return GateResult(passed=True, reason="No rubric — skipping final review")
 
-    diff = _capture_full_build_diff(config, state)
+    diff = capture_build_diff(config, state)
     if not diff:
         log.warning("No full-build diff captured — final review sees rubric only")
     prompt = FINAL_REVIEW_PROMPT.format(

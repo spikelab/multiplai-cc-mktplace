@@ -39,7 +39,7 @@ REFACTORER_TIMEOUT = 15 * 60
 # gets more room than the per-block refactorer — but the same tool list, since
 # it does the same kind of work.
 REFACTOR_ALL_MAX_TURNS = 40
-REFACTOR_ALL_TIMEOUT = 25 * 60  # 25 min  # 15 min
+REFACTOR_ALL_TIMEOUT = 25 * 60  # 25 min
 
 
 async def run_test_writer(
