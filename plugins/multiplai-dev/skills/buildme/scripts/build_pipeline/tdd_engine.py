@@ -43,6 +43,7 @@ from .llm_steps.review_steps import run_code_review
 from .llm_steps.tdd_steps import (
     run_implementer,
     run_integration_fix,
+    run_refactor_all,
     run_refactorer,
     run_test_writer,
 )
@@ -81,16 +82,35 @@ def _mark_block(
                  note=f"block {block_idx + 1} {status.value}")
 
 
-def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -> str | None:
-    """Commit the block phase's changes in the project repo.
+def _bookkeeping_excludes(config: BuildConfig) -> list[str]:
+    """`:(exclude)` pathspecs for buildme's own bookkeeping files.
 
-    phase: "test" or "impl" (used for conventional-commit prefix).
-    Returns short SHA of the new commit, or None if there was nothing to
-    commit or the commit failed (logged as warning — never raises).
+    build-progress.md, .build-state.json and .board.json live inside the
+    project tree but are the pipeline's own scratch, not the user's work. Every
+    whole-tree git operation here (stage, status, clean) carries these so the
+    files are neither committed nor — much worse — deleted by a discard.
+    """
+    excludes: list[str] = []
+    bookkeeping_files = (
+        config.progress_file_path(),
+        config.state_file_path(),
+        config.change_dir / ".board.json",
+    )
+    for bookkeeping in bookkeeping_files:
+        try:
+            rel = bookkeeping.relative_to(config.project_dir)
+        except ValueError:
+            continue  # outside the repo — a pathspec under '.' won't touch it anyway
+        excludes.append(f":(exclude){rel}")
+    return excludes
 
-    Stages everything EXCEPT buildme's own bookkeeping files (build-progress.md,
-    .build-state.json and .board.json) so they don't leak into the user's
-    per-block commits.
+
+def _git_commit_tree(config: BuildConfig, message: str, label: str) -> str | None:
+    """Commit everything in the project repo except buildme's bookkeeping.
+
+    Returns the new commit's SHA, or None if there was nothing to commit or the
+    commit failed (logged as a warning — never raises). *label* only names the
+    operation in log lines.
 
     NOTE (git lifecycle): this is the pipeline's ONE whole-tree stage — a
     pathspec-limited `git add -A -- . :(exclude)…`, not a bare `git add -A`.
@@ -102,22 +122,9 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
     worktree, "everything under ." IS this build's own work.
     """
     cwd = str(config.project_dir)
-    # Exclude the bookkeeping files via :(exclude) pathspecs, relative to the repo.
-    excludes: list[str] = []
-    bookkeeping_files = (
-        config.progress_file_path(),
-        config.state_file_path(),
-        config.change_dir / ".board.json",
-    )
-    for bookkeeping in bookkeeping_files:
-        try:
-            rel = bookkeeping.relative_to(config.project_dir)
-        except ValueError:
-            continue  # outside the repo — git add under '.' won't touch it anyway
-        excludes.append(f":(exclude){rel}")
     try:
         subprocess.run(
-            ["git", "add", "-A", "--", ".", *excludes],
+            ["git", "add", "-A", "--", ".", *_bookkeeping_excludes(config)],
             cwd=cwd, check=True, capture_output=True, timeout=30,
         )
         status = subprocess.run(
@@ -125,11 +132,10 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
             cwd=cwd, capture_output=True, timeout=10,
         )
         if status.returncode == 0:
-            log.info("No changes to commit for block=%d phase=%s", block.number, phase)
+            log.info("No changes to commit for %s", label)
             return None
-        msg = f"{phase}(block-{block.number}): {block.name}"
         subprocess.run(
-            ["git", "commit", "-m", msg],
+            ["git", "commit", "-m", message],
             cwd=cwd, check=True, capture_output=True, timeout=30,
         )
         sha_proc = subprocess.run(
@@ -137,15 +143,118 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
             cwd=cwd, capture_output=True, text=True, check=True, timeout=10,
         )
         sha = sha_proc.stdout.strip()
-        log.info("COMMIT block=%d phase=%s sha=%s", block.number, phase, sha[:8])
+        log.info("COMMIT %s sha=%s", label, sha[:8])
         return sha
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr.decode(errors="replace") if e.stderr else "").strip()
-        log.warning("Failed to commit block=%d phase=%s: %s", block.number, phase, stderr or str(e))
+        log.warning("Failed to commit %s: %s", label, stderr or str(e))
         return None
     except Exception as e:
-        log.warning("Unexpected error committing block=%d phase=%s: %s", block.number, phase, e)
+        log.warning("Unexpected error committing %s: %s", label, e)
         return None
+
+
+def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -> str | None:
+    """Commit the block phase's changes in the project repo.
+
+    phase: "test", "impl" or "refactor" (used for the conventional-commit
+    prefix). Returns the new commit's SHA, or None if there was nothing to
+    commit or the commit failed (logged as a warning — never raises).
+    """
+    return _git_commit_tree(
+        config,
+        f"{phase}(block-{block.number}): {block.name}",
+        f"block={block.number} phase={phase}",
+    )
+
+
+def _git_discard_to(config: BuildConfig, sha: str, label: str) -> bool:
+    """Throw away every change made since *sha*, keeping buildme's bookkeeping.
+
+    Used to un-do a refactor that failed verification. `reset --hard` restores
+    tracked files; the `clean` removes files the agent newly created, which
+    `reset` leaves behind and the next whole-tree commit would otherwise sweep
+    into the build as reverted-but-committed work. The bookkeeping pathspecs
+    are what keep the clean from deleting .build-state.json out from under a
+    running build.
+
+    **Only ever moves backwards along the current history.** `reset --hard` will
+    happily jump to any commit, including one on unrelated history, and the
+    refactorer holds `Bash` — so it can move HEAD, commit, or switch branches
+    between the moment *sha* was captured and this call. Resetting without
+    checking would then discard whatever HEAD had actually reached: earlier
+    blocks' commits, or, under `--no-worktree`, the user's own. So *sha* must
+    still be an ancestor of HEAD, and this refuses when it is not.
+
+    Returns False (with a warning) when git refused — never raises. A caller
+    that gets False must not treat the refactor as reverted.
+    """
+    cwd = str(config.project_dir)
+    if not _is_ancestor_of_head(config, sha):
+        log.warning(
+            "Refusing to discard %s: %s is not an ancestor of HEAD — resetting "
+            "would throw away history this pass did not create",
+            label, sha[:8],
+        )
+        return False
+    try:
+        subprocess.run(
+            ["git", "reset", "--hard", sha],
+            cwd=cwd, check=True, capture_output=True, timeout=30,
+        )
+        subprocess.run(
+            ["git", "clean", "-fdq", "--", ".", *_bookkeeping_excludes(config)],
+            cwd=cwd, check=True, capture_output=True, timeout=30,
+        )
+        log.info("DISCARD %s reset to %s", label, sha[:8])
+        return True
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr.decode(errors="replace") if e.stderr else "").strip()
+        log.warning("Could not discard %s (reset to %s): %s", label, sha[:8], stderr or str(e))
+        return False
+    except Exception as e:
+        log.warning("Could not discard %s (reset to %s): %s", label, sha[:8], e)
+        return False
+
+
+def _is_ancestor_of_head(config: BuildConfig, sha: str) -> bool:
+    """Whether *sha* is reachable from HEAD (or is HEAD itself).
+
+    Returns False when git could not be asked. Same reading as everywhere else
+    in this module: "unknown" is never allowed to mean "safe to destroy".
+    """
+    if not sha:
+        return False
+    try:
+        proc = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", sha, "HEAD"],
+            cwd=str(config.project_dir), capture_output=True, timeout=30,
+        )
+    except Exception as e:
+        log.warning("Could not check ancestry of %s: %s", sha[:8], e)
+        return False
+    return proc.returncode == 0
+
+
+def _git_tree_clean(config: BuildConfig) -> bool:
+    """True when the project tree holds nothing but buildme's own bookkeeping.
+
+    Only used to decide whether HEAD is a faithful snapshot to discard back to.
+    Returns False when git could not be asked — "unknown" must never be read as
+    "safe to reset", because a reset over uncommitted work destroys it.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain", "--", ".", *_bookkeeping_excludes(config)],
+            cwd=str(config.project_dir), capture_output=True, text=True, timeout=30,
+        )
+    except Exception as e:
+        log.warning("git status failed: %s", e)
+        return False
+    if proc.returncode != 0:
+        log.warning("git status failed: %s", proc.stderr.strip())
+        return False
+    return not proc.stdout.strip()
 
 
 def _git_rev_parse_head(config: BuildConfig) -> str | None:
@@ -1193,9 +1302,26 @@ async def run_block_tdd(
         block.impl_commit = impl_sha
         state.checkpoint(config.state_file_path())
 
-    # --- Phase C: Refactor (standard tier only) ---
+    # --- Phase C: Refactor (every tier) ---
     if config.refactor_phase:
         log.info("START block=%d name=%s phase=REFACTOR", block.number, block.name)
+        # The point to rewind to if the refactor turns out not to be
+        # behavior-preserving. The impl commit above is the normal answer; the
+        # HEAD fallback only applies when there was genuinely nothing to commit
+        # and the tree is clean, so a reset cannot eat uncommitted work.
+        rewind_to = impl_sha
+        if rewind_to is None and _git_tree_clean(config):
+            rewind_to = _git_rev_parse_head(config)
+
+        # The integrity baseline for this window is the tree as the implementer
+        # left it — NOT `block.test_file_hashes`, which was frozen at the RED
+        # gate and is only re-baselined by `_enforce_test_integrity` AFTER this
+        # phase. An implementer that legitimately changed a test (the
+        # `TEST CHANGE REQUIRED:` path, committed just above) would otherwise
+        # be blamed on the refactorer, discarding a good refactor every time.
+        # The whole-change pass snapshots its own window the same way.
+        pre_refactor_hashes = _snapshot_test_files(config, block)
+
         refactor_context = assemble_context(block, config, "refactorer", blocks=state.tdd.blocks if state.tdd else None)
         progress.log_agent("Refactorer", block.name, "STARTED")
         refactor_result = await run_refactorer(
@@ -1213,11 +1339,97 @@ async def run_block_tdd(
             reason = "timeout" if refactor_result.timed_out else refactor_result.error
             log.warning("FAIL block=%d name=%s phase=REFACTOR reason=%s (non-fatal)", block.number, block.name, reason)
             progress.log_agent("Refactorer", block.name, "TIMEOUT" if refactor_result.timed_out else "FAILED")
+        elif not _verify_block_refactor(block, config, state, progress, rewind_to,
+                                        pre_refactor_hashes):
+            # Verification failed and the diff was discarded (or could not be):
+            # the block keeps the implementation it had. Already logged.
+            pass
         else:
             log.info("DONE block=%d name=%s phase=REFACTOR", block.number, block.name)
             progress.log_agent("Refactorer", block.name, "COMPLETE")
+            if not _record_implementation_note(
+                block, config, state, progress, "refactorer", refactor_result.output,
+            ):
+                _mark_block(state, block_idx, BlockStatus.FAILED, config)
+                return False
+            refactor_sha = _git_commit_block_phase(config, "refactor", block)
+            if refactor_sha:
+                block.refactor_commit = refactor_sha
+                state.checkpoint(config.state_file_path())
 
     return True
+
+
+def _verify_block_refactor(
+    block: BlockInfo,
+    config: BuildConfig,
+    state: BuildState,
+    progress: ProgressWriter,
+    rewind_to: str | None,
+    before: dict[str, str] | None,
+) -> bool:
+    """Prove the block's refactor was behavior-preserving, or throw it away.
+
+    Two checks, both of which the refactorer could otherwise satisfy by moving
+    the bar instead of clearing it:
+
+    1. The suite is re-run through `integration_gate` — the same call that
+       produces this block's GREEN evidence a moment later — so "still green"
+       means green by the same measurement.
+    2. `unchanged_tests_gate` is re-applied against *before* — the snapshot
+       taken when the refactor window opened (after the impl commit), so a
+       test the implementer legitimately changed is not blamed on the
+       refactorer — with **no report**, so the `TEST CHANGE REQUIRED:` escape
+       hatch is unavailable in this window by construction. The hatch exists
+       for an implementer that discovers a genuinely wrong test; a refactorer
+       is defined as behavior-preserving, so it has no case for touching the
+       contract it is being measured against.
+
+    A failure discards the refactor diff and returns False. It never fails the
+    block: the implementation that was green before the refactor is still there
+    afterwards, which is the whole point of committing impl first.
+    """
+    gate = integration_gate(config.test_command, config.project_dir)
+    detail = "" if gate.passed else f"tests failed after refactor: {gate.reason}"
+
+    if gate.passed:
+        after = _snapshot_test_files(config, block)
+        if before is None or after is None:
+            # Same reading as everywhere else: an unavailable snapshot means
+            # "not checked", never "every test file was deleted".
+            log.warning("Test integrity could not run after refactor for block %d: "
+                        "test file list unavailable", block.number)
+            progress.log_agent("TestIntegrity", block.name, "NOT CHECKED (refactor)")
+        else:
+            # No report argument, deliberately — see the docstring.
+            tests_gate = unchanged_tests_gate(before, after, "")
+            if not tests_gate.passed:
+                detail = f"test files changed during refactor: {tests_gate.reason}"
+
+    if not detail:
+        return True
+
+    if rewind_to is None:
+        log.warning(
+            "Refactor of block %d (%s) failed verification and could NOT be "
+            "discarded (no commit to rewind to): %s",
+            block.number, block.name, detail,
+        )
+        progress.log_agent("Refactorer", block.name, "REVERT FAILED — see log")
+        return False
+
+    reverted = _git_discard_to(config, rewind_to, f"refactor of block {block.number}")
+    log.warning(
+        "Refactor of block %d (%s) %s: %s",
+        block.number, block.name,
+        "discarded" if reverted else "failed verification but could not be discarded",
+        detail,
+    )
+    progress.log_agent(
+        "Refactorer", block.name,
+        "REVERTED — refactor did not verify" if reverted else "REVERT FAILED — see log",
+    )
+    return False
 
 
 def _enforce_test_integrity(
@@ -1654,6 +1866,13 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
 
         state.advance_block(state_path)
 
+    # --- Whole-change refactor (one conservative pass, before final review) ---
+    # Runs here and not per block on purpose: cross-block duplication is only
+    # visible once every block exists, and the final review should grade the
+    # code that ships, not a version the refactor is about to change.
+    if not await _run_refactor_all(config, state, progress):
+        return EXIT_BUILD_FAILURE
+
     # --- Final comprehensive review ---
     if not state.tdd.final_review_done:
         log.info("START phase=FINAL_REVIEW")
@@ -1708,7 +1927,7 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
     return EXIT_SUCCESS
 
 
-def _capture_full_build_diff(config: BuildConfig, state: BuildState) -> str:
+def capture_build_diff(config: BuildConfig, state: BuildState) -> str:
     """Whole-build diff for the final review: first block's pre-build baseline
     → working tree, capped like the per-block review diff. Returns "" on git
     failure — never raises."""
@@ -1732,6 +1951,176 @@ def _capture_full_build_diff(config: BuildConfig, state: BuildState) -> str:
     if len(diff) > MAX_REVIEW_DIFF_CHARS:
         diff = diff[:MAX_REVIEW_DIFF_CHARS] + "\n... (diff truncated for review)"
     return diff
+
+
+def _snapshot_all_test_files(config: BuildConfig, state: BuildState) -> dict[str, str] | None:
+    """{repo-relative path: sha256} for every test file the build touched.
+
+    The union of each block's snapshot, so the whole-change refactor is
+    measured against the same hashes the per-block windows used. Returns None
+    the moment any block's list is unavailable — the invariant that an
+    unobtainable snapshot means "not checked", never "everything was deleted",
+    holds here too.
+    """
+    if not state.tdd or not state.tdd.blocks:
+        return {}
+    merged: dict[str, str] = {}
+    for block in state.tdd.blocks:
+        snapshot = _snapshot_test_files(config, block)
+        if snapshot is None:
+            return None
+        merged.update(snapshot)
+    return merged
+
+
+async def _run_refactor_all(
+    config: BuildConfig, state: BuildState, progress: ProgressWriter,
+) -> bool:
+    """One conservative refactor pass over the whole change.
+
+    Returns False only when the budget breaker stopped the build — every other
+    outcome (no diff, agent failure, failed verification) is non-fatal and
+    returns True, because a refactor must never turn a green build red.
+
+    Safety harness, identical in shape to the per-block one: the pending tree
+    is proven green and then committed first so there is a faithful point to
+    rewind to (a tree that is red, or that cannot be checkpointed, skips the
+    pass — never a checkpoint of breakage, never a reset over uncommitted
+    work), the full suite must be green afterwards, and `unchanged_tests_gate`
+    is re-applied with no report — the `TEST CHANGE REQUIRED:` escape hatch
+    does not exist in a refactor window.
+    """
+    if not state.tdd or state.tdd.refactor_all_done:
+        return True
+
+    # A build-sized agent run is worth a boundary check, same as a block.
+    try:
+        budget_mod.check(phase="whole-change refactor")
+    except BudgetExceededError as e:
+        log.error("FAIL phase=REFACTOR_ALL reason=budget_exhausted")
+        progress.log_phase("BUDGET", f"STOPPED: {e}\n{e.diagnosis}")
+        state.checkpoint(config.state_file_path())
+        return False
+
+    diff = capture_build_diff(config, state)
+    if not diff:
+        log.info("SKIP phase=REFACTOR_ALL reason=no-diff-captured")
+        state.tdd.refactor_all_done = True
+        state.checkpoint(config.state_file_path())
+        return True
+
+    # Prove the tree green BEFORE checkpointing it as the rewind baseline.
+    # Every block ended green, so a red suite here means the tree holds
+    # unverified edits — a prior whole-change pass that crashed after its
+    # agent wrote files (resume re-enters with refactor_all_done still
+    # False), or a review fix that broke the suite after the last
+    # integration run. Committing them would bake the breakage into the
+    # exact commit a failed verification later restores, and nothing
+    # downstream re-runs the suite (the final review is LLM-graded). Whose
+    # edits are dirty is unknowable from here, and unknown is never safe to
+    # destroy — so: no reset, no checkpoint, no refactor pass.
+    pre_gate = integration_gate(config.test_command, config.project_dir)
+    if not pre_gate.passed:
+        log.error(
+            "SKIP phase=REFACTOR_ALL reason=suite-red-before-refactor: %s — "
+            "the tree holds unverified edits (crashed refactor pass or a "
+            "breaking review fix); NOT checkpointing them as a rewind "
+            "baseline. The suite is RED — review before shipping.",
+            pre_gate.reason,
+        )
+        progress.log_phase("REFACTOR_ALL",
+                           f"SKIPPED — suite red before refactor: {pre_gate.reason}")
+        state.tdd.refactor_all_done = True
+        state.checkpoint(config.state_file_path())
+        return True
+
+    # Review-fix edits are left uncommitted by the block loop, so "the last
+    # commit" is only a faithful pre-refactor snapshot once they are in it.
+    # Without this, discarding a failed refactor would take the build's own
+    # review fixes with it.
+    rewind_to = _git_commit_tree(config, "chore: checkpoint before whole-change refactor",
+                                 "pre-refactor checkpoint")
+    if rewind_to is None and _git_tree_clean(config):
+        # Nothing to commit and the tree is clean: HEAD already holds
+        # everything, so it is a faithful snapshot (same guard as the
+        # per-block rewind).
+        rewind_to = _git_rev_parse_head(config)
+    if rewind_to is None:
+        # `_git_commit_tree` returns None for "commit failed" too (failing
+        # hook, missing identity) — with work still in the tree, possibly all
+        # of it staged. Trusting HEAD then would let a failed verification
+        # `reset --hard` + `clean -fd` over the uncommitted work and destroy
+        # it. The rewind target is unknown, and unknown is never safe to
+        # reset — skip the pass rather than run an agent with no way back.
+        log.warning(
+            "SKIP phase=REFACTOR_ALL reason=no-rewind-target: pre-refactor "
+            "checkpoint commit failed with uncommitted work in the tree")
+        progress.log_phase("REFACTOR_ALL",
+                           "SKIPPED — could not checkpoint the pending tree")
+        state.tdd.refactor_all_done = True
+        state.checkpoint(config.state_file_path())
+        return True
+    before = _snapshot_all_test_files(config, state)
+
+    log.info("START phase=REFACTOR_ALL diff_chars=%d", len(diff))
+    progress.log_phase("REFACTOR_ALL", "Simplifying across blocks")
+    result = await run_refactor_all(
+        diff=diff,
+        design=config.design_path.read_text() if config.design_path.exists() else "(no design.md)",
+        rubric=config.rubric_path.read_text() if config.rubric_path.exists() else "(no rubric.md)",
+        test_command=config.test_command,
+        model=config.model,
+        effort=config.agent_effort,
+        cwd=str(config.project_dir),
+    )
+
+    if not result.success:
+        reason = "timeout" if result.timed_out else result.error
+        log.warning("FAIL phase=REFACTOR_ALL reason=%s (non-fatal)", reason)
+        progress.log_phase("REFACTOR_ALL",
+                           "TIMEOUT" if result.timed_out else f"FAILED: {reason}")
+        state.tdd.refactor_all_done = True
+        state.checkpoint(config.state_file_path())
+        return True
+
+    gate = integration_gate(config.test_command, config.project_dir)
+    detail = "" if gate.passed else f"tests failed after refactor: {gate.reason}"
+    if gate.passed:
+        after = _snapshot_all_test_files(config, state)
+        if before is None or after is None:
+            log.warning("Test integrity could not run after the whole-change "
+                        "refactor: test file list unavailable")
+            progress.log_phase("REFACTOR_ALL", "test integrity NOT CHECKED")
+        else:
+            # No report argument, deliberately: no escape hatch in this window.
+            tests_gate = unchanged_tests_gate(before, after, "")
+            if not tests_gate.passed:
+                detail = f"test files changed during refactor: {tests_gate.reason}"
+
+    if detail:
+        if rewind_to and _git_discard_to(config, rewind_to, "whole-change refactor"):
+            log.warning("DONE phase=REFACTOR_ALL result=discarded reason=%s", detail)
+            progress.log_phase("REFACTOR_ALL", f"REVERTED — {detail}")
+        else:
+            # The refactor's edits failed verification AND could not be
+            # discarded — they stay in the tree, and nothing downstream
+            # re-runs the suite (the final review is LLM-graded). Say so
+            # loudly rather than let the build reach COMPLETE looking clean.
+            log.error("DONE phase=REFACTOR_ALL result=unverified-and-not-discarded "
+                      "reason=%s — UNVERIFIED refactor edits remain in the tree "
+                      "and will ship unless reviewed", detail)
+            progress.log_phase("REFACTOR_ALL", f"REVERT FAILED — {detail}")
+    else:
+        sha = _git_commit_tree(config, "refactor: simplify across blocks",
+                               "whole-change refactor")
+        log.info("DONE phase=REFACTOR_ALL result=committed sha=%s",
+                 sha[:8] if sha else "(no changes)")
+        progress.log_phase("REFACTOR_ALL",
+                           "COMMITTED" if sha else "PASSED (no changes needed)")
+
+    state.tdd.refactor_all_done = True
+    state.checkpoint(config.state_file_path())
+    return True
 
 
 def _build_trajectory_text(state: BuildState) -> str:
@@ -1778,7 +2167,7 @@ async def _run_final_review(config: BuildConfig, state: BuildState) -> GateResul
     if not rubric:
         return GateResult(passed=True, reason="No rubric — skipping final review")
 
-    diff = _capture_full_build_diff(config, state)
+    diff = capture_build_diff(config, state)
     if not diff:
         log.warning("No full-build diff captured — final review sees rubric only")
     prompt = FINAL_REVIEW_PROMPT.format(

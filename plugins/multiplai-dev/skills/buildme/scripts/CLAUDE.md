@@ -7,7 +7,7 @@
 | `__main__.py` | CLI entry point with subcommands | No |
 | `orchestrator.py` | Phase sequencing state machine | Delegates |
 | `spec_generator.py` | Artifact pipeline (proposal → tasks → rubric) | Via llm_steps |
-| `tdd_engine.py` | Block-by-block TDD with agent spawning | Via llm_steps |
+| `tdd_engine.py` | Block-by-block TDD with agent spawning. Each block runs test → implement → **refactor** on every tier; the refactor is verified (suite re-run + `unchanged_tests_gate`) and its diff discarded on failure. `_run_refactor_all` is the one conservative whole-change pass, between the block loop and `_run_final_review`, guarded by `TDDState.refactor_all_done`. | Via llm_steps |
 | `apply.py` | Manual single-agent implementation | Via sdk |
 | `change_manager.py` | Manages specs/ directory (DAG, status, templates, archiving) | No |
 | `config.py` | BuildConfig, tier detection, test command discovery, reference-doc resolution (`stack_reference_docs`/`reference_docs_text`: built-in stack map + `reference_docs:` overrides from `specs/config.yaml` + django/react manifest detection) | No |
@@ -30,7 +30,7 @@
 |------|-----------|-------------|
 | `spec_steps.py` | `generate_artifact()`, `run_explainer()`, `run_design_audit()`, `run_tasks_audit()`, `run_codebase_analysis()` | `run_explainer()` is the B1 explainer gate — one call per `dependencies.detect_new_dependencies()` hit, run concurrently with `WebSearch`/`WebFetch`/`Read`/`Glob`/`Grep`, concatenated into `unknowns.md`; `unknowns_gate` then forces at most one regeneration pass (`spec_generator._audit_unknowns`, recorded as `SpecGenState.explainers_done`). Spec generation + adversarial audits (design audit and tasks-shape audit, both wired — the tasks audit forces one regeneration pass on horizontal-decomposition findings). `run_design_audit()` covers consistency **and** plan quality (over-engineering, granularity, testability, edge cases); its critical/major gaps force one regeneration pass of design.md + tasks.md through the single call site `spec_generator.run_design_audit_stage` (recorded as `SpecGenState.design_audit_regen_done`, then one report-only re-audit; the stage as a whole is recorded as `design_audit_done` and checked before the model call, so the second call site is free). `run_codebase_analysis()` (3 concurrent explore agents) is **wired** as `BuildPhase.CODEBASE_ANALYSIS` — the orchestrator writes its report to `codebase-analysis.md` and records the path on `SpecGenState.codebase_analysis_path`; `spec_generator.read_codebase_analysis` turns that path back into the text the design prompt inlines. |
 | `prototype_steps.py` | `run_prototype()`, `apply_prototype_findings()`, `primary_prototype_artifact()` | Prototype-first stage (BuildPhase.PROTOTYPE, between DESIGN_AUDIT and REVIEW). One agent writes a mockup / sample output / CLI transcript + `NOTES.md` inside `specs/changes/<name>/prototype/` — the write boundary is enforced in code (`_files_outside`), not only in the prompt. `apply_prototype_findings()` folds the notes' DISPROVES/OPEN_QUESTIONS back into design.md and tasks.md with **one** regeneration pass each. |
-| `tdd_steps.py` | `run_test_writer()`, `run_implementer()`, `run_refactorer()`, `run_integration_fix()` | TDD agent spawning with tool allowlists. Reports carry the `SURPRISES:` / `SPEC_IMPACT:` REQUIRED slots parsed by `gates.parse_implementation_note`. |
+| `tdd_steps.py` | `run_test_writer()`, `run_implementer()`, `run_refactorer()`, `run_refactor_all()`, `run_integration_fix()` | TDD agent spawning with tool allowlists. Reports carry the `SURPRISES:` / `SPEC_IMPACT:` REQUIRED slots parsed by `gates.parse_implementation_note`. `run_refactor_all()` is the whole-change pass: same `REFACTORER_TOOLS`, more turns/time, `budget_label="refactor_all"`. |
 | `respec_steps.py` | `append_implementation_note()`, `format_implementation_note()`, `notes_path()`, `ensure_delta_sections()`, `run_respec_audit()` | B3 loop back to the spec. Each parsed `ImplementationNote` is appended to `implementation-notes.md` **as the build runs** (a crashed build still leaves the learning on disk). `run_respec_audit()` (BuildPhase.RESPEC, after TDD_BUILD) reads those notes + current requirements/design and writes `respec.md` in ADDED/MODIFIED/REMOVED form — **propose only, never edits the specs**, and non-fatal on LLM failure. |
 | `review_steps.py` | `run_code_review()`, `merge_panel_results()`, `run_security_review()`, `run_review_fix()` | `run_code_review()` is **wired** as the active per-block review — `tdd_engine._run_quality_review` calls it with the block's actual diff, rubric, spec context, and coding standards. Runs every model in `config.review_panel` concurrently (empty panel → one reviewer on `review_model`-or-`model`, byte-identical to the pre-panel behavior), drops members that failed, and folds the survivors with `merge_panel_results()`. `run_security_review()` / `run_review_fix()` remain **not wired**. |
 
@@ -42,7 +42,7 @@ Templates are Python f-strings with `{placeholders}`. Each template is a constan
 |------|-----------|
 | `spec_generation.py` | PROPOSAL_PROMPT, SPEC_PROMPT, DESIGN_PROMPT, TASKS_PROMPT |
 | `test_writing.py` | TEST_WRITER_PROMPT |
-| `implementation.py` | IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM, REFACTOR_PROMPT, APPLY_PROMPT |
+| `implementation.py` | IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM, REFACTOR_PROMPT, REFACTOR_ALL_PROMPT, APPLY_PROMPT |
 | `review.py` | CODE_REVIEW_PROMPT, FINDING_ADJUDICATION_PROMPT, FINAL_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT |
 | `design_audit.py` | DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT |
 | `prototype.py` | PROTOTYPE_PROMPT |
@@ -126,6 +126,25 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   wrote during that window, never the accumulated `block.implementer_report` —
   otherwise the re-baseline is defeated by a single implement-phase declaration
   authorizing every later review-fix mutation.
+- **A refactor window carries no test-change escape hatch.** Both refactor
+  windows (per block, and the whole-change pass) call `unchanged_tests_gate`
+  with an **empty report** — deliberately, so `TEST CHANGE REQUIRED:` cannot
+  reach it. The hatch exists for an implementer that discovers a genuinely
+  wrong test; a refactorer is behavior-preserving by definition, so any
+  test-file change there is a failure. This is also why the windows are safe to
+  be strict: the implementation is committed first, so a failed refactor is
+  discarded (`reset --hard` to the impl commit, plus a `clean` that excludes
+  buildme's bookkeeping) and the block keeps the code that was already green.
+  A refactor must never turn a green block red.
+- **A discard only ever moves backwards along the current history.**
+  `_git_discard_to` checks `merge-base --is-ancestor <sha> HEAD` and refuses
+  otherwise. `reset --hard` will jump to any commit, and the refactorer holds
+  `Bash` — so it can commit, move HEAD, or switch branches between the moment
+  the impl sha was captured and the discard. Resetting unchecked would throw
+  away whatever HEAD had actually reached: earlier blocks' commits, or under
+  `--no-worktree` the user's own. Unknown ancestry (git unavailable) reads as
+  "refuse", never as "safe to destroy" — the caller then treats the refactor as
+  *not* reverted.
 - **An unavailable snapshot means "not checked", never "everything was
   deleted".** `_snapshot_test_files` returns `None` (distinct from `{}`) when
   git cannot be asked; both windows must pass on `None` rather than compare a

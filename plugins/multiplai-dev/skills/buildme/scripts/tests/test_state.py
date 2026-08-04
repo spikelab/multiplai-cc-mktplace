@@ -287,6 +287,35 @@ class TestRespecPhaseAndNotes:
         assert loaded.is_phase_complete(BuildPhase.REVIEW)
         assert not loaded.is_phase_complete(BuildPhase.RESPEC)
 
+    def test_pre_refactor_all_fixture_has_no_refactor_all_field(self):
+        """Guard the guard: regenerating this fixture with current code would
+        stop it testing backwards compatibility."""
+        raw = (FIXTURES / "build-state-pre-refactor-all.json").read_text()
+        assert "refactor_all" not in raw
+
+    def test_pre_refactor_all_checkpoint_resumes_at_the_refactor_pass(self):
+        """A checkpoint written before the whole-change refactor existed: every
+        block is done, the final review has not run, and the new flag defaults
+        to False — so the resume runs the pass rather than skipping it."""
+        s = BuildState.load(FIXTURES / "build-state-pre-refactor-all.json")
+
+        assert s.phase == BuildPhase.TDD_BUILD
+        assert s.tdd.refactor_all_done is False
+        assert s.tdd.final_review_done is False
+        assert [b.status for b in s.tdd.blocks] == [BlockStatus.DONE, BlockStatus.DONE]
+        assert s.tdd.current_block == len(s.tdd.blocks)
+        # Fields added after the checkpoint was written take their defaults.
+        assert all(b.refactor_commit is None for b in s.tdd.blocks)
+
+    def test_refactor_all_done_survives_checkpoint_and_reload(self, tmp_path):
+        s = BuildState.load(FIXTURES / "build-state-pre-refactor-all.json")
+        out = tmp_path / "state.json"
+        s.tdd.refactor_all_done = True
+        s.checkpoint(out)
+
+        assert BuildState.load(out).tdd.refactor_all_done is True
+        assert json.loads(out.read_text())["tdd"]["refactor_all_done"] is True
+
     def test_block_notes_survive_checkpoint_and_reload(self, tmp_path):
         state_file = tmp_path / "state.json"
         block = BlockInfo(number=2, name="Uploader", description="u")

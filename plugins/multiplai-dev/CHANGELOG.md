@@ -10,7 +10,7 @@ Version numbers are this plugin's version in the marketplace manifest
 
 Recorded history starts at **0.1.1**; anything earlier is in `git log` only.
 
-Of the 14 versions recorded here, `0.1.1` and `0.5.0` carry a git tag — the
+Of the 15 versions recorded here, `0.1.1` and `0.5.0` carry a git tag — the
 tagging convention started partway through. Dates on untagged versions are the
 release dates recorded at the time, not derived from a tag.
 
@@ -20,6 +20,45 @@ release dates recorded at the time, not derived from a tag.
 - **A plugin README** (`plugins/multiplai-dev/README.md`) — what the pack
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
+
+## [0.8.0] - 2026-08-04
+
+### Added
+
+- **`/buildme` now refactors every block, on every tier — and proves it was
+  safe.** The refactor step used to be off entirely on the advanced tier and
+  unverified on the standard one, so the TDD loop effectively stopped at
+  "the tests pass". It now runs after every block on both tiers, and the
+  pipeline checks the result rather than taking the agent's word for it: the
+  suite is re-run and every test file is re-hashed. If the suite is not green,
+  or a single test file changed, the whole refactor is thrown away — the block
+  is reset to its `impl(block-N)` commit and the build carries on with the code
+  that was already green. A refactor can improve your block or do nothing to
+  it; it can no longer break one.
+- **A refactor that survives verification is committed**, as
+  `refactor(block-N): <name>`, so you can see it in the branch history and
+  review it separately from the implementation. Previously the refactor's edits
+  were left uncommitted and got folded silently into the next commit.
+- **One conservative whole-change refactor pass runs after the last block**,
+  before the final review, over the cumulative diff. It exists to catch what
+  is invisible while you are building block by block: the same helper written
+  twice in two blocks, code nothing calls any more, a wrapper that only
+  forwards, one concept named three ways. Its charter stops there — module
+  boundaries and public signatures stay as designed, and behavior is preserved.
+  It lands as `refactor: simplify across blocks`, carries the same
+  suite-and-tests verification (a failure reverts the whole pass), is checked
+  against your token budget like any block boundary, and is recorded in the
+  checkpoint so resuming a build does not pay for it twice.
+
+### Changed
+
+- **The implementer prompt no longer tells the advanced tier "there is no
+  refactor phase".** It says a conservative refactor pass follows, and still
+  asks for production-quality code the first time — the later pass tidies, it
+  does not rescue.
+- **`[buildme.agent]` in `multiplai.conf` also tunes the whole-change refactor
+  pass**, alongside the test writer, implementer, per-block refactorer and fix
+  agents.
 
 ## [0.7.0] - 2026-08-04
 
