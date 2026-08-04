@@ -199,6 +199,12 @@ async def apply_prototype_findings(config) -> int:
     change_dir = config.change_dir
     regenerated = 0
 
+    # Read back what the first pass was written against. This function has no
+    # BuildState, so the phase's report is re-read from disk; without it the
+    # regenerated design would silently lose its codebase grounding.
+    analysis_path = config.codebase_analysis_path
+    codebase_analysis = analysis_path.read_text() if analysis_path.exists() else ""
+
     for artifact_id in ("design", "tasks"):
         context = cm.artifact_context(change_dir, artifact_id)
         output_path = change_dir / context["output_path"]
@@ -210,7 +216,13 @@ async def apply_prototype_findings(config) -> int:
             continue
         try:
             content = await generate_artifact(
-                artifact_id, context, config, audit_findings=findings_text,
+                artifact_id, context, config,
+                # Same grounding the first pass had: a regeneration that
+                # dropped it would quietly rewrite the design away from the
+                # project's conventions and its existing structure.
+                codebase_analysis=codebase_analysis,
+                reference_docs=config.reference_docs_text(),
+                audit_findings=findings_text,
             )
         except Exception as regen_err:  # non-fatal: first pass stands
             log.warning(

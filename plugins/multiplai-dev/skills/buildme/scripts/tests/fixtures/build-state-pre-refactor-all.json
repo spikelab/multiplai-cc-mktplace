@@ -1,0 +1,49 @@
+{
+  "change_name": "legacy-refactor-all",
+  "mode": "scratch",
+  "tier": "advanced",
+  "phase": "tdd_build",
+  "bootstrap_done": true,
+  "interview_summary": "Add a retry column to the jobs table.",
+  "research_path": null,
+  "spec_gen": {
+    "completed_artifacts": ["proposal", "requirements", "design", "unknowns", "tasks", "rubric"],
+    "research_path": null,
+    "codebase_analysis_path": null,
+    "tasks_audit_done": true,
+    "explainers_done": true,
+    "prototype_done": true
+  },
+  "tdd": {
+    "blocks": [
+      {
+        "number": 1,
+        "name": "Retry column",
+        "description": "Add the column and the migration",
+        "status": "done",
+        "baseline_commit": "1111111111111111111111111111111111111111",
+        "test_commit": "2222222222222222222222222222222222222222",
+        "impl_commit": "3333333333333333333333333333333333333333",
+        "review_iterations": 1
+      },
+      {
+        "number": 2,
+        "name": "Re-enqueue worker",
+        "description": "Worker picks up failed jobs",
+        "status": "done",
+        "baseline_commit": "3333333333333333333333333333333333333333",
+        "test_commit": "4444444444444444444444444444444444444444",
+        "impl_commit": "5555555555555555555555555555555555555555",
+        "review_iterations": 2
+      }
+    ],
+    "current_block": 2,
+    "baseline_tests_pass": true,
+    "final_review_done": false,
+    "e2e_done": false
+  },
+  "budget": {},
+  "state_file": "",
+  "started_at": "2026-07-22T09:14:03.117412+00:00",
+  "updated_at": "2026-07-22T11:48:52.554311+00:00"
+}

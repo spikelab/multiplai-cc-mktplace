@@ -1,10 +1,16 @@
 """Prompt template for adversarial design audit.
 
 Runs after all artifacts are generated to catch gaps before TDD.
+
+Its findings are not report-only: critical and major gaps drive exactly one
+regeneration pass of design.md and tasks.md
+(``spec_generator.run_design_audit_stage``). That is why the checklist covers
+plan *quality* — over-engineering, granularity, testability, edge cases — and
+why the severity scale below is calibrated: severity decides what gets rewritten.
 """
 
 DESIGN_AUDIT_PROMPT = """\
-You are an adversarial reviewer auditing the generated OpenSpec artifacts for internal consistency and completeness.
+You are an adversarial reviewer auditing the generated OpenSpec artifacts for internal consistency, completeness, and plan quality.
 
 ## Proposal
 {proposal_content}
@@ -47,6 +53,52 @@ Cross-reference these artifacts and report ANY gaps:
 - All capability names from proposal have corresponding spec files
 - Task block count is reasonable (2-8 blocks typical)
 
+### Plan Quality — Right-Sizing (category "over-engineering")
+For every abstraction the design introduces — an interface, a base class, a
+plugin/registry/factory, a configuration knob, a new layer, a generalized
+parameter — name the requirement or spec scenario that needs it. Report each
+one where no requirement needs it, quoting the abstraction and stating what
+the simpler shape would be (a direct call, a literal, one concrete
+implementation). The same applies to scope the proposal did not ask for:
+report design decisions or task blocks that build capability nothing in the
+specs requires.
+
+### Plan Quality — Task Granularity (category "granularity")
+Report blocks that are mis-sized for review and verification:
+- a block whose deliverable spans several unrelated behaviors (say which
+  behaviors, and where the split goes)
+- a block so small it cannot be verified on its own (say which neighbor it
+  belongs with)
+- a block whose checkbox items do not add up to the behavior its title claims
+
+### Plan Quality — Testability (category "testability")
+For every design decision and every task block, name the observable a test
+could assert on — a return value, a written file, a logged line, an emitted
+event, an exit code. Report each decision or block where no such observable
+exists, and say what to expose (a return value instead of an internal
+mutation, a seam instead of a hidden global) so it becomes assertable.
+
+### Plan Quality — Edge Cases (category "edge-case")
+Walk the inputs and the failure surface the design implies and report the ones
+no spec scenario and no task block covers. At minimum consider: empty or
+absent input, input at the size/format boundary, each external dependency
+failing or timing out, partial completion followed by a retry or resume,
+concurrent or repeated invocation, and the permission/credential being missing.
+Report each uncovered case with the scenario that should exist.
+
+## Severity
+
+Severity decides what gets rewritten, so calibrate it:
+
+- **critical** — the change cannot be built correctly from these documents as
+  written: a required behavior has no home, two documents contradict, or a
+  named contract does not exist.
+- **major** — the documents will produce the wrong shape or leave a real
+  behavior unbuilt: an unneeded abstraction that will be built, an uncovered
+  failure mode, a block that cannot be verified, a spec scenario with no block.
+- **minor** — a clarification that improves the documents without changing
+  what gets built.
+
 ## Output Format
 Return a JSON array of gap objects:
 
@@ -63,7 +115,9 @@ Return a JSON array of gap objects:
 
 If no gaps found, return an empty array: `[]`
 
-Be thorough but not pedantic. Flag real gaps, not stylistic preferences.
+Report what you can point at in these documents — quote the line, the block, or
+the scenario each finding comes from, and make the suggestion concrete enough
+to apply.
 """
 
 

@@ -141,15 +141,22 @@ class TestTierProperties:
         c = BuildConfig(tier="standard")
         assert c.agent_scope == "per_task"
 
-    def test_advanced_no_refactor_phase(self):
+    def test_advanced_has_refactor_phase(self):
+        """`refactor_phase` is the single switch and it is on everywhere: the
+        step re-runs the tests and re-hashes them, and discards its own diff
+        when either check fails, so there is no tier it can cost anything on."""
         c = BuildConfig(tier="advanced")
-        assert not c.refactor_phase
-        assert c.tdd_phases == ["test", "implement"]
+        assert c.refactor_phase is True
+        assert c.tdd_phases == ["test", "implement", "refactor"]
 
     def test_standard_has_refactor_phase(self):
         c = BuildConfig(tier="standard")
-        assert c.refactor_phase
+        assert c.refactor_phase is True
         assert c.tdd_phases == ["test", "implement", "refactor"]
+
+    def test_refactor_phase_is_on_for_every_tier(self):
+        for tier in ("advanced", "standard"):
+            assert BuildConfig(tier=tier).refactor_phase is True
 
     def test_advanced_implementer_prompt_clean(self):
         c = BuildConfig(tier="advanced")
@@ -274,6 +281,255 @@ class TestStandardsFiles:
             text = config.standards_text()
         assert "Never use bare except." in text
         assert "binary.md" not in text
+        assert any("unreadable" in r.getMessage() for r in caplog.records)
+
+
+class TestReferenceDocs:
+    """`reference_docs:` in specs/config.yaml overrides the built-in stack
+    mapping; framework detection reads the manifests the stack name cannot
+    distinguish."""
+
+    @staticmethod
+    def _config_with_docs(tmp_path, *doc_names, stack="pyproject", **kwargs):
+        """A BuildConfig whose reference/dev directory really holds `doc_names`."""
+        ref_dir = tmp_path / "claude-config" / "reference" / "dev"
+        ref_dir.mkdir(parents=True, exist_ok=True)
+        for name in doc_names:
+            (ref_dir / name).write_text(f"# {name}\ncontent of {name}\n")
+        project = tmp_path / "project"
+        project.mkdir(exist_ok=True)
+        config = BuildConfig(
+            project_dir=project,
+            config_dir=tmp_path / "claude-config",
+            **kwargs,
+        )
+        config.stack = stack
+        return config
+
+    # --- built-in defaults ---
+
+    def test_builtin_mapping_still_resolves_python_docs(self, tmp_path):
+        config = self._config_with_docs(
+            tmp_path, "uv-python-best-practices.md", "python-project-structure.md",
+        )
+        assert [p.name for p in config.stack_reference_docs()] == [
+            "uv-python-best-practices.md", "python-project-structure.md",
+        ]
+
+    def test_missing_doc_is_skipped_not_fatal(self, tmp_path):
+        """Only one of the two built-in python docs exists on disk."""
+        config = self._config_with_docs(tmp_path, "python-project-structure.md")
+        assert [p.name for p in config.stack_reference_docs()] == [
+            "python-project-structure.md",
+        ]
+
+    def test_unknown_stack_resolves_nothing_and_warns_nothing(self, tmp_path, caplog):
+        config = self._config_with_docs(tmp_path, stack="Cargo")
+        with caplog.at_level("WARNING"):
+            assert config.stack_reference_docs() == []
+        # Cargo maps to [] by design — that is not "docs went missing".
+        assert not any("NONE of its reference docs" in r.getMessage() for r in caplog.records)
+
+    def test_detected_stack_with_zero_resolved_docs_warns(self, tmp_path, caplog):
+        """The visible failure mode: a stack is detected, docs are named, and
+        none of them exist — every spec below is written with no conventions."""
+        config = self._config_with_docs(tmp_path)  # ref dir exists but is empty
+        with caplog.at_level("WARNING"):
+            assert config.stack_reference_docs() == []
+        assert any("NONE of its reference docs" in r.getMessage() for r in caplog.records)
+
+    def test_references_progress_line_is_emitted_once(self, tmp_path, capsys):
+        config = self._config_with_docs(tmp_path, "python-project-structure.md")
+        config.stack_reference_docs()
+        config.stack_reference_docs()
+        out = capsys.readouterr().out
+        assert out.count("REFERENCES:") == 1
+        assert "REFERENCES:python-project-structure.md" in out
+
+    def test_references_progress_line_says_none_when_empty(self, tmp_path, capsys):
+        config = self._config_with_docs(tmp_path, stack="go")
+        config.stack_reference_docs()
+        assert "REFERENCES:(none)" in capsys.readouterr().out
+
+    # --- specs/config.yaml override ---
+
+    def test_reference_docs_defaults_empty(self):
+        assert BuildConfig().reference_docs == {}
+
+    def test_config_yaml_override_changes_the_resolved_doc_list(self, tmp_path):
+        """The acceptance fact: a `reference_docs:` key in specs/config.yaml
+        replaces the built-in list for that stack."""
+        config = self._config_with_docs(
+            tmp_path, "uv-python-best-practices.md", "house-python-rules.md",
+        )
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text(
+            "reference_docs:\n  pyproject:\n    - house-python-rules.md\n"
+        )
+        config.specs_dir = specs
+        config._load_specs_config()
+        config.stack = "pyproject"
+
+        assert config.reference_docs == {"pyproject": ["house-python-rules.md"]}
+        # The built-in uv doc exists on disk but is no longer asked for.
+        assert config.reference_doc_names() == ["house-python-rules.md"]
+        assert [p.name for p in config.stack_reference_docs()] == ["house-python-rules.md"]
+
+    def test_config_yaml_override_leaves_other_stacks_alone(self, tmp_path):
+        config = self._config_with_docs(
+            tmp_path, "swift-best-practices.md", "swift-testing-strategies.md",
+            stack="Package",
+        )
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text(
+            "reference_docs:\n  pyproject:\n    - house-python-rules.md\n"
+        )
+        config.specs_dir = specs
+        config._load_specs_config()
+        config.stack = "Package"
+        assert [p.name for p in config.stack_reference_docs()] == [
+            "swift-best-practices.md", "swift-testing-strategies.md",
+        ]
+
+    def test_malformed_reference_docs_entry_is_dropped_not_fatal(self, tmp_path, caplog):
+        config = self._config_with_docs(tmp_path, "uv-python-best-practices.md")
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text("reference_docs:\n  pyproject: 17\n")
+        config.specs_dir = specs
+        with caplog.at_level("WARNING"):
+            config._load_specs_config()
+        config.stack = "pyproject"
+        assert config.reference_docs == {}
+        assert any("must be a list" in r.getMessage() for r in caplog.records)
+        # Defaults stand.
+        assert "uv-python-best-practices.md" in config.reference_doc_names()
+
+    def test_reference_docs_scalar_is_accepted_as_a_one_item_list(self, tmp_path):
+        config = self._config_with_docs(tmp_path, "house-python-rules.md")
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text("reference_docs:\n  pyproject: house-python-rules.md\n")
+        config.specs_dir = specs
+        config._load_specs_config()
+        config.stack = "pyproject"
+        assert config.reference_doc_names() == ["house-python-rules.md"]
+
+    # --- framework detection ---
+
+    def test_manage_py_detects_django(self, tmp_path):
+        config = self._config_with_docs(tmp_path, "django-best-practices.md")
+        (config.project_dir / "manage.py").write_text("#!/usr/bin/env python\n")
+        assert config.detect_frameworks() == ["django"]
+        assert "django-best-practices.md" in config.reference_doc_names()
+
+    def test_django_in_pyproject_dependencies_detects_django(self, tmp_path):
+        config = self._config_with_docs(tmp_path, "django-best-practices.md")
+        (config.project_dir / "pyproject.toml").write_text(
+            '[project]\nname = "site"\ndependencies = ["Django>=5.0", "gunicorn"]\n'
+        )
+        assert config.detect_frameworks() == ["django"]
+
+    def test_django_in_requirements_txt_detects_django(self, tmp_path):
+        config = self._config_with_docs(tmp_path, "django-best-practices.md")
+        (config.project_dir / "requirements.txt").write_text(
+            "# app deps\ndjango[argon2]==5.0.1\nrequests\n"
+        )
+        assert config.detect_frameworks() == ["django"]
+
+    def test_plain_python_project_is_not_django(self, tmp_path):
+        config = self._config_with_docs(tmp_path, "django-best-practices.md")
+        (config.project_dir / "pyproject.toml").write_text(
+            '[project]\nname = "lib"\ndependencies = ["pydantic"]\n'
+        )
+        assert config.detect_frameworks() == []
+        assert "django-best-practices.md" not in config.reference_doc_names()
+
+    def test_react_in_package_json_extends_the_node_docs(self, tmp_path):
+        config = self._config_with_docs(
+            tmp_path, "bun-vite-react-best-practices.md", "react-best-practices.md",
+            stack="package",
+        )
+        (config.project_dir / "package.json").write_text(
+            '{"dependencies": {"react": "^19.0.0", "react-dom": "^19.0.0"}}'
+        )
+        assert config.detect_frameworks() == ["react"]
+        assert [p.name for p in config.stack_reference_docs()] == [
+            "bun-vite-react-best-practices.md", "react-best-practices.md",
+        ]
+
+    def test_node_project_without_react_keeps_only_the_stack_docs(self, tmp_path):
+        config = self._config_with_docs(
+            tmp_path, "bun-vite-react-best-practices.md", "react-best-practices.md",
+            stack="package",
+        )
+        (config.project_dir / "package.json").write_text('{"dependencies": {"express": "^4"}}')
+        assert config.detect_frameworks() == []
+        assert [p.name for p in config.stack_reference_docs()] == [
+            "bun-vite-react-best-practices.md",
+        ]
+
+    def test_unparseable_manifest_does_not_crash_detection(self, tmp_path, caplog):
+        config = self._config_with_docs(tmp_path, stack="package")
+        (config.project_dir / "package.json").write_text("{ not json ")
+        (config.project_dir / "pyproject.toml").write_text("[project\nbroken")
+        with caplog.at_level("WARNING"):
+            assert config.detect_frameworks() == []
+        assert any("framework detection" in r.getMessage() for r in caplog.records)
+
+    def test_framework_doc_list_is_overridable_too(self, tmp_path):
+        config = self._config_with_docs(tmp_path, "our-django-rules.md")
+        (config.project_dir / "manage.py").write_text("")
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "config.yaml").write_text(
+            "reference_docs:\n  pyproject: []\n  django:\n    - our-django-rules.md\n"
+        )
+        config.specs_dir = specs
+        config._load_specs_config()
+        config.stack = "pyproject"
+        assert config.reference_doc_names() == ["our-django-rules.md"]
+
+    # --- inlining for the spec prompts ---
+
+    def test_reference_docs_text_inlines_contents(self, tmp_path):
+        config = self._config_with_docs(tmp_path, "python-project-structure.md")
+        text = config.reference_docs_text()
+        assert "### Reference: python-project-structure.md" in text
+        assert "content of python-project-structure.md" in text
+
+    def test_reference_docs_text_empty_when_nothing_resolves(self, tmp_path):
+        config = self._config_with_docs(tmp_path, stack="go")
+        assert config.reference_docs_text() == ""
+
+    def test_long_doc_is_truncated_with_a_marker(self, tmp_path):
+        from build_pipeline.config import REFERENCE_DOC_CHAR_LIMIT
+
+        ref_dir = tmp_path / "claude-config" / "reference" / "dev"
+        ref_dir.mkdir(parents=True)
+        (ref_dir / "python-project-structure.md").write_text("x" * (REFERENCE_DOC_CHAR_LIMIT + 5000))
+        config = BuildConfig(
+            project_dir=tmp_path / "project", config_dir=tmp_path / "claude-config",
+        )
+        config.stack = "pyproject"
+        text = config.reference_docs_text()
+        assert "truncated at" in text
+        assert text.count("x") == REFERENCE_DOC_CHAR_LIMIT
+
+    def test_unreadable_reference_doc_skipped_not_fatal(self, tmp_path, caplog):
+        ref_dir = tmp_path / "claude-config" / "reference" / "dev"
+        ref_dir.mkdir(parents=True)
+        (ref_dir / "uv-python-best-practices.md").write_bytes(b"\xff\xfe\x00garbage\x80")
+        (ref_dir / "python-project-structure.md").write_text("Layout rules.")
+        config = BuildConfig(
+            project_dir=tmp_path / "project", config_dir=tmp_path / "claude-config",
+        )
+        config.stack = "pyproject"
+        with caplog.at_level("WARNING"):
+            text = config.reference_docs_text()
+        assert "Layout rules." in text
         assert any("unreadable" in r.getMessage() for r in caplog.records)
 
 

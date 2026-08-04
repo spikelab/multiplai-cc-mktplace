@@ -186,6 +186,62 @@ class TestLegacyCheckpointResume:
         assert json.loads(out.read_text())["spec_gen"]["prototype_done"] is False
 
 
+class TestPreCodebaseAnalysisCheckpointResume:
+    """A .build-state.json written before BuildPhase.CODEBASE_ANALYSIS existed
+    must still load, and the inserted phase must land where it runs — ahead of
+    a checkpoint parked at RESEARCH, behind one already into spec generation.
+    The stored phase is a name, not an ordinal, so the insertion cannot shift
+    it; is_phase_complete compares enum *positions*, which is what has to be
+    asserted."""
+
+    FIXTURE = "build-state-pre-codebase-analysis.json"
+
+    def test_fixture_predates_the_change(self):
+        """Guard the guard: regenerating this fixture with current code would
+        stop it testing backwards compatibility."""
+        raw = (FIXTURES / self.FIXTURE).read_text()
+        for token in ("codebase_analysis_path", "prototype_done", "explainers_done", "budget"):
+            assert token not in raw, f"{self.FIXTURE} is no longer a pre-change fixture"
+
+    def test_loads_and_resumes_with_codebase_analysis_still_ahead(self):
+        s = BuildState.load(FIXTURES / self.FIXTURE)
+
+        assert s.phase == BuildPhase.RESEARCH
+        assert s.change_name == "legacy-research"
+        # The field the new phase writes takes its default on an old checkpoint.
+        assert s.spec_gen.codebase_analysis_path is None
+
+        assert s.is_phase_complete(BuildPhase.BOOTSTRAP)
+        assert s.is_phase_complete(BuildPhase.INTERVIEW_DONE)
+        # The resume point is research, with the new phase after it rather
+        # than silently skipped...
+        assert not s.is_phase_complete(BuildPhase.RESEARCH)
+        assert not s.is_phase_complete(BuildPhase.CODEBASE_ANALYSIS)
+        assert not s.is_phase_complete(BuildPhase.SPEC_GENERATION)
+
+    def test_codebase_analysis_is_ordered_between_research_and_spec_generation(self):
+        order = list(BuildPhase)
+        assert order.index(BuildPhase.RESEARCH) < order.index(BuildPhase.CODEBASE_ANALYSIS)
+        assert order.index(BuildPhase.CODEBASE_ANALYSIS) < order.index(BuildPhase.SPEC_GENERATION)
+
+    def test_a_checkpoint_past_research_does_not_rewind_for_analysis(self):
+        """...and an old checkpoint already at spec generation is not sent
+        back to analyze the codebase — its shaping is done."""
+        s = BuildState.load(FIXTURES / self.FIXTURE)
+        s.phase = BuildPhase.SPEC_GENERATION
+        assert s.is_phase_complete(BuildPhase.CODEBASE_ANALYSIS)
+
+    def test_roundtrip_rewrites_with_the_new_field(self, tmp_path):
+        s = BuildState.load(FIXTURES / self.FIXTURE)
+        out = tmp_path / "state.json"
+        s.checkpoint(out)
+
+        reloaded = BuildState.load(out)
+        assert reloaded.phase == BuildPhase.RESEARCH
+        assert reloaded.interview_summary == s.interview_summary
+        assert json.loads(out.read_text())["spec_gen"]["codebase_analysis_path"] is None
+
+
 class TestRespecPhaseAndNotes:
     """BuildPhase.RESPEC sits between TDD_BUILD and COMPLETE, and the notes an
     agent reported survive a checkpoint/resume round trip."""
@@ -230,6 +286,35 @@ class TestRespecPhaseAndNotes:
         assert loaded.tdd.blocks[0].notes == []
         assert loaded.is_phase_complete(BuildPhase.REVIEW)
         assert not loaded.is_phase_complete(BuildPhase.RESPEC)
+
+    def test_pre_refactor_all_fixture_has_no_refactor_all_field(self):
+        """Guard the guard: regenerating this fixture with current code would
+        stop it testing backwards compatibility."""
+        raw = (FIXTURES / "build-state-pre-refactor-all.json").read_text()
+        assert "refactor_all" not in raw
+
+    def test_pre_refactor_all_checkpoint_resumes_at_the_refactor_pass(self):
+        """A checkpoint written before the whole-change refactor existed: every
+        block is done, the final review has not run, and the new flag defaults
+        to False — so the resume runs the pass rather than skipping it."""
+        s = BuildState.load(FIXTURES / "build-state-pre-refactor-all.json")
+
+        assert s.phase == BuildPhase.TDD_BUILD
+        assert s.tdd.refactor_all_done is False
+        assert s.tdd.final_review_done is False
+        assert [b.status for b in s.tdd.blocks] == [BlockStatus.DONE, BlockStatus.DONE]
+        assert s.tdd.current_block == len(s.tdd.blocks)
+        # Fields added after the checkpoint was written take their defaults.
+        assert all(b.refactor_commit is None for b in s.tdd.blocks)
+
+    def test_refactor_all_done_survives_checkpoint_and_reload(self, tmp_path):
+        s = BuildState.load(FIXTURES / "build-state-pre-refactor-all.json")
+        out = tmp_path / "state.json"
+        s.tdd.refactor_all_done = True
+        s.checkpoint(out)
+
+        assert BuildState.load(out).tdd.refactor_all_done is True
+        assert json.loads(out.read_text())["tdd"]["refactor_all_done"] is True
 
     def test_block_notes_survive_checkpoint_and_reload(self, tmp_path):
         state_file = tmp_path / "state.json"

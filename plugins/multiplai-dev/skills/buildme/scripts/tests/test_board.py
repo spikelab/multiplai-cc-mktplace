@@ -48,6 +48,7 @@ EXPECTED_COLUMNS = {
     BuildPhase.BOOTSTRAP: BoardColumn.SHAPING,
     BuildPhase.INTERVIEW_DONE: BoardColumn.SHAPING,
     BuildPhase.RESEARCH: BoardColumn.SHAPING,
+    BuildPhase.CODEBASE_ANALYSIS: BoardColumn.SHAPING,
     BuildPhase.SPEC_GENERATION: BoardColumn.SHAPING,
     BuildPhase.DESIGN_AUDIT: BoardColumn.PLANNING,
     BuildPhase.PROTOTYPE: BoardColumn.PLANNING,

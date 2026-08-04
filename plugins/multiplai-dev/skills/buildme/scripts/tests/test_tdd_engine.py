@@ -2,6 +2,7 @@
 
 import os
 import re
+import sys
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,10 +17,14 @@ from build_pipeline.tdd_engine import (
     run_tdd_engine,
     _capture_block_diff,
     _detect_entry_point,
+    _git_discard_to,
+    _is_ancestor_of_head,
     _read_block_test_files,
     _git_commit_block_phase,
     _run_final_review,
     _run_integration_and_review,
+    _run_refactor_all,
+    _snapshot_all_test_files,
     _run_quality_review,
     _adjudicate_review_findings,
     _build_trajectory_text,
@@ -53,6 +58,22 @@ from build_pipeline.models import (
 from build_pipeline.models import TestQualityAudit as QualityAudit  # Test* name breaks pytest collection
 from build_pipeline.state import BuildState, TDDState
 from build_pipeline.progress import ProgressWriter
+
+
+@pytest.fixture(autouse=True)
+def _no_live_refactorer():
+    """No test may spawn a real refactor agent.
+
+    The refactor step runs on every tier now, so every `run_block_tdd` test
+    reaches it whether or not it cares about refactoring. Default it to a
+    successful no-op agent here; tests that assert on the refactorer patch it
+    again locally, and the inner patch wins.
+    """
+    with patch("build_pipeline.tdd_engine.run_refactorer", new_callable=AsyncMock,
+               return_value=AgentResult(success=True, output="nothing to refactor")), \
+         patch("build_pipeline.tdd_engine.run_refactor_all", new_callable=AsyncMock,
+               return_value=AgentResult(success=True, output="already consistent")):
+        yield
 
 
 # --- Sample tasks.md content ---
@@ -468,10 +489,12 @@ class TestContextConstraintsAndInterfaces:
 class TestModelAdaptiveAgentSelection:
     """Test that tier-dependent behavior drives the right agent configuration."""
 
-    def test_advanced_tier_no_refactor(self):
+    def test_advanced_tier_has_refactor(self):
+        """The refactor step is verified and reverted on failure, so it is on
+        for the advanced tier too — only the implementer prompt still differs."""
         config = BuildConfig(tier="advanced")
-        assert not config.refactor_phase
-        assert config.tdd_phases == ["test", "implement"]
+        assert config.refactor_phase
+        assert config.tdd_phases == ["test", "implement", "refactor"]
         assert config.implementer_prompt_style == "clean"
 
     def test_standard_tier_has_refactor(self):
@@ -749,12 +772,37 @@ class TestPromptTemplates:
         assert "failing_tests" in placeholders
         assert "context_bundle" in placeholders
 
+    def test_clean_prompt_does_not_claim_there_is_no_refactor_phase(self):
+        """There is one on every tier now — the prompt said the opposite."""
+        from build_pipeline.prompts.implementation import IMPLEMENTER_PROMPT_CLEAN
+        assert "no refactor phase" not in IMPLEMENTER_PROMPT_CLEAN
+        assert "no separate refactoring phase" not in IMPLEMENTER_PROMPT_CLEAN
+        assert "refactor pass" in IMPLEMENTER_PROMPT_CLEAN
+
     def test_refactor_prompt_placeholders(self):
         from build_pipeline.prompts.implementation import REFACTOR_PROMPT
         placeholders = re.findall(r"\{(\w+)\}", REFACTOR_PROMPT)
         assert "block_name" in placeholders
         assert "context_bundle" in placeholders
         assert "test_command" in placeholders
+
+    def test_refactor_all_prompt_placeholders(self):
+        from build_pipeline.prompts.implementation import REFACTOR_ALL_PROMPT
+        placeholders = re.findall(r"\{(\w+)\}", REFACTOR_ALL_PROMPT)
+        assert {"diff", "design", "rubric", "test_command"} <= set(placeholders)
+        REFACTOR_ALL_PROMPT.format(
+            diff="d", design="des", rubric="r", test_command="pytest",
+        )
+
+    def test_refactor_prompts_forbid_touching_tests(self):
+        """The gate is the enforcement, but the prompt must not leave the agent
+        guessing — and neither prompt offers the TEST CHANGE REQUIRED hatch."""
+        from build_pipeline.prompts.implementation import (
+            REFACTOR_ALL_PROMPT, REFACTOR_PROMPT,
+        )
+        for prompt in (REFACTOR_PROMPT, REFACTOR_ALL_PROMPT):
+            assert "test file" in prompt.lower()
+            assert "TEST CHANGE REQUIRED" not in prompt
 
     def test_prompts_can_be_formatted(self):
         """All prompts format without error when given the right kwargs."""
@@ -813,6 +861,18 @@ class TestTDDStepToolAllowlists:
         assert "Edit" in REFACTORER_TOOLS
         assert REFACTORER_MAX_TURNS == 30
         assert REFACTORER_TIMEOUT == 15 * 60
+
+    def test_refactor_all_uses_the_refactorer_tool_list(self):
+        """Same work, more room: the whole-change pass reads a build-sized diff
+        but must not gain any capability the per-block refactorer lacks."""
+        import inspect
+        from build_pipeline.llm_steps import tdd_steps
+
+        assert tdd_steps.REFACTOR_ALL_MAX_TURNS > tdd_steps.REFACTORER_MAX_TURNS
+        assert tdd_steps.REFACTOR_ALL_TIMEOUT > tdd_steps.REFACTORER_TIMEOUT
+        source = inspect.getsource(tdd_steps.run_refactor_all)
+        assert "allowed_tools=REFACTORER_TOOLS" in source
+        assert 'budget_label="refactor_all"' in source
 
 
 # A suite result that satisfies the RED gate: non-zero exit, genuine failure.
@@ -988,7 +1048,9 @@ class TestRunBlockTDD:
         mock_refactor.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_advanced_tier_skips_refactorer(self, setup):
+    async def test_advanced_tier_also_runs_refactorer(self, setup):
+        """The advanced tier used to skip the refactor step. It no longer does:
+        the step is verified and self-reverting, so it runs on both tiers."""
         config, state, progress, block = setup
         config.tier = "advanced"
         ok_result = AgentResult(success=True, output="Done")
@@ -999,7 +1061,224 @@ class TestRunBlockTDD:
             result = await run_block_tdd(block, config, state, progress)
 
         assert result is True
-        mock_refactor.assert_not_called()
+        mock_refactor.assert_called_once()
+
+
+def _git_init_project(project_dir: Path) -> str:
+    """A project repo with one commit. Returns its SHA."""
+    subprocess.run(["git", "init", "-q"], cwd=project_dir, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=project_dir, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=project_dir, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=project_dir, check=True)
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=project_dir,
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _git_log_subjects(project_dir: Path) -> list[str]:
+    return subprocess.run(
+        ["git", "log", "--format=%s"], cwd=project_dir,
+        capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+
+
+TEST_FILE_REL = "tests/test_thing.py"
+ORIGINAL_TEST_SOURCE = "def test_addition():\n    assert add(2, 3) == 5\n"
+
+
+class TestBlockRefactorVerification:
+    """The per-block refactor is verified, never trusted.
+
+    The refactorer runs after the implementation is already committed, so the
+    pipeline can afford to be strict: if the suite is not green afterwards, or
+    a single test file changed, the whole refactor diff is thrown away and the
+    block keeps the implementation that was green. A refactor can improve a
+    block or do nothing — it can never break one.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _red(self, red_gate_passes, quality_audit_overturns):
+        yield
+
+    @pytest.fixture
+    def setup(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        change_dir = project_dir / "specs" / "changes" / "test"
+        change_dir.mkdir(parents=True)
+        (change_dir / "design.md").write_text("# Design")
+        (project_dir / "module.py").write_text("x = 1\n")
+        _git_init_project(project_dir)
+
+        config = BuildConfig(
+            project_dir=project_dir,
+            change_name="test",
+            tier="advanced",
+            test_command="true",  # green; individual tests flip it to "false"
+            config_dir=tmp_path / "config",
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
+        )
+        config.specs_dir = project_dir / "specs"
+
+        block = BlockInfo(number=1, name="Block1", description="Test block")
+        state = BuildState(
+            change_name="test", mode="only", tier="advanced",
+            state_file=str(tmp_path / "state.json"),
+            tdd=TDDState(blocks=[block]),
+        )
+        progress = ProgressWriter(tmp_path / "progress.md")
+        progress.initialize("test", "only", "advanced", 1)
+        return config, state, progress, block
+
+    @staticmethod
+    def _agent_writing(project_dir: Path, rel: str, content: str, output: str = "done"):
+        """An agent mock whose side effect is writing one file."""
+        def _run(*_a, **_kw):
+            path = project_dir / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+            return AgentResult(success=True, output=output)
+        return _run
+
+    async def _run(self, config, state, progress, block, refactorer, implementer=None):
+        """Drive one block with a test writer and implementer that produce real
+        files, so the refactor step has a committed baseline to rewind to."""
+        write_tests = self._agent_writing(
+            config.project_dir, TEST_FILE_REL, ORIGINAL_TEST_SOURCE, "tests written")
+        write_impl = implementer or self._agent_writing(
+            config.project_dir, "module.py", "def add(a, b):\n    return a + b\n", "implemented")
+        with patch("build_pipeline.tdd_engine.run_test_writer",
+                   new_callable=AsyncMock, side_effect=write_tests), \
+             patch("build_pipeline.tdd_engine.run_implementer",
+                   new_callable=AsyncMock, side_effect=write_impl), \
+             patch("build_pipeline.tdd_engine.run_refactorer",
+                   new_callable=AsyncMock, side_effect=refactorer):
+            return await run_block_tdd(block, config, state, progress)
+
+    @pytest.mark.asyncio
+    async def test_verified_refactor_is_committed_and_noted(self, setup):
+        config, state, progress, block = setup
+        refactorer = self._agent_writing(
+            config.project_dir, "module.py",
+            "def add(a: int, b: int) -> int:\n    return a + b\n",
+            "Tidied add().\nSURPRISES: the design named it sum()\nSPEC_IMPACT: clarify\n",
+        )
+
+        assert await self._run(config, state, progress, block, refactorer) is True
+
+        assert block.refactor_commit is not None
+        assert _git_log_subjects(config.project_dir)[0] == "refactor(block-1): Block1"
+        assert (config.project_dir / "module.py").read_text().startswith("def add(a: int")
+        roles = [n.role for n in block.notes]
+        assert "refactorer" in roles
+
+    @pytest.mark.asyncio
+    async def test_red_suite_after_refactor_reverts_and_continues(self, setup):
+        """A refactor that breaks the suite is discarded — the block keeps the
+        green implementation and the build carries on."""
+        config, state, progress, block = setup
+        config.test_command = "false"  # the post-refactor suite run fails
+        refactorer = self._agent_writing(
+            config.project_dir, "module.py", "def add(a, b):\n    return a - b  # broken\n")
+
+        # The block still succeeds...
+        assert await self._run(config, state, progress, block, refactorer) is True
+        # ...with the implementation restored and no refactor commit.
+        assert (config.project_dir / "module.py").read_text() == "def add(a, b):\n    return a + b\n"
+        assert block.refactor_commit is None
+        assert not any(s.startswith("refactor(") for s in _git_log_subjects(config.project_dir))
+
+    @pytest.mark.asyncio
+    async def test_refactor_that_creates_files_has_them_cleaned_on_revert(self, setup):
+        """`reset --hard` alone leaves new files behind, where the next
+        whole-tree commit would sweep reverted work back into the build."""
+        config, state, progress, block = setup
+        config.test_command = "false"
+        refactorer = self._agent_writing(config.project_dir, "extracted.py", "# new helper\n")
+
+        assert await self._run(config, state, progress, block, refactorer) is True
+        assert not (config.project_dir / "extracted.py").exists()
+
+    @pytest.mark.asyncio
+    async def test_test_file_mutation_reverts_the_refactor(self, setup):
+        """The suite is green, but the refactorer moved the bar it is measured
+        against — the same failure as a red suite."""
+        config, state, progress, block = setup
+        refactorer = self._agent_writing(
+            config.project_dir, TEST_FILE_REL,
+            "def test_addition():\n    assert True\n",  # gutted
+        )
+
+        assert await self._run(config, state, progress, block, refactorer) is True
+        assert (config.project_dir / TEST_FILE_REL).read_text() == ORIGINAL_TEST_SOURCE
+        assert block.refactor_commit is None
+
+    @pytest.mark.asyncio
+    async def test_declaring_a_test_change_does_not_excuse_it(self, setup):
+        """`TEST CHANGE REQUIRED:` is an implementer's escape hatch. The
+        refactor window is given no report at all, so the declaration cannot
+        reach the gate — a refactorer is behavior-preserving by definition and
+        has no case for editing the tests."""
+        config, state, progress, block = setup
+        refactorer = self._agent_writing(
+            config.project_dir, TEST_FILE_REL,
+            "def test_addition():\n    assert True\n",
+            output="TEST CHANGE REQUIRED: the test had a typo\n",
+        )
+
+        assert await self._run(config, state, progress, block, refactorer) is True
+        assert (config.project_dir / TEST_FILE_REL).read_text() == ORIGINAL_TEST_SOURCE
+        assert block.refactor_commit is None
+        assert block.test_change_claims == []
+
+    @pytest.mark.asyncio
+    async def test_implementer_test_change_is_not_blamed_on_the_refactorer(self, setup):
+        """An implementer may legitimately change a test file (the
+        `TEST CHANGE REQUIRED:` path — the change rides in the impl commit).
+        The refactor window is measured from the tree the implementer left
+        behind, not from the RED-gate freeze, so a source-only refactor after
+        such a change must be verified and kept — not discarded with the
+        implementer's edit blamed on the refactorer."""
+        config, state, progress, block = setup
+        changed_test = "def test_addition():\n    assert add(2, 3) == 5  # fixed typo\n"
+
+        def impl_and_fix_test(*_a, **_kw):
+            (config.project_dir / "module.py").write_text(
+                "def add(a, b):\n    return a + b\n")
+            (config.project_dir / TEST_FILE_REL).write_text(changed_test)
+            return AgentResult(
+                success=True,
+                output="implemented\nTEST CHANGE REQUIRED: the test had a typo\n",
+            )
+
+        refactorer = self._agent_writing(
+            config.project_dir, "module.py",
+            "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+        assert await self._run(config, state, progress, block, refactorer,
+                               implementer=impl_and_fix_test) is True
+
+        assert block.refactor_commit is not None
+        assert _git_log_subjects(config.project_dir)[0] == "refactor(block-1): Block1"
+        assert (config.project_dir / "module.py").read_text().startswith("def add(a: int")
+        # The implementer's test change is untouched by the refactor verdict.
+        assert (config.project_dir / TEST_FILE_REL).read_text() == changed_test
+
+    @pytest.mark.asyncio
+    async def test_failed_refactor_agent_leaves_the_block_alone(self, setup):
+        """An agent that errored wrote nothing to verify — no revert, no commit,
+        and the block still passes."""
+        config, state, progress, block = setup
+
+        def _fail(*_a, **_kw):
+            return AgentResult(success=False, error="agent crashed")
+
+        assert await self._run(config, state, progress, block, _fail) is True
+        assert block.refactor_commit is None
+        assert (config.project_dir / "module.py").read_text() == "def add(a, b):\n    return a + b\n"
 
 
 class TestGitCommitScoping:
@@ -2507,6 +2786,311 @@ class TestAdjudicateReviewFindings:
         assert out.findings == []
 
 
+# A suite command that actually inspects the tree: green until "broken"
+# appears in module.py. A static "false" can no longer stand in for "the
+# refactor broke the suite" — `_run_refactor_all` proves the tree green
+# BEFORE checkpointing it, so a command that is red regardless of tree
+# content trips that pre-gate and the agent never runs.
+SUITE_RED_IF_BROKEN = (
+    f"{sys.executable} -c "
+    "\"import sys; sys.exit('broken' in open('module.py').read())\""
+)
+
+
+class TestWholeChangeRefactor:
+    """One conservative pass over the finished change, between the last block
+    and the final review — with the same harness as the per-block step."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_budget(self, monkeypatch):
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        budget_mod.reset()
+        yield
+        budget_mod.reset()
+
+    @pytest.fixture
+    def setup(self, tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        change_dir = project_dir / "specs" / "changes" / "feat"
+        change_dir.mkdir(parents=True)
+        (change_dir / "design.md").write_text("# Design")
+        (change_dir / "rubric.md").write_text("# Rubric")
+        (project_dir / "module.py").write_text("x = 1\n")
+        baseline = _git_init_project(project_dir)
+
+        # The build's own work, committed after the baseline: a test file (so
+        # there is something for the integrity gate to hash) and a source file.
+        (project_dir / "tests").mkdir()
+        (project_dir / TEST_FILE_REL).write_text(ORIGINAL_TEST_SOURCE)
+        (project_dir / "module.py").write_text("def add(a, b):\n    return a + b\n")
+        subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True)
+        subprocess.run(["git", "commit", "-qm", "impl(block-1): B"], cwd=project_dir, check=True)
+
+        config = BuildConfig(
+            project_dir=project_dir,
+            change_name="feat",
+            tier="advanced",
+            test_command="true",
+            config_dir=tmp_path / "config",
+            core_memory_files=[],
+            stack_memory_files=[],
+            additional_memory_files=[],
+        )
+        config.specs_dir = project_dir / "specs"
+
+        block = BlockInfo(number=1, name="B", description="d",
+                          baseline_commit=baseline, status=BlockStatus.DONE)
+        state = BuildState(
+            change_name="feat", mode="only", tier="advanced",
+            state_file=str(config.state_file_path()),
+            tdd=TDDState(blocks=[block], current_block=1),
+        )
+        progress = ProgressWriter(tmp_path / "progress.md")
+        progress.initialize("feat", "only", "advanced", 1)
+        return config, state, progress
+
+    @staticmethod
+    def _agent_writing(project_dir: Path, rel: str, content: str, output: str = "done"):
+        def _run(*_a, **_kw):
+            path = project_dir / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+            return AgentResult(success=True, output=output)
+        return _run
+
+    @pytest.mark.asyncio
+    async def test_verified_pass_is_committed(self, setup):
+        config, state, progress = setup
+        agent = self._agent_writing(
+            config.project_dir, "module.py",
+            "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+        with patch("build_pipeline.tdd_engine.run_refactor_all",
+                   new_callable=AsyncMock, side_effect=agent):
+            assert await _run_refactor_all(config, state, progress) is True
+
+        assert _git_log_subjects(config.project_dir)[0] == "refactor: simplify across blocks"
+        assert state.tdd.refactor_all_done is True
+
+    @pytest.mark.asyncio
+    async def test_red_suite_reverts_and_the_build_continues(self, setup):
+        config, state, progress = setup
+        config.test_command = SUITE_RED_IF_BROKEN  # green now, red after the agent
+        agent = self._agent_writing(
+            config.project_dir, "module.py", "def add(a, b):\n    return a - b  # broken\n")
+
+        with patch("build_pipeline.tdd_engine.run_refactor_all",
+                   new_callable=AsyncMock, side_effect=agent):
+            assert await _run_refactor_all(config, state, progress) is True
+
+        assert (config.project_dir / "module.py").read_text() == "def add(a, b):\n    return a + b\n"
+        assert not any(s.startswith("refactor:") for s in _git_log_subjects(config.project_dir))
+        assert state.tdd.refactor_all_done is True
+
+    @pytest.mark.asyncio
+    async def test_test_file_mutation_reverts(self, setup):
+        """Green suite, mutated tests — reverted, with no escape hatch even
+        when the agent declares one."""
+        config, state, progress = setup
+        agent = self._agent_writing(
+            config.project_dir, TEST_FILE_REL,
+            "def test_addition():\n    assert True\n",
+            output="TEST CHANGE REQUIRED: it was flaky\n",
+        )
+
+        with patch("build_pipeline.tdd_engine.run_refactor_all",
+                   new_callable=AsyncMock, side_effect=agent):
+            assert await _run_refactor_all(config, state, progress) is True
+
+        assert (config.project_dir / TEST_FILE_REL).read_text() == ORIGINAL_TEST_SOURCE
+        assert not any(s.startswith("refactor:") for s in _git_log_subjects(config.project_dir))
+
+    @pytest.mark.asyncio
+    async def test_uncommitted_review_fixes_survive_a_revert(self, setup):
+        """The block loop leaves review-fix edits uncommitted. They are
+        checkpointed before the refactor runs, so discarding a failed refactor
+        cannot take the build's own fixes with it."""
+        config, state, progress = setup
+        config.test_command = SUITE_RED_IF_BROKEN  # green with the fix, red after the agent
+        (config.project_dir / "module.py").write_text(
+            "def add(a, b):\n    return a + b  # review fix\n")
+        agent = self._agent_writing(
+            config.project_dir, "module.py", "def add(a, b):\n    return a - b  # broken\n")
+
+        with patch("build_pipeline.tdd_engine.run_refactor_all",
+                   new_callable=AsyncMock, side_effect=agent):
+            assert await _run_refactor_all(config, state, progress) is True
+
+        assert "# review fix" in (config.project_dir / "module.py").read_text()
+
+    @pytest.mark.asyncio
+    async def test_failed_checkpoint_commit_with_dirty_tree_skips_the_pass(self, setup):
+        """`_git_commit_tree` returns None for "commit failed" too (failing
+        hook, missing identity) — with the dirty work possibly all staged.
+        HEAD is then NOT a faithful snapshot, and trusting it as the rewind
+        target would let a later failed verification reset over the
+        uncommitted review fixes. No trustworthy rewind target → no refactor
+        pass, and nothing is reset."""
+        config, state, progress = setup
+        (config.project_dir / "module.py").write_text(
+            "def add(a, b):\n    return a + b  # review fix\n")
+        hook = config.project_dir / ".git" / "hooks" / "pre-commit"
+        hook.parent.mkdir(exist_ok=True)
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        head_before = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=config.project_dir,
+            capture_output=True, text=True, check=True).stdout.strip()
+
+        with patch("build_pipeline.tdd_engine.run_refactor_all",
+                   new_callable=AsyncMock) as agent:
+            assert await _run_refactor_all(config, state, progress) is True
+
+        agent.assert_not_awaited()
+        # The uncommitted review fix survived, and HEAD never moved.
+        assert "# review fix" in (config.project_dir / "module.py").read_text()
+        head_after = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=config.project_dir,
+            capture_output=True, text=True, check=True).stdout.strip()
+        assert head_after == head_before
+        assert state.tdd.refactor_all_done is True
+
+    @pytest.mark.asyncio
+    async def test_red_tree_on_resume_is_not_checkpointed_as_a_baseline(self, setup):
+        """Crash simulation: a prior pass's agent edited files, the process
+        died before verification, and resume re-enters with refactor_all_done
+        still False. The suite is red with the partial edits in place — they
+        must not be swept into the checkpoint commit (the rewind baseline),
+        no agent may run on top of them, and they must not be reset over
+        either (whose edits are dirty is unknowable)."""
+        config, state, progress = setup
+        config.test_command = SUITE_RED_IF_BROKEN
+        (config.project_dir / "module.py").write_text(
+            "def add(a, b):\n    return a - b  # broken, half-refactored\n")
+        subjects_before = _git_log_subjects(config.project_dir)
+
+        with patch("build_pipeline.tdd_engine.run_refactor_all",
+                   new_callable=AsyncMock) as agent:
+            assert await _run_refactor_all(config, state, progress) is True
+
+        agent.assert_not_awaited()
+        # No checkpoint (or any other) commit swept the breakage in...
+        assert _git_log_subjects(config.project_dir) == subjects_before
+        # ...and the dirty edits were not destroyed either.
+        assert "half-refactored" in (config.project_dir / "module.py").read_text()
+        assert state.tdd.refactor_all_done is True
+
+    @pytest.mark.asyncio
+    async def test_already_done_is_not_re_run_on_resume(self, setup):
+        config, state, progress = setup
+        state.tdd.refactor_all_done = True
+
+        with patch("build_pipeline.tdd_engine.run_refactor_all",
+                   new_callable=AsyncMock) as agent:
+            assert await _run_refactor_all(config, state, progress) is True
+
+        agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_agent_failure_is_non_fatal(self, setup):
+        config, state, progress = setup
+        fail = AgentResult(success=False, error="crashed")
+
+        with patch("build_pipeline.tdd_engine.run_refactor_all",
+                   new_callable=AsyncMock, return_value=fail):
+            assert await _run_refactor_all(config, state, progress) is True
+
+        assert state.tdd.refactor_all_done is True
+
+    @pytest.mark.asyncio
+    async def test_exhausted_budget_stops_before_the_agent(self, setup):
+        config, state, progress = setup
+
+        class _Usage:
+            input_tokens, output_tokens = 500, 0
+            cache_read_tokens = cache_creation_tokens = 0
+            cost_usd = 0.0
+
+        budget_mod.configure(max_tokens=100)
+        budget_mod.record(_Usage(), label="spec")
+
+        with patch("build_pipeline.tdd_engine.run_refactor_all",
+                   new_callable=AsyncMock) as agent:
+            assert await _run_refactor_all(config, state, progress) is False
+
+        agent.assert_not_awaited()
+        assert state.tdd.refactor_all_done is False
+
+    @pytest.mark.asyncio
+    async def test_snapshot_is_none_when_any_block_cannot_be_listed(self, setup):
+        """An unobtainable snapshot means 'not checked', never 'all deleted'."""
+        config, state, progress = setup
+        with patch("build_pipeline.tdd_engine._snapshot_test_files", return_value=None):
+            assert _snapshot_all_test_files(config, state) is None
+
+
+class TestRefactorAllOrdering:
+    """The whole-change pass runs after the last block and before the final
+    review — the final review must grade the code that ships."""
+
+    @pytest.mark.asyncio
+    async def test_refactor_all_runs_before_final_review(self, tdd_setup):
+        config, args = tdd_setup
+        calls: list[str] = []
+
+        async def _refactor_all(*_a, **_kw):
+            calls.append("refactor_all")
+            return True
+
+        async def _final_review(*_a, **_kw):
+            calls.append("final_review")
+            return GateResult(passed=True, reason="ok")
+
+        ok = AgentResult(success=True, output="done")
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
+             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT), \
+             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
+                   return_value=QualityAudit(passed=True)), \
+             patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+                   return_value=ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])), \
+             patch("build_pipeline.tdd_engine._adjudicate_review_findings", new_callable=AsyncMock,
+                   side_effect=lambda review, *a, **k: review), \
+             patch("build_pipeline.tdd_engine._run_refactor_all", side_effect=_refactor_all), \
+             patch("build_pipeline.tdd_engine._run_final_review", side_effect=_final_review):
+            result = await run_tdd_engine(config, args)
+
+        assert result == EXIT_SUCCESS
+        assert calls == ["refactor_all", "final_review"]
+
+    @pytest.mark.asyncio
+    async def test_budget_stop_in_refactor_all_fails_the_build(self, tdd_setup):
+        config, args = tdd_setup
+        ok = AgentResult(success=True, output="done")
+
+        async def _refactor_all(*_a, **_kw):
+            return False
+
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
+             patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok), \
+             patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT), \
+             patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
+                   return_value=QualityAudit(passed=True)), \
+             patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+                   return_value=ReviewResult(scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])), \
+             patch("build_pipeline.tdd_engine._adjudicate_review_findings", new_callable=AsyncMock,
+                   side_effect=lambda review, *a, **k: review), \
+             patch("build_pipeline.tdd_engine._run_refactor_all", side_effect=_refactor_all), \
+             patch("build_pipeline.tdd_engine._run_final_review", new_callable=AsyncMock) as final:
+            result = await run_tdd_engine(config, args)
+
+        assert result == EXIT_BUILD_FAILURE
+        final.assert_not_awaited()
+
+
 class TestBudgetCircuitBreaker:
     """The engine stops on a spent budget at the block boundary."""
 
@@ -2810,3 +3394,78 @@ class TestReportContractSlots:
         from build_pipeline.prompts.implementation import IMPLEMENTER_PROMPT_CLEAN
         assert "contradicts" in IMPLEMENTER_PROMPT_CLEAN
         assert "implementation-notes.md" in IMPLEMENTER_PROMPT_CLEAN
+
+
+class TestDiscardToAncestorGuard:
+    """`_git_discard_to` may only ever move backwards along the current history.
+
+    The refactorer holds `Bash`, so between the moment the impl commit is
+    captured and the moment a failed refactor is discarded it can commit, move
+    HEAD, or switch branches. A bare `reset --hard <sha>` would then throw away
+    whatever HEAD had actually reached — earlier blocks' commits, or under
+    `--no-worktree` the user's own work.
+    """
+
+    @pytest.fixture
+    def repo(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        subprocess.run(["git", "init", "-q", "."], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=project, check=True)
+
+        def commit(text):
+            (project / "README.md").write_text(text)
+            subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+            subprocess.run(["git", "commit", "-qm", text], cwd=project, check=True)
+            return subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=project,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+
+        first = commit("one")
+        second = commit("two")
+        config = BuildConfig(project_dir=project)
+        return project, config, first, second, commit
+
+    def test_discards_to_an_ancestor(self, repo):
+        project, config, first, second, _ = repo
+        assert _git_discard_to(config, first, "refactor") is True
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project,
+                              capture_output=True, text=True, check=True).stdout.strip()
+        assert head == first
+
+    def test_head_itself_is_an_ancestor(self, repo):
+        _, config, _, second, _ = repo
+        assert _is_ancestor_of_head(config, second) is True
+        assert _git_discard_to(config, second, "refactor") is True
+
+    def test_refuses_a_sha_on_unrelated_history(self, repo):
+        """The agent switched branches: the impl sha is no longer reachable."""
+        project, config, first, second, _ = repo
+        subprocess.run(["git", "checkout", "-q", "--orphan", "elsewhere"],
+                       cwd=project, check=True)
+        (project / "OTHER.md").write_text("other\n")
+        subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-qm", "orphan"], cwd=project, check=True)
+        before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project,
+                                capture_output=True, text=True, check=True).stdout.strip()
+
+        assert _git_discard_to(config, second, "refactor") is False
+        after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project,
+                               capture_output=True, text=True, check=True).stdout.strip()
+        assert after == before, "HEAD must not move when the sha is unreachable"
+
+    def test_refuses_an_unknown_sha(self, repo):
+        _, config, _, _, _ = repo
+        assert _git_discard_to(config, "0" * 40, "refactor") is False
+
+    def test_refuses_an_empty_sha(self, repo):
+        _, config, _, _, _ = repo
+        assert _is_ancestor_of_head(config, "") is False
+        assert _git_discard_to(config, "", "refactor") is False
+
+    def test_unknown_ancestry_is_never_treated_as_safe(self, tmp_path):
+        """Git could not be asked → "unknown", which must not mean "destroy"."""
+        config = BuildConfig(project_dir=tmp_path / "nonexistent")
+        assert _is_ancestor_of_head(config, "a" * 40) is False

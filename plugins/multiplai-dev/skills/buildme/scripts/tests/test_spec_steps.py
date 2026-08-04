@@ -17,7 +17,7 @@ from build_pipeline.llm_steps.spec_steps import (
     run_design_audit,
     run_tasks_audit,
 )
-from build_pipeline.prompts.spec_generation import TASKS_PROMPT
+from build_pipeline.prompts.spec_generation import DESIGN_PROMPT, TASKS_PROMPT
 
 
 def _make_config(tmp_path, req_files: dict[str, str]) -> BuildConfig:
@@ -82,6 +82,63 @@ class TestBuildPromptGrounding:
         prompt = _build_prompt("tasks", self._CONTEXT, config)
         assert "SCENARIO: login-flow-marker" in prompt
         assert "(no specs yet)" not in prompt
+
+
+class TestReferenceDocsInThePrompts:
+    """The spec-generation system prompt forbids tools, so the reference docs
+    have to travel inlined in the prompt or they do not reach the generator at
+    all."""
+
+    _CONTEXT = TestBuildPromptGrounding._CONTEXT
+
+    def test_design_prompt_has_a_reference_docs_slot(self):
+        assert "{reference_docs}" in DESIGN_PROMPT
+
+    def test_tasks_prompt_has_a_reference_docs_slot(self):
+        assert "{reference_docs}" in TASKS_PROMPT
+
+    def test_design_prompt_inlines_the_docs(self, tmp_path):
+        config = _make_config(tmp_path, {"auth": "SCENARIO: x"})
+        (config.change_dir / "proposal.md").write_text("proposal body")
+        prompt = _build_prompt(
+            "design", self._CONTEXT, config,
+            reference_docs="### Reference: uv-python.md\nAlways use uv, never pip.",
+        )
+        assert "Always use uv, never pip." in prompt
+        assert "(none available)" not in prompt
+
+    def test_tasks_prompt_inlines_the_docs(self, tmp_path):
+        config = _make_config(tmp_path, {"auth": "SCENARIO: x"})
+        (config.change_dir / "proposal.md").write_text("proposal body")
+        (config.change_dir / "design.md").write_text("design body")
+        prompt = _build_prompt(
+            "tasks", self._CONTEXT, config,
+            reference_docs="### Reference: uv-python.md\nAlways use uv, never pip.",
+        )
+        assert "Always use uv, never pip." in prompt
+
+    def test_absent_docs_render_as_a_placeholder_not_an_empty_heading(self, tmp_path):
+        config = _make_config(tmp_path, {"auth": "SCENARIO: x"})
+        (config.change_dir / "proposal.md").write_text("proposal body")
+        prompt = _build_prompt("design", self._CONTEXT, config)
+        assert "(none available)" in prompt
+
+    def test_generate_artifact_passes_the_docs_through(self, tmp_path):
+        """The parameter has to reach _build_prompt, not stop at the door."""
+        import asyncio
+        from build_pipeline.llm_steps.spec_steps import generate_artifact
+
+        config = _make_config(tmp_path, {"auth": "SCENARIO: x"})
+        (config.change_dir / "proposal.md").write_text("proposal body")
+        with patch(
+            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
+        ) as mock_llm:
+            mock_llm.return_value = "# design"
+            asyncio.run(generate_artifact(
+                "design", self._CONTEXT, config,
+                reference_docs="### Reference: house.md\nHOUSE-RULE-MARKER",
+            ))
+        assert "HOUSE-RULE-MARKER" in mock_llm.call_args[0][0]
 
 
 class TestDesignAudit:
