@@ -292,13 +292,16 @@ class TestSupportFiles:
                 "runtime deps are declared inline via PEP 723 + multiplai-core"
             )
 
-    def test_entry_points_declare_pep723_core_dep(self):
-        # Every entry-point script carries inline PEP 723 metadata that
-        # depends on multiplai-core.
+    def test_entry_points_take_core_from_workspace_member(self):
+        # Dependencies are declared once in the workspace member, not inline in
+        # each script (inline metadata made uv re-resolve on every invocation).
+        manifest = (PLUGIN_ROOT / "scripts" / "pyproject.toml").read_text()
+        assert "multiplai-core" in manifest, (
+            "scripts/pyproject.toml must declare multiplai-core"
+        )
         for name in ("session_start.py", "context_manager.py", "dream.py"):
             text = (PLUGIN_ROOT / "scripts" / name).read_text()
-            assert "# /// script" in text, f"{name} missing PEP 723 header"
-            assert "multiplai-core" in text, f"{name} missing multiplai-core dependency"
+            assert "# /// script" not in text, f"{name} carries a PEP 723 header again"
 
 
 # ---------------------------------------------------------------------------

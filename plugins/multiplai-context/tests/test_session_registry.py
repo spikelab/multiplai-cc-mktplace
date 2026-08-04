@@ -472,12 +472,14 @@ class TestHookWiring:
         )
         assert isinstance(hook["timeout"], int) and hook["timeout"] >= 5
 
-    def test_notification_script_exists_with_pep723(self):
+    def test_notification_script_exists_and_uses_workspace_deps(self):
         script = SCRIPTS_DIR / "session_notification.py"
         assert script.exists()
-        source = script.read_text()
-        assert "# /// script" in source
-        assert "multiplai-core" in source
+        assert "# /// script" not in script.read_text(), (
+            "session_notification.py carries a PEP 723 header again"
+        )
+        manifest = (SCRIPTS_DIR / "pyproject.toml").read_text()
+        assert "multiplai-core" in manifest
 
     @pytest.mark.parametrize("script,kind", [
         ("session_start.py", '"start"'),

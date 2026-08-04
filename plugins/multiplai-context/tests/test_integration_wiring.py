@@ -220,41 +220,47 @@ class TestPluginJsonFullWiring:
 # ===========================================================================
 
 class TestAfterFieldAndBootstrapFallback:
-    """Verify hooks are launched via uv with PEP 723 inline metadata.
+    """Verify hooks are launched via uv against the shared workspace.
 
-    The managed-venv re-exec preamble (R3 mitigation) was retired: every hook
-    command runs through `uv run --no-project`, which provisions deps from each
-    script's inline PEP 723 block.
+    Two retirements are asserted here. The managed-venv re-exec preamble (R3
+    mitigation) went first. PEP 723 inline metadata followed on 2026-08-04: it
+    made `uv run` re-resolve a mutable git ref on every invocation, so these
+    hooks took 12-68s and timed out. Commands now use `uv run --project`,
+    which resolves from the committed uv.lock without touching the network.
     """
 
     @pytest.fixture(autouse=True)
     def load_hooks(self):
         self.hooks = _load_hooks_json()
 
-    def test_session_start_has_pep723_metadata(self):
+    def test_session_start_carries_no_inline_metadata(self):
         """WHEN session_start.py is inspected
-        THEN it carries PEP 723 inline metadata and no retired venv guard."""
+        THEN it carries neither a PEP 723 block nor the retired venv guard."""
         text = (SCRIPTS_DIR / "session_start.py").read_text()
-        assert "# /// script" in text, \
-            "session_start.py must carry PEP 723 inline metadata"
+        assert "# /// script" not in text, \
+            "session_start.py carries a PEP 723 header again — it would make " \
+            "uv re-resolve on every prompt; declare deps in scripts/pyproject.toml"
         assert "ensure_venv_python" not in text, \
             "session_start.py must not reference the retired venv guard"
 
-    def test_all_hook_scripts_have_pep723_metadata(self):
+    def test_no_hook_script_carries_inline_metadata(self):
         """WHEN any hook script is inspected
-        THEN it carries PEP 723 inline metadata (and no venv guard)."""
+        THEN it carries neither a PEP 723 block nor the venv guard — its
+        dependencies come from the workspace member instead."""
+        assert "multiplai-core" in (SCRIPTS_DIR / "pyproject.toml").read_text(), \
+            "scripts/pyproject.toml must declare multiplai-core for these scripts"
         for hook in self.hooks["hooks"]:
             script_path = PLUGIN_ROOT / hook["script"]
             if script_path.exists():
                 text = script_path.read_text()
-                assert "# /// script" in text, \
-                    f"{hook['script']} missing PEP 723 inline metadata"
+                assert "# /// script" not in text, \
+                    f"{hook['script']} carries a PEP 723 header again"
                 assert "venv_guard" not in text and "ensure_venv_python" not in text, \
                     f"{hook['script']} still references the retired venv guard"
 
     def test_all_hook_commands_use_uv_run(self):
         """WHEN any hook command is inspected
-        THEN it execs the script via `uv run --no-project` (rather than
+        THEN it execs the script via `uv run --project` (rather than
         `python`), wrapped in the sh-level uv guard that turns a missing uv
         into one clear message instead of a silent spawn failure (C1 —
         see test_uv_guard.py for behavior)."""
@@ -265,8 +271,9 @@ class TestAfterFieldAndBootstrapFallback:
                     cmd = entry["command"]
                     assert cmd.startswith("sh -c 'command -v uv "), \
                         f"{event} command must start with the uv guard, got: {cmd}"
-                    assert 'exec uv run --no-project "' in cmd, \
-                        f"{event} command must exec via 'uv run --no-project', got: {cmd}"
+                    assert "exec uv run --project " in cmd, \
+                        f"{event} command must exec via 'uv run --project' so deps " \
+                        f"resolve from the workspace lock, got: {cmd}"
                     assert "python " not in cmd.replace("uv run", ""), \
                         f"{event} command must not invoke bare python: {cmd}"
 
@@ -644,12 +651,12 @@ class TestGrepAuditHardcodedPaths:
 # ===========================================================================
 
 class TestMinimalDependencies:
-    """Verify runtime deps moved out of requirements.txt and into per-script
-    PEP 723 inline metadata + multiplai-core.
+    """Verify runtime deps moved out of requirements.txt and into the
+    workspace member manifest, scripts/pyproject.toml.
 
     anthropic / claude-agent-sdk / pyyaml are no longer pinned in
-    requirements.txt; entry-point scripts declare their deps inline and
-    `uv run` provisions them (the SDK arrives transitively via multiplai-core)."""
+    requirements.txt; the member declares multiplai-core[sdk] once and every
+    script in this directory gets it (the SDK arrives transitively)."""
 
     def test_requirements_has_no_runtime_pins(self):
         """WHEN requirements.txt is parsed
@@ -666,16 +673,18 @@ class TestMinimalDependencies:
         text = (PLUGIN_ROOT / "requirements.txt").read_text()
         for pin in ("anthropic==", "claude-agent-sdk==", "pyyaml>="):
             assert pin not in text, \
-                f"requirements.txt must not pin {pin!r} (moved to PEP 723 + multiplai-core)"
+                f"requirements.txt must not pin {pin!r} (moved to scripts/pyproject.toml)"
 
-    def test_entry_points_declare_multiplai_core(self):
-        """WHEN entry-point scripts are inspected
-        THEN each carries PEP 723 metadata depending on multiplai-core."""
+    def test_member_declares_multiplai_core_for_entry_points(self):
+        """WHEN the workspace member manifest is inspected
+        THEN it depends on multiplai-core, and no entry point re-declares it
+        inline (which would reintroduce the per-invocation resolve)."""
+        assert "multiplai-core" in (SCRIPTS_DIR / "pyproject.toml").read_text(), \
+            "scripts/pyproject.toml must declare multiplai-core"
         for name in ("session_start.py", "context_manager.py", "dream.py",
                      "extract_learnings.py", "generate_catalog.py"):
             text = (SCRIPTS_DIR / name).read_text()
-            assert "# /// script" in text, f"{name} missing PEP 723 header"
-            assert "multiplai-core" in text, f"{name} missing multiplai-core dependency"
+            assert "# /// script" not in text, f"{name} carries a PEP 723 header again"
 
 
 # ===========================================================================
@@ -732,7 +741,7 @@ class TestCrossModuleWiring:
         THEN the retired venv_guard.py is gone (uv migration)."""
         guard_path = SCRIPTS_DIR / "lib" / "venv_guard.py"
         assert not guard_path.exists(), \
-            "venv_guard.py must be removed (replaced by uv run + PEP 723)"
+            "venv_guard.py must be removed (replaced by the uv workspace)"
 
     def test_all_scripts_add_parent_to_sys_path(self):
         """WHEN each script in scripts/ is inspected

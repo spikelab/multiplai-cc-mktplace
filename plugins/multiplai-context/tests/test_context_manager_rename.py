@@ -456,16 +456,18 @@ class TestNoFunctionalChange:
 
 
 class TestVenvGuardPreserved:
-    """Post-uv-migration: context_manager.py runs via `uv run --no-project`
-    with PEP 723 inline metadata; the old venv guard preamble is gone and
-    core imports resolve through multiplai_core."""
+    """Post-uv-migration: context_manager.py runs via `uv run --project`
+    against the shared workspace; the old venv guard preamble is gone, PEP 723
+    inline metadata was retired on 2026-08-04, and core imports resolve
+    through multiplai_core."""
 
-    def test_has_pep723_header(self):
+    def test_has_no_pep723_header(self):
         """WHEN context_manager.py is inspected
-        THEN it carries a PEP 723 inline-metadata header."""
+        THEN it carries no PEP 723 inline-metadata header — its dependencies
+        come from scripts/pyproject.toml, resolved once from uv.lock."""
         text = CONTEXT_MANAGER_PATH.read_text()
-        assert "# /// script" in text, \
-            "context_manager.py must carry a PEP 723 header"
+        assert "# /// script" not in text, \
+            "context_manager.py carries a PEP 723 header again"
 
     def test_no_venv_guard(self):
         """WHEN context_manager.py is inspected

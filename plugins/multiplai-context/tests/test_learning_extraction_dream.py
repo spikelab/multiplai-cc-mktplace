@@ -84,27 +84,33 @@ def _find_imports(tree: ast.Module) -> list[str]:
 # Requirement: PEP 723 inline metadata present in all four scripts
 # ===================================================================
 
-class TestPep723Preamble:
-    """All four ported entry-point scripts carry PEP 723 inline metadata
-    declaring multiplai-core, so they run via `uv run --no-project`."""
+class TestDependencyDeclaration:
+    """Dependencies live in the workspace member, not in each script.
+
+    Inline PEP 723 metadata was retired on 2026-08-04: it pinned
+    multiplai-core by mutable git tag, so `uv run` re-resolved it against
+    GitHub on every invocation and the UserPromptSubmit hooks took 12-68s.
+    Scripts now run from the shared workspace environment, which uv resolves
+    from uv.lock without touching the network.
+    """
 
     @pytest.mark.parametrize("script_path", ALL_SCRIPTS, ids=ALL_SCRIPT_NAMES)
-    def test_has_pep723_header(self, script_path):
+    def test_has_no_inline_metadata(self, script_path):
         """WHEN any of the four scripts is inspected
-        THEN it begins with a PEP 723 inline-metadata block."""
+        THEN it carries no PEP 723 block (which would reintroduce the fetch)."""
         source = _read_source(script_path)
-        assert "# /// script" in source, (
-            f"{script_path.name} must carry a PEP 723 '# /// script' header"
+        assert "# /// script" not in source, (
+            f"{script_path.name} carries a PEP 723 header again — declare the "
+            "dependency in scripts/pyproject.toml instead"
         )
 
-    @pytest.mark.parametrize("script_path", ALL_SCRIPTS, ids=ALL_SCRIPT_NAMES)
-    def test_declares_multiplai_core(self, script_path):
-        """WHEN any of the four scripts is inspected
-        THEN its inline metadata depends on multiplai-core."""
-        source = _read_source(script_path)
-        assert "multiplai-core" in source, (
-            f"{script_path.name} must declare a multiplai-core dependency "
-            "in its PEP 723 metadata"
+    def test_member_declares_multiplai_core(self):
+        """WHEN the workspace member's manifest is inspected
+        THEN it depends on multiplai-core, so every script above gets it."""
+        manifest = (SCRIPTS_DIR / "pyproject.toml").read_text()
+        assert "multiplai-core" in manifest, (
+            "scripts/pyproject.toml must declare multiplai-core — it is what "
+            "supplies the dependency now that the inline blocks are gone"
         )
 
     @pytest.mark.parametrize("script_path", ALL_SCRIPTS, ids=ALL_SCRIPT_NAMES)
