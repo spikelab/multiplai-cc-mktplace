@@ -13,7 +13,7 @@ dependencies = [
     # and raises `Claude Code returned an error result: success` after a full
     # generation. Core's pyproject says it outright: nothing injects the SDK at
     # runtime, so a consumer that wants the SDK backend must ask for [sdk].
-    "multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.10.0",
+    "multiplai-core[sdk]",
     "pydantic>=2.0",
     "httpx>=0.27",
     "pyyaml>=6.0",

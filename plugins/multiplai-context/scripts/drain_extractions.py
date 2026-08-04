@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """Standalone drain for deferred extraction markers.
 
 ``session_end.py`` and ``pre_compact.py`` are kill-within-seconds hooks, so

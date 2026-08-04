@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """Report on the multiplai cost ledger.
 
 Reads the monthly JSONL ledgers written by ``collect_costs.py`` (transcripts)

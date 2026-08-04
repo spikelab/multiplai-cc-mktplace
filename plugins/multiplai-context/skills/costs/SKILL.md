@@ -17,7 +17,7 @@ from the append-only cost ledger in `<data_dir>/costs/`. Two scripts:
 
 1. **Collect first** so the report includes recent sessions:
    ```
-   uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/collect_costs.py"
+   uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/collect_costs.py"
    ```
 2. **Report** based on what the user asked:
 
@@ -35,7 +35,7 @@ from the append-only cost ledger in `<data_dir>/costs/`. Two scripts:
    | cost per buildme block | `costs_report.py --all --group build --project-dir <repo>` |
    | cache utilization | `costs_report.py --all --report cache [--cache-threshold 0.5]` |
 
-   All via `uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/costs_report.py" ...`.
+   All via `uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/costs_report.py" ...`.
    Add `--json` when you need to post-process numbers.
 
 3. Present the relevant numbers concisely. Always mention once: costs are
@@ -53,7 +53,7 @@ from the append-only cost ledger in `<data_dir>/costs/`. Two scripts:
    (batch: `gh pr list --repo <owner>/<repo> --state all --json number,headRefName`)
 2. Report on it:
    ```
-   uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/costs_report.py" --branch <that-branch>
+   uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/costs_report.py" --branch <that-branch>
    ```
 3. If several PRs were cut from one branch, they **share** the branch's cost —
    say so when presenting the number.
@@ -105,7 +105,7 @@ they re-write prefixes more often than they reuse them.
 - Records collected before this feature show `(none)` until the one-time
   enrichment is run:
   ```
-  uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/collect_costs.py" --backfill-branches
+  uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/collect_costs.py" --backfill-branches
   ```
   Idempotent; safe to re-run. Non-git cwds and SDK-sourced records stay `(none)`.
 

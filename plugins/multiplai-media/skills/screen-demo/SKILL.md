@@ -38,9 +38,16 @@ silently falls back to building anything in the container.
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/bootstrap.sh
 ```
-Verifies `ffmpeg`, ensures PySceneDetect + OpenCV are importable (baked into the
-image; else installed into a `uv venv`), and preflights the host transcription
-bridge. Idempotent. **No whisper build, no cmake, no PEP-668 breakage.**
+Verifies `ffmpeg`, checks PySceneDetect + OpenCV are importable, and preflights
+the host transcription bridge. Idempotent, and it installs nothing — it reports
+what is missing and names the fix. **No whisper build, no cmake, no PEP-668
+breakage.**
+
+The Python deps are declared in `scripts/pyproject.toml`, a member of the
+repo-root uv workspace, so running the pipeline through `uv run --project`
+provides them from the one shared environment. If `import scenedetect, cv2`
+fails, that is the missing piece — not a venv this skill should build for
+itself.
 
 ### 2. Prep
 

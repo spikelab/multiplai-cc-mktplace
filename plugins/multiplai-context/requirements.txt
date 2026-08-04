@@ -1,8 +1,7 @@
 # Runtime dependencies are no longer pinned here.
 #
-# Each entry-point script under scripts/ declares its own dependencies inline
-# via PEP 723 ("# /// script" blocks) and is launched with `uv run --no-project`.
-# The shared core (anthropic, claude-agent-sdk, pyyaml) arrives transitively
-# through the `multiplai-core` package referenced in those inline metadata blocks.
-#
-# See requirements-dev.txt for the test/dev toolchain.
+# scripts/pyproject.toml declares them once, as a member of the repo-root uv
+# workspace, resolved from the committed uv.lock. The shared core (anthropic,
+# claude-agent-sdk, pyyaml) arrives transitively through `multiplai-core`.
+# The test/dev toolchain (pytest et al) is supplied per-run by CI via
+# `uv run --with pytest ...` — see .github/workflows/ci.yml.

@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """Render the fleet view: ``AGENTS.md`` and ``fleet.txt``.
 
 Ten concurrent agents in ten tmux tabs is only workable if walking away is

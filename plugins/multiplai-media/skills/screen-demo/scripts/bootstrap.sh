@@ -10,6 +10,23 @@ set -euo pipefail
 
 SKILL_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+bootstrap.sh — preflight the screen-demo skill. Installs nothing.
+
+Checks, in order:
+  1. ffmpeg is on PATH (hint names the fix for the actual platform)
+  2. scenedetect + opencv are importable — they come from the repo-root uv
+     workspace, so run the pipeline via `uv run --project <repo-root>`
+  3. the host transcription bridge reaches mlx_whisper (warning only)
+
+Exit 0 if usable, 1 with a fix-it message otherwise. Idempotent.
+EOF
+    exit 0
+    ;;
+esac
+
 # 1. ffmpeg (proxy / audio extract / composite) must be present. We never
 #    install it here — the hint names the right fix for the actual platform.
 if ! command -v ffmpeg >/dev/null 2>&1; then
@@ -27,27 +44,21 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
 fi
 echo "✓ ffmpeg: $(command -v ffmpeg)"
 
-# 2. Scene-detection deps (PySceneDetect + OpenCV) must be importable. Prefer
-#    them baked into the image. If missing, install into a uv venv — NEVER a
-#    bare `pip install` into system Python (PEP 668 externally-managed error).
+# 2. Scene-detection deps (PySceneDetect + OpenCV) must be importable. This
+#    script used to create a skill-local `.venv` here when they were not. It no
+#    longer does: that venv reached 229MB, was gitignored so nothing ever
+#    flagged it, and was one of four such environments in this repo. The deps
+#    are now declared in scripts/pyproject.toml, a member of the repo-root uv
+#    workspace, so `uv run` provisions them from the single shared environment.
+#    We verify and point at the fix rather than silently building a second one.
 if python3 -c "import scenedetect, cv2" 2>/dev/null; then
-  echo "✓ scenedetect + opencv already importable"
+  echo "✓ scenedetect + opencv importable"
 else
-  echo "→ scenedetect/opencv not importable; installing into a uv venv"
-  if ! command -v uv >/dev/null 2>&1; then
-    echo "✗ uv not found and scenedetect is missing." >&2
-    echo "  Bake scenedetect + opencv-python-headless into the container image," >&2
-    echo "  or install uv (https://docs.astral.sh/uv/) so this can create a venv." >&2
-    exit 1
-  fi
-  VENV="$SKILL_ROOT/.venv"
-  [ -d "$VENV" ] || uv venv "$VENV"
-  # shellcheck disable=SC1091
-  source "$VENV/bin/activate"
-  uv pip install --quiet scenedetect opencv-python-headless
-  python3 -c "import scenedetect, cv2" \
-    || { echo "✗ scenedetect still not importable after install" >&2; exit 1; }
-  echo "✓ scenedetect + opencv installed into $VENV (activate it before running the pipeline)"
+  echo "✗ scenedetect/opencv not importable." >&2
+  echo "  Run the pipeline through the workspace, which provisions them:" >&2
+  echo "    uv run --project <repo-root> python3 $SKILL_ROOT/scripts/pipeline.py …" >&2
+  echo "  (or bake scenedetect + opencv-python-headless into the container image)." >&2
+  exit 1
 fi
 
 # 3. Preflight the host transcription bridge: confirm mlx_whisper is reachable on

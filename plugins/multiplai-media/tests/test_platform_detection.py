@@ -144,6 +144,47 @@ class TestScreenDemoBootstrap:
         assert "package manager" in res.stderr
         assert "container image" not in res.stderr
 
+    def test_never_creates_a_venv(self, tmp_path):
+        """Missing scenedetect must report the fix, not build an environment.
+
+        This script used to `uv venv` + `uv pip install` into the skill
+        directory when the import failed. That venv reached 229MB and was
+        gitignored, so nothing ever surfaced it. The deps now come from the
+        repo-root uv workspace; bootstrap only checks and explains.
+        """
+        real_python = shutil.which("python3")
+        assert real_python
+        bins = _shim_dir(
+            tmp_path,
+            ["uname", "dirname"],
+            fakes={
+                # ffmpeg is faked, not symlinked: this test is about step 2,
+                # and requiring a real ffmpeg would make it fail on any host
+                # that lacks one for reasons that say nothing about the check.
+                "ffmpeg": "#!/bin/bash\nexit 0\n",
+                # scenedetect/cv2 unimportable, everything else normal.
+                "python3": (
+                    "#!/bin/bash\n"
+                    'if [ "$1" = "-c" ] && [[ "$2" == *"import scenedetect"* ]]; '
+                    "then exit 1; fi\n"
+                    f'exec {real_python} "$@"\n'
+                ),
+                # If bootstrap reaches for uv at all, the test should notice.
+                "uv": "#!/bin/bash\necho UV_INVOKED \"$@\"\nexit 0\n",
+            },
+        )
+        env = _clean_env(tmp_path, str(bins))
+        res = _run(_BOOTSTRAP, [], env, tmp_path)
+
+        assert res.returncode == 1
+        assert "UV_INVOKED" not in res.stdout + res.stderr, (
+            "bootstrap invoked uv — it must not build an environment"
+        )
+        assert not list(tmp_path.rglob(".venv")), "bootstrap created a venv"
+        assert "uv run --project" in res.stderr, (
+            "the error must name the workspace as the fix"
+        )
+
 
 class TestYtTranscript:
     def _fake_python3(self) -> str:

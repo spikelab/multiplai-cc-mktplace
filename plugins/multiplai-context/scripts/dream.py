@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """Dream consolidation script for multiplai plugin.
 
 Default mode (no flags): generates a human-readable change proposal and writes it

@@ -223,12 +223,12 @@ class TestD8StrippingTransformation:
 # PEP 723 inline metadata (replaces the retired venv re-exec preamble)
 # ===========================================================================
 
-class TestPep723Preamble:
-    """Each session lifecycle script must carry PEP 723 inline metadata.
+class TestDependencyDeclaration:
+    """Lifecycle scripts take dependencies from the workspace member.
 
-    The managed-venv re-exec preamble was retired: scripts are now launched
-    via `uv run --no-project`, which reads the inline metadata to provision
-    dependencies (multiplai-core + transitive SDK).
+    Inline PEP 723 metadata was retired on 2026-08-04 — it forced uv to
+    re-resolve a mutable git tag on every hook invocation. scripts/pyproject.toml
+    declares multiplai-core once for all of them.
     """
 
     @pytest.mark.parametrize("script", [
@@ -236,11 +236,12 @@ class TestPep723Preamble:
         SCRIPTS_DIR / "session_stop.py",
         SCRIPTS_DIR / "session_end.py",
     ], ids=["session_start", "session_stop", "session_end"])
-    def test_has_pep723_header(self, script):
-        """Script begins with a PEP 723 inline-metadata block."""
+    def test_has_no_inline_metadata(self, script):
+        """Script carries no PEP 723 block (it would restore the per-run fetch)."""
         source = script.read_text()
-        assert "# /// script" in source, (
-            f"{script.name} must carry a PEP 723 '# /// script' header"
+        assert "# /// script" not in source, (
+            f"{script.name} carries a PEP 723 header again — declare the "
+            "dependency in scripts/pyproject.toml instead"
         )
 
     @pytest.mark.parametrize("script", [
@@ -249,10 +250,10 @@ class TestPep723Preamble:
         SCRIPTS_DIR / "session_end.py",
     ], ids=["session_start", "session_stop", "session_end"])
     def test_declares_multiplai_core(self, script):
-        """Inline metadata depends on multiplai-core."""
-        source = script.read_text()
+        """The workspace member supplying this script depends on multiplai-core."""
+        source = (SCRIPTS_DIR / "pyproject.toml").read_text()
         assert "multiplai-core" in source, (
-            f"{script.name} must declare a multiplai-core dependency in PEP 723 metadata"
+            f"scripts/pyproject.toml must declare multiplai-core for {script.name}"
         )
 
     @pytest.mark.parametrize("script", [

@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """Notification hook for multiplai plugin.
 
 Single, fast job: stamp this session's registry entry with a

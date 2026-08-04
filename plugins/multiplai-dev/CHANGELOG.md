@@ -21,6 +21,25 @@ release dates recorded at the time, not derived from a tag.
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
 
+## [0.10.0] - 2026-08-04
+
+### Fixed
+- **The skill promotion gate stopped working on skills in a uv workspace.**
+  `promote_skill.py` decided how to run a bundled script by looking for a PEP
+  723 header: found one, ran it under `uv run --script`; found none, fell back
+  to bare `python3`. For a skill whose dependencies live in a `pyproject.toml`
+  instead, that fallback meant every script died on `ModuleNotFoundError`
+  before argument parsing, and the gate reported the *skill* as broken.
+
+  It now looks upward for a uv workspace root and runs through it. The PEP 723
+  path is unchanged, so single-file skills from elsewhere still work.
+
+### Changed
+- **`buildme` and `deepen` take their dependencies from the repo-root uv
+  workspace.** Their `scripts/uv.lock` files are gone, replaced by one lock at
+  the root. Run them with `uv run --project <repo-root>`; running from inside
+  the script directory no longer resolves a project of its own.
+
 ## [0.9.1] - 2026-08-04
 
 ### Fixed

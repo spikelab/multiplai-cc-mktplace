@@ -9,13 +9,30 @@
 # updates are the fix for that failure mode, so every uv project here is
 # enrolled explicitly.
 #
-# Adding a new plugin with its own pyproject.toml/uv.lock? Add it below —
-# Dependabot does not discover manifests recursively.
+# As of 2026-08-04 there is one uv workspace at the repo root and one uv.lock
+# covering every plugin, so there is one entry below instead of three. Adding a
+# new plugin no longer means adding an entry here — but it does mean adding the
+# directory to [tool.uv.workspace] members in /pyproject.toml, which
+# scripts/lint_workspace.py enforces.
+#
+# This also closed a real blind spot rather than just tidying: dependencies
+# used to be declared in PEP 723 inline script metadata, which Dependabot
+# cannot parse at all. 29 declarations of multiplai-core were invisible to it.
+# Manifests are the only thing it scans, so moving them into pyproject.toml is
+# what made them visible.
+#
+# The pip entry for /plugins/multiplai-context went with requirements-dev.txt:
+# CI now supplies the test toolchain per-run (`uv run --with pytest ...`), so
+# there is no pip manifest left to scan there.
+#
+# Known gap: Dependabot does not bump git-sourced dependencies, and
+# multiplai-core is declared as a git URL. It will not be updated by these PRs
+# until core is published to PyPI.
 
 version: 2
 updates:
   - package-ecosystem: "uv"
-    directory: "/plugins/multiplai-dev/skills/buildme/scripts"
+    directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
@@ -23,29 +40,6 @@ updates:
       # One PR for the routine churn, so the noise stays reviewable. Security
       # updates are deliberately NOT grouped — Dependabot raises those
       # separately and immediately regardless of this schedule.
-      minor-and-patch:
-        update-types: ["minor", "patch"]
-    commit-message:
-      prefix: "chore(deps)"
-
-  - package-ecosystem: "uv"
-    directory: "/plugins/multiplai-research/skills/deep-research/scripts"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      minor-and-patch:
-        update-types: ["minor", "patch"]
-    commit-message:
-      prefix: "chore(deps)"
-
-  # Test/dev toolchain for the memory engine (pytest + multiplai-core pin).
-  - package-ecosystem: "pip"
-    directory: "/plugins/multiplai-context"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-    groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
     commit-message:

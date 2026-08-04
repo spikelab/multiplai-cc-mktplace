@@ -47,7 +47,7 @@ Two consequences worth stating outright:
 
 ## Gates before publishing
 
-All four are deterministic and offline. Run them locally; CI
+All five are deterministic and offline. Run them locally; CI
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs them too.
 
 ```bash
@@ -60,6 +60,11 @@ uv run --no-project scripts/scan_skills.py --all
 # release notes: a changed plugin must carry a version bump and an entry
 uv run --no-project scripts/check_changelog.py --base origin/main
 
+# one environment: every pyproject.toml is a declared workspace member, no
+# stray .venv, no PEP 723 blocks (the stray-venv check only bites locally —
+# they are gitignored, so a CI checkout never has one)
+uv run --no-project scripts/lint_workspace.py
+
 # the promotion gate — executes every bundled entry point with --help
 for skill in plugins/*/skills/*/; do
   python3 plugins/multiplai-dev/skills/skill-creator/scripts/promote_skill.py "$skill"
@@ -69,14 +74,24 @@ done
 uv run --no-project --with pytest python -m pytest scripts/tests/ -q
 ```
 
-CI additionally runs the three per-plugin test suites, each from its own
+The gate scripts and their tests are stdlib-only, which is why they alone use
+`--no-project`: it skips installing the workspace environment just to run a
+linter. Everything under `plugins/` needs `--project`.
+
+CI additionally runs the four per-plugin test suites, each from its own
 directory:
 
 | Suite | Command |
 |---|---|
-| `multiplai-context` | `cd plugins/multiplai-context && python -m pytest tests/ -q` |
-| buildme | `cd plugins/multiplai-dev/skills/buildme/scripts && uv run --extra dev python -m pytest tests/ -q` |
-| deep-research | `cd plugins/multiplai-research/skills/deep-research/scripts && uv run --extra dev python -m pytest tests/ -q` |
+| `multiplai-context` | `cd plugins/multiplai-context && uv run --all-packages --project ../.. --with pytest --with pytest-asyncio --with pytest-timeout python -m pytest tests/ -q` |
+| `multiplai-media` | `cd plugins/multiplai-media && uv run --no-project --with pytest python -m pytest tests/ -q` |
+| buildme | `cd plugins/multiplai-dev/skills/buildme/scripts && uv run --project ../../../../.. --package build-pipeline --extra dev python -m pytest tests/ -q` |
+| deep-research | `cd plugins/multiplai-research/skills/deep-research/scripts && uv run --project ../../../../.. --package research-pipeline --extra dev python -m pytest tests/ -q` |
+
+An extra (`--extra dev`) belongs to a *member*, not to the workspace, so it
+needs `--package <member-name>` alongside `--project`. Without it uv reports
+`Extra 'dev' is not defined in the project's optional-dependencies table`,
+which is about the root, not the member you meant.
 
 Skills may also ship a `CONTRACT.md` — assertions on interface *shape*, not on
 values — run by `promote_skill.py <skill> --contract`.
@@ -116,26 +131,46 @@ writing two sentences.
 
 Shared Python infrastructure — paths, config, logging, the model client — is
 [`multiplai-core`](https://github.com/spikelab/multiplai-core), a separate
-repository. It is **not** vendored here. Scripts consume it through PEP 723
-inline metadata, pinned by git tag:
+repository. It is **not** vendored here.
 
-```python
-# /// script
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.9.0"]
-# ///
-```
-
-Find every pin with:
+**There is one uv workspace, rooted at `/pyproject.toml`, and one `uv.lock`.**
+Each script directory that needs dependencies is a *member*: it has its own
+`pyproject.toml` listing what it imports, and is named in
+`[tool.uv.workspace] members`. Nothing else declares dependencies. Run
+anything through it:
 
 ```bash
-grep -rho 'multiplai-core.*@v[0-9.]*' --include='*.py' plugins/ | sort | uniq -c
+uv run --all-packages --project <repo-root> <path/to/script.py>
 ```
 
-Bumping a pin is **deliberate and per-consumer**. Tags in `multiplai-core` are
-immutable and fixes ship as new tags, so a pin says exactly which code runs.
-Do not sweep all pins to the newest tag as a tidying pass: a script pinned to
-an older tag may be pinned there because the newer one changed something it
-relies on. Bump the pin you are testing, and say so in the changelog entry.
+Two rules, both enforced by `scripts/lint_workspace.py`:
+
+- **A new script directory with dependencies must be added to `members`.** uv
+  does not warn about an undeclared `pyproject.toml` — it silently gives that
+  directory its own `.venv`, which is how this repo accumulated four of them
+  (915MB, all gitignored, none noticed for months).
+- **No script may carry a PEP 723 `# /// script` block.** This was the
+  previous convention and it is now a defect, for two independent reasons.
+  `uv run` re-resolves inline dependencies on **every** invocation, so the
+  `UserPromptSubmit` hooks — which fire on every prompt — took 12-68s and hit
+  their timeout; from the lock it is ~0.05s. And Dependabot cannot parse PEP
+  723 at all, so 29 declarations of `multiplai-core` were invisible to it.
+
+PEP 723 remains the right tool for a genuinely standalone one-file script. It
+became the wrong one here somewhere around the 26th script sharing a library —
+a scale threshold, not an original mistake.
+
+**On pinning:** `multiplai-core` is declared unpinned and tracked from `main`.
+It is first-party, its releases have been additive throughout, and no consumer
+here has ever needed an older one. A lockfile is not a pin — it records what
+"latest" resolved to, so resolution happens when Dependabot opens a PR and CI
+runs against it, rather than during a user's prompt. Third-party ceilings
+(e.g. `claude-agent-sdk>=0.2.116,<0.3`) are a separate question and still
+apply; see that cap's rationale in `multiplai-core/pyproject.toml`.
+
+**Known gap:** Dependabot does not bump git-sourced dependencies, so the
+weekly PR will not move `multiplai-core`. Publishing core to PyPI is what
+closes this.
 
 ## The two cross-cutting contracts
 

@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """PreCompact hook for multiplai plugin.
 
 Conversation context is about to be compacted, so the full transcript
