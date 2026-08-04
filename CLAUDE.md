@@ -85,8 +85,13 @@ directory:
 |---|---|
 | `multiplai-context` | `cd plugins/multiplai-context && uv run --project ../.. --with pytest --with pytest-asyncio --with pytest-timeout python -m pytest tests/ -q` |
 | `multiplai-media` | `cd plugins/multiplai-media && uv run --project ../.. --with pytest python -m pytest tests/ -q` |
-| buildme | `cd plugins/multiplai-dev/skills/buildme/scripts && uv run --project ../../../../.. --extra dev python -m pytest tests/ -q` |
-| deep-research | `cd plugins/multiplai-research/skills/deep-research/scripts && uv run --project ../../../../.. --extra dev python -m pytest tests/ -q` |
+| buildme | `cd plugins/multiplai-dev/skills/buildme/scripts && uv run --project ../../../../.. --package build-pipeline --extra dev python -m pytest tests/ -q` |
+| deep-research | `cd plugins/multiplai-research/skills/deep-research/scripts && uv run --project ../../../../.. --package research-pipeline --extra dev python -m pytest tests/ -q` |
+
+An extra (`--extra dev`) belongs to a *member*, not to the workspace, so it
+needs `--package <member-name>` alongside `--project`. Without it uv reports
+`Extra 'dev' is not defined in the project's optional-dependencies table`,
+which is about the root, not the member you meant.
 
 Skills may also ship a `CONTRACT.md` — assertions on interface *shape*, not on
 values — run by `promote_skill.py <skill> --contract`.

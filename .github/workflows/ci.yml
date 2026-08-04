@@ -142,24 +142,37 @@ jobs:
         with:
           python-version: '3.12'
 
-      # The hooks shell out to `uv run --script` (PEP 723) for the memory
-      # maintainer and the deferred-extraction subprocess. Without uv on PATH
-      # those launches fail — handled, but the lifecycle tests then exercise
-      # the degraded path instead of the real one.
+      # The hooks shell out to uv for the memory maintainer and the
+      # deferred-extraction subprocess. Without uv on PATH those launches
+      # fail — handled, but the lifecycle tests then exercise the degraded
+      # path instead of the real one.
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      # multiplai-core is a git dependency, not on PyPI — the test suite
-      # imports it directly (the scripts get it via PEP 723 at runtime).
-      - name: Install dependencies
-        working-directory: plugins/multiplai-context
-        run: |
-          python -m pip install --quiet --upgrade pip
-          python -m pip install --quiet -r requirements-dev.txt
-
+      # The suite imports multiplai-core directly. It comes from the workspace
+      # environment now (scripts/pyproject.toml declares it), so this is a
+      # `uv sync` rather than a pip install of a separate requirements file.
       - name: Run tests
         working-directory: plugins/multiplai-context
-        run: python -m pytest tests/ -q
+        run: |
+          uv run --project ../.. --with pytest --with pytest-asyncio \
+            --with pytest-timeout python -m pytest tests/ -q
+
+  media-tests:
+    name: multiplai-media tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # These tests shim the host tools they probe (ffmpeg, yt-dlp, uname), so
+      # they need no real media toolchain — the point is the platform-detection
+      # branching and the fix-it messages, not transcoding.
+      - name: Run tests
+        working-directory: plugins/multiplai-media
+        run: uv run --project ../.. --with pytest python -m pytest tests/ -q
 
   buildme-tests:
     name: buildme pipeline tests
@@ -170,9 +183,13 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
+      # `--extra dev` belongs to the member, not the workspace root, so it
+      # needs `--package` too — without it uv reports the extra as undefined.
       - name: Run tests
         working-directory: plugins/multiplai-dev/skills/buildme/scripts
-        run: uv run --extra dev python -m pytest tests/ -q
+        run: |
+          uv run --project ../../../../.. --package build-pipeline \
+            --extra dev python -m pytest tests/ -q
 
   research-tests:
     name: deep-research pipeline tests
@@ -185,4 +202,6 @@ jobs:
 
       - name: Run tests
         working-directory: plugins/multiplai-research/skills/deep-research/scripts
-        run: uv run --extra dev python -m pytest tests/ -q
+        run: |
+          uv run --project ../../../../.. --package research-pipeline \
+            --extra dev python -m pytest tests/ -q
