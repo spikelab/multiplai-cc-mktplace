@@ -18,10 +18,22 @@ dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.1] - 2026-08-04
+
+### Fixed
+
+- **`screen-demo` pipeline commands work on an installed copy of the plugin.**
+  The documented `uv run --project` form pointed at the marketplace repo root,
+  which does not exist on an install. SKILL.md, `bootstrap.sh` and the
+  pipeline's own error messages now use
+  `uv run --project "${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts"`, which
+  resolves in-repo and standalone.
+
 ### Added
 - **A plugin README** (`plugins/multiplai-media/README.md`) — what the pack
   contains, what each skill needs, and how it degrades without the kit.
-  Not yet in a released version.
 
 ## [0.2.0] - 2026-08-04
 

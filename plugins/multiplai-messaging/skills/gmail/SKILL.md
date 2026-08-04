@@ -50,7 +50,7 @@ Run through the bundled script; `uv` provides the Google client libs from the
 repo-root workspace environment (no venv to manage, no `pip install`):
 
 ```bash
-GM="uv run --all-packages --project ${CLAUDE_PLUGIN_ROOT}/../.. ${CLAUDE_PLUGIN_ROOT}/skills/gmail/scripts/gmail.py"
+GM="uv run --project ${CLAUDE_PLUGIN_ROOT}/skills/gmail/scripts ${CLAUDE_PLUGIN_ROOT}/skills/gmail/scripts/gmail.py"
 ```
 
 ## Verbs

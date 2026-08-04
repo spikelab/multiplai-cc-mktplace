@@ -39,3 +39,11 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["research_pipeline"]
+
+# Member-local source so this directory also resolves standalone — an
+# installed plugin is a copy of the plugin subtree only (no workspace root
+# above it), so without this the bare multiplai-core name would be looked
+# up on PyPI, where it does not exist. In-repo, uv still resolves through
+# the workspace root and the single uv.lock.
+[tool.uv.sources]
+multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }

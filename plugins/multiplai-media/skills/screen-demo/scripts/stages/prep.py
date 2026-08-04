@@ -150,10 +150,10 @@ def _scenedetect_bin() -> str:
     if on_path:
         return on_path
     raise RuntimeError(
-        "scenedetect not found on PATH. Run this pipeline through the uv "
-        "workspace, which provides it: `uv run --project <repo-root> python3 "
-        "pipeline.py …` — or bake scenedetect + opencv-python-headless into "
-        "the image."
+        "scenedetect not found on PATH. Run this pipeline through the skill's "
+        "scripts project, which provides it: `uv run --project "
+        "<skill>/scripts python3 pipeline.py …` — or bake scenedetect + "
+        "opencv-python-headless into the image."
     )
 
 
