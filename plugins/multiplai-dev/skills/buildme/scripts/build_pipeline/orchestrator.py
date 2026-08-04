@@ -446,15 +446,31 @@ async def _run_docs_update_phase(
         _progress_note(progress, "DOCS_UPDATE", f"FAILED (non-fatal): {docs_err}")
         return
 
-    state.docs_impact = files
+    staged, dropped = _docs_paths(config, files)
+    # Only paths that survived validation reach the state — the reported list
+    # is agent output, and a hallucinated path must not surface in the PR body
+    # as a document this build updated.
+    state.docs_impact = staged
     # Checkpointed here rather than relying on the caller's advance_to: the PR
     # body is written much later, possibly in a resumed process, and an
     # in-memory value would silently drop the "docs updated" section.
     state.checkpoint(config.state_file_path())
-    staged = _docs_paths(config, files)
-    if files:
-        log.info("DONE phase=DOCS_UPDATE files=%d", len(files))
-        _progress_note(progress, "DOCS_UPDATE", "Updated: " + ", ".join(files))
+    if dropped:
+        shown = ", ".join(dropped[:10]) + (" …" if len(dropped) > 10 else "")
+        log.warning(
+            "DOCS_UPDATE reported %d path(s) that are not files in the project "
+            "and were NOT committed: %s", len(dropped), shown,
+        )
+        print(f"DOCS_WARNING:reported paths not found in the project, dropped: {shown}",
+              flush=True)
+        _progress_note(
+            progress, "DOCS_UPDATE",
+            f"WARNING: {len(dropped)} reported path(s) dropped (not files in the "
+            f"project): {shown}",
+        )
+    if staged:
+        log.info("DONE phase=DOCS_UPDATE files=%d", len(staged))
+        _progress_note(progress, "DOCS_UPDATE", "Updated: " + ", ".join(staged))
         # Its own commit, with an explicit pathspec — the docs are a separate
         # readable step in the branch history, not a lump with the code.
         git_ops.commit_stage(
@@ -550,17 +566,19 @@ def _uncommitted_paths(config: BuildConfig) -> list[str] | None:
     return paths
 
 
-def _docs_paths(config: BuildConfig, files: list[str]) -> list[str]:
-    """Pathspecs (relative to the project dir) for the documents the agent wrote.
+def _docs_paths(config: BuildConfig, files: list[str]) -> tuple[list[str], list[str]]:
+    """Split the agent's reported paths into ``(staged, dropped)``.
 
-    Only paths that resolve to an existing file **inside** the project survive.
-    This list comes from an agent's report and is the one place it becomes
-    ``git add`` argv, so anything outside the project — or any pathspec-magic
-    string that is not a real file — is dropped with a warning rather than
-    staged.
+    ``staged`` holds pathspecs (relative to the project dir) for the documents
+    the agent wrote: only paths that resolve to an existing file **inside** the
+    project survive. This list comes from an agent's report and is the one
+    place it becomes ``git add`` argv, so anything outside the project — or any
+    pathspec-magic string that is not a real file — lands in ``dropped``
+    (as reported, for naming back to the user) rather than being staged.
     """
     root = Path(config.project_dir).resolve()
-    out: list[str] = []
+    staged: list[str] = []
+    dropped: list[str] = []
     for entry in files or []:
         candidate = Path(entry)
         resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
@@ -569,11 +587,12 @@ def _docs_paths(config: BuildConfig, files: list[str]) -> list[str]:
                 "Ignoring reported docs path (outside the project, or not a file): %s",
                 entry,
             )
+            dropped.append(entry)
             continue
         rel = str(resolved.relative_to(root))
-        if rel not in out:
-            out.append(rel)
-    return out
+        if rel not in staged:
+            staged.append(rel)
+    return staged, dropped
 
 
 def _progress_note(progress: ProgressWriter, phase: str, text: str) -> None:

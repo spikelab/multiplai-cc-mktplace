@@ -503,6 +503,7 @@ class TestDocsUpdatePhaseWiring:
         from build_pipeline.orchestrator import run_orchestrator
 
         config = self._config(tmp_path)
+        (config.project_dir / "README.md").write_text("r")
         order: list[str] = []
 
         async def fake_docs(*a, **kw):
@@ -604,6 +605,7 @@ class TestDocsUpdatePhaseWiring:
         from build_pipeline.orchestrator import _run_docs_update_phase
 
         config = self._config(tmp_path)
+        (config.project_dir / "README.md").write_text("r")
         state = BuildState(change_name="feat", mode="only", tier="advanced")
         progress = ProgressWriter(config.progress_file_path())
 
@@ -614,6 +616,67 @@ class TestDocsUpdatePhaseWiring:
 
         assert state.docs_impact == ["README.md"]
         assert "Updated: README.md" in config.progress_file_path().read_text()
+
+    @pytest.mark.asyncio
+    async def test_a_hallucinated_path_never_reaches_the_state_or_the_pr_body(
+        self, tmp_path, capsys,
+    ):
+        """The DOCS_IMPACT list is agent output: an entry that is not a file in
+        the project must not be presented to a reviewer as an updated document.
+        It is dropped from state (and so from the PR body) and named back to
+        the user as a DOCS_WARNING, on stdout and in the progress file."""
+        from unittest.mock import AsyncMock, patch
+        from build_pipeline.models import GateResult
+        from build_pipeline.orchestrator import _pr_title_body, _run_docs_update_phase
+
+        config = self._config(tmp_path)
+        (config.project_dir / "README.md").write_text("r")
+        state = BuildState(change_name="feat", mode="only", tier="advanced")
+        progress = ProgressWriter(config.progress_file_path())
+
+        with patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
+                   new_callable=AsyncMock,
+                   return_value=(["README.md", "ghost.md"],
+                                 GateResult(passed=True, reason="ok"))):
+            await _run_docs_update_phase(config, state, progress)
+
+        assert state.docs_impact == ["README.md"]
+        out = capsys.readouterr().out
+        assert "DOCS_WARNING:" in out and "ghost.md" in out
+        text = config.progress_file_path().read_text()
+        assert "ghost.md" in text and "Updated: README.md" in text
+        _, body = _pr_title_body(config, state)
+        assert "`README.md`" in body
+        assert "ghost.md" not in body
+
+    @pytest.mark.asyncio
+    async def test_all_reported_paths_invalid_leaves_the_state_empty(
+        self, tmp_path, capsys,
+    ):
+        """Truthy garbage from the report must not suppress the freshness
+        warning path either: nothing survives validation, docs_impact stays
+        empty, and the gate's own warning still reaches stdout."""
+        from unittest.mock import AsyncMock, patch
+        from build_pipeline.models import GateResult
+        from build_pipeline.orchestrator import _run_docs_update_phase
+
+        config = self._config(tmp_path)
+        state = BuildState(change_name="feat", mode="only", tier="advanced")
+        progress = ProgressWriter(config.progress_file_path())
+        warning = GateResult(
+            passed=True, action="docs_may_be_stale", reason="CHANGELOG.md may be stale",
+        )
+
+        with patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
+                   new_callable=AsyncMock,
+                   return_value=(["ghost.md", "phantom.md"], warning)):
+            await _run_docs_update_phase(config, state, progress)
+
+        assert state.docs_impact == []
+        out = capsys.readouterr().out
+        assert "ghost.md" in out and "phantom.md" in out
+        assert "DOCS_WARNING:CHANGELOG.md may be stale" in out
+        assert "No documentation needed updating" in config.progress_file_path().read_text()
 
     def test_reported_paths_outside_the_project_are_never_staged(self, tmp_path):
         """The DOCS_IMPACT list is agent-supplied and becomes `git add` argv."""
@@ -626,14 +689,15 @@ class TestDocsUpdatePhaseWiring:
         (tmp_path / "outside.md").write_text("o")
         config = BuildConfig(project_dir=project, change_name="c")
 
-        assert _docs_paths(config, ["README.md", "docs/usage.md"]) == [
-            "README.md", "docs/usage.md",
-        ]
-        assert _docs_paths(config, ["../outside.md"]) == []
-        assert _docs_paths(config, [str(tmp_path / "outside.md")]) == []
-        assert _docs_paths(config, ["does-not-exist.md"]) == []
-        assert _docs_paths(config, [":(exclude)README.md"]) == []
-        assert _docs_paths(config, ["README.md", "./README.md"]) == ["README.md"]
+        assert _docs_paths(config, ["README.md", "docs/usage.md"]) == (
+            ["README.md", "docs/usage.md"], [],
+        )
+        assert _docs_paths(config, ["../outside.md"]) == ([], ["../outside.md"])
+        outside = str(tmp_path / "outside.md")
+        assert _docs_paths(config, [outside]) == ([], [outside])
+        assert _docs_paths(config, ["does-not-exist.md"]) == ([], ["does-not-exist.md"])
+        assert _docs_paths(config, [":(exclude)README.md"]) == ([], [":(exclude)README.md"])
+        assert _docs_paths(config, ["README.md", "./README.md"]) == (["README.md"], [])
 
 
 class TestDocsAgentWritesItDidNotReport:
