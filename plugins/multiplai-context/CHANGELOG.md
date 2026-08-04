@@ -18,6 +18,41 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.16.0] - 2026-08-04
+
+### Fixed
+- **The prompt hooks no longer time out.** If your sessions have been printing
+  `UserPromptSubmit hook timed out after 10s` / `after 30s`, this is that.
+  Every prompt you typed fired two hooks, and each one re-resolved
+  `multiplai-core` against GitHub before doing any work — measured at 12-68
+  seconds per invocation, against timeouts of 10s and 30s. When the hook timed
+  out, routing was skipped: no memory injected, silently.
+
+  The cause was `multiplai-core` being pinned by git *tag* in each script's
+  PEP 723 inline metadata. A tag is a mutable ref, so uv could not cache the
+  resolution and asked GitHub every single time. Dependencies are now declared
+  once in `scripts/pyproject.toml` and resolved from a committed lockfile —
+  the same command now takes ~0.05s and touches the network on install only.
+
+### Changed
+- **Scripts are launched with `uv run --project` instead of
+  `uv run --no-project`.** If you invoke any of them by hand — from a SKILL.md,
+  a cron job, or a shell — the old form now fails with
+  `ModuleNotFoundError: multiplai_core`, because the dependencies moved out of
+  the script files. Every SKILL.md in this plugin shows the new form. There is
+  still no venv for you to create or activate.
+- **`multiplai-core` is no longer pinned per script.** It tracks `main`, with
+  a lockfile recording what that resolved to, so updates arrive as a reviewed
+  Dependabot PR that CI has run against. 25 of the 26 scripts were already on
+  the same version, so the per-script pin was granularity nobody used.
+
+### Removed
+- **`requirements-dev.txt`.** The test suite no longer installs from it — CI
+  supplies pytest per-run (`uv run --with pytest ...`) and `multiplai_core`
+  comes from the workspace — so keeping it would have been exactly the kind of
+  unwatched pin drift this release eliminates. The Dependabot pip entry that
+  scanned it is gone too.
+
 ## [0.15.1] - 2026-08-03
 
 ### Fixed

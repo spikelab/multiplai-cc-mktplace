@@ -63,11 +63,15 @@ For local development, point Claude Code at the plugin directory:
 claude --plugin-dir ./plugins/multiplai-context
 ```
 
-No manual install step for Python dependencies. Each plugin script
-declares its own dependencies inline (PEP 723) and is launched via
-`uv run --no-project`, which resolves and caches them on first run. There
-is no shared virtualenv to bootstrap or maintain — `uv` provisions an
-ephemeral, per-script environment on demand.
+No manual install step for Python dependencies. `scripts/pyproject.toml`
+declares them once, as a member of the repo-root `uv` workspace, and scripts
+are launched via `uv run --project`. uv provisions the environment on first
+run from the committed `uv.lock` and reuses it after that.
+
+Scripts previously declared dependencies inline (PEP 723). That made `uv run`
+re-resolve `multiplai-core` against GitHub on **every** invocation, so the
+`UserPromptSubmit` hooks — which fire on every prompt — took 12-68s and hit
+their timeout. Resolving from a lockfile instead brought that to ~0.05s.
 
 ### Standalone install (no kit)
 
@@ -84,14 +88,14 @@ more. On vanilla Claude Code:
    /plugin marketplace add spikelab/multiplai-cc-mktplace
    /plugin install multiplai-context@multiplai
    ```
-3. **Expect a slow first session start.** The first hook run resolves
-   `multiplai-core` from GitHub plus PyPI deps into uv's cache (the
-   SessionStart hook allows 60s for this). To warm the cache ahead of time
-   instead, run once from a shell:
+3. **Expect a slow first session start.** The first run installs the
+   workspace environment from `uv.lock` (the SessionStart hook allows 60s for
+   this). To do it ahead of time instead, run once from a shell:
    ```
-   uv run --no-project <plugin-dir>/scripts/session_start.py </dev/null
+   uv run --all-packages --project <repo-root> <plugin-dir>/scripts/session_start.py </dev/null
    ```
-   Every later start is fast (cache hit).
+   Every later start is fast — resolution is already done, so no later run
+   touches the network.
 4. Run `/multiplai-context:setup` in your first session — two questions
    (your name, your workspace), settings written, memory seeded.
    (`/multiplai-context:setup full` runs the deeper interview any time.)
@@ -626,8 +630,8 @@ silently never runs again.
 Run it by hand, or check what it would do:
 
 ```bash
-uv run --no-project scripts/memory_maintainer.py --dry-run
-uv run --no-project scripts/memory_maintainer.py --force
+uv run --all-packages --project ../.. scripts/memory_maintainer.py --dry-run
+uv run --all-packages --project ../.. scripts/memory_maintainer.py --force
 ```
 
 State lives in `<data_dir>/maintainer_state.yaml`; runs appear in the activity
@@ -688,7 +692,7 @@ detached subprocess.
 so it no longer has to wait for a session:
 
 ```
-uv run --no-project drain_extractions.py --data-dir <workspace>/.multiplai/data
+uv run --all-packages --project ../../.. drain_extractions.py --data-dir <workspace>/.multiplai/data
 ```
 
 `--wait` blocks until each extraction finishes with its errors visible;
@@ -1398,7 +1402,7 @@ checks the plumbing mechanically and names what's missing.
 | Symptom | Fix |
 |---|---|
 | **Nothing runs at all — no diary, no injection, no logs.** Hooks disable themselves silently when `uv` is missing. | Install [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh \| sh`), restart the session. |
-| **First session start hangs ~60 seconds.** Cold start: the first hook run resolves `multiplai-core` + PyPI deps into uv's cache. Expected exactly once. | Wait it out, or pre-warm from a shell: `uv run --no-project <plugin-dir>/scripts/session_start.py </dev/null`. Every later start is a cache hit. |
+| **First session start hangs ~60 seconds.** Cold start: the first run installs the workspace environment from `uv.lock`. Expected exactly once. | Wait it out, or pre-warm from a shell: `uv run --all-packages --project <repo-root> <plugin-dir>/scripts/session_start.py </dev/null`. Every later start reuses the environment. |
 | **Hooks appear to do nothing.** No visible effect, unsure if anything is installed correctly. | Run `/multiplai-context:health` — it verifies the model client, directories, memory freshness, and diary/learnings counts, and names the broken piece. |
 | **Memory not injected.** You told setup things, but a new session doesn't know them. | Two checks: (1) your `settings.json` key must be the compound `pluginConfigs["multiplai-context@multiplai"]` form — a bare `multiplai` key fails **silently** (see [Configuration](#configuration)); (2) read the `[context]` routing line in the activity log — [Observability](#observability) explains how to tell a healthy route from an abstention or a fallback. |
 | **Settings changed but nothing happened.** | Options are read at session start — restart Claude Code after any `settings.json` change. |
@@ -1430,9 +1434,13 @@ what it needs if you come back.
 
 ```
 cd plugins/multiplai-context
-python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest -q
+uv run --all-packages --project ../.. --with pytest --with pytest-asyncio \
+  --with pytest-timeout python -m pytest tests/ -q
 ```
+
+No venv to create: the repo-root uv workspace supplies `multiplai_core` and
+friends, and `--with` adds the test toolchain for the run (same command CI
+uses).
 
 Tests live in `tests/` and are dev-only — never loaded by the plugin
 runtime.

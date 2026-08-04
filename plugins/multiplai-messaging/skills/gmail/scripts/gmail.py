@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#   # Floors + major caps, not bare names. `uv run` resolves this block fresh
-#   # at hook time with no lockfile behind it, so an unconstrained name means
-#   # whatever is newest on PyPI executes here — holding a Gmail OAuth token.
-#   # The caps stop a surprise major; the floors stay open at the patch level
-#   # on purpose, because PEP 723 blocks are invisible to Dependabot and an
-#   # exact pin would silently rot with nothing to raise an alert (see #99).
-#   "google-api-python-client>=2.198.0,<3",
-#   "google-auth[requests]>=2.56.2,<3",
-#   "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.10.0",
-# ]
-# ///
 """gmail.py — the Gmail skill's engine. TODAY it can only: search the inbox,
 read one inbox message, and create a draft. It does NOT send, and reaches
 nothing outside the inbox. The boundary is THIS SCRIPT — what it does and does

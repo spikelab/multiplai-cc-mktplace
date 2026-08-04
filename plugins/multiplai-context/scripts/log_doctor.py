@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """Log digest for the multiplai runtime logs (the /log-doctor skill).
 
 Scans ``paths.logs_dir()``, parses every log file, clusters ERROR/WARNING/INFO

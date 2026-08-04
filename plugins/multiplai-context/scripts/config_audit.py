@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """Config-audit state stamping for the multiplai plugin.
 
 The ``/multiplai-context:config-audit`` skill is prompt-driven — the audit

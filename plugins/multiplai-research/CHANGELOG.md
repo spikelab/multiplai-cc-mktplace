@@ -23,6 +23,19 @@ dates recorded at the time, not derived from a tag.
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
 
+## [0.6.0] - 2026-08-04
+
+### Changed
+- **`deep-research` takes its dependencies from the repo-root uv workspace.**
+  Its own `scripts/uv.lock` is gone, replaced by one lock covering every plugin
+  in the marketplace. Nothing changes about what the pipeline does; if you
+  invoke it by hand, use `uv run --project <repo-root>` rather than running
+  from inside `scripts/`, which no longer resolves a project of its own.
+
+  This also removes a whole class of the problem that caused 0.5.2: one plugin
+  can no longer sit on a stale lock while its siblings are patched, because
+  there is only one lock to keep current.
+
 ## [0.5.2] - 2026-07-30
 
 ### Fixed

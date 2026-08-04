@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """Session end hook for multiplai plugin.
 
 Saves a deferred extraction marker for the next SessionStart hook to

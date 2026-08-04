@@ -459,22 +459,25 @@ class TestTimeoutCompliance:
 
 
 class TestVenvPreamble:
-    """Post-uv-migration: the context router runs via `uv run --no-project`
-    with PEP 723 inline metadata; the venv re-exec preamble is gone."""
+    """Post-uv-migration: the context router runs via `uv run --project`
+    against the shared workspace. The venv re-exec preamble went first; PEP
+    723 inline metadata followed on 2026-08-04, because resolving it made this
+    hook — which fires on every prompt — take 12-68s."""
 
-    def test_has_pep723_header(self):
+    def test_has_no_pep723_header(self):
         """WHEN the context_manager.py source is inspected
-        THEN it carries a PEP 723 inline-metadata header."""
+        THEN it carries no PEP 723 inline-metadata header."""
         text = CONTEXT_ROUTER_PATH.read_text()
-        assert "# /// script" in text, \
-            "Context router must carry a PEP 723 header"
+        assert "# /// script" not in text, \
+            "Context router carries a PEP 723 header again — it fires on every " \
+            "prompt, so a per-run resolve is a user-visible timeout"
 
-    def test_declares_multiplai_core(self):
-        """WHEN the context_manager.py source is inspected
-        THEN its inline metadata depends on multiplai-core."""
-        text = CONTEXT_ROUTER_PATH.read_text()
-        assert "multiplai-core" in text, \
-            "Context router must declare a multiplai-core dependency"
+    def test_member_declares_multiplai_core(self):
+        """WHEN the workspace member manifest is inspected
+        THEN it depends on multiplai-core, which is what supplies the router."""
+        manifest = (CONTEXT_ROUTER_PATH.parent / "pyproject.toml").read_text()
+        assert "multiplai-core" in manifest, \
+            "scripts/pyproject.toml must declare a multiplai-core dependency"
 
     def test_no_venv_guard(self):
         """WHEN the context_manager.py source is inspected

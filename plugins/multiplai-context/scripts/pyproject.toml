@@ -1,0 +1,16 @@
+# Dependencies for the memory-engine scripts (hooks + skill entry points).
+# Consolidated from 26 PEP 723 blocks on 2026-08-04; see the workspace root
+# pyproject.toml for why. The [sdk] extra is required, not optional: nothing
+# injects claude-agent-sdk at runtime, so AgentSDKClient degrades to the
+# API backend without it.
+[project]
+name = "multiplai-context-scripts"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "multiplai-core[sdk]",
+    "pyyaml>=6.0",
+]
+
+[tool.uv]
+package = false

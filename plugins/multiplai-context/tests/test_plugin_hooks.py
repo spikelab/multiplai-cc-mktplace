@@ -70,12 +70,14 @@ class TestVenvPythonUsage:
     def _get_hook_scripts(self):
         return [PLUGIN_ROOT / h["script"] for h in parse_hooks()]
 
-    def test_scripts_have_pep723_metadata(self):
+    def test_scripts_have_no_inline_metadata(self):
         for script_path in self._get_hook_scripts():
             if script_path.is_file():
                 text = script_path.read_text()
-                assert "# /// script" in text, \
-                    f"{script_path.name} missing PEP 723 inline metadata"
+                assert "# /// script" not in text, \
+                    (f"{script_path.name} carries PEP 723 inline metadata again — "
+                     "dependencies belong in scripts/pyproject.toml, which is a "
+                     "workspace member; inline blocks make uv re-resolve per run")
                 assert "venv_guard" not in text and "ensure_venv_python" not in text, \
                     f"{script_path.name} still references the retired venv guard"
 

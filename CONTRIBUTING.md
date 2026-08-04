@@ -13,18 +13,26 @@ repo](https://github.com/spikelab/multiplai/discussions); bugs to
 ## Pre-publish checks
 
 Installing a plugin copies these files onto someone else's machine, where they
-run with that person's credentials — and nobody reads every line first. Two
-repo-level checks stand in for that reading; both are deterministic and offline:
+run with that person's credentials — and nobody reads every line first. Three
+repo-level checks stand in for that reading; all are deterministic and offline:
 
 ```bash
 uv run --no-project scripts/lint_skills.py     # structure: frontmatter, script refs, absolute paths
 uv run --no-project scripts/scan_skills.py     # security: what a skill does vs what its SKILL.md says
+uv run --no-project scripts/lint_workspace.py  # one environment: members declared, no stray .venv
 ```
 
 - `lint_skills.py` catches malformed frontmatter, unknown `model`/`effort`
   values (silently ignored at runtime, so the skill quietly runs on the wrong
   tier), SKILL.md references to renamed scripts, and machine-specific absolute
   paths baked into shipped files. Exit 1 on any error.
+- `lint_workspace.py` keeps this repo on a single uv environment. Every
+  `pyproject.toml` under `plugins/` must be a declared member in the root
+  `[tool.uv.workspace]` — an undeclared one gets its own `.venv` from uv with
+  no warning — and no script may carry a PEP 723 `# /// script` block, which
+  makes `uv run` re-resolve on every invocation. **Run this one locally**: its
+  stray-`.venv` check is the only part CI cannot do, because stray venvs are
+  gitignored and a fresh checkout never has one.
 - `scan_skills.py` reports declared-vs-actual behaviour. **FAIL** (blocks CI) for
   patterns with no legitimate use in a shipped skill — `curl | bash`,
   base64-decode-and-execute; **WARN** for behaviour that is fine when declared

@@ -11,7 +11,7 @@ dependencies = [
     # hand-written duplicate is not, so a future floor bump in core would
     # silently fail to reach this pipeline. Nothing injects the SDK at
     # runtime, which is why asking for [sdk] is required, not optional.
-    "multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.11.0",
+    "multiplai-core[sdk]",
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",

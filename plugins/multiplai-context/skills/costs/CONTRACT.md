@@ -20,7 +20,7 @@ Commands run with this directory as cwd.
 ### help lists every documented --by dimension
 
 ```sh
-uv run --no-project ../../scripts/costs_report.py --help
+uv run --all-packages --project ../../../.. ../../scripts/costs_report.py --help
 ```
 
 Expect: {branch,component,day,model,project,session,skill}
@@ -28,7 +28,7 @@ Expect: {branch,component,day,model,project,session,skill}
 ### an unknown --by dimension is rejected rather than silently ignored
 
 ```sh
-uv run --no-project ../../scripts/costs_report.py --by nonsense 2>&1 || true
+uv run --all-packages --project ../../../.. ../../scripts/costs_report.py --by nonsense 2>&1 || true
 ```
 
 Expect: invalid choice
@@ -36,7 +36,7 @@ Expect: invalid choice
 ### --json emits parseable JSON, not a formatted table
 
 ```sh
-uv run --no-project ../../scripts/costs_report.py --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('json-ok')"
+uv run --all-packages --project ../../../.. ../../scripts/costs_report.py --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('json-ok')"
 ```
 
 Expect: json-ok
