@@ -1,4 +1,4 @@
-"""Unit tests for lib/fleet.py — the AGENTS.md / fleet.txt aggregator.
+"""Unit tests for lib/fleet.py — the AGENTS.md aggregator.
 
 Everything here runs against synthetic registry entries and checkpoints in a
 ``tmp_path``. **Never against the real `.multiplai/`** — an agent contaminated
@@ -149,7 +149,7 @@ class TestRegistryOnlyEntries:
         f = fleet.collect(tmp_path, NOW)
 
         assert f.agents == []
-        assert fleet.render_fleet_line(f, NOW) == ""
+        assert f.fronts == []
         assert "# Agents" in fleet.render_agents_md(f, NOW)
 
     def test_malformed_entries_are_skipped_not_fatal(self, tmp_path):
@@ -238,10 +238,11 @@ class TestStatus:
 # ---------------------------------------------------------------------------
 
 class TestFronts:
-    """`AGENTS.md` lists everything on the board; `fleet.txt` counts only what
-    has a claim on you. Folding idle tabs into that count is what turned one
-    running session into "36 fronts" — the number appeared to answer "how many
-    agents am I running" while answering "how many tabs have I opened lately"."""
+    """`AGENTS.md` lists everything on the board; `Fleet.fronts` counts only
+    what has a claim on you. Folding idle tabs into that count is what turned
+    one running session into "36 fronts" — the number appeared to answer "how
+    many agents am I running" while answering "how many tabs have I opened
+    lately"."""
 
     def test_an_idle_session_is_live_but_not_a_front(self, tmp_path):
         make_session(tmp_path, "quiet", ago=timedelta(days=3))
@@ -261,11 +262,11 @@ class TestFronts:
         assert "## Idle (1)" in md
         assert "forgotten" in md
 
-    def test_an_all_idle_fleet_renders_no_line(self, tmp_path):
+    def test_an_all_idle_fleet_has_no_fronts(self, tmp_path):
         for i in range(9):
             make_session(tmp_path, f"quiet{i}", ago=timedelta(days=2 + i))
 
-        assert fleet.render_fleet_line(fleet.collect(tmp_path, NOW), NOW) == ""
+        assert fleet.collect(tmp_path, NOW).fronts == []
 
     def test_working_notification_and_parked_all_count(self, tmp_path):
         make_session(tmp_path, "w", ago=timedelta(minutes=2))
@@ -531,47 +532,40 @@ class TestInvolvedFilesParsing:
 
 
 # ---------------------------------------------------------------------------
-# fleet.txt — the status-line reading
+# fleet.txt is retired — the fronts count survives in `Fleet.fronts`
 # ---------------------------------------------------------------------------
 
-class TestFleetLine:
+class TestFrontsCount:
 
-    def test_it_reads_like_the_plan_says(self, tmp_path):
+    def test_idle_is_listed_but_is_not_a_front(self, tmp_path):
         for i in range(4):
             make_session(tmp_path, f"w{i}", ago=timedelta(hours=1))
         make_session(tmp_path, "n1", kind="notification")
         make_session(tmp_path, "n2", kind="notification")
         make_session(tmp_path, "old", ago=timedelta(days=3))
-        make_checkpoint(tmp_path, "w0", files=("/work/knowhere/src/hot.py",))
-        make_checkpoint(tmp_path, "w1", files=("/work/knowhere/src/hot.py",))
 
-        line = fleet.render_fleet_line(fleet.collect(tmp_path, NOW), NOW)
+        f = fleet.collect(tmp_path, NOW)
 
-        # Seven sessions, six fronts: `old` went quiet three days ago, so it is
-        # listed in AGENTS.md as idle and left out of the count here. "oldest"
-        # measures the fronts, which is why it reads 1h and not 3d.
-        assert line == "6 fronts · 2 need you · oldest 1h · 1 collision\n"
+        # Seven sessions, six fronts: `old` went quiet three days ago, so it
+        # is listed in AGENTS.md as idle and excluded from the fronts.
+        assert len(f.agents) == 7
+        assert len(f.fronts) == 6
+        assert len(f.in_group("Needs you")) == 2
 
-    def test_zero_valued_segments_are_dropped(self, tmp_path):
-        make_session(tmp_path, "a", ago=timedelta(hours=2))
+    def test_a_leftover_fleet_txt_is_deleted_on_write(self, tmp_path):
+        """A pre-digest release wrote it and the kit status line renders
+        whatever it says; a frozen count in every tab is worse than none."""
+        make_session(tmp_path, "a")
+        (tmp_path / "fleet.txt").write_text("9 fronts · 4 need you\n")
 
-        line = fleet.render_fleet_line(fleet.collect(tmp_path, NOW), NOW)
+        fleet.write_fleet_view(tmp_path, NOW)
 
-        assert line == "1 front · oldest 2h\n"
+        assert not (tmp_path / "fleet.txt").exists()
 
-    def test_no_live_sessions_renders_nothing(self, tmp_path):
-        """A permanent `0 fronts` in every tmux tab is noise, not a reading."""
-        make_session(tmp_path, "over", kind="end")
-
-        assert fleet.render_fleet_line(fleet.collect(tmp_path, NOW), NOW) == ""
-
-    def test_it_is_a_single_line(self, tmp_path):
-        make_session(tmp_path, "a", kind="notification")
-
-        line = fleet.render_fleet_line(fleet.collect(tmp_path, NOW), NOW)
-
-        assert line.count("\n") == 1
-        assert len(line) < 80
+    def test_render_fleet_line_is_gone(self):
+        """The status-line rendering must not linger as dead code a caller
+        could quietly resurrect."""
+        assert not hasattr(fleet, "render_fleet_line")
 
     @pytest.mark.parametrize("delta,expected", [
         (timedelta(seconds=5), "just now"),
@@ -598,16 +592,15 @@ class TestCacheProperty:
                                               "/work/knowhere/src/b.py"))
         return tmp_path
 
-    def test_delete_both_outputs_and_they_come_back_identical(self, tmp_path):
+    def test_delete_the_output_and_it_comes_back_identical(self, tmp_path):
         data = self._fleet_dir(tmp_path)
-        agents_path, fleet_path = fleet.write_fleet_view(data, NOW)
-        before = (agents_path.read_text(), fleet_path.read_text())
+        agents_path = fleet.write_fleet_view(data, NOW)
+        before = agents_path.read_text()
 
         agents_path.unlink()
-        fleet_path.unlink()
         fleet.write_fleet_view(data, NOW)
 
-        assert (agents_path.read_text(), fleet_path.read_text()) == before
+        assert agents_path.read_text() == before
 
     def test_only_the_generation_stamp_differs_across_runs(self, tmp_path):
         """Proven at the render layer with two `now` values a second apart —
@@ -630,7 +623,7 @@ class TestCacheProperty:
         """AGENTS.md must never become a fourth store. If someone edits it, the
         next run overwrites — that is the property, not a bug."""
         data = self._fleet_dir(tmp_path)
-        agents_path, _ = fleet.write_fleet_view(data, NOW)
+        agents_path = fleet.write_fleet_view(data, NOW)
         expected = agents_path.read_text()
 
         agents_path.write_text(expected + "\n## My own notes\n\nremember this\n")
@@ -747,14 +740,13 @@ class TestRendering:
 
 class TestOutputLocation:
 
-    def test_both_files_land_in_the_data_dir(self, tmp_path):
+    def test_the_file_lands_in_the_data_dir(self, tmp_path):
         make_session(tmp_path, "a")
 
-        agents_path, fleet_path = fleet.write_fleet_view(tmp_path, NOW)
+        agents_path = fleet.write_fleet_view(tmp_path, NOW)
 
         assert agents_path == tmp_path / "AGENTS.md"
-        assert fleet_path == tmp_path / "fleet.txt"
-        assert agents_path.exists() and fleet_path.exists()
+        assert agents_path.exists()
 
     def test_nothing_is_written_to_now(self, tmp_path):
         """`now/*.md` is globbed by the hub into one NowCard per filename, so an

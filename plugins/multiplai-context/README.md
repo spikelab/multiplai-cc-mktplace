@@ -891,11 +891,11 @@ fact, because a fabricated `active` would silently strip a real `parked`.
 
 #### Stage 9 — how it is seen, and forgotten
 
-The fleet view (`AGENTS.md` + `fleet.txt`) is regenerated from the two
-stores every time a session starts and every time the host drain runs.
-It is pure aggregation — delete both files and the next pass rebuilds
-them byte-for-byte. What lands in which, and why the two count different
-things, is [What you actually see](#4-what-you-actually-see).
+The fleet view (`AGENTS.md`) is regenerated from the two stores every
+time a session starts and every time the host drain runs. It is pure
+aggregation — delete the file and the next pass rebuilds it
+byte-for-byte. What is listed and what counts as a front is
+[What you actually see](#4-what-you-actually-see).
 
 Entries are then collected on a schedule that depends on how the session
 ended — 7 days for an observed or recorded end, 30 for one that might
@@ -940,10 +940,10 @@ to that tab.
 Now the readings. A is `ended`, so it drops off the board entirely. B is
 the whole question:
 
-| When | B's group | `fleet.txt` |
+| When | B's group | in the `/fleet-status` digest |
 |---|---|---|
-| 13:15 Tue — 35 min after B's last event | **Needs you** | `1 front · 1 needs you · oldest 2h` |
-| 14:00 Wed — 25h quiet | **Idle** — listed in `AGENTS.md`, not counted | `0 fronts · oldest —` |
+| 13:15 Tue — 35 min after B's last event | **Needs you** | ranked item: B, waiting on your answer |
+| 14:00 Wed — 25h quiet | **Idle** — listed in `AGENTS.md`, not a front | `IDLE (1, oldest 25h)` count line |
 | following Tuesday | still **Idle**; still listed | unchanged |
 | +30 days | entry GC'd — B disappears | unchanged |
 
@@ -952,12 +952,12 @@ hook fires for a session that is still sitting there, and none fires for
 one whose container was killed either. All the system can honestly say is
 "quiet for 25 hours", which is `idle`.
 
-That is why the two outputs count different things. `AGENTS.md` **lists**
+That is why listing and counting are kept apart. `AGENTS.md` **lists**
 B — the idle section is exactly where you go looking for the tab you
-forgot about. `fleet.txt` does **not count** it, because a tab that went
+forgot about. The digest does **not rank** it, because a tab that went
 quiet has no claim on your attention while a session waiting on an answer
 does. Every entry the system is unsure about lands on the listed-but-not-
-counted side, which is what keeps the one number you actually read honest.
+ranked side, which is what keeps the list you actually read honest.
 
 And if you reboot the Mac on Wednesday, B looks **exactly the same** —
 which is the point of [How the end of a session is detected](#3-how-the-end-of-a-session-is-detected).
@@ -1064,8 +1064,8 @@ a second writer of registry *state* is how two stores start disagreeing
 silently, and a marker is a one-bit channel that cannot corrupt
 anything.
 
-`data/AGENTS.md` and `data/fleet.txt` are **outputs, never inputs** —
-pure aggregation over the two stores above, no LLM call. Delete them and
+`data/AGENTS.md` and `data/fleet.json` are **outputs, never inputs** —
+pure aggregation over the stores above, no LLM call. Delete them and
 the next run reconstructs them byte-for-byte.
 
 #### 2. Three questions, three fields
@@ -1125,9 +1125,9 @@ correctly did all of the work.
 
 #### 4. What you actually see
 
-Two outputs, and they deliberately count different things:
+Listing and counting are deliberately kept apart:
 
-| Group | Listed in `AGENTS.md` | Counted in `fleet.txt` |
+| Group | Listed in `AGENTS.md` | A **front** (counted by the digest) |
 |---|---|---|
 | Needs you | yes | **yes** |
 | Working | yes | **yes** |
@@ -1136,10 +1136,12 @@ Two outputs, and they deliberately count different things:
 | ended / `done` | no (counted as "finished") | no |
 
 `AGENTS.md` **lists** everything on the board — the idle section is
-where you go looking for the tab you forgot about. `fleet.txt` is one
-line for a status bar and has room for one number, so it counts
-**fronts**: what has a claim on you. Idle is the difference, and on a
-real registry it is most of the entries.
+where you go looking for the tab you forgot about. The
+`/multiplai-context:fleet-status` digest ranks and counts **fronts**:
+what has a claim on you. Idle is the difference, and on a real registry
+it is most of the entries. (`fleet.txt`, the old one-line status-bar
+count of the same fronts, is retired — a count with no referent said
+there was a fire without saying where.)
 
 Parked counts as a front on purpose. Its process is usually long gone,
 but "I am coming back to this" is a claim on you in a way that a tab

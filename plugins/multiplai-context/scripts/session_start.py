@@ -671,7 +671,7 @@ def main() -> None:
     except Exception:
         logger.exception("Deferred extraction processing failed (non-fatal)")
 
-    # Refresh the fleet view (data/AGENTS.md + data/fleet.txt). Runs
+    # Refresh the fleet view (data/AGENTS.md). Runs
     # in-process rather than detached: it is a pure read of sessions/ +
     # checkpoints/ with no LLM call, so it costs a few file reads — far less
     # than the `uv run` cold start a subprocess would pay. Also the moment it

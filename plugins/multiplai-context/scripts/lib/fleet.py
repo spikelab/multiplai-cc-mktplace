@@ -17,20 +17,19 @@ and re-run and they come back identical; anything that ever wrote *into*
 ``AGENTS.md`` as primary state would make it a fourth store that silently
 disagrees with the other three.
 
-Two outputs, deliberately different shapes:
+The hook-path output is ``AGENTS.md`` — the full read, grouped by whether an
+agent needs you, listing everything still on the board, idle tabs included.
+The ranked console digest and ``fleet.json`` (see :mod:`lib.fleet_digest` and
+:func:`fleet_json`) are further renderings of the same collection, produced
+only when a human runs the ``fleet-status`` CLI.
 
-* ``AGENTS.md`` — the full read, grouped by whether an agent needs you.
-* ``fleet.txt`` — one short line for the terminal status bar, which re-renders
-  constantly and can afford exactly one ``cat``.
+``fleet.txt`` — the one-line status-bar count — is retired. A count with no
+referent ("9 fronts · 4 need you") tells you there is a fire without telling
+you where; the digest replaced it, and :func:`write_fleet_view` deletes any
+leftover file so an old status line goes blank rather than stale.
 
-They also count different things, which is the one subtlety here. ``AGENTS.md``
-**lists** everything still on the board, idle tabs included. ``fleet.txt``
-**counts** only *fronts* — Needs you, Working, Parked — because a status bar
-has room for one number and it has to be the one you would act on. Idle is the
-difference, and against a real registry it is most of the entries.
-
-Both are a *reading*, not a rule: no thresholds to breach, no "too many agents"
-warning, no recommendation. Just what is true right now.
+All of it is a *reading*, not a rule: no thresholds to breach, no "too many
+agents" warning, no recommendation. Just what is true right now.
 """
 
 import json
@@ -56,7 +55,10 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 logger = logging.getLogger(__name__)
 
 AGENTS_FILENAME = "AGENTS.md"
-FLEET_FILENAME = "fleet.txt"
+
+# Written by pre-digest releases; write_fleet_view() deletes a leftover so an
+# old status line reading it goes blank instead of showing a frozen count.
+RETIRED_FLEET_FILENAME = "fleet.txt"
 
 # A session quiet for longer than this is "idle" rather than "working".
 # One day, because the unit that matters is "did I touch this today" — a
@@ -812,38 +814,6 @@ def _render_extras(fleet: Fleet) -> list[str]:
     return out
 
 
-def render_fleet_line(fleet: Fleet, now: datetime) -> str:
-    """One line for the status bar, or empty when there is no fleet.
-
-    Empty rather than ``0 fronts`` on purpose: the status line renders nothing
-    for an empty file, and a permanent "0" in every tab is noise, not a
-    reading. Zero-valued segments are dropped for the same reason.
-
-    Counts **fronts, not live agents** — idle sessions are listed in
-    ``AGENTS.md`` but excluded here (see :attr:`Agent.front`). One line in a
-    status bar has room for one number, so it has to be the number that
-    answers the question the bar appears to be answering.
-    """
-    fronts = fleet.fronts
-    if not fronts:
-        return ""
-
-    parts = [f"{len(fronts)} front{'s' if len(fronts) != 1 else ''}"]
-
-    needs = len(fleet.in_group("Needs you"))
-    if needs:
-        parts.append(f"{needs} need you")
-
-    oldest = max(a.age(now) for a in fronts)
-    parts.append(f"oldest {format_age(oldest)}")
-
-    n = len(fleet.collisions)
-    if n:
-        parts.append(f"{n} collision{'s' if n != 1 else ''}")
-
-    return " · ".join(parts) + "\n"
-
-
 # ---------------------------------------------------------------------------
 # fleet.json — the machine rendering
 # ---------------------------------------------------------------------------
@@ -908,24 +878,27 @@ def fleet_json(fleet: Fleet, now: datetime, generated_at: str | None = None) -> 
     return json.dumps(payload, indent=2, sort_keys=False) + "\n"
 
 
-def write_fleet_view(data_dir: Path, now: datetime | None = None) -> tuple[Path, Path]:
-    """Render both outputs into *data_dir*; return their paths.
+def write_fleet_view(data_dir: Path, now: datetime | None = None) -> Path:
+    """Render ``AGENTS.md`` into *data_dir*; return its path.
 
-    One function so the hook and the CLI cannot drift into writing two
-    different files. Atomic because the status line ``cat``s ``fleet.txt`` on
-    every prompt render, and a torn read there flashes garbage into every tab.
+    One function so the hook and the CLI cannot drift into rendering two
+    different files. Also deletes a leftover ``fleet.txt`` from a pre-digest
+    release: the kit status line renders whatever that file says, and a frozen
+    count in every tab is worse than no segment at all.
     """
     now = now or datetime.now(timezone.utc)
     fleet = collect(data_dir, now)
 
     agents_path = data_dir / AGENTS_FILENAME
-    fleet_path = data_dir / FLEET_FILENAME
     atomic_write(agents_path, render_agents_md(fleet, now))
-    atomic_write(fleet_path, render_fleet_line(fleet, now))
+    try:
+        (data_dir / RETIRED_FLEET_FILENAME).unlink(missing_ok=True)
+    except OSError:  # pragma: no cover - a stale file is cosmetic, never fatal
+        pass
 
     logger.info(
         "Fleet: %d front(s), %d listed of %d session(s), %d collision(s) → %s",
         len(fleet.fronts), len(fleet.live), len(fleet.agents),
         len(fleet.collisions), agents_path,
     )
-    return agents_path, fleet_path
+    return agents_path
