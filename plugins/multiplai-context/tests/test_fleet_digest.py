@@ -95,6 +95,16 @@ def test_approved_but_red_ranks_as_red():
     assert "CI red" in item.text
 
 
+def test_stack_head_approved_but_red_reports_red():
+    """Same rule as a single PR: "approved" over red CI invites a bouncing click."""
+    chain = [
+        pr(number=1, head="a", base="main", review_decision="APPROVED", ci="failing"),
+        pr(number=2, head="b", base="a"),
+    ]
+    (item,) = rank(fleet(prs=PRScan(prs=chain)), NOW)[0]
+    assert "CI failing" in item.text and "approved" not in item.text
+
+
 def test_collisions_rank_last_but_always_appear():
     items, _ = rank(
         fleet([agent()], collisions=[Collision("x.py", ["a", "b"], ["p@a", "p@b"])]),
@@ -176,6 +186,15 @@ def _rich_fleet():
 def test_every_digest_section_exists_in_the_full_report(heading):
     """The digest is a summary of AGENTS.md, never a second opinion about it."""
     assert f"## {heading}" in render_agents_md(_rich_fleet(), NOW)
+
+
+def test_worktrees_are_listed_even_when_every_repo_is_clean():
+    """A clean repo with a stale linked worktree is still work in flight."""
+    clean = RepoState(path="proj", slug="o/r", branch="main",
+                      worktrees=["/ws/.worktrees/feat-x"])
+    text = render_agents_md(fleet(repos=[clean]), NOW)
+    assert "All 1 checkout(s) clean" in text
+    assert "1 linked worktree(s)" in text and ".worktrees/feat-x" in text
 
 
 def test_agents_md_omits_sections_that_were_not_collected():

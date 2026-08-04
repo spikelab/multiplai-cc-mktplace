@@ -716,21 +716,24 @@ def _render_repos(repos: "list[RepoState]") -> list[str]:
     noisy = [r for r in repos if not r.clean]
     if not noisy:
         out += [f"_All {len(repos)} checkout(s) clean, pushed, and tracking._", ""]
-        return out
-    out.append(f"**{len(noisy)} of {len(repos)} checkout(s) want something**")
-    out.append("")
-    for repo in noisy:
-        bits = []
-        if repo.dirty:
-            bits.append(f"{repo.dirty} uncommitted ({repo.untracked} untracked)")
-        if repo.unpushed:
-            bits.append("unpushed: " + ", ".join(repo.unpushed))
-        if repo.no_upstream:
-            bits.append("never pushed: " + ", ".join(repo.no_upstream))
-        if repo.error:
-            bits.append(f"error: {repo.error}")
-        out.append(f"- `{repo.path}` (on `{repo.branch}`) — {'; '.join(bits)}")
-    out.append("")
+    else:
+        out.append(f"**{len(noisy)} of {len(repos)} checkout(s) want something**")
+        out.append("")
+        for repo in noisy:
+            bits = []
+            if repo.dirty:
+                bits.append(f"{repo.dirty} uncommitted ({repo.untracked} untracked)")
+            if repo.unpushed:
+                bits.append("unpushed: " + ", ".join(repo.unpushed))
+            if repo.no_upstream:
+                bits.append("never pushed: " + ", ".join(repo.no_upstream))
+            if repo.error:
+                bits.append(f"error: {repo.error}")
+            out.append(f"- `{repo.path}` (on `{repo.branch}`) — {'; '.join(bits)}")
+        out.append("")
+    # Worktrees render regardless of cleanliness: a clean repo with a stale
+    # linked worktree is exactly the "branch merged three weeks ago" case this
+    # section exists to surface.
     worktrees = [(r.path, w) for r in repos for w in r.worktrees]
     if worktrees:
         out.append(f"**{len(worktrees)} linked worktree(s)**")

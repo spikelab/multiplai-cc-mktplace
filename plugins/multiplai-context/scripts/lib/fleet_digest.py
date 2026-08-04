@@ -91,7 +91,9 @@ def _pr_items(fleet: Fleet) -> list[Item]:
         # actionable. Four PRs, one decision, one line.
         head = chain[0]
         order = "→".join(f"#{pr.number}" for pr in chain)
-        state = "approved" if head.approved else f"CI {head.ci}"
+        # Same rule as single PRs below: approved is only actionable when CI
+        # lets it merge. "approved" over a red head invites a bouncing click.
+        state = "approved" if head.approved and not head.failing else f"CI {head.ci}"
         repo = head.repo.split("/")[-1]
         items.append(Item(
             _RANK_STACK,

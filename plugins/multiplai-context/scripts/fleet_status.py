@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """One command, the whole picture: agents, PRs, repos, jobs, backlog.
 
 ``synthesize_agents.py`` writes ``AGENTS.md`` from the session registry and the
@@ -18,13 +14,14 @@ Three renderings, one collection, and that is the point: the digest is a
 summary of ``AGENTS.md``, not a second opinion about it, and ``fleet.json``
 hands the identical structure to the multiplai hub.
 
-Usage::
+Usage (deps come from the workspace root, not PEP 723 — see the root
+``pyproject.toml``)::
 
-    uv run --no-project fleet_status.py                 # digest + refresh files
-    uv run --no-project fleet_status.py --full          # print AGENTS.md
-    uv run --no-project fleet_status.py --json          # print fleet.json
-    uv run --no-project fleet_status.py --fresh         # ignore the PR cache
-    uv run --no-project fleet_status.py --offline       # skip gh entirely
+    uv run --all-packages --project <repo-root> fleet_status.py            # digest
+    uv run --all-packages --project <repo-root> fleet_status.py --full     # AGENTS.md
+    uv run --all-packages --project <repo-root> fleet_status.py --json     # fleet.json
+    uv run --all-packages --project <repo-root> fleet_status.py --fresh    # skip PR cache
+    uv run --all-packages --project <repo-root> fleet_status.py --offline  # skip gh
 
 Read-only. It writes ``AGENTS.md``, ``fleet.json`` and a PR cache and touches
 nothing else — no merges, no branch deletion, no session is killed. Both output

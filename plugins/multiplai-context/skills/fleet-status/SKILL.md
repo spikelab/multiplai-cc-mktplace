@@ -19,7 +19,7 @@ saying where. This skill is the thing in between.
    is touched.
 
    ```
-   uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/fleet_status.py"
+   uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/fleet_status.py"
    ```
 
 2. **Print the digest exactly as the script emitted it.** Do not re-narrate,
