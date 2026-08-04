@@ -12,6 +12,18 @@ Recorded history starts at **0.1.2**; anything earlier is in `git log` only.
 
 `multiplai-messaging@0.1.1` predates this file and has no section here.
 
+## [0.3.1] - 2026-08-04
+
+### Fixed
+
+- **`gmail` and `slack` scripts run on an installed copy of the plugin.** The
+  0.3.0 command form pointed `uv run --project` at the marketplace repo root,
+  which does not exist on an install (you get a copy of the plugin subtree
+  only). The SKILL.md snippets (`GM=`, `SLACK=`) now use
+  `uv run --project ${CLAUDE_PLUGIN_ROOT}/skills/<name>/scripts`, which works
+  both in-repo and installed — each scripts project declares its own git
+  source for `multiplai-core`.
+
 ## [0.3.0] - 2026-08-04
 
 ### Changed

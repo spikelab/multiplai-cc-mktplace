@@ -17,11 +17,11 @@ hands the identical structure to the multiplai hub.
 Usage (deps come from the workspace root, not PEP 723 — see the root
 ``pyproject.toml``)::
 
-    uv run --all-packages --project <repo-root> fleet_status.py            # digest
-    uv run --all-packages --project <repo-root> fleet_status.py --full     # AGENTS.md
-    uv run --all-packages --project <repo-root> fleet_status.py --json     # fleet.json
-    uv run --all-packages --project <repo-root> fleet_status.py --fresh    # skip PR cache
-    uv run --all-packages --project <repo-root> fleet_status.py --offline  # skip gh
+    uv run --project <plugin>/scripts <plugin>/scripts/fleet_status.py            # digest
+    uv run --project <plugin>/scripts <plugin>/scripts/fleet_status.py --full     # AGENTS.md
+    uv run --project <plugin>/scripts <plugin>/scripts/fleet_status.py --json     # fleet.json
+    uv run --project <plugin>/scripts <plugin>/scripts/fleet_status.py --fresh    # skip PR cache
+    uv run --project <plugin>/scripts <plugin>/scripts/fleet_status.py --offline  # skip gh
 
 Read-only. It writes ``AGENTS.md``, ``fleet.json`` and a PR cache and touches
 nothing else — no merges, no branch deletion, no session is killed. Both output

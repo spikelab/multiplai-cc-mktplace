@@ -10,7 +10,7 @@
       "name": "multiplai-context",
       "source": "./plugins/multiplai-context",
       "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
-      "version": "0.17.0",
+      "version": "0.17.1",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -73,7 +73,7 @@
       "name": "multiplai-research",
       "source": "./plugins/multiplai-research",
       "description": "Research skill pack: code-driven deep research pipeline, insight extraction, structured interviewing.",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -94,7 +94,7 @@
       "name": "multiplai-dev",
       "source": "./plugins/multiplai-dev",
       "description": "Developer skill pack: spec-driven builds, executable plan authoring, code/security review, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring.",
-      "version": "0.10.0",
+      "version": "0.10.1",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -116,7 +116,7 @@
       "name": "multiplai-media",
       "source": "./plugins/multiplai-media",
       "description": "Media skill pack: audio transcription, YouTube transcripts, screen-recording demo videos, diagrams, host-browser automation.",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -137,7 +137,7 @@
       "name": "multiplai-messaging",
       "source": "./plugins/multiplai-messaging",
       "description": "Messaging skill pack: read/search/post Slack as yourself, search/read/draft Gmail (never sends), and list/pull Fireflies meeting transcripts.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"

@@ -137,11 +137,20 @@ repository. It is **not** vendored here.
 Each script directory that needs dependencies is a *member*: it has its own
 `pyproject.toml` listing what it imports, and is named in
 `[tool.uv.workspace] members`. Nothing else declares dependencies. Run
-anything through it:
+anything through its **member directory**:
 
 ```bash
-uv run --all-packages --project <repo-root> <path/to/script.py>
+uv run --project <member-dir> <member-dir>/<script.py>
 ```
+
+In-repo, uv walks up from the member to the workspace root and the single
+`uv.lock`. On an **installed plugin** — a copy of the plugin subtree only, no
+workspace root above it — the same command resolves the member standalone via
+its member-local `[tool.uv.sources]`. This is why shipped commands (hooks,
+SKILL.md snippets) must use the member dir, never
+`--project "${CLAUDE_PLUGIN_ROOT}/../.."`: two levels up does not exist on an
+install. (`--all-packages --project <repo-root>` still works for repo-only
+tooling like CI, but is not the shippable form.)
 
 Two rules, both enforced by `scripts/lint_workspace.py`:
 

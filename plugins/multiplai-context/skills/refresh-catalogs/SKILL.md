@@ -28,12 +28,12 @@ By default (no arguments), all enabled catalogs are regenerated using state-awar
 1. **Parse flags** from the user's invocation to determine mode (default, force, dry-run) and any generator filter.
 
 2. **Invoke the catalog dispatcher:**
-   Run `uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"` with the appropriate flags:
-   - Default: `uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"`
-   - Force: `uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --force`
-   - Dry-run: `uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --dry-run`
-   - Selective: `uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --only memory,diary`
-   - Combined: `uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --force --dry-run`
+   Run `uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"` with the appropriate flags:
+   - Default: `uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"`
+   - Force: `uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --force`
+   - Dry-run: `uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --dry-run`
+   - Selective: `uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --only memory,diary`
+   - Combined: `uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --force --dry-run`
 
 3. **Report per-catalog status** as a summary table:
    - Each catalog gets its own status line: **regenerated** (success), **skipped** (unchanged), or **failed** (with error reason).

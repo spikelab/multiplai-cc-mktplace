@@ -17,8 +17,9 @@ bootstrap.sh — preflight the screen-demo skill. Installs nothing.
 
 Checks, in order:
   1. ffmpeg is on PATH (hint names the fix for the actual platform)
-  2. scenedetect + opencv are importable — they come from the repo-root uv
-     workspace, so run the pipeline via `uv run --project <repo-root>`
+  2. scenedetect + opencv are importable — they come from the scripts/
+     project (in-repo: the root uv workspace), so run the pipeline via
+     `uv run --project <skill>/scripts`
   3. the host transcription bridge reaches mlx_whisper (warning only)
 
 Exit 0 if usable, 1 with a fix-it message otherwise. Idempotent.
@@ -55,8 +56,8 @@ if python3 -c "import scenedetect, cv2" 2>/dev/null; then
   echo "✓ scenedetect + opencv importable"
 else
   echo "✗ scenedetect/opencv not importable." >&2
-  echo "  Run the pipeline through the workspace, which provisions them:" >&2
-  echo "    uv run --project <repo-root> python3 $SKILL_ROOT/scripts/pipeline.py …" >&2
+  echo "  Run the pipeline through the skill scripts project, which provisions them:" >&2
+  echo "    uv run --project \"$SKILL_ROOT/scripts\" python3 $SKILL_ROOT/scripts/pipeline.py …" >&2
   echo "  (or bake scenedetect + opencv-python-headless into the container image)." >&2
   exit 1
 fi

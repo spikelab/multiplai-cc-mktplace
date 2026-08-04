@@ -18,6 +18,20 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.17.1] - 2026-08-04
+
+### Fixed
+
+- **Installed copies of the plugin work again.** 0.16.0 moved the hooks onto
+  the repo's uv workspace via `--project "${CLAUDE_PLUGIN_ROOT}/../.."` — a
+  path that only exists in the marketplace repo checkout. On a real install
+  (a copy of the plugin subtree only) every hook failed to resolve its
+  dependencies. Hooks and documented commands now use
+  `uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts"`, which resolves through
+  the workspace in-repo and standalone on an install (the scripts project
+  declares its own git source for `multiplai-core`). Same ~0.06s warm hook
+  latency.
+
 ## [0.17.0] - 2026-08-04
 
 ### Added

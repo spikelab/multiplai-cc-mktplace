@@ -52,7 +52,11 @@ class TestUvGuard:
             assert "command -v uv" in hook["command"], (
                 f"{hook['event']} command missing the uv guard: {hook['command']}"
             )
-            assert "exec uv run --all-packages --project" in hook["command"]
+            # Member-dir --project: "${CLAUDE_PLUGIN_ROOT}/scripts" exists both
+            # in-repo (resolves via the workspace root) and on an installed
+            # copy (resolves standalone). The old ../.. workspace-root form
+            # does not exist on installs.
+            assert 'exec uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts"' in hook["command"]
 
     @pytest.mark.parametrize("hook", parse_hooks(), ids=lambda h: f"{h['event']}:{h['script']}")
     def test_missing_uv_warns_once_and_exits_zero(self, hook, tmp_path):
@@ -111,5 +115,5 @@ class TestUvGuard:
         fake_uv.chmod(0o755)
         res = _run(parse_hooks()[0]["command"], env)
         assert res.returncode == 0
-        assert "UV_CALLED run --all-packages --project" in res.stdout
+        assert "UV_CALLED run --project" in res.stdout
         assert "uv not found" not in res.stdout

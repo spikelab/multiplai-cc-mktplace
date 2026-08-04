@@ -271,14 +271,20 @@ class TestAfterFieldAndBootstrapFallback:
                     cmd = entry["command"]
                     assert cmd.startswith("sh -c 'command -v uv "), \
                         f"{event} command must start with the uv guard, got: {cmd}"
-                    # --all-packages is not optional here. The workspace
-                    # root is virtual and declares no dependencies, so bare
-                    # --project installs nothing and the script dies on
-                    # import. It only appeared to work when some earlier
-                    # command had already populated the environment.
-                    assert "exec uv run --all-packages --project " in cmd, \
-                        f"{event} command must exec via 'uv run --all-packages " \
-                        f"--project' so the members' deps are installed, got: {cmd}"
+                    # --project must point at the scripts/ member dir, NOT at
+                    # "${CLAUDE_PLUGIN_ROOT}/../..". An installed plugin is a
+                    # copy of the plugin subtree only — there is no workspace
+                    # root two levels up, so the ../.. form worked in this repo
+                    # and broke every hook on a real install. scripts/ exists
+                    # in both layouts: in-repo uv walks up to the workspace;
+                    # installed, it resolves standalone via the member-local
+                    # [tool.uv.sources].
+                    assert 'exec uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts"' in cmd, \
+                        f"{event} command must exec via 'uv run --project " \
+                        f"\"$CLAUDE_PLUGIN_ROOT/scripts\"', got: {cmd}"
+                    assert "/../.." not in cmd, \
+                        f"{event} command points above the plugin root — that " \
+                        f"path does not exist on an installed copy: {cmd}"
                     assert "python " not in cmd.replace("uv run", ""), \
                         f"{event} command must not invoke bare python: {cmd}"
 

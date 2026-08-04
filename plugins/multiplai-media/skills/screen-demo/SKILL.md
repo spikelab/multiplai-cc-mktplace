@@ -43,11 +43,17 @@ the host transcription bridge. Idempotent, and it installs nothing — it report
 what is missing and names the fix. **No whisper build, no cmake, no PEP-668
 breakage.**
 
-The Python deps are declared in `scripts/pyproject.toml`, a member of the
-repo-root uv workspace, so running the pipeline through `uv run --project`
-provides them from the one shared environment. If `import scenedetect, cv2`
-fails, that is the missing piece — not a venv this skill should build for
-itself.
+The Python deps are declared in `scripts/pyproject.toml`. Run the pipeline
+through it and uv provides them:
+
+```bash
+uv run --project "${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts" python3 "${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/pipeline.py" …
+```
+
+This works for an installed plugin (the directory resolves standalone) and in
+the marketplace repo (uv walks up to the root workspace and its shared
+environment). If `import scenedetect, cv2` fails, that is the missing piece —
+not a venv this skill should build for itself.
 
 ### 2. Prep
 

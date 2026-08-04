@@ -18,10 +18,21 @@ dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.6.1] - 2026-08-04
+
+### Fixed
+
+- **`deep-research`'s pipeline resolves on an installed copy of the plugin.**
+  Its `scripts/pyproject.toml` now declares its own git source for
+  `multiplai-core`, so `uv run --project <skill>/scripts` works standalone —
+  an install is a copy of the plugin subtree only, with no marketplace
+  workspace above it to resolve through.
+
 ### Added
 - **A plugin README** (`plugins/multiplai-research/README.md`) — what the pack
   contains, what each skill needs, and how it degrades without the kit.
-  Not yet in a released version.
 
 ## [0.6.0] - 2026-08-04
 

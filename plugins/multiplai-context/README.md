@@ -92,7 +92,7 @@ more. On vanilla Claude Code:
    workspace environment from `uv.lock` (the SessionStart hook allows 60s for
    this). To do it ahead of time instead, run once from a shell:
    ```
-   uv run --all-packages --project <repo-root> <plugin-dir>/scripts/session_start.py </dev/null
+   uv run --project <plugin-dir>/scripts <plugin-dir>/scripts/session_start.py </dev/null
    ```
    Every later start is fast — resolution is already done, so no later run
    touches the network.
@@ -631,8 +631,8 @@ silently never runs again.
 Run it by hand, or check what it would do:
 
 ```bash
-uv run --all-packages --project ../.. scripts/memory_maintainer.py --dry-run
-uv run --all-packages --project ../.. scripts/memory_maintainer.py --force
+uv run --project scripts scripts/memory_maintainer.py --dry-run
+uv run --project scripts scripts/memory_maintainer.py --force
 ```
 
 State lives in `<data_dir>/maintainer_state.yaml`; runs appear in the activity
@@ -693,7 +693,7 @@ detached subprocess.
 so it no longer has to wait for a session:
 
 ```
-uv run --all-packages --project ../../.. drain_extractions.py --data-dir <workspace>/.multiplai/data
+uv run --project . drain_extractions.py --data-dir <workspace>/.multiplai/data
 ```
 
 `--wait` blocks until each extraction finishes with its errors visible;

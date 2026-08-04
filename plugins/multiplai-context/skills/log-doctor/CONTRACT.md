@@ -20,7 +20,7 @@ Commands run with this directory as cwd.
 ### the documented flags all still exist
 
 ```sh
-uv run --all-packages --project ../../../.. ../../scripts/log_doctor.py --help
+uv run --project ../../scripts ../../scripts/log_doctor.py --help
 ```
 
 Expect: --injections
@@ -34,7 +34,7 @@ entirely — which is exactly the vacuous assertion this contract exists to
 avoid.
 
 ```sh
-uv run --all-packages --project ../../../.. ../../scripts/log_doctor.py --list --logs-dir "$(mktemp -d)" >/dev/null 2>&1 && echo list-ok
+uv run --project ../../scripts ../../scripts/log_doctor.py --list --logs-dir "$(mktemp -d)" >/dev/null 2>&1 && echo list-ok
 ```
 
 Expect: list-ok
@@ -42,7 +42,7 @@ Expect: list-ok
 ### --json emits parseable JSON
 
 ```sh
-uv run --all-packages --project ../../../.. ../../scripts/log_doctor.py --json --logs-dir "$(mktemp -d)" 2>/dev/null | python3 -c "import json,sys; json.load(sys.stdin); print('json-ok')"
+uv run --project ../../scripts ../../scripts/log_doctor.py --json --logs-dir "$(mktemp -d)" 2>/dev/null | python3 -c "import json,sys; json.load(sys.stdin); print('json-ok')"
 ```
 
 Expect: json-ok
