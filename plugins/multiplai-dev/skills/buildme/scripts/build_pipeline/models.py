@@ -13,6 +13,14 @@ class BuildPhase(str, Enum):
     BOOTSTRAP = "bootstrap"
     INTERVIEW_DONE = "interview_done"
     RESEARCH = "research"
+    # Reads the repo that already exists (architecture, patterns, dependencies)
+    # so the design is written against it rather than against a generic stack.
+    # Ordinal position matters: state.is_phase_complete compares positions in
+    # this enum, so CODEBASE_ANALYSIS sits where it runs — after research,
+    # before spec generation consumes its output. Checkpoints written before
+    # this phase existed still load (the stored value is a phase name, not an
+    # index) and resume at their recorded phase.
+    CODEBASE_ANALYSIS = "codebase_analysis"
     SPEC_GENERATION = "spec_generation"
     DESIGN_AUDIT = "design_audit"
     # Cheap shape proof (mockup / sample output / CLI transcript) before the

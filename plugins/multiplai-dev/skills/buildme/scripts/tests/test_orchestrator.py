@@ -184,6 +184,219 @@ class TestArchivePhase:
         assert (change_dir / "proposal.md").exists()
 
 
+class TestCodebaseAnalysisPhase:
+    """BuildPhase.CODEBASE_ANALYSIS runs between RESEARCH and SPEC_GENERATION,
+    writes codebase-analysis.md, records the path on the checkpoint, and is
+    skipped — with the reason logged — for a project with no source files."""
+
+    def _args(self, tmp_path, change):
+        return argparse.Namespace(
+            mode="scratch",
+            change=change,
+            project_dir=str(tmp_path),
+            auto=True,
+            spec_only=True,
+            skip_research=True,
+            interview_summary="",
+            research_path="",
+            context_files=[],
+            session_id="",
+        )
+
+    def _config(self, tmp_path, change, *, with_source=True, phase=BuildPhase.RESEARCH):
+        from build_pipeline.config import GitToggles
+
+        config = BuildConfig(
+            project_dir=tmp_path, change_name=change, mode="scratch",
+            auto=True, spec_only=True, skip_research=True,
+            git=GitToggles(worktree=False),
+        )
+        config.specs_dir = tmp_path / "specs"
+        config.prototype_mode = "false"
+        cm = ChangeManager(config.specs_dir)
+        cm.init_specs()
+        cm.create_change(change)
+        (config.change_dir / "proposal.md").write_text("## Why\nA thing.\n")
+        if with_source:
+            (tmp_path / "app.py").write_text("def main():\n    return 1\n")
+        state = BuildState(
+            change_name=change, mode="scratch", tier="advanced",
+            phase=phase, bootstrap_done=True,
+            state_file=str(config.state_file_path()),
+        )
+        state.checkpoint(config.state_file_path())
+        return config
+
+    @staticmethod
+    def _patches(analysis_mock):
+        from unittest.mock import AsyncMock, patch
+
+        return (
+            patch("build_pipeline.llm_steps.spec_steps.run_codebase_analysis", analysis_mock),
+            patch("build_pipeline.spec_generator.run_spec_generator", AsyncMock(return_value=0)),
+            patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                  AsyncMock(return_value=[])),
+        )
+
+    @pytest.mark.asyncio
+    async def test_runs_and_writes_the_report(self, tmp_path, capsys):
+        from unittest.mock import AsyncMock
+
+        config = self._config(tmp_path, "analyze-me")
+        mock_analysis = AsyncMock(return_value="## Architecture\nOne module: app.py")
+        p1, p2, p3 = self._patches(mock_analysis)
+        with p1, p2, p3:
+            result = await run_orchestrator(config, self._args(tmp_path, "analyze-me"))
+
+        assert result == 0
+        assert mock_analysis.await_count == 1
+        # The agents are pointed at the project, not the specs directory.
+        assert mock_analysis.await_args.args[0] == config.project_dir
+
+        report = config.codebase_analysis_path
+        assert report.exists()
+        assert report.read_text() == "## Architecture\nOne module: app.py"
+        assert report.name == "codebase-analysis.md"
+
+        out = capsys.readouterr().out
+        assert "PHASE:CODEBASE_ANALYSIS:COMPLETE" in out
+        # Still shaping — the card must not jump a column for reading code.
+        assert "BOARD:analyze-me:Shaping" in out
+
+    @pytest.mark.asyncio
+    async def test_records_the_report_path_on_the_checkpoint(self, tmp_path):
+        """spec generation reads spec_gen.codebase_analysis_path, so the phase
+        that writes the report has to persist where it put it."""
+        from unittest.mock import AsyncMock
+
+        config = self._config(tmp_path, "record-path")
+        seen = {}
+
+        async def _capture(cfg, args=None):
+            state = BuildState.load(cfg.state_file_path())
+            seen["path"] = state.spec_gen.codebase_analysis_path if state.spec_gen else None
+            return 0
+
+        from unittest.mock import patch
+        with patch("build_pipeline.llm_steps.spec_steps.run_codebase_analysis",
+                   AsyncMock(return_value="## Architecture\nstuff")), \
+                patch("build_pipeline.spec_generator.run_spec_generator", _capture), \
+                patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                      AsyncMock(return_value=[])):
+            result = await run_orchestrator(config, self._args(tmp_path, "record-path"))
+
+        assert result == 0
+        assert seen["path"] == str(config.codebase_analysis_path)
+
+    @pytest.mark.asyncio
+    async def test_skipped_with_a_reason_when_there_is_no_source_yet(
+        self, tmp_path, caplog, capsys,
+    ):
+        from unittest.mock import AsyncMock
+
+        config = self._config(tmp_path, "greenfield", with_source=False)
+        mock_analysis = AsyncMock()
+        p1, p2, p3 = self._patches(mock_analysis)
+        with caplog.at_level("INFO"), p1, p2, p3:
+            result = await run_orchestrator(config, self._args(tmp_path, "greenfield"))
+
+        assert result == 0
+        mock_analysis.assert_not_awaited()
+        assert not config.codebase_analysis_path.exists()
+        skips = [r.getMessage() for r in caplog.records
+                 if "SKIP phase=CODEBASE_ANALYSIS" in r.getMessage()]
+        assert skips, "the skip must be logged with its reason"
+        assert "no-source-files-yet" in skips[0]
+        # The phase still completes — a skip is not a stall.
+        assert "PHASE:CODEBASE_ANALYSIS:COMPLETE" in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_specs_dir_alone_is_not_a_codebase(self, tmp_path):
+        """A bootstrapped project whose only files are its own specs must not
+        pay for three explore agents."""
+        from unittest.mock import AsyncMock
+
+        config = self._config(tmp_path, "specs-only", with_source=False)
+        (config.change_dir / "notes.py").write_text("# not project source")
+        mock_analysis = AsyncMock()
+        p1, p2, p3 = self._patches(mock_analysis)
+        with p1, p2, p3:
+            assert await run_orchestrator(config, self._args(tmp_path, "specs-only")) == 0
+        mock_analysis.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_analysis_failure_does_not_fail_the_build(self, tmp_path, caplog):
+        from unittest.mock import AsyncMock
+
+        config = self._config(tmp_path, "boom")
+        mock_analysis = AsyncMock(side_effect=RuntimeError("all three agents died"))
+        p1, p2, p3 = self._patches(mock_analysis)
+        with caplog.at_level("WARNING"), p1, p2, p3:
+            result = await run_orchestrator(config, self._args(tmp_path, "boom"))
+
+        assert result == 0
+        assert not config.codebase_analysis_path.exists()
+        assert any("Codebase analysis failed" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_resume_past_the_phase_does_not_rerun_it(self, tmp_path):
+        from unittest.mock import AsyncMock
+
+        config = self._config(tmp_path, "resumed", phase=BuildPhase.SPEC_GENERATION)
+        mock_analysis = AsyncMock()
+        p1, p2, p3 = self._patches(mock_analysis)
+        with p1, p2, p3:
+            assert await run_orchestrator(config, self._args(tmp_path, "resumed")) == 0
+        mock_analysis.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_only_mode_skips_the_phase(self, tmp_path, caplog):
+        """`only` mode generates no specs, so there is nothing to ground."""
+        from unittest.mock import AsyncMock
+
+        config = self._config(tmp_path, "only-mode")
+        config.mode = "only"
+        args = self._args(tmp_path, "only-mode")
+        args.mode = "only"
+        mock_analysis = AsyncMock()
+        p1, p2, p3 = self._patches(mock_analysis)
+        with caplog.at_level("INFO"), p1, p2, p3:
+            assert await run_orchestrator(config, args) == 0
+        mock_analysis.assert_not_awaited()
+        assert any("only-mode-generates-no-specs" in r.getMessage() for r in caplog.records)
+
+
+class TestReviewCheckpointPaths:
+    """The non-`--auto` review checkpoint prints what the reviewer must read,
+    in order — the codebase analysis explains what the design was written
+    against, so it is printed before the design."""
+
+    def test_codebase_analysis_path_is_printed_when_present(self, tmp_path, capsys):
+        from build_pipeline.orchestrator import _print_review_context_paths
+
+        config = BuildConfig(project_dir=tmp_path, change_name="review-me")
+        config.specs_dir = tmp_path / "specs"
+        config.change_dir.mkdir(parents=True)
+        config.unknowns_path.write_text("# Unknowns")
+        config.codebase_analysis_path.write_text("## Architecture")
+
+        _print_review_context_paths(config)
+        out = capsys.readouterr().out
+        assert f"REVIEW:READ_FIRST:{config.unknowns_path}" in out
+        assert f"REVIEW:CODEBASE_ANALYSIS:{config.codebase_analysis_path}" in out
+        assert out.index("READ_FIRST") < out.index("CODEBASE_ANALYSIS")
+
+    def test_absent_analysis_prints_nothing(self, tmp_path, capsys):
+        from build_pipeline.orchestrator import _print_review_context_paths
+
+        config = BuildConfig(project_dir=tmp_path, change_name="review-me")
+        config.specs_dir = tmp_path / "specs"
+        config.change_dir.mkdir(parents=True)
+
+        _print_review_context_paths(config)
+        assert "CODEBASE_ANALYSIS" not in capsys.readouterr().out
+
+
 class TestPrototypePhase:
     """Done-means #5 (orchestrator half): --no-prototype skips the phase and
     logs the reason; an applicable change runs it."""
@@ -324,6 +537,40 @@ class TestPrototypePhase:
         mock_feedback.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_design_audit_phase_regenerates_specs_on_critical_gaps(self, tmp_path):
+        """The orchestrator's DESIGN_AUDIT phase used to log its gaps and move
+        on. It now goes through run_design_audit_stage, so a critical gap
+        rewrites design.md and tasks.md once."""
+        from unittest.mock import AsyncMock, patch
+        from build_pipeline.orchestrator import run_orchestrator
+
+        config = self._config(tmp_path, "audit-loop", "false", self.BACKEND_PROPOSAL)
+        (config.change_dir / "tasks.md").write_text("## 1. Block v1")
+        gap = {
+            "category": "spec-task-alignment",
+            "severity": "critical",
+            "description": "Scenario 'retry exhausts' has no task block",
+            "suggestion": "Add a block for the exhausted-retry path",
+        }
+
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   new_callable=AsyncMock) as mock_audit, \
+                patch("build_pipeline.llm_steps.spec_steps.generate_artifact",
+                      new_callable=AsyncMock) as mock_gen:
+            mock_audit.side_effect = [[gap], []]
+            mock_gen.side_effect = ["## Decisions\nv2", "## 1. Block v2"]
+            result = await run_orchestrator(config, self._args(tmp_path, "audit-loop"))
+
+        assert result == 0
+        assert mock_gen.await_count == 2
+        assert [c.args[0] for c in mock_gen.call_args_list] == ["design", "tasks"]
+        assert "retry exhausts" in mock_gen.call_args_list[0].kwargs["audit_findings"]
+        # One report-only re-audit after the pass.
+        assert mock_audit.await_count == 2
+        assert (config.change_dir / "design.md").read_text() == "## Decisions\nv2"
+        assert (config.change_dir / "tasks.md").read_text() == "## 1. Block v2"
+
+    @pytest.mark.asyncio
     async def test_prototype_failure_does_not_fail_the_build(self, tmp_path):
         from unittest.mock import AsyncMock, patch
         from build_pipeline.models import GateResult
@@ -410,6 +657,92 @@ class TestPrototypeDecision:
         should, reason = prototype_decision(config)
         assert should is True
         assert reason.startswith("auto:")
+
+
+class TestSpecGenerationReloadOnlyMovesForward:
+    """The orchestrator reloads the state run_spec_generator checkpointed. That
+    copy can already sit at a LATER phase than SPEC_GENERATION, so the advance
+    that follows has to be guarded — advance_to assigns unconditionally, and an
+    unguarded call rewinds the persisted pointer, re-opening the phases in
+    between."""
+
+    @staticmethod
+    def _config(tmp_path):
+        config = BuildConfig(
+            project_dir=tmp_path, change_name="reload", mode="scratch",
+            auto=True, spec_only=True, skip_research=True,
+        )
+        config.specs_dir = tmp_path / "specs"
+        cm = ChangeManager(config.specs_dir)
+        cm.init_specs()
+        cm.create_change("reload")
+        (config.change_dir / "proposal.md").write_text("## Why\nBecause.")
+        (config.change_dir / "design.md").write_text("## Decisions\nNone.")
+        (config.change_dir / "tasks.md").write_text("## 1. Block")
+        state = BuildState(
+            change_name="reload", mode="scratch", tier="advanced",
+            phase=BuildPhase.RESEARCH,
+            state_file=str(config.state_file_path()),
+        )
+        state.checkpoint(config.state_file_path())
+        return config
+
+    @staticmethod
+    def _args(tmp_path):
+        import argparse
+        return argparse.Namespace(
+            mode="scratch", change="reload", project_dir=str(tmp_path),
+            auto=True, spec_only=True, skip_research=True,
+            interview_summary="", research_path="", context_files=[],
+            session_id="",
+        )
+
+    @pytest.mark.asyncio
+    async def test_phase_is_not_rewound_and_the_audit_is_not_re_run(self, tmp_path):
+        from unittest.mock import AsyncMock, patch
+        from build_pipeline.orchestrator import run_orchestrator
+        from build_pipeline.state import SpecGenState
+
+        config = self._config(tmp_path)
+        state_path = config.state_file_path()
+
+        async def fake_spec_generator(cfg, args=None):
+            """What the real one leaves behind: the pointer already at
+            DESIGN_AUDIT, and the audit stage recorded as spent."""
+            s = BuildState.load(state_path)
+            s.spec_gen = SpecGenState(design_audit_done=True)
+            s.advance_to(BuildPhase.DESIGN_AUDIT, state_path)
+            return 0
+
+        # A successful spec-only run deletes its state file, so the pointer is
+        # observed as it is written rather than read back at the end.
+        advanced: list[BuildPhase] = []
+        real_advance = BuildState.advance_to
+
+        def recording_advance(self, phase, path=None):
+            advanced.append(phase)
+            return real_advance(self, phase, path)
+
+        with patch("build_pipeline.spec_generator.run_spec_generator",
+                   side_effect=fake_spec_generator), \
+                patch("build_pipeline.state.BuildState.advance_to",
+                      recording_advance), \
+                patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                      new_callable=AsyncMock) as mock_audit:
+            result = await run_orchestrator(config, self._args(tmp_path))
+
+        assert result == 0
+        # The audit stage was already spent, so the orchestrator's DESIGN_AUDIT
+        # phase costs no LLM call at all — not even a report-only one.
+        mock_audit.assert_not_awaited()
+        # The pointer never went backwards: nothing re-advances to
+        # SPEC_GENERATION after the spec generator left it at DESIGN_AUDIT.
+        order = list(BuildPhase)
+        assert BuildPhase.DESIGN_AUDIT in advanced
+        after = advanced[advanced.index(BuildPhase.DESIGN_AUDIT) + 1:]
+        assert all(
+            order.index(p) >= order.index(BuildPhase.DESIGN_AUDIT) for p in after
+        ), f"phase pointer rewound: {[p.value for p in advanced]}"
 
 
 class TestRespecPhaseWiring:

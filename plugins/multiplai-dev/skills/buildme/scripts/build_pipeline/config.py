@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import logging
 import re
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -19,6 +21,73 @@ log = logging.getLogger(__name__)
 
 Tier = Literal["advanced", "standard"]
 Mode = Literal["scratch", "brief", "only"]
+
+# Built-in stack/framework → reference doc names, resolved under
+# $CLAUDE_CONFIG_DIR/reference/dev/. These are DEFAULTS: a `reference_docs:`
+# key in specs/config.yaml replaces the list for whichever keys it names and
+# leaves the rest alone (see BuildConfig.reference_doc_names).
+#
+# The manifest keys ("pyproject", "Package", "package", "Cargo", "go") are the
+# `stack` value that _discover_test_command derives from the manifest
+# filename. The framework keys ("django", "react") are appended by
+# detect_frameworks(), which looks inside the manifests — a Django project and
+# a plain-library project are both `stack == "pyproject"`, so the manifest
+# filename alone cannot tell them apart.
+_DEFAULT_REFERENCE_DOCS: dict[str, list[str]] = {
+    "pyproject": ["uv-python-best-practices.md", "python-project-structure.md"],
+    "Package": ["swift-best-practices.md", "swift-testing-strategies.md"],
+    "package": ["bun-vite-react-best-practices.md"],
+    "Cargo": [],
+    "go": [],
+    "django": ["django-best-practices.md"],
+    "react": ["react-best-practices.md"],
+}
+
+# Per-document ceiling when reference docs are inlined into a spec-generation
+# prompt. The spec-gen system prompt forbids tools, so inlining is the only
+# channel — and a 40k-char standards doc would otherwise crowd out the specs
+# it is meant to inform.
+REFERENCE_DOC_CHAR_LIMIT = 8000
+
+
+def _requirement_name(spec: str) -> str:
+    """The bare package name from a requirement line, lowercased.
+
+    `Django>=5.0`, `django[argon2]==5.0`, `  django  # comment` → `django`.
+    Returns "" for blanks, comments and flag lines (`-r other.txt`), which is
+    never equal to a package name being looked for.
+    """
+    text = spec.split("#", 1)[0].strip()
+    if not text or text.startswith("-"):
+        return ""
+    name = re.split(r"[\[\s<>=!~;,]", text, maxsplit=1)[0]
+    return name.strip().lower().replace("_", "-")
+
+
+def _pyproject_dependency_specs(data: dict) -> list[str]:
+    """Every dependency requirement string in a parsed pyproject.toml.
+
+    Covers PEP 621 (`project.dependencies`, `project.optional-dependencies`)
+    and Poetry (`tool.poetry.dependencies`, where the *keys* are the names).
+    """
+    specs: list[str] = []
+    project = data.get("project")
+    if isinstance(project, dict):
+        deps = project.get("dependencies")
+        if isinstance(deps, list):
+            specs.extend(d for d in deps if isinstance(d, str))
+        optional = project.get("optional-dependencies")
+        if isinstance(optional, dict):
+            for group in optional.values():
+                if isinstance(group, list):
+                    specs.extend(d for d in group if isinstance(d, str))
+    poetry = (data.get("tool") or {}).get("poetry") if isinstance(data.get("tool"), dict) else None
+    if isinstance(poetry, dict):
+        for section in ("dependencies", "dev-dependencies"):
+            group = poetry.get(section)
+            if isinstance(group, dict):
+                specs.extend(str(name) for name in group)
+    return specs
 
 
 def detect_tier() -> tuple[Tier, str]:
@@ -209,6 +278,11 @@ class BuildConfig:
     stack_memory_files: list[str] = field(default_factory=list)
     additional_memory_files: list[str] = field(default_factory=list)
 
+    # Reference docs: per-stack/framework overrides from specs/config.yaml's
+    # `reference_docs:` key. Empty means "built-in defaults only"; a key
+    # present here replaces _DEFAULT_REFERENCE_DOCS for that key alone.
+    reference_docs: dict[str, list[str]] = field(default_factory=dict)
+
     # Gate toggles
     gates: GateToggles = field(default_factory=GateToggles)
 
@@ -220,6 +294,11 @@ class BuildConfig:
     # resume). None means "we do not own a branch" — every commit/push/PR
     # helper no-ops, which is what keeps --no-worktree behavior unchanged.
     pipeline_branch: str | None = None
+
+    # Runtime marker, not user-configurable: stack_reference_docs() announces
+    # the resolved set once per process (it is called per artifact and per TDD
+    # block, and one REFERENCES: line is information while twenty is noise).
+    references_announced: bool = field(default=False, repr=False)
 
     # Paths (resolved after config load)
     config_dir: Path = field(default_factory=lambda: Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser())
@@ -342,6 +421,9 @@ class BuildConfig:
             self.stack = next(iter(stacks))
             self.stack_memory_files = stacks[self.stack]
         self.additional_memory_files = mem.get("additional", [])
+
+        # Reference docs (per stack/framework key, overriding the built-ins)
+        self._load_reference_docs(data.get("reference_docs"))
 
         # TDD config
         tdd = data.get("tdd", {})
@@ -519,6 +601,11 @@ class BuildConfig:
         return self.change_dir / "unknowns.md"
 
     @property
+    def codebase_analysis_path(self) -> Path:
+        """Where BuildPhase.CODEBASE_ANALYSIS writes its report."""
+        return self.change_dir / "codebase-analysis.md"
+
+    @property
     def explainers_active(self) -> bool:
         """Whether the B1 explainer pass runs. The CLI flag wins over config.yaml
         (same precedence as every other flag/config pair here)."""
@@ -569,18 +656,169 @@ class BuildConfig:
                 return candidate
         return None
 
+    def _load_reference_docs(self, raw) -> None:
+        """Parse specs/config.yaml's `reference_docs:` key.
+
+        Shape is `{<stack-or-framework>: [<doc name>, ...]}`. A malformed
+        entry is dropped with a warning rather than failing the build — the
+        built-in defaults then stand for that key.
+        """
+        if not raw:
+            return
+        if not isinstance(raw, dict):
+            log.warning("reference_docs must be a mapping, got %s — ignoring", type(raw).__name__)
+            return
+        parsed: dict[str, list[str]] = {}
+        for key, value in raw.items():
+            if isinstance(value, str):
+                value = [value]
+            if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                log.warning(
+                    "reference_docs['%s'] must be a list of doc names — ignoring", key,
+                )
+                continue
+            parsed[str(key)] = list(value)
+        self.reference_docs = parsed
+
+    def detect_frameworks(self) -> list[str]:
+        """Frameworks visible in the project's manifests, beyond the manifest
+        filename that `stack` records.
+
+        A Django app and a plain Python library are both `stack == "pyproject"`,
+        so the framework has to be read out of the dependency list (or, for
+        Django, its unmistakable `manage.py`). Detection is additive: each hit
+        appends its own reference-doc key.
+        """
+        found: list[str] = []
+        p = self.project_dir
+        if (p / "manage.py").is_file() or self._python_deps_mention("django"):
+            found.append("django")
+        if self._node_deps_mention("react"):
+            found.append("react")
+        return found
+
+    def _python_deps_mention(self, package: str) -> bool:
+        """Whether `package` appears in pyproject.toml or requirements.txt deps."""
+        pyproject = self.project_dir / "pyproject.toml"
+        if pyproject.is_file():
+            try:
+                data = tomllib.loads(pyproject.read_text())
+            except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+                log.warning("Could not parse %s for framework detection: %s", pyproject, e)
+                data = {}
+            for spec in _pyproject_dependency_specs(data):
+                if _requirement_name(spec) == package:
+                    return True
+        reqs = self.project_dir / "requirements.txt"
+        if reqs.is_file():
+            try:
+                lines = reqs.read_text().splitlines()
+            except (OSError, UnicodeDecodeError) as e:
+                log.warning("Could not read %s for framework detection: %s", reqs, e)
+                lines = []
+            for line in lines:
+                if _requirement_name(line) == package:
+                    return True
+        return False
+
+    def _node_deps_mention(self, package: str) -> bool:
+        """Whether `package` is a dependency in package.json."""
+        manifest = self.project_dir / "package.json"
+        if not manifest.is_file():
+            return False
+        try:
+            data = json.loads(manifest.read_text())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+            log.warning("Could not parse %s for framework detection: %s", manifest, e)
+            return False
+        if not isinstance(data, dict):
+            return False
+        for key in ("dependencies", "devDependencies", "peerDependencies"):
+            section = data.get(key)
+            if isinstance(section, dict) and package in section:
+                return True
+        return False
+
+    def reference_doc_names(self) -> list[str]:
+        """The reference doc filenames for this project, before existence checks.
+
+        Built-in defaults, overridden per key by `reference_docs:` in
+        specs/config.yaml, for the detected `stack` plus every framework
+        `detect_frameworks()` finds. Order is stack docs first, then frameworks
+        in detection order; duplicates collapse to their first appearance.
+        """
+        mapping = dict(_DEFAULT_REFERENCE_DOCS)
+        mapping.update(self.reference_docs)
+
+        names: list[str] = []
+        for key in [self.stack, *self.detect_frameworks()]:
+            for name in mapping.get(key, []):
+                if name not in names:
+                    names.append(name)
+        return names
+
     def stack_reference_docs(self) -> list[Path]:
-        """Return reference doc paths for the detected stack."""
+        """Reference doc paths for the detected stack and frameworks.
+
+        A name with no file under $CLAUDE_CONFIG_DIR/reference/dev/ is skipped
+        (the mapping may name a doc that has not been written yet), but the
+        skip is logged rather than silent, and resolving *nothing* for a
+        project that does have a detected stack is a warning: it means every
+        spec below is being written with no conventions to build to.
+        """
         ref_dir = self.config_dir / "reference" / "dev"
-        mapping: dict[str, list[str]] = {
-            "pyproject": ["uv-python-best-practices.md", "python-project-structure.md"],
-            "Package": ["swift-best-practices.md", "swift-testing-strategies.md"],
-            "package": ["bun-vite-react-best-practices.md"],
-            "Cargo": [],
-            "go": [],
-        }
-        docs = mapping.get(self.stack, [])
-        return [ref_dir / d for d in docs if (ref_dir / d).exists()]
+        names = self.reference_doc_names()
+        resolved: list[Path] = []
+        for name in names:
+            path = ref_dir / name
+            if path.is_file():
+                resolved.append(path)
+            else:
+                log.info("Reference doc not found, skipping: %s", path)
+        self._announce_references(names, resolved)
+        return resolved
+
+    def _announce_references(self, names: list[str], resolved: list[Path]) -> None:
+        """Emit the `REFERENCES:` progress line once per process."""
+        if names and not resolved:
+            log.warning(
+                "Stack '%s' detected but NONE of its reference docs resolved under %s "
+                "(wanted: %s) — specs will be generated with no conventions to build to",
+                self.stack or "(unknown)",
+                self.config_dir / "reference" / "dev",
+                ", ".join(names),
+            )
+        if self.references_announced:
+            return
+        self.references_announced = True
+        listed = ", ".join(p.name for p in resolved) or "(none)"
+        print(f"REFERENCES:{listed}", flush=True)
+        log.info("REFERENCES stack=%s docs=%s", self.stack or "(unknown)", listed)
+
+    def reference_docs_text(self) -> str:
+        """The reference docs inlined for a spec-generation prompt.
+
+        The spec-generation system prompt forbids tools, so inlining is the
+        only channel the generator has. Each doc is capped at
+        REFERENCE_DOC_CHAR_LIMIT with a visible truncation marker; an
+        unreadable doc is skipped rather than failing the build. Returns ""
+        when nothing resolves — the prompt then says "(none available)".
+        """
+        parts: list[str] = []
+        for doc in self.stack_reference_docs():
+            try:
+                text = doc.read_text()
+            except (OSError, UnicodeDecodeError) as e:
+                log.warning("Reference doc unreadable, skipping: %s (%s)", doc, e)
+                continue
+            if len(text) > REFERENCE_DOC_CHAR_LIMIT:
+                text = (
+                    text[:REFERENCE_DOC_CHAR_LIMIT]
+                    + f"\n\n[... truncated at {REFERENCE_DOC_CHAR_LIMIT} chars —"
+                    f" read {doc.name} in full for the rest ...]"
+                )
+            parts.append(f"### Reference: {doc.name}\n{text}")
+        return "\n\n".join(parts)
 
     # --- Tier-dependent behavior properties ---
 

@@ -10,7 +10,7 @@ Version numbers are this plugin's version in the marketplace manifest
 
 Recorded history starts at **0.1.1**; anything earlier is in `git log` only.
 
-Of the 9 versions recorded here, `0.1.1` and `0.5.0` carry a git tag — the
+Of the 15 versions recorded here, `0.1.1` and `0.5.0` carry a git tag — the
 tagging convention started partway through. Dates on untagged versions are the
 release dates recorded at the time, not derived from a tag.
 
@@ -21,7 +21,7 @@ release dates recorded at the time, not derived from a tag.
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
 
-## [0.6.0] - 2026-08-03
+## [0.8.0] - 2026-08-04
 
 ### Added
 
@@ -59,6 +59,129 @@ release dates recorded at the time, not derived from a tag.
 - **`[buildme.agent]` in `multiplai.conf` also tunes the whole-change refactor
   pass**, alongside the test writer, implementer, per-block refactorer and fix
   agents.
+
+## [0.7.0] - 2026-08-04
+
+### Added
+
+- **`/buildme` now reads your codebase before it writes a spec.** A new
+  **Codebase Analysis** phase runs between research and spec generation: three
+  agents explore the repo in parallel (module structure and entry points;
+  naming, error-handling and test patterns; dependencies, config loading and
+  integration points) and write what they find to
+  `specs/changes/<name>/codebase-analysis.md`. That report is fed into
+  `design.md`, so the design extends the modules you already have instead of
+  proposing a parallel structure beside them. At the review checkpoint the
+  pipeline prints `REVIEW:CODEBASE_ANALYSIS:<path>` — read it before
+  `design.md`, because it is where "why does it extend that module" is
+  answered.
+
+  The phase is skipped, with the reason logged, for a project that has no
+  source files yet and for `--only` runs (which generate no specs), and a
+  failure is never a build failure — the design falls back to treating the
+  project as new.
+
+- **Reference docs now reach spec generation, not just the TDD agents.** The
+  best-practice docs under `$CLAUDE_CONFIG_DIR/reference/dev/` for your stack
+  are inlined into the design and task-breakdown prompts (capped at 8,000
+  characters each), so the plan is written to your conventions rather than
+  corrected to them afterwards. Every run prints one `REFERENCES:<doc names>`
+  line (or `REFERENCES:(none)`) naming exactly what reached the generator.
+
+- **Frameworks are detected, not guessed from the manifest name.** A `manage.py`
+  or a `django` dependency in `pyproject.toml`/`requirements.txt` adds the
+  Django reference docs on top of the Python ones; `react` in `package.json`
+  adds the React docs on top of the Node ones. Previously every Python project
+  got the same two docs regardless of what it actually was.
+
+- **`reference_docs:` in `specs/config.yaml`** lets you say which docs a project
+  builds to. Keys are the detected stack (`pyproject`, `Package`, `package`,
+  `Cargo`, `go`) or framework (`django`, `react`), and a key you set replaces
+  the built-in list for that key alone:
+
+  ```yaml
+  reference_docs:
+    pyproject: [uv-python-best-practices.md, our-house-style.md]
+  ```
+
+### Changed
+
+- A reference doc named in the mapping but missing from disk is still skipped
+  rather than failing the run — but the skip is now logged, and a project whose
+  stack is detected while *none* of its docs resolve gets a loud warning
+  instead of silently generating specs with no conventions attached.
+
+### Fixed
+
+- The prototype-feedback pass, which regenerates `design.md` and `tasks.md`
+  once from the prototype's notes, now carries the same codebase analysis and
+  reference docs the first pass had. Without that, a regeneration quietly
+  rewrote the design away from the project's conventions.
+
+## [0.6.0] - 2026-08-03
+
+### Changed
+
+- **`/buildme`'s design audit now fixes the specs it criticises, instead of
+  printing the criticism and building anyway.** Until now the audit ran after
+  spec generation, listed the gaps it found — a spec scenario with no task
+  block, a design decision contradicting a requirement — and the build carried
+  on against the same unchanged documents. You would find the warnings in the
+  log after the fact, next to code built on top of them.
+
+  Every gap the audit rates **critical** or **major** is now handed back to the
+  generator, which rewrites `design.md` and then `tasks.md` once with those
+  findings in front of it. The rewrite lands as its own commit
+  (`docs(specs): regenerate design.md and tasks.md after design audit`), so
+  the branch history shows what the critique changed, and `git diff` on that
+  commit is a readable summary of it.
+
+  The audit then runs one more time, **report-only**, and says in the log
+  whether the critique landed:
+
+  ```
+  PHASE: design_audit_feedback_applied — 2 artifact(s)
+  PHASE: design_audit_recheck — clean
+  ```
+
+  It is deliberately one pass, not a loop. If gaps remain, they are reported
+  and the documents stand — a stubborn gap costs one extra audit call, not an
+  open-ended spec-generation bill, and the review checkpoint is still where you
+  decide. Minor gaps are reported only; they never trigger a rewrite.
+
+- **The design audit also judges the plan, not just its consistency.** It
+  previously cross-referenced the artifacts against each other. It now
+  additionally reports: abstractions no requirement asks for (the factory with
+  one implementation, the config knob nothing reads), task blocks mis-sized for
+  review, design decisions with nothing a test could assert on, and edge cases
+  no scenario covers — missing input, a dependency timing out, a retry after
+  partial completion. Combined with the change above, this is what turns those
+  observations into an actually different plan.
+
+### Fixed
+
+- **A resumed build no longer loses the spec-generation checkpoint.** The
+  orchestrator kept an in-memory copy of the build state while spec generation
+  wrote its own to disk, then overwrote the disk copy — discarding the record
+  of which artifacts and which audits had completed. A resumed build could
+  therefore re-run work that had already succeeded. The orchestrator now
+  re-reads the state after spec generation, the same way it already did after
+  the TDD phase.
+
+- **The build no longer pays for a design audit whose answer it already has.**
+  A full build reaches the audit stage twice — once inside spec generation,
+  once from the orchestrator's own `DESIGN_AUDIT` phase — and the second
+  arrival used to re-read all four artifacts through the model just to
+  rediscover that the regeneration had already happened. It now checks the
+  checkpoint *before* calling the model, so the second arrival is free. On a
+  build whose audit found nothing actionable, this removes a whole audit call
+  that previously produced only a log line.
+
+- **The phase pointer can no longer move backwards after spec generation.**
+  Re-reading the state (above) also picked up a pointer already sitting at
+  `design_audit`, which the orchestrator then reset to `spec_generation`. The
+  advance is now guarded, so an interrupted build resumes at the phase it
+  actually reached rather than at one it had already finished.
 
 ## [0.5.4] - 2026-07-30
 

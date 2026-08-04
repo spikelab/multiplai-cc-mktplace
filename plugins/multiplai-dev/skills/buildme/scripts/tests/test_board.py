@@ -48,6 +48,7 @@ EXPECTED_COLUMNS = {
     BuildPhase.BOOTSTRAP: BoardColumn.SHAPING,
     BuildPhase.INTERVIEW_DONE: BoardColumn.SHAPING,
     BuildPhase.RESEARCH: BoardColumn.SHAPING,
+    BuildPhase.CODEBASE_ANALYSIS: BoardColumn.SHAPING,
     BuildPhase.SPEC_GENERATION: BoardColumn.SHAPING,
     BuildPhase.DESIGN_AUDIT: BoardColumn.PLANNING,
     BuildPhase.PROTOTYPE: BoardColumn.PLANNING,
@@ -70,7 +71,7 @@ class TestColumnFor:
     @pytest.mark.parametrize("block_status", ALL_BLOCK_STATES)
     def test_every_phase_and_block_status_case(self, phase, block_status):
         """Criterion 15a — every (phase, block_status) pair, all 7 block
-        states (including None) against all 13 phases."""
+        states (including None) against every phase in the enum."""
         assert column_for(phase, block_status) is EXPECTED_COLUMNS[phase]
 
     def test_block_status_never_moves_the_card_today(self):
