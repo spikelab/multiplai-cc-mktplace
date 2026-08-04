@@ -38,7 +38,7 @@ that is newer but sorts *before* the base name).
   proposal from another session may appear mid-review). Proceed to Step 3.
 - **Not found:** tell the user "No pre-generated proposal found — generating one now" and run:
   ```
-  uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
+  uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
   ```
   This can run for many minutes, past the Bash tool's 600s max timeout. You **MUST**
   invoke it via the Bash tool with **`run_in_background: true`** (no `&`, no `nohup`).
@@ -161,7 +161,7 @@ For each target file that has at least one **decided** item (approved or rejecte
    and there are no shell quoting rules to get wrong:
 
    ```bash
-   uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --mark-processed \
+   uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --mark-processed \
      --proposal <exact-proposal-path> --decisions - <<'JSON'
    [
      {"kind":"update","file":"technical-pref.md","index":3,"status":"applied","target":"technical-pref.md"},
@@ -229,7 +229,7 @@ Then **record every decided action item** (approved *and* rejected) in **one** c
 JSON shape as Step 4 with `"kind":"action"` and no `file`:
 
 ```bash
-uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --mark-processed \
+uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --mark-processed \
   --proposal <exact-proposal-path> --decisions - <<'JSON'
 [
   {"kind":"action","index":1,"status":"applied"},
@@ -247,7 +247,7 @@ JSON
 Always run the collector, then report what it removed:
 
 ```bash
-uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --gc-learnings
+uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --gc-learnings
 ```
 
 It is pure code — no model call, no lock — and it makes the keep/delete call **per file,
@@ -291,7 +291,7 @@ reviewed proposal so `dreams/` holds only pending proposals (without this, revie
 and pending proposals are indistinguishable and pile up).
 
 ```bash
-uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --stamp \
+uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --stamp \
   --files-updated <M> --learnings-processed <N> \
   --archive <exact-proposal-path-recorded-in-Step-1>
 ```
@@ -318,7 +318,7 @@ item(s) remain pending (to finish in the GUI or a later `/dream-remember`), and 
 report the proposal as archived. Split the command when leaving items pending:
 
 ```bash
-uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --stamp \
+uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --stamp \
   --files-updated <M> --learnings-processed <N>   # no --archive: items still pending
 ```
 
@@ -329,7 +329,7 @@ uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dr
 After memory files have been updated, run:
 
 ```bash
-uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"
+uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"
 ```
 
 Skip this step if no memory files were actually modified.

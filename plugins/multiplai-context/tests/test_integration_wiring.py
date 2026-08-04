@@ -271,9 +271,14 @@ class TestAfterFieldAndBootstrapFallback:
                     cmd = entry["command"]
                     assert cmd.startswith("sh -c 'command -v uv "), \
                         f"{event} command must start with the uv guard, got: {cmd}"
-                    assert "exec uv run --project " in cmd, \
-                        f"{event} command must exec via 'uv run --project' so deps " \
-                        f"resolve from the workspace lock, got: {cmd}"
+                    # --all-packages is not optional here. The workspace
+                    # root is virtual and declares no dependencies, so bare
+                    # --project installs nothing and the script dies on
+                    # import. It only appeared to work when some earlier
+                    # command had already populated the environment.
+                    assert "exec uv run --all-packages --project " in cmd, \
+                        f"{event} command must exec via 'uv run --all-packages " \
+                        f"--project' so the members' deps are installed, got: {cmd}"
                     assert "python " not in cmd.replace("uv run", ""), \
                         f"{event} command must not invoke bare python: {cmd}"
 

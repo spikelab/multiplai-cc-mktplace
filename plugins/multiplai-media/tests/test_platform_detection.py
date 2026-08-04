@@ -156,8 +156,12 @@ class TestScreenDemoBootstrap:
         assert real_python
         bins = _shim_dir(
             tmp_path,
-            ["uname", "dirname", "ffmpeg"],
+            ["uname", "dirname"],
             fakes={
+                # ffmpeg is faked, not symlinked: this test is about step 2,
+                # and requiring a real ffmpeg would make it fail on any host
+                # that lacks one for reasons that say nothing about the check.
+                "ffmpeg": "#!/bin/bash\nexit 0\n",
                 # scenedetect/cv2 unimportable, everything else normal.
                 "python3": (
                     "#!/bin/bash\n"

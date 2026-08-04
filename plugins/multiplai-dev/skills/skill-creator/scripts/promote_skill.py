@@ -99,7 +99,13 @@ def python_command(script: Path) -> list[str]:
     if shutil.which("uv"):
         root = _workspace_root(script)
         if root is not None:
-            return ["uv", "run", "--project", str(root), str(script)]
+            # --all-packages, not bare --project: the workspace root is
+            # virtual and declares no dependencies of its own, so --project
+            # alone installs nothing and the script dies on import. This bit
+            # in CI while passing locally, off an environment a previous run
+            # had populated.
+            return ["uv", "run", "--all-packages", "--project", str(root),
+                    str(script)]
         text = script.read_text(encoding="utf-8", errors="replace")
         if PEP723_RE.search(text):
             return ["uv", "run", "--script", str(script)]

@@ -92,7 +92,7 @@ more. On vanilla Claude Code:
    workspace environment from `uv.lock` (the SessionStart hook allows 60s for
    this). To do it ahead of time instead, run once from a shell:
    ```
-   uv run --project <repo-root> <plugin-dir>/scripts/session_start.py </dev/null
+   uv run --all-packages --project <repo-root> <plugin-dir>/scripts/session_start.py </dev/null
    ```
    Every later start is fast — resolution is already done, so no later run
    touches the network.
@@ -630,8 +630,8 @@ silently never runs again.
 Run it by hand, or check what it would do:
 
 ```bash
-uv run --project ../.. scripts/memory_maintainer.py --dry-run
-uv run --project ../.. scripts/memory_maintainer.py --force
+uv run --all-packages --project ../.. scripts/memory_maintainer.py --dry-run
+uv run --all-packages --project ../.. scripts/memory_maintainer.py --force
 ```
 
 State lives in `<data_dir>/maintainer_state.yaml`; runs appear in the activity
@@ -692,7 +692,7 @@ detached subprocess.
 so it no longer has to wait for a session:
 
 ```
-uv run --project ../../.. drain_extractions.py --data-dir <workspace>/.multiplai/data
+uv run --all-packages --project ../../.. drain_extractions.py --data-dir <workspace>/.multiplai/data
 ```
 
 `--wait` blocks until each extraction finishes with its errors visible;
@@ -1402,7 +1402,7 @@ checks the plumbing mechanically and names what's missing.
 | Symptom | Fix |
 |---|---|
 | **Nothing runs at all — no diary, no injection, no logs.** Hooks disable themselves silently when `uv` is missing. | Install [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh \| sh`), restart the session. |
-| **First session start hangs ~60 seconds.** Cold start: the first run installs the workspace environment from `uv.lock`. Expected exactly once. | Wait it out, or pre-warm from a shell: `uv run --project <repo-root> <plugin-dir>/scripts/session_start.py </dev/null`. Every later start reuses the environment. |
+| **First session start hangs ~60 seconds.** Cold start: the first run installs the workspace environment from `uv.lock`. Expected exactly once. | Wait it out, or pre-warm from a shell: `uv run --all-packages --project <repo-root> <plugin-dir>/scripts/session_start.py </dev/null`. Every later start reuses the environment. |
 | **Hooks appear to do nothing.** No visible effect, unsure if anything is installed correctly. | Run `/multiplai-context:health` — it verifies the model client, directories, memory freshness, and diary/learnings counts, and names the broken piece. |
 | **Memory not injected.** You told setup things, but a new session doesn't know them. | Two checks: (1) your `settings.json` key must be the compound `pluginConfigs["multiplai-context@multiplai"]` form — a bare `multiplai` key fails **silently** (see [Configuration](#configuration)); (2) read the `[context]` routing line in the activity log — [Observability](#observability) explains how to tell a healthy route from an abstention or a fallback. |
 | **Settings changed but nothing happened.** | Options are read at session start — restart Claude Code after any `settings.json` change. |

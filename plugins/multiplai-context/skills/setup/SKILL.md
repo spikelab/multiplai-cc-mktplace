@@ -22,7 +22,7 @@ the contract is here.
 
 ### `setup_check.py`
 ```
-uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/setup_check.py"
+uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/setup_check.py"
 ```
 Returns:
 ```json
@@ -36,8 +36,8 @@ Returns:
 
 ### `setup_write.py`
 ```
-uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/setup_write.py"            # copy-if-absent
-uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/setup_write.py" --force    # overwrite all
+uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/setup_write.py"            # copy-if-absent
+uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/setup_write.py" --force    # overwrite all
 ```
 Copies starter templates → `memory_dir`. **Does NOT ingest interview answers** —
 it just lays down the starter files. Returns:

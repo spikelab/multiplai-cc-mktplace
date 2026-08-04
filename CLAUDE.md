@@ -83,8 +83,8 @@ directory:
 
 | Suite | Command |
 |---|---|
-| `multiplai-context` | `cd plugins/multiplai-context && uv run --project ../.. --with pytest --with pytest-asyncio --with pytest-timeout python -m pytest tests/ -q` |
-| `multiplai-media` | `cd plugins/multiplai-media && uv run --project ../.. --with pytest python -m pytest tests/ -q` |
+| `multiplai-context` | `cd plugins/multiplai-context && uv run --all-packages --project ../.. --with pytest --with pytest-asyncio --with pytest-timeout python -m pytest tests/ -q` |
+| `multiplai-media` | `cd plugins/multiplai-media && uv run --no-project --with pytest python -m pytest tests/ -q` |
 | buildme | `cd plugins/multiplai-dev/skills/buildme/scripts && uv run --project ../../../../.. --package build-pipeline --extra dev python -m pytest tests/ -q` |
 | deep-research | `cd plugins/multiplai-research/skills/deep-research/scripts && uv run --project ../../../../.. --package research-pipeline --extra dev python -m pytest tests/ -q` |
 
@@ -140,7 +140,7 @@ Each script directory that needs dependencies is a *member*: it has its own
 anything through it:
 
 ```bash
-uv run --project <repo-root> <path/to/script.py>
+uv run --all-packages --project <repo-root> <path/to/script.py>
 ```
 
 Two rules, both enforced by `scripts/lint_workspace.py`:

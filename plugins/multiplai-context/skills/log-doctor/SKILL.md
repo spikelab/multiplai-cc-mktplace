@@ -39,7 +39,7 @@ half:
 ## Step 1 — Run the scanner
 
 ```bash
-uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/log_doctor.py" \
+uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/log_doctor.py" \
   [--subsystem <name>[,<name>]] \
   [--days N] [--errors-only] [--json] [--logs-dir DIR]
 ```
@@ -126,7 +126,7 @@ cooldown suppressions) with `activity.jsonl` inject events (session id, final
 files, bytes) on timestamp.
 
 ```bash
-uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/log_doctor.py" --injections \
+uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/log_doctor.py" --injections \
   [--file life.md] [--trace 5] [--days N] [--json]
 ```
 
@@ -161,12 +161,12 @@ Three steps: baseline → trigger → check.
 
 ```bash
 # 1. Baseline: snapshot current log sizes
-uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/log_doctor.py" --probe-start
+uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/log_doctor.py" --probe-start
 
 # 2. Trigger the functionality (see below)
 
 # 3. Check: only entries appended since the baseline are evaluated
-uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/log_doctor.py" \
+uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/log_doctor.py" \
   --probe-check --scenario <name>        # exit 0 = passed, 1 = failed
 ```
 
@@ -182,7 +182,7 @@ instruction. Available: `session-start`, `session-end`, `session-stop`,
   `claude -p "say hi"` — which fires the whole lifecycle (SessionStart,
   UserPromptSubmit routing, Stop, SessionEnd). Check each scenario afterwards.
 - `generate-catalog`: run the refresh-catalogs skill or
-  `uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --dry-run`
+  `uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py" --dry-run`
   (dry-run: no writes, no LLM calls).
 - `backfill` / `dream` / `synthesize-now`: invoke the corresponding skill
   (keep it small, e.g. backfill `--days 1`).

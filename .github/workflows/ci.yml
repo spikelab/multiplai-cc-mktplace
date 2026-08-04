@@ -155,7 +155,7 @@ jobs:
       - name: Run tests
         working-directory: plugins/multiplai-context
         run: |
-          uv run --project ../.. --with pytest --with pytest-asyncio \
+          uv run --all-packages --project ../.. --with pytest --with pytest-asyncio \
             --with pytest-timeout python -m pytest tests/ -q
 
   media-tests:
@@ -172,7 +172,7 @@ jobs:
       # branching and the fix-it messages, not transcoding.
       - name: Run tests
         working-directory: plugins/multiplai-media
-        run: uv run --project ../.. --with pytest python -m pytest tests/ -q
+        run: uv run --no-project --with pytest python -m pytest tests/ -q
 
   buildme-tests:
     name: buildme pipeline tests

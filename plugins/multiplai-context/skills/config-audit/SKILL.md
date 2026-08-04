@@ -108,7 +108,7 @@ workaround for a model.
    gate — never skip it, even when the audit found nothing to remove):
 
    ```bash
-   uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/config_audit.py" --stamp \
+   uv run --all-packages --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/config_audit.py" --stamp \
      --proposal <exact-proposal-path-from-step-4>
    ```
 
