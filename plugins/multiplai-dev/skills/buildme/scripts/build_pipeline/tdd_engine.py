@@ -1983,10 +1983,12 @@ async def _run_refactor_all(
     returns True, because a refactor must never turn a green build red.
 
     Safety harness, identical in shape to the per-block one: the pending tree
-    is committed first so there is a faithful point to rewind to, the full
-    suite must be green afterwards, and `unchanged_tests_gate` is re-applied
-    with no report — the `TEST CHANGE REQUIRED:` escape hatch does not exist in
-    a refactor window.
+    is proven green and then committed first so there is a faithful point to
+    rewind to (a tree that is red, or that cannot be checkpointed, skips the
+    pass — never a checkpoint of breakage, never a reset over uncommitted
+    work), the full suite must be green afterwards, and `unchanged_tests_gate`
+    is re-applied with no report — the `TEST CHANGE REQUIRED:` escape hatch
+    does not exist in a refactor window.
     """
     if not state.tdd or state.tdd.refactor_all_done:
         return True
@@ -2007,13 +2009,57 @@ async def _run_refactor_all(
         state.checkpoint(config.state_file_path())
         return True
 
+    # Prove the tree green BEFORE checkpointing it as the rewind baseline.
+    # Every block ended green, so a red suite here means the tree holds
+    # unverified edits — a prior whole-change pass that crashed after its
+    # agent wrote files (resume re-enters with refactor_all_done still
+    # False), or a review fix that broke the suite after the last
+    # integration run. Committing them would bake the breakage into the
+    # exact commit a failed verification later restores, and nothing
+    # downstream re-runs the suite (the final review is LLM-graded). Whose
+    # edits are dirty is unknowable from here, and unknown is never safe to
+    # destroy — so: no reset, no checkpoint, no refactor pass.
+    pre_gate = integration_gate(config.test_command, config.project_dir)
+    if not pre_gate.passed:
+        log.error(
+            "SKIP phase=REFACTOR_ALL reason=suite-red-before-refactor: %s — "
+            "the tree holds unverified edits (crashed refactor pass or a "
+            "breaking review fix); NOT checkpointing them as a rewind "
+            "baseline. The suite is RED — review before shipping.",
+            pre_gate.reason,
+        )
+        progress.log_phase("REFACTOR_ALL",
+                           f"SKIPPED — suite red before refactor: {pre_gate.reason}")
+        state.tdd.refactor_all_done = True
+        state.checkpoint(config.state_file_path())
+        return True
+
     # Review-fix edits are left uncommitted by the block loop, so "the last
     # commit" is only a faithful pre-refactor snapshot once they are in it.
     # Without this, discarding a failed refactor would take the build's own
     # review fixes with it.
-    _git_commit_tree(config, "chore: checkpoint before whole-change refactor",
-                     "pre-refactor checkpoint")
-    rewind_to = _git_rev_parse_head(config)
+    rewind_to = _git_commit_tree(config, "chore: checkpoint before whole-change refactor",
+                                 "pre-refactor checkpoint")
+    if rewind_to is None and _git_tree_clean(config):
+        # Nothing to commit and the tree is clean: HEAD already holds
+        # everything, so it is a faithful snapshot (same guard as the
+        # per-block rewind).
+        rewind_to = _git_rev_parse_head(config)
+    if rewind_to is None:
+        # `_git_commit_tree` returns None for "commit failed" too (failing
+        # hook, missing identity) — with work still in the tree, possibly all
+        # of it staged. Trusting HEAD then would let a failed verification
+        # `reset --hard` + `clean -fd` over the uncommitted work and destroy
+        # it. The rewind target is unknown, and unknown is never safe to
+        # reset — skip the pass rather than run an agent with no way back.
+        log.warning(
+            "SKIP phase=REFACTOR_ALL reason=no-rewind-target: pre-refactor "
+            "checkpoint commit failed with uncommitted work in the tree")
+        progress.log_phase("REFACTOR_ALL",
+                           "SKIPPED — could not checkpoint the pending tree")
+        state.tdd.refactor_all_done = True
+        state.checkpoint(config.state_file_path())
+        return True
     before = _snapshot_all_test_files(config, state)
 
     log.info("START phase=REFACTOR_ALL diff_chars=%d", len(diff))
@@ -2056,8 +2102,13 @@ async def _run_refactor_all(
             log.warning("DONE phase=REFACTOR_ALL result=discarded reason=%s", detail)
             progress.log_phase("REFACTOR_ALL", f"REVERTED — {detail}")
         else:
-            log.warning("DONE phase=REFACTOR_ALL result=unverified-and-not-discarded "
-                        "reason=%s", detail)
+            # The refactor's edits failed verification AND could not be
+            # discarded — they stay in the tree, and nothing downstream
+            # re-runs the suite (the final review is LLM-graded). Say so
+            # loudly rather than let the build reach COMPLETE looking clean.
+            log.error("DONE phase=REFACTOR_ALL result=unverified-and-not-discarded "
+                      "reason=%s — UNVERIFIED refactor edits remain in the tree "
+                      "and will ship unless reviewed", detail)
             progress.log_phase("REFACTOR_ALL", f"REVERT FAILED — {detail}")
     else:
         sha = _git_commit_tree(config, "refactor: simplify across blocks",

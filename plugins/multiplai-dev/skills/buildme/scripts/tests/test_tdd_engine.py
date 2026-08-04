@@ -2,6 +2,7 @@
 
 import os
 import re
+import sys
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2785,6 +2786,17 @@ class TestAdjudicateReviewFindings:
         assert out.findings == []
 
 
+# A suite command that actually inspects the tree: green until "broken"
+# appears in module.py. A static "false" can no longer stand in for "the
+# refactor broke the suite" — `_run_refactor_all` proves the tree green
+# BEFORE checkpointing it, so a command that is red regardless of tree
+# content trips that pre-gate and the agent never runs.
+SUITE_RED_IF_BROKEN = (
+    f"{sys.executable} -c "
+    "\"import sys; sys.exit('broken' in open('module.py').read())\""
+)
+
+
 class TestWholeChangeRefactor:
     """One conservative pass over the finished change, between the last block
     and the final review — with the same harness as the per-block step."""
@@ -2864,9 +2876,9 @@ class TestWholeChangeRefactor:
     @pytest.mark.asyncio
     async def test_red_suite_reverts_and_the_build_continues(self, setup):
         config, state, progress = setup
-        config.test_command = "false"
+        config.test_command = SUITE_RED_IF_BROKEN  # green now, red after the agent
         agent = self._agent_writing(
-            config.project_dir, "module.py", "def add(a, b):\n    return a - b\n")
+            config.project_dir, "module.py", "def add(a, b):\n    return a - b  # broken\n")
 
         with patch("build_pipeline.tdd_engine.run_refactor_all",
                    new_callable=AsyncMock, side_effect=agent):
@@ -2900,17 +2912,74 @@ class TestWholeChangeRefactor:
         checkpointed before the refactor runs, so discarding a failed refactor
         cannot take the build's own fixes with it."""
         config, state, progress = setup
-        config.test_command = "false"
+        config.test_command = SUITE_RED_IF_BROKEN  # green with the fix, red after the agent
         (config.project_dir / "module.py").write_text(
             "def add(a, b):\n    return a + b  # review fix\n")
         agent = self._agent_writing(
-            config.project_dir, "module.py", "def add(a, b):\n    return a - b\n")
+            config.project_dir, "module.py", "def add(a, b):\n    return a - b  # broken\n")
 
         with patch("build_pipeline.tdd_engine.run_refactor_all",
                    new_callable=AsyncMock, side_effect=agent):
             assert await _run_refactor_all(config, state, progress) is True
 
         assert "# review fix" in (config.project_dir / "module.py").read_text()
+
+    @pytest.mark.asyncio
+    async def test_failed_checkpoint_commit_with_dirty_tree_skips_the_pass(self, setup):
+        """`_git_commit_tree` returns None for "commit failed" too (failing
+        hook, missing identity) — with the dirty work possibly all staged.
+        HEAD is then NOT a faithful snapshot, and trusting it as the rewind
+        target would let a later failed verification reset over the
+        uncommitted review fixes. No trustworthy rewind target → no refactor
+        pass, and nothing is reset."""
+        config, state, progress = setup
+        (config.project_dir / "module.py").write_text(
+            "def add(a, b):\n    return a + b  # review fix\n")
+        hook = config.project_dir / ".git" / "hooks" / "pre-commit"
+        hook.parent.mkdir(exist_ok=True)
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        head_before = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=config.project_dir,
+            capture_output=True, text=True, check=True).stdout.strip()
+
+        with patch("build_pipeline.tdd_engine.run_refactor_all",
+                   new_callable=AsyncMock) as agent:
+            assert await _run_refactor_all(config, state, progress) is True
+
+        agent.assert_not_awaited()
+        # The uncommitted review fix survived, and HEAD never moved.
+        assert "# review fix" in (config.project_dir / "module.py").read_text()
+        head_after = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=config.project_dir,
+            capture_output=True, text=True, check=True).stdout.strip()
+        assert head_after == head_before
+        assert state.tdd.refactor_all_done is True
+
+    @pytest.mark.asyncio
+    async def test_red_tree_on_resume_is_not_checkpointed_as_a_baseline(self, setup):
+        """Crash simulation: a prior pass's agent edited files, the process
+        died before verification, and resume re-enters with refactor_all_done
+        still False. The suite is red with the partial edits in place — they
+        must not be swept into the checkpoint commit (the rewind baseline),
+        no agent may run on top of them, and they must not be reset over
+        either (whose edits are dirty is unknowable)."""
+        config, state, progress = setup
+        config.test_command = SUITE_RED_IF_BROKEN
+        (config.project_dir / "module.py").write_text(
+            "def add(a, b):\n    return a - b  # broken, half-refactored\n")
+        subjects_before = _git_log_subjects(config.project_dir)
+
+        with patch("build_pipeline.tdd_engine.run_refactor_all",
+                   new_callable=AsyncMock) as agent:
+            assert await _run_refactor_all(config, state, progress) is True
+
+        agent.assert_not_awaited()
+        # No checkpoint (or any other) commit swept the breakage in...
+        assert _git_log_subjects(config.project_dir) == subjects_before
+        # ...and the dirty edits were not destroyed either.
+        assert "half-refactored" in (config.project_dir / "module.py").read_text()
+        assert state.tdd.refactor_all_done is True
 
     @pytest.mark.asyncio
     async def test_already_done_is_not_re_run_on_resume(self, setup):
