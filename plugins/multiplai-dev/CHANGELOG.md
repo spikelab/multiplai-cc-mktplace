@@ -71,6 +71,21 @@ release dates recorded at the time, not derived from a tag.
   re-reads the state after spec generation, the same way it already did after
   the TDD phase.
 
+- **The build no longer pays for a design audit whose answer it already has.**
+  A full build reaches the audit stage twice — once inside spec generation,
+  once from the orchestrator's own `DESIGN_AUDIT` phase — and the second
+  arrival used to re-read all four artifacts through the model just to
+  rediscover that the regeneration had already happened. It now checks the
+  checkpoint *before* calling the model, so the second arrival is free. On a
+  build whose audit found nothing actionable, this removes a whole audit call
+  that previously produced only a log line.
+
+- **The phase pointer can no longer move backwards after spec generation.**
+  Re-reading the state (above) also picked up a pointer already sitting at
+  `design_audit`, which the orchestrator then reset to `spec_generation`. The
+  advance is now guarded, so an interrupted build resumes at the phase it
+  actually reached rather than at one it had already finished.
+
 ## [0.5.4] - 2026-07-30
 
 ### Security

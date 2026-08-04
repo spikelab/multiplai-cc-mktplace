@@ -614,7 +614,9 @@ async def run_design_audit_stage(
 
     This is the ONE place the design audit's outcome is acted on; both callers
     (``run_spec_generator`` and the orchestrator's DESIGN_AUDIT phase) go
-    through it, so the audit cannot regenerate twice in one build.
+    through it, so the audit cannot regenerate twice in one build. The second
+    caller to arrive costs nothing at all — ``spec_gen.design_audit_done`` is
+    checked before the audit call, not after it.
 
     Shape (deliberately identical to ``apply_prototype_findings`` and
     ``_audit_tasks_shape``): critical/major gaps drive **one** regeneration
@@ -628,9 +630,24 @@ async def run_design_audit_stage(
     artifacts stand. Returns the first-pass gaps (what the audit found on the
     artifacts as generated); the re-check reports its own remaining count.
     """
+    if state.spec_gen is None:
+        state.spec_gen = SpecGenState()
+    if state.spec_gen.design_audit_done:
+        # The stage already ran to completion in this build (or before a
+        # resume). Checked BEFORE the audit call, not after: a full build
+        # reaches this function twice — once inside run_spec_generator, once in
+        # the orchestrator's DESIGN_AUDIT phase — and the audit reads all four
+        # artifacts, so re-running it to discover there is nothing left to do
+        # is a whole LLM call spent on a log line.
+        log.info("SKIP phase=DESIGN_AUDIT reason=recorded-complete-in-state")
+        print("PHASE: design_audit_skipped — already run for this build")
+        return []
+
     try:
         gaps = await _run_audit(change_dir, config)
     except Exception as audit_err:
+        # Deliberately NOT recorded as done: an LLM failure is a reason to try
+        # again (the second call site, or a resume), unlike a completed audit.
         log.warning("Design audit LLM call failed (non-fatal): %s", audit_err)
         print(f"PHASE: design_audit_skipped — {audit_err}")
         return []
@@ -639,15 +656,15 @@ async def run_design_audit_stage(
 
     findings_text = design_audit_findings_text(gaps)
     if not findings_text:
+        _mark_design_audit_done(state, state_path)
         return gaps
 
-    if state.spec_gen is None:
-        state.spec_gen = SpecGenState()
     if state.spec_gen.design_audit_regen_done:
         # A resume, or the second of the two call sites in the same build: the
         # documents already absorbed this critique once. Report only.
         log.info("SKIP phase=DESIGN_AUDIT_FEEDBACK reason=recorded-complete-in-state")
         print("PHASE: design_audit_feedback_skipped — regeneration already applied")
+        _mark_design_audit_done(state, state_path)
         return gaps
 
     regenerated = await _apply_design_audit_findings(change_dir, config, findings_text)
@@ -658,7 +675,22 @@ async def run_design_audit_stage(
 
     if regenerated:
         await _reaudit_after_design_feedback(change_dir, config)
+    _mark_design_audit_done(state, state_path)
     return gaps
+
+
+def _mark_design_audit_done(state: BuildState, state_path: Path) -> None:
+    """Record that the audit stage ran to completion, and checkpoint it.
+
+    Separate from ``design_audit_regen_done``: an audit that found nothing
+    actionable never regenerates, so the regen flag alone cannot tell the
+    second call site "there is nothing here for you" — it would re-audit to
+    rediscover that. This flag is the record that the *stage* is spent.
+    """
+    if state.spec_gen is None:
+        state.spec_gen = SpecGenState()
+    state.spec_gen.design_audit_done = True
+    state.checkpoint(state_path)
 
 
 def _log_design_audit_gaps(gaps: list[dict]) -> None:

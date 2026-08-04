@@ -147,7 +147,16 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             # lost. Same reason the TDD phase reloads.
             if state_path.exists():
                 state = BuildState.load(state_path)
-            state.advance_to(BuildPhase.SPEC_GENERATION, state_path)
+            # Only ever forwards. The reloaded copy may already sit at a LATER
+            # phase than this one — run_spec_generator advances to DESIGN_AUDIT
+            # before running its audit stage — and advance_to assigns
+            # unconditionally, so an unguarded call here would rewind the
+            # persisted pointer to SPEC_GENERATION. That re-opens the phases in
+            # between (the DESIGN_AUDIT block below would re-enter and pay
+            # another audit call) and leaves a checkpoint that lies about where
+            # the build is.
+            if not state.is_phase_complete(BuildPhase.SPEC_GENERATION):
+                state.advance_to(BuildPhase.SPEC_GENERATION, state_path)
             # Shaping/planning lands as its own commit so the branch history
             # reads shaping → planning → implementation rather than one lump.
             # No-op when the pipeline does not own a branch (--no-worktree).

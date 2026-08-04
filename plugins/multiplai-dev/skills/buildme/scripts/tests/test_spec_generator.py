@@ -783,6 +783,81 @@ class TestDesignAuditFeedback:
             )
 
         assert mock_gen.await_count == 2  # design + tasks, once — not four calls
+        # ...and the second arrival costs no audit call either: the stage is
+        # recorded as spent, so it returns before reaching the LLM.
+        assert mock_audit.await_count == 2  # audit + re-check, from call one only
+
+    @pytest.mark.asyncio
+    async def test_second_call_site_costs_nothing_when_nothing_was_actionable(
+        self, audit_setup,
+    ):
+        """The regeneration flag alone cannot carry this case: a clean audit
+        never regenerates, so without design_audit_done the second call site
+        would re-run a four-artifact audit to rediscover there is nothing to
+        do."""
+        change_dir, config, state = audit_setup
+
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit", new_callable=AsyncMock) as mock_audit, \
+             patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen:
+            mock_audit.return_value = []
+
+            await run_design_audit_stage(
+                change_dir, config, state, config.state_file_path(),
+            )
+            assert state.spec_gen.design_audit_done is True
+            gaps = await run_design_audit_stage(
+                change_dir, config, state, config.state_file_path(),
+            )
+
+        assert gaps == []
+        assert mock_audit.await_count == 1  # not two
+        mock_gen.assert_not_awaited()
+        assert state.spec_gen.design_audit_regen_done is False
+
+    @pytest.mark.asyncio
+    async def test_completion_survives_a_reload(self, audit_setup):
+        """The orchestrator reloads the state from disk between the two call
+        sites, so the flag has to be on the checkpoint, not just in memory."""
+        change_dir, config, state = audit_setup
+        state_path = config.state_file_path()
+
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   new_callable=AsyncMock) as mock_audit:
+            mock_audit.return_value = []
+            await run_design_audit_stage(change_dir, config, state, state_path)
+
+            reloaded = BuildState.load(state_path)
+            assert reloaded.spec_gen.design_audit_done is True
+            await run_design_audit_stage(change_dir, config, reloaded, state_path)
+
+        assert mock_audit.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_failed_audit_is_not_recorded_as_done(self, audit_setup):
+        """An LLM failure is a reason to try again — unlike a completed audit."""
+        change_dir, config, state = audit_setup
+
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   new_callable=AsyncMock) as mock_audit:
+            mock_audit.side_effect = [RuntimeError("LLM down"), []]
+
+            await run_design_audit_stage(
+                change_dir, config, state, config.state_file_path(),
+            )
+            assert state.spec_gen.design_audit_done is False
+            await run_design_audit_stage(
+                change_dir, config, state, config.state_file_path(),
+            )
+
+        assert mock_audit.await_count == 2  # the retry really happened
+        assert state.spec_gen.design_audit_done is True
+
+    def test_old_checkpoint_without_done_flag_defaults_to_not_done(self, audit_setup):
+        _, _, state = audit_setup
+        assert SpecGenState().design_audit_done is False
+        raw = state.model_dump()
+        del raw["spec_gen"]["design_audit_done"]
+        assert BuildState.model_validate(raw).spec_gen.design_audit_done is False
 
     def test_findings_text_carries_severity_category_and_fix(self):
         text = design_audit_findings_text([_CRITICAL_GAP, _MINOR_GAP])

@@ -46,6 +46,13 @@ class SpecGenState(BaseModel):
     # regenerate a second time. Old checkpoints default to False (the pass has
     # not run, so running it once is correct).
     design_audit_regen_done: bool = False
+    # The audit stage as a whole (audit → optional regeneration → optional
+    # re-check) has run to completion. Distinct from the flag above, which only
+    # records the regeneration: an audit that finds nothing actionable never
+    # regenerates, so without this the second call site would re-run a
+    # four-artifact audit purely to rediscover that there is nothing to do.
+    # Old checkpoints default to False (the stage has not run).
+    design_audit_done: bool = False
 
 
 class TDDState(BaseModel):
