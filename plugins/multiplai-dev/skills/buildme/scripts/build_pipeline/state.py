@@ -38,6 +38,21 @@ class SpecGenState(BaseModel):
     # tasks.md already exist when the prototype notes are folded back in, so
     # file existence proves nothing. Old checkpoints default to False.
     prototype_done: bool = False
+    # The design audit's single regeneration pass rewrites design.md and
+    # tasks.md, both of which already exist — so, again, file existence proves
+    # nothing and the checkpoint is the only record. It also guards the
+    # one-pass discipline across the TWO call sites that run the audit
+    # (spec_generator and orchestrator): without it a resumed build would
+    # regenerate a second time. Old checkpoints default to False (the pass has
+    # not run, so running it once is correct).
+    design_audit_regen_done: bool = False
+    # The audit stage as a whole (audit → optional regeneration → optional
+    # re-check) has run to completion. Distinct from the flag above, which only
+    # records the regeneration: an audit that finds nothing actionable never
+    # regenerates, so without this the second call site would re-run a
+    # four-artifact audit purely to rediscover that there is nothing to do.
+    # Old checkpoints default to False (the stage has not run).
+    design_audit_done: bool = False
 
 
 class TDDState(BaseModel):

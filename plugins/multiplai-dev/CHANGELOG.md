@@ -21,6 +21,71 @@ release dates recorded at the time, not derived from a tag.
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
 
+## [0.6.0] - 2026-08-03
+
+### Changed
+
+- **`/buildme`'s design audit now fixes the specs it criticises, instead of
+  printing the criticism and building anyway.** Until now the audit ran after
+  spec generation, listed the gaps it found — a spec scenario with no task
+  block, a design decision contradicting a requirement — and the build carried
+  on against the same unchanged documents. You would find the warnings in the
+  log after the fact, next to code built on top of them.
+
+  Every gap the audit rates **critical** or **major** is now handed back to the
+  generator, which rewrites `design.md` and then `tasks.md` once with those
+  findings in front of it. The rewrite lands as its own commit
+  (`docs(specs): regenerate design.md and tasks.md after design audit`), so
+  the branch history shows what the critique changed, and `git diff` on that
+  commit is a readable summary of it.
+
+  The audit then runs one more time, **report-only**, and says in the log
+  whether the critique landed:
+
+  ```
+  PHASE: design_audit_feedback_applied — 2 artifact(s)
+  PHASE: design_audit_recheck — clean
+  ```
+
+  It is deliberately one pass, not a loop. If gaps remain, they are reported
+  and the documents stand — a stubborn gap costs one extra audit call, not an
+  open-ended spec-generation bill, and the review checkpoint is still where you
+  decide. Minor gaps are reported only; they never trigger a rewrite.
+
+- **The design audit also judges the plan, not just its consistency.** It
+  previously cross-referenced the artifacts against each other. It now
+  additionally reports: abstractions no requirement asks for (the factory with
+  one implementation, the config knob nothing reads), task blocks mis-sized for
+  review, design decisions with nothing a test could assert on, and edge cases
+  no scenario covers — missing input, a dependency timing out, a retry after
+  partial completion. Combined with the change above, this is what turns those
+  observations into an actually different plan.
+
+### Fixed
+
+- **A resumed build no longer loses the spec-generation checkpoint.** The
+  orchestrator kept an in-memory copy of the build state while spec generation
+  wrote its own to disk, then overwrote the disk copy — discarding the record
+  of which artifacts and which audits had completed. A resumed build could
+  therefore re-run work that had already succeeded. The orchestrator now
+  re-reads the state after spec generation, the same way it already did after
+  the TDD phase.
+
+- **The build no longer pays for a design audit whose answer it already has.**
+  A full build reaches the audit stage twice — once inside spec generation,
+  once from the orchestrator's own `DESIGN_AUDIT` phase — and the second
+  arrival used to re-read all four artifacts through the model just to
+  rediscover that the regeneration had already happened. It now checks the
+  checkpoint *before* calling the model, so the second arrival is free. On a
+  build whose audit found nothing actionable, this removes a whole audit call
+  that previously produced only a log line.
+
+- **The phase pointer can no longer move backwards after spec generation.**
+  Re-reading the state (above) also picked up a pointer already sitting at
+  `design_audit`, which the orchestrator then reset to `spec_generation`. The
+  advance is now guarded, so an interrupted build resumes at the phase it
+  actually reached rather than at one it had already finished.
+
 ## [0.5.4] - 2026-07-30
 
 ### Security
