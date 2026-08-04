@@ -7,6 +7,10 @@ malformed frontmatter, a SKILL.md pointing at a script that was renamed, or an
 absolute `/Users/spike/...` path baked into a shipped file would all ship
 silently and fail on the installing side, where nobody can debug it.
 
+It also checks dependency declarations — `pyproject.toml` files and PEP 723
+inline metadata — for a claude-agent-sdk pin sitting alongside multiplai-core,
+which quietly opts a consumer out of core's version floor.
+
 Everything here is deterministic and offline: parse, resolve, compare. No LLM,
 no network. The security-flavoured checks live in `scan_skills.py`.
 
@@ -21,6 +25,7 @@ import argparse
 import json
 import re
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -52,6 +57,29 @@ HOST_PATH_EXEMPT_DIRS = {"tests", "test", "references", "docs"}
 # `${CLAUDE_PLUGIN_ROOT}/...` references inside a SKILL.md. Trailing
 # punctuation and closing backticks/quotes are stripped by the caller.
 PLUGIN_ROOT_REF_RE = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}(/[^\s`\"'\)\],;]*)")
+
+# A PEP 723 inline-metadata block: `# /// script` … `# ///`, every line
+# commented. Most scripts here declare their deps this way rather than in a
+# pyproject.toml, so the dependency checks must read both.
+PEP723_RE = re.compile(r"^# /// script\s*$(.*?)^# ///\s*$", re.MULTILINE | re.DOTALL)
+
+# The leading `name[extras]` of a PEP 508 requirement, before any version
+# specifier, `@ url`, or environment marker.
+REQUIREMENT_HEAD_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[([^\]]*)\])?")
+
+# Every LLM call in this repo goes through `multiplai_core.run_agent()`, so
+# multiplai-core's `[sdk]` extra is the single place the claude-agent-sdk
+# version floor belongs — and it is covered by a regression test there
+# (tests/test_pyproject_sdk_floor.py). A consumer that declares the SDK a
+# second time alongside core opts out of that floor without saying so: the
+# resolver unions the two specs, so the local one silently wins whenever it is
+# looser. That is exactly how deep-research resolved 0.1.56 under core's
+# >=0.2.116 floor and raised `Claude Code returned an error result: success`
+# after every full generation. Matching numbers today is not a defence — a
+# future floor bump in core would not reach the duplicate.
+CORE_DIST = "multiplai-core"
+SDK_DIST = "claude-agent-sdk"
+SDK_EXTRA = "sdk"
 
 
 @dataclass
@@ -200,6 +228,99 @@ def check_host_paths(path: Path, f: Findings) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Dependency declarations
+# --------------------------------------------------------------------------- #
+
+def _requirement_head(spec: str) -> tuple[str, set[str]]:
+    """Return (normalised distribution name, extras) for a PEP 508 spec.
+
+    Only the head is parsed — everything from the version specifier, `@ url`
+    or marker onwards is irrelevant to "which distribution is this". Returns
+    ("", set()) for anything unparseable, so a malformed spec is left to the
+    resolver to complain about rather than reported here as a false positive.
+    """
+    m = REQUIREMENT_HEAD_RE.match(spec)
+    if not m:
+        return "", set()
+    name = m.group(1).lower().replace("_", "-")
+    extras = {e.strip().lower() for e in (m.group(2) or "").split(",") if e.strip()}
+    return name, extras
+
+
+def check_sdk_via_core(where: Path, deps: list[str], f: Findings) -> None:
+    """Flag a claude-agent-sdk declaration sitting next to multiplai-core.
+
+    See the CORE_DIST comment above for why the duplicate is the bug even when
+    the two specs currently agree.
+    """
+    core_extras: set[str] | None = None
+    declares_sdk = False
+    for spec in deps:
+        if not isinstance(spec, str):
+            continue
+        name, extras = _requirement_head(spec)
+        if name == CORE_DIST:
+            core_extras = extras if core_extras is None else core_extras | extras
+        elif name == SDK_DIST:
+            declares_sdk = True
+
+    if declares_sdk and core_extras is not None:
+        f.error(where, (
+            f"declares {SDK_DIST} directly alongside {CORE_DIST}; depend on "
+            f"'{CORE_DIST}[{SDK_EXTRA}]' instead so core owns the version floor"
+        ))
+
+
+def _pep723_deps(text: str) -> list[str] | None:
+    """Dependencies from a script's PEP 723 block, or None if it has none."""
+    m = PEP723_RE.search(text)
+    if not m:
+        return None
+    body = "\n".join(
+        line[2:] if line.startswith("# ") else line.lstrip("#")
+        for line in m.group(1).splitlines()
+    )
+    try:
+        data = tomllib.loads(body)
+    except tomllib.TOMLDecodeError:
+        return None  # malformed metadata is uv's error to report, not ours
+    deps = data.get("dependencies")
+    return deps if isinstance(deps, list) else None
+
+
+def check_dependency_files(repo: Path, f: Findings) -> None:
+    plugins_dir = repo / "plugins"
+    for path in sorted(plugins_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        if {"__pycache__", ".venv"}.intersection(path.parts):
+            continue
+        # Test fixtures build synthetic manifests on purpose.
+        if HOST_PATH_EXEMPT_DIRS.intersection(path.parts):
+            continue
+
+        if path.name == "pyproject.toml":
+            try:
+                data = tomllib.loads(path.read_text(encoding="utf-8"))
+            except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError):
+                continue
+            project = data.get("project", {})
+            deps = list(project.get("dependencies", []) or [])
+            for extra_deps in (project.get("optional-dependencies", {}) or {}).values():
+                deps.extend(extra_deps or [])
+            check_sdk_via_core(path, deps, f)
+
+        elif path.suffix == ".py":
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            deps = _pep723_deps(text)
+            if deps is not None:
+                check_sdk_via_core(path, deps, f)
+
+
+# --------------------------------------------------------------------------- #
 # marketplace.json
 # --------------------------------------------------------------------------- #
 
@@ -246,6 +367,7 @@ def lint(repo: Path) -> Findings:
         return f
 
     check_marketplace(repo, f)
+    check_dependency_files(repo, f)
 
     for skill_md in sorted(plugins_dir.glob("*/skills/*/SKILL.md")):
         plugin_dir = skill_md.parent.parent.parent

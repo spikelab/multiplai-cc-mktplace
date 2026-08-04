@@ -4,11 +4,14 @@ version = "0.1.0"
 description = "Deterministic build pipeline for the buildme skill ecosystem"
 requires-python = ">=3.12"
 dependencies = [
-    "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.11.0",
-    # Floor + cap: 0.1.x crashed at import inside hooks (same bug class as
-    # the dream 0.1.x crash); 0.2.116 is the verified floor, <0.3 guards
-    # against silent breaking majors.
-    "claude-agent-sdk>=0.2.116,<0.3",
+    # The [sdk] extra, not a bare pin alongside it: every LLM call here goes
+    # through multiplai_core.run_agent(), so core owns the version floor and
+    # restating it here only creates a second copy that can drift. Core's
+    # extra is >=0.2.116,<0.3 and is covered by a regression test there; a
+    # hand-written duplicate is not, so a future floor bump in core would
+    # silently fail to reach this pipeline. Nothing injects the SDK at
+    # runtime, which is why asking for [sdk] is required, not optional.
+    "multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.11.0",
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",

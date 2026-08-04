@@ -63,8 +63,7 @@ name = "build-pipeline"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "claude-agent-sdk" },
-    { name = "multiplai-core" },
+    { name = "multiplai-core", extra = ["sdk"] },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -78,8 +77,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "claude-agent-sdk", specifier = ">=0.2.116,<0.3" },
-    { name = "multiplai-core", git = "https://github.com/spikelab/multiplai-core?rev=v0.11.0" },
+    { name = "multiplai-core", extras = ["sdk"], git = "https://github.com/spikelab/multiplai-core?rev=v0.11.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
@@ -452,6 +450,11 @@ source = { git = "https://github.com/spikelab/multiplai-core?rev=v0.11.0#e62a8ee
 dependencies = [
     { name = "anthropic" },
     { name = "pyyaml" },
+]
+
+[package.optional-dependencies]
+sdk = [
+    { name = "claude-agent-sdk" },
 ]
 
 [[package]]
