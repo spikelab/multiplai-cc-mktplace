@@ -48,6 +48,20 @@ The SKILL.md wrapper invokes the `/interviewer` skill to surface requirements, c
 
 Unless `--skip-research`, the wrapper invokes `/deep-research` with topics from the interview. Research output is passed to the pipeline for spec generation.
 
+### Phase 2.5: Codebase Analysis
+
+Before any spec is written, three explore agents analyze the existing repo in
+parallel — module structure and entry points; naming, error-handling and test
+patterns; dependencies, config loading and integration points. Their findings
+are merged into `specs/changes/<name>/codebase-analysis.md`, which is threaded
+into the `design.md` prompt so the design extends the modules the project
+already has instead of proposing a parallel structure beside them. At the
+review checkpoint the pipeline prints `REVIEW:CODEBASE_ANALYSIS:<path>`.
+
+The phase is skipped, with the reason logged, when the project has no source
+files yet and for `--only` runs (which generate no specs). A failure is never
+a build failure — the design falls back to treating the project as new.
+
 ### Phase 3: Spec Generation
 
 The pipeline generates artifacts in dependency order:
@@ -90,13 +104,34 @@ that documented edge cases arrive as tests. Controls: `--skip-explainers`,
 
 ### Phase 4: Design Audit
 
-A single adversarial audit call reviews the generated artifacts (proposal, specs,
-design, tasks) and returns a list of gaps — missing edge cases and design
-inconsistencies — which are surfaced as warnings before the build.
+An adversarial audit call reviews the generated artifacts (proposal, specs,
+design, tasks) and returns a list of gaps. It checks two things: internal
+consistency (spec↔task alignment, design coherence, placeholders) and **plan
+quality** — abstractions no requirement asks for, blocks that are mis-sized for
+review, decisions with nothing a test can assert on, and edge cases no scenario
+covers.
 
-> Note: a separate multi-agent codebase-analysis step and an implementation
-> feasibility gate exist in the code (`run_codebase_analysis`, `feasibility_gate`)
-> but are **not currently wired into the pipeline**.
+The gaps are not just logged. Every gap at **critical** or **major** severity is
+fed back into **one** regeneration pass of `design.md` and then `tasks.md`, which
+is committed as its own `docs(specs): regenerate design.md and tasks.md after
+design audit`. The audit then runs once more, **report-only**, so the build log
+records whether the critique landed:
+
+```
+PHASE: design_audit_feedback_applied — 2 artifact(s)
+PHASE: design_audit_recheck — clean
+```
+
+There is no loop. Documents that still have gaps after one pass stand as they
+are — a stubborn gap costs one extra audit call, not an unbounded number. Minor
+gaps are reported and left to the review checkpoint. The pass is recorded in the
+checkpoint (`spec_gen.design_audit_regen_done`), so a resumed build audits and
+reports but never regenerates a second time.
+
+> Note: an implementation feasibility gate exists in the code
+> (`feasibility_gate`) but is **not currently wired into the pipeline**. The
+> multi-agent codebase-analysis step (`run_codebase_analysis`) **is** wired —
+> see [Phase 2.5](#phase-25-codebase-analysis).
 
 ### Phase 5: Prototype
 

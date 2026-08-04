@@ -57,28 +57,14 @@ async def run_spec_generator(config, args=None) -> int:
         await _generate_all_artifacts(cm, change_dir, config, state)
         log.info("DONE phase=ARTIFACT_GENERATION")
 
-        # Run design audit (best-effort — failures don't block the build)
+        # Run design audit and fold its findings back into the specs
+        # (best-effort — failures don't block the build)
         log.info("START phase=DESIGN_AUDIT")
         print("PHASE: design_audit")
         state.advance_to(BuildPhase.DESIGN_AUDIT, config.state_file_path())
-        try:
-            gaps = await _run_audit(change_dir, config)
-        except Exception as audit_err:
-            log.warning("Design audit LLM call failed (non-fatal): %s", audit_err)
-            print(f"PHASE: design_audit_skipped — {audit_err}")
-            gaps = []
-
-        if gaps:
-            critical_gaps = [g for g in gaps if g.get("severity") == "critical"]
-            if critical_gaps:
-                log.warning("DONE phase=DESIGN_AUDIT gaps=%d critical=%d", len(gaps), len(critical_gaps))
-                for gap in critical_gaps:
-                    log.warning("  gap category=%s desc=%s", gap.get("category", "?"), gap.get("description", "?"))
-                print(f"PHASE: design_audit_warnings — {len(critical_gaps)} critical gaps")
-            else:
-                log.info("DONE phase=DESIGN_AUDIT gaps=%d critical=0", len(gaps))
-        else:
-            log.info("DONE phase=DESIGN_AUDIT gaps=0")
+        await run_design_audit_stage(
+            change_dir, config, state, config.state_file_path(),
+        )
 
         print("PHASE: spec_generation_complete")
         return 0
@@ -571,16 +557,27 @@ async def _audit_tasks_shape(
     log.info("Rewrote artifact after shape audit: %s", output_path)
     # One commit per regeneration pass, so the branch history shows the audit
     # actually changed something. No-op unless the pipeline owns a branch.
+    _commit_change_dir(
+        config, change_dir, "docs(specs): regenerate tasks.md after shape audit",
+    )
+    print(f"PHASE: tasks_regenerated_after_shape_audit — {len(findings)} findings")
+
+
+def _commit_change_dir(config, change_dir: Path, message: str) -> None:
+    """Commit the change directory after a regeneration pass.
+
+    No-op unless the pipeline owns a branch (``--no-worktree`` stays
+    byte-identical to the pre-git-lifecycle pipeline), and no-op when the
+    change directory is not under the project — the commit is explicit-path.
+    """
     from . import git_ops
+
     try:
         rel = str(change_dir.relative_to(config.project_dir))
-    except ValueError:
-        rel = ""
+    except (ValueError, TypeError):
+        return
     if rel:
-        git_ops.commit_stage(
-            config, "docs(specs): regenerate tasks.md after shape audit", [rel],
-        )
-    print(f"PHASE: tasks_regenerated_after_shape_audit — {len(findings)} findings")
+        git_ops.commit_stage(config, message, [rel])
 
 
 async def _generate_rubric(
@@ -599,6 +596,241 @@ async def _run_audit(change_dir: Path, config) -> list[dict]:
     """Run design audit on generated artifacts."""
     from .llm_steps.spec_steps import run_design_audit
     return await run_design_audit(change_dir, config)
+
+
+# Severities that earn a regeneration pass. A minor gap is a clarification,
+# not a reason to spend two more spec-generation calls.
+DESIGN_AUDIT_ACTIONABLE = ("critical", "major")
+
+
+def design_audit_findings_text(gaps: list[dict]) -> str:
+    """The findings block injected into the single design/tasks regeneration.
+
+    Empty string when the audit surfaced nothing at critical or major severity
+    — the caller reads that as "report only, nothing to regenerate".
+    """
+    actionable = [
+        g for g in gaps or []
+        if isinstance(g, dict) and g.get("severity") in DESIGN_AUDIT_ACTIONABLE
+    ]
+    if not actionable:
+        return ""
+    return "\n".join(
+        f"- [{g.get('severity', '?')}] ({g.get('category', 'design-audit')}) "
+        f"{g.get('description', '')}"
+        + (f" Fix: {g['suggestion']}" if g.get("suggestion") else "")
+        for g in actionable
+    )
+
+
+async def run_design_audit_stage(
+    change_dir: Path,
+    config,
+    state: BuildState,
+    state_path: Path,
+) -> list[dict]:
+    """Run the design audit and fold its findings back into design.md/tasks.md.
+
+    This is the ONE place the design audit's outcome is acted on; both callers
+    (``run_spec_generator`` and the orchestrator's DESIGN_AUDIT phase) go
+    through it, so the audit cannot regenerate twice in one build. The second
+    caller to arrive costs nothing at all — ``spec_gen.design_audit_done`` is
+    checked before the audit call, not after it.
+
+    Shape (deliberately identical to ``apply_prototype_findings`` and
+    ``_audit_tasks_shape``): critical/major gaps drive **one** regeneration
+    pass of design.md and then tasks.md, the pass is committed, and the audit
+    is then re-run **report-only** so the build log records whether the
+    critique landed. There is no loop — a document that still has gaps after
+    one pass stands, and costs one extra audit call rather than an unbounded
+    number.
+
+    Never raises: an audit or regeneration failure is logged and the existing
+    artifacts stand. Returns the first-pass gaps (what the audit found on the
+    artifacts as generated); the re-check reports its own remaining count.
+    """
+    if state.spec_gen is None:
+        state.spec_gen = SpecGenState()
+    if state.spec_gen.design_audit_done:
+        # The stage already ran to completion in this build (or before a
+        # resume). Checked BEFORE the audit call, not after: a full build
+        # reaches this function twice — once inside run_spec_generator, once in
+        # the orchestrator's DESIGN_AUDIT phase — and the audit reads all four
+        # artifacts, so re-running it to discover there is nothing left to do
+        # is a whole LLM call spent on a log line.
+        log.info("SKIP phase=DESIGN_AUDIT reason=recorded-complete-in-state")
+        print("PHASE: design_audit_skipped — already run for this build")
+        return []
+
+    try:
+        gaps = await _run_audit(change_dir, config)
+    except Exception as audit_err:
+        # Deliberately NOT recorded as done: an LLM failure is a reason to try
+        # again (the second call site, or a resume), unlike a completed audit.
+        log.warning("Design audit LLM call failed (non-fatal): %s", audit_err)
+        print(f"PHASE: design_audit_skipped — {audit_err}")
+        return []
+
+    _log_design_audit_gaps(gaps)
+
+    findings_text = design_audit_findings_text(gaps)
+    if not findings_text:
+        _mark_design_audit_done(state, state_path)
+        return gaps
+
+    if state.spec_gen.design_audit_regen_done:
+        # A resume, or the second of the two call sites in the same build: the
+        # documents already absorbed this critique once. Report only.
+        log.info("SKIP phase=DESIGN_AUDIT_FEEDBACK reason=recorded-complete-in-state")
+        print("PHASE: design_audit_feedback_skipped — regeneration already applied")
+        _mark_design_audit_done(state, state_path)
+        return gaps
+
+    regenerated = await _apply_design_audit_findings(
+        change_dir, config, state, findings_text,
+    )
+    # Recorded whether or not anything was rewritten: the pass has been spent,
+    # and a failed regeneration is not a reason to try again later.
+    state.spec_gen.design_audit_regen_done = True
+    state.checkpoint(state_path)
+
+    if regenerated:
+        await _reaudit_after_design_feedback(change_dir, config)
+    _mark_design_audit_done(state, state_path)
+    return gaps
+
+
+def _mark_design_audit_done(state: BuildState, state_path: Path) -> None:
+    """Record that the audit stage ran to completion, and checkpoint it.
+
+    Separate from ``design_audit_regen_done``: an audit that found nothing
+    actionable never regenerates, so the regen flag alone cannot tell the
+    second call site "there is nothing here for you" — it would re-audit to
+    rediscover that. This flag is the record that the *stage* is spent.
+    """
+    if state.spec_gen is None:
+        state.spec_gen = SpecGenState()
+    state.spec_gen.design_audit_done = True
+    state.checkpoint(state_path)
+
+
+def _log_design_audit_gaps(gaps: list[dict]) -> None:
+    """Record what the audit found, at the severity it found it."""
+    dict_gaps = [g for g in gaps or [] if isinstance(g, dict)]
+    if not dict_gaps:
+        log.info("DONE phase=DESIGN_AUDIT gaps=0")
+        return
+    critical_gaps = [g for g in dict_gaps if g.get("severity") == "critical"]
+    if critical_gaps:
+        log.warning(
+            "DONE phase=DESIGN_AUDIT gaps=%d critical=%d",
+            len(dict_gaps), len(critical_gaps),
+        )
+        for gap in critical_gaps:
+            log.warning(
+                "  gap category=%s desc=%s",
+                gap.get("category", "?"), gap.get("description", "?"),
+            )
+        print(f"PHASE: design_audit_warnings — {len(critical_gaps)} critical gaps")
+    else:
+        log.info("DONE phase=DESIGN_AUDIT gaps=%d critical=0", len(dict_gaps))
+
+
+async def _apply_design_audit_findings(
+    change_dir: Path, config, state: BuildState, findings_text: str,
+) -> int:
+    """Regenerate design.md and then tasks.md ONCE from the audit's findings.
+
+    Returns the number of artifacts rewritten. design.md goes first so the
+    tasks regeneration reads the corrected design off disk. A regeneration
+    failure is non-fatal — that artifact's first pass stands. The regeneration
+    carries the same codebase analysis the first pass had, so a rewrite cannot
+    quietly drift the design away from the project's existing structure.
+    """
+    from .llm_steps.spec_steps import generate_artifact
+
+    cm = ChangeManager(config.specs_dir)
+    regenerated = 0
+
+    for artifact_id in ("design", "tasks"):
+        context = cm.artifact_context(change_dir, artifact_id)
+        if artifact_id == "tasks":
+            context["unknowns_content"] = read_unknowns(change_dir)
+        output_path = change_dir / context["output_path"]
+        if not output_path.exists():
+            log.warning(
+                "SKIP design-audit feedback for %s — %s does not exist",
+                artifact_id, output_path,
+            )
+            continue
+        try:
+            content = await generate_artifact(
+                artifact_id,
+                context,
+                config,
+                codebase_analysis=read_codebase_analysis(state),
+                reference_docs=config.reference_docs_text(),
+                audit_findings=findings_text,
+            )
+        except Exception as regen_err:  # non-fatal: first pass stands
+            log.warning(
+                "Design-audit regeneration of %s failed (non-fatal): %s",
+                artifact_id, regen_err,
+            )
+            continue
+        output_path.write_text(content)
+        regenerated += 1
+        log.info("Rewrote %s from design audit findings", output_path)
+
+    if regenerated:
+        # One commit per regeneration pass, so the branch history shows the
+        # audit actually changed something.
+        _commit_change_dir(
+            config,
+            change_dir,
+            "docs(specs): regenerate design.md and tasks.md after design audit",
+        )
+    print(f"PHASE: design_audit_feedback_applied — {regenerated} artifact(s)")
+    return regenerated
+
+
+async def _reaudit_after_design_feedback(change_dir: Path, config) -> None:
+    """Re-run the audit once, REPORT-ONLY — did the critique land?
+
+    No third artifact pass follows this, whatever it says; its only job is to
+    put the answer in the build log.
+    """
+    try:
+        remaining = await _run_audit(change_dir, config)
+    except Exception as audit_err:
+        log.warning("Design audit re-check failed (non-fatal): %s", audit_err)
+        print(f"PHASE: design_audit_recheck_skipped — {audit_err}")
+        return
+
+    still_open = [
+        g for g in remaining or []
+        if isinstance(g, dict) and g.get("severity") in DESIGN_AUDIT_ACTIONABLE
+    ]
+    if still_open:
+        log.warning(
+            "Design audit re-check: %d critical/major gap(s) remain after the "
+            "single regeneration pass (accepted, no loop)",
+            len(still_open),
+        )
+        for gap in still_open:
+            log.warning(
+                "  remaining gap severity=%s category=%s desc=%s",
+                gap.get("severity", "?"),
+                gap.get("category", "?"),
+                gap.get("description", "?"),
+            )
+        print(
+            f"PHASE: design_audit_recheck — {len(still_open)} critical/major "
+            "gap(s) remain, accepted after one pass"
+        )
+    else:
+        log.info("Design audit re-check: no critical or major gaps remain")
+        print("PHASE: design_audit_recheck — clean")
 
 
 def _extract_capabilities(proposal_text: str) -> list[str]:

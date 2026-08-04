@@ -537,6 +537,40 @@ class TestPrototypePhase:
         mock_feedback.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_design_audit_phase_regenerates_specs_on_critical_gaps(self, tmp_path):
+        """The orchestrator's DESIGN_AUDIT phase used to log its gaps and move
+        on. It now goes through run_design_audit_stage, so a critical gap
+        rewrites design.md and tasks.md once."""
+        from unittest.mock import AsyncMock, patch
+        from build_pipeline.orchestrator import run_orchestrator
+
+        config = self._config(tmp_path, "audit-loop", "false", self.BACKEND_PROPOSAL)
+        (config.change_dir / "tasks.md").write_text("## 1. Block v1")
+        gap = {
+            "category": "spec-task-alignment",
+            "severity": "critical",
+            "description": "Scenario 'retry exhausts' has no task block",
+            "suggestion": "Add a block for the exhausted-retry path",
+        }
+
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   new_callable=AsyncMock) as mock_audit, \
+                patch("build_pipeline.llm_steps.spec_steps.generate_artifact",
+                      new_callable=AsyncMock) as mock_gen:
+            mock_audit.side_effect = [[gap], []]
+            mock_gen.side_effect = ["## Decisions\nv2", "## 1. Block v2"]
+            result = await run_orchestrator(config, self._args(tmp_path, "audit-loop"))
+
+        assert result == 0
+        assert mock_gen.await_count == 2
+        assert [c.args[0] for c in mock_gen.call_args_list] == ["design", "tasks"]
+        assert "retry exhausts" in mock_gen.call_args_list[0].kwargs["audit_findings"]
+        # One report-only re-audit after the pass.
+        assert mock_audit.await_count == 2
+        assert (config.change_dir / "design.md").read_text() == "## Decisions\nv2"
+        assert (config.change_dir / "tasks.md").read_text() == "## 1. Block v2"
+
+    @pytest.mark.asyncio
     async def test_prototype_failure_does_not_fail_the_build(self, tmp_path):
         from unittest.mock import AsyncMock, patch
         from build_pipeline.models import GateResult
@@ -623,6 +657,92 @@ class TestPrototypeDecision:
         should, reason = prototype_decision(config)
         assert should is True
         assert reason.startswith("auto:")
+
+
+class TestSpecGenerationReloadOnlyMovesForward:
+    """The orchestrator reloads the state run_spec_generator checkpointed. That
+    copy can already sit at a LATER phase than SPEC_GENERATION, so the advance
+    that follows has to be guarded — advance_to assigns unconditionally, and an
+    unguarded call rewinds the persisted pointer, re-opening the phases in
+    between."""
+
+    @staticmethod
+    def _config(tmp_path):
+        config = BuildConfig(
+            project_dir=tmp_path, change_name="reload", mode="scratch",
+            auto=True, spec_only=True, skip_research=True,
+        )
+        config.specs_dir = tmp_path / "specs"
+        cm = ChangeManager(config.specs_dir)
+        cm.init_specs()
+        cm.create_change("reload")
+        (config.change_dir / "proposal.md").write_text("## Why\nBecause.")
+        (config.change_dir / "design.md").write_text("## Decisions\nNone.")
+        (config.change_dir / "tasks.md").write_text("## 1. Block")
+        state = BuildState(
+            change_name="reload", mode="scratch", tier="advanced",
+            phase=BuildPhase.RESEARCH,
+            state_file=str(config.state_file_path()),
+        )
+        state.checkpoint(config.state_file_path())
+        return config
+
+    @staticmethod
+    def _args(tmp_path):
+        import argparse
+        return argparse.Namespace(
+            mode="scratch", change="reload", project_dir=str(tmp_path),
+            auto=True, spec_only=True, skip_research=True,
+            interview_summary="", research_path="", context_files=[],
+            session_id="",
+        )
+
+    @pytest.mark.asyncio
+    async def test_phase_is_not_rewound_and_the_audit_is_not_re_run(self, tmp_path):
+        from unittest.mock import AsyncMock, patch
+        from build_pipeline.orchestrator import run_orchestrator
+        from build_pipeline.state import SpecGenState
+
+        config = self._config(tmp_path)
+        state_path = config.state_file_path()
+
+        async def fake_spec_generator(cfg, args=None):
+            """What the real one leaves behind: the pointer already at
+            DESIGN_AUDIT, and the audit stage recorded as spent."""
+            s = BuildState.load(state_path)
+            s.spec_gen = SpecGenState(design_audit_done=True)
+            s.advance_to(BuildPhase.DESIGN_AUDIT, state_path)
+            return 0
+
+        # A successful spec-only run deletes its state file, so the pointer is
+        # observed as it is written rather than read back at the end.
+        advanced: list[BuildPhase] = []
+        real_advance = BuildState.advance_to
+
+        def recording_advance(self, phase, path=None):
+            advanced.append(phase)
+            return real_advance(self, phase, path)
+
+        with patch("build_pipeline.spec_generator.run_spec_generator",
+                   side_effect=fake_spec_generator), \
+                patch("build_pipeline.state.BuildState.advance_to",
+                      recording_advance), \
+                patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                      new_callable=AsyncMock) as mock_audit:
+            result = await run_orchestrator(config, self._args(tmp_path))
+
+        assert result == 0
+        # The audit stage was already spent, so the orchestrator's DESIGN_AUDIT
+        # phase costs no LLM call at all — not even a report-only one.
+        mock_audit.assert_not_awaited()
+        # The pointer never went backwards: nothing re-advances to
+        # SPEC_GENERATION after the spec generator left it at DESIGN_AUDIT.
+        order = list(BuildPhase)
+        assert BuildPhase.DESIGN_AUDIT in advanced
+        after = advanced[advanced.index(BuildPhase.DESIGN_AUDIT) + 1:]
+        assert all(
+            order.index(p) >= order.index(BuildPhase.DESIGN_AUDIT) for p in after
+        ), f"phase pointer rewound: {[p.value for p in advanced]}"
 
 
 class TestRespecPhaseWiring:

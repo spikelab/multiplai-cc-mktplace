@@ -42,9 +42,10 @@ logger = logging.getLogger(__name__)
 # SessionStart (per the hub input contract).
 GC_AFTER_DAYS = 7
 
-# Fallback age-out for entries that never saw a SessionEnd: containers killed
-# without the hook firing (docker kill, reboot, OOM — routine with ephemeral
-# containers) would otherwise accumulate forever as ghost "idle" sessions.
+# Fallback age-out for entries that never saw a SessionEnd. Only a clean quit
+# fires that hook; a container killed by a reboot, a closed terminal, `docker
+# kill` or the OOM killer records nothing at all, and without this those would
+# accumulate forever as ghost "idle" sessions.
 # Generous window: an idle session with no event at all for this long is dead.
 GC_LIVE_AFTER_DAYS = 30
 
@@ -407,7 +408,10 @@ def _sweep_orphans(rdir: Path, cutoff: datetime) -> int:
     under the lock before unlinking.
     """
     removed = 0
-    for orphan in [*rdir.glob("*.adopt"), *rdir.glob("*.lock")]:
+    for orphan in [
+        *rdir.glob("*.adopt"),
+        *rdir.glob("*.lock"),
+    ]:
         try:
             if orphan.with_suffix(".json").exists():
                 continue
@@ -441,12 +445,12 @@ def gc_stale(
     """Delete registry entries whose session ended more than *days* ago.
 
     Entries whose last event is anything other than ``end`` age out after
-    *live_days* instead — sessions whose container died without a SessionEnd
-    (docker kill, reboot, OOM) would otherwise linger forever as adoptable
-    ghosts. Unparseable entries older than the *days* window (by mtime) are
-    removed too — they can never become readable again and would otherwise
-    accumulate forever. A removed entry's orphaned ``.adopt`` marker goes
-    with it.
+    *live_days* instead — a session killed without firing ``SessionEnd``
+    would otherwise linger forever as an adoptable ghost, and nothing can
+    tell that apart from a session that is merely quiet.
+    Unparseable entries older than the *days* window (by mtime) are removed
+    too — they can never become readable again and would otherwise accumulate
+    forever. A removed entry's orphaned ``.adopt`` marker goes with it.
 
     **Entries with ``disposition: parked`` are never collected**, at any age.
     Parking a session is the user saying "I am coming back to this", and the

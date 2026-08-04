@@ -705,6 +705,285 @@ bites: `CLAUDE_PLUGIN_OPTION_workspace_dir` (or `WORKSPACE`), without
 which the diary silently lands in `~/.multiplai/` instead of your
 workspace — `--data-dir` fixes the queue's location, not the diary's.
 
+### The life of a session
+
+*One session from launch to the deletion of its last trace, with every
+fork marked.*
+
+The parts are documented separately above — checkpointing, extraction,
+the registry. This is the single pass through all of them, in the order
+things actually happen. No new machinery appears here; it is the map.
+
+```
+  launch ─► SessionStart ─►┌─────────────────────┐─► it stops ─► drain ─► extraction ─► GC
+                           │  prompt ─► turn ─►  │      │           │           │
+              rebuild ◄────┤  Stop / Notification│      │           │           │
+                 ▲         └─────────────────────┘      │           │           │
+                 └──── window fills ◄───────────────────┘           │           │
+                                        diary · learnings · disposition ◄───────┘
+```
+
+Every stage below is **best-effort by construction**: a hook that fails
+logs and exits 0. There is no state in this system whose loss stops a
+session from starting, running, or ending.
+
+#### Stage 0 — before the first hook *(multiplai-kit only)*
+
+`claude.sh` starts a container and blocks on `docker run`. On vanilla
+Claude Code this stage does not exist, and the only thing lost is the
+host-side drain in Stage 7 — every hook below is identical either way.
+
+#### Stage 1 — `SessionStart`
+
+Fires once per physical context window, **not** once per conversation:
+compaction and `/clear` both fire it again. It branches on `source`,
+which is the single most consequential fork in the whole lifecycle:
+
+| `source` | What happened | Checkpoint re-injected? |
+|---|---|---|
+| `startup` | a genuinely new session | **no** |
+| `resume` | `claude --resume <id>` | **no** |
+| `clear` | you ran `/clear` | yes — consumes the pending marker |
+| `compact` | the window was compacted (auto or `/compact`) | yes — marker, or this session's own `checkpoint.md` as fallback |
+
+`startup`/`resume` not inheriting is deliberate, and was decided against
+the opposite behaviour after live testing: a fresh session in a project
+should not silently wake up inside week-old parked work. Soft continuity
+for those comes from the `now/<project>.md` snapshot instead, which is
+injected on *every* source.
+
+Then, in this order, always:
+
+1. **GC the registry** (see [When entries are collected](#5-when-entries-are-collected)) — before anything is written, so a
+   just-started session is never a GC candidate.
+2. **Record the `start` event**, which also clears any `disposition`:
+   picking a session back up makes "parked" obsolete by definition, and
+   the next extraction re-labels how you left it this time.
+3. Detect the model client. **No client → a one-time warning**, and
+   every LLM-backed pass downstream silently no-ops.
+4. Inject `now/<project>.md`, then the checkpoint rebuild if the source
+   allows it.
+5. Launch, detached and each behind its own gate: the qmd index refresh
+   *(only with the qmd backend)*, cost collection *(only with
+   `enable_costs`)*, the **extraction drain** for markers left by earlier
+   sessions, and the **memory maintainer** *(24h gate, checked before
+   spawning so 95% of sessions pay nothing)*.
+6. Write the fleet view — in-process, since it is a pure read of
+   `sessions/` + `checkpoints/` with no model call.
+7. Emit whichever nudges are due: dream *(>24h **and** unprocessed
+   learnings on disk)*, config audit *(>60 days)*, prospective intentions
+   *(their own due date is the gate — no cadence)*.
+
+#### Stage 2 — every prompt you type
+
+Two `UserPromptSubmit` hooks, both fast, neither able to block:
+
+| Hook | Does | Silent when |
+|---|---|---|
+| `context_manager.py` | routes the prompt and injects only the memory it matches | nothing scores above the relevance cutoff |
+| `checkpoint_nudge.py` | tells **Claude** the context budget is nearly spent, so it can finish cleanly and suggest `/clear` at a boundary | below the handoff threshold (the common case), in auto-compact mode, in a child session, or within the cooldown |
+
+#### Stage 3 — every turn's end (`Stop`)
+
+Three things, none of them an LLM call: refresh the liveness timestamp,
+record the `stop` event, and run the checkpoint decision. That decision
+has exactly three outcomes:
+
+| Condition | Result |
+|---|---|
+| crossed a token band (default 100K / 200K), or above handoff and grew by `checkpoint_refresh_tokens` | spawn the **detached** checkpoint writer |
+| no band crossed, but the session is older than `checkpoint_min_session_minutes` **and** its last checkpoint is older than `checkpoint_stale_hours` | spawn it anyway — this is the tab you left open, which crosses no band |
+| context size unreadable (`0` tokens), a writer already in flight, or checkpointing disabled | do nothing |
+
+At or above the handoff threshold it *also* returns a `systemMessage`
+advising `/clear`. That advice is suppressed in auto-compact mode unless
+compaction is demonstrably overdue. **This hook never emits a
+`decision`** — it structurally cannot block a Stop, so `/goal` loops and
+other Stop hooks are unaffected.
+
+#### Stage 4 — when it waits for you (`Notification`)
+
+One job: stamp the entry with a `notification` event. That is what makes
+the session read as **Needs you** in the fleet view, and it is the hub's
+push trigger. No LLM, no state migration.
+
+#### Stage 5 — when the window fills
+
+Four ways out, and which one you get depends entirely on whether
+auto-compaction has been steered (see [Activation](#activation-fully-automatic-rebuild)):
+
+| Path | Trigger | Session id | You do |
+|---|---|---|---|
+| **Auto-compact** *(recommended)* | native compaction near the handoff threshold | unchanged | nothing at all |
+| **`/compact`** | you, manually | unchanged | one command |
+| **`/clear`** | you, manually | **new** | one command; the new session consumes the marker within `checkpoint_ttl_hours`, and only in the same project |
+| **Nothing** | you sail past the threshold | unchanged | keep going — the nudges repeat every `checkpoint_refresh_tokens` and nothing breaks |
+
+On the first two, `PreCompact` fires and does three things in order:
+clears the re-recommendation cooldown map (injected context is about to
+be summarized away, so every file must become eligible again); writes a
+checkpoint **synchronously** — the one place in the system that blocks,
+because this is the last moment the transcript exists; and, only if that
+checkpoint is both valid and fresh, steers the native summarizer to a
+one-sentence stub instead of a multi-KB summary. Any doubt at all — the
+writer timed out, the checkpoint is stale, the context size is
+unreadable — falls back to the full native summary. It also enqueues an
+extraction marker, so learnings survive the compaction that is about to
+discard the transcript.
+
+#### Stage 6 — how it stops
+
+One observed case, everything else inferred from silence. It has its own
+section: [How the end of a session is detected](#3-how-the-end-of-a-session-is-detected).
+In brief: a clean quit fires `SessionEnd` and is recorded at once.
+Nothing else records anything — a reboot, a closed terminal, a `docker
+kill`, an OOM, or a session you simply walked away from all look
+identical from outside, and are filed as **idle** after 24h. That is a
+conservative guess rather than a claim that it died, and it is why idle
+is listed but never counted.
+
+#### Stage 7 — the drain
+
+`SessionEnd` and `PreCompact` only ever write a marker — both hooks are
+killed within seconds, so neither can afford an LLM call. Something else
+picks the marker up:
+
+| Drain | Runs | Catches |
+|---|---|---|
+| `SessionStart` | next time any session opens | everything, eventually |
+| `drain_extractions.py` *(kit)* | on the host, once the container exits | the last tab of the day, written up that evening instead of next morning |
+
+Both call the same `lib/extraction_drain.py`, and the dequeue is an
+atomic rename, so the two firing at the same instant hand each marker to
+exactly one of them. The retry ladder from there:
+
+```
+pending_extractions/ ──rename──► processing_extractions/ ──► detached extract_learnings.py
+        ▲                                   │                          │
+        └──── requeue after 15 min ─────────┘                   deletes its own
+              (max 3 attempts)                                  marker on success
+                     │
+                     └──► failed_extractions/   (kept for inspection, never retried)
+```
+
+A marker sitting in `processing_extractions/` is the signature of a
+container torn down mid-extraction — the detached child dies with it.
+
+#### Stage 8 — what the extraction leaves behind
+
+One model pass over the transcript produces four things:
+
+| Output | Where | Note |
+|---|---|---|
+| diary entry | `diary/YYYY-MM-DD.md` | the permanent record |
+| learnings | `learnings/YYYY-MM-DD.md` | input to `/multiplai-context:dream` |
+| `disposition` | on the registry entry | `active` · `parked` · `done`, read from how you actually spoke — no command to remember |
+| checkpoint retired | `data/checkpoints/<sid>/` deleted | *only* once the diary supersedes it — see [Retire](#context-checkpointing-long-sessions) for the conditions that keep one alive |
+
+The disposition is gated on the **final** chunk specifically: a partial
+extraction leaves it at the default rather than writing a guess as a
+fact, because a fabricated `active` would silently strip a real `parked`.
+
+#### Stage 9 — how it is seen, and forgotten
+
+The fleet view (`AGENTS.md` + `fleet.txt`) is regenerated from the two
+stores every time a session starts and every time the host drain runs.
+It is pure aggregation — delete both files and the next pass rebuilds
+them byte-for-byte. What lands in which, and why the two count different
+things, is [What you actually see](#4-what-you-actually-see).
+
+Entries are then collected on a schedule that depends on how the session
+ended — 7 days for an observed or recorded end, 30 for one that might
+still be alive, never for a parked one. See
+[When entries are collected](#5-when-entries-are-collected).
+
+#### Branch points at a glance
+
+Everything above that can go two ways, in one table:
+
+| Fork | Branches | Decided by |
+|---|---|---|
+| `uv` present? | hooks run / **every hook is inert** (one warning per day) | the environment |
+| model client present? | extraction, dreams, catalogs run / all no-op | SDK or API key |
+| `SessionStart.source` | `clear`/`compact` rebuild · `startup`/`resume` start clean | Claude Code |
+| child session (subagent)? | excluded from all checkpointing | transcript shape |
+| checkpoint trigger | band · staleness · none | tokens and clock |
+| auto-compaction steered? | silent automatic rebuild / `/clear` advice | two env vars |
+| checkpoint fresh at `PreCompact`? | one-line stub summary / full native summary | sync write + watermark |
+| how it stopped | `SessionEnd` fired · silence | whether you quit cleanly |
+| which drain got there first | in-session / host *(kit)* | atomic rename |
+| extraction outcome | diary + disposition + retire · partial · requeue · quarantine | the model call |
+| disposition | `active` · `parked` · `done` | how you left, read from the transcript |
+| fleet grouping | Needs you · Working · Parked · Idle · not listed | status × disposition |
+
+#### A worked example — two sessions, one line of output
+
+Two tabs on a Tuesday. **A** is a bugfix in `PROJECTS/DolceBot` that you
+finish and quit out of. **B** is a refactor in `knowhere` that asks you a
+question at 12:40, right as you leave for lunch — and you never go back
+to that tab.
+
+| Time | Session A (`DolceBot`) | Session B (`knowhere`) |
+|---|---|---|
+| 09:02 | `./claude.sh` → `SessionStart(startup)`; entry created, `last_event: start` | — |
+| 09:05 | first reply → `Stop` → `last_event: stop` | — |
+| 11:30 | — | launched; `SessionStart(startup)`, `last_event: start` |
+| 12:40 | — | Claude asks a question → `Notification` → `last_event: notification` |
+| 13:10 | done. **Ctrl-C Ctrl-C** → `SessionEnd` writes `last_event: end` and an extraction marker | still open, still waiting |
+| 13:10 | the host drain picks up that marker → detached extraction → diary entry, learnings, `disposition` | — |
+
+Now the readings. A is `ended`, so it drops off the board entirely. B is
+the whole question:
+
+| When | B's group | `fleet.txt` |
+|---|---|---|
+| 13:15 Tue — 35 min after B's last event | **Needs you** | `1 front · 1 needs you · oldest 2h` |
+| 14:00 Wed — 25h quiet | **Idle** — listed in `AGENTS.md`, not counted | `0 fronts · oldest —` |
+| following Tuesday | still **Idle**; still listed | unchanged |
+| +30 days | entry GC'd — B disappears | unchanged |
+
+**B never becomes `ended`, and it cannot.** Nothing proves it died: no
+hook fires for a session that is still sitting there, and none fires for
+one whose container was killed either. All the system can honestly say is
+"quiet for 25 hours", which is `idle`.
+
+That is why the two outputs count different things. `AGENTS.md` **lists**
+B — the idle section is exactly where you go looking for the tab you
+forgot about. `fleet.txt` does **not count** it, because a tab that went
+quiet has no claim on your attention while a session waiting on an answer
+does. Every entry the system is unsure about lands on the listed-but-not-
+counted side, which is what keeps the one number you actually read honest.
+
+And if you reboot the Mac on Wednesday, B looks **exactly the same** —
+which is the point of [How the end of a session is detected](#3-how-the-end-of-a-session-is-detected).
+Dead and dormant are indistinguishable from outside, so both are filed
+as the harmless one.
+
+**Why this matters — real numbers.** On a registry of 118 entries
+(82 ended, one session actually running), the pre-0.15.1 line read:
+
+```
+36 fronts · 4 need you · oldest 19d · 8 collisions
+```
+
+The same registry, same instant, with 0.15.1's counting:
+
+```
+7 fronts · 4 need you · oldest 7h
+```
+
+The 29 that vanished are B-shaped: tabs that went quiet days or weeks
+ago. They are still in `AGENTS.md` under **Idle** — nothing was hidden —
+they simply stopped being counted as things needing you. `oldest` fell
+from 19d to 7h for the same reason: it now measures the oldest *front*,
+not the oldest corpse. All 8 collisions were between pairs of sessions
+last heard from over a week ago, which is shared history, not a live
+conflict over a file.
+
+Worth noting what did **not** contribute: nothing outside the session
+was consulted. The entire improvement is counting the entries already on
+disk correctly, which is why it works identically on vanilla Claude Code.
+
 ### Key libraries
 
 - **`multiplai_core.paths`** — single source of truth for path
@@ -753,41 +1032,145 @@ workspace — `--data-dir` fixes the queue's location, not the diary's.
 > 15 minutes is treated the same way — that is what a container torn down
 > mid-extraction leaves behind, since the detached child dies with it.
 
-### The fleet view (`data/AGENTS.md`)
+### Session accounting
+
+*How each session's state is decided, and by whom.*
 
 Running several sessions at once, the question at the end of the day is
-*which of these needs me?* `scripts/synthesize_agents.py` answers it by
-aggregating the session registry and the checkpoints — no LLM call, pure
-aggregation — into two files:
+*which of these needs me?* Everything below exists to answer that one
+question honestly. Read this section before changing any of it — the
+pieces are individually small and it is the *interaction* that gets
+confusing.
 
-- **`data/AGENTS.md`** — one section per session, grouped by what you need
-  to do about it: **Needs you** · **Working** · **Parked** · **Idle**.
-  Finished sessions are counted, not listed. A **Collisions** section
-  names every file two live sessions are both holding.
-- **`data/fleet.txt`** — the same reading compressed to one line, cheap
-  enough for a status line to `cat` on every prompt.
+#### 1. What is on disk
 
-It runs alongside the extraction drain, so both refresh after the last
-tab closes as well as at session start.
+One directory, four kinds of file, and a strict rule about who may
+write which:
 
-### Session disposition — "park it for now"
+| Path | Written by | Holds |
+|---|---|---|
+| `data/sessions/<sid>.json` | this plugin's lifecycle hooks | the registry entry — project, cwd, container hostname, `started_at`, `last_event`, `disposition` |
+| `data/sessions/<sid>.adopt` | the multiplai hub | nothing. Its existence means "the hub has taken the driver seat" |
+| `data/checkpoints/<sid>/checkpoint.md` | this plugin's checkpoint writer | what the session is *doing* — intent, next action, files in hand |
 
-Liveness (*is it running?*) and intent (*am I coming back to it?*) are
-different questions. The extraction pass that already reads your
-transcript for the diary also reads **how you left**, on the same model
-response, and records it under a separate `disposition` key on the
-registry entry: `active` · `parked` · `done` (defaulting to `active`
-whenever it is unsure).
+**Only this plugin writes the JSON.** Anything outside a session that
+needs to say something leaves an empty marker file next to it instead —
+a second writer of registry *state* is how two stores start disagreeing
+silently, and a marker is a one-bit channel that cannot corrupt
+anything.
 
-You get this by typing "park it for now" as you would anyway — there is
-no command to remember at the moment you are least likely to remember it.
-Parked sessions get their own heading in `AGENTS.md` and are **exempt
-from registry garbage collection**, which closes a real asymmetry:
-transcripts survive a year, but registry entries used to age out in 7-30
-days, so a parked idea stayed resumable while becoming invisible.
+`data/AGENTS.md` and `data/fleet.txt` are **outputs, never inputs** —
+pure aggregation over the two stores above, no LLM call. Delete them and
+the next run reconstructs them byte-for-byte.
 
-The liveness field (`status`) is untouched by this — it is a separate,
-contracted vocabulary and disposition never writes to it.
+#### 2. Three questions, three fields
+
+They get conflated constantly. They are independent:
+
+| Question | Field | Values |
+|---|---|---|
+| Is its process running, and doing what? | `status` (derived) | `working` · `waiting_input` · `idle` · `ended` |
+| How did *you* leave it? | `disposition` (on the entry) | `active` · `parked` · `done` |
+| So what do I see? | group (derived from both) | **Needs you** · **Working** · **Parked** · **Idle** · not listed |
+
+`status` is frozen — it is the vocabulary the multiplai-gui API contract
+speaks, so nothing here may coin a fifth value. `disposition` is a
+*separate key* precisely so intent can never overwrite liveness: a
+session can perfectly well be ended **and** parked.
+
+You get a disposition by typing "park it for now" as you would anyway —
+the extraction pass that already reads your transcript for the diary
+reads how you left on the same model response. There is no command to
+remember at the moment you are least likely to remember it. It defaults
+to `active` whenever the model is unsure.
+
+#### 3. How the end of a session is detected
+
+This is the part that surprises people, so it is worth stating flatly:
+**a hook is code running inside a session, and a session cannot report
+its own death.** Exactly one way of stopping is observed; everything
+else is inferred from silence:
+
+| How it stopped | Fires | Recorded as | Noticed |
+|---|---|---|---|
+| `/exit`, Ctrl-D, Ctrl-C Ctrl-C — a clean quit | `SessionEnd` | `last_event.kind = end` | at once |
+| Reboot, closed terminal, `docker kill`, OOM-kill, crash | **nothing** | nothing | quiet ⇒ `idle` after 24h |
+| Still running; you walked away | nothing | nothing | quiet ⇒ `idle` after 24h |
+
+Rows 2 and 3 collapsing into the same reading is not an oversight, it is
+the honest answer: **from the outside they are indistinguishable.** A
+session that died and a session sitting at a prompt both look like an
+entry that has not spoken in a while.
+
+So quiet is treated as a **guess, deliberately the conservative one** —
+the entry is filed as `idle`, still listed, not declared over, because
+it may just be thinking or you may be at lunch. What that buys is that
+`idle` is *listed but never counted*: an entry the system is unsure
+about can never inflate the one number you actually read.
+
+*This was tried the other way.* 0.15.1 briefly had the kit launcher drop
+an `.exited` marker beside the entry when `docker run` returned, on the
+theory that an observer outside the container could close the gap. It
+was removed before release once measured: a clean quit already records
+`end`, and a reboot or a closed terminal kills the launcher along with
+the container, so the marker only ever covered `docker kill` and
+OOM-kills — worth zero entries on a real 118-entry registry, against a
+permanent filename contract between two repos. Counting idle sessions
+correctly did all of the work.
+
+#### 4. What you actually see
+
+Two outputs, and they deliberately count different things:
+
+| Group | Listed in `AGENTS.md` | Counted in `fleet.txt` |
+|---|---|---|
+| Needs you | yes | **yes** |
+| Working | yes | **yes** |
+| Parked | yes | **yes** |
+| Idle | yes | no |
+| ended / `done` | no (counted as "finished") | no |
+
+`AGENTS.md` **lists** everything on the board — the idle section is
+where you go looking for the tab you forgot about. `fleet.txt` is one
+line for a status bar and has room for one number, so it counts
+**fronts**: what has a claim on you. Idle is the difference, and on a
+real registry it is most of the entries.
+
+Parked counts as a front on purpose. Its process is usually long gone,
+but "I am coming back to this" is a claim on you in a way that a tab
+which merely went quiet is not — that is the whole difference between
+parking something and abandoning it.
+
+A **Collisions** section names every file two agents both have in hand.
+Both holders must be fronts *and* have been heard from within 24h: a
+collision is the claim that two agents might **now** write the same
+file, and a file two sessions both touched last week is shared history.
+
+#### 5. When entries are collected
+
+| Entry | Kept for |
+|---|---|
+| `disposition: parked` | forever — parking it is you saying you will be back |
+| extraction still queued or in flight | until the extraction finishes |
+| ended cleanly (`SessionEnd` fired) | 7 days |
+| anything else (might still be alive) | 30 days |
+
+The 30-day window exists for sessions that *might* still be running —
+and since nothing outside a session can prove one is not, every entry
+that did not quit cleanly gets it.
+
+Parked being exempt closes a real asymmetry: transcripts survive a year,
+so `claude --resume <id>` works months later, but registry entries used
+to age out in 7–30 days. A parked idea stayed *resumable* while becoming
+*invisible*.
+
+#### 6. When it refreshes
+
+`SessionStart` regenerates both files in-process (no model call, so it
+costs a few file reads), and `drain_extractions.py` does the same on the
+host after a container exits — so the view is current at session start
+**and** after the last tab closes. `scripts/synthesize_agents.py` writes
+them on demand; `--stdout` previews `AGENTS.md` without touching disk.
 
 ## Observability
 

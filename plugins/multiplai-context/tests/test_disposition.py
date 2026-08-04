@@ -717,7 +717,11 @@ class TestFleetView:
         listed = sum(len(f.in_group(g)) for g in ("Needs you", "Working", "Parked", "Idle"))
 
         assert listed == len(f.live) == 4
-        assert "4 live" in md
+        # Four listed, but the headline counts the three that want something
+        # from you; the idle one is named separately rather than folded in.
+        assert len(f.fronts) == 3
+        assert "3 front(s)" in md
+        assert "1 idle" in md
         assert "1 finished, not listed" in md
 
     def test_a_hostile_reason_cannot_break_the_markdown(self, tmp_path):
