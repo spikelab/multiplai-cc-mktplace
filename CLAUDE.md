@@ -118,7 +118,15 @@ independent release lines interleaved in one file would say less than seven
 files each saying one thing. Do not add entries to it.
 
 **The gate's escape hatch.** Docs-only changes (only `README.md` and/or
-`CHANGELOG.md` under a plugin) are never gated. For a genuine exception —
+`CHANGELOG.md` under a plugin) are never gated. Neither are **lockfile-only**
+changes (only a `uv.lock`): Dependabot opens those weekly and cannot write
+release notes, so gating them only ever produced a red check someone cleared by
+hand. That exemption is `all`, not `any` — a lock riding along with a real code
+change is still gated on the whole diff. And it is *not* a claim that a re-lock
+is invisible to users: if a dependency bump is worth telling them about, bump
+and write the entry. The gate can no longer make you.
+
+For a genuine exception —
 a mechanical rename, a comment fix — opt out visibly, either way:
 
 - add the **`no-changelog`** label to the PR, or

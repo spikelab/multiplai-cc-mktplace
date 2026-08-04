@@ -95,6 +95,21 @@ def test_docs_only_change_is_not_gated():
     assert any("docs-only" in n for n in f.notes)
 
 
+def test_lockfile_only_change_is_not_gated():
+    """Dependabot's weekly re-lock cannot write release notes."""
+    f = check(["plugins/myplug/skills/thing/scripts/uv.lock"], BASE, BASE)
+    assert f.ok
+    assert any("lockfile-only" in n for n in f.notes)
+
+
+def test_lockfile_plus_code_is_still_gated():
+    """The exemption is `all`, not `any` — a lock riding along with a real
+    change must not smuggle that change past the gate."""
+    f = check(["plugins/myplug/skills/thing/scripts/uv.lock",
+               "plugins/myplug/skills/thing/scripts/run.py"], BASE, BASE)
+    assert not f.ok
+
+
 def test_changelog_only_change_is_not_gated():
     """Backfilling notes for past releases must not demand a version bump."""
     f = check(["plugins/myplug/CHANGELOG.md"], BASE, BASE)
