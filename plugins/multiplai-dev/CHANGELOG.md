@@ -10,7 +10,7 @@ Version numbers are this plugin's version in the marketplace manifest
 
 Recorded history starts at **0.1.1**; anything earlier is in `git log` only.
 
-Of the 9 versions recorded here, `0.1.1` and `0.5.0` carry a git tag — the
+Of the 14 versions recorded here, `0.1.1` and `0.5.0` carry a git tag — the
 tagging convention started partway through. Dates on untagged versions are the
 release dates recorded at the time, not derived from a tag.
 
@@ -20,6 +20,64 @@ release dates recorded at the time, not derived from a tag.
 - **A plugin README** (`plugins/multiplai-dev/README.md`) — what the pack
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
+
+## [0.7.0] - 2026-08-04
+
+### Added
+
+- **`/buildme` now reads your codebase before it writes a spec.** A new
+  **Codebase Analysis** phase runs between research and spec generation: three
+  agents explore the repo in parallel (module structure and entry points;
+  naming, error-handling and test patterns; dependencies, config loading and
+  integration points) and write what they find to
+  `specs/changes/<name>/codebase-analysis.md`. That report is fed into
+  `design.md`, so the design extends the modules you already have instead of
+  proposing a parallel structure beside them. At the review checkpoint the
+  pipeline prints `REVIEW:CODEBASE_ANALYSIS:<path>` — read it before
+  `design.md`, because it is where "why does it extend that module" is
+  answered.
+
+  The phase is skipped, with the reason logged, for a project that has no
+  source files yet and for `--only` runs (which generate no specs), and a
+  failure is never a build failure — the design falls back to treating the
+  project as new.
+
+- **Reference docs now reach spec generation, not just the TDD agents.** The
+  best-practice docs under `$CLAUDE_CONFIG_DIR/reference/dev/` for your stack
+  are inlined into the design and task-breakdown prompts (capped at 8,000
+  characters each), so the plan is written to your conventions rather than
+  corrected to them afterwards. Every run prints one `REFERENCES:<doc names>`
+  line (or `REFERENCES:(none)`) naming exactly what reached the generator.
+
+- **Frameworks are detected, not guessed from the manifest name.** A `manage.py`
+  or a `django` dependency in `pyproject.toml`/`requirements.txt` adds the
+  Django reference docs on top of the Python ones; `react` in `package.json`
+  adds the React docs on top of the Node ones. Previously every Python project
+  got the same two docs regardless of what it actually was.
+
+- **`reference_docs:` in `specs/config.yaml`** lets you say which docs a project
+  builds to. Keys are the detected stack (`pyproject`, `Package`, `package`,
+  `Cargo`, `go`) or framework (`django`, `react`), and a key you set replaces
+  the built-in list for that key alone:
+
+  ```yaml
+  reference_docs:
+    pyproject: [uv-python-best-practices.md, our-house-style.md]
+  ```
+
+### Changed
+
+- A reference doc named in the mapping but missing from disk is still skipped
+  rather than failing the run — but the skip is now logged, and a project whose
+  stack is detected while *none* of its docs resolve gets a loud warning
+  instead of silently generating specs with no conventions attached.
+
+### Fixed
+
+- The prototype-feedback pass, which regenerates `design.md` and `tasks.md`
+  once from the prototype's notes, now carries the same codebase analysis and
+  reference docs the first pass had. Without that, a regeneration quietly
+  rewrote the design away from the project's conventions.
 
 ## [0.6.0] - 2026-08-03
 

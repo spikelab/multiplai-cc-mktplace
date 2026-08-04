@@ -32,6 +32,7 @@ async def generate_artifact(
     interview_summary: str = "",
     research: str = "",
     codebase_analysis: str = "",
+    reference_docs: str = "",
     audit_findings: str = "",
 ) -> str:
     """Generate a single artifact's content via llm_call.
@@ -43,6 +44,10 @@ async def generate_artifact(
         interview_summary: For proposal generation
         research: Research findings for proposal generation
         codebase_analysis: Existing code analysis for design generation
+        reference_docs: Inlined stack/framework reference docs
+            (config.reference_docs_text()) for `design` and `tasks`. Inlined
+            rather than read on demand because this call's system prompt
+            forbids tools — the prompt is the only channel.
         audit_findings: Findings injected on a single regeneration pass —
             tasks-shape audit findings (run_tasks_audit) or prototype notes
             (prototype_steps.apply_prototype_findings). Used by `design` and
@@ -58,6 +63,7 @@ async def generate_artifact(
         interview_summary=interview_summary,
         research=research,
         codebase_analysis=codebase_analysis,
+        reference_docs=reference_docs,
         audit_findings=audit_findings,
     )
 
@@ -87,6 +93,7 @@ def _build_prompt(
     interview_summary: str = "",
     research: str = "",
     codebase_analysis: str = "",
+    reference_docs: str = "",
     audit_findings: str = "",
 ) -> str:
     """Build the prompt string for an artifact type."""
@@ -120,6 +127,7 @@ def _build_prompt(
             proposal_content=proposal_content,
             specs_content=specs_content,
             codebase_analysis=codebase_analysis or "(new project)",
+            reference_docs=reference_docs or "(none available)",
             audit_findings=audit_findings or "(none — first pass)",
             instruction=instruction,
             template=template,
@@ -135,6 +143,7 @@ def _build_prompt(
             design_content=design_content,
             granularity=config.task_granularity,
             unknowns_content=context.get("unknowns_content") or "(none detected)",
+            reference_docs=reference_docs or "(none available)",
             audit_findings=audit_findings or "(none — first pass)",
             instruction=instruction,
             template=template,
@@ -304,10 +313,17 @@ async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
         return []
 
 
-# NOTE: not currently wired into the pipeline. No caller runs the parallel
-# codebase-analysis agents; kept for a future spec-grounding step.
 async def run_codebase_analysis(project_dir: Path, config) -> str:
     """Spawn parallel explore agents to analyze the existing codebase.
+
+    Wired as BuildPhase.CODEBASE_ANALYSIS (orchestrator, between RESEARCH and
+    SPEC_GENERATION); the report is written to
+    `specs/changes/<name>/codebase-analysis.md` and inlined into the design
+    prompt so the design extends the repo that exists.
+
+    A failed agent degrades to a labelled "(analysis failed: ...)" section
+    rather than taking the other two down — a partial picture of the codebase
+    is worth more to the design than none.
 
     Returns a combined analysis string covering architecture, patterns, and conventions.
     """

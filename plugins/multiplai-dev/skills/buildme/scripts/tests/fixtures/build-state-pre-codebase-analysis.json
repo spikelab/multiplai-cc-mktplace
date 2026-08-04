@@ -1,0 +1,18 @@
+{
+  "change_name": "legacy-research",
+  "mode": "scratch",
+  "tier": "advanced",
+  "phase": "research",
+  "bootstrap_done": true,
+  "interview_summary": "Add a nightly export job.",
+  "research_path": null,
+  "spec_gen": {
+    "completed_artifacts": [],
+    "research_path": null,
+    "tasks_audit_done": false
+  },
+  "tdd": null,
+  "state_file": "",
+  "started_at": "2026-07-22T08:02:11.004310+00:00",
+  "updated_at": "2026-07-22T08:05:44.771205+00:00"
+}

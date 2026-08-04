@@ -79,6 +79,9 @@ You are generating a design document for an spec-driven change.
 ## Existing Codebase Analysis
 {codebase_analysis}
 
+## Reference Docs — the conventions this project builds to
+{reference_docs}
+
 ## Findings To Address
 {audit_findings}
 
@@ -96,6 +99,14 @@ Rules:
 - Integration contracts: define interfaces between components
 - Be explicit about what's new vs what's modified
 - Flag any spec requirements that seem infeasible or contradictory
+- The Reference Docs above are this project's prescribed practices. Where one
+  states a convention that applies (package manager, project layout, error
+  handling, test framework, naming), the design follows it and names the doc in
+  the Decisions section. Where a decision departs from a reference doc, say
+  which doc and why — an unexplained departure is a defect
+- The Existing Codebase Analysis is the repo as it actually is. Extend the
+  modules, patterns and integration points it names rather than introducing a
+  parallel structure beside them
 - REQUIRED section `## Global Constraints`: the project-wide rules every
   implementation block must honor — version floors, naming conventions,
   library choices, exact string literals/IDs/paths. One rule per line, each
@@ -123,6 +134,9 @@ You are generating a task breakdown for an spec-driven change.
 
 ## Unknowns — dependencies new to this project, and their edge cases
 {unknowns_content}
+
+## Reference Docs — the conventions this project builds to
+{reference_docs}
 
 ## Task Granularity
 {granularity}
@@ -170,6 +184,9 @@ Rules:
 - If {granularity} is "checkboxes": add checkbox items under each block (- [ ] task)
 - If Shape Audit Findings are present, this is a regeneration pass: fix every
   finding by re-slicing the flagged blocks vertically
+- Where the Reference Docs prescribe concrete tooling (test runner, package
+  manager, directory layout), tasks name that exact tooling and command rather
+  than a generic equivalent
 - Every edge case listed under Unknowns belongs to the block that first touches
   that dependency: name it in that block's acceptance criteria so the test
   writer turns it into a test (e.g. "silence input produces an empty
