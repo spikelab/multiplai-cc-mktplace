@@ -18,6 +18,62 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.15.1] - 2026-08-03
+
+### Fixed
+- **The fleet reading counted dead sessions.** A status line saying
+  `36 fronts · 5 need you · oldest 19d · 9 collisions` over a fleet of one
+  running session is not a reading, it is noise you learn to ignore — and
+  that is what the real registry produced: 117 entries, 34 of them counted
+  as fronts, every one of the nine collisions between pairs of sessions that
+  had been dead for three to eighteen days.
+
+  Two causes, both fixed:
+
+  - **Idle sessions counted as fronts.** `AGENTS.md` still lists every tab
+    that is on the board, idle ones included — that is where you go looking
+    for the one you forgot about. But `fleet.txt` has room for one number,
+    and it now counts only what has a claim on you: **Needs you**, **Working**
+    and **Parked**. The full read's header follows suit (`N front(s) … · N
+    idle`), so the two cannot disagree.
+
+  - **Collisions were reported between long-dead sessions.** A collision is
+    the claim that two agents might *now* write the same file. Both holders
+    must therefore be fronts and have been heard from within 24 hours; a file
+    two sessions both touched last week is shared history.
+
+### Changed
+- **Session state is now documented in one place** — README → *Session
+  accounting*. It had accreted across two half-sections and a lot of code
+  comments, which is how you end up with three overlapping notions of "is
+  this session alive" and no single page saying which is which. The new
+  section covers what is on disk and who may write it, the three independent
+  fields (`status` / `disposition` / group), how a session's end is detected
+  (and why only a clean quit is ever *observed*), which groups are listed
+  versus counted, and the GC cutoffs. The suite `ARCHITECTURE.md` links here
+  rather than restating it.
+
+- **There is now a single walkthrough of what a session actually does** —
+  README → *The life of a session*. Checkpointing, extraction and the
+  registry were each documented well and separately, which left no page
+  answering the question people actually ask: what happens, in what order,
+  and where does it fork. Ten stages from `docker run` to the deletion of
+  the last registry entry, each fork stated as a branch — the four values
+  of `SessionStart.source` and which two re-inject a checkpoint, the three
+  outcomes of the Stop-hook checkpoint decision, the four ways out of a
+  full context window, the ways a session can stop, the two drains and
+  the atomic rename that keeps them from colliding, and the retry ladder
+  down to `failed_extractions/`. It closes with every branch point in one
+  table, including the two that turn features off entirely (`uv` missing,
+  no model client). It ends with a worked example — two sessions, one quit
+  and one left open over lunch — tracing what `fleet.txt` reads at each
+  point and why the abandoned one is listed but never counted.
+
+  Also corrects *Session accounting* → *When it refreshes*, which credited
+  the fleet-view regeneration to `synthesize_agents.py` running alongside
+  the drain. `SessionStart` writes it in-process; the host drain writes it
+  again after a container exits; the script is the on-demand entry point.
+
 ## [0.15.0] - 2026-08-01
 
 ### Added
