@@ -211,6 +211,110 @@ class TestMarketplaceManifest:
         assert any("manifest is missing" in e for e in errors_for(repo))
 
 
+class TestSdkComesFromCore:
+    """The duplicate-declaration bug this check exists for.
+
+    deep-research declared `multiplai-core` (no extra) plus a bare
+    `claude-agent-sdk>=0.1.0`. Core's own floor lives inside its `[sdk]` extra,
+    so nothing activated it and the resolver picked 0.1.56 — the line that
+    misparses terminal result messages and raises `Claude Code returned an
+    error result: success` after a full generation. The specs agreeing today
+    is not what makes a tree safe; not having two of them is.
+    """
+
+    def _with_manifest(self, tmp_path, body: str, name="pyproject.toml"):
+        repo = make_repo(tmp_path, skills={"alpha": VALID.format(name="alpha")})
+        (repo / "plugins" / "myplug" / "scripts").mkdir(parents=True, exist_ok=True)
+        (repo / "plugins" / "myplug" / "scripts" / name).write_text(body)
+        return repo
+
+    def test_bare_sdk_alongside_core_is_caught(self, tmp_path):
+        repo = self._with_manifest(tmp_path, (
+            '[project]\nname = "p"\ndependencies = [\n'
+            '  "multiplai-core @ git+https://example.com/c@v0.11.0",\n'
+            '  "claude-agent-sdk>=0.2.116,<0.3",\n]\n'
+        ))
+        assert any("directly alongside multiplai-core" in e for e in errors_for(repo))
+
+    def test_matching_version_specs_do_not_excuse_the_duplicate(self, tmp_path):
+        """Even the [sdk] extra plus an identical local pin is an error —
+        the second copy is what drifts when core bumps its floor."""
+        repo = self._with_manifest(tmp_path, (
+            '[project]\nname = "p"\ndependencies = [\n'
+            '  "multiplai-core[sdk] @ git+https://example.com/c@v0.11.0",\n'
+            '  "claude-agent-sdk>=0.2.116,<0.3",\n]\n'
+        ))
+        assert any("directly alongside multiplai-core" in e for e in errors_for(repo))
+
+    def test_sdk_extra_alone_is_clean(self, tmp_path):
+        repo = self._with_manifest(tmp_path, (
+            '[project]\nname = "p"\ndependencies = [\n'
+            '  "multiplai-core[sdk] @ git+https://example.com/c@v0.11.0",\n'
+            '  "pydantic>=2.0",\n]\n'
+        ))
+        assert errors_for(repo) == []
+
+    def test_sdk_hiding_in_an_optional_extra_is_caught(self, tmp_path):
+        repo = self._with_manifest(tmp_path, (
+            '[project]\nname = "p"\ndependencies = ["multiplai-core"]\n'
+            '[project.optional-dependencies]\n'
+            'agent = ["claude-agent-sdk>=0.2.116"]\n'
+        ))
+        assert any("directly alongside multiplai-core" in e for e in errors_for(repo))
+
+    def test_pep723_inline_metadata_is_checked_too(self, tmp_path):
+        repo = make_repo(tmp_path, skills={"alpha": VALID.format(name="alpha")})
+        s = repo / "plugins" / "myplug" / "scripts"
+        s.mkdir(parents=True, exist_ok=True)
+        (s / "run.py").write_text(
+            "# /// script\n"
+            '# dependencies = ["multiplai-core", "claude-agent-sdk>=0.1.0"]\n'
+            "# ///\nprint(1)\n"
+        )
+        assert any("directly alongside multiplai-core" in e for e in errors_for(repo))
+
+    def test_pep723_with_the_extra_is_clean(self, tmp_path):
+        repo = make_repo(tmp_path, skills={"alpha": VALID.format(name="alpha")})
+        s = repo / "plugins" / "myplug" / "scripts"
+        s.mkdir(parents=True, exist_ok=True)
+        (s / "run.py").write_text(
+            "# /// script\n"
+            '# dependencies = ["multiplai-core[sdk] @ git+https://e.com/c@v0.12.0"]\n'
+            "# ///\nprint(1)\n"
+        )
+        assert errors_for(repo) == []
+
+    def test_distribution_name_is_normalised(self, tmp_path):
+        """`multiplai_core` and `Claude_Agent_SDK` are the same distributions."""
+        repo = self._with_manifest(tmp_path, (
+            '[project]\nname = "p"\ndependencies = [\n'
+            '  "multiplai_core",\n  "Claude_Agent_SDK>=0.1.0",\n]\n'
+        ))
+        assert any("directly alongside multiplai-core" in e for e in errors_for(repo))
+
+    def test_sdk_without_core_is_not_this_checks_business(self, tmp_path):
+        """A standalone script that never touches core is out of scope —
+        a narrow rule that never false-positives is one that stays enabled."""
+        repo = self._with_manifest(tmp_path, (
+            '[project]\nname = "p"\ndependencies = ["claude-agent-sdk>=0.2.116"]\n'
+        ))
+        assert errors_for(repo) == []
+
+    def test_test_fixtures_are_exempt(self, tmp_path):
+        repo = make_repo(tmp_path, skills={"alpha": VALID.format(name="alpha")})
+        t = repo / "plugins" / "myplug" / "tests"
+        t.mkdir(parents=True)
+        (t / "pyproject.toml").write_text(
+            '[project]\nname = "fixture"\n'
+            'dependencies = ["multiplai-core", "claude-agent-sdk>=0.1.0"]\n'
+        )
+        assert errors_for(repo) == []
+
+    def test_malformed_manifest_is_skipped_not_raised(self, tmp_path):
+        repo = self._with_manifest(tmp_path, "[project\nnope = ")
+        assert errors_for(repo) == []
+
+
 class TestRealTree:
     def test_the_shipped_marketplace_is_clean(self):
         """The gate must pass on what we actually publish."""

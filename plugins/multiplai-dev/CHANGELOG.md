@@ -10,7 +10,7 @@ Version numbers are this plugin's version in the marketplace manifest
 
 Recorded history starts at **0.1.1**; anything earlier is in `git log` only.
 
-Of the 16 versions recorded here, `0.1.1` and `0.5.0` carry a git tag — the
+Of the 17 versions recorded here, `0.1.1` and `0.5.0` carry a git tag — the
 tagging convention started partway through. Dates on untagged versions are the
 release dates recorded at the time, not derived from a tag.
 
@@ -20,6 +20,24 @@ release dates recorded at the time, not derived from a tag.
 - **A plugin README** (`plugins/multiplai-dev/README.md`) — what the pack
   contains, what each skill needs, and how it degrades without the kit.
   Not yet in a released version.
+
+## [0.9.1] - 2026-08-04
+
+### Fixed
+- **`/buildme` now gets its Claude Agent SDK version floor from
+  `multiplai-core`, instead of stating its own.** Nothing was broken for you:
+  buildme's hand-written pin and core's floor happened to be the same
+  (`>=0.2.116,<0.3`), so the right SDK was installed either way.
+
+  It was a latent version of a bug that already bit `deep-research`, which
+  declared the SDK the same way and resolved 0.1.56 — the release that
+  misparses the terminal message from modern Claude CLIs and fails a finished
+  run with `Claude Code returned an error result: success`. Because every
+  buildme LLM call goes through `multiplai_core.run_agent()`, core is the only
+  place that floor is meaningfully known; a second copy in buildme's own
+  manifest could only ever go stale, and would have kept installing an old SDK
+  the next time core raised its floor. Buildme now depends on
+  `multiplai-core[sdk]` and names no SDK version of its own.
 
 ## [0.9.0] - 2026-08-04
 
