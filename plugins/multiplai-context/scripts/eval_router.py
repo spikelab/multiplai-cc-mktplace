@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """Standalone routing-quality eval for the live memory_router.
 
 Replaces the retired ``run-context-router-eval.py`` (which imported a

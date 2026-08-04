@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """Collect API-call cost records from Claude Code session transcripts.
 
 Incrementally scans ``$CLAUDE_CONFIG_DIR/projects/**/*.jsonl`` and appends

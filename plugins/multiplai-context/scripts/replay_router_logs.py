@@ -1,6 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# ///
 """Replay real ROUTING_SCORES log lines against candidate keep_ratio values.
 
 A label-free, real-traffic complement to eval_router.py: it does not need a

@@ -1,0 +1,48 @@
+# Marketplace-wide uv workspace.
+#
+# Why this exists: every bundled script used to declare its own dependencies in
+# PEP 723 inline metadata and run under `uv run --no-project`. That pinned
+# multiplai-core by *tag*, and a tag is a mutable git ref — so uv had to reach
+# GitHub on EVERY invocation to re-resolve it. Measured 2026-08-04: the two
+# UserPromptSubmit hooks took 12-68s each and routinely blew their 10s/30s
+# budgets, discarding the injected context. Dependabot could not see any of it
+# either: it scans manifests, and it does not parse `# /// script` blocks.
+#
+# One workspace fixes both. Dependencies are declared once per script
+# directory, resolved together into a single uv.lock, and installed into a
+# single environment. Hook latency went 20.8s -> 0.05s.
+#
+# The rule that keeps it that way: EVERY directory of Python scripts with
+# third-party dependencies must be a member below. A directory carrying its own
+# pyproject.toml that is NOT a member gets its own stray .venv — that is how the
+# repo accumulated four of them (259MB of it orphaned). scripts/lint_workspace.py
+# fails CI if a pyproject.toml is not listed here.
+[project]
+name = "multiplai-marketplace"
+version = "0.0.0"
+description = "Workspace root — owns the single lockfile and environment for all bundled scripts"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+# Virtual: this is a workspace root, never a distribution to build.
+package = false
+
+[tool.uv.workspace]
+members = [
+    "plugins/multiplai-context/scripts",
+    "plugins/multiplai-dev/skills/buildme/scripts",
+    "plugins/multiplai-dev/skills/deepen/scripts",
+    "plugins/multiplai-dev/skills/skill-creator/scripts",
+    "plugins/multiplai-media/skills/screen-demo/scripts",
+    "plugins/multiplai-messaging/skills/gmail/scripts",
+    "plugins/multiplai-messaging/skills/slack/scripts",
+    "plugins/multiplai-research/skills/deep-research/scripts",
+]
+
+[tool.uv.sources]
+# Declared once, unpinned. Dependabot moves uv.lock to the latest core weekly;
+# CI runs the suites against it before it merges. Previously 29 per-script tag
+# pins drifted to three different versions (v0.10.0 / v0.11.0 / v0.12.0) with
+# no reason on record.
+multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }

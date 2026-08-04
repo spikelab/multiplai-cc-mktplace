@@ -1,0 +1,9 @@
+# Dependencies for the deepen skill's report renderer.
+[project]
+name = "deepen-scripts"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = ["jinja2>=3.0"]
+
+[tool.uv]
+package = false

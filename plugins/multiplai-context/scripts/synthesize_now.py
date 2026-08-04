@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """Per-project status synthesis for multiplai plugin.
 
 Scans recent diary entries from ``paths.diary_dir()``, groups them by project

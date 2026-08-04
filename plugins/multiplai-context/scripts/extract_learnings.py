@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core[sdk] @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """Structured learning extraction (Stop hook).
 
 Decomposes the session transcript into logical units of work, writes a

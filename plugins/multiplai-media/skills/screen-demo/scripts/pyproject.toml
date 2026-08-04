@@ -1,0 +1,24 @@
+# Dependencies for the screen-demo pipeline.
+#
+# These are CLI tools, not imports: prep.py shells out to the `scenedetect`
+# binary (shutil.which) alongside ffmpeg's silencedetect/blackdetect filters.
+# No module here imports scenedetect, cv2 or numpy — which is why the skill
+# previously had no declared dependencies at all and instead grew a 229MB
+# bootstrap .venv nobody tracked. Declaring them here puts `scenedetect` on the
+# shared environment's PATH and retires bootstrap.sh.
+#
+# Headless OpenCV on purpose: the container has no display, and the GUI build
+# pulls a much larger dependency tree for windowing this never uses.
+[project]
+name = "screen-demo-scripts"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "scenedetect>=0.7",
+    "opencv-python-headless>=4.9",
+    "tqdm>=4.66",
+    "click>=8.1",
+]
+
+[tool.uv]
+package = false

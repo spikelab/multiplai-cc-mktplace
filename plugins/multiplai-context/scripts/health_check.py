@@ -1,10 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#     "multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.12.0",
-#     "pyyaml",
-# ]
-# ///
 """Health check script for multiplai plugin.
 
 Audits memory files, diary entries, learnings, and plugin data directories.

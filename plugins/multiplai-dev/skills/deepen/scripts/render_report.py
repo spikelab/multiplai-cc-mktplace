@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["jinja2>=3.0"]
-# ///
 """Render a deepen candidates JSON file as a self-contained HTML report.
 
 Usage:

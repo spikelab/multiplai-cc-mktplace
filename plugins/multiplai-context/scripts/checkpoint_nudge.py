@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["multiplai-core @ git+https://github.com/spikelab/multiplai-core@v0.12.0"]
-# ///
 """Checkpoint handoff nudge (UserPromptSubmit hook).
 
 The Stop hook's ``systemMessage`` tells the *user* a handoff is due; this
