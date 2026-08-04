@@ -31,6 +31,7 @@ import argparse
 import os
 import re
 import shutil
+import tomllib
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -61,17 +62,47 @@ MISSING_DEP_RE = re.compile(
     r"ModuleNotFoundError: No module named '([^']+)'")
 
 
+def _workspace_root(script: Path) -> Path | None:
+    """The uv workspace root above `script`, if there is one.
+
+    Identified by a pyproject.toml declaring `[tool.uv.workspace]` — the marker
+    of the root itself, not of a member (members declare only `[project]`).
+    """
+    for parent in script.resolve().parents:
+        pyproject = parent / "pyproject.toml"
+        if pyproject.is_file():
+            try:
+                meta = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            except tomllib.TOMLDecodeError:
+                continue
+            if "workspace" in meta.get("tool", {}).get("uv", {}):
+                return parent
+    return None
+
+
 def python_command(script: Path) -> list[str]:
     """How to invoke a Python script so its dependencies are actually present.
 
-    A script that declares PEP 723 inline metadata is asking for an isolated
-    environment; running it with a bare `python3` gives it the base interpreter
-    instead, and it dies on `import` before doing any work. That failure reads
-    like the *skill* is broken rather than the runner, so resolve it here.
+    Running a script with a bare `python3` gives it the base interpreter, so it
+    dies on `import` before doing any work. That failure reads like the *skill*
+    is broken rather than the runner, so resolve it here.
+
+    Two ways a script says where its dependencies come from:
+
+    - It lives under a uv workspace (this repo, as of 2026-08-04). The nearest
+      root's lock has them; `--project` resolves from it without touching the
+      network. This is the case for every script shipped here.
+    - It declares PEP 723 inline metadata. Retired in this repo — re-resolving
+      per invocation is what made the prompt hooks time out — but kept here
+      because this gate is also run against skills from elsewhere.
     """
-    text = script.read_text(encoding="utf-8", errors="replace")
-    if PEP723_RE.search(text) and shutil.which("uv"):
-        return ["uv", "run", "--script", str(script)]
+    if shutil.which("uv"):
+        root = _workspace_root(script)
+        if root is not None:
+            return ["uv", "run", "--project", str(root), str(script)]
+        text = script.read_text(encoding="utf-8", errors="replace")
+        if PEP723_RE.search(text):
+            return ["uv", "run", "--script", str(script)]
     return [sys.executable, str(script)]
 
 

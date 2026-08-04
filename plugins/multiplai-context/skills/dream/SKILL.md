@@ -36,7 +36,7 @@ Run `/multiplai-context:dream-remember` to load the proposal and apply approved 
 
 1. **Check for pending learnings:**
    ```
-   uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --check
+   uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --check
    ```
    If the output says no pending learnings, inform the user and exit.
 
@@ -48,7 +48,7 @@ Run `/multiplai-context:dream-remember` to load the proposal and apply approved 
    measured 25 min), past the Bash tool's 600s max timeout. You **MUST** invoke
    it via the Bash tool with `run_in_background: true`:
    ```
-   uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
+   uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
    ```
    (No flags — default is report mode.)
 
@@ -94,7 +94,7 @@ Run `/multiplai-context:dream-remember` to load the proposal and apply approved 
 
 If the user explicitly asks to apply changes without review:
 ```
-uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --auto
+uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --auto
 ```
 
 This rewrites memory files directly and commits. Use only when the user explicitly
@@ -106,7 +106,7 @@ requests fully autonomous operation — the default is always human-in-the-loop.
 
 After `--auto` mode completes, regenerate catalogs:
 ```
-uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"
+uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"
 ```
 (Skipped for report-only mode — catalogs are regenerated after the user applies
 changes via `/multiplai-context:dream-remember`.)
@@ -137,7 +137,7 @@ it at the cost of a proportionally longer run.
 
 ## Constraints
 - Never invoke `--auto` unless the user explicitly requests autonomous operation.
-- The default invocation (`uv run --no-project "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"`, no flags) is always report mode — safe to run anytime.
+- The default invocation (`uv run --project "${CLAUDE_PLUGIN_ROOT}/../.." "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"`, no flags) is always report mode — safe to run anytime.
 - The dream script uses the path resolver for all file locations — never hardcode paths.
 - All LLM calls go through the model client abstraction — never import the SDK directly.
 - If catalog generation fails or errors occur, the dream cycle still completes successfully. Catalog failures are logged but do not block or prevent the dream from finishing.

@@ -10,6 +10,23 @@ set -euo pipefail
 
 SKILL_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+bootstrap.sh — preflight the screen-demo skill. Installs nothing.
+
+Checks, in order:
+  1. ffmpeg is on PATH (hint names the fix for the actual platform)
+  2. scenedetect + opencv are importable — they come from the repo-root uv
+     workspace, so run the pipeline via `uv run --project <repo-root>`
+  3. the host transcription bridge reaches mlx_whisper (warning only)
+
+Exit 0 if usable, 1 with a fix-it message otherwise. Idempotent.
+EOF
+    exit 0
+    ;;
+esac
+
 # 1. ffmpeg (proxy / audio extract / composite) must be present. We never
 #    install it here — the hint names the right fix for the actual platform.
 if ! command -v ffmpeg >/dev/null 2>&1; then

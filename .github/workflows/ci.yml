@@ -26,13 +26,21 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Both gates are stdlib-only and offline on purpose: a check that guards
-      # publication should not itself depend on the network being up.
+      # All three gates are stdlib-only and offline on purpose: a check that
+      # guards publication should not itself depend on the network being up.
       - name: Structural lint
         run: python scripts/lint_skills.py
 
       - name: Security scan
         run: python scripts/scan_skills.py --all
+
+      # One environment. Catches an undeclared pyproject.toml (uv silently
+      # gives it its own .venv) and any PEP 723 block creeping back in — the
+      # latter is what made the prompt hooks re-resolve on every invocation.
+      # Its stray-.venv check cannot fire here: those are gitignored, so a
+      # fresh CI checkout never has one. That half only works run locally.
+      - name: Workspace hygiene
+        run: python scripts/lint_workspace.py
 
       - name: Gate self-tests
         run: |

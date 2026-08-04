@@ -22,7 +22,7 @@ re-fetched; attachments download to disk. It can post messages **as the user**.
 Run everything through the bundled script (`uv` auto-installs `slack_sdk`):
 
 ```bash
-SLACK="uv run ${CLAUDE_PLUGIN_ROOT}/skills/slack/scripts/slack_client.py"
+SLACK="uv run --project ${CLAUDE_PLUGIN_ROOT}/../.. ${CLAUDE_PLUGIN_ROOT}/skills/slack/scripts/slack_client.py"
 ```
 
 Requires `SLACK_TOKEN` (an `xoxp-…` user token) in the environment. If it's unset
