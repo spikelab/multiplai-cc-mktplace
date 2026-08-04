@@ -18,6 +18,35 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.18.1] - 2026-08-04
+
+### Fixed
+
+- **`/multiplai-context:fleet-status` no longer reports collisions that are not
+  collisions.** A real reading showed 16, of which 0 were real. Two causes.
+  Every pair of agents working in one repo collided on a **blank path**,
+  because a checkpoint may list the checkout root as an involved entry and
+  stripping the repo prefix left `""` for both sides. And pairs of sessions
+  *stopped at a prompt* collided on a document they had merely both **read** —
+  a collision is a claim that someone might write the file while you are in it,
+  which a session waiting on an answer cannot do until answered. Directory
+  entries are now ignored (a shared directory says "same neighbourhood", not
+  "same file"), and a session in `waiting_input` no longer holds a file against
+  anyone. **Parked sessions still do**, unchanged: uncommitted work nobody is
+  watching is a stronger claim on a file, not a weaker one. A genuine shared
+  file between two live agents still reports, as before.
+- **The backlog no longer announces a pending dream proposal that does not
+  exist.** It counted every `.md` in `.multiplai/dreams/`, which includes
+  `memory-lint-latest.md` — a report, not something to apply. It now counts the
+  `processed-learnings-*.md` proposals that `/multiplai-context:dream` writes
+  and `dream-remember` reads.
+
+**Still known-imprecise, and not fixed here:** the `NEEDS YOU` lines quote each
+session's last recorded next action verbatim and nothing checks it against the
+world, so a request that has since been satisfied — a PR already merged, an env
+var already set — keeps asking. Treat those lines as "what this session thought
+when it stopped", not as verified state.
+
 ## [0.18.0] - 2026-08-04
 
 ### Removed

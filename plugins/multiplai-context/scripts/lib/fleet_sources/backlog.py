@@ -94,7 +94,13 @@ def collect_backlog(
         learnings_lines=lines,
         learnings_files=files,
         oldest_learning=oldest,
-        dreams_pending=_count_files(dreams_dir, "*.md"),
+        # The proposal filename, not every .md in the directory: `dreams/` also
+        # holds `memory-lint-latest.md`, which is a report and not something to
+        # apply. Counting it announced a pending dream on a workspace that had
+        # none (2026-08-04), and "1 dream proposal(s)" that does not exist is
+        # how a backlog line stops being believed. Same glob dream.py writes
+        # and dream-remember reads.
+        dreams_pending=_count_files(dreams_dir, "processed-learnings-*.md"),
         pending_extractions=_count_files(data_dir / "pending_extractions"),
         failed_extractions=_count_files(data_dir / "failed_extractions"),
         # Top level only: INBOX subdirectories are the user's own filing, and

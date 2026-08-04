@@ -442,8 +442,9 @@ def _label(agent: Agent) -> str:
     return f"{project}@{qualifier}"
 
 
-def _collision_key(agent: Agent, path: str) -> tuple[tuple[str, str], str]:
-    """``(intersection key, display path)`` for one involved-file entry.
+def _collision_key(agent: Agent, path: str) -> tuple[tuple[str, str], str] | None:
+    """``(intersection key, display path)`` for one involved-file entry, or
+    ``None`` for an entry that cannot support a collision claim.
 
     Checkpoints record **absolute** paths (the writer prompt mandates it), so
     the same logical file edited in two worktrees of one repo appears under
@@ -454,13 +455,27 @@ def _collision_key(agent: Agent, path: str) -> tuple[tuple[str, str], str]:
     dir every worktree shares, so worktrees intersect while an unrelated repo's
     identical relative path does not. Paths outside any detected checkout keep
     the absolute string as the key, which still catches workspace-shared files.
+
+    **Directories are not collisions, and the checkout root least of all.**
+    Checkpoints list directory entries freely — ``…/worktrees/lab/DolceEngine/``,
+    or the checkout root itself as a shorthand for "I worked in this repo". Two
+    agents in one repo both list that root; stripping the prefix leaves ``""``
+    for both, and two empty strings intersect, so *every* pair of sessions
+    sharing a checkout reported a phantom collision on a blank path (seen
+    2026-08-04: `collision on `` — workspace@main, workspace@main`). A
+    directory in common is also just weak evidence on its own terms — it says
+    "same neighbourhood", where the warning claims "same file".
     """
+    if path.endswith("/"):
+        return None
     root = agent.repo_root
     if root:
         prefix = root.rstrip("/") + "/"
         if path.startswith(prefix):
             rel = path[len(prefix):]
-            return (agent.repo_id or root, rel), rel
+            return ((agent.repo_id or root, rel), rel) if rel else None
+        if path.rstrip("/") == root.rstrip("/"):
+            return None
     return ("", path), path
 
 
@@ -472,24 +487,43 @@ def find_collisions(agents: list[Agent], now: datetime | None = None) -> list[Co
     normalized per-agent by :func:`_collision_key` so two worktrees of one
     repo collide on the logical file, not the raw string.
 
-    "In play" is a front (:attr:`Agent.front`) that has been heard from within
-    ``COLLISION_MAX_AGE_HOURS``, and both halves of that earn their keep.
-    Against the real registry, filtering on liveness alone reported eight
-    collisions of which eight were between pairs of sessions dead for three to
-    eighteen days — a warning that is wrong every time is one you stop reading,
-    which costs more than not having it. A collision is a claim that two agents
-    might *now* write the same file; a dead one cannot, and neither can a
-    parked one that has not moved since last week.
+    "In play" is ``Working`` or ``Parked``, heard from within
+    ``COLLISION_MAX_AGE_HOURS``. Every clause earns its keep. Against the real
+    registry, filtering on liveness alone reported eight collisions of which
+    eight were between pairs of sessions dead for three to eighteen days; a
+    warning that is wrong every time is one you stop reading, which costs more
+    than not having it.
+
+    **``waiting_input`` is excluded, and parked deliberately is not.** A
+    collision is a claim that someone might write the file while you are in it.
+    An agent stopped at a prompt cannot: it will not touch anything until
+    answered, and on 2026-08-04 that reading produced fourteen of sixteen
+    reported collisions — all pairs of sessions parked at a prompt, sharing a
+    July planning document that both had merely **read**. Parked work is the
+    opposite case and stays: it holds its files *more* than running work does,
+    since nobody is watching it and its edits are sitting there uncommitted.
+
+    The known imprecision underneath all of this is the involved-files list
+    itself: it records what a session *touched*, with no read/write
+    distinction, so two agents editing one file and two agents reading it are
+    indistinguishable from here. That is what makes the ``waiting_input``
+    exclusion worth its narrowness — it removes the population where a bare
+    read was most likely to be all there was. Fixing it properly needs a write
+    signal in the checkpoint, which is a checkpoint-writer change, not this
+    function's.
     """
     now = now or datetime.now(timezone.utc)
     max_age = timedelta(hours=COLLISION_MAX_AGE_HOURS)
     holders: dict[tuple[str, str], list[Agent]] = {}
     display: dict[tuple[str, str], str] = {}
     for agent in agents:
-        if not agent.front or agent.age(now) > max_age:
+        if agent.group not in _COLLIDING_GROUPS or agent.age(now) > max_age:
             continue
         for path in agent.files:
-            key, shown = _collision_key(agent, path)
+            keyed = _collision_key(agent, path)
+            if keyed is None:
+                continue
+            key, shown = keyed
             holders.setdefault(key, []).append(agent)
             display.setdefault(key, shown)
 
@@ -567,6 +601,14 @@ _GROUP_ORDER = ("Needs you", "Working", "Parked", "Idle")
 # which merely went quiet is not. That is the entire difference between
 # parking something and abandoning it.
 _FRONT_GROUPS = frozenset(_GROUP_ORDER) - {"Idle"}
+
+# The groups that can hold a file against another agent (see
+# :func:`find_collisions`): a front, minus "Needs you". An agent stopped at a
+# prompt will not write anything until it is answered, so it cannot be about to
+# clash with you — and taking it at its word was fourteen of the sixteen false
+# collisions read on 2026-08-04. Parked stays for the reason above: uncommitted
+# work nobody is watching is a stronger claim on a file, not a weaker one.
+_COLLIDING_GROUPS = _FRONT_GROUPS - {"Needs you"}
 
 
 def _sanitize_reason(reason: str) -> str:
