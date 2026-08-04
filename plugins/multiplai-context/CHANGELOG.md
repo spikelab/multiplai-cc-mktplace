@@ -18,6 +18,47 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.16.0] - 2026-08-04
+
+### Added
+
+- **`/multiplai-context:fleet-status` — one ranked snapshot of everything in
+  flight.** Agent sessions waiting on an answer, open pull requests with CI and
+  review state, dirty or unpushed checkouts, background jobs, and the pending
+  backlog, in one reading of under twenty lines. Read-only: it merges nothing,
+  closes nothing, kills no session and deletes no branch.
+
+  The list is ranked by **what is blocked on a decision only you can make** —
+  an approved PR waiting for a merge click, then red CI on a PR you own, then a
+  stack of PRs collapsed to one line with its merge order, then a session that
+  asked you a question, then two sessions holding the same file. It is capped
+  at eight items; past that you get the count, because an unbounded urgent list
+  is the same overwhelm in a new font.
+
+  `--full` prints the whole `AGENTS.md` report, `--json` emits `fleet.json` for
+  another program, `--fresh` re-queries GitHub, and `--offline` skips it.
+
+- **`AGENTS.md` now carries pull requests, repo hygiene, background jobs and
+  backlog sections** when the new skill generates it, so the file the digest
+  points at is the same file the digest summarizes. Sessions-only generation
+  from the session hooks is unchanged, byte for byte.
+
+- **`fleet.json`** — the fleet as structured data, including the derived
+  `group` / `front` / `age_seconds` fields so another consumer cannot re-derive
+  them differently.
+
+### Notes
+
+- **Nothing that is not collected is ever reported as zero.** Scheduled
+  routines live server-side and print `not tracked`; an unavailable `gh` prints
+  `not read`; a repo outside your GitHub token's reach is listed apart from
+  real failures, because it is a standing fact about the credential rather than
+  something that might work next time.
+- **`gh` and `git` are both optional.** Each source degrades on its own and the
+  rest of the reading still stands.
+- Measured on a 27-repo workspace: about 9 seconds cold, half a second against
+  the 5-minute PR cache.
+
 ## [0.15.1] - 2026-08-03
 
 ### Fixed

@@ -36,12 +36,22 @@ warning, no recommendation. Just what is true right now.
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from lib.fsio import atomic_write
 from lib.session_registry import entry_disposition_block
+
+if TYPE_CHECKING:  # pragma: no cover - annotations only
+    # Type-only so the expensive collectors cannot reach the hook path by
+    # accident. `lib.fleet_sources` shells out to git and gh; this module is
+    # imported from session hooks and must stay a pure file read.
+    from lib.fleet_sources.backlog import Backlog
+    from lib.fleet_sources.git_repos import RepoState
+    from lib.fleet_sources.jobs import BackgroundJob
+    from lib.fleet_sources.prs import PRScan
 
 logger = logging.getLogger(__name__)
 
@@ -153,8 +163,31 @@ class Collision:
 
 @dataclass
 class Fleet:
+    """Every agent, plus — when a human asked — everything around them.
+
+    The four extra fields are **empty on the hook path and populated only by
+    :mod:`fleet_status`**, which a person ran on purpose. That asymmetry is
+    deliberate: :func:`collect` reads local files and is cheap enough to run
+    from a session hook, while the extra sources shell out to ``git`` and
+    ``gh``. Keeping them optional on one dataclass — rather than forking into
+    two — is what lets ``AGENTS.md``, the digest and ``fleet.json`` stay three
+    renderings of one truth instead of three views that can disagree.
+
+    ``None`` and ``[]`` mean different things here and the renderers rely on
+    it: ``None`` is *not collected*, an empty list is *collected, nothing
+    found*. "I didn't look" and "there is nothing" must never print the same.
+    """
+
     agents: list[Agent]
     collisions: list[Collision]
+    prs: "PRScan | None" = None
+    repos: "list[RepoState] | None" = None
+    jobs: "list[BackgroundJob] | None" = None
+    backlog: "Backlog | None" = None
+    # Scheduled routines live server-side; only a live Claude Code session can
+    # enumerate them (CronList). The script cannot, so this stays None there —
+    # and the digest says "not tracked" rather than implying zero.
+    scheduled: list[str] | None = None
 
     def by_status(self, *statuses: str) -> list[Agent]:
         return [a for a in self.agents if a.status in statuses]
@@ -633,7 +666,147 @@ def render_agents_md(fleet: Fleet, now: datetime, generated_at: str | None = Non
             out.append(f"- `{c.path}` — {', '.join(c.labels)}")
         out.append("")
 
+    out.extend(_render_extras(fleet))
     return "\n".join(out).rstrip() + "\n"
+
+
+# ---------------------------------------------------------------------------
+# The extra sections — only when someone paid for them
+# ---------------------------------------------------------------------------
+
+def _render_prs(scan: "PRScan") -> list[str]:
+    out = ["## Pull requests", ""]
+    if not scan.available:
+        out += ["_`gh` is unavailable or unauthenticated — PRs not read. "
+                "Install the GitHub CLI and run `gh auth login`._", ""]
+        return out
+    human, bots = scan.human, scan.bots
+    if not scan.prs:
+        out += ["_None open._", ""]
+    else:
+        out.append(f"**{len(human)} yours · {len(bots)} bot**")
+        out.append("")
+        for pr in sorted(human, key=lambda p: (p.repo, p.number)):
+            bits = []
+            if pr.is_draft:
+                bits.append("draft")
+            if pr.review_decision:
+                bits.append(pr.review_decision.replace("_", " ").lower())
+            bits.append(f"CI {pr.ci}")
+            out.append(f"- `{pr.label}` {pr.title} — {' · '.join(bits)}  \n  {pr.url}")
+        if bots:
+            out.append(f"- _plus {len(bots)} bot PR(s) — dependency bumps, not listed._")
+        out.append("")
+    for slug, err in sorted(scan.errors.items()):
+        out.append(f"- ⚠️ `{slug}` — {err}")
+    if scan.errors:
+        out.append("")
+    if scan.no_access:
+        out.append(
+            f"_{len(scan.no_access)} repo(s) not visible to this GitHub token — "
+            f"{', '.join(f'`{s}`' for s in scan.no_access)}. A standing fact "
+            "about the credential, not a failure._"
+        )
+        out.append("")
+    return out
+
+
+def _render_repos(repos: "list[RepoState]") -> list[str]:
+    out = ["## Repos", ""]
+    noisy = [r for r in repos if not r.clean]
+    if not noisy:
+        out += [f"_All {len(repos)} checkout(s) clean, pushed, and tracking._", ""]
+        return out
+    out.append(f"**{len(noisy)} of {len(repos)} checkout(s) want something**")
+    out.append("")
+    for repo in noisy:
+        bits = []
+        if repo.dirty:
+            bits.append(f"{repo.dirty} uncommitted ({repo.untracked} untracked)")
+        if repo.unpushed:
+            bits.append("unpushed: " + ", ".join(repo.unpushed))
+        if repo.no_upstream:
+            bits.append("never pushed: " + ", ".join(repo.no_upstream))
+        if repo.error:
+            bits.append(f"error: {repo.error}")
+        out.append(f"- `{repo.path}` (on `{repo.branch}`) — {'; '.join(bits)}")
+    out.append("")
+    worktrees = [(r.path, w) for r in repos for w in r.worktrees]
+    if worktrees:
+        out.append(f"**{len(worktrees)} linked worktree(s)**")
+        out.append("")
+        for owner, path in worktrees:
+            out.append(f"- `{path}` — from `{owner}`")
+        out.append("")
+    return out
+
+
+def _render_jobs(jobs: "list[BackgroundJob]") -> list[str]:
+    out = ["## Background jobs", ""]
+    if not jobs:
+        out += ["_None recorded._", ""]
+        return out
+    running = [j for j in jobs if j.running]
+    out.append(f"**{len(running)} running · {len(jobs) - len(running)} finished or stale**")
+    out.append("")
+    for job in jobs:
+        if job.running:
+            mark = "running"
+        elif job.finished:
+            mark = job.state
+        else:
+            # Stale is a *guess*: the pids in the roster belong to another
+            # process namespace, so nothing here can confirm a death.
+            mark = f"{job.state or 'unknown'}, stale"
+        detail = f" — {job.detail}" if job.detail else ""
+        out.append(f"- `{job.short}` [{mark}]{detail}")
+    out.append("")
+    return out
+
+
+def _render_backlog(backlog: "Backlog") -> list[str]:
+    out = ["## Backlog", ""]
+    if backlog.empty:
+        out += ["_Nothing pending._", ""]
+        return out
+    if backlog.learnings_lines:
+        oldest = f", oldest {backlog.oldest_learning}" if backlog.oldest_learning else ""
+        out.append(
+            f"- {backlog.learnings_lines} learning line(s) across "
+            f"{backlog.learnings_files} file(s){oldest} — `/multiplai-context:dream`"
+        )
+    if backlog.dreams_pending:
+        out.append(
+            f"- {backlog.dreams_pending} dream proposal(s) unapplied — "
+            "`/multiplai-context:dream-remember`"
+        )
+    if backlog.pending_extractions:
+        out.append(f"- {backlog.pending_extractions} extraction marker(s) not drained")
+    if backlog.failed_extractions:
+        out.append(f"- ⚠️ {backlog.failed_extractions} failed extraction(s) quarantined")
+    if backlog.inbox_items:
+        out.append(f"- {backlog.inbox_items} INBOX item(s) awaiting review")
+    out.append("")
+    return out
+
+
+def _render_extras(fleet: Fleet) -> list[str]:
+    """The sections that exist only when the expensive collectors ran.
+
+    Absent sources render **nothing at all** rather than an empty section: on
+    the hook path none of them are collected, and this is what keeps
+    ``AGENTS.md`` byte-identical to its pre-digest shape there.
+    """
+    out: list[str] = []
+    if fleet.prs is not None:
+        out += _render_prs(fleet.prs)
+    if fleet.repos is not None:
+        out += _render_repos(fleet.repos)
+    if fleet.jobs is not None:
+        out += _render_jobs(fleet.jobs)
+    if fleet.backlog is not None:
+        out += _render_backlog(fleet.backlog)
+    return out
 
 
 def render_fleet_line(fleet: Fleet, now: datetime) -> str:
@@ -666,6 +839,70 @@ def render_fleet_line(fleet: Fleet, now: datetime) -> str:
         parts.append(f"{n} collision{'s' if n != 1 else ''}")
 
     return " · ".join(parts) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# fleet.json — the machine rendering
+# ---------------------------------------------------------------------------
+
+FLEET_JSON_FILENAME = "fleet.json"
+
+# Bumped when a field changes meaning or disappears. The multiplai hub is the
+# intended second consumer, and a consumer that cannot tell which shape it is
+# holding has to guess.
+FLEET_JSON_VERSION = 1
+
+
+def _jsonable(value):
+    """Datetimes to ISO strings, dataclasses to dicts, recursively."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if is_dataclass(value) and not isinstance(value, type):
+        return {k: _jsonable(v) for k, v in asdict(value).items()}
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    return value
+
+
+def _agent_json(agent: Agent, now: datetime) -> dict:
+    data = {k: _jsonable(v) for k, v in asdict(agent).items()}
+    data["group"] = agent.group
+    data["front"] = agent.front
+    data["age_seconds"] = int(agent.age(now).total_seconds())
+    return data
+
+
+def fleet_json(fleet: Fleet, now: datetime, generated_at: str | None = None) -> str:
+    """Serialize a :class:`Fleet` for another program to render.
+
+    Carries the derived properties — ``group``, ``front``, ``age_seconds`` —
+    alongside the raw fields, because they encode rules (disposition beats
+    liveness; idle is not a front) that a consumer re-deriving them would get
+    subtly wrong. The hub rendering a different set of fronts from the digest
+    would be worse than the hub having no fleet view at all.
+    """
+    payload = {
+        "version": FLEET_JSON_VERSION,
+        "generated_at": generated_at or now.isoformat(),
+        "counts": {
+            "agents": len(fleet.agents),
+            "live": len(fleet.live),
+            "fronts": len(fleet.fronts),
+            "needs_you": len(fleet.in_group("Needs you")),
+            "collisions": len(fleet.collisions),
+        },
+        "agents": [_agent_json(agent, now) for agent in fleet.agents],
+        "collisions": _jsonable(fleet.collisions),
+        # Preserved as null when not collected — see the Fleet docstring.
+        "prs": _jsonable(fleet.prs),
+        "repos": _jsonable(fleet.repos),
+        "jobs": _jsonable(fleet.jobs),
+        "backlog": _jsonable(fleet.backlog),
+        "scheduled": _jsonable(fleet.scheduled),
+    }
+    return json.dumps(payload, indent=2, sort_keys=False) + "\n"
 
 
 def write_fleet_view(data_dir: Path, now: datetime | None = None) -> tuple[Path, Path]:
