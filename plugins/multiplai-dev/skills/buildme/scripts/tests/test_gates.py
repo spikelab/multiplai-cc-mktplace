@@ -1024,6 +1024,26 @@ class TestParseDocsImpact:
         assert out == ["docs/board.md"]
 
     def test_echoed_template_placeholder_is_not_an_answer(self):
+        """The literal shipped template, not a hand-shortened stand-in — a
+        stand-in once masked the wrapped-placeholder case below."""
+        from build_pipeline.prompts.docs_update import DOCS_UPDATE_PROMPT
+
+        echoed = DOCS_UPDATE_PROMPT.format(
+            project_dir="/tmp/project", change_name="feat", diff="", notes="",
+        )
+        assert parse_docs_impact(echoed) is None
+
+    def test_echoed_placeholder_wrapping_onto_a_second_line_is_not_an_answer(self):
+        """The regression this guards: the capture regex takes one line, so an
+        echo of a wrapped placeholder starts with `<` but never reaches the
+        closing `>` — a guard requiring both brackets let it through as a
+        garbage path list."""
+        assert parse_docs_impact(
+            "DOCS_IMPACT: <none, or a comma-separated list of the documentation files you\n"
+            "              changed, as paths relative to the project root>\n"
+        ) is None
+
+    def test_echoed_single_line_placeholder_is_not_an_answer(self):
         assert parse_docs_impact("DOCS_IMPACT: <none, or the files you changed>\n") is None
 
 

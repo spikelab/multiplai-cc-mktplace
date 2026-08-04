@@ -52,8 +52,7 @@ You are working in `{project_dir}`. Read what is there before you write.
 Close your report with these REQUIRED slots, exactly these labels:
 
 ```
-DOCS_IMPACT: <none, or a comma-separated list of the documentation files you
-              changed, as paths relative to the project root>
+DOCS_IMPACT: <none, or a comma-separated list of the documentation files you changed, as paths relative to the project root>
 STATUS: <DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED>
 ```
 

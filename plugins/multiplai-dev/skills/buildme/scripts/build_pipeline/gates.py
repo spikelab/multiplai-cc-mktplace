@@ -628,8 +628,11 @@ def parse_docs_impact(output: str) -> list[str] | None:
         return None
     raw = matches[-1].strip().strip("*_` ")
     # The agent echoing the template (`DOCS_IMPACT: <none, or a ...>`) is not
-    # an answer; treat it as an unfilled slot.
-    if raw.startswith("<") and raw.endswith(">"):
+    # an answer; treat it as an unfilled slot. The opening `<` alone decides:
+    # a real path list never starts with an angle bracket, and requiring the
+    # closing `>` too would miss an echo of a placeholder that wraps onto the
+    # next line (the regex captures a single line, so the `>` is out of reach).
+    if raw.startswith("<"):
         return None
     if raw.lower() in _EMPTY_SLOT_VALUES:
         return []
