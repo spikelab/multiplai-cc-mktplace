@@ -46,6 +46,13 @@ Nothing yet.
   Dependabot PR that CI has run against. 25 of the 26 scripts were already on
   the same version, so the per-script pin was granularity nobody used.
 
+### Removed
+- **`requirements-dev.txt`.** The test suite no longer installs from it — CI
+  supplies pytest per-run (`uv run --with pytest ...`) and `multiplai_core`
+  comes from the workspace — so keeping it would have been exactly the kind of
+  unwatched pin drift this release eliminates. The Dependabot pip entry that
+  scanned it is gone too.
+
 ## [0.15.1] - 2026-08-03
 
 ### Fixed

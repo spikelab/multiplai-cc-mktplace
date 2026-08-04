@@ -46,8 +46,8 @@ The credential is three env vars, forwarded from the kit `.env` like
 mint them once on the Mac host — see [references/setup.md](references/setup.md).
 (A JSON token file via `GMAIL_TOKEN_FILE` is an optional fallback.)
 
-Run through the bundled script; `uv` auto-installs the Google client libs from
-the script's inline deps (no venv, no `pip install`):
+Run through the bundled script; `uv` provides the Google client libs from the
+repo-root workspace environment (no venv to manage, no `pip install`):
 
 ```bash
 GM="uv run --all-packages --project ${CLAUDE_PLUGIN_ROOT}/../.. ${CLAUDE_PLUGIN_ROOT}/skills/gmail/scripts/gmail.py"

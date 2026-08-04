@@ -1434,9 +1434,13 @@ what it needs if you come back.
 
 ```
 cd plugins/multiplai-context
-python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest -q
+uv run --all-packages --project ../.. --with pytest --with pytest-asyncio \
+  --with pytest-timeout python -m pytest tests/ -q
 ```
+
+No venv to create: the repo-root uv workspace supplies `multiplai_core` and
+friends, and `--with` adds the test toolchain for the run (same command CI
+uses).
 
 Tests live in `tests/` and are dev-only — never loaded by the plugin
 runtime.

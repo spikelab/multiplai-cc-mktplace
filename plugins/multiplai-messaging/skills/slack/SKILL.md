@@ -19,7 +19,8 @@ their `xoxp-…` user token (read from `$SLACK_TOKEN`), so it sees every channel
 and DM they're in — no bot to invite. Messages are cached to SQLite so nothing is
 re-fetched; attachments download to disk. It can post messages **as the user**.
 
-Run everything through the bundled script (`uv` auto-installs `slack_sdk`):
+Run everything through the bundled script (`uv` provides `slack_sdk` from the
+repo-root workspace environment):
 
 ```bash
 SLACK="uv run --all-packages --project ${CLAUDE_PLUGIN_ROOT}/../.. ${CLAUDE_PLUGIN_ROOT}/skills/slack/scripts/slack_client.py"

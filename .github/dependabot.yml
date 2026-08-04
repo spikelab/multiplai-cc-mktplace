@@ -21,6 +21,10 @@
 # Manifests are the only thing it scans, so moving them into pyproject.toml is
 # what made them visible.
 #
+# The pip entry for /plugins/multiplai-context went with requirements-dev.txt:
+# CI now supplies the test toolchain per-run (`uv run --with pytest ...`), so
+# there is no pip manifest left to scan there.
+#
 # Known gap: Dependabot does not bump git-sourced dependencies, and
 # multiplai-core is declared as a git URL. It will not be updated by these PRs
 # until core is published to PyPI.
@@ -36,18 +40,6 @@ updates:
       # One PR for the routine churn, so the noise stays reviewable. Security
       # updates are deliberately NOT grouped — Dependabot raises those
       # separately and immediately regardless of this schedule.
-      minor-and-patch:
-        update-types: ["minor", "patch"]
-    commit-message:
-      prefix: "chore(deps)"
-
-  # Test/dev toolchain for the memory engine (pytest et al).
-  - package-ecosystem: "pip"
-    directory: "/plugins/multiplai-context"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
-    groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
     commit-message:
