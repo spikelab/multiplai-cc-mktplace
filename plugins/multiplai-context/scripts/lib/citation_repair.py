@@ -74,7 +74,7 @@ _IN_RANGE = "in range"
 # A citation whose filename is not a dated learnings file is not a broken
 # provenance link — there is no file it could have meant, so there is nothing to
 # repair and nothing for a reviewer to go and check. It is a model formatting
-# slip (or, historically, this module's own docstring example quoted back at it).
+# slip (or, historically, this module's own placeholder examples quoted back at it).
 # Still reported in the proposal, but flagged so the caller can log it quietly:
 # at WARNING it was pure noise on every run, which is how it trained the reader
 # to skip the citation warnings that do matter.
