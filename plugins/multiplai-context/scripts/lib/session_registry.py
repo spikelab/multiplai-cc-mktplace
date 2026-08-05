@@ -360,7 +360,11 @@ def entry_disposition(entry: dict) -> str:
 
 
 def _entry_is_stale(
-    path: Path, cutoff_ended: datetime, cutoff_live: datetime
+    path: Path,
+    cutoff_ended: datetime,
+    cutoff_live: datetime,
+    dead_sids: frozenset[str] | set[str] = frozenset(),
+    dead_before: datetime | None = None,
 ) -> bool:
     """Staleness of one registry entry (see :func:`gc_stale` for the policy).
 
@@ -382,6 +386,22 @@ def _entry_is_stale(
         ts = datetime.fromisoformat(str(last.get("ts") or ""))
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
+        # Observation beats both clocks. *dead_sids* are entries whose container
+        # the host looked for and did not find (`lib.fleet.roster_dead_sids`);
+        # the two windows below exist only because nothing used to be able to
+        # tell a killed session from a quiet one.
+        #
+        # Two guards, both load-bearing. `parked` is checked first, above:
+        # parking outranks liveness, since a parked session's process being gone
+        # is the normal case. And the entry must not have spoken since the scan
+        # began (*dead_before*) — the deletion below happens under a lock this
+        # pass may have waited on, and a writer that refreshed the entry
+        # meanwhile is a session that came back. Without this the re-check under
+        # the lock would pass a set it can no longer contradict.
+        if str(entry.get("session_id") or path.stem) in dead_sids and (
+            dead_before is None or ts <= dead_before
+        ):
+            return True
         if last.get("kind") == "end":
             return ts < cutoff_ended
         return ts < cutoff_live
@@ -471,8 +491,18 @@ def gc_stale(
     data_dir: Path,
     days: int = GC_AFTER_DAYS,
     live_days: int = GC_LIVE_AFTER_DAYS,
+    dead_sids: frozenset[str] | set[str] | None = None,
 ) -> int:
     """Delete registry entries whose session ended more than *days* ago.
+
+    *dead_sids* are entries an outside observer has confirmed dead — the
+    caller passes what :func:`lib.fleet.roster_dead_sids` read off the host's
+    container roster. Those are collected on this pass regardless of age, and
+    the reason is that the age windows below are not really about age: they are
+    two guesses standing in for the fact that a session cannot report its own
+    death. Where that fact is available, a guess is not needed. Passed in rather
+    than read here so this module keeps no opinion about containers and no
+    import of the fleet view (which imports this one).
 
     Entries whose last event is anything other than ``end`` age out after
     *live_days* instead — a session killed without firing ``SessionEnd``
@@ -513,17 +543,18 @@ def gc_stale(
         cutoff_ended = now - timedelta(days=days)
         cutoff_live = now - timedelta(days=live_days)
         protected = _pending_extraction_sids(data_dir)
+        dead = frozenset(dead_sids or ())
         for path in list(rdir.glob("*.json")):
             try:
                 if path.stem in protected:
                     continue
-                if not _entry_is_stale(path, cutoff_ended, cutoff_live):
+                if not _entry_is_stale(path, cutoff_ended, cutoff_live, dead, now):
                     continue
                 lock_fd = _lock_entry(path)
                 try:
                     # Re-check under the lock — the writer we may have just
                     # waited on could have refreshed the entry.
-                    if not _entry_is_stale(path, cutoff_ended, cutoff_live):
+                    if not _entry_is_stale(path, cutoff_ended, cutoff_live, dead, now):
                         continue
                     path.unlink(missing_ok=True)
                     path.with_suffix(".adopt").unlink(missing_ok=True)

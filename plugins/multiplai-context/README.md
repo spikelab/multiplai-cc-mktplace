@@ -1301,12 +1301,23 @@ less. A file two sessions both touched last week is shared history.
 |---|---|
 | `disposition: parked` | forever — parking it is you saying you will be back |
 | extraction still queued or in flight | until the extraction finishes |
+| **container confirmed gone by the roster** | **1 hour** |
 | ended cleanly (`SessionEnd` fired) | 7 days |
 | anything else (might still be alive) | 30 days |
 
 The 30-day window exists for sessions that *might* still be running —
 and since nothing outside a session can prove one is not, every entry
-that did not quit cleanly gets it.
+that did not quit cleanly gets it. The roster is exactly that proof
+where the kit launcher is installed: it records the running containers
+on the host, so an entry whose container is absent from a reading taken
+*after* that entry last spoke is over as a matter of observation. Those
+are collected on the next session start rather than sitting out a month.
+The hour is not doubt about the roster — it is room for the deferred
+extraction, which writes `disposition` minutes after a session exits and
+only protects an entry once its marker is on disk.
+
+With no kit and no roster, nothing above changes: the two windows are
+all there is, as before.
 
 Parked being exempt closes a real asymmetry: transcripts survive a year,
 so `claude --resume <id>` works months later, but registry entries used
