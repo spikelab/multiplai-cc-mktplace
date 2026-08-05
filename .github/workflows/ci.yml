@@ -97,12 +97,26 @@ jobs:
       # warning it can't act on.
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          # Keyed on the lock, so a run only pays the cold-cache cost when the
+          # dependency set actually changed.
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       # The media skills' entry points refuse to start without ffmpeg (they
       # print the platform-appropriate install hint and exit non-zero), so
       # without it here the gate reports a host-tool gap, not a skill defect.
       - name: Install ffmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      # Build the environment *before* the gate, not inside it. The gate asks
+      # "does this entry point hang?" with a 30s budget; on a cold cache the
+      # first `uv run` also had to resolve the lock and clone the git-sourced
+      # `multiplai-core`, which regularly blew that budget and was reported as
+      # a timeout — a hung script, which it was not. ~40% of runs in one batch
+      # (issue #114). Paying for it here makes the gate measure the script.
+      - name: Warm the workspace environment
+        run: uv sync --all-packages --frozen
 
       # Runs before the self-tests: this step prints the per-skill hint for
       # anything that fails, where the pytest sweep only reports the names.

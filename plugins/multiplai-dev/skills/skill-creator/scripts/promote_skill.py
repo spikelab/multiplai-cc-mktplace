@@ -40,9 +40,40 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 QUICK_VALIDATE = SCRIPT_DIR / "quick_validate.py"
 
-# How long any single bundled script gets. A skill script that hangs on --help
-# is broken; waiting on it just moves the hang into the gate.
+# How long any single bundled script gets *once its environment exists*. A skill
+# script that hangs on --help is broken; waiting on it just moves the hang into
+# the gate.
 TIMEOUT_SECONDS = 30
+
+# The one exception: the first `uv run` of a gate run may also have to build the
+# environment — resolve the lock, clone the git-sourced `multiplai-core`, create
+# a virtualenv. On a cold CI cache that alone blew the 30s budget and the gate
+# reported "timed out", which reads as a hung script and is not one. The tell
+# was that only the *first* costs assertion ever failed; the other two ran the
+# same script against a warm cache in under two seconds (issue #114).
+#
+# So resolution gets its own, generous budget, spent at most once per run. This
+# is not a weakened gate: the question "does this entry point hang?" is still
+# asked with 30 seconds, of every command that is not paying for the cache miss.
+RESOLVE_TIMEOUT_SECONDS = 300
+
+# Flipped by the first uv-mediated command, which is the one that pays.
+_resolution_budget_spent = False
+
+
+def _mediated_by_uv(cmd) -> bool:
+    """Does *cmd* go through `uv`, and therefore possibly through the network?"""
+    text = cmd if isinstance(cmd, str) else " ".join(str(part) for part in cmd)
+    return text.startswith("uv ") or " uv run" in text or text.startswith("uv\t")
+
+
+def timeout_for(cmd) -> float:
+    """The budget *cmd* gets, and the accounting that goes with spending it."""
+    global _resolution_budget_spent
+    if _mediated_by_uv(cmd) and not _resolution_budget_spent:
+        _resolution_budget_spent = True
+        return RESOLVE_TIMEOUT_SECONDS
+    return TIMEOUT_SECONDS
 
 RUNNABLE_SUFFIXES = {".py", ".sh"}
 
@@ -158,9 +189,9 @@ class GateReport:
 
 
 def check_frontmatter(skill_dir: Path, report: GateReport) -> None:
+    cmd = python_command(QUICK_VALIDATE) + [str(skill_dir)]
     proc = subprocess.run(
-        python_command(QUICK_VALIDATE) + [str(skill_dir)],
-        capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+        cmd, capture_output=True, text=True, timeout=timeout_for(cmd),
         env=_clean_env())
     report.add("frontmatter", proc.returncode == 0,
                (proc.stdout + proc.stderr).strip())
@@ -205,9 +236,9 @@ def check_scripts(skill_dir: Path, report: GateReport) -> None:
                else ["bash", str(script), "--help"])
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=TIMEOUT_SECONDS, env=_clean_env())
-        except subprocess.TimeoutExpired:
-            failures.append(f"{rel}: --help hung (>{TIMEOUT_SECONDS}s)")
+                                  timeout=timeout_for(cmd), env=_clean_env())
+        except subprocess.TimeoutExpired as exc:
+            failures.append(f"{rel}: --help hung (>{exc.timeout:g}s)")
             continue
         if proc.returncode == 0:
             continue
@@ -287,10 +318,10 @@ def check_contract(skill_dir: Path, report: GateReport) -> None:
     for name, cmd, expect in cases:
         try:
             proc = subprocess.run(cmd, shell=True, capture_output=True,
-                                  text=True, timeout=TIMEOUT_SECONDS,
+                                  text=True, timeout=timeout_for(cmd),
                                   cwd=skill_dir)
-        except subprocess.TimeoutExpired:
-            failures.append(f"{name}: timed out")
+        except subprocess.TimeoutExpired as exc:
+            failures.append(f"{name}: timed out after {exc.timeout:g}s")
             continue
         combined = proc.stdout + proc.stderr
         if expect not in combined:

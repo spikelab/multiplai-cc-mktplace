@@ -245,3 +245,40 @@ class TestRealSkills:
         blocked = [s.name for s in skills
                    if not promote(s, run_contract=False).ok]
         assert blocked == []
+
+
+# ---------------------------------------------------------------------------
+# The two budgets (#114)
+# ---------------------------------------------------------------------------
+
+class TestTheResolutionBudgetIsSpentOnce:
+    """A cold uv cache is not a hung script, and must not be reported as one."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_run(self):
+        promote_skill._resolution_budget_spent = False
+        yield
+        promote_skill._resolution_budget_spent = False
+
+    def test_the_first_uv_command_may_pay_for_the_clone(self):
+        assert promote_skill.timeout_for(
+            "uv run --project ../../scripts ../../scripts/costs_report.py --help"
+        ) == promote_skill.RESOLVE_TIMEOUT_SECONDS
+
+    def test_every_later_command_is_held_to_the_tight_budget(self):
+        promote_skill.timeout_for(["uv", "run", "x.py"])
+        assert promote_skill.timeout_for(["uv", "run", "y.py"]) == \
+            promote_skill.TIMEOUT_SECONDS
+        assert promote_skill.timeout_for(
+            "uv run --project . z.py --help") == promote_skill.TIMEOUT_SECONDS
+
+    def test_a_plain_command_never_gets_the_allowance(self):
+        """A hang in `python3 script.py --help` is a hang, not a cache miss —
+        and it must not consume the allowance the uv command needs."""
+        assert promote_skill.timeout_for(["python3", "x.py", "--help"]) == \
+            promote_skill.TIMEOUT_SECONDS
+        assert promote_skill.timeout_for(["bash", "x.sh", "--help"]) == \
+            promote_skill.TIMEOUT_SECONDS
+        # …and the uv command that follows still gets it.
+        assert promote_skill.timeout_for(["uv", "run", "x.py"]) == \
+            promote_skill.RESOLVE_TIMEOUT_SECONDS
