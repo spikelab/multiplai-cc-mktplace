@@ -58,18 +58,29 @@ _STAMP_RE = re.compile(r"^##\s+Session Learnings\s*[—-]\s*(\d{4}-\d{2}-\d{2})"
 _FILE_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.md$")
 
 
+# `_resolve` reports soundness through its reason string; comparing against a
+# literal in two places is how the range check came to test only one end.
+_IN_RANGE = "in range"
+
+
 @dataclass(frozen=True)
 class Repair:
     """One citation rewritten, or one left alone with the reason why."""
 
     cited_file: str
-    line: int
+    # None when the finding is about the file as a whole rather than one
+    # citation in it — an unreadable file, where no citation was checked.
+    line: int | None
     resolved_file: str | None  # None when it could not be resolved
     reason: str
 
     @property
     def repaired(self) -> bool:
         return self.resolved_file is not None
+
+    @property
+    def where(self) -> str:
+        return f"{self.cited_file}:{self.line}" if self.line else self.cited_file
 
 
 def _stamp_date(block_text: str) -> str | None:
@@ -87,7 +98,7 @@ def _resolve(
     """
     known = cited_file in line_counts
     if known and 1 <= line <= line_counts[cited_file]:
-        return None, "in range"
+        return None, _IN_RANGE
 
     cited_date_match = _FILE_DATE_RE.match(cited_file)
     if not cited_date_match:
@@ -133,7 +144,10 @@ def cited_files(proposal: str) -> set[str]:
 
 
 def repair_citations(
-    proposal: str, blocks: Iterable, learnings: dict[str, str]
+    proposal: str,
+    blocks: Iterable,
+    learnings: dict[str, str],
+    unreadable: Iterable[str] = (),
 ) -> tuple[str, list[Repair]]:
     """Rewrite provably-wrong, unambiguously-resolvable citation filenames.
 
@@ -141,23 +155,62 @@ def repair_citations(
     *learnings* maps filename to its full text. Returns the proposal and every
     citation that did not verify — repaired or not — so the caller can report
     both rather than repairing silently.
+
+    *unreadable* names files that exist but could not be read. They must be
+    passed, not merely omitted from *learnings*: absent from *learnings* a file
+    is indistinguishable from one that does not exist, and every citation to it
+    then looks *provably* broken — the line "does not exist" in a file that was
+    never opened. That produced a confirmed false repair in review: a valid
+    ``2026-07-28.md:10`` was rewritten to ``2026-07-29.md:10`` on a transient
+    read failure, because 07-29 held a past-midnight record stamped 07-28
+    covering line 10 — exactly the record shape this module exists to fix. It
+    was then listed under "Citation Repairs" as a verified correction, which is
+    the one outcome the module must never produce. Citations naming an
+    unreadable file are therefore left alone, and the file is reported once so
+    the reviewer knows a check was skipped rather than passed.
     """
     blocks = list(blocks)
-    line_counts = {name: len(text.splitlines()) for name, text in learnings.items()}
+    unreadable = frozenset(unreadable)
+    line_counts = {
+        name: len(text.splitlines())
+        for name, text in learnings.items()
+        if name not in unreadable
+    }
     findings: list[Repair] = []
+    skipped: set[str] = set()
 
     def substitute(match: re.Match) -> str:
         lo = int(match.group("lo"))
         hi = int(match.group("hi") or lo)
         cited = match.group("file")
 
+        if cited in unreadable:
+            skipped.add(cited)
+            return match.group(0)
+
         # Check the whole cited range: a citation is only sound if both ends
         # resolve, and repairing on the strength of one end could move a range
         # that legitimately spans nothing.
         resolved_lo, reason = _resolve(cited, lo, blocks, line_counts)
         if resolved_lo is None:
-            if reason != "in range":
+            if reason != _IN_RANGE:
                 findings.append(Repair(cited, lo, None, reason))
+            elif hi != lo:
+                # `lo` verified, so nothing here is repairable — but a range is
+                # only sound if its tail exists too. Report rather than repair:
+                # a citation half of which is right is not evidence of which
+                # file the other half meant.
+                _, hi_reason = _resolve(cited, hi, blocks, line_counts)
+                if hi_reason != _IN_RANGE:
+                    findings.append(
+                        Repair(
+                            cited,
+                            lo,
+                            None,
+                            f"line {lo} verifies but the range ends at {hi}, "
+                            f"which does not — {hi_reason}",
+                        )
+                    )
             return match.group(0)
 
         resolved_hi, hi_reason = _resolve(cited, hi, blocks, line_counts)
@@ -171,7 +224,23 @@ def repair_citations(
         span = f"{lo}-{hi}" if match.group("hi") else str(lo)
         return f"{match.group('prefix')}{resolved_lo}:{span}"
 
-    return _CITATION_RE.sub(substitute, proposal), findings
+    repaired = _CITATION_RE.sub(substitute, proposal)
+
+    # One finding per unreadable file that the proposal actually cites — not
+    # one per citation. The reviewer needs to know a check was skipped, and
+    # repeating it per citation would bury the citations that genuinely failed.
+    findings += [
+        Repair(
+            name,
+            None,
+            None,
+            "file could not be read, so citations naming it were not checked "
+            "(they are left exactly as written)",
+        )
+        for name in sorted(skipped)
+    ]
+
+    return repaired, findings
 
 
 def render_findings(findings: Sequence[Repair]) -> str:
@@ -203,11 +272,13 @@ def render_findings(findings: Sequence[Repair]) -> str:
 
     if broken:
         out.append(
-            f"{len(broken)} citation(s) could not be verified and were left "
-            "unchanged — check these by hand before relying on them:"
+            f"{len(broken)} item(s) could not be verified and were left "
+            "unchanged — check these by hand before relying on them. An entry "
+            "naming a file rather than a line is a file that could not be "
+            "read, so none of its citations were checked:"
         )
         out.append("")
-        out += [f"- `{f.cited_file}:{f.line}` — {f.reason}" for f in broken]
+        out += [f"- `{f.where}` — {f.reason}" for f in broken]
         out.append("")
 
     return "\n".join(out).rstrip() + "\n"
