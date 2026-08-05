@@ -349,9 +349,9 @@ class TestSessionStartWiring:
 
     def test_a_closed_gate_costs_no_subprocess_at_all(self, tmp_path, monkeypatch):
         """The child re-checks the gate authoritatively, but reaching it costs a
-        `uv run` startup — and the maintainer's PEP 723 header declares a git
-        dependency, so a cold uv cache makes that a network fetch at session
-        start. Paying it to accomplish nothing must not happen."""
+        `uv run` startup — and the scripts project declares a git dependency,
+        so a cold uv cache makes that a network fetch at session start. Paying
+        it to accomplish nothing must not happen."""
         import session_start
 
         (tmp_path / "memory_maintainer.py").write_text("", encoding="utf-8")

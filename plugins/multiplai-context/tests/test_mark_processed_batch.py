@@ -1,9 +1,8 @@
 """Batched ``--mark-processed`` and the deterministic ``--gc-learnings``.
 
 Why these exist. A `/dream-remember` review of a real proposal decides 50–70
-items, and the pre-batch apply path spent one `uv run --no-project` cold start
-per item — a PEP 723 resolve and environment build, to move text inside one
-local file. On 2026-07-24 a 70-item review applied five files and then ran out
+items, and the pre-batch apply path spent one `uv run` cold start per item — a
+fresh interpreter and environment check, to move text inside one local file. On 2026-07-24 a 70-item review applied five files and then ran out
 of context mid-review. The batch path collapses that to one call per target
 file; these tests hold it to producing *exactly* what the per-item path did.
 

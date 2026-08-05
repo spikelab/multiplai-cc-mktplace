@@ -111,7 +111,10 @@ class TestProcessDeferredExtractions:
         ]
 
         argv, kwargs = spy.calls[0]
-        assert argv == ["uv", "run", "--no-project", str(extract_script)]
+        # --project is mandatory: without it the child cannot resolve
+        # scripts/pyproject.toml and dies with ModuleNotFoundError, silently
+        # (stderr is DEVNULL and nothing awaits it). See lib/runtime.
+        assert argv == ["uv", "run", "--project", str(SCRIPTS_DIR), str(extract_script)]
         assert kwargs["start_new_session"] is True
         payload = json.loads(spy.handles[0].stdin.written.decode())
         assert payload["session_id"] == "sess-a"
