@@ -43,7 +43,7 @@ def data_env(tmp_path, monkeypatch):
     from multiplai_core.paths import _reset_cache
 
     data_dir = tmp_path / "data"
-    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_data_dir", str(data_dir))
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_DATA_DIR", str(data_dir))
     _reset_cache()
     yield data_dir
     _reset_cache()

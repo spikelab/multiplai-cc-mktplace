@@ -260,7 +260,7 @@ class TestMemoryCatalogHit:
         memory_dir = tmp_path / "memory"
         memory_dir.mkdir()
         (memory_dir / "me.md").write_text("should not be read")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         # Track if source files were read
         original_read_text = Path.read_text
@@ -375,7 +375,7 @@ class TestSkillsCatalogHit:
         """
         import context_manager
 
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_skills", "true")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS", "true")
 
         catalog = _valid_skills_catalog()
         _write_catalog(plugin_data_env, "skills.json", catalog)
@@ -394,7 +394,7 @@ class TestSkillsCatalogHit:
         """
         import context_manager
 
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_skills", "true")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS", "true")
         # No skills.json created
 
         # Should not raise — should fall back gracefully
@@ -425,8 +425,8 @@ class TestResourcesCatalogHit:
 
         resources_dir = tmp_path / "resources"
         resources_dir.mkdir()
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_resources", "true")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_resources_dir", str(resources_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES", "true")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_RESOURCES_DIR", str(resources_dir))
 
         catalog = _valid_resources_catalog()
         _write_catalog(plugin_data_env, "resources.json", catalog)
@@ -779,7 +779,7 @@ class TestOptionalCatalogsMissing:
         """
         import context_manager
 
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_skills", "true")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS", "true")
         # No skills.json
 
         result = context_manager._read_catalog_or_scan("skills")
@@ -796,7 +796,7 @@ class TestOptionalCatalogsMissing:
         """
         import context_manager
 
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_resources", "false")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES", "false")
 
         result = context_manager._read_catalog_or_scan("resources")
 
@@ -814,7 +814,7 @@ class TestOptionalCatalogsMissing:
         """
         import context_manager
 
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_skills", "true")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS", "true")
 
         with caplog.at_level(logging.DEBUG):
             context_manager._read_catalog_or_scan("skills")
@@ -1118,7 +1118,7 @@ class TestCatalogErrorIsolation:
         """Each catalog type is read independently — one failure doesn't cascade."""
         import context_manager
 
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_skills", "true")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS", "true")
 
         # Memory: valid
         _write_catalog(plugin_data_env, "memory.json", _valid_memory_catalog())

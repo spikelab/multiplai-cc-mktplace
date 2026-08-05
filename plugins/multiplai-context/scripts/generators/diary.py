@@ -69,8 +69,8 @@ class DiaryGenerator(GeneratorBase):
         """Configured diary directory, resolver-routed.
 
         Uses the path resolver (not the raw env var) so the
-        workspace/standalone fallbacks apply when
-        CLAUDE_PLUGIN_OPTION_diary_dir is unset.
+        workspace/standalone fallbacks apply when the ``diary_dir``
+        plugin option is unset.
         """
         return Paths.resolve().diary_dir()
 

@@ -82,7 +82,7 @@ def _make_diary_generator(tmp_path, *, client=None, config=None):
     gen = DiaryGenerator(config=config, model_client=client)
 
     os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
-    os.environ["CLAUDE_PLUGIN_OPTION_diary_dir"] = str(diary_dir)
+    os.environ["CLAUDE_PLUGIN_OPTION_DIARY_DIR"] = str(diary_dir)
 
     return gen, catalogs_dir, diary_dir
 
@@ -292,7 +292,7 @@ class TestDiscoverSources:
         gen = DiaryGenerator(config=config, model_client=client)
 
         os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
-        os.environ["CLAUDE_PLUGIN_OPTION_diary_dir"] = str(tmp_path / "nonexistent")
+        os.environ["CLAUDE_PLUGIN_OPTION_DIARY_DIR"] = str(tmp_path / "nonexistent")
 
         sources = gen.discover_sources()
         assert sources == {}

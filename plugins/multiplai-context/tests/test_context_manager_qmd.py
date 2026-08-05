@@ -43,9 +43,9 @@ def _fake_qmd(tmp_path: Path, results: list[dict], exit_code: int = 0) -> Path:
 def _run_hook(env_setup, *, prompt: str, qmd_bin_dir: Path | None,
               extra_env: dict | None = None) -> dict:
     qmd_env = {
-        "CLAUDE_PLUGIN_OPTION_enable_resources": "true",
-        "CLAUDE_PLUGIN_OPTION_resources_retrieval": "qmd",
-        "CLAUDE_PLUGIN_OPTION_qmd_mode": "local",
+        "CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES": "true",
+        "CLAUDE_PLUGIN_OPTION_RESOURCES_RETRIEVAL": "qmd",
+        "CLAUDE_PLUGIN_OPTION_QMD_MODE": "local",
         # Point HOME away from any real ~/.bun/bin qmd; PATH carries the fake.
         "HOME": str(env_setup["tmp_path"]),
         "PATH": (
@@ -127,7 +127,7 @@ class TestQmdBackendE2E:
         out = _run_hook(
             env_setup, prompt="which water filter should I buy?",
             qmd_bin_dir=bin_dir,
-            extra_env={"CLAUDE_PLUGIN_OPTION_resources_retrieval": "catalog"},
+            extra_env={"CLAUDE_PLUGIN_OPTION_RESOURCES_RETRIEVAL": "catalog"},
         )
         # No resources catalog on disk → no resources under the catalog path.
         assert out.get("resources_files", 0) == 0

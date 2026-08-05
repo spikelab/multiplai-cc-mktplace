@@ -403,14 +403,14 @@ class TestQmdRefreshRemoteQuoting:
         assert cfg.qmd_min_score == 0.30
 
     def test_loads_from_env(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_resources_retrieval", "qmd")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_mode", "http")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_ssh_host", "myhost")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_collection", "notes")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_strategy", "fts")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_http_url", "http://host.docker.internal:9000")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_candidate_limit", "20")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_qmd_min_score", "0.5")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_RESOURCES_RETRIEVAL", "qmd")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_MODE", "http")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_SSH_HOST", "myhost")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_COLLECTION", "notes")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_STRATEGY", "fts")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_HTTP_URL", "http://host.docker.internal:9000")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_CANDIDATE_LIMIT", "20")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_MIN_SCORE", "0.5")
         cfg = load_catalog_config()
         assert cfg.resources_retrieval == "qmd"
         assert cfg.qmd_mode == "http"

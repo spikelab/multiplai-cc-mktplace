@@ -676,7 +676,7 @@ class TestHookExecutionAfterRename:
                 del env[k]
         env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
         env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
-        env["CLAUDE_PLUGIN_OPTION_memory_dir"] = str(memory_dir)
+        env["CLAUDE_PLUGIN_OPTION_MEMORY_DIR"] = str(memory_dir)
 
         input_data = json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": "test"})
         result = subprocess.run(

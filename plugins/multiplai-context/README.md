@@ -151,9 +151,11 @@ or set manually in your `settings.json` under the compound
 }
 ```
 
-Values are exposed to hooks as `CLAUDE_PLUGIN_OPTION_*` env vars.
+Values are exposed to hooks as `CLAUDE_PLUGIN_OPTION_<KEY>` env vars, where
+`<KEY>` is the option key **uppercased** — `workspace_dir` arrives as
+`CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR`.
 (Sideloaded installs via `claude --plugin-dir` ignore `pluginConfigs` —
-set the env vars directly.)
+set the env vars directly, in that same uppercase form.)
 
 ### Quick start: the only options you probably need
 
@@ -781,7 +783,7 @@ two paths cannot drift, and the dequeue is an atomic rename, so a
 launcher drain and a fresh session firing together is safe.
 
 The script's own header documents the environment it needs. The one that
-bites: `CLAUDE_PLUGIN_OPTION_workspace_dir` (or `WORKSPACE`), without
+bites: `CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR` (or `WORKSPACE`), without
 which the diary silently lands in `~/.multiplai/` instead of your
 workspace — `--data-dir` fixes the queue's location, not the diary's.
 

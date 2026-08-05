@@ -50,6 +50,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from multiplai_core.plugin_options import option, option_float, option_int
+
 from lib.fsio import atomic_write
 
 logger = logging.getLogger("multiplai.checkpoint")
@@ -140,44 +142,17 @@ class CheckpointConfig:
     min_session_minutes: int = _DEFAULT_MIN_SESSION_MINUTES
 
 
-def _opt(name: str) -> str:
-    """Read a ``CLAUDE_PLUGIN_OPTION_<name>`` env var ('' when unset)."""
-    return os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name}", "").strip()
-
-
-def _opt_int(name: str, default: int) -> int:
-    raw = _opt(name)
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        logger.warning("Malformed %s=%r; using default %d", name, raw, default)
-        return default
-
-
-def _opt_float(name: str, default: float) -> float:
-    raw = _opt(name)
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        logger.warning("Malformed %s=%r; using default %s", name, raw, default)
-        return default
-
-
 def load_config() -> CheckpointConfig:
-    """Build config from ``CLAUDE_PLUGIN_OPTION_checkpoint_*`` env vars.
+    """Build config from the plugin's ``checkpoint_*`` options.
 
     Malformed values fall back to defaults with a warning — config problems
     must never crash a hook. Bands are normalized to sorted-unique-positive;
     the handoff threshold is clamped to at least the highest band so a
     partial override can't produce a handoff below the last checkpoint.
     """
-    enabled = _opt("checkpoint_enabled").lower() not in ("false", "0", "no", "off")
+    enabled = option("checkpoint_enabled").lower() not in ("false", "0", "no", "off")
 
-    raw_bands = _opt("checkpoint_tokens")
+    raw_bands = option("checkpoint_tokens")
     bands: tuple[int, ...] = _DEFAULT_BANDS
     if raw_bands:
         try:
@@ -192,7 +167,7 @@ def load_config() -> CheckpointConfig:
                 raw_bands, _DEFAULT_BANDS,
             )
 
-    handoff = _opt_int("checkpoint_handoff_tokens", bands[-1])
+    handoff = option_int("checkpoint_handoff_tokens", bands[-1])
     if handoff < bands[-1]:
         logger.warning(
             "checkpoint_handoff_tokens=%d below last band %d; clamping",
@@ -203,14 +178,14 @@ def load_config() -> CheckpointConfig:
     return CheckpointConfig(
         bands=bands,
         handoff_tokens=handoff,
-        refresh_tokens=max(1, _opt_int("checkpoint_refresh_tokens", _DEFAULT_REFRESH)),
-        ttl_hours=_opt_float("checkpoint_ttl_hours", _DEFAULT_TTL_HOURS),
-        timeout_s=_opt_int("checkpoint_timeout_s", _DEFAULT_TIMEOUT_S),
-        model=_opt("checkpoint_model") or None,
+        refresh_tokens=max(1, option_int("checkpoint_refresh_tokens", _DEFAULT_REFRESH)),
+        ttl_hours=option_float("checkpoint_ttl_hours", _DEFAULT_TTL_HOURS),
+        timeout_s=option_int("checkpoint_timeout_s", _DEFAULT_TIMEOUT_S),
+        model=option("checkpoint_model") or None,
         enabled=enabled,
-        stale_hours=max(0.0, _opt_float("checkpoint_stale_hours", _DEFAULT_STALE_HOURS)),
+        stale_hours=max(0.0, option_float("checkpoint_stale_hours", _DEFAULT_STALE_HOURS)),
         min_session_minutes=max(
-            0, _opt_int("checkpoint_min_session_minutes", _DEFAULT_MIN_SESSION_MINUTES)
+            0, option_int("checkpoint_min_session_minutes", _DEFAULT_MIN_SESSION_MINUTES)
         ),
     )
 

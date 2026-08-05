@@ -197,8 +197,8 @@ class TestConfig:
         assert cfg.min_session_minutes == 30
 
     def test_both_fields_have_their_own_env_knob(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_stale_hours", "1.5")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_min_session_minutes", "10")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_STALE_HOURS", "1.5")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_MIN_SESSION_MINUTES", "10")
 
         cfg = cp.load_config()
 
@@ -208,8 +208,8 @@ class TestConfig:
     def test_a_malformed_value_falls_back_rather_than_crashing(self, monkeypatch):
         """A config problem must never crash a hook — the existing
         `load_config` contract."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_stale_hours", "soon")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_min_session_minutes", "a lot")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_STALE_HOURS", "soon")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_MIN_SESSION_MINUTES", "a lot")
 
         cfg = cp.load_config()
 
@@ -217,8 +217,8 @@ class TestConfig:
         assert cfg.min_session_minutes == 30
 
     def test_a_negative_value_is_clamped_not_inverted(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_stale_hours", "-5")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_min_session_minutes", "-1")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_STALE_HOURS", "-5")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_MIN_SESSION_MINUTES", "-1")
 
         cfg = cp.load_config()
 
@@ -231,12 +231,12 @@ class TestTtlHoursUntouched:
     have been the smaller diff and would have broken rebuild expiry silently."""
 
     def test_the_stale_knob_does_not_move_ttl_hours(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_stale_hours", "1")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_STALE_HOURS", "1")
 
         assert cp.load_config().ttl_hours == 6.0
 
     def test_the_ttl_knob_does_not_move_stale_hours(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_ttl_hours", "1")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_TTL_HOURS", "1")
 
         cfg = cp.load_config()
         assert cfg.ttl_hours == 1.0

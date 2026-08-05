@@ -32,7 +32,7 @@ def _write_diary(ws, sessions):
 def workspace(monkeypatch, reset_paths_cache, tmp_path):
     ws = tmp_path / "ws"
     (ws / ".multiplai").mkdir(parents=True)
-    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_workspace_dir", str(ws))
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR", str(ws))
     return ws
 
 

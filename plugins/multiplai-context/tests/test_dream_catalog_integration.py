@@ -206,8 +206,8 @@ class TestAutodreamCatalogGenerationBehavior:
 
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN_ROOT))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_dir", str(diary_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_DIARY_DIR", str(diary_dir))
 
         # Create a learnings file so dream has work to do
         learnings = data_dir / "learnings.md"

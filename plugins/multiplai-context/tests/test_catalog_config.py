@@ -609,7 +609,7 @@ class TestConfigLoadingFromPluginSettings:
     def test_load_respects_model_override(self, monkeypatch):
         """Scenario: Config module exposes catalog settings from env vars."""
         monkeypatch.setenv(
-            "CLAUDE_PLUGIN_OPTION_catalog_model", "claude-haiku-4-5"
+            "CLAUDE_PLUGIN_OPTION_CATALOG_MODEL", "claude-haiku-4-5"
         )
         from generators.config import load_catalog_config
 
@@ -618,7 +618,7 @@ class TestConfigLoadingFromPluginSettings:
 
     def test_load_respects_ttl_hours_override(self, monkeypatch):
         """Scenario: Config module reflects user overrides for ttl_hours."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_catalog_ttl_hours", "12")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CATALOG_TTL_HOURS", "12")
         from generators.config import load_catalog_config
 
         config = load_catalog_config()
@@ -626,7 +626,7 @@ class TestConfigLoadingFromPluginSettings:
 
     def test_load_respects_diary_catalog_days_override(self, monkeypatch):
         """Scenario: Config module reflects user overrides for diary_catalog_days."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_catalog_days", "14")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_DIARY_CATALOG_DAYS", "14")
         from generators.config import load_catalog_config
 
         config = load_catalog_config()
@@ -635,7 +635,7 @@ class TestConfigLoadingFromPluginSettings:
     def test_load_respects_enable_skills_override(self, monkeypatch):
         """Scenario: Skills catalog enabled via config."""
         monkeypatch.setenv(
-            "CLAUDE_PLUGIN_OPTION_enable_skills", "true"
+            "CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS", "true"
         )
         from generators.config import load_catalog_config
 
@@ -645,7 +645,7 @@ class TestConfigLoadingFromPluginSettings:
     def test_load_respects_enable_resources_override(self, monkeypatch):
         """Scenario: Resources catalog enabled via config."""
         monkeypatch.setenv(
-            "CLAUDE_PLUGIN_OPTION_enable_resources", "true"
+            "CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES", "true"
         )
         from generators.config import load_catalog_config
 
@@ -654,7 +654,7 @@ class TestConfigLoadingFromPluginSettings:
 
     def test_load_respects_enable_costs_override(self, monkeypatch):
         """Scenario: Cost collection enabled via config."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_costs", "true")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_COSTS", "true")
         from generators.config import load_catalog_config
 
         config = load_catalog_config()
@@ -662,7 +662,7 @@ class TestConfigLoadingFromPluginSettings:
 
     def test_load_validates_negative_ttl_hours(self, monkeypatch):
         """Scenario: Negative ttl_hours from env is rejected, default used."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_catalog_ttl_hours", "-5")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CATALOG_TTL_HOURS", "-5")
         from generators.config import load_catalog_config
 
         config = load_catalog_config()
@@ -672,7 +672,7 @@ class TestConfigLoadingFromPluginSettings:
 
     def test_load_validates_negative_diary_catalog(self, monkeypatch):
         """Scenario: Negative diary_catalog_days from env is rejected, default used."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_catalog_days", "-10")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_DIARY_CATALOG_DAYS", "-10")
         from generators.config import load_catalog_config
 
         config = load_catalog_config()
@@ -682,7 +682,7 @@ class TestConfigLoadingFromPluginSettings:
 
     def test_load_handles_non_numeric_ttl_hours(self, monkeypatch):
         """Edge case: Non-numeric ttl_hours from env should use default."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_catalog_ttl_hours", "abc")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CATALOG_TTL_HOURS", "abc")
         from generators.config import load_catalog_config
 
         config = load_catalog_config()
@@ -692,7 +692,7 @@ class TestConfigLoadingFromPluginSettings:
 
     def test_load_handles_non_numeric_diary_catalog(self, monkeypatch):
         """Edge case: Non-numeric diary_catalog_days from env should use default."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_catalog_days", "abc")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_DIARY_CATALOG_DAYS", "abc")
         from generators.config import load_catalog_config
 
         config = load_catalog_config()
@@ -716,7 +716,7 @@ class TestBooleanConfigParsing:
     def test_enable_skills_false_string(self, monkeypatch):
         """Scenario: 'false' string maps to False."""
         monkeypatch.setenv(
-            "CLAUDE_PLUGIN_OPTION_enable_skills", "false"
+            "CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS", "false"
         )
         from generators.config import load_catalog_config
 
@@ -726,7 +726,7 @@ class TestBooleanConfigParsing:
     def test_enable_skills_true_string(self, monkeypatch):
         """Scenario: 'true' string maps to True."""
         monkeypatch.setenv(
-            "CLAUDE_PLUGIN_OPTION_enable_skills", "true"
+            "CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS", "true"
         )
         from generators.config import load_catalog_config
 
@@ -736,7 +736,7 @@ class TestBooleanConfigParsing:
     def test_enable_resources_false_string(self, monkeypatch):
         """Scenario: 'false' string maps to False for resources."""
         monkeypatch.setenv(
-            "CLAUDE_PLUGIN_OPTION_enable_resources", "false"
+            "CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES", "false"
         )
         from generators.config import load_catalog_config
 
@@ -746,7 +746,7 @@ class TestBooleanConfigParsing:
     def test_enable_resources_empty_string_is_false(self, monkeypatch):
         """Scenario: Empty string for boolean config is treated as False."""
         monkeypatch.setenv(
-            "CLAUDE_PLUGIN_OPTION_enable_resources", ""
+            "CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES", ""
         )
         from generators.config import load_catalog_config
 
@@ -769,10 +769,10 @@ class TestResourcesDirConfig:
     def test_resources_dir_from_env(self, monkeypatch):
         """Scenario: Resources dir loaded from environment."""
         monkeypatch.setenv(
-            "CLAUDE_PLUGIN_OPTION_enable_resources", "true"
+            "CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES", "true"
         )
         monkeypatch.setenv(
-            "CLAUDE_PLUGIN_OPTION_resources_dir", "/path/to/resources"
+            "CLAUDE_PLUGIN_OPTION_RESOURCES_DIR", "/path/to/resources"
         )
         from generators.config import load_catalog_config
 
@@ -786,10 +786,10 @@ class TestResourcesDirConfig:
         responsible for skipping when dir is empty.
         """
         monkeypatch.setenv(
-            "CLAUDE_PLUGIN_OPTION_enable_resources", "true"
+            "CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES", "true"
         )
         # resources_dir not set or empty
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_resources_dir", raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_RESOURCES_DIR", raising=False)
         from generators.config import load_catalog_config
 
         config = load_catalog_config()
