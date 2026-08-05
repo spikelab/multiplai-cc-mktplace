@@ -420,36 +420,36 @@ class TestReferenceDocs:
     # --- framework detection ---
 
     def test_manage_py_detects_django(self, tmp_path):
-        config = self._config_with_docs(tmp_path, "django-best-practices.md")
+        config = self._config_with_docs(tmp_path, "django-drf-best-practices.md")
         (config.project_dir / "manage.py").write_text("#!/usr/bin/env python\n")
         assert config.detect_frameworks() == ["django"]
-        assert "django-best-practices.md" in config.reference_doc_names()
+        assert "django-drf-best-practices.md" in config.reference_doc_names()
 
     def test_django_in_pyproject_dependencies_detects_django(self, tmp_path):
-        config = self._config_with_docs(tmp_path, "django-best-practices.md")
+        config = self._config_with_docs(tmp_path, "django-drf-best-practices.md")
         (config.project_dir / "pyproject.toml").write_text(
             '[project]\nname = "site"\ndependencies = ["Django>=5.0", "gunicorn"]\n'
         )
         assert config.detect_frameworks() == ["django"]
 
     def test_django_in_requirements_txt_detects_django(self, tmp_path):
-        config = self._config_with_docs(tmp_path, "django-best-practices.md")
+        config = self._config_with_docs(tmp_path, "django-drf-best-practices.md")
         (config.project_dir / "requirements.txt").write_text(
             "# app deps\ndjango[argon2]==5.0.1\nrequests\n"
         )
         assert config.detect_frameworks() == ["django"]
 
     def test_plain_python_project_is_not_django(self, tmp_path):
-        config = self._config_with_docs(tmp_path, "django-best-practices.md")
+        config = self._config_with_docs(tmp_path, "django-drf-best-practices.md")
         (config.project_dir / "pyproject.toml").write_text(
             '[project]\nname = "lib"\ndependencies = ["pydantic"]\n'
         )
         assert config.detect_frameworks() == []
-        assert "django-best-practices.md" not in config.reference_doc_names()
+        assert "django-drf-best-practices.md" not in config.reference_doc_names()
 
     def test_react_in_package_json_extends_the_node_docs(self, tmp_path):
         config = self._config_with_docs(
-            tmp_path, "bun-vite-react-best-practices.md", "react-best-practices.md",
+            tmp_path, "bun-vite-react-best-practices.md", "react-nextjs-best-practices.md",
             stack="package",
         )
         (config.project_dir / "package.json").write_text(
@@ -457,12 +457,12 @@ class TestReferenceDocs:
         )
         assert config.detect_frameworks() == ["react"]
         assert [p.name for p in config.stack_reference_docs()] == [
-            "bun-vite-react-best-practices.md", "react-best-practices.md",
+            "bun-vite-react-best-practices.md", "react-nextjs-best-practices.md",
         ]
 
     def test_node_project_without_react_keeps_only_the_stack_docs(self, tmp_path):
         config = self._config_with_docs(
-            tmp_path, "bun-vite-react-best-practices.md", "react-best-practices.md",
+            tmp_path, "bun-vite-react-best-practices.md", "react-nextjs-best-practices.md",
             stack="package",
         )
         (config.project_dir / "package.json").write_text('{"dependencies": {"express": "^4"}}')
@@ -517,6 +517,75 @@ class TestReferenceDocs:
         text = config.reference_docs_text()
         assert "truncated at" in text
         assert text.count("x") == REFERENCE_DOC_CHAR_LIMIT
+
+    def test_builtin_map_names_only_docs_the_kit_actually_ships(self):
+        """The regression this map already suffered: the Django and React docs
+        were renamed in multiplai-kit and the map kept the old names, so both
+        keys silently resolved nothing for weeks. Pinning the names here means
+        the next rename breaks a test instead of a build."""
+        from build_pipeline.config import _DEFAULT_REFERENCE_DOCS
+
+        assert _DEFAULT_REFERENCE_DOCS["django"] == ["django-drf-best-practices.md"]
+        assert _DEFAULT_REFERENCE_DOCS["react"] == ["react-nextjs-best-practices.md"]
+        assert _DEFAULT_REFERENCE_DOCS["fastapi"] == ["fastapi-best-practices.md"]
+
+    def test_fastapi_dependency_detects_fastapi(self, tmp_path):
+        config = self._config_with_docs(tmp_path, "fastapi-best-practices.md")
+        (config.project_dir / "pyproject.toml").write_text(
+            '[project]\nname = "api"\ndependencies = ["fastapi", "uvicorn"]\n'
+        )
+        assert config.detect_frameworks() == ["fastapi"]
+        assert "fastapi-best-practices.md" in config.reference_doc_names()
+
+    def test_next_without_react_still_resolves_the_frontend_doc(self, tmp_path):
+        """A Next.js app can list only `next` — react arrives transitively.
+        Before, that project resolved no frontend standards at all."""
+        config = self._config_with_docs(
+            tmp_path, "react-nextjs-best-practices.md", stack="package",
+        )
+        (config.project_dir / "package.json").write_text('{"dependencies": {"next": "^15.0.0"}}')
+        assert config.detect_frameworks() == ["react"]
+        assert [p.name for p in config.stack_reference_docs()] == [
+            "react-nextjs-best-practices.md",
+        ]
+
+    def test_long_sectioned_doc_keeps_whole_sections_and_a_full_index(self):
+        """The reduction must never hand the generator half a rule, and must
+        always say which sections it dropped — the doc is 60k chars and the
+        generator has no tools to go read the rest."""
+        from build_pipeline.config import REFERENCE_DOC_CHAR_LIMIT, summarize_reference_doc
+
+        body = "\n\n".join(
+            f"## Section {i}\n" + f"rule text for section {i}. " * 400 for i in range(1, 8)
+        )
+        text = "# Standards\n\nPreamble line.\n\n" + body
+        assert len(text) > REFERENCE_DOC_CHAR_LIMIT
+
+        out = summarize_reference_doc("doc.md", text, REFERENCE_DOC_CHAR_LIMIT)
+        assert len(out) <= REFERENCE_DOC_CHAR_LIMIT + 400  # index + marker overhead
+        assert "Preamble line." in out
+        # Every section is named in the index, whether or not its body fit.
+        for i in range(1, 8):
+            assert f"Section {i}" in out
+        assert "section(s) omitted for length" in out
+        # No section body is cut mid-sentence: each included body ends at its
+        # own last full sentence, so the fragment "rule text for sec" (a cut
+        # inside the repeated sentence) must not appear.
+        assert "rule text for sec\n" not in out
+        assert not out.rstrip().endswith("rule text for section")
+
+    def test_short_doc_is_passed_through_untouched(self):
+        from build_pipeline.config import summarize_reference_doc
+
+        text = "# Doc\n\n## One\nbody\n"
+        assert summarize_reference_doc("doc.md", text, 24000) == text
+
+    def test_doc_with_no_sections_falls_back_to_a_character_cut(self):
+        from build_pipeline.config import summarize_reference_doc
+
+        out = summarize_reference_doc("doc.md", "y" * 500, 100)
+        assert out.count("y") == 100
+        assert "truncated at 100 chars" in out
 
     def test_unreadable_reference_doc_skipped_not_fatal(self, tmp_path, caplog):
         ref_dir = tmp_path / "claude-config" / "reference" / "dev"

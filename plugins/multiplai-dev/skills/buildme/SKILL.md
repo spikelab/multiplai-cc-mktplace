@@ -59,21 +59,55 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 `prototype: {enabled: auto|true|false}`, `respec: {halt_on_contradiction: false}`,
 `git: {worktree: true, push: true, pr: draft|ready|none}`.
 
-`specs/config.yaml` also takes `reference_docs:` — the docs under
-`$CLAUDE_CONFIG_DIR/reference/dev/` that the design and task breakdown are
-written against. Keys are the detected stack (`pyproject`, `Package`,
-`package`, `Cargo`, `go`) or a detected framework (`django`, `react`); each key
-given here **replaces** the built-in list for that key alone:
+### Reference docs — the standards the specs are written against
+
+Every build resolves engineering-standards docs from
+`$CLAUDE_CONFIG_DIR/reference/dev/` and **inlines them into the
+spec-generation prompts**. Inlining (rather than pointing at a path) is forced:
+the spec-gen system prompt allows no tools, so the generator cannot go read
+anything. This is why buildme has its own mechanism and does not rely on the
+`DEV REFERENCES` pointer block that multiplai-context injects into ordinary
+sessions — the two cover different phases and neither replaces the other.
+
+Resolution, in order:
+
+1. **Stack** — the manifest filename (`pyproject`, `package`, `Package`,
+   `Cargo`, `go`).
+2. **Frameworks** — read out of the manifests, not their names, because a
+   Django app and a plain library are both `pyproject.toml`: `manage.py` or a
+   `django` dependency → `django`; a `fastapi` dependency → `fastapi`; a
+   `react` **or `next`** dependency → `react`.
+3. **`reference_docs:` in `specs/config.yaml`** replaces the built-in list for
+   whichever keys it names, leaving the rest alone:
 
 ```yaml
 reference_docs:
   pyproject: [uv-python-best-practices.md, our-house-style.md]
 ```
 
-Frameworks are detected from the manifests, not the manifest *name* — `manage.py`
-or a `django` dependency adds the django docs on top of the python ones. A name
-with no file on disk is skipped; the run prints `REFERENCES:<names>` (or
-`REFERENCES:(none)`) so what actually reached the generator is visible.
+Built-in map (`_DEFAULT_REFERENCE_DOCS` in `build_pipeline/config.py`):
+`pyproject` → uv + project-structure · `django` → `django-drf-best-practices.md`
+· `fastapi` → `fastapi-best-practices.md` · `package` → bun/vite/react ·
+`react` → `react-nextjs-best-practices.md` · `Package` → swift + swift-testing ·
+`Cargo`/`go` → none yet.
+
+A name with no file on disk is skipped, and **renaming a doc without updating
+the map silently removes it from every build** — the Django and React entries
+were dead for a month that way. The run prints `REFERENCES:<names>` (or
+`REFERENCES:(none)`) so what actually reached the generator is visible, and a
+detected stack that resolves *nothing* logs a warning: it means the specs below
+were written with no conventions to build to.
+
+**Long docs are reduced, not cut.** A doc over `REFERENCE_DOC_CHAR_LIMIT`
+(24000) is passed through `summarize_reference_doc`, which keeps whole sections
+plus an index of **every** section in the doc — including the ones whose bodies
+did not fit, so the generator knows what it did not receive, and the TDD phases
+(which do hold `Read`) can fetch it. The old behaviour was a flat character cut
+that ended mid-sentence, which presents a truncated rule as a complete one.
+
+The same docs also reach the **reviewer** via `standards_files`, which is
+resolved separately (absolute path, then project dir, then `reference/dev/`,
+then `$CLAUDE_CONFIG_DIR`) and is not capped.
 
 ## Git lifecycle
 

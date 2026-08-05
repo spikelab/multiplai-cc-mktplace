@@ -10,7 +10,7 @@
 | `tdd_engine.py` | Block-by-block TDD with agent spawning. Each block runs test → implement → **refactor** on every tier; the refactor is verified (suite re-run + `unchanged_tests_gate`) and its diff discarded on failure. `_run_refactor_all` is the one conservative whole-change pass, between the block loop and `_run_final_review`, guarded by `TDDState.refactor_all_done`. | Via llm_steps |
 | `apply.py` | Manual single-agent implementation | Via sdk |
 | `change_manager.py` | Manages specs/ directory (DAG, status, templates, archiving) | No |
-| `config.py` | BuildConfig, tier detection, test command discovery, reference-doc resolution (`stack_reference_docs`/`reference_docs_text`: built-in stack map + `reference_docs:` overrides from `specs/config.yaml` + django/react manifest detection) | No |
+| `config.py` | BuildConfig, tier detection, test command discovery, reference-doc resolution (`stack_reference_docs`/`reference_docs_text`: built-in stack map + `reference_docs:` overrides from `specs/config.yaml` + django/fastapi/react manifest detection; `summarize_reference_doc` reduces an over-limit doc on section boundaries and always emits the full section index) | No |
 | `state.py` | BuildState with checkpoint/resume | No |
 | `models.py` | Pydantic models for all structured data | No |
 | `gates.py` | Quality gate assertions (pure code) + agent-report parsers (`parse_agent_status`, `parse_implementation_note`, `parse_docs_impact`). New gates: `unknowns_gate`, `prototype_required`, `prototype_gate`, `docs_freshness_gate` (warn-only). | No |
@@ -85,6 +85,19 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   language.
 
 ## Invariants (do not "simplify" these away)
+
+- **A reference-doc filename in `_DEFAULT_REFERENCE_DOCS` must match a file the
+  kit actually ships.** Resolution does no fuzzy matching and a miss is only an
+  INFO line, so a rename on the kit side silently removes that doc from every
+  build while the run still looks healthy — which is exactly what happened to
+  the django and react entries between 2026-07 and 2026-08.
+  `test_builtin_map_names_only_docs_the_kit_actually_ships` pins the names so
+  the next rename breaks a test instead of a build.
+- **Reducing an over-limit reference doc never cuts inside a section.** A
+  truncated rule reads as a complete rule, and the spec-gen prompt has no tools
+  with which to go check. `summarize_reference_doc` keeps whole sections and
+  always emits an index of *all* of them, so an omitted section is known to
+  exist rather than invisible.
 
 - **Audit feedback is one pass, decided in one place.** Every audit that
   rewrites an artifact — the unknowns gate, the tasks-shape audit, the

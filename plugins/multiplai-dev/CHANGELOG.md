@@ -18,6 +18,33 @@ release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.11.0] - 2026-08-05
+
+### Fixed
+
+- **buildme loads the Django and React standards again.** Its stack map named
+  `django-best-practices.md` and `react-best-practices.md`; the docs
+  multiplai-kit ships are `django-drf-best-practices.md` and
+  `react-nextjs-best-practices.md`. A name with no file on disk is skipped with
+  only an INFO line, so for a month every Django and React build generated its
+  specs with **no conventions to build to** while looking like it had them. If
+  you have a `reference_docs:` override in `specs/config.yaml` naming the old
+  filenames, update it too — an override replaces the built-in list.
+- **A long reference doc no longer arrives cut mid-sentence.** The per-doc
+  ceiling for inlining into spec-generation prompts was 8000 chars, set when the
+  docs were ~20k; the Django doc is 61k, so 87% of it was dropped and the
+  surviving 13% ended in the middle of a rule — which reads as a complete rule.
+  The ceiling is now 24000 and overflow is reduced on section boundaries: whole
+  sections, plus an index of *every* section in the doc so the generator knows
+  what it did not receive and the TDD phases (which hold `Read`) can go get it.
+
+### Added
+
+- **FastAPI and Next.js projects resolve their standards.** A `fastapi`
+  dependency now adds `fastapi-best-practices.md`, and a project that lists only
+  `next` (with React arriving transitively) counts as React instead of resolving
+  no frontend standards at all.
+
 ## [0.10.3] - 2026-08-05
 
 ### Fixed

@@ -22,7 +22,10 @@ doesn't. Native Windows (without WSL) isn't supported.
    indexed catalogs of memory (and optionally skills/resources) and
    injects only the relevant pieces. No memory dump. Files injected on
    recent turns are skipped — they're already in the conversation (see
-   [Re-recommendation cooldown](#re-recommendation-cooldown)).
+   [Re-recommendation cooldown](#re-recommendation-cooldown)). The same hook
+   also points Claude at the engineering standards for the project's stack,
+   detected from its manifests rather than routed — see
+   [Dev references](#dev-references--engineering-standards-not-memory).
 3. **Per session** — diary entries and a learnings backlog are captured
    in the background; nothing blocks your session.
 4. **Consolidation** — `/multiplai-context:dream-remember` distills the backlog
@@ -505,6 +508,78 @@ tracked, add to `.gitignore`:
 ```
 
 Memory files are the one thing worth tracking — see the next section.
+
+## Dev references — engineering standards, not memory
+
+If `$CLAUDE_CONFIG_DIR/reference/dev/` exists, Claude is told which of those
+docs apply to the project you are working in. multiplai-kit ships that directory
+(uv/Python, Django/DRF, React/Next.js, Swift, FastAPI, Docker, auth, …); you can
+also just create it and drop your own house standards in.
+
+**Why this is not the router's job.** Memory is context *about you*, so
+relevance to your wording is the right way to pick it. A standards doc applies
+because of what the project **is** — a Django app needs the Django standards
+whether you said "fix the serializer" or "the API is returning 500s". Routing
+them by prompt similarity would make adherence depend on phrasing, which is
+exactly the failure this replaced: the standards were previously loaded only by
+a prose instruction in `CLAUDE.md`, i.e. whenever the model happened to notice.
+
+**How the project is found.** From your cwd, the nearest ancestor holding a
+manifest (`pyproject.toml`, `requirements.txt`, `package.json`, `Package.swift`,
+`Cargo.toml`, `go.mod`), stopping at `$HOME`. If cwd is a workspace root that
+holds many repos and has no manifest of its own — `knowhere/PROJECTS/<name>/…` —
+path-like tokens in your prompt are resolved instead, so `fix PROJECTS/site/api`
+finds `site`. Prompt text is only ever used to resolve a path that must already
+exist on disk.
+
+**Stack → docs.** Manifest filenames give the stack; frameworks have to be read
+out of the dependency lists, because a Django app and a plain library are both
+`pyproject.toml`:
+
+| Detected | Docs named |
+|---|---|
+| `pyproject.toml` / `requirements.txt` | `uv-python-best-practices.md`, `python-project-structure.md` |
+| `manage.py` or a `django` dependency | `django-drf-best-practices.md` |
+| a `fastapi` dependency | `fastapi-best-practices.md` |
+| `package.json` | `bun-vite-react-best-practices.md` |
+| a `react` or `next` dependency | `react-nextjs-best-practices.md` |
+| `Package.swift` | `swift-best-practices.md`, `swift-testing-strategies.md` |
+| `Cargo.toml`, `go.mod` | (none yet) |
+
+The map is `STACK_DOCS` in `scripts/lib/reference_docs.py`. A name with no file
+on disk is skipped and logged — **renaming a doc without updating the map
+silently removes it from every session**, which is how the Django and React
+entries went dead for a month. buildme keeps a parallel map
+(`_DEFAULT_REFERENCE_DOCS` in multiplai-dev) for the specs it generates; both
+are listed in the kit's `reference/dev/README.md` as the renaming contract.
+
+**What is injected: pointers, not contents.** A `DEV REFERENCES` block naming
+each doc's absolute path and its section index, ~60 tokens. The Django doc alone
+is 60k chars — inlining it every turn would crowd out the conversation it is
+meant to inform. Claude holds `Read` and only needs to know the doc exists and
+what is in it.
+
+```
+=== DEV REFERENCES ===
+
+Engineering standards that apply to site because of its stack. …
+
+- /home/you/.claude/reference/dev/django-drf-best-practices.md
+  Sections: Project layout · Settings & secrets · ORM & queries · Migrations · …
+```
+
+**Cadence.** Once per session per project, re-announced after 30 turns so a
+compaction (which silently drops the earlier block) doesn't leave the session
+flying blind. At most one project per turn.
+
+**Off switch:** the **Dev Reference Injection** (`enable_dev_references`)
+option. It already no-ops when `reference/dev/` doesn't exist — no warning, no
+error, nothing in the way of a vanilla install.
+
+**Where it is not the mechanism.** Inside a buildme run the standards are
+inlined into the spec-generation prompts instead (that generator has no tools,
+so a pointer would be useless to it) — see the multiplai-dev README. These two
+are independent: this one covers ordinary sessions, buildme covers builds.
 
 ## Where your memory lives
 

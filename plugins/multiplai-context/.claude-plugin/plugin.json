@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.18.6",
+  "version": "0.19.0",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",
@@ -190,6 +190,12 @@
       "type": "boolean",
       "title": "Memory Conflict Surfacing",
       "description": "Render a conflict-surfacing directive plus per-file last-updated stamps above every injected MEMORY block, making the model flag memory-vs-session disagreements to the user. Costs ~90 tokens per memory-carrying turn; turn off to save them.",
+      "default": true
+    },
+    "enable_dev_references": {
+      "type": "boolean",
+      "title": "Dev Reference Injection",
+      "description": "Detect the project's stack from its manifests and inject pointers to the matching engineering-standards docs under $CLAUDE_CONFIG_DIR/reference/dev/ (paths and section index, not contents), once per session per project. Silently does nothing when that directory does not exist.",
       "default": true
     }
   }

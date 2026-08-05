@@ -25,6 +25,11 @@ Resources alternative backend: when ``resources_retrieval == "qmd"``,
 the resources corpus skips the catalog+router path entirely and is
 retrieved per-prompt from a qmd index (scripts/qmd_retrieval.py);
 results render as path+excerpt entries in the same RESOURCES section.
+
+A fourth section, DEV REFERENCES, does NOT go through the router at
+all: engineering standards apply because of what the project is, not
+because of how the prompt was phrased, so they are detected from the
+project's manifests and injected as pointers (see lib/reference_docs.py).
 """
 
 import json
@@ -41,6 +46,7 @@ from multiplai_core.paths import get_paths
 from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.log_utils import setup_logging, log_event
 from lib.memory_router import create_router
+from lib import reference_docs
 from lib.routing_logic import expand_picks
 from lib.section_loader import load_picked_content, parse_section_ref
 from lib.transcript_helper import read_last_assistant_response
@@ -494,6 +500,69 @@ _MEMORY_CONFLICT_PREAMBLE = (
 _LAST_UPDATED_RE = re.compile(
     r"^\*\*Last Updated:\*\*\s*(\d{4}-\d{2}-\d{2})", re.MULTILINE | re.IGNORECASE
 )
+
+
+def _dev_reference_block(
+    prompt: str,
+    cwd: str,
+    state: dict,
+    turn_index: int,
+) -> tuple[str, Path | None]:
+    """The DEV REFERENCES block for this turn, and the project it describes.
+
+    Returns ``("", None)`` whenever there is nothing to say: no
+    ``reference/dev/`` directory (a vanilla install — the docs ship with
+    multiplai-kit), no manifest anywhere in reach of cwd or the prompt, a
+    detected stack with no docs mapped to it, or a project already announced
+    this session. At most one project is announced per turn, so a prompt
+    naming three repos does not inject three blocks.
+
+    Records the announcement by mutating ``state``; the caller owns
+    persisting it. Never raises — the hook runs on every prompt, and a
+    standards pointer is not worth a broken turn.
+    """
+    try:
+        ref_dir = reference_docs.reference_dir()
+        if not ref_dir.is_dir():
+            return "", None
+        candidates: list[Path] = []
+        primary = reference_docs.find_project_dir(cwd or ".")
+        if primary is not None:
+            candidates.append(primary)
+        for project in reference_docs.projects_from_prompt(prompt, cwd or "."):
+            if project not in candidates:
+                candidates.append(project)
+
+        for project in candidates:
+            keys = reference_docs.detect_stack_keys(project)
+            names = reference_docs.doc_names_for(keys)
+            if not names:
+                continue
+            docs = reference_docs.resolve_docs(names)
+            if not docs:
+                # The map named docs that are not on disk. Worth a line: it
+                # means this project builds with no standards loaded, and the
+                # usual cause is a doc renamed without updating the map.
+                logger.info(
+                    "DEV_REFERENCES project=%s stack=%s wanted=%s resolved=none under %s",
+                    project, ",".join(keys), ",".join(names), ref_dir,
+                )
+                continue
+            if not reference_docs.should_announce(state, project, turn_index):
+                continue
+            block = reference_docs.build_block(project, docs)
+            if not block:
+                continue
+            reference_docs.record_announced(state, project, turn_index)
+            logger.info(
+                "DEV_REFERENCES project=%s stack=%s docs=%s",
+                project, ",".join(keys), ",".join(p.name for p, _ in docs),
+            )
+            return block, project
+        return "", None
+    except Exception:
+        logger.debug("Dev reference detection failed; injecting nothing", exc_info=True)
+        return "", None
 
 
 def _memory_freshness_date(path: Path) -> str | None:
@@ -1003,6 +1072,27 @@ def main() -> None:
                 json.dumps({k: sorted(v) for k, v in refloor_dropped.items()}),
             )
 
+    # --- Dev reference docs (stack-detected, not routed) ------------------
+    # Deliberately outside the router and the cooldown: a standards doc
+    # applies because of what the project is, so relevance scoring against
+    # the prompt is the wrong instrument. Announcement state lives in
+    # session_state alongside the cooldown's, and is persisted here when the
+    # cooldown is off (nothing else would write it).
+    dev_refs = ""
+    if cfg.enable_dev_references and prompt:
+        if not cooldown_active:
+            try:
+                _rs = read_session_state(paths.data_dir())
+            except Exception:
+                _rs = None
+            session_state = _rs if isinstance(_rs, dict) else {}
+        dev_refs, _ = _dev_reference_block(prompt, cwd, session_state, turn_index)
+        if dev_refs and not cooldown_active:
+            try:
+                write_session_state(paths.data_dir(), session_state)
+            except Exception:
+                logger.debug("Could not persist dev-reference state", exc_info=True)
+
     # Load content per corpus
     memory_content = _load_memory_content(memory_dir, picks_by_corpus.get("memory") or [])
     skills_content = _build_skills_recommendations(
@@ -1053,7 +1143,7 @@ def main() -> None:
                 files=sorted(memory_content.keys()),
             )
 
-    if not memory_content and not skills_content and not resources_content:
+    if not memory_content and not skills_content and not resources_content and not dev_refs:
         logger.info("No context to inject")
         # Make abstention visible in the human log: a deliberate
         # "nothing relevant" is the floor/continuation guard working,
@@ -1107,6 +1197,8 @@ def main() -> None:
             "RESOURCES", resources_content,
             preamble=_QMD_RESOURCES_PREAMBLE if qmd_active else "",
         ))
+    if dev_refs:
+        parts.append(dev_refs)
 
     session_context = "\n\n".join(parts)
 
@@ -1144,6 +1236,7 @@ def main() -> None:
         f"injected {corpus_counts['memory']} memory · "
         f"{corpus_counts['skills']} skills · "
         f"{corpus_counts['resources']} resources"
+        + (" · dev references" if dev_refs else "")
         + score_hint
         + (f" → {' · '.join(file_groups)}" if file_groups else "")
     )
@@ -1173,6 +1266,7 @@ def main() -> None:
         "skills_files": corpus_counts["skills"],
         "resources_files": corpus_counts["resources"],
         "corpus_counts": corpus_counts,
+        "dev_references": bool(dev_refs),
     }
     _emit_result(session_context, result)
 

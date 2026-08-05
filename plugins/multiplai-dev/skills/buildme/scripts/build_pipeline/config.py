@@ -33,21 +33,96 @@ Mode = Literal["scratch", "brief", "only"]
 # detect_frameworks(), which looks inside the manifests — a Django project and
 # a plain-library project are both `stack == "pyproject"`, so the manifest
 # filename alone cannot tell them apart.
+#
+# A name here must match a filename on disk exactly — resolution does no
+# fuzzy matching, and a miss is only an INFO line. Renaming a doc without
+# updating this map silently removes it from every build (which is what
+# happened to the Django and React entries between 2026-07 and 2026-08). The
+# renaming contract is stated next to the docs, in reference/dev/README.md.
 _DEFAULT_REFERENCE_DOCS: dict[str, list[str]] = {
     "pyproject": ["uv-python-best-practices.md", "python-project-structure.md"],
     "Package": ["swift-best-practices.md", "swift-testing-strategies.md"],
     "package": ["bun-vite-react-best-practices.md"],
     "Cargo": [],
     "go": [],
-    "django": ["django-best-practices.md"],
-    "react": ["react-best-practices.md"],
+    "django": ["django-drf-best-practices.md"],
+    "react": ["react-nextjs-best-practices.md"],
+    "fastapi": ["fastapi-best-practices.md"],
 }
 
 # Per-document ceiling when reference docs are inlined into a spec-generation
 # prompt. The spec-gen system prompt forbids tools, so inlining is the only
-# channel — and a 40k-char standards doc would otherwise crowd out the specs
-# it is meant to inform.
-REFERENCE_DOC_CHAR_LIMIT = 8000
+# channel — and an unbounded standards doc would crowd out the specs it is
+# meant to inform.
+#
+# Sized against the real corpus rather than a round number: the docs run
+# 20k-61k chars, so 8000 (the original value, set when they were ~20k) cut the
+# Django doc to 13% of itself. 24000 admits most docs whole and, for the two
+# that overflow, `summarize_reference_doc` keeps whole sections plus a full
+# section index — so the generator always knows what it did not receive.
+REFERENCE_DOC_CHAR_LIMIT = 24000
+
+
+_H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+
+
+def summarize_reference_doc(name: str, text: str, limit: int) -> str:
+    """`text` trimmed to `limit` chars on section boundaries, never mid-sentence.
+
+    Returns `text` unchanged when it already fits. Otherwise emits, in order:
+    everything above the first H2 (the doc's own framing), an index of ALL its
+    H2 sections, then whole sections until the budget runs out, then a marker
+    naming the sections that were dropped and the file to Read for them.
+
+    Two properties matter more than the exact packing. The generator never
+    sees half a sentence presented as a standard — the old flat
+    ``text[:limit]`` cut mid-line, and a truncated rule reads as a complete
+    one. And the index is unconditional, so a section that did not fit is
+    *known to exist* rather than invisible; the TDD phases hold ``Read`` and
+    can fetch it.
+
+    Falls back to a plain character cut for a doc with no H2 headers at all —
+    there are no boundaries to respect, so there is nothing better to do.
+    """
+    if len(text) <= limit:
+        return text
+
+    matches = list(_H2_RE.finditer(text))
+    if not matches:
+        return (
+            text[:limit]
+            + f"\n\n[... truncated at {limit} chars — read {name} in full for the rest ...]"
+        )
+
+    headers = [m.group(1).strip() for m in matches]
+    bounds = [m.start() for m in matches] + [len(text)]
+    preamble = text[: bounds[0]].rstrip()
+    index = "\n".join(f"- {h}" for h in headers)
+    header_block = (
+        f"{preamble}\n\n"
+        f"[Section index for {name} — every section in the doc, whether or not "
+        f"its body is included below:]\n{index}\n"
+    )
+
+    kept: list[str] = []
+    kept_names: list[str] = []
+    used = len(header_block)
+    for i, header in enumerate(headers):
+        section = text[bounds[i] : bounds[i + 1]].rstrip()
+        if used + len(section) + 2 > limit:
+            continue
+        kept.append(section)
+        kept_names.append(header)
+        used += len(section) + 2
+
+    dropped = [h for h in headers if h not in kept_names]
+    tail = ""
+    if dropped:
+        tail = (
+            f"\n\n[... {len(dropped)} section(s) omitted for length: "
+            f"{', '.join(dropped)}. Read {name} for them ...]"
+        )
+    return header_block + "\n" + "\n\n".join(kept) + tail
 
 
 def _requirement_name(spec: str) -> str:
@@ -693,7 +768,12 @@ class BuildConfig:
         p = self.project_dir
         if (p / "manage.py").is_file() or self._python_deps_mention("django"):
             found.append("django")
-        if self._node_deps_mention("react"):
+        if self._python_deps_mention("fastapi"):
+            found.append("fastapi")
+        # `next` counts as react: the Next.js doc is the React doc, and a
+        # Next project that lists only `next` (react arriving transitively)
+        # would otherwise resolve no frontend standards at all.
+        if self._node_deps_mention("react") or self._node_deps_mention("next"):
             found.append("react")
         return found
 
@@ -799,10 +879,11 @@ class BuildConfig:
         """The reference docs inlined for a spec-generation prompt.
 
         The spec-generation system prompt forbids tools, so inlining is the
-        only channel the generator has. Each doc is capped at
-        REFERENCE_DOC_CHAR_LIMIT with a visible truncation marker; an
-        unreadable doc is skipped rather than failing the build. Returns ""
-        when nothing resolves — the prompt then says "(none available)".
+        only channel the generator has. Each doc over REFERENCE_DOC_CHAR_LIMIT
+        is reduced by `summarize_reference_doc` — whole sections plus a full
+        section index, never a mid-sentence cut. An unreadable doc is skipped
+        rather than failing the build. Returns "" when nothing resolves — the
+        prompt then says "(none available)".
         """
         parts: list[str] = []
         for doc in self.stack_reference_docs():
@@ -812,11 +893,11 @@ class BuildConfig:
                 log.warning("Reference doc unreadable, skipping: %s (%s)", doc, e)
                 continue
             if len(text) > REFERENCE_DOC_CHAR_LIMIT:
-                text = (
-                    text[:REFERENCE_DOC_CHAR_LIMIT]
-                    + f"\n\n[... truncated at {REFERENCE_DOC_CHAR_LIMIT} chars —"
-                    f" read {doc.name} in full for the rest ...]"
+                log.info(
+                    "Reference doc %s is %d chars, reducing to fit %d",
+                    doc.name, len(text), REFERENCE_DOC_CHAR_LIMIT,
                 )
+                text = summarize_reference_doc(doc.name, text, REFERENCE_DOC_CHAR_LIMIT)
             parts.append(f"### Reference: {doc.name}\n{text}")
         return "\n\n".join(parts)
 
