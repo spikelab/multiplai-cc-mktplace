@@ -604,7 +604,7 @@ class TestInvolvedFilesParsing:
 
 
 # ---------------------------------------------------------------------------
-# fleet.txt is retired — the fronts count survives in `Fleet.fronts`
+# The status-line count is retired — the fronts count survives in `Fleet.fronts`
 # ---------------------------------------------------------------------------
 
 class TestFrontsCount:
@@ -623,16 +623,6 @@ class TestFrontsCount:
         assert len(f.agents) == 7
         assert len(f.fronts) == 6
         assert len(f.in_group("Needs you")) == 2
-
-    def test_a_leftover_fleet_txt_is_deleted_on_write(self, tmp_path):
-        """A pre-digest release wrote it and the kit status line renders
-        whatever it says; a frozen count in every tab is worse than none."""
-        make_session(tmp_path, "a")
-        (tmp_path / "fleet.txt").write_text("9 fronts · 4 need you\n")
-
-        fleet.write_fleet_view(tmp_path, NOW)
-
-        assert not (tmp_path / "fleet.txt").exists()
 
     def test_render_fleet_line_is_gone(self):
         """The status-line rendering must not linger as dead code a caller

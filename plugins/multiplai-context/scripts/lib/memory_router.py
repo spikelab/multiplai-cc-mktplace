@@ -23,16 +23,12 @@ A third strategy, ``embeddings``, is reserved for a future port —
 zero-cost per prompt after an initial embed pass, but requires model
 setup out of scope here.
 
-Both routers expose two methods:
-
-    select(prompt, entries, *, max_files=10) -> list[str]
-        Single-corpus selection. Used by tests and by the legacy
-        single-corpus context_manager path. Last-response unaware.
+Both routers expose one method:
 
     select_multi(prompt, last_response, corpora, *, max_files_per_corpus=10)
         -> dict[str, list[str]]
         Multi-corpus selection. The canonical entry point for the
-        new context_manager flow.
+        context_manager flow.
 """
 
 from __future__ import annotations
@@ -99,16 +95,6 @@ class CorpusRouter(Protocol):
 
     name: str
 
-    def select(
-        self,
-        prompt: str,
-        catalog_entries: list[dict],
-        *,
-        max_files: int = 10,
-    ) -> list[str]:
-        """Single-corpus pick — returns ordered list of entry names."""
-        ...
-
     def select_multi(
         self,
         prompt: str,
@@ -119,10 +105,6 @@ class CorpusRouter(Protocol):
     ) -> dict[str, list[str]]:
         """Multi-corpus pick — returns ``{corpus_name: [name, ...]}``."""
         ...
-
-
-# Legacy alias so existing single-corpus callers keep type-checking.
-MemoryRouter = CorpusRouter
 
 
 # ---------------------------------------------------------------------------
@@ -328,24 +310,13 @@ class TokenOverlapRouter:
     def __init__(self, *, keep_ratio: float = DEFAULT_KEEP_RATIO) -> None:
         # Relative-cutoff ratio for select_multi's _apply_policy. Plumbed
         # from the `keep_ratio` plugin option (via create_router) so the
-        # filler-tail lever is tunable without a release. select() is
-        # unaffected (it stays pure rank+cap by contract).
+        # filler-tail lever is tunable without a release.
         self.keep_ratio = keep_ratio
         # Populated by select_multi each call: per-corpus full
         # pre-truncation ranking + cap diagnostics, for the context
         # manager to log. This is the routing-quality signal /health
         # reports. Empty until the first select_multi call.
         self.last_scores: dict[str, dict] = {}
-
-    def select(
-        self,
-        prompt: str,
-        catalog_entries: list[dict],
-        *,
-        max_files: int = 10,
-    ) -> list[str]:
-        """Single-corpus selection (no last-response awareness)."""
-        return self._score_corpus(prompt, catalog_entries, max_files=max_files)
 
     def select_multi(
         self,
@@ -589,34 +560,6 @@ def _parse_llm_multi_selection(
     return result
 
 
-def _parse_llm_single_selection(raw: str, known_filenames: set[str]) -> list[str]:
-    """Parse a single-corpus LLM response (legacy ``select`` path).
-
-    The LLM is asked for a JSON array; we accept either an array or
-    an object with the corpus key. Returns only filenames that exist
-    in ``known_filenames``.
-    """
-    text = raw.strip()
-    match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-    if match:
-        text = match.group(1).strip()
-    try:
-        parsed = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        logger.warning("LLM router returned non-JSON; ignoring")
-        return []
-    if isinstance(parsed, dict):
-        # Tolerate the multi-corpus response shape under the "memory" key.
-        parsed = parsed.get("memory", [])
-    if not isinstance(parsed, list):
-        logger.warning("LLM router JSON is not a list; ignoring")
-        return []
-    return [
-        f for f in parsed
-        if isinstance(f, str) and f.split("#", 1)[0] in known_filenames
-    ]
-
-
 class LLMRouter:
     """Semantic router — one LLM call per prompt covering all corpora.
 
@@ -635,38 +578,6 @@ class LLMRouter:
             or os.environ.get(ROUTER_MODEL_ENV_VAR, "").strip()
             or DEFAULT_ROUTER_MODEL
         )
-
-    def select(
-        self,
-        prompt: str,
-        catalog_entries: list[dict],
-        *,
-        max_files: int = 10,
-    ) -> list[str]:
-        """Single-corpus selection — convenience for legacy callers and tests.
-
-        Wraps the multi-corpus path with a single ``memory`` corpus.
-        """
-        if not catalog_entries or not prompt:
-            return []
-
-        known_filenames = {
-            _entry_filename(e) for e in catalog_entries if _entry_filename(e)
-        }
-        if not known_filenames:
-            return []
-
-        try:
-            picks = asyncio.run(
-                self._select_async_single(prompt, catalog_entries, known_filenames)
-            )
-        except RuntimeError as e:
-            logger.warning("LLMRouter could not run event loop: %s", e)
-            return []
-        except Exception:
-            logger.exception("LLMRouter call failed; falling back to no picks")
-            return []
-        return picks[:max_files]
 
     def select_multi(
         self,
@@ -707,32 +618,6 @@ class LLMRouter:
         return {
             ct: picks.get(ct, [])[:max_files_per_corpus] for ct in CORPUS_TYPES
         }
-
-    async def _select_async_single(
-        self,
-        prompt: str,
-        catalog_entries: list[dict],
-        known_filenames: set[str],
-    ) -> list[str]:
-        from multiplai_core.model_client import create_client
-
-        client = await create_client(component="memory-router")
-        user_msg = build_user_message(
-            prompt, None, {"memory": catalog_entries, "skills": [], "resources": []}
-        )
-        try:
-            response = await asyncio.wait_for(
-                client.query(
-                    system=SYSTEM_PROMPT + "\n\n" + FEW_SHOT_EXAMPLES,
-                    messages=[{"role": "user", "content": user_msg}],
-                    model=self._model,
-                ),
-                timeout=self._timeout_seconds,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("LLMRouter timed out after %.1fs", self._timeout_seconds)
-            return []
-        return _parse_llm_single_selection(response.content, known_filenames)
 
     async def _select_async_multi(
         self,

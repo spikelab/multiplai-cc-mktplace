@@ -23,10 +23,9 @@ The ranked console digest and ``fleet.json`` (see :mod:`lib.fleet_digest` and
 :func:`fleet_json`) are further renderings of the same collection, produced
 only when a human runs the ``fleet-status`` CLI.
 
-``fleet.txt`` — the one-line status-bar count — is retired. A count with no
-referent ("9 fronts · 4 need you") tells you there is a fire without telling
-you where; the digest replaced it, and :func:`write_fleet_view` deletes any
-leftover file so an old status line goes blank rather than stale.
+The one-line status-bar count is retired. A count with no referent ("9 fronts ·
+4 need you") tells you there is a fire without telling you where; the digest
+replaced it.
 
 All of it is a *reading*, not a rule: no thresholds to breach, no "too many
 agents" warning, no recommendation. Just what is true right now.
@@ -55,10 +54,6 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 logger = logging.getLogger(__name__)
 
 AGENTS_FILENAME = "AGENTS.md"
-
-# Written by pre-digest releases; write_fleet_view() deletes a leftover so an
-# old status line reading it goes blank instead of showing a frozen count.
-RETIRED_FLEET_FILENAME = "fleet.txt"
 
 # A session quiet for longer than this is "idle" rather than "working".
 # One day, because the unit that matters is "did I touch this today" — a
@@ -924,19 +919,13 @@ def write_fleet_view(data_dir: Path, now: datetime | None = None) -> Path:
     """Render ``AGENTS.md`` into *data_dir*; return its path.
 
     One function so the hook and the CLI cannot drift into rendering two
-    different files. Also deletes a leftover ``fleet.txt`` from a pre-digest
-    release: the kit status line renders whatever that file says, and a frozen
-    count in every tab is worse than no segment at all.
+    different files.
     """
     now = now or datetime.now(timezone.utc)
     fleet = collect(data_dir, now)
 
     agents_path = data_dir / AGENTS_FILENAME
     atomic_write(agents_path, render_agents_md(fleet, now))
-    try:
-        (data_dir / RETIRED_FLEET_FILENAME).unlink(missing_ok=True)
-    except OSError:  # pragma: no cover - a stale file is cosmetic, never fatal
-        pass
 
     logger.info(
         "Fleet: %d front(s), %d listed of %d session(s), %d collision(s) → %s",

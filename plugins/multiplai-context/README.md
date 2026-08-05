@@ -1176,8 +1176,8 @@ to age out in 7–30 days. A parked idea stayed *resumable* while becoming
 `SessionStart` regenerates both files in-process (no model call, so it
 costs a few file reads), and `drain_extractions.py` does the same on the
 host after a container exits — so the view is current at session start
-**and** after the last tab closes. `scripts/synthesize_agents.py` writes
-them on demand; `--stdout` previews `AGENTS.md` without touching disk.
+**and** after the last tab closes. `scripts/fleet_status.py --full` writes
+them on demand and prints the whole picture.
 
 ## Observability
 
@@ -1310,10 +1310,8 @@ for stricter, smaller injections; lower it if you want the weaker tail back.
 > `floor/top` ratio (and thus the picked set) unchanged. The ratio is the
 > lever.
 
-**Measuring it.** `scripts/replay_router_logs.py` sweeps candidate ratios
-against your own `ROUTING_SCORES` logs (label-free, real traffic);
-`scripts/eval_router.py --keep-ratio R` runs the golden-case harness at a
-given ratio. Note `keep_ratio` only moves the *relative* cutoff; the
+**Measuring it.** `scripts/eval_router.py --keep-ratio R` runs the golden-case
+harness at a given ratio. Note `keep_ratio` only moves the *relative* cutoff; the
 *absolute* floor is guarded separately by a match-breadth eligibility gate —
 an entry can clear `MIN_SIGNAL` only when it matched ≥ 2 distinct
 `intent_domains` tokens (or a multi-word domain phrase verbatim), so a
