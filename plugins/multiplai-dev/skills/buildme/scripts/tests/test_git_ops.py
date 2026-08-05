@@ -427,3 +427,146 @@ class TestSafetyInvariants:
         assert "shell=True" not in text
         assert "--force" not in text
         assert "git merge" not in text
+
+
+# --- whole-tree operations ------------------------------------------------
+
+
+class TestWholeTreeOperations:
+    """`commit_tree` / `tree_is_clean` / `rev_parse_head` — the TDD block
+    loop's only whole-tree git calls. They must never sweep in, or delete,
+    buildme's own bookkeeping."""
+
+    def _bookkeeping(self, repo: Path) -> None:
+        (repo / "build-progress.md").write_text("# progress\n")
+        change = repo / "specs" / "changes" / "feat"
+        change.mkdir(parents=True, exist_ok=True)
+        (change / ".build-state.json").write_text("{}\n")
+        (change / ".board.json").write_text("{}\n")
+
+    def test_commit_tree_excludes_bookkeeping_at_every_depth(self, tmp_path):
+        repo = make_repo(tmp_path / "proj")
+        (repo / "module.py").write_text("x = 1\n")
+        self._bookkeeping(repo)
+
+        sha = git_ops.commit_tree(repo, "impl(block-1): B", "block=1")
+        assert sha == git_ops.rev_parse_head(repo)
+
+        committed = _git(repo, "show", "--name-only", "--pretty=format:", "HEAD").stdout.split()
+        assert "module.py" in committed
+        assert "build-progress.md" not in committed
+        assert not any(".build-state.json" in f for f in committed)
+        assert not any(".board.json" in f for f in committed)
+
+    def test_commit_tree_returns_none_when_there_is_nothing_to_commit(self, tmp_path):
+        repo = make_repo(tmp_path / "proj")
+        assert git_ops.commit_tree(repo, "noop", "label") is None
+
+    def test_commit_tree_never_raises_outside_a_repo(self, tmp_path):
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        assert git_ops.commit_tree(plain, "m", "label") is None
+
+    def test_rev_parse_head_is_none_without_commits(self, tmp_path):
+        repo = make_repo(tmp_path / "proj", commit=False)
+        assert git_ops.rev_parse_head(repo) is None
+
+    def test_tree_is_clean_ignores_bookkeeping_only(self, tmp_path):
+        repo = make_repo(tmp_path / "proj")
+        assert git_ops.tree_is_clean(repo)
+        self._bookkeeping(repo)
+        assert git_ops.tree_is_clean(repo), "bookkeeping alone is still a clean tree"
+        (repo / "module.py").write_text("x = 1\n")
+        assert not git_ops.tree_is_clean(repo)
+
+    def test_tree_is_clean_is_false_when_git_cannot_be_asked(self, tmp_path):
+        """Unknown must never read as 'safe to reset'."""
+        assert not git_ops.tree_is_clean(tmp_path / "nonexistent")
+
+    def test_discard_keeps_bookkeeping_it_would_otherwise_clean(self, tmp_path):
+        repo = make_repo(tmp_path / "proj")
+        # The spec stages have already committed the change directory, which is
+        # what the real layout looks like by the time a block runs — an
+        # entirely *untracked* directory is removed wholesale by `clean -d`
+        # whatever the file-level excludes say.
+        change = repo / "specs" / "changes" / "feat"
+        change.mkdir(parents=True)
+        (change / "proposal.md").write_text("# proposal\n")
+        (repo / "module.py").write_text("x = 1\n")
+        base = git_ops.commit_tree(repo, "impl", "block=1")
+        assert base is not None
+
+        # A failed refactor: a tracked file edited and a new file created,
+        # alongside bookkeeping written while the refactor ran.
+        (repo / "module.py").write_text("x = 2\n")
+        (repo / "extra.py").write_text("y = 1\n")
+        self._bookkeeping(repo)
+
+        assert git_ops.discard_to(repo, base, "refactor") is True
+        assert (repo / "module.py").read_text() == "x = 1\n"
+        assert not (repo / "extra.py").exists()
+        assert (repo / "build-progress.md").exists()
+        assert (repo / "specs/changes/feat/.build-state.json").exists()
+        assert (repo / "specs/changes/feat/.board.json").exists()
+
+
+class TestDiscardToAncestorGuard:
+    """`git_ops.discard_to` may only ever move backwards along the current
+    history.
+
+    The refactorer holds `Bash`, so between the moment the impl commit is
+    captured and the moment a failed refactor is discarded it can commit, move
+    HEAD, or switch branches. A bare `reset --hard <sha>` would then throw away
+    whatever HEAD had actually reached — earlier blocks' commits, or under
+    `--no-worktree` the user's own work.
+    """
+
+    @pytest.fixture
+    def repo(self, tmp_path):
+        project = make_repo(tmp_path / "proj", commit=False)
+
+        def commit(text):
+            (project / "README.md").write_text(text)
+            _git(project, "add", "-A")
+            _git(project, "commit", "-qm", text)
+            return _git(project, "rev-parse", "HEAD").stdout.strip()
+
+        first = commit("one")
+        second = commit("two")
+        return project, first, second, commit
+
+    def test_discards_to_an_ancestor(self, repo):
+        project, first, second, _ = repo
+        assert git_ops.discard_to(project, first, "refactor") is True
+        assert _git(project, "rev-parse", "HEAD").stdout.strip() == first
+
+    def test_head_itself_is_an_ancestor(self, repo):
+        project, _, second, _ = repo
+        assert git_ops.is_ancestor_of_head(project, second) is True
+        assert git_ops.discard_to(project, second, "refactor") is True
+
+    def test_refuses_a_sha_on_unrelated_history(self, repo):
+        """The agent switched branches: the impl sha is no longer reachable."""
+        project, _, second, _ = repo
+        _git(project, "checkout", "-q", "--orphan", "elsewhere")
+        (project / "OTHER.md").write_text("other\n")
+        _git(project, "add", "-A")
+        _git(project, "commit", "-qm", "orphan")
+        before = _git(project, "rev-parse", "HEAD").stdout.strip()
+
+        assert git_ops.discard_to(project, second, "refactor") is False
+        after = _git(project, "rev-parse", "HEAD").stdout.strip()
+        assert after == before, "HEAD must not move when the sha is unreachable"
+
+    def test_refuses_an_unknown_sha(self, repo):
+        project, _, _, _ = repo
+        assert git_ops.discard_to(project, "0" * 40, "refactor") is False
+
+    def test_refuses_an_empty_sha(self, repo):
+        project, _, _, _ = repo
+        assert git_ops.is_ancestor_of_head(project, "") is False
+        assert git_ops.discard_to(project, "", "refactor") is False
+
+    def test_unknown_ancestry_is_never_treated_as_safe(self, tmp_path):
+        """Git could not be asked → "unknown", which must not mean "destroy"."""
+        assert git_ops.is_ancestor_of_head(tmp_path / "nonexistent", "a" * 40) is False
