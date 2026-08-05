@@ -251,6 +251,42 @@ class TestIntegrationGate:
         assert "not trusted" in result.reason
 
 
+class TestTestGatesShareOneRunner:
+    """`run_test_suite` owns the trust guard and the subprocess mechanics; the
+    baseline and integration gates only translate its result into a
+    GateResult. Three copies of the same subprocess block is how the trust
+    guard came to be written three times."""
+
+    def test_neither_gate_runs_the_suite_itself(self):
+        import inspect
+        from build_pipeline import gates as gates_mod
+
+        for gate in (gates_mod.baseline_test_gate, gates_mod.integration_gate):
+            src = inspect.getsource(gate)
+            assert "subprocess.run" not in src, f"{gate.__name__} runs the suite directly"
+            assert "run_test_suite(" in src, f"{gate.__name__} does not use run_test_suite"
+
+    def test_both_gates_delegate_at_runtime(self, tmp_path, trust_repo):
+        from unittest.mock import patch
+
+        for gate in (baseline_test_gate, integration_gate):
+            with patch("build_pipeline.gates.run_test_suite",
+                       return_value=(0, "5 passed")) as runner:
+                assert gate("pytest -q", tmp_path).passed
+            runner.assert_called_once()
+
+    def test_an_unverifiable_suite_never_reads_as_a_pass(self, tmp_path, trust_repo):
+        """exit_code None means 'could not verify' — both gates must fail."""
+        from unittest.mock import patch
+
+        for gate in (baseline_test_gate, integration_gate):
+            with patch("build_pipeline.gates.run_test_suite",
+                       return_value=(None, "Test command failed to run: boom")):
+                result = gate("pytest -q", tmp_path)
+            assert not result.passed
+            assert "boom" in result.reason
+
+
 class TestParseAgentStatus:
     """Agents close their report with a REQUIRED STATUS slot (Item 7)."""
 
