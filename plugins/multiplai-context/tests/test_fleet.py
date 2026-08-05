@@ -205,13 +205,15 @@ class TestStatus:
 
         assert fleet.collect(tmp_path, NOW).agents[0].status == "working"
 
-    def test_quiet_for_a_day_means_idle(self, tmp_path):
-        make_session(tmp_path, "quiet", kind="stop", ago=timedelta(hours=30))
+    def test_quiet_for_half_a_day_means_idle(self, tmp_path):
+        """12h, not 24h: a day is long enough for every container from the
+        previous evening to still be claiming a slot under "Working"."""
+        make_session(tmp_path, "quiet", kind="stop", ago=timedelta(hours=13))
 
         f = fleet.collect(tmp_path, NOW)
 
         assert f.agents[0].status == "idle"
-        assert "## Idle (1)" in fleet.render_agents_md(f, NOW)
+        assert "1 idle, not listed" in fleet.render_agents_md(f, NOW)
 
     def test_end_means_ended_regardless_of_recency(self, tmp_path):
         make_session(tmp_path, "over", kind="end", ago=timedelta(minutes=1))
@@ -252,15 +254,18 @@ class TestFronts:
         assert agent.live is True
         assert agent.front is False
 
-    def test_an_idle_session_is_still_listed(self, tmp_path):
-        """Not counted is not the same as not shown — the full read is where
-        you go looking for the tab you forgot about."""
+    def test_an_idle_session_is_counted_but_not_listed(self, tmp_path):
+        """Idle is a guess at death, not a queue: past the quiet threshold
+        these are overwhelmingly closed terminals. They were ten to one against
+        the fronts, so listing them *was* the file. The count stays so that a
+        fleet which has gone entirely quiet still says so."""
         make_session(tmp_path, "quiet", project="forgotten", ago=timedelta(days=3))
 
         md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
 
-        assert "## Idle (1)" in md
-        assert "forgotten" in md
+        assert "## Idle" not in md
+        assert "forgotten" not in md
+        assert "1 idle, not listed" in md
 
     def test_an_all_idle_fleet_has_no_fronts(self, tmp_path):
         for i in range(9):
@@ -360,16 +365,38 @@ class TestCollisions:
 
         assert fleet.collect(tmp_path, NOW).collisions == []
 
-    def test_the_gate_is_the_idle_window(self, tmp_path):
+    def test_the_gate_is_the_collision_window_for_parked_work(self, tmp_path):
         """Just inside COLLISION_MAX_AGE_HOURS still collides — the cut is at
-        the window, not somewhere vaguely near it."""
+        the window, not somewhere vaguely near it.
+
+        Parked, because that is the only group the full window can still reach:
+        the two constants were decoupled when IDLE_AFTER_HOURS dropped to 12,
+        and unparked work leaves `Working` at that shorter threshold (see the
+        test below). Parked work keeps the longer tenure deliberately — nobody
+        is watching it and its edits sit there uncommitted."""
         inside = timedelta(hours=fleet.COLLISION_MAX_AGE_HOURS) - timedelta(minutes=1)
-        make_session(tmp_path, "a", ago=inside)
-        make_session(tmp_path, "b", ago=inside)
-        make_checkpoint(tmp_path, "a", files=("/work/knowhere/src/shared.py",))
-        make_checkpoint(tmp_path, "b", files=("/work/knowhere/src/shared.py",))
+        for sid in ("a", "b"):
+            entry = make_session(tmp_path, sid, ago=inside)
+            raw = json.loads(entry.read_text())
+            raw["disposition"] = {"state": "parked", "reason": "back Monday"}
+            entry.write_text(json.dumps(raw))
+            make_checkpoint(tmp_path, sid, files=("/work/knowhere/src/shared.py",))
 
         assert len(fleet.collect(tmp_path, NOW).collisions) == 1
+
+    def test_unparked_work_stops_colliding_at_the_idle_window(self, tmp_path):
+        """The effective gate on unparked work is the *shorter* of the two: it
+        leaves `Working` at IDLE_AFTER_HOURS and only `Working`/`Parked` can
+        hold a file. Pinned because the two constants used to be one, and
+        decoupling them without saying which one bites here is how a reader
+        concludes a 20h-old tab still collides."""
+        just_idle = timedelta(hours=fleet.IDLE_AFTER_HOURS) + timedelta(minutes=1)
+        assert just_idle < timedelta(hours=fleet.COLLISION_MAX_AGE_HOURS)
+        for sid in ("a", "b"):
+            make_session(tmp_path, sid, ago=just_idle)
+            make_checkpoint(tmp_path, sid, files=("/work/knowhere/src/shared.py",))
+
+        assert fleet.collect(tmp_path, NOW).collisions == []
 
     def test_one_session_listing_a_file_twice_is_not_a_collision(self, tmp_path):
         make_session(tmp_path, "a")
@@ -604,12 +631,91 @@ class TestInvolvedFilesParsing:
 
 
 # ---------------------------------------------------------------------------
+# The involved-files bullet — a glance aid, not an inventory
+# ---------------------------------------------------------------------------
+
+class TestFilesLine:
+    """Checkpoints record absolute paths and must keep doing so — collisions
+    and a resuming session both need them. The *display* is what shortens: one
+    real entry carried 41 absolute paths on one line, which is the reason
+    AGENTS.md became unreadable."""
+
+    def _agent(self, *files, repo_root="", cwd="/work/knowhere"):
+        return fleet.Agent(session_id="s", cwd=cwd, repo_root=repo_root,
+                           files=list(files))
+
+    def test_paths_under_the_checkout_are_shown_relative_to_it(self):
+        agent = self._agent("/work/knowhere/PROJECTS/app/src/x.py",
+                            repo_root="/work/knowhere/PROJECTS/app")
+
+        assert fleet._files_line(agent) == "- **Files:** `src/x.py`"
+
+    def test_paths_elsewhere_in_the_workspace_lose_the_workspace_prefix(self):
+        """The workspace root is derived from the agent's own cwd, so a file in
+        a sibling project still says which project it is in."""
+        agent = self._agent("/work/knowhere/.multiplai/memory/dev.md",
+                            repo_root="/work/knowhere/PROJECTS/app")
+
+        assert fleet._files_line(agent) == "- **Files:** `.multiplai/memory/dev.md`"
+
+    def test_paths_outside_the_workspace_keep_two_segments(self):
+        """A bare basename would collapse six sibling `state.py` into one."""
+        agent = self._agent("/tmp/claude-501/abc/scratchpad/probe.py")
+
+        assert fleet._files_line(agent) == "- **Files:** `…/scratchpad/probe.py`"
+
+    def test_a_worktree_is_a_checkout_not_a_workspace(self):
+        """Peeling `.worktrees/<name>` off is what lets a path in the main
+        checkout render as `PROJECTS/...` instead of `…/lib/fleet.py`."""
+        agent = self._agent("/work/knowhere/PROJECTS/app/README.md",
+                            repo_root="/work/knowhere/.worktrees/feat")
+
+        assert fleet._files_line(agent) == "- **Files:** `PROJECTS/app/README.md`"
+
+    def test_directory_entries_keep_their_trailing_slash(self):
+        agent = self._agent("/work/knowhere/src/pkg/", repo_root="/work/knowhere")
+
+        assert fleet._files_line(agent) == "- **Files:** `src/pkg/`"
+
+    def test_the_checkout_root_itself_renders_as_dot(self):
+        agent = self._agent("/work/knowhere/PROJECTS/app",
+                            repo_root="/work/knowhere/PROJECTS/app")
+
+        assert fleet._files_line(agent) == "- **Files:** `.`"
+
+    def test_the_list_is_capped_and_says_how_many_it_dropped(self):
+        agent = self._agent(*(f"/work/knowhere/src/f{i}.py" for i in range(10)),
+                            repo_root="/work/knowhere")
+
+        line = fleet._files_line(agent)
+
+        assert line.count("`") == 2 * fleet._MAX_FILES_SHOWN
+        assert "_+4 more_" in line
+
+    def test_shortening_may_not_produce_duplicate_entries(self):
+        """Two paths outside the workspace can shorten to the same two
+        segments; showing `…/tests/test_x.py` twice wastes one of six slots."""
+        agent = self._agent("/a/one/tests/test_x.py", "/b/two/tests/test_x.py")
+
+        assert fleet._files_line(agent) == "- **Files:** `…/tests/test_x.py`"
+
+    def test_the_underlying_paths_stay_absolute(self):
+        """Display only. `fleet.json` and `find_collisions` read `.files`, and
+        both break on a relative path."""
+        agent = self._agent("/work/knowhere/src/x.py", repo_root="/work/knowhere")
+
+        fleet._files_line(agent)
+
+        assert agent.files == ["/work/knowhere/src/x.py"]
+
+
+# ---------------------------------------------------------------------------
 # The status-line count is retired — the fronts count survives in `Fleet.fronts`
 # ---------------------------------------------------------------------------
 
 class TestFrontsCount:
 
-    def test_idle_is_listed_but_is_not_a_front(self, tmp_path):
+    def test_idle_is_counted_but_is_not_a_front(self, tmp_path):
         for i in range(4):
             make_session(tmp_path, f"w{i}", ago=timedelta(hours=1))
         make_session(tmp_path, "n1", kind="notification")
@@ -619,7 +725,8 @@ class TestFrontsCount:
         f = fleet.collect(tmp_path, NOW)
 
         # Seven sessions, six fronts: `old` went quiet three days ago, so it
-        # is listed in AGENTS.md as idle and excluded from the fronts.
+        # is counted in the AGENTS.md header as idle and excluded from both
+        # the fronts and the body.
         assert len(f.agents) == 7
         assert len(f.fronts) == 6
         assert len(f.in_group("Needs you")) == 2
@@ -724,7 +831,8 @@ class TestRendering:
 
         assert "**Doing:** Rewiring the drain" in md
         assert "**Next:** Run the gates" in md
-        assert "`/work/knowhere/src/x.py`" in md
+        # Shortened against the agent's own root — see TestFilesLine.
+        assert "**Files:** `src/x.py`" in md
 
     def test_groups_appear_only_when_populated(self, tmp_path):
         make_session(tmp_path, "a", kind="notification")
