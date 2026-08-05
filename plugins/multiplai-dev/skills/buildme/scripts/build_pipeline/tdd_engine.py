@@ -23,6 +23,7 @@ import hashlib
 from . import budget as budget_mod
 from .budget import BudgetExceededError
 from . import board
+from . import git_ops
 from .change_manager import extract_global_constraints
 from .config import BuildConfig
 from .gates import (
@@ -82,78 +83,6 @@ def _mark_block(
                  note=f"block {block_idx + 1} {status.value}")
 
 
-def _bookkeeping_excludes(config: BuildConfig) -> list[str]:
-    """`:(exclude)` pathspecs for buildme's own bookkeeping files.
-
-    build-progress.md, .build-state.json and .board.json live inside the
-    project tree but are the pipeline's own scratch, not the user's work. Every
-    whole-tree git operation here (stage, status, clean) carries these so the
-    files are neither committed nor — much worse — deleted by a discard.
-    """
-    excludes: list[str] = []
-    bookkeeping_files = (
-        config.progress_file_path(),
-        config.state_file_path(),
-        config.change_dir / ".board.json",
-    )
-    for bookkeeping in bookkeeping_files:
-        try:
-            rel = bookkeeping.relative_to(config.project_dir)
-        except ValueError:
-            continue  # outside the repo — a pathspec under '.' won't touch it anyway
-        excludes.append(f":(exclude){rel}")
-    return excludes
-
-
-def _git_commit_tree(config: BuildConfig, message: str, label: str) -> str | None:
-    """Commit everything in the project repo except buildme's bookkeeping.
-
-    Returns the new commit's SHA, or None if there was nothing to commit or the
-    commit failed (logged as a warning — never raises). *label* only names the
-    operation in log lines.
-
-    NOTE (git lifecycle): this is the pipeline's ONE whole-tree stage — a
-    pathspec-limited `git add -A -- . :(exclude)…`, not a bare `git add -A`.
-    Every other commit path (git_ops.commit_paths, used for the spec stages
-    and the archive move) stages explicit paths only. It is kept whole-tree
-    here because a TDD block's output is not fully enumerable from the agent's
-    self-reported FILES: slot, and dropping a produced file would be worse
-    than sweeping one in — and since the build now runs inside its own
-    worktree, "everything under ." IS this build's own work.
-    """
-    cwd = str(config.project_dir)
-    try:
-        subprocess.run(
-            ["git", "add", "-A", "--", ".", *_bookkeeping_excludes(config)],
-            cwd=cwd, check=True, capture_output=True, timeout=30,
-        )
-        status = subprocess.run(
-            ["git", "diff", "--cached", "--quiet"],
-            cwd=cwd, capture_output=True, timeout=10,
-        )
-        if status.returncode == 0:
-            log.info("No changes to commit for %s", label)
-            return None
-        subprocess.run(
-            ["git", "commit", "-m", message],
-            cwd=cwd, check=True, capture_output=True, timeout=30,
-        )
-        sha_proc = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=cwd, capture_output=True, text=True, check=True, timeout=10,
-        )
-        sha = sha_proc.stdout.strip()
-        log.info("COMMIT %s sha=%s", label, sha[:8])
-        return sha
-    except subprocess.CalledProcessError as e:
-        stderr = (e.stderr.decode(errors="replace") if e.stderr else "").strip()
-        log.warning("Failed to commit %s: %s", label, stderr or str(e))
-        return None
-    except Exception as e:
-        log.warning("Unexpected error committing %s: %s", label, e)
-        return None
-
-
 def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -> str | None:
     """Commit the block phase's changes in the project repo.
 
@@ -161,115 +90,11 @@ def _git_commit_block_phase(config: BuildConfig, phase: str, block: BlockInfo) -
     prefix). Returns the new commit's SHA, or None if there was nothing to
     commit or the commit failed (logged as a warning — never raises).
     """
-    return _git_commit_tree(
-        config,
+    return git_ops.commit_tree(
+        config.project_dir,
         f"{phase}(block-{block.number}): {block.name}",
         f"block={block.number} phase={phase}",
     )
-
-
-def _git_discard_to(config: BuildConfig, sha: str, label: str) -> bool:
-    """Throw away every change made since *sha*, keeping buildme's bookkeeping.
-
-    Used to un-do a refactor that failed verification. `reset --hard` restores
-    tracked files; the `clean` removes files the agent newly created, which
-    `reset` leaves behind and the next whole-tree commit would otherwise sweep
-    into the build as reverted-but-committed work. The bookkeeping pathspecs
-    are what keep the clean from deleting .build-state.json out from under a
-    running build.
-
-    **Only ever moves backwards along the current history.** `reset --hard` will
-    happily jump to any commit, including one on unrelated history, and the
-    refactorer holds `Bash` — so it can move HEAD, commit, or switch branches
-    between the moment *sha* was captured and this call. Resetting without
-    checking would then discard whatever HEAD had actually reached: earlier
-    blocks' commits, or, under `--no-worktree`, the user's own. So *sha* must
-    still be an ancestor of HEAD, and this refuses when it is not.
-
-    Returns False (with a warning) when git refused — never raises. A caller
-    that gets False must not treat the refactor as reverted.
-    """
-    cwd = str(config.project_dir)
-    if not _is_ancestor_of_head(config, sha):
-        log.warning(
-            "Refusing to discard %s: %s is not an ancestor of HEAD — resetting "
-            "would throw away history this pass did not create",
-            label, sha[:8],
-        )
-        return False
-    try:
-        subprocess.run(
-            ["git", "reset", "--hard", sha],
-            cwd=cwd, check=True, capture_output=True, timeout=30,
-        )
-        subprocess.run(
-            ["git", "clean", "-fdq", "--", ".", *_bookkeeping_excludes(config)],
-            cwd=cwd, check=True, capture_output=True, timeout=30,
-        )
-        log.info("DISCARD %s reset to %s", label, sha[:8])
-        return True
-    except subprocess.CalledProcessError as e:
-        stderr = (e.stderr.decode(errors="replace") if e.stderr else "").strip()
-        log.warning("Could not discard %s (reset to %s): %s", label, sha[:8], stderr or str(e))
-        return False
-    except Exception as e:
-        log.warning("Could not discard %s (reset to %s): %s", label, sha[:8], e)
-        return False
-
-
-def _is_ancestor_of_head(config: BuildConfig, sha: str) -> bool:
-    """Whether *sha* is reachable from HEAD (or is HEAD itself).
-
-    Returns False when git could not be asked. Same reading as everywhere else
-    in this module: "unknown" is never allowed to mean "safe to destroy".
-    """
-    if not sha:
-        return False
-    try:
-        proc = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", sha, "HEAD"],
-            cwd=str(config.project_dir), capture_output=True, timeout=30,
-        )
-    except Exception as e:
-        log.warning("Could not check ancestry of %s: %s", sha[:8], e)
-        return False
-    return proc.returncode == 0
-
-
-def _git_tree_clean(config: BuildConfig) -> bool:
-    """True when the project tree holds nothing but buildme's own bookkeeping.
-
-    Only used to decide whether HEAD is a faithful snapshot to discard back to.
-    Returns False when git could not be asked — "unknown" must never be read as
-    "safe to reset", because a reset over uncommitted work destroys it.
-    """
-    try:
-        proc = subprocess.run(
-            ["git", "status", "--porcelain", "--", ".", *_bookkeeping_excludes(config)],
-            cwd=str(config.project_dir), capture_output=True, text=True, timeout=30,
-        )
-    except Exception as e:
-        log.warning("git status failed: %s", e)
-        return False
-    if proc.returncode != 0:
-        log.warning("git status failed: %s", proc.stderr.strip())
-        return False
-    return not proc.stdout.strip()
-
-
-def _git_rev_parse_head(config: BuildConfig) -> str | None:
-    """Return the project repo's HEAD SHA, or None (not a repo / no commits)."""
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(config.project_dir), capture_output=True, text=True, timeout=10,
-        )
-        if proc.returncode == 0:
-            return proc.stdout.strip()
-        log.warning("git rev-parse HEAD failed: %s", proc.stderr.strip())
-    except Exception as e:
-        log.warning("git rev-parse HEAD failed: %s", e)
-    return None
 
 
 # git's well-known empty-tree object. Used as the diff baseline when the
@@ -1150,7 +975,7 @@ async def run_block_tdd(
         BlockStatus.PENDING,
         BlockStatus.TESTING,
     ):
-        baseline = _git_rev_parse_head(config)
+        baseline = git_ops.rev_parse_head(config.project_dir)
         # Empty repo (no commits yet) → baseline against the empty tree so the
         # reviewer sees block 1's work; a None baseline would diff `HEAD`,
         # which after the block's own commits shows nothing.
@@ -1310,8 +1135,8 @@ async def run_block_tdd(
         # HEAD fallback only applies when there was genuinely nothing to commit
         # and the tree is clean, so a reset cannot eat uncommitted work.
         rewind_to = impl_sha
-        if rewind_to is None and _git_tree_clean(config):
-            rewind_to = _git_rev_parse_head(config)
+        if rewind_to is None and git_ops.tree_is_clean(config.project_dir):
+            rewind_to = git_ops.rev_parse_head(config.project_dir)
 
         # The integrity baseline for this window is the tree as the implementer
         # left it — NOT `block.test_file_hashes`, which was frozen at the RED
@@ -1418,7 +1243,9 @@ def _verify_block_refactor(
         progress.log_agent("Refactorer", block.name, "REVERT FAILED — see log")
         return False
 
-    reverted = _git_discard_to(config, rewind_to, f"refactor of block {block.number}")
+    reverted = git_ops.discard_to(
+        config.project_dir, rewind_to, f"refactor of block {block.number}",
+    )
     log.warning(
         "Refactor of block %d (%s) %s: %s",
         block.number, block.name,
@@ -1752,10 +1579,23 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
     )
 
 
-async def run_tdd_engine(config: BuildConfig, args) -> int:
+async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) -> int:
     """Main entry point for the TDD engine.
 
     Orchestrates: parse blocks → baseline gate → per-block TDD → final review.
+
+    *standalone* says who owns the build's lifecycle. True (the
+    `python -m build_pipeline tdd` entry point) means the engine IS the build:
+    on success it advances the checkpoint to COMPLETE and deletes it. False
+    (the orchestrator's TDD_BUILD sub-phase) means the orchestrator owns phase
+    advancement and cleanup, and the engine must leave the checkpoint alone —
+    deleting it here made the orchestrator's post-engine reload
+    (`if state_path.exists(): state = BuildState.load(state_path)`) fall
+    through to a stale in-memory copy with `tdd is None`, so a crash in
+    DOCS_UPDATE/RESPEC/PUBLISH resumed at TDD_BUILD with no block state and
+    re-ran the whole build; and a crash in the few lines between the advance
+    and the cleanup left a checkpoint at COMPLETE, silently skipping every
+    remaining phase.
     """
     state_path = config.state_file_path()
     progress = ProgressWriter(config.progress_file_path())
@@ -1915,7 +1755,13 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
             progress.log_phase("E2E_CHECK", "PASSED")
 
     # Success
-    state.advance_to(BuildPhase.COMPLETE, state_path)
+    if standalone:
+        state.advance_to(BuildPhase.COMPLETE, state_path)
+    else:
+        # Persist the finished TDD sub-state so the orchestrator's reload sees
+        # it; the phase pointer stays at TDD_BUILD for the orchestrator to
+        # advance.
+        state.checkpoint(state_path)
     # Report the spend even when nothing stopped: a build that finished at 95%
     # of its ceiling is the one worth knowing about before the next run.
     spend = budget_mod.get_budget()
@@ -1923,7 +1769,8 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
              total_blocks, spend.total_tokens, spend.cost_usd, spend.calls)
     progress.log_phase("BUDGET", spend.diagnosis())
     progress.log_phase("COMPLETE", f"All {total_blocks} blocks implemented successfully")
-    state.cleanup(state_path)
+    if standalone:
+        state.cleanup(state_path)
     return EXIT_SUCCESS
 
 
@@ -2038,15 +1885,18 @@ async def _run_refactor_all(
     # commit" is only a faithful pre-refactor snapshot once they are in it.
     # Without this, discarding a failed refactor would take the build's own
     # review fixes with it.
-    rewind_to = _git_commit_tree(config, "chore: checkpoint before whole-change refactor",
-                                 "pre-refactor checkpoint")
-    if rewind_to is None and _git_tree_clean(config):
+    rewind_to = git_ops.commit_tree(
+        config.project_dir,
+        "chore: checkpoint before whole-change refactor",
+        "pre-refactor checkpoint",
+    )
+    if rewind_to is None and git_ops.tree_is_clean(config.project_dir):
         # Nothing to commit and the tree is clean: HEAD already holds
         # everything, so it is a faithful snapshot (same guard as the
         # per-block rewind).
-        rewind_to = _git_rev_parse_head(config)
+        rewind_to = git_ops.rev_parse_head(config.project_dir)
     if rewind_to is None:
-        # `_git_commit_tree` returns None for "commit failed" too (failing
+        # `git_ops.commit_tree` returns None for "commit failed" too (failing
         # hook, missing identity) — with work still in the tree, possibly all
         # of it staged. Trusting HEAD then would let a failed verification
         # `reset --hard` + `clean -fd` over the uncommitted work and destroy
@@ -2098,7 +1948,7 @@ async def _run_refactor_all(
                 detail = f"test files changed during refactor: {tests_gate.reason}"
 
     if detail:
-        if rewind_to and _git_discard_to(config, rewind_to, "whole-change refactor"):
+        if rewind_to and git_ops.discard_to(config.project_dir, rewind_to, "whole-change refactor"):
             log.warning("DONE phase=REFACTOR_ALL result=discarded reason=%s", detail)
             progress.log_phase("REFACTOR_ALL", f"REVERTED — {detail}")
         else:
@@ -2111,8 +1961,10 @@ async def _run_refactor_all(
                       "and will ship unless reviewed", detail)
             progress.log_phase("REFACTOR_ALL", f"REVERT FAILED — {detail}")
     else:
-        sha = _git_commit_tree(config, "refactor: simplify across blocks",
-                               "whole-change refactor")
+        sha = git_ops.commit_tree(
+            config.project_dir, "refactor: simplify across blocks",
+            "whole-change refactor",
+        )
         log.info("DONE phase=REFACTOR_ALL result=committed sha=%s",
                  sha[:8] if sha else "(no changes)")
         progress.log_phase("REFACTOR_ALL",

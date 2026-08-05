@@ -8,7 +8,6 @@
 | `orchestrator.py` | Phase sequencing state machine | Delegates |
 | `spec_generator.py` | Artifact pipeline (proposal → tasks → rubric) | Via llm_steps |
 | `tdd_engine.py` | Block-by-block TDD with agent spawning. Each block runs test → implement → **refactor** on every tier; the refactor is verified (suite re-run + `unchanged_tests_gate`) and its diff discarded on failure. `_run_refactor_all` is the one conservative whole-change pass, between the block loop and `_run_final_review`, guarded by `TDDState.refactor_all_done`. | Via llm_steps |
-| `apply.py` | Manual single-agent implementation | Via sdk |
 | `change_manager.py` | Manages specs/ directory (DAG, status, templates, archiving) | No |
 | `config.py` | BuildConfig, tier detection, test command discovery, reference-doc resolution (`stack_reference_docs`/`reference_docs_text`: built-in stack map + `reference_docs:` overrides from `specs/config.yaml` + django/fastapi/react manifest detection; `summarize_reference_doc` reduces an over-limit doc on section boundaries and always emits the full section index) | No |
 | `state.py` | BuildState with checkpoint/resume | No |
@@ -16,7 +15,7 @@
 | `gates.py` | Quality gate assertions (pure code) + agent-report parsers (`parse_agent_status`, `parse_implementation_note`, `parse_docs_impact`). New gates: `unknowns_gate`, `prototype_required`, `prototype_gate`, `docs_freshness_gate` (warn-only). | No |
 | `budget.py` | Per-build token/cost ledger + circuit-breaker (module singleton) | No |
 | `dependencies.py` | Pure detection of dependencies **new to this project**: parses the proposal's `## Impact` and design's `## Decisions`, subtracts every manifest (`pyproject.toml`, `package.json`, `Package.swift`, `Cargo.toml`, `go.mod`, `requirements.txt`) and every existing import. Feeds the B1 explainer gate. No LLM, no network. | No |
-| `git_ops.py` | Every `git`/`gh` invocation: worktree+branch setup, explicit-path commits, push, `gh pr create`. `shell=False`, fixed argv, never merges/force-pushes/deletes. | No |
+| `git_ops.py` | Every `git`/`gh` invocation: worktree+branch setup, explicit-path commits, the TDD loop's whole-tree `commit_tree`/`tree_is_clean`/`discard_to`, push, `gh pr create`. `shell=False`, fixed argv, never merges/force-pushes/deletes; the one destructive call (`discard_to`) refuses unless the target sha is still an ancestor of HEAD. `BOOKKEEPING_EXCLUDES` is the single list of buildme's own files, honored by every commit path and by the discard's `clean`. | No |
 | `board.py` | Board seam: pure `column_for(phase, block_status)` → `BoardColumn`, `.board.json` card writer, `BOARD:<slug>:<Column>` stdout line. Drives Shaping → Planning → In Development → In Review only; its docstring names the columns it never sets. The `BoardCard`/`BoardEvent` pydantic models live here deliberately (they are the card file's private schema, not shared pipeline data). | No |
 | `sdk.py` | `llm_call()` + `agent_call()` adapters over `multiplai_core.run_agent()` | Yes (SDK) |
 | `rubric.py` | Rubric generation and change type detection | Via sdk |
@@ -43,7 +42,7 @@ Templates are Python f-strings with `{placeholders}`. Each template is a constan
 |------|-----------|
 | `spec_generation.py` | PROPOSAL_PROMPT, SPEC_PROMPT, DESIGN_PROMPT, TASKS_PROMPT |
 | `test_writing.py` | TEST_WRITER_PROMPT |
-| `implementation.py` | IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM, REFACTOR_PROMPT, REFACTOR_ALL_PROMPT, APPLY_PROMPT |
+| `implementation.py` | IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM, REFACTOR_PROMPT, REFACTOR_ALL_PROMPT |
 | `review.py` | CODE_REVIEW_PROMPT, FINDING_ADJUDICATION_PROMPT, FINAL_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT |
 | `design_audit.py` | DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT |
 | `prototype.py` | PROTOTYPE_PROMPT |
@@ -153,7 +152,7 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   buildme's bookkeeping) and the block keeps the code that was already green.
   A refactor must never turn a green block red.
 - **A discard only ever moves backwards along the current history.**
-  `_git_discard_to` checks `merge-base --is-ancestor <sha> HEAD` and refuses
+  `git_ops.discard_to` checks `merge-base --is-ancestor <sha> HEAD` and refuses
   otherwise. `reset --hard` will jump to any commit, and the refactorer holds
   `Bash` — so it can commit, move HEAD, or switch branches between the moment
   the impl sha was captured and the discard. Resetting unchecked would throw

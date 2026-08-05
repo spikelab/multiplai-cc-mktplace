@@ -8,11 +8,14 @@ Design rules (these are the trust boundary — do not relax them):
 - **Names are normalized first.** Branch and worktree names are derived from
   ``change_manager.normalize_change_name``, so a hostile ``--change`` value
   cannot become a path traversal or an option-looking argument.
-- **Never destructive.** Nothing here merges, rebases, resets, force-pushes,
-  or deletes a branch. ``remove_worktree`` exists as a documented helper for
-  a *calling session* to use from the workspace root; the pipeline itself
-  never calls it (worktree-safety rule: never self-cleanup from inside the
-  worktree).
+- **Never destructive except for one guarded discard.** Nothing here merges,
+  rebases, force-pushes, or deletes a branch. The single exception is
+  ``discard_to``, which throws away a failed refactor — and it refuses unless
+  the target sha is still an ancestor of HEAD, so it can only ever move
+  backwards along the current history. ``remove_worktree`` exists as a
+  documented helper for a *calling session* to use from the workspace root;
+  the pipeline itself never calls it (worktree-safety rule: never self-cleanup
+  from inside the worktree).
 - **Explicit pathspecs.** ``commit_paths`` stages the paths it is given and
   nothing else.
 - **Push / PR failures are non-fatal.** They return a result the caller turns
@@ -324,13 +327,20 @@ def commit_paths(worktree: Path, message: str, paths: list[str]) -> str | None:
 
 
 # Buildme's own bookkeeping files must never be committed, from ANY commit
-# path (the TDD engine enforces the same invariant with its own :(exclude)
-# pathspecs in _git_commit_block_phase). Glob magic so the rule holds at every
-# depth — specs/changes/<name>/ while active, specs/archive/<date>-<name>/
-# after the --auto archive move.
+# path, and — much worse if it goes wrong — must never be *deleted* by the
+# discard below. Glob magic so the rule holds at every depth:
+# specs/changes/<name>/ while active, specs/archive/<date>-<name>/ after the
+# --auto archive move, and build-progress.md at the project root. A leading
+# `**/` matches at the root too, so one list covers every path.
+#
+# This is the ONE list. The TDD engine used to derive its own exact-path
+# variant from BuildConfig, which meant two mechanisms disagreeing about which
+# files were bookkeeping (that one covered build-progress.md, this one did
+# not) — with a `git clean` on the other side of the disagreement.
 BOOKKEEPING_EXCLUDES = [
     ":(exclude,glob)**/.build-state.json",
     ":(exclude,glob)**/.board.json",
+    ":(exclude,glob)**/build-progress.md",
 ]
 
 
@@ -350,6 +360,128 @@ def commit_stage(config, message: str, paths: list[str]) -> str | None:
     if not paths:
         return None
     return commit_paths(Path(config.project_dir), message, [*paths, *BOOKKEEPING_EXCLUDES])
+
+
+# --- Whole-tree operations (the TDD block loop) ---------------------------
+#
+# Everything above stages explicit paths. The three below are the pipeline's
+# only whole-tree git operations, and they live here rather than in the TDD
+# engine so that every `git` invocation the pipeline makes is in one module,
+# behind one `_run`. They are pathspec-limited (`-- . :(exclude)…`), never a
+# bare `git add -A`: a block's output is not fully enumerable from the agent's
+# self-reported FILES: slot, so dropping a produced file would be worse than
+# sweeping one in — and since the build runs inside its own worktree,
+# "everything under ." IS this build's own work.
+
+
+def commit_tree(repo: Path | str, message: str, label: str = "") -> str | None:
+    """Commit everything in *repo* except buildme's bookkeeping.
+
+    Returns the new commit's SHA, or None when there was nothing to commit or
+    the commit failed (logged as a warning — never raises). *label* only names
+    the operation in log lines.
+    """
+    add = _run(["git", "add", "-A", "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
+    if not add.ok:
+        log.warning("Failed to commit %s: %s", label, add.stderr.strip() or add.stdout.strip())
+        return None
+    staged = _run(["git", "diff", "--cached", "--quiet"], cwd=repo)
+    if staged.returncode == 0:
+        log.info("No changes to commit for %s", label)
+        return None
+    commit = _run(["git", "commit", "-m", message], cwd=repo)
+    if not commit.ok:
+        log.warning("Failed to commit %s: %s", label, commit.stderr.strip() or commit.stdout.strip())
+        return None
+    sha = _run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
+    if not sha:
+        log.warning("Committed %s but could not read HEAD", label)
+        return None
+    log.info("COMMIT %s sha=%s", label, sha[:8])
+    return sha
+
+
+def rev_parse_head(repo: Path | str) -> str | None:
+    """*repo*'s HEAD SHA, or None (not a repo / no commits)."""
+    res = _run(["git", "rev-parse", "HEAD"], cwd=repo)
+    if not res.ok:
+        log.warning("git rev-parse HEAD failed: %s", res.stderr.strip())
+        return None
+    return res.stdout.strip() or None
+
+
+def is_ancestor_of_head(repo: Path | str, sha: str) -> bool:
+    """Whether *sha* is reachable from HEAD (or is HEAD itself).
+
+    Returns False when git could not be asked. Same reading as everywhere
+    else: "unknown" is never allowed to mean "safe to destroy".
+    """
+    if not sha:
+        return False
+    res = _run(["git", "merge-base", "--is-ancestor", sha, "HEAD"], cwd=repo)
+    if res.returncode not in (0, 1):
+        log.warning("Could not check ancestry of %s: %s", sha[:8], res.stderr.strip())
+        return False
+    return res.returncode == 0
+
+
+def tree_is_clean(repo: Path | str) -> bool:
+    """True when *repo* holds nothing but buildme's own bookkeeping.
+
+    Used only to decide whether HEAD is a faithful snapshot to discard back
+    to. Returns False when git could not be asked — "unknown" must never be
+    read as "safe to reset", because a reset over uncommitted work destroys it.
+    """
+    res = _run(["git", "status", "--porcelain", "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
+    if not res.ok:
+        log.warning("git status failed: %s", res.stderr.strip())
+        return False
+    return not res.stdout.strip()
+
+
+def discard_to(repo: Path | str, sha: str, label: str = "") -> bool:
+    """Throw away every change made since *sha*, keeping buildme's bookkeeping.
+
+    Used to un-do a refactor that failed verification. `reset --hard` restores
+    tracked files; the `clean` removes files the agent newly created, which
+    `reset` leaves behind and the next whole-tree commit would otherwise sweep
+    into the build as reverted-but-committed work. The bookkeeping pathspecs
+    are what keep the clean from deleting .build-state.json out from under a
+    running build. (File-level excludes cannot save a wholly *untracked*
+    directory — `clean -d` removes those entire. By the time a block runs the
+    spec stages have committed the change directory, so the exclude bites on
+    the individual files, which is the case that matters.)
+
+    **Only ever moves backwards along the current history.** `reset --hard`
+    will happily jump to any commit, including one on unrelated history, and
+    the refactorer holds `Bash` — so it can move HEAD, commit, or switch
+    branches between the moment *sha* was captured and this call. Resetting
+    without checking would then discard whatever HEAD had actually reached:
+    earlier blocks' commits, or, under `--no-worktree`, the user's own. So
+    *sha* must still be an ancestor of HEAD, and this refuses when it is not.
+
+    Returns False (with a warning) when git refused — never raises. A caller
+    that gets False must not treat the refactor as reverted.
+    """
+    if not is_ancestor_of_head(repo, sha):
+        log.warning(
+            "Refusing to discard %s: %s is not an ancestor of HEAD — resetting "
+            "would throw away history this pass did not create",
+            label, sha[:8],
+        )
+        return False
+    reset = _run(["git", "reset", "--hard", sha], cwd=repo)
+    if not reset.ok:
+        log.warning("Could not discard %s (reset to %s): %s",
+                    label, sha[:8], reset.stderr.strip() or reset.stdout.strip())
+        return False
+    clean = _run(["git", "clean", "-fdq", "--", ".", *BOOKKEEPING_EXCLUDES], cwd=repo)
+    if not clean.ok:
+        log.warning("Could not discard %s (clean after reset to %s): %s",
+                    label, sha[:8], clean.stderr.strip() or clean.stdout.strip())
+        return False
+    log.info("DISCARD %s reset to %s", label, sha[:8])
+    return True
 
 
 def push_branch(worktree: Path, branch: str) -> GitResult:

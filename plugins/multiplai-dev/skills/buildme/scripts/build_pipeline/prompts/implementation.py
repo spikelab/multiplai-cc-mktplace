@@ -250,21 +250,3 @@ Report what you changed and why, grouped by the four categories above, and
 confirm the full suite is green. If you changed nothing, say so plainly — "the
 blocks were already consistent" is a valid and useful result.
 """
-
-APPLY_PROMPT = """\
-You are implementing a single block from the task list manually.
-
-## Block {block_number}: {block_name}
-{block_description}
-
-## Project Context
-{context}
-
-## Rules
-
-1. Implement everything described in the block.
-2. Follow existing project patterns and conventions.
-3. Write tests if the project has a test framework set up.
-4. Commit your changes with a descriptive message.
-5. Report what you implemented.
-"""

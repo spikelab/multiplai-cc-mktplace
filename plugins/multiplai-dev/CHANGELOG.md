@@ -16,7 +16,32 @@ release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **A crash after the TDD build no longer re-runs the whole build.** The TDD
+  engine deleted the build's checkpoint on success even when it was running as
+  one phase of `buildme` rather than on its own. Everything after it — the
+  documentation pass, the respec proposal, the push and PR — then had nothing
+  to resume from: a crash there restarted at `tdd_build` with no block state
+  and rebuilt every block from scratch. A crash in the moment between marking
+  the build complete and deleting the checkpoint was worse still: the resume
+  read "complete" and skipped the remaining phases silently, so the docs, the
+  respec proposal and the PR never happened. Resuming a build now picks up
+  where it stopped.
+- **A crash while the checkpoint is being written can no longer corrupt it.**
+  `.build-state.json` was written in place, so an interruption mid-write left a
+  half-written file that no resume can read — and it is the only record a build
+  has. It is now written to a temp file and renamed into place, so a resume
+  always finds either the previous checkpoint or the new one.
+
+### Changed
+
+- **`python -m build_pipeline` exposes only the subcommands it documents.** The
+  `migrate` (legacy `openspec/` layout) and `apply` (single-agent, non-TDD)
+  subcommands are gone — both were undocumented, unreachable from the
+  `/buildme` skill, and untouched by the last year of pipeline work. If you
+  scripted either of them directly, use `build` / `spec-generate` / `tdd`
+  instead.
 
 ## [0.11.0] - 2026-08-05
 

@@ -4,9 +4,7 @@ Subcommands for dev/debug use (only /buildme is user-facing):
   build         — Full orchestrator (mode detect → interview → research → specs → build)
   spec-generate — Artifact generation pipeline
   tdd           — TDD implementation engine
-  apply         — Manual single-agent change application
   archive       — Archive a completed change (merge delta specs → main registry)
-  migrate       — Migrate legacy openspec/ layout to new specs/ layout
 """
 
 from __future__ import annotations
@@ -24,7 +22,7 @@ def _add_trust_repo_flag(p: argparse.ArgumentParser) -> None:
         "--trust-repo",
         action="store_true",
         help="Confirm you trust this repo's specs/ before running auto-approving "
-             "build agents. Required for build/spec-generate/tdd/apply on any "
+             "build agents. Required for build/spec-generate/tdd on any "
              "repo you did not author (equivalent to BUILDME_TRUST_REPO=1).",
     )
 
@@ -142,23 +140,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_trust_repo_flag(tdd)
     _add_lenient_review_flag(tdd)
 
-    # --- apply ---
-    apply_ = sub.add_parser("apply", help="Manual single-agent change application")
-    apply_.add_argument("--change", default="", help="Change name (auto-selects if only one)")
-    apply_.add_argument("--project-dir", default=".", help="Project directory")
-    apply_.add_argument("--block", type=int, help="Start from specific block number")
-    _add_trust_repo_flag(apply_)
-
     # --- archive ---
     archive = sub.add_parser("archive", help="Archive a completed change")
     archive.add_argument("--change", required=True, help="Change name")
     archive.add_argument("--project-dir", default=".", help="Project directory")
     archive.add_argument("--no-merge", action="store_true", help="Skip merging delta specs into main registry")
-
-    # --- migrate ---
-    migrate = sub.add_parser("migrate", help="Migrate legacy openspec/ to new specs/ layout")
-    migrate.add_argument("--project-dir", default=".", help="Project directory")
-    migrate.add_argument("--dry-run", action="store_true", help="Show what would change without modifying anything")
 
     return parser
 
@@ -212,11 +198,6 @@ def main(argv: list[str] | None = None) -> int:
         config = BuildConfig.from_cli_args(args)
         return asyncio.run(run_tdd_engine(config, args))
 
-    elif args.command == "apply":
-        from .apply import run_apply
-        config = BuildConfig.from_cli_args(args)
-        return asyncio.run(run_apply(config, args))
-
     elif args.command == "archive":
         from .change_manager import ChangeManager
         config = BuildConfig.from_cli_args(args)
@@ -228,11 +209,6 @@ def main(argv: list[str] | None = None) -> int:
         dest = cm.archive_change(change_dir, merge_specs=not args.no_merge)
         print(f"Archived to: {dest}")
         return 0
-
-    elif args.command == "migrate":
-        from pathlib import Path
-        from .migrate import run_migrate
-        return run_migrate(Path(args.project_dir), dry_run=args.dry_run)
 
     return 2
 

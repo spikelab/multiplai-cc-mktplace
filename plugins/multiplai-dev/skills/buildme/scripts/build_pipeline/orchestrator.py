@@ -235,7 +235,10 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             # the whole build, not only once it succeeds.
             board.record(config, state, BuildPhase.TDD_BUILD, progress=progress)
             from .tdd_engine import run_tdd_engine
-            result = await run_tdd_engine(config, args)
+            # standalone=False: this is a sub-phase, so the engine must not
+            # advance to COMPLETE or delete the checkpoint — the reload below
+            # depends on the file still being there.
+            result = await run_tdd_engine(config, args, standalone=False)
             # Reload state from disk — tdd_engine wrote its own updates (block status, TDD sub-state)
             # and our in-memory copy is stale. Without this, advance_to() overwrites tdd state with null.
             if state_path.exists():

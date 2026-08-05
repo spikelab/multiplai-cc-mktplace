@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -116,14 +118,37 @@ class BuildState(BaseModel):
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def checkpoint(self, path: Path | None = None) -> None:
-        """Serialize state to disk."""
+        """Serialize state to disk, atomically.
+
+        The checkpoint is the build's only crash-recovery record, and it is
+        rewritten after every block phase — so a truncated write is a real
+        failure mode, and one there is no recovery from: `BuildState.load`
+        raises on a half-written file and the orchestrator has nothing else to
+        resume from. Write to a temp file in the SAME directory (so `os.replace`
+        stays within one filesystem and is therefore atomic) and rename over the
+        target. A crash then leaves either the previous checkpoint or the new
+        one, never a partial one; a serialization failure leaves the previous
+        checkpoint intact and no stray temp file.
+        """
         target = path or Path(self.state_file)
         if not target.name:
             return
         self.budget = budget.get_budget().to_state()
         self.updated_at = datetime.now(timezone.utc).isoformat()
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(self.model_dump_json(indent=2))
+        fd, tmp_name = tempfile.mkstemp(
+            dir=target.parent, prefix=f".{target.name}.", suffix=".tmp",
+        )
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(self.model_dump_json(indent=2))
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, target)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         log.debug("State checkpointed to %s", target)
 
     @classmethod

@@ -128,10 +128,8 @@ gaps are reported and left to the review checkpoint. The pass is recorded in the
 checkpoint (`spec_gen.design_audit_regen_done`), so a resumed build audits and
 reports but never regenerates a second time.
 
-> Note: an implementation feasibility gate exists in the code
-> (`feasibility_gate`) but is **not currently wired into the pipeline**. The
-> multi-agent codebase-analysis step (`run_codebase_analysis`) **is** wired —
-> see [Phase 2.5](#phase-25-codebase-analysis).
+> Note: the multi-agent codebase-analysis step (`run_codebase_analysis`) **is**
+> wired — see [Phase 2.5](#phase-25-codebase-analysis).
 
 ### Phase 5: Prototype
 

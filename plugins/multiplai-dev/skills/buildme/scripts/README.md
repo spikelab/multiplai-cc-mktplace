@@ -29,8 +29,8 @@ python -m build_pipeline spec-generate --change my-feature --project-dir /path
 # TDD engine only (dev/debug)
 python -m build_pipeline tdd --change my-feature --project-dir /path
 
-# Manual apply (dev/debug)
-python -m build_pipeline apply --change my-feature --project-dir /path
+# Archive a completed change (merge delta specs → main registry)
+python -m build_pipeline archive --change my-feature --project-dir /path
 ```
 
 ## Model-Adaptive Behavior
