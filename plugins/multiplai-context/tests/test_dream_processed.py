@@ -159,3 +159,25 @@ def test_mark_processed_writes_atomically(tmp_path):
     assert not (tmp_path / (path.name + ".tmp")).exists()  # temp cleaned up by rename
     # re-marking the same item does not rewrite
     assert mark_processed(path, ("update", "testing.md", 1), "applied") is False
+
+
+def test_a_heading_without_a_summary_is_not_an_item():
+    """Byte-identical to the hub's `_UPDATE_RE`, and this is what pins it there.
+
+    The two copies had already drifted: the plugin's pattern stopped at the
+    dot, so `### 5.` was an update here and not in the hub — the two tools
+    disagreeing about what the same file says, which is exactly what the
+    `## Processed` contract exists to prevent.
+    """
+    from lib.dream_processed import _ACTION_ITEM_RE, _UPDATE_RE
+
+    assert _UPDATE_RE.match("### 5. Freeze the monotonic clock")
+    assert not _UPDATE_RE.match("### 5.")
+    # `### 5.   ` *does* match, with a single space as the summary — `.` matches
+    # a space, so `\s*(.+?)\s*` can always find one. Asserted here because it is
+    # surprising, and because the hub does the same thing: the point is that the
+    # two agree, not that either is elegant.
+    assert _UPDATE_RE.match("### 5.   ")
+
+    assert _ACTION_ITEM_RE.match("### A2. Delete the stale worktree")
+    assert not _ACTION_ITEM_RE.match("### A2.")

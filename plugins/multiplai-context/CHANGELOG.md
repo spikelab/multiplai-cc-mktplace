@@ -18,6 +18,17 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.18.6] - 2026-08-05
+
+### Fixed
+
+- **The plugin and the multiplai-gui hub now read a dream proposal the same
+  way.** Their block-matching patterns are duplicated by design — the cross-tool
+  contract is the `## Processed` heading, not a shared library — and they had
+  drifted on the first day: a heading like `### 5.` with no summary counted as
+  an item here and not in the hub. The stricter form is now used in both, and a
+  test pins it, so the two tools cannot disagree about what the same file says.
+
 ## [0.18.5] - 2026-08-05
 
 ### Fixed

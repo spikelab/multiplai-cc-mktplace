@@ -27,8 +27,18 @@ from pathlib import Path
 
 _GROUP_RE = re.compile(r"^## Updates for `(?P<file>[^`]+)`(?:\s.*)?$")
 _ACTIONS_HEADER_RE = re.compile(r"^## Action Items\b")
-_UPDATE_RE = re.compile(r"^### (?P<index>\d+)\.")
-_ACTION_ITEM_RE = re.compile(r"^### A(?P<index>\d+)\.")
+# These two are duplicated in multiplai-gui's `hub/src/multiplai_hub/dreams.py`
+# on purpose — the cross-tool contract is the `## Processed` heading, not a
+# shared library, and vendoring one into the other would couple a web service
+# to a plugin's release cycle. Duplication is the cheaper of the two costs.
+#
+# What it is *not* is licence to drift. These had already diverged on day one:
+# the plugin accepted a bare `### 5.` that the hub rejected, so a malformed
+# heading would have been an update here and not there — the two tools
+# disagreeing about what the same file says, which is the one failure this
+# format exists to prevent. Keep them byte-identical; change both or neither.
+_UPDATE_RE = re.compile(r"^### (?P<index>\d+)\.\s*(?P<summary>.+?)\s*$")
+_ACTION_ITEM_RE = re.compile(r"^### A(?P<index>\d+)\.\s*(?P<summary>.+?)\s*$")
 # A block ends at the next item/section heading or a horizontal-rule separator.
 _BLOCK_BOUNDARY_RE = re.compile(r"^(?:#{2,3}\s|---\s*$)")
 
