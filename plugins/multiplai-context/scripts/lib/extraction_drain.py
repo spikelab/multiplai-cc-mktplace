@@ -37,6 +37,8 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
+from lib.runtime import uv_run_argv
+
 logger = logging.getLogger(__name__)
 
 # Retry policy for markers left in ``processing_extractions/``. A detached
@@ -237,7 +239,7 @@ def process_deferred_extractions(
 
         try:
             proc = subprocess.Popen(
-                ["uv", "run", "--no-project", str(extract_script)],
+                uv_run_argv(extract_script),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=None if wait else subprocess.DEVNULL,

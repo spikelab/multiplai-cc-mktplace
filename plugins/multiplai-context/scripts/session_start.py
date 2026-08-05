@@ -45,6 +45,7 @@ from multiplai_core.log_utils import setup_logging, log_event
 # the same code. Two copies of a marker-move loop is how one of them quietly
 # stops matching the other.
 from lib.extraction_drain import process_deferred_extractions
+from lib.runtime import uv_run_argv
 from lib.fleet import write_fleet_view
 
 logger = setup_logging("session_start")
@@ -287,7 +288,7 @@ def _launch_qmd_refresh(scripts_dir: Path, cwd: str) -> bool:
             return False
         workspace = cwd or str(Path(cfg.resources_dir).expanduser().parent)
         subprocess.Popen(
-            ["uv", "run", "--no-project", str(script), workspace],
+            uv_run_argv(script, workspace),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -322,7 +323,7 @@ def _launch_cost_collection(scripts_dir: Path) -> bool:
         if not script.exists():
             return False
         subprocess.Popen(
-            ["uv", "run", "--no-project", str(script)],
+            uv_run_argv(script),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -338,11 +339,11 @@ def _maintainer_gate_open(maintainer_state_file: Path) -> bool:
     """True when >=24h have passed since the last maintenance run.
 
     Deliberately duplicates the maintainer's own ``gate_open`` rather than
-    importing it: ``memory_maintainer.py`` is a PEP 723 script whose header
-    resolves its own core version under ``uv run``, and importing it into this
-    hook would run it against whichever core the hook process has. The gate is
-    a timestamp comparison — cheap to state twice, and the child re-checks
-    authoritatively anyway, so a disagreement costs at most one no-op child.
+    importing it: ``memory_maintainer.py`` is an entry point with its own
+    argparse/asyncio setup, and importing it here to read one timestamp would
+    drag all of that into the hook process. The gate is a timestamp comparison
+    — cheap to state twice, and the child re-checks authoritatively anyway, so
+    a disagreement costs at most one no-op child.
 
     Fail-open on missing/corrupt state, matching the maintainer: the failure
     mode of an extra pass is a few cents, of a wedged gate is maintenance that
@@ -388,7 +389,7 @@ def _launch_maintainer(scripts_dir: Path, data_dir: Path) -> bool:
         if not script.exists():
             return False
         subprocess.Popen(
-            ["uv", "run", "--no-project", str(script)],
+            uv_run_argv(script),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

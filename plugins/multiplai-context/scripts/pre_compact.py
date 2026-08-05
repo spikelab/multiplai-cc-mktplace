@@ -51,6 +51,7 @@ from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import setup_logging, log_event
 from lib import checkpoint as cp
+from lib.runtime import uv_run_argv
 
 logger = setup_logging("pre_compact")
 
@@ -154,7 +155,7 @@ def _sync_checkpoint(hook_input: dict, data_dir) -> bool:
         # Synchronous on purpose: compaction is imminent and this state is
         # about to be summarized away. The writer releases the marker itself.
         proc = subprocess.run(
-            ["uv", "run", "--no-project", str(script)],
+            uv_run_argv(script),
             input=payload.encode("utf-8"),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

@@ -37,6 +37,7 @@ from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import setup_logging, log_event
 from lib import checkpoint as cp
+from lib.runtime import uv_run_argv
 
 logger = setup_logging("session_stop")
 
@@ -49,7 +50,7 @@ def _spawn_writer(payload: dict) -> bool:
         return False
     try:
         proc = subprocess.Popen(
-            ["uv", "run", "--no-project", str(script)],
+            uv_run_argv(script),
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

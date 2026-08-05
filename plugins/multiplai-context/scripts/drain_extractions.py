@@ -13,8 +13,9 @@ exits, at exactly the moment a marker was just written.
 
 Usage::
 
-    uv run --no-project drain_extractions.py --data-dir ~/knowhere/.multiplai/data
-    uv run --no-project drain_extractions.py --wait --verbose   # by hand
+    uv run --project <plugin>/scripts drain_extractions.py \\
+        --data-dir ~/knowhere/.multiplai/data
+    uv run --project <plugin>/scripts drain_extractions.py --wait --verbose
 
 ``--data-dir`` is optional; without it the standard path cascade applies
 (``CLAUDE_PLUGIN_OPTION_data_dir`` → ``<workspace>/.multiplai/data`` → …).
