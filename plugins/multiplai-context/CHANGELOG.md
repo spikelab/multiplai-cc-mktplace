@@ -16,7 +16,24 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
-Nothing yet.
+### Removed
+
+- **`scripts/synthesize_agents.py`** — `scripts/fleet_status.py --full` writes
+  the same `AGENTS.md` from the same registry and checkpoints, and adds
+  everything the registry cannot see. If you invoked the old script by hand,
+  use `fleet_status.py --full` instead.
+- **`scripts/replay_router_logs.py`** — a one-off ratio sweep over your own
+  routing logs, with no caller. `scripts/eval_router.py --keep-ratio R` answers
+  the same question against the golden-case harness.
+- **The last `fleet.txt` remnants.** The one-line status-bar count was retired
+  in 0.18.0, and `write_fleet_view()` has been deleting any leftover copy on
+  every session since. That self-heal is now gone too — a runtime that has
+  started at least one session on 0.18.0 or later has already been cleaned.
+- **`dream.py --run`**, the hidden deprecated alias for `--auto`. Use `--auto`.
+- **The legacy single-corpus router path** in `lib/memory_router.py`
+  (`CorpusRouter.select`, both implementations, and the `MemoryRouter` alias).
+  Routing has gone through `select_multi` since the three-corpus flow landed;
+  nothing called the single-corpus entry point. No change to what gets routed.
 
 ## [0.18.1] - 2026-08-04
 
