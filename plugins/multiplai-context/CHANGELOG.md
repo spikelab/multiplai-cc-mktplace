@@ -35,6 +35,34 @@ are the release dates recorded at the time, not derived from a tag.
   Routing has gone through `select_multi` since the three-corpus flow landed;
   nothing called the single-corpus entry point. No change to what gets routed.
 
+### Fixed
+
+- **Background work runs again.** Learnings and diary extraction, cost
+  collection, the resources (qmd) refresh, the checkpoint writer and the memory
+  maintainer had all been silently dead since the dependency consolidation on
+  2026-08-04: the plugin launched each of them with uv's project resolution
+  turned off, so the child could not read `scripts/pyproject.toml` and died
+  immediately on `ModuleNotFoundError: No module named 'multiplai_core'`.
+  Nothing surfaced it — every child is launched detached with its stderr
+  discarded, and the process *did* start, so no hook logged a failure. The
+  deferred-extraction drain was worse than a no-op: it moved each pending
+  marker into `processing_extractions/` before launching the child that never
+  ran, so every session start re-launched the same dead work. All eight launch
+  points now name the plugin's scripts directory as the uv project, through a
+  single shared helper so the flag cannot be dropped from one of them again.
+
+  If your diary or learnings have a gap around 2026-08-04, that is why. The
+  pending markers were not lost — they are still in the data directory and will
+  be picked up once you are on this version.
+
+- **Locks now actually lock across sessions.** Cost collection, the qmd
+  refresh, and — most importantly — appends to your diary and learnings files
+  put their lock files in the system temp directory. Under the container-based
+  runtime each session gets its own `/tmp`, so two concurrent sessions locked
+  two different files and both proceeded: concurrent appends to the same diary
+  file could interleave. Locks moved to `<data_dir>/locks/`, on the shared
+  workspace filesystem, matching what `/dream` already does.
+
 ## [0.18.1] - 2026-08-04
 
 ### Fixed

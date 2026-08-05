@@ -31,7 +31,7 @@ not need it.
 Invoked detached from SessionStart (same fire-and-forget pattern as deferred
 extraction), or by hand:
 
-    uv run --no-project scripts/memory_maintainer.py [--force] [--dry-run]
+    uv run --project scripts scripts/memory_maintainer.py [--force] [--dry-run]
 """
 
 from __future__ import annotations
@@ -50,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.config import load_yaml, save_yaml
 from multiplai_core.log_utils import setup_logging
 from multiplai_core.paths import get_paths
+from lib.runtime import uv_run_argv
 
 logger = setup_logging("memory_maintainer")
 
@@ -207,7 +208,7 @@ def run_dream(script_dir: Path, dream_state: Path, learnings_dir: Path,
 
         script = script_dir / "dream.py"
         proc = subprocess.run(
-            ["uv", "run", "--no-project", str(script)],
+            uv_run_argv(script),
             capture_output=True, text=True, timeout=600,
         )
         if proc.returncode != 0:
@@ -244,8 +245,7 @@ def run_catalog(script_dir: Path, memory_dir: Path, catalogs_dir: Path,
         if dry_run:
             return PassResult("catalog", True, "would rebuild (dry run)")
         proc = subprocess.run(
-            ["uv", "run", "--no-project", str(script_dir / "generate_catalog.py"),
-             "--only", "memory"],
+            uv_run_argv(script_dir / "generate_catalog.py", "--only", "memory"),
             capture_output=True, text=True, timeout=600,
         )
         if proc.returncode != 0:

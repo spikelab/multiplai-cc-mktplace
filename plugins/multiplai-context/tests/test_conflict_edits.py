@@ -95,8 +95,8 @@ class TestOverlap:
 
     def test_code_spans_are_stripped(self):
         """Identical boilerplate in code spans shouldn't manufacture overlap."""
-        a = "`uv run --no-project script.py` handles the alpha subsystem cleanly"
-        b = "`uv run --no-project script.py` handles the beta pipeline instead"
+        a = "`uv run script.py` handles the alpha subsystem cleanly"
+        b = "`uv run script.py` handles the beta pipeline instead"
         assert overlap(a, b) < 0.6
 
 

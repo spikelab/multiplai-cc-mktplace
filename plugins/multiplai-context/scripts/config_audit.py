@@ -13,7 +13,7 @@ landed in the wrong place and the nudge fired forever.
 
 Usage (from the skill, step 6)::
 
-    uv run --no-project config_audit.py --stamp \\
+    uv run --project . config_audit.py --stamp \\
         --proposal .multiplai/dreams/config-audit-YYYY-MM-DD.md
 
 Mirrors ``dream.py --stamp`` for the dream gate.

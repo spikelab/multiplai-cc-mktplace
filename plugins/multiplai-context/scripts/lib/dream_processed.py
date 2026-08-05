@@ -155,9 +155,9 @@ def mark_processed(
 # ---------------------------------------------------------------------------
 #
 # A review of a real proposal decides 50–70 items. Marking them one flag-
-# invocation at a time costs one ``uv run --no-project`` cold start each — a PEP
-# 723 resolve and environment build per item, to move text inside one local file
-# — and that per-item cost is what fills a reviewing session's context window
+# invocation at a time costs one ``uv run`` cold start each — a fresh interpreter
+# and environment check per item, to move text inside one local file — and that
+# per-item cost is what fills a reviewing session's context window
 # until it has to hand off mid-review. The batch path takes the same decisions in
 # one process, one read and one write.
 #
