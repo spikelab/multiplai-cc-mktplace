@@ -1,14 +1,15 @@
 """One command, the whole picture: agents, PRs, repos, jobs, backlog.
 
-``synthesize_agents.py`` writes ``AGENTS.md`` from the session registry and the
-checkpoints. It works, and for a week nobody opened it — while the status bar
+``AGENTS.md`` used to be written from the session registry and the checkpoints
+alone. That worked, and for a week nobody opened it — while the status bar
 rendered the same data as ``9 fronts · 4 need you``, a number with no referent
 that tells you there is a fire without telling you where.
 
-This script is the missing half. It collects what the registry cannot see —
-open pull requests with CI and review state, dirty and unpushed checkouts,
-background jobs, the pending backlog — folds them into the same ``AGENTS.md``,
-and prints a **ranked** reading of what is actually blocked on you.
+This script is the whole picture. It writes ``AGENTS.md`` from the registry and
+the checkpoints, collects what the registry cannot see — open pull requests
+with CI and review state, dirty and unpushed checkouts, background jobs, the
+pending backlog — folds them into the same file, and prints a **ranked**
+reading of what is actually blocked on you.
 
 Three renderings, one collection, and that is the point: the digest is a
 summary of ``AGENTS.md``, not a second opinion about it, and ``fleet.json``

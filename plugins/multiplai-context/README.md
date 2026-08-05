@@ -1176,8 +1176,8 @@ to age out in 7–30 days. A parked idea stayed *resumable* while becoming
 `SessionStart` regenerates both files in-process (no model call, so it
 costs a few file reads), and `drain_extractions.py` does the same on the
 host after a container exits — so the view is current at session start
-**and** after the last tab closes. `scripts/synthesize_agents.py` writes
-them on demand; `--stdout` previews `AGENTS.md` without touching disk.
+**and** after the last tab closes. `scripts/fleet_status.py --full` writes
+them on demand and prints the whole picture.
 
 ## Observability
 
