@@ -15,7 +15,10 @@ asserted here, not any one call site.
 
 import ast
 import re
+import signal
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -26,7 +29,8 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib.runtime import scripts_dir, uv_run_argv  # noqa: E402
+from lib import runtime  # noqa: E402
+from lib.runtime import run_supervised, scripts_dir, uv_run_argv  # noqa: E402
 
 # Assembled rather than written out, so a repo-wide grep for the retired flag
 # stays clean and can itself serve as the coarse check.
@@ -123,3 +127,117 @@ class TestLocksLiveInTheWorkspace:
             assert p.parent.is_dir()
         finally:
             core_paths._reset_cache()
+
+
+# A child that spawns a grandchild and then outlives its own supervisor's
+# deadline — the shape of every real spawn site here, where the direct child is a
+# `uv run` wrapper and the work happens in processes below it. The grandchild
+# deliberately does NOT start its own session: it must inherit the group the
+# supervisor gave its parent, which is what makes one killpg reach it.
+_ORPHANING_CHILD = """
+import subprocess, sys, time
+
+heartbeat = sys.argv[1]
+subprocess.Popen([
+    sys.executable, "-c",
+    "import sys, time\\n"
+    "f = open(sys.argv[1], 'a')\\n"
+    "while True:\\n"
+    "    f.write('.')\\n"
+    "    f.flush()\\n"
+    "    time.sleep(0.05)\\n",
+    heartbeat,
+])
+time.sleep(120)
+"""
+
+
+class TestTimeoutKillsTheWholeTree:
+    """F2 (log-doctor, 2026-08-05): `subprocess.run(timeout=…)` kills only the
+    process it started. On 2026-08-05 the maintainer logged `Dream pass timed out`
+    at 08:51:57Z and the dream it had "killed" fanned out at 08:52:26Z and wrote
+    its proposal at 08:55:00Z, with eight CLI subprocesses still under it — the
+    caller had reported failure while the work carried on unsupervised.
+    """
+
+    def test_the_child_is_a_process_group_leader(self, monkeypatch):
+        """Without `start_new_session` there is no group to kill, so this is the
+        assertion the whole fix rests on."""
+        popen_kwargs = {}
+
+        class FakeProc:
+            pid = 4242
+            returncode = 0
+
+            def communicate(self, timeout=None):
+                return "out", "err"
+
+        monkeypatch.setattr(
+            runtime.subprocess, "Popen",
+            lambda argv, **kw: (popen_kwargs.update(kw), FakeProc())[1],
+        )
+        run_supervised(["true"], timeout=5)
+        assert popen_kwargs["start_new_session"] is True
+
+    def test_a_timeout_sigkills_the_group_and_reraises(self, monkeypatch):
+        signalled = {}
+        waits = []
+
+        class FakeProc:
+            pid = 4242
+            returncode = -9
+
+            def communicate(self, timeout=None):
+                waits.append(timeout)
+                if len(waits) == 1:
+                    raise subprocess.TimeoutExpired(["child"], timeout)
+                return "partial out", "partial err"
+
+        monkeypatch.setattr(runtime.subprocess, "Popen", lambda argv, **kw: FakeProc())
+        monkeypatch.setattr(runtime.os, "getpgid", lambda pid: pid)
+        monkeypatch.setattr(
+            runtime.os, "killpg",
+            lambda pgid, sig: signalled.update(pgid=pgid, sig=sig),
+        )
+
+        with pytest.raises(subprocess.TimeoutExpired) as caught:
+            run_supervised(["child"], timeout=7)
+
+        assert signalled == {"pgid": 4242, "sig": signal.SIGKILL}
+        # The second, deadline-free communicate() is what reaps the child instead
+        # of leaving a zombie, and what recovers the output for the caller's log.
+        assert waits == [7, None]
+        assert caught.value.output == "partial out"
+        assert caught.value.stderr == "partial err"
+
+    def test_a_grandchild_does_not_survive_the_timeout(self, tmp_path):
+        """The end-to-end property, with real processes: the thing that actually
+        orphaned was two levels down, so a mock of the kill cannot prove this."""
+        heartbeat = tmp_path / "heartbeat"
+        child = tmp_path / "child.py"
+        child.write_text(_ORPHANING_CHILD, encoding="utf-8")
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_supervised([sys.executable, str(child), str(heartbeat)], timeout=2)
+
+        # Guards against a vacuous pass: a grandchild that never ran would also
+        # "stop growing".
+        assert heartbeat.is_file() and heartbeat.stat().st_size > 0, (
+            "the grandchild never started — this test proves nothing")
+
+        time.sleep(0.5)
+        settled = heartbeat.stat().st_size
+        time.sleep(0.5)
+        assert heartbeat.stat().st_size == settled, (
+            "the grandchild is still writing — it outlived the killpg")
+
+    def test_the_success_path_matches_subprocess_run(self):
+        """Callers were written against `subprocess.run`; the contract has to be
+        identical or the swap changes behaviour on the path that works."""
+        proc = run_supervised(
+            [sys.executable, "-c",
+             "import sys; sys.stdout.write('hi'); sys.stderr.write('bye');"
+             " sys.exit(3)"],
+            timeout=60,
+        )
+        assert (proc.returncode, proc.stdout, proc.stderr) == (3, "hi", "bye")

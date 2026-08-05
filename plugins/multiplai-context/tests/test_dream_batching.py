@@ -20,6 +20,7 @@ Two properties are asserted hardest because getting them wrong is unrecoverable:
 import asyncio
 import importlib.util
 import json
+import logging
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -921,3 +922,193 @@ class TestCriticStats:
 
         monkeypatch.setattr(mod, "_query", ok)
         assert asyncio.run(mod._critique_proposal(MagicMock(), proposal)) == proposal
+
+
+class _Recorder(logging.Handler):
+    """Captures records straight off dream's own logger.
+
+    `setup_logging` configures that logger itself, so `caplog` — which works by
+    propagation to the root — is not guaranteed to see anything. Attaching here
+    tests the level the log file actually receives.
+    """
+
+    def __init__(self):
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+
+class TestCitationNoiseIsNotAWarning:
+    """F6 (log-doctor, 2026-08-05): every unrepaired citation finding was logged
+    at WARNING, including ones naming a file that is not a dated learnings file at
+    all. Those are formatting slips with nothing for a reviewer to chase, and
+    `lib/citation_repair`'s own docstring example — quoted back through a learnings
+    entry — produced two per run. A log where the noise and the real finding share
+    a level trains the reader to skip both.
+    """
+
+    @staticmethod
+    def _levels(mod, proposal, learnings_dir):
+        rec = _Recorder()
+        mod.logger.addHandler(rec)
+        try:
+            out = mod._with_repaired_citations(proposal, learnings_dir)
+        finally:
+            mod.logger.removeHandler(rec)
+        return out, [r.levelno for r in rec.records if "citation" in r.getMessage().lower()]
+
+    def test_a_non_dated_citation_logs_below_warning(self, dream_env, tmp_path):
+        mod = _load_dream("dream_citation_noise")
+        learnings = tmp_path / "learnings"
+        learnings.mkdir()
+
+        out, levels = self._levels(mod, "(Source: f.md:12)\n", learnings)
+        assert levels, "the finding must still be logged, just not at WARNING"
+        assert max(levels) < logging.WARNING
+
+    def test_a_broken_dated_citation_still_warns(self, dream_env, tmp_path):
+        """The narrowness is the point: silencing the whole loop would hide the
+        citations a reviewer would otherwise follow to the wrong file."""
+        mod = _load_dream("dream_citation_real")
+        learnings = tmp_path / "learnings"
+        learnings.mkdir()
+        (learnings / "2026-07-28.md").write_text(
+            "## Session Learnings — 2026-07-28T09:00:00+00:00\nSession: s\n"
+            "- **[trust: verified]** A lesson.\n",
+            encoding="utf-8")
+
+        _, levels = self._levels(mod, "**Source:** 2026-07-28.md:9999\n", learnings)
+        assert max(levels) >= logging.WARNING
+
+    def test_the_finding_still_reaches_the_reviewer(self, dream_env, tmp_path):
+        mod = _load_dream("dream_citation_reported")
+        learnings = tmp_path / "learnings"
+        learnings.mkdir()
+        out, _ = self._levels(mod, "(Source: f.md:12)\n", learnings)
+        assert "## Citation Repairs" in out and "f.md:12" in out
+
+
+class TestCriticRetriesOnRateLimit:
+    """F4 (log-doctor, 2026-08-05): a failed critic batch returned "" and its
+    directives were gone. On 2026-08-03 all 12 batches hit HTTP 429 within seconds
+    of each other, so the entire critic pass contributed nothing to a proposal that
+    had cost a full drafting run — and the 429s were largely self-inflicted by the
+    critic's own 8-way fan-out. A rate limit is not a property of the batch, so it
+    is the one failure worth waiting out.
+    """
+
+    @staticmethod
+    def _no_waiting(mod, monkeypatch):
+        """Keep the retry logic under test and the 60 s backoff out of it."""
+        monkeypatch.setattr(mod, "_RATE_LIMIT_BACKOFF_S", 0.0)
+
+    def test_a_rate_limited_batch_keeps_its_directives(self, dream_env, monkeypatch):
+        mod = _load_dream("dream_critic_429_retry")
+        self._no_waiting(mod, monkeypatch)
+        calls = {"n": 0}
+
+        async def rate_limited_once(client, system, messages, timeout_s=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("API error: 429 rate_limit_error")
+            return MagicMock(content="DROP f0.md#1 redundant")
+
+        monkeypatch.setattr(mod, "_query", rate_limited_once)
+        raw = asyncio.run(mod._critique_batch(
+            MagicMock(), "## Updates for f0.md\n\n### f0.md#1\nx\n", "",
+            asyncio.Semaphore(1), 1, 1))
+
+        assert calls["n"] == 2, "the batch must be retried, not dropped"
+        assert raw == "DROP f0.md#1 redundant"
+
+    def test_a_second_rate_limit_gives_up_without_raising(self, dream_env, monkeypatch):
+        """Degrading to "" is still the final fallback — one batch's directives are
+        worth less than the whole proposal."""
+        mod = _load_dream("dream_critic_429_twice")
+        self._no_waiting(mod, monkeypatch)
+        calls = {"n": 0}
+
+        async def always_rate_limited(client, system, messages, timeout_s=None):
+            calls["n"] += 1
+            raise RuntimeError("API error: 429 rate_limit_error")
+
+        monkeypatch.setattr(mod, "_query", always_rate_limited)
+        raw = asyncio.run(mod._critique_batch(
+            MagicMock(), "## Updates for f0.md\n", "", asyncio.Semaphore(1), 1, 1))
+
+        assert calls["n"] == mod._RATE_LIMIT_ATTEMPTS
+        assert raw == ""
+
+    def test_a_non_rate_limit_failure_is_not_retried(self, dream_env, monkeypatch):
+        """A timeout means the batch itself did not fit the deadline; retrying it
+        unchanged just spends the deadline twice."""
+        mod = _load_dream("dream_critic_no_retry")
+        self._no_waiting(mod, monkeypatch)
+        calls = {"n": 0}
+
+        async def timed_out(client, system, messages, timeout_s=None):
+            calls["n"] += 1
+            raise TimeoutError("simulated critic batch timeout")
+
+        monkeypatch.setattr(mod, "_query", timed_out)
+        raw = asyncio.run(mod._critique_batch(
+            MagicMock(), "## Updates for f0.md\n", "", asyncio.Semaphore(1), 1, 1))
+
+        assert calls["n"] == 1
+        assert raw == ""
+
+    @pytest.mark.parametrize("message", [
+        "API error: 429 rate_limit_error",
+        "rate_limit_error: too many concurrent requests",
+        "Rate limit exceeded, retry after 30s",
+        "HTTP 429 Too Many Requests",
+    ])
+    def test_the_shapes_seen_in_the_logs_are_recognised(self, dream_env, message):
+        mod = _load_dream("dream_ratelimit_detect")
+        assert mod._is_rate_limit(RuntimeError(message))
+
+    @pytest.mark.parametrize("message", [
+        "simulated critic batch timeout",
+        "CLIJSONDecodeError: unexpected end of stream",
+        "process exited with code 1",
+    ])
+    def test_ordinary_failures_are_not_mistaken_for_rate_limits(self, dream_env, message):
+        mod = _load_dream("dream_ratelimit_reject")
+        assert not mod._is_rate_limit(RuntimeError(message))
+
+    def test_the_whole_pass_survives_every_batch_being_rate_limited_once(
+            self, dream_env, monkeypatch):
+        """The 2026-08-03 shape end to end: a burst of 429s across every batch now
+        costs a backoff instead of the entire review."""
+        mod = _load_dream("dream_critic_429_all")
+        self._no_waiting(mod, monkeypatch)
+        proposal = TestCriticBatching._proposal([(f"f{i}.md", 9_000) for i in range(6)])
+        batches = mod._batch_proposal_for_critic(proposal)
+        assert len(batches) > 1
+
+        seen: dict[str, int] = {}
+
+        async def rate_limit_each_batch_once(client, system, messages, timeout_s=None):
+            key = messages[0]["content"]
+            seen[key] = seen.get(key, 0) + 1
+            if seen[key] == 1:
+                raise RuntimeError("API error: 429 rate_limit_error")
+            # A real directive, not NOOP: the point is that the retry's OUTPUT
+            # reaches `apply_directives`, which a NOOP would not prove.
+            return MagicMock(content=f"DROP f{list(seen).index(key)}.md#1 redundant")
+
+        monkeypatch.setattr(mod, "_query", rate_limit_each_batch_once)
+
+        from lib import proposal_edits
+
+        captured = {}
+
+        def spy(p, d):
+            captured["n"] = len(d)
+            return p, [], []
+
+        monkeypatch.setattr(proposal_edits, "apply_directives", spy)
+        asyncio.run(mod._critique_proposal(MagicMock(), proposal))
+        assert captured["n"] == len(batches), "every batch's directives must survive"

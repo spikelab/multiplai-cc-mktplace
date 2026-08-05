@@ -50,11 +50,30 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.config import load_yaml, save_yaml
 from multiplai_core.log_utils import setup_logging
 from multiplai_core.paths import get_paths
-from lib.runtime import uv_run_argv
+from lib.dream_chunking import CHUNK_TIMEOUT_S
+from lib.runtime import run_supervised, uv_run_argv
 
 logger = setup_logging("memory_maintainer")
 
 STATE_FILENAME = "maintainer_state.yaml"
+
+# How long the unattended dream pass may take, derived from dream's own per-chunk
+# budget rather than picked — the two must move together, and importing the
+# constant is what guarantees they do. `lib.dream_chunking` is pure, so this
+# import costs nothing; `dream.py` itself must NOT be imported (it configures
+# logging and mutates the environment at import time).
+#
+# 4x because a dream run is many chunks, not one: an oversized block already gets
+# 2x on its own call (`plan_chunks`), and the chunks run concurrently behind a
+# semaphore with a scheduling tail no lower bound sees. The measured worst case
+# is the 283 KB backlog at 37m55s (2,275 s) end to end, which 2,400 s would clear
+# only by 5%; 4 x 900 = 3,600 s clears it with real margin and still fails inside
+# the hour. What this replaces was a hardcoded 600 s — less than one chunk's
+# deadline, so the pass could not finish however fast the model ran.
+DREAM_PASS_TIMEOUT_S = 4 * CHUNK_TIMEOUT_S
+
+# Catalog and status rebuilds are ordinary single-call scripts, not fan-outs.
+SHORT_PASS_TIMEOUT_S = 600
 
 # Once a day. The passes are cheap but not free (one model call for the dream
 # proposal, one for the status rebuild), and nothing they surface changes
@@ -207,15 +226,13 @@ def run_dream(script_dir: Path, dream_state: Path, learnings_dir: Path,
             return PassResult("dream", True, "would generate a proposal (dry run)")
 
         script = script_dir / "dream.py"
-        proc = subprocess.run(
-            uv_run_argv(script),
-            capture_output=True, text=True, timeout=600,
-        )
+        proc = run_supervised(uv_run_argv(script), timeout=DREAM_PASS_TIMEOUT_S)
         if proc.returncode != 0:
             return PassResult("dream", False, f"exit {proc.returncode}")
         return PassResult("dream", True, "proposal generated")
     except subprocess.TimeoutExpired:
-        logger.warning("Dream pass timed out")
+        logger.warning("Dream pass timed out after %.0fs; its process group was killed",
+                       DREAM_PASS_TIMEOUT_S)
         return PassResult("dream", False, "timed out")
     except Exception as exc:
         logger.exception("Dream pass failed")
@@ -244,9 +261,9 @@ def run_catalog(script_dir: Path, memory_dir: Path, catalogs_dir: Path,
             return PassResult("catalog", False, "catalog is current")
         if dry_run:
             return PassResult("catalog", True, "would rebuild (dry run)")
-        proc = subprocess.run(
+        proc = run_supervised(
             uv_run_argv(script_dir / "generate_catalog.py", "--only", "memory"),
-            capture_output=True, text=True, timeout=600,
+            timeout=SHORT_PASS_TIMEOUT_S,
         )
         if proc.returncode != 0:
             return PassResult("catalog", False, f"exit {proc.returncode}")

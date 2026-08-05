@@ -110,7 +110,7 @@ class TestLintPass:
 class TestDreamPass:
     def _spy(self, monkeypatch):
         calls = []
-        monkeypatch.setattr(mm.subprocess, "run",
+        monkeypatch.setattr(mm, "run_supervised",
                             lambda cmd, **kw: calls.append(cmd) or
                             subprocess.CompletedProcess(cmd, 0, "", ""))
         return calls
@@ -151,7 +151,7 @@ class TestDreamPass:
         assert calls[0][-1].endswith("dream.py")
 
     def test_nonzero_exit_is_reported_not_raised(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(mm.subprocess, "run",
+        monkeypatch.setattr(mm, "run_supervised",
                             lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "nope"))
         learnings = tmp_path / "learnings"
         learnings.mkdir()
@@ -239,7 +239,7 @@ class TestCatalogPass:
 
     def test_current_catalog_skips_the_rebuild(self, tmp_path, monkeypatch):
         calls = []
-        monkeypatch.setattr(mm.subprocess, "run",
+        monkeypatch.setattr(mm, "run_supervised",
                             lambda cmd, **kw: calls.append(cmd) or
                             subprocess.CompletedProcess(cmd, 0, "", ""))
         memory = tmp_path / "memory"
@@ -297,7 +297,7 @@ class TestMemoryIsNeverModified:
         monkeypatch.setattr(mm, "get_paths", lambda: FakePaths())
         # Every subprocess pass is stubbed: this test is about what the
         # maintainer writes, not about running a real dream.
-        monkeypatch.setattr(mm.subprocess, "run",
+        monkeypatch.setattr(mm, "run_supervised",
                             lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", ""))
 
         report = mm.run_maintenance(force=True)
@@ -415,3 +415,57 @@ class TestCheapTierIsRealNotJustDocumented:
         import synthesize_now
         assert (inspect.signature(synthesize_now.synthesize)
                 .parameters["model"].default is None)
+
+
+class TestDreamPassTimeoutIsDerived:
+    """F1 (log-doctor, 2026-08-05): the maintainer used a hardcoded 600 s cap
+    while dream's own per-chunk budget was 900 s — and an oversized chunk gets
+    1800 s. The unattended pass could not finish however fast the model ran, and
+    6/6 runs in the week to 2026-08-05 timed out. The cap must therefore be
+    derived from dream's constant, not chosen next to it.
+    """
+
+    def test_the_cap_is_at_least_two_chunk_deadlines(self):
+        from lib.dream_chunking import CHUNK_TIMEOUT_S
+
+        assert mm.DREAM_PASS_TIMEOUT_S >= 2 * CHUNK_TIMEOUT_S
+
+    def test_the_cap_covers_the_worst_measured_run(self):
+        """The 283 KB backlog took 37m55s end to end. 2400 s clears it by 5%,
+        which is not margin; the derived 3600 s is."""
+        assert mm.DREAM_PASS_TIMEOUT_S >= 2275 * 1.25
+
+    def test_the_cap_is_imported_not_hardcoded(self):
+        """A literal here is the defect: it drifts the moment dream's own budget
+        moves, and the drift is silent until an unattended run dies."""
+        import inspect
+
+        src = inspect.getsource(mm)
+        assert "from lib.dream_chunking import CHUNK_TIMEOUT_S" in src
+        assert "timeout=600" not in src
+        assert "DREAM_PASS_TIMEOUT_S = 4 * CHUNK_TIMEOUT_S" in src
+
+    def test_the_dream_pass_hands_the_derived_cap_to_the_child(self, tmp_path,
+                                                               monkeypatch):
+        seen = {}
+
+        def spy(cmd, *, timeout, **kw):
+            seen["timeout"] = timeout
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(mm, "run_supervised", spy)
+        learnings = tmp_path / "learnings"
+        learnings.mkdir()
+        (learnings / "2026-07-26.md").write_text("- x\n", encoding="utf-8")
+
+        assert mm.run_dream(tmp_path, tmp_path / "absent.yaml", learnings,
+                            tmp_path / "dreams").ran
+        assert seen["timeout"] == mm.DREAM_PASS_TIMEOUT_S
+
+    def test_every_child_pass_is_supervised(self):
+        """F2's fix is only worth anything if nothing bypasses it. A bare
+        `subprocess.run` on a child is how the orphaning came back."""
+        import inspect
+
+        src = inspect.getsource(mm)
+        assert "subprocess.run(" not in src

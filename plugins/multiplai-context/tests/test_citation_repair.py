@@ -337,3 +337,74 @@ class TestFailOpen:
 
         assert out == text
         assert len(findings) == 1 and not findings[0].repaired
+
+
+class TestAdvisoryVsBrokenFindings:
+    """F6 (log-doctor, 2026-08-05): dream logged every unrepaired finding at
+    WARNING, including citations naming a file that is not a dated learnings file
+    at all. Those are model formatting slips — there is no file the reviewer could
+    go and check — and this module's own docstring example (`(Source: f.md:12)`,
+    quoted back at it through a learnings entry) produced two of them every run.
+    Noise at WARNING is how a reader learns to skip the warnings that matter.
+    """
+
+    def test_a_non_dated_filename_is_advisory(self, corpus):
+        blocks, learnings = corpus
+        _, findings = repair_citations("**Source:** notes.md:500\n", blocks, learnings)
+        assert findings[0].advisory
+
+    def test_the_retired_docstring_placeholder_is_advisory(self, corpus):
+        blocks, learnings = corpus
+        _, findings = repair_citations("(Source: f.md:12)\n", blocks, learnings)
+        assert [f.advisory for f in findings] == [True]
+
+    def test_a_genuinely_broken_dated_citation_is_not_advisory(self, corpus):
+        """The distinction has to be narrow, or it silences the real finding: a
+        dated file whose cited line does not exist IS something to chase."""
+        blocks, learnings = corpus
+        _, findings = repair_citations(
+            "**Source:** 2026-07-28.md:9999\n", blocks, learnings)
+        assert findings and not any(f.advisory for f in findings)
+
+    def test_a_repair_is_never_advisory(self, corpus, past_midnight_line):
+        blocks, learnings = corpus
+        _, findings = repair_citations(
+            f"**Source:** 2026-07-28.md:{past_midnight_line}\n", blocks, learnings)
+        assert findings[0].repaired and not findings[0].advisory
+
+    def test_an_unreadable_file_finding_is_not_advisory(self, corpus):
+        """A skipped check is exactly what the reviewer must be warned about."""
+        blocks, learnings = corpus
+        _, findings = repair_citations(
+            "**Source:** 2026-07-28.md:1\n", blocks, learnings,
+            unreadable=["2026-07-28.md"])
+        assert findings and not any(f.advisory for f in findings)
+
+    def test_advisory_findings_are_still_reported_to_the_reviewer(self, corpus):
+        """Quieter in the log, not hidden from the proposal — the reviewer still
+        needs to see that a citation did not verify."""
+        blocks, learnings = corpus
+        _, findings = repair_citations("(Source: f.md:12)\n", blocks, learnings)
+        assert "f.md:12" in render_findings(findings)
+
+
+class TestTheModuleDoesNotCiteItself:
+    def test_no_example_in_the_source_matches_the_citation_pattern(self):
+        """The placeholders documenting `_CITATION_RE` used to match it. A
+        learnings entry quoting this file then carried a live-looking citation
+        into the proposal, and the repairer dutifully flagged it — twice a run.
+
+        Asserted as the property rather than as "the old literal is gone", so any
+        newly-written example has to use the unmatchable `<...>` form too.
+        """
+        from pathlib import Path
+
+        from lib import citation_repair
+
+        source = Path(citation_repair.__file__).read_text(encoding="utf-8")
+        found = [m.group(0) for m in citation_repair._CITATION_RE.finditer(source)]
+        assert not found, (
+            f"citation-shaped example(s) in the source: {found}. Written into a "
+            "learnings entry these become findings against a file that does not "
+            "exist — use the `<date>.md:<line>` form."
+        )
