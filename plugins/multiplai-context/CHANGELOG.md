@@ -16,6 +16,10 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.18.2] - 2026-08-05
+
 ### Removed
 
 - **`scripts/synthesize_agents.py`** — `scripts/fleet_status.py --full` writes
@@ -62,10 +66,6 @@ are the release dates recorded at the time, not derived from a tag.
   two different files and both proceeded: concurrent appends to the same diary
   file could interleave. Locks moved to `<data_dir>/locks/`, on the shared
   workspace filesystem, matching what `/dream` already does.
-
-## [0.18.2] - 2026-08-05
-
-### Fixed
 
 - **`/dream-remember` Step 5 could delete learnings files that were still in
   use.** Two separate ways, both of which destroyed the sources behind work you
@@ -1507,7 +1507,6 @@ Fixes from the 2026-07-12→16 PR audit (mktplace PRs #24–#39).
   skills shipped by installed Claude Code plugins (the themed Multiplai packs:
   pm, writing, research, dev, media) via `installed_plugins.json`, in addition
   to `skills_dir`. New `plugins_dir` option (empty = `$CLAUDE_CONFIG_DIR/plugins`).
-
 
 ### Changed
 - **`refresh-catalogs --only <gen>` now honors its override contract.** An
