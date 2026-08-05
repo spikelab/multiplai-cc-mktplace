@@ -18,6 +18,20 @@ release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.10.3] - 2026-08-05
+
+### Fixed
+
+- **The promotion gate no longer reports a cold dependency cache as a hung
+  script.** Every command got the same 30-second budget, and the first
+  `uv run` of a run has to build the environment first — resolve the lock,
+  clone the git-sourced `multiplai-core` — which regularly exceeded it. The
+  gate said `timed out`, which reads as a defect in the skill and was not one;
+  about 40% of runs in one batch failed this way. The first uv-mediated command
+  now gets a separate, generous budget for that one-off cost. Everything after
+  it is still held to 30 seconds, so a script that genuinely hangs still fails,
+  and now fails distinguishably — the message names the budget it blew.
+
 ## [0.10.2] - 2026-08-05
 
 ### Security
