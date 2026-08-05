@@ -26,48 +26,6 @@ def _repo_trusted() -> bool:
     return os.environ.get("BUILDME_TRUST_REPO", "").strip().lower() in ("1", "true", "yes")
 
 
-# NOTE: not currently wired into the pipeline. No caller invokes an implementation
-# feasibility gate; kept for a future explicit feasibility check.
-def feasibility_gate(project_dir: Path, stack: str, dependencies: list[str]) -> GateResult:
-    """Check if dependencies can be resolved for the detected stack."""
-    if not dependencies:
-        return GateResult(passed=True, reason="No dependencies to check")
-
-    if stack in ("pyproject", "python"):
-        # Check PyPI availability
-        missing = []
-        for dep in dependencies:
-            pkg = dep.split(">=")[0].split("==")[0].split("[")[0].strip()
-            try:
-                result = subprocess.run(
-                    ["pip", "index", "versions", pkg],
-                    capture_output=True, text=True, timeout=30,
-                )
-            except FileNotFoundError:
-                # No `pip` on the PATH (uv-only machine) — can't check PyPI,
-                # so skip the gate rather than crashing the orchestrator.
-                log.warning("pip not found; skipping PyPI availability gate")
-                return GateResult(passed=True, reason="pip unavailable — skipped PyPI check")
-            if result.returncode != 0:
-                missing.append(pkg)
-        if missing:
-            return GateResult(
-                passed=False, reason=f"Packages not found on PyPI: {missing}",
-                action="suggest_alternatives", metadata={"missing": missing},
-            )
-    elif stack in ("Package", "swift"):
-        resolve = subprocess.run(
-            ["swift", "package", "resolve"],
-            capture_output=True, text=True, cwd=project_dir, timeout=120,
-        )
-        if resolve.returncode != 0:
-            return GateResult(
-                passed=False, reason=f"SPM resolve failed: {resolve.stderr[:500]}",
-                action="fix_dependencies",
-            )
-    return GateResult(passed=True, reason=f"Dependencies resolved for {stack}")
-
-
 def wiring_task_gate(tasks_path: Path, project_dir: Path) -> GateResult:
     """Check that tasks.md has a wiring task if the project is an app."""
     app_markers = [
