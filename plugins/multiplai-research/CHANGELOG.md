@@ -20,6 +20,31 @@ dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.6.2] - 2026-08-05
+
+### Security
+
+- **deep-research no longer installs `cryptography` 49.0.0 (CVE-2026-69247,
+  high).** If you have deep-research installed, updating to 0.6.2 is the fix —
+  the next run resolves `cryptography` 50.0.0. There is nothing to change in
+  your own config.
+
+  What went wrong: `skills/deep-research/scripts/` shipped its own `uv.lock`,
+  left behind when this repo consolidated onto a single workspace lock. After
+  that consolidation nothing could regenerate it — `uv lock` run from inside
+  the skill resolves the whole workspace and rewrites the *root* lock, never
+  the nested one — so it stayed frozen on the day's versions while the root
+  lock moved on. In this repo that was invisible, because in-repo runs use the
+  root lock. On *your* machine there is no workspace above the plugin, so
+  `uv run --project` found the frozen lock and used it. Dependabot filed the
+  advisory correctly and opened patches; those patches edited the nested lock,
+  which is the one file that could not be updated.
+
+  The nested lock is now deleted, so an installed deep-research resolves
+  against the declared dependency ranges and picks up patched versions on its
+  own. A new repo gate (`lint_workspace.py` → nested lockfiles) fails CI if a
+  lockfile ever reappears outside the workspace root.
+
 ## [0.6.1] - 2026-08-04
 
 ### Fixed

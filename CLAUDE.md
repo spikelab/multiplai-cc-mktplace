@@ -160,8 +160,16 @@ SKILL.md snippets) must use the member dir, never
 install. (`--all-packages --project <repo-root>` still works for repo-only
 tooling like CI, but is not the shippable form.)
 
-Two rules, both enforced by `scripts/lint_workspace.py`:
+Three rules, all enforced by `scripts/lint_workspace.py`:
 
+- **No `uv.lock` anywhere but the repo root.** uv cannot maintain a nested one:
+  `uv lock` from a member directory walks up, resolves the whole graph and
+  rewrites the *root* lock, leaving the nested file frozen forever. That is not
+  hypothetical — two survived the consolidation and shipped `cryptography`
+  49.0.0 (CVE-2026-69247, high) to installed plugins for months, because an
+  install has no workspace root above the member, so `uv run --project` found
+  the stale lock and resolved from it. Dependabot's patches for it were
+  unmergeable by construction: they edited the one file nothing could update.
 - **A new script directory with dependencies must be added to `members`.** uv
   does not warn about an undeclared `pyproject.toml` — it silently gives that
   directory its own `.venv`, which is how this repo accumulated four of them

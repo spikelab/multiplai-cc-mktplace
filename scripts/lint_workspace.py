@@ -114,6 +114,35 @@ def check_no_stray_venvs() -> list[str]:
     ]
 
 
+def check_no_nested_locks() -> list[str]:
+    """One workspace, one uv.lock — at the repo root, and nowhere else.
+
+    This is not tidiness. Two locks under `plugins/` survived the workspace
+    consolidation and went stale, and `uv` cannot regenerate them: run `uv lock`
+    from a member directory and it walks up to the workspace root, resolves the
+    whole graph and rewrites the *root* lock, leaving the nested one untouched.
+    So a nested lock is frozen at whatever it held the day it was orphaned, and
+    nothing — not uv, not Dependabot, not CI — can move it.
+
+    The cost landed on users. An installed plugin is a copy of the plugin
+    subtree with no workspace root above it, so `uv run --project <member-dir>`
+    finds the nested lock and resolves from it. Both orphans still pinned
+    cryptography 49.0.0 (CVE-2026-69247, high) months after the root lock had
+    moved to 50.0.0; deleting them drops the resolve straight to 50.0.0.
+
+    Nothing in the previous gate suite had an opinion about lockfile *location*,
+    which is exactly why this went unnoticed.
+    """
+    return [
+        f"nested lockfile at {p.relative_to(REPO_ROOT)} — the workspace has one "
+        f"uv.lock at the repo root. `uv lock` from a member directory rewrites "
+        f"the root lock, never this one, so it can only ever go stale; an "
+        f"installed plugin would then resolve from it. Delete it."
+        for p in sorted(REPO_ROOT.glob("plugins/**/uv.lock"))
+        if ".venv" not in p.parts
+    ]
+
+
 def check_no_pep723() -> list[str]:
     """No script may reintroduce a PEP 723 dependency block.
 
@@ -144,6 +173,7 @@ CHECKS = (
     ("undeclared workspace members", check_members),
     ("missing workspace members", check_members_exist),
     ("stray virtualenvs", check_no_stray_venvs),
+    ("nested lockfiles", check_no_nested_locks),
     ("PEP 723 dependency blocks", check_no_pep723),
 )
 
