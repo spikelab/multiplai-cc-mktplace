@@ -216,6 +216,24 @@ its own.
   and the *vanilla* fix. Error messages must not mention the kit or the
   container.
 
+## Reference docs: the *docs* are the kit's, both *loaders* are here
+
+`reference/dev/*.md` — the prescriptive engineering standards — ship with
+**multiplai-kit** (`dotfiles/reference/dev/`). Nothing in this repo contains
+them. But both mechanisms that load them live here, and they are independent:
+
+| Mechanism | Where | What it injects | Why that shape |
+|---|---|---|---|
+| Ordinary sessions | `multiplai-context`, `scripts/lib/reference_docs.py` → `context_manager.py` | Pointers: path + section index, once per session per project | 60k chars per doc; the main agent holds `Read` |
+| A buildme run | `multiplai-dev`, `build_pipeline/config.py` | Contents, inlined into the spec-gen prompts | That generator is given no tools, so a pointer is useless to it |
+
+Each keeps its own stack→filename map (`STACK_DOCS` and
+`_DEFAULT_REFERENCE_DOCS`). **They must name the same files, and those files
+must exist in the kit** — resolution does no fuzzy matching and a miss is a log
+line, not a failure, so a doc renamed on the kit side goes quietly dead in both.
+The renaming contract is stated where a renamer will actually see it: the kit's
+`dotfiles/reference/dev/README.md`.
+
 ## Where the memory system lives — the common wrong-repo mistake
 
 **Routing, the diary, learnings, and dreams are `plugins/multiplai-context/` in

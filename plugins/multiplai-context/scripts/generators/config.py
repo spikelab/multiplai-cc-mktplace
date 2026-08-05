@@ -78,6 +78,11 @@ class CatalogConfig:
     # every injected MEMORY block. On by default (reliability feature);
     # opt out to save ~90 tokens per memory-carrying turn.
     memory_conflict_preamble: bool = True
+    # Stack-detected pointers to $CLAUDE_CONFIG_DIR/reference/dev/ docs,
+    # injected once per (session, project). On by default: it costs ~60
+    # tokens once and it is the only mechanism that loads engineering
+    # standards outside buildme. No-ops when reference/dev/ is absent.
+    enable_dev_references: bool = True
 
     def __post_init__(self):
         if not self.model or not self.model.strip():
@@ -228,6 +233,9 @@ def load_catalog_config() -> CatalogConfig:
     memory_conflict_preamble = _parse_bool(
         os.environ.get("CLAUDE_PLUGIN_OPTION_memory_conflict_preamble", "true")
     )
+    enable_dev_references = _parse_bool(
+        os.environ.get("CLAUDE_PLUGIN_OPTION_enable_dev_references", "true")
+    )
 
     return CatalogConfig(
         model=model,
@@ -252,4 +260,5 @@ def load_catalog_config() -> CatalogConfig:
         keep_ratio=keep_ratio,
         enable_costs=enable_costs,
         memory_conflict_preamble=memory_conflict_preamble,
+        enable_dev_references=enable_dev_references,
     )

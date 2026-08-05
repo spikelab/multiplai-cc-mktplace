@@ -18,6 +18,35 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.19.0] - 2026-08-05
+
+### Added
+
+- **Dev reference injection.** If you keep prescriptive engineering standards in
+  `$CLAUDE_CONFIG_DIR/reference/dev/` (the docs multiplai-kit ships — uv/Python,
+  Django/DRF, React/Next.js, Swift, FastAPI…), Claude is now told about the ones
+  that apply to the project you are in, once per session per project.
+
+  This deliberately does **not** go through the router. Memory is context about
+  you and is picked by relevance to your wording; a standards doc applies
+  because of what the project *is*. So detection reads the project's manifests
+  — `pyproject.toml`, `package.json`, `Package.swift`, `Cargo.toml`, `go.mod`,
+  plus framework hints (`manage.py` or a `django`/`fastapi` dependency, a
+  `react`/`next` dependency) — and maps the stack to doc filenames.
+
+  What gets injected is **pointers, not contents**: the absolute path plus the
+  doc's section index, ~60 tokens. Inlining would cost 15k+ tokens per turn for
+  one doc; Claude holds `Read` and only needs to know the doc exists and what is
+  in it.
+
+  Works from a workspace root too. If your cwd holds many repos and carries no
+  manifest of its own (`knowhere/PROJECTS/<name>/…`), path-like tokens in your
+  prompt are resolved to find the project you are actually pointing at.
+
+  Turn it off with the **Dev Reference Injection** (`enable_dev_references`)
+  option. It already does nothing on an install with no `reference/dev/`
+  directory — no warning, no error.
+
 ## [0.18.6] - 2026-08-05
 
 ### Fixed
