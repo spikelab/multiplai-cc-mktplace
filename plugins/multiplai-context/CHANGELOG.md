@@ -18,6 +18,46 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.22.0] - 2026-08-05
+
+### Changed
+
+- **A session whose container is gone is now reported as ended, immediately,
+  instead of being guessed at after twelve hours of silence.** Nothing inside a
+  session can report its own death — a reboot, a closed terminal, a `docker
+  kill` or an OOM takes the hooks down with it — so `AGENTS.md` had only silence
+  to reason from, and every such session sat as "working" for half a day and
+  then as a permanent idle entry. On a real registry that was 49 entries in
+  limbo.
+
+  multiplai-kit now writes the running container names to
+  `.multiplai/data/live_containers.json` on every launch (kit PR #35, needs
+  `git pull && ./setup.sh`). When a reading is *newer* than a session's last
+  event and that session's container is not in it, the session is over — no
+  inference, no waiting. Sessions still live keep their real status, so a
+  long-running agent no longer decays to idle just because it has been quiet.
+
+  **Parked sessions are never retired this way.** Parking is a stated intent;
+  the container being gone is exactly what you meant when you parked it.
+
+  Everything about this is conditional on evidence, and its absence changes
+  nothing: no roster file (no kit, or a kit that has not launched since) leaves
+  the previous behaviour untouched, a roster older than a session's last event
+  decides nothing about that session, and a corrupt or unreadable one is
+  ignored. The status vocabulary is unchanged — a dead container maps to the
+  existing `ended` — so the multiplai hub sees no shape change.
+
+  One knock-on worth knowing: entries that would have lingered for weeks now
+  reach `ended` in minutes, so registry GC collects them on the 7-day
+  ended-session schedule rather than the 30-day one.
+
+- **Session entries record whether they ran in a container** (`in_container`).
+  This is what keeps a bare `--local` session, or one run through
+  `claude-wrapped` on the Mac, from being declared dead by a roster that could
+  never have listed it: outside a container the recorded hostname is a *machine*
+  name, and no string comparison can tell the two apart. Entries written before
+  this version simply are not judged by the roster.
+
 ## [0.21.0] - 2026-08-05
 
 ### Changed
