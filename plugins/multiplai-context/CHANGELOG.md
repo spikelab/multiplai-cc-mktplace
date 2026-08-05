@@ -18,6 +18,36 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.18.3] - 2026-08-05
+
+### Fixed
+
+- **A `## Citation Repairs` entry can no longer be confidently wrong.** Dream's
+  proposals cite provenance as `<learnings-file>:<line>`, and the repair pass
+  corrects a filename only when it can *prove* the cited one is wrong. Two ways
+  it could get that proof wrong:
+
+  **A file that could not be read looked like a file that did not exist.** When
+  `dream` failed to read one of your learnings files — a transient I/O error is
+  enough — it simply left it out of what the repairer was given, which is
+  indistinguishable from the file being absent. Every citation to that file then
+  looked provably broken, and a neighbouring past-midnight record supplied a
+  one-candidate match. A *valid* `2026-07-28.md:10` was rewritten to
+  `2026-07-29.md:10` and listed as a verified correction — the one outcome the
+  pass exists to prevent, since a wrong citation looks wrong and a wrong repair
+  looks right. Citations naming an unreadable file are now left exactly as
+  written, and the file is reported once so you can see that a check was skipped
+  rather than passed.
+
+  **A range citation was only checked at its start.** `2026-07-28.md:1-9999`
+  passed silently while the proposal reported every citation as verified, and
+  following it ran off the end of the file. Both ends are now checked; a range
+  whose tail does not resolve is reported, never repaired — half a verified
+  range is not evidence of which file the other half meant.
+
+  Neither changes what a correct citation does, and neither makes the pass
+  repair anything it did not repair before.
+
 ## [0.18.2] - 2026-08-05
 
 ### Removed

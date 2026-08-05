@@ -1102,14 +1102,20 @@ def _with_repaired_citations(proposal: str, learnings_dir: Path) -> str:
 
         blocks, files = _collect_blocks(learnings_dir)
         learnings = {}
+        unreadable = []
         for f in files:
             try:
                 learnings[f.name] = f.read_text()
             except OSError:
+                # Must be passed through, not just skipped: a file absent from
+                # `learnings` reads as "does not exist", which makes every
+                # citation to it look provably broken and licenses a repair
+                # that is wrong. See `repair_citations` for the confirmed case.
                 logger.warning("Could not read %s for citation repair", f.name)
+                unreadable.append(f.name)
 
         repaired, findings = citation_repair.repair_citations(
-            proposal, blocks, learnings
+            proposal, blocks, learnings, unreadable
         )
         section = citation_repair.render_findings(findings)
     except Exception:

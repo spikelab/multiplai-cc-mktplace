@@ -164,6 +164,144 @@ class TestWhatItMustNotDo:
         assert "not a dated learnings file" in findings[0].reason
 
 
+class TestAnUnreadableFileIsNotAMissingOne:
+    """Issue #113 (1) — the module's worst failure mode, confirmed in review.
+
+    A file that fails `read_text()` used to be simply absent from the dict the
+    module is handed, which is indistinguishable from a file that does not
+    exist. Every citation to it then looked *provably* broken — the line "does
+    not exist" in a file nothing ever opened — and the past-midnight record in
+    the neighbouring file supplied a one-candidate match. The result was a
+    valid citation rewritten to a wrong one and listed as a verified
+    correction.
+    """
+
+    def test_a_valid_citation_is_not_rewritten_when_its_file_is_unreadable(
+        self, corpus, past_midnight_line
+    ):
+        """The exact case measured in review, as a test.
+
+        `2026-07-28.md:{line}` is *correct* here — but 07-28 could not be read,
+        and 07-29 carries a record stamped 07-28 covering that line. Without
+        knowing the file was unreadable the module repairs it, confidently and
+        wrongly.
+        """
+        blocks, learnings = corpus
+        line = past_midnight_line
+        text = f"**Source:** 2026-07-28.md:{line}\n"
+
+        out, findings = repair_citations(
+            text, blocks, learnings, unreadable=["2026-07-28.md"]
+        )
+
+        assert out == text, "an unread file cannot prove a citation wrong"
+        assert not any(f.repaired for f in findings)
+
+    def test_the_skipped_file_is_reported_once_not_per_citation(self, corpus):
+        """Silence would read as 'verified'. Repetition would bury the real ones."""
+        blocks, learnings = corpus
+        text = (
+            "**Source:** 2026-07-28.md:1\n"
+            "**Source:** 2026-07-28.md:2\n"
+            "(Source: 2026-07-28.md:3)\n"
+        )
+
+        _, findings = repair_citations(
+            text, blocks, learnings, unreadable=["2026-07-28.md"]
+        )
+
+        assert len(findings) == 1
+        assert findings[0].cited_file == "2026-07-28.md"
+        assert findings[0].line is None
+        assert not findings[0].repaired
+        assert "could not be read" in findings[0].reason
+
+    def test_an_unreadable_file_nobody_cites_is_not_reported(self, corpus):
+        """The reviewer is told what went unchecked, not what went unread."""
+        blocks, learnings = corpus
+        text = "**Source:** 2026-07-29.md:1\n"
+
+        _, findings = repair_citations(
+            text, blocks, learnings, unreadable=["2026-07-28.md"]
+        )
+
+        assert findings == []
+
+    def test_other_files_are_still_repaired_normally(
+        self, corpus, past_midnight_line
+    ):
+        """One unreadable file must not disarm the whole pass."""
+        blocks, learnings = corpus
+        line = past_midnight_line
+        text = f"**Source:** 2026-07-28.md:{line}\n"
+
+        out, findings = repair_citations(
+            text, blocks, learnings, unreadable=["2026-07-30.md"]
+        )
+
+        assert f"**Source:** 2026-07-29.md:{line}" in out
+        assert [f.repaired for f in findings] == [True]
+
+    def test_the_report_names_the_file_without_a_line_number(self, corpus):
+        blocks, learnings = corpus
+        text = "**Source:** 2026-07-28.md:1\n"
+
+        _, findings = repair_citations(
+            text, blocks, learnings, unreadable=["2026-07-28.md"]
+        )
+        section = render_findings(findings)
+
+        assert "- `2026-07-28.md` —" in section
+        assert "2026-07-28.md:None" not in section
+
+
+class TestBothEndsOfARangeAreChecked:
+    """Issue #113 (2) — a range was only ever validated at its low end.
+
+    `2026-07-28.md:1-9999` passed silently: `lo` was in range, the function
+    returned early, and `hi` was never looked at. The proposal then reported
+    every citation as verified while a reviewer following that range ran off
+    the end of the file.
+    """
+
+    def test_a_range_whose_tail_does_not_exist_is_reported(self, corpus):
+        blocks, learnings = corpus
+        text = "**Source:** 2026-07-28.md:1-9999\n"
+
+        out, findings = repair_citations(text, blocks, learnings)
+
+        assert out == text, "half a verified range is not grounds to move it"
+        assert len(findings) == 1
+        assert not findings[0].repaired
+        assert "9999" in findings[0].reason
+
+    def test_a_range_wholly_in_range_is_still_silent(self, corpus):
+        blocks, learnings = corpus
+        text = "**Source:** 2026-07-29.md:1-2\n"
+
+        out, findings = repair_citations(text, blocks, learnings)
+
+        assert out == text
+        assert findings == []
+
+    def test_a_tail_that_resolves_elsewhere_is_reported_not_repaired(
+        self, corpus, past_midnight_line
+    ):
+        """`lo` verifies in the cited file, `hi` points into another one.
+
+        Two files cannot both be right, and which end is the mistake is not
+        knowable from here — so it is a finding, never a rewrite.
+        """
+        blocks, learnings = corpus
+        text = f"**Source:** 2026-07-28.md:1-{past_midnight_line}\n"
+
+        out, findings = repair_citations(text, blocks, learnings)
+
+        assert out == text
+        assert len(findings) == 1
+        assert not findings[0].repaired
+
+
 class TestReporting:
     def test_nothing_to_report_renders_nothing(self):
         assert render_findings([]) == ""
