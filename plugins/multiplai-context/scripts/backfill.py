@@ -23,6 +23,7 @@ Default window: last 7 days by record timestamp (file mtime fallback).
 
 import argparse
 import asyncio
+import fcntl
 import json
 import os
 import sys
@@ -128,25 +129,97 @@ def _session_id_from_path(jsonl_path: Path) -> str:
     return stem or jsonl_path.name
 
 
-def _is_already_processed(session_id: str, learnings_file: Path, diary_dir: Path) -> bool:
-    """Pre-LLM idempotency gate: skip if both learnings and diary already
-    contain this ``session_id``.
+def _ledger_path() -> Path:
+    """Where "this session has been extracted" is recorded.
 
-    Both files use the same ``## Session: <id>`` (diary) / ``Session: <id>``
-    (learnings) substring marker per the per-day layout introduced in v0.3.0.
+    One session id per line, append-only. Deliberately not JSON: concurrent
+    workers append under a lock, and a truncated write must cost one duplicate
+    line rather than a corrupt document nothing can read.
     """
-    if not learnings_file.exists():
-        return False
-    if f"Session: {session_id}" not in learnings_file.read_text(
+    return get_paths().skill_state_dir("backfill") / "processed-sessions.txt"
+
+
+def _read_ledger(path: Path) -> set[str]:
+    try:
+        return {
+            line.strip()
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+            if line.strip()
+        }
+    except OSError:
+        # Fail open: an unreadable ledger costs a re-extraction, and refusing
+        # to back up because bookkeeping is unavailable is the worse trade.
+        return set()
+
+
+def _record_processed(session_id: str, path: Path) -> None:
+    """Note that *session_id* was extracted, whatever the extraction produced."""
+    if not session_id:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = path.with_suffix(path.suffix + ".lock")
+        with open(lock_file, "w") as lock_fd:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            try:
+                with open(path, "a", encoding="utf-8") as fh:
+                    fh.write(f"{session_id}\n")
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    except OSError:
+        logger.warning("Could not record %s as processed", session_id)
+
+
+def _is_already_processed(
+    session_id: str,
+    learnings_file: Path,
+    diary_dir: Path,
+    processed: set[str] | None = None,
+) -> bool:
+    """Pre-LLM idempotency gate: has this session already been extracted?
+
+    **The ledger is the answer; the two file markers are a fallback.** Both
+    markers are written only when the extraction produced something of that
+    kind — `write_diary_entries` returns early when no unit carries a diary
+    entry, and `append_learnings` writes its `Session: <id>` line inside a loop
+    that `continue`s past units with no learnings. So the presence of a marker
+    proves a session was processed, but its absence proves nothing.
+
+    This gate used to require *both* markers, which made it permanently False
+    for the commonest asymmetric shape: a session that produced a diary entry
+    and no learnings — the diary is the primary record and learnings are a
+    projection of it, so that combination is ordinary, not exceptional. Every
+    subsequent `--since <old-date>` re-ran a full LLM pass over those
+    transcripts, landing month-old material in today's backlog and sharing a
+    rate limit with interactive work (the 2026-07-06/07 `failed_extractions`
+    cluster was one 429 from a large backfill).
+
+    Requiring *either* marker fixes that, but not the session that produced
+    neither — a short or uneventful transcript extracts to nothing at all and
+    would re-extract forever. Hence the ledger, which records the *act* of
+    extracting rather than its output. The markers stay as a fallback so the
+    first run after this change does not re-extract a history that predates the
+    ledger.
+
+    *processed* is the ledger contents, read once per run by `backfill()`. This
+    function does not read it itself: an empty default keeps the predicate
+    answerable from its arguments alone, with no data directory to resolve and
+    no directory created as a side effect of asking a question.
+    """
+    processed = processed or set()
+    if session_id in processed:
+        return True
+
+    if learnings_file.exists() and f"Session: {session_id}" in learnings_file.read_text(
         encoding="utf-8", errors="replace",
     ):
-        return False
-    if not diary_dir.is_dir():
-        return False
-    marker = f"## Session: {session_id}"
-    for day_file in diary_dir.glob("*.md"):
-        if marker in day_file.read_text(encoding="utf-8", errors="replace"):
-            return True
+        return True
+
+    if diary_dir.is_dir():
+        marker = f"## Session: {session_id}"
+        for day_file in diary_dir.glob("*.md"):
+            if marker in day_file.read_text(encoding="utf-8", errors="replace"):
+                return True
     return False
 
 
@@ -178,11 +251,12 @@ async def _process_session(
     client,
     dry_run: bool,
     sem: asyncio.Semaphore,
+    processed: set[str] | None = None,
 ) -> dict:
     """Process one session transcript. Returns a stats dict."""
     stats = {"session_id": session_id, "status": "ok", "diary": False, "learnings": False}
 
-    if _is_already_processed(session_id, learnings_file, diary_dir):
+    if _is_already_processed(session_id, learnings_file, diary_dir, processed):
         stats["status"] = "skipped"
         return stats
 
@@ -201,6 +275,7 @@ async def _process_session(
         return stats
 
     units: list[dict] = []
+    failed_chunks = 0
     async with sem:
         for i, chunk in enumerate(chunks):
             try:
@@ -212,6 +287,7 @@ async def _process_session(
                 # Tag with session_id for multi-chunk dedup
                 units.extend(chunk_units)
             except Exception as e:
+                failed_chunks += 1
                 logger.warning("LLM call failed for session %s chunk %d: %s", session_id, i, e)
 
     if units:
@@ -220,6 +296,21 @@ async def _process_session(
 
     wrote = append_learnings(units, learnings_file, session_id, timestamp)
     stats["learnings"] = wrote
+
+    # Record the *act* of extracting, so a session that legitimately yielded
+    # nothing is not re-extracted on every future run. Not when a chunk failed:
+    # a 429 or a timeout means this transcript has not actually been read, and
+    # marking it done would lose it permanently — the one thing worse than
+    # re-extracting it.
+    if failed_chunks:
+        stats["status"] = "partial"
+        logger.warning(
+            "Session %s: %d/%d chunk(s) failed — not recorded as processed, "
+            "so a later run will retry it",
+            session_id, failed_chunks, len(chunks),
+        )
+    else:
+        _record_processed(session_id, _ledger_path())
 
     return stats
 
@@ -284,6 +375,10 @@ async def backfill(
     logger.info("Backfill using %s", type(client).__name__)
 
     sem = asyncio.Semaphore(concurrency)
+    # Read once for the whole run: every worker asks the same question, and the
+    # ledger only grows during the run (nothing here is skipped because of a
+    # session processed moments ago in the same pass).
+    processed = _read_ledger(_ledger_path())
     tasks = []
     for jsonl_path in sorted(in_window):
         session_id = _session_id_from_path(jsonl_path)
@@ -302,6 +397,7 @@ async def backfill(
             client=client,
             dry_run=False,
             sem=sem,
+            processed=processed,
         ))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
