@@ -33,15 +33,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Per-CALL ceiling, and the number chunk sizes are derived from. It used to be
-# 1800 s because dream made one serial call over the whole backlog — which is
-# arithmetically guaranteed to time out past ~150 KB at the measured ~85 input
-# bytes/s. Chunking inverts the relationship: the timeout is now the input to
-# `plan_chunks`, which sizes every chunk to finish well inside it, so a lower
-# ceiling makes a stuck call fail fast instead of burning half an hour. Must run
-# before model_client is imported — the timeout is read into a module constant
-# at import time; setdefault preserves an explicit override.
-os.environ.setdefault("MULTIPLAI_SDK_CALL_TIMEOUT_S", "900")
+# The per-CALL ceiling, and the number chunk sizes are derived from. Defined in
+# `lib.dream_chunking` (pure, import-side-effect-free) so a supervisor can read
+# it without importing this module — see that constant's comment for why 900.
+#
+# Imported here BEFORE model_client, and used to seed the SDK's own env knob in
+# the same breath: the SDK reads that variable into a module constant at import
+# time, so the setdefault has to precede it. `setdefault` preserves an explicit
+# override; deriving the value from the constant means the two can no longer
+# drift apart.
+from lib.dream_chunking import CHUNK_TIMEOUT_S
+
+os.environ.setdefault("MULTIPLAI_SDK_CALL_TIMEOUT_S", str(int(CHUNK_TIMEOUT_S)))
 
 from multiplai_core.paths import get_paths
 from multiplai_core.model_client import create_client
@@ -60,10 +63,6 @@ from lib.dream_processed import (
 
 logger = setup_logging("dream", propagate_loggers=("multiplai_core",))
 
-# The per-chunk deadline handed to `plan_chunks` and to `query(timeout_s=…)`.
-# Kept in step with the MULTIPLAI_SDK_CALL_TIMEOUT_S setdefault above.
-CHUNK_TIMEOUT_S = 900.0
-
 # Each chunk spawns a Claude Code CLI subprocess. Unbounded fan-out over a dozen
 # chunks is a subprocess storm, so the gather runs behind a semaphore.
 #
@@ -79,6 +78,25 @@ CHUNK_TIMEOUT_S = 900.0
 # semaphore still bounds it, and MULTIPLAI_DREAM_CONCURRENCY lowers it for anyone
 # who would rather wait than share the CPU.
 DEFAULT_CONCURRENCY = 8
+
+# One retry, not a ladder. A 429 here is self-inflicted burstiness that clears in
+# under a minute; if it is instead a real quota exhaustion, retrying repeatedly
+# just converts a fast partial result into a slow one. 60 s is longer than the
+# per-minute windows the CLI reports and short against the pass's own budget.
+_RATE_LIMIT_ATTEMPTS = 2
+_RATE_LIMIT_BACKOFF_S = 60.0
+
+# Matched on the rendered exception text because that is all the SDK guarantees
+# to be stable — `multiplai_core` surfaces the CLI's error as a plain exception,
+# and the log line this was diagnosed from is the same string. A false positive
+# costs one 60 s retry and never a wrong result, so the match errs wide.
+_RATE_LIMIT_MARKERS = ("rate_limit", "rate limit", "too many requests", "429")
+
+
+def _is_rate_limit(exc: BaseException) -> bool:
+    """True when *exc* looks like a rate limit rather than a real failure."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in _RATE_LIMIT_MARKERS)
 
 # Weight of the newest observation in the throughput EWMA. Low enough that one
 # slow chunk (a cold model, a retried call) does not swing the next run's plan.
@@ -1132,11 +1150,17 @@ def _with_repaired_citations(proposal: str, learnings_dir: Path) -> str:
         fixed, len(findings) - fixed,
     )
     for finding in findings:
-        if not finding.repaired:
-            logger.warning(
-                "Unverifiable citation %s:%d — %s",
-                finding.cited_file, finding.line, finding.reason,
-            )
+        if finding.repaired:
+            continue
+        # An advisory finding names a file that is not a dated learnings file at
+        # all — nothing to chase, so it goes at INFO. Everything else is a
+        # citation a reviewer may follow to the wrong place, which is the thing
+        # WARNING is for; mixing the two taught the reader to ignore both.
+        log = logger.info if finding.advisory else logger.warning
+        log(
+            "Unverifiable citation %s:%d — %s",
+            finding.cited_file, finding.line, finding.reason,
+        )
     return f"{repaired.rstrip()}\n\n---\n\n{section}"
 
 
@@ -1316,6 +1340,12 @@ async def _critique_batch(client, batch: str, memory_context: str, sem, index: i
 
     Fails open per batch: a batch that times out loses only its own directives,
     and the other batches' edits still land.
+
+    A **rate limit** is the exception, retried once after a backoff. It is not a
+    property of the batch — the batch was fine, the account was busy — and the
+    critic's own fan-out is usually what made it busy, so dropping the batch
+    discards good work over a condition that clears by waiting. On 2026-08-03 all
+    12 batches hit 429 and the whole critic pass silently contributed nothing.
     """
     from lib import dream_chunking
 
@@ -1337,17 +1367,41 @@ async def _critique_batch(client, batch: str, memory_context: str, sem, index: i
 
     async with sem:
         started = time.monotonic()
-        try:
-            response = await _query(
-                client, _CRITIC_SYSTEM, [{"role": "user", "content": content}], timeout_s
-            )
-        except Exception:
-            logger.exception(
-                "Critic batch %d/%d failed (%d bytes) — its directives are lost, the "
-                "other batches still apply", index, total, n_bytes,
-            )
-            return ""
+        response = None
+        # The backoff deliberately happens while holding the semaphore. The slot
+        # is the only throttle available here, so pausing inside it stalls the
+        # whole critic fan-out — which is the correct response to being rate
+        # limited, and lets the retry land in a quieter window rather than back
+        # in the storm that caused the 429.
+        for attempt in range(1, _RATE_LIMIT_ATTEMPTS + 1):
+            try:
+                response = await _query(
+                    client, _CRITIC_SYSTEM,
+                    [{"role": "user", "content": content}], timeout_s,
+                )
+                break
+            except Exception as exc:
+                if attempt < _RATE_LIMIT_ATTEMPTS and _is_rate_limit(exc):
+                    logger.warning(
+                        "Critic batch %d/%d rate limited (%s) — retrying once in "
+                        "%.0fs rather than dropping its directives",
+                        index, total, exc, _RATE_LIMIT_BACKOFF_S,
+                    )
+                    await asyncio.sleep(_RATE_LIMIT_BACKOFF_S)
+                    continue
+                logger.exception(
+                    "Critic batch %d/%d failed (%d bytes) — its directives are lost, "
+                    "the other batches still apply", index, total, n_bytes,
+                )
+                return ""
         elapsed = max(time.monotonic() - started, 1e-6)
+
+    # Unreachable: the loop either breaks with a response or returns "" (the last
+    # attempt fails the `attempt < _RATE_LIMIT_ATTEMPTS` guard and falls through
+    # to the failure branch). Kept so a future change to the retry ladder cannot
+    # turn this into an AttributeError on None mid-run.
+    if response is None:  # pragma: no cover - defensive
+        return ""
 
     raw = (response.content or "").strip()
     logger.info(

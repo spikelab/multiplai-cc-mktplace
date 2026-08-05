@@ -40,9 +40,18 @@ from typing import Iterable, Sequence
 logger = logging.getLogger(__name__)
 
 # Both provenance forms the proposal template emits: the block form on entries
-# (`**Source:** f.md:12` / `f.md:12-14`) and the inline form used in the
-# "Filtered Out" list (`(Source: f.md:12)`). Kept as one pattern so a repair
-# cannot fix one and miss the other for the same record.
+# (`**Source:** <date>.md:<line>` / `<date>.md:<lo>-<hi>`) and the inline form
+# used in the "Filtered Out" list (`(Source: <date>.md:<line>)`). Kept as one
+# pattern so a repair cannot fix one and miss the other for the same record.
+#
+# The placeholders above are deliberately unmatchable by the pattern below: a
+# `<...>` angle-bracket stands where a real filename and line number would go,
+# and neither survives the `[\w.\-]+\.md` / `\d+` groups. They used to be a
+# plausible-looking filename and a number, which the pattern DOES match — so when
+# a learnings entry quoted this comment (they do; this module gets discussed in
+# sessions), the drafted proposal carried a live-looking citation to a file that
+# was never meant to exist, and every dream run warned about it. Keep any example
+# written here in the angle-bracket form.
 _CITATION_RE = re.compile(
     r"(?P<prefix>\*\*Source:\*\*\s*|\(Source:\s*)"
     r"(?P<file>[\w.\-]+\.md)"
@@ -61,6 +70,15 @@ _FILE_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.md$")
 # `_resolve` reports soundness through its reason string; comparing against a
 # literal in two places is how the range check came to test only one end.
 _IN_RANGE = "in range"
+
+# A citation whose filename is not a dated learnings file is not a broken
+# provenance link — there is no file it could have meant, so there is nothing to
+# repair and nothing for a reviewer to go and check. It is a model formatting
+# slip (or, historically, this module's own docstring example quoted back at it).
+# Still reported in the proposal, but flagged so the caller can log it quietly:
+# at WARNING it was pure noise on every run, which is how it trained the reader
+# to skip the citation warnings that do matter.
+_NOT_DATED = "is not a dated learnings file"
 
 
 @dataclass(frozen=True)
@@ -82,6 +100,15 @@ class Repair:
     def where(self) -> str:
         return f"{self.cited_file}:{self.line}" if self.line else self.cited_file
 
+    @property
+    def advisory(self) -> bool:
+        """True when this finding is a formatting slip, not a broken citation.
+
+        Derived from the reason rather than stored, so it cannot fall out of step
+        with what `_resolve` actually decided. See `_NOT_DATED`.
+        """
+        return not self.repaired and _NOT_DATED in self.reason
+
 
 def _stamp_date(block_text: str) -> str | None:
     match = _STAMP_RE.search(block_text)
@@ -102,7 +129,7 @@ def _resolve(
 
     cited_date_match = _FILE_DATE_RE.match(cited_file)
     if not cited_date_match:
-        return None, f"cited file `{cited_file}` is not a dated learnings file"
+        return None, f"cited file `{cited_file}` {_NOT_DATED}"
     cited_date = cited_date_match.group(1)
 
     # Candidates: records in some OTHER file that cover this line and whose own

@@ -68,6 +68,26 @@ DEFAULT_THROUGHPUT_BYTES_PER_S = 50.0
 MIN_CHUNK_BYTES = 8_000
 MAX_CHUNK_BYTES = 40_000
 
+# The per-call deadline every chunk is sized against — the single number anything
+# reasoning about how long dream takes must derive from: `chunk_budget_bytes`
+# below, `query(timeout_s=…)` in dream.py, dream's own
+# `MULTIPLAI_SDK_CALL_TIMEOUT_S` default, and `memory_maintainer`'s cap on the
+# whole unattended pass.
+#
+# It lives *here* rather than in `dream.py` because a supervisor cannot import
+# `dream.py` to read it: that module configures logging and mutates the
+# environment at import time. This module is pure and side-effect-free, so
+# importing it costs nothing and commits to nothing. Keeping the number in
+# dream.py is what let `memory_maintainer` carry a hardcoded 600 s cap against a
+# 900 s per-chunk budget — a pass that could not finish however fast the model
+# was, and 6/6 unattended runs in the week of 2026-08-05 duly timed out.
+#
+# 900 s, not the original 1800: chunking inverts the relation between size and
+# deadline — the timeout is the *input* to `chunk_budget_bytes`, not something a
+# fixed-size call hopes to fit under — so a lower ceiling makes a stuck call fail
+# fast instead of burning half an hour.
+CHUNK_TIMEOUT_S = 900.0
+
 # Escalation ceiling for one oversized indivisible block. Matches the SDK's own
 # hard per-attempt cap: raising past it buys nothing, the call dies anyway.
 MAX_ESCALATED_TIMEOUT_S = 1800.0

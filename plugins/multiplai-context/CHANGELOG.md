@@ -18,6 +18,45 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.20.0] - 2026-08-05
+
+### Fixed
+
+- **The unattended nightly consolidation can now actually finish.** The memory
+  maintainer gave its dream pass 10 minutes, while dream's own budget is 15
+  minutes *per chunk* of your backlog (30 for an oversized one). The pass was
+  arithmetically unable to complete however fast the model ran, and every
+  unattended run for a week timed out — which is why a backlog can sit
+  unconsolidated for days even though the maintainer runs nightly. The cap is now
+  derived from dream's per-chunk budget (one hour, covering the slowest full run
+  measured to date) instead of being a number sitting next to it, so the two can
+  no longer drift apart.
+
+  If your learnings have been piling up, the next scheduled run should drain them
+  without you doing anything. There is nothing to configure.
+
+- **A timed-out background pass no longer keeps running.** Killing a child
+  process killed only the wrapper, so a dream the maintainer had reported as
+  "timed out" carried on for another three minutes — writing its proposal, with
+  eight CLI subprocesses still under it — after the failure was logged. Children
+  now get their own process group and a timeout kills the whole tree, so the log
+  and reality agree and nothing burns CPU unsupervised.
+
+- **A rate-limited review batch is retried instead of silently discarded.**
+  During dream's second-pass review, a batch that hit an API rate limit lost its
+  suggestions and said so only in the log. Because that pass runs eight batches
+  at once, one burst could take out *all* of them — leaving a proposal that had
+  cost a full drafting run with no review applied at all. A rate limit now costs
+  a 60-second wait and one retry; a genuine failure still degrades the same way
+  as before, losing one batch rather than the proposal.
+
+- **Dream logs no longer warn about a citation nobody wrote.** Every run reported
+  two unverifiable `**Source:**` citations pointing at a file that never existed
+  — the citation checker was matching an example in its own source comments.
+  Citations naming something that is not a dated learnings file are now logged
+  quietly (they are a formatting slip with nothing to check), while citations
+  that could send a reviewer to the wrong place still warn.
+
 ## [0.19.0] - 2026-08-05
 
 ### Added
