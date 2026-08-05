@@ -13,6 +13,7 @@ an ``error`` string on the record rather than an exception.
 import logging
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +26,13 @@ logger = logging.getLogger(__name__)
 # `PROJECTS/<project>` and one level of nesting (`PROJECTS/DolceBot/DolceEngine`),
 # which is the deepest real layout; going deeper mostly finds vendored copies.
 MAX_DEPTH = 3
+
+# How long one repo may spend before the rest of its questions go unanswered.
+# Six bounded `git` calls at the 5s default is 30s for a single stalled mount,
+# which breaks the "a few seconds and one unreachable line" promise the timeout
+# was there to keep. Ten seconds is well clear of a cold-cache repo on a healthy
+# disk (measured: under 0.5s for the whole set) and well under the stall case.
+REPO_BUDGET = 10.0
 
 # Directories never worth descending into. `.worktrees` is excluded on purpose:
 # worktrees are not independent repos and are reported *per repo* by
@@ -76,7 +84,10 @@ def find_repos(workspace: Path, max_depth: int = MAX_DEPTH) -> list[Path]:
         if depth > max_depth:
             return
         try:
-            entries = sorted(os.scandir(base), key=lambda e: e.name)
+            # `with`, because a bare `sorted(os.scandir(...))` leaks the
+            # directory handle until GC and raises ResourceWarning under -W error.
+            with os.scandir(base) as it:
+                entries = sorted(it, key=lambda e: e.name)
         except OSError:
             return
         for entry in entries:
@@ -179,6 +190,7 @@ def _load(repo: Path, workspace: Path) -> RepoState:
         rel = str(repo)
     state = RepoState(path=rel)
 
+    deadline = time.monotonic() + REPO_BUDGET
     status = run(["git", "status", "--porcelain"], cwd=repo)
     if not status.ok:
         # One clear failure beats five: if `git status` cannot run here, the
@@ -188,9 +200,26 @@ def _load(repo: Path, workspace: Path) -> RepoState:
         return state
 
     state.dirty, state.untracked = _porcelain_counts(status)
+
+    # The fast-fail above only catches a checkout that is broken outright. A
+    # merely *slow* one answers `git status` after four seconds and then does it
+    # again five more times, so one stalled mount could spend 30s of a digest
+    # that promises to be bounded. Between calls, stop and report what we have.
+    def over_budget() -> bool:
+        if time.monotonic() < deadline:
+            return False
+        state.error = f"partial: exceeded the {REPO_BUDGET:g}s per-repo budget"
+        return True
+
+    if over_budget():
+        return state
     state.slug = _slug(repo)
     state.branch = _branch(repo)
+    if over_budget():
+        return state
     state.unpushed, state.no_upstream = _tracking(repo, _has_remote(repo))
+    if over_budget():
+        return state
     state.worktrees = _worktrees(repo)
     return state
 

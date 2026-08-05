@@ -130,14 +130,17 @@ def _waiting_items(fleet: Fleet, now: datetime) -> tuple[list[Item], int]:
         if age > cutoff:
             stale += 1
             continue
-        who = agent.project or agent.hostname or agent.session_id[:8]
+        where = agent.hostname or agent.session_id[:8]
+        # Project first, then the container it is in — but never both when they
+        # are the same string, which is what a session with no project used to
+        # render: ``hostname `hostname` — …``.
+        who = f"{agent.project} `{where}`" if agent.project else f"`{where}`"
         # The checkpoint's next action is what it is waiting on; without one
         # the honest answer is that we only know it stopped to ask.
         what = agent.next_action or agent.intent or "waiting on you (no checkpoint)"
         items.append(Item(
             _RANK_WAITING,
-            f"{who} `{agent.hostname or agent.session_id[:8]}` — "
-            f"{_clip(what)} ({format_age(age)})",
+            f"{who} — {_clip(what)} ({format_age(age)})",
             (int(age.total_seconds()),),
         ))
     return items, stale
@@ -258,5 +261,7 @@ def render_digest(fleet: Fleet, now: datetime, agents_path: str = "") -> str:
     out.extend(_summary_lines(fleet, now, stale_prompts))
     out.append("")
     pointer = f"   ({agents_path})" if agents_path else ""
-    out.append(f"Full detail: /fleet-status --full{pointer}")
+    # The plugin-qualified form, because that is what actually invokes it —
+    # a pointer to a command that does not exist is worse than no pointer.
+    out.append(f"Full detail: /multiplai-context:fleet-status --full{pointer}")
     return "\n".join(out) + "\n"

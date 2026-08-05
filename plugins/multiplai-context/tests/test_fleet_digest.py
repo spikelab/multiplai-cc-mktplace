@@ -65,9 +65,25 @@ def test_waiting_sessions_are_ranked_youngest_first():
     """A two-minute-old question is a live conversation; a six-hour one is not."""
     items, _ = rank(fleet([agent(minutes=300, session_id="old"),
                            agent(minutes=2, session_id="new")]), NOW)
-    assert items[0].text.index("2m") and "just now" not in items[0].text
+    assert "2m" in items[0].text and "just now" not in items[0].text
     ages = [i.sort_key[0] for i in items]
     assert ages == sorted(ages)
+
+
+def test_a_session_without_a_project_is_named_once():
+    """`hostname \\`hostname\\`` said the same thing twice and read like a bug."""
+    items, _ = rank(fleet([agent(project="", hostname="box-7")]), NOW)
+    assert items[0].text.startswith("`box-7` — ")
+
+
+def test_a_session_with_a_project_names_both():
+    items, _ = rank(fleet([agent(project="knowhere", hostname="box-7")]), NOW)
+    assert items[0].text.startswith("knowhere `box-7` — ")
+
+
+def test_the_pointer_names_the_command_that_exists():
+    """`/fleet-status` is not invocable; the plugin-qualified form is."""
+    assert "/multiplai-context:fleet-status --full" in render_digest(fleet(), NOW)
 
 
 def test_waiting_past_the_cutoff_becomes_a_stale_count():

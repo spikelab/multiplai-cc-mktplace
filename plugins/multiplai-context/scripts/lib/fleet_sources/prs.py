@@ -310,9 +310,14 @@ def stacks(prs: list[PullRequest]) -> list[list[PullRequest]]:
     Returned innermost-first: the PR whose base is *not* another open PR comes
     first, because that is the one that can actually merge now.
     """
+    # Both indexes are built once. They depend only on `prs`, so rebuilding
+    # `based_on` inside the per-PR loop — as this did — made the whole thing
+    # O(n²) for no gain.
     by_repo: dict[str, dict[str, PullRequest]] = {}
+    based_on_by_repo: dict[str, dict[str, list[PullRequest]]] = {}
     for pr in prs:
         by_repo.setdefault(pr.repo, {})[pr.head] = pr
+        based_on_by_repo.setdefault(pr.repo, {}).setdefault(pr.base, []).append(pr)
 
     seen: set[tuple[str, int]] = set()
     out: list[list[PullRequest]] = []
@@ -331,10 +336,7 @@ def stacks(prs: list[PullRequest]) -> list[list[PullRequest]]:
             cursor = heads.get(cursor.base)
         chain.reverse()
         # Then climb back up from the root through anything based on it.
-        based_on: dict[str, list[PullRequest]] = {}
-        for other in prs:
-            if other.repo == pr.repo:
-                based_on.setdefault(other.base, []).append(other)
+        based_on = based_on_by_repo.get(pr.repo, {})
         cursor = chain[-1]
         while True:
             children = [c for c in based_on.get(cursor.head, []) if c.number not in walked]

@@ -76,7 +76,7 @@ def collect_full(
     fleet = collect(data_dir, now)
     fleet.repos = collect_repos(workspace)
     fleet.jobs = collect_jobs(now=now)
-    fleet.backlog = collect_backlog(data_dir, now=now)
+    fleet.backlog = collect_backlog(data_dir)
 
     if offline:
         # `None` means "not collected" — distinct from an empty scan, which

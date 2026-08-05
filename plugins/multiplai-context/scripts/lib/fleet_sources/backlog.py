@@ -12,7 +12,6 @@ INBOX's own; repeating it here would be a second unread list.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -79,10 +78,14 @@ def collect_backlog(
     learnings_dir: Path | None = None,
     dreams_dir: Path | None = None,
     inbox_dir: Path | None = None,
-    now: datetime | None = None,
 ) -> Backlog:
-    """Count every pending queue. Never raises; a missing directory is zero."""
-    now = now or datetime.now(timezone.utc)
+    """Count every pending queue. Never raises; a missing directory is zero.
+
+    No ``now`` parameter: every number here is a count or a date read off a
+    filename, so there is nothing to measure an age against. The signature used
+    to take one and ignore it, which reads as "ages are handled here" — they
+    are not, and the digest computes them from the returned dates.
+    """
     workspace_root = data_dir.parent.parent
 
     learnings_dir = learnings_dir or (data_dir.parent / "learnings")
@@ -103,7 +106,12 @@ def collect_backlog(
         dreams_pending=_count_files(dreams_dir, "processed-learnings-*.md"),
         pending_extractions=_count_files(data_dir / "pending_extractions"),
         failed_extractions=_count_files(data_dir / "failed_extractions"),
-        # Top level only: INBOX subdirectories are the user's own filing, and
-        # recursing turns one swept folder into three hundred "items".
-        inbox_items=_count_files(inbox_dir, "*.md"),
+        # Every top-level file, not just `*.md`: INBOX is where screenshots and
+        # saved links land too, and counting only markdown reported a swept
+        # INBOX that still held twenty things.
+        #
+        # Top level only, though: INBOX subdirectories are the user's own
+        # filing, and recursing turns one swept folder into three hundred
+        # "items".
+        inbox_items=_count_files(inbox_dir),
     )
