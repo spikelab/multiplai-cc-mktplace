@@ -170,17 +170,30 @@ def rank(fleet: Fleet, now: datetime) -> tuple[list[Item], int]:
 def _summary_lines(fleet: Fleet, now: datetime, stale_prompts: int) -> list[str]:
     out: list[str] = []
 
+    needs = fleet.in_group("Needs you")
     working = fleet.in_group("Working")
     parked = fleet.in_group("Parked")
     idle = fleet.in_group("Idle")
-    bits = [f"RUNNING ({len(working)})"]
+
+    # One number for "how many agents do I have", then its breakdown. `RUNNING`
+    # used to be the Working count alone, which read as the whole fleet and was
+    # not: a session that stopped to ask a question leaves `Working` for
+    # `Needs you`, so four live containers rendered as `RUNNING (2)` with the
+    # other two accounted for only in the ranked list above. Every reading of
+    # that line was wrong in the same direction — fewer agents alive than there
+    # are. The total is what the question asks; the split is what to do about it.
+    bits = [f"IN FLIGHT ({len(needs) + len(working) + len(parked)})"]
+    if needs:
+        bits.append(f"{len(needs)} waiting on you")
+    if working:
+        bits.append(f"{len(working)} working")
     if parked:
-        bits.append(f"PARKED ({len(parked)})")
+        bits.append(f"{len(parked)} parked")
     if idle:
         oldest = max((a.age(now) for a in idle), default=timedelta(0))
-        bits.append(f"IDLE ({len(idle)}, oldest {format_age(oldest)})")
+        bits.append(f"{len(idle)} idle (oldest {format_age(oldest)})")
     if stale_prompts:
-        bits.append(f"STALE PROMPTS ({stale_prompts})")
+        bits.append(f"{stale_prompts} stale prompt(s)")
     out.append(" · ".join(bits))
 
     if fleet.prs is not None:

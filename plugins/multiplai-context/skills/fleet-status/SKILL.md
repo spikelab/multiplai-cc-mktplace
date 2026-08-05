@@ -60,11 +60,16 @@ blocked on a decision only the user can make*:
    four PRs that must land in sequence are one decision, not four.
 4. **A session in `waiting_input`, under 12 hours old** — an agent asked a
    question. Past 12 hours it is an abandoned tab, and it moves to a
-   `STALE PROMPTS` count instead.
+   `stale prompt(s)` count instead.
 5. **Collisions** — two live sessions holding the same file.
 
 The list is capped at 8. If there are more, the count is shown and the rest are
 in `--full`. An unbounded urgent list is the same overwhelm in a new font.
+
+Under the list, `IN FLIGHT (N)` is **every** agent still on the board — the
+ones waiting on the user included, since they are running too. Do not read it
+as a separate population from the ranked list; the same session appears in
+both, and the breakdown after the total says which is which.
 
 ## Reading the output honestly
 
