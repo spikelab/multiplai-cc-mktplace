@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.log_utils import setup_logging
 from multiplai_core.costing import costs_dir
 from lib.costing_collector import default_config_dir, run_backfill_branches, run_collect
+from lib.runtime import lock_path
 
 logger = setup_logging("costs")
 
@@ -37,7 +38,11 @@ logger = setup_logging("costs")
 # concurrent writing passes (e.g. racing SessionStart hooks) could double-append
 # records or clobber each other's offsets. A non-blocking exclusive flock makes
 # the second launch a no-op. Dry runs don't write, so they skip the lock.
-_LOCK_PATH = "/tmp/multiplai-costs-collector.lock"
+#
+# The lock lives under the workspace data dir, not /tmp: each session runs in
+# its own OrbStack container, so a /tmp path is container-local and would let
+# two racing collectors lock two different files and both proceed.
+_LOCK_NAME = "costs-collector"
 
 
 def main() -> int:
@@ -62,7 +67,7 @@ def main() -> int:
     # Hold the lock for the whole pass; the fd is released on process exit.
     lock_fd = None
     if not args.dry_run:
-        lock_fd = open(_LOCK_PATH, "w")
+        lock_fd = open(lock_path(_LOCK_NAME), "w")
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:

@@ -10,10 +10,11 @@ import hashlib
 import json
 import logging
 import re
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence, Union
+
+from lib.runtime import lock_path
 
 logger = logging.getLogger(__name__)
 
@@ -76,16 +77,21 @@ def render_target_line(target: Union[str, dict]) -> str:
 
 
 def _lock_path(target: Path) -> Path:
-    """Return a flock file path for *target*, kept in a temp dir rather than
-    beside the target. The lock files used to be written into the user's diary/
-    learnings dirs and never removed, littering their (often git-tracked)
-    workspace. A deterministic per-target path in the temp dir preserves the
-    mutual-exclusion semantics without polluting the content dirs.
+    """Return a flock file path for *target*, kept in the plugin data dir's
+    ``locks/`` bucket rather than beside the target. The lock files used to be
+    written into the user's diary/learnings dirs and never removed, littering
+    their (often git-tracked) workspace. A deterministic per-target path
+    elsewhere preserves the mutual-exclusion semantics without polluting the
+    content dirs.
+
+    It is deliberately NOT in the temp dir, where it used to live: every Claude
+    session runs in its own OrbStack container, so ``/tmp`` is container-local
+    and two sessions appending to the same diary file would lock two different
+    paths and both proceed — precisely the interleaved-write corruption this
+    guards against. The data dir is on the shared workspace filesystem.
     """
-    lock_dir = Path(tempfile.gettempdir()) / "multiplai-locks"
-    lock_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha1(str(target.resolve()).encode("utf-8")).hexdigest()[:16]
-    return lock_dir / f"{target.name}.{digest}.lock"
+    return lock_path(f"{target.name}.{digest}")
 
 
 # Tag-delimited output, NOT JSON. diary_entry is long prose full of quotes,

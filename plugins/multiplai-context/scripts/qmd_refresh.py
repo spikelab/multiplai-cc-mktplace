@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.log_utils import setup_logging
 from generators.config import load_catalog_config
 from qmd_retrieval import QmdTarget, target_from_config
+from lib.runtime import lock_path
 
 logger = setup_logging("qmd_refresh")
 
@@ -131,10 +132,11 @@ def main() -> None:
     if not workspace or not cfg.enable_resources or cfg.resources_retrieval != "qmd":
         return
 
-    # One refresh per workspace at a time; losers exit silently.
+    # One refresh per workspace at a time; losers exit silently. The lock sits
+    # under the workspace data dir rather than /tmp, which is container-local
+    # under OrbStack and so would not exclude a concurrent session at all.
     key = hashlib.sha256(workspace.encode()).hexdigest()[:12]
-    lock_path = f"/tmp/qmd-refresh-{key}.lock"
-    lock = open(lock_path, "w")
+    lock = open(lock_path(f"qmd-refresh-{key}"), "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
