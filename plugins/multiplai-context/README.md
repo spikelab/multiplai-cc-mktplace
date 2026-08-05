@@ -1310,10 +1310,8 @@ for stricter, smaller injections; lower it if you want the weaker tail back.
 > `floor/top` ratio (and thus the picked set) unchanged. The ratio is the
 > lever.
 
-**Measuring it.** `scripts/replay_router_logs.py` sweeps candidate ratios
-against your own `ROUTING_SCORES` logs (label-free, real traffic);
-`scripts/eval_router.py --keep-ratio R` runs the golden-case harness at a
-given ratio. Note `keep_ratio` only moves the *relative* cutoff; the
+**Measuring it.** `scripts/eval_router.py --keep-ratio R` runs the golden-case
+harness at a given ratio. Note `keep_ratio` only moves the *relative* cutoff; the
 *absolute* floor is guarded separately by a match-breadth eligibility gate —
 an entry can clear `MIN_SIGNAL` only when it matched ≥ 2 distinct
 `intent_domains` tokens (or a multi-word domain phrase verbatim), so a
