@@ -482,6 +482,20 @@ def _ledger_all(env, name, proposal):
     return blocks
 
 
+def _archive(env, proposal, disposition="applied", body="x"):
+    """Put a proposal where a *decided* one lives.
+
+    gc requires positive evidence of a decision, so a test that means "this
+    proposal was reviewed" has to say so by putting the file somewhere — a
+    ledgered name with no file anywhere is the crashed-run state, not a
+    decided one.
+    """
+    d = env["dreams"] / disposition
+    d.mkdir(parents=True, exist_ok=True)
+    (d / proposal).write_text(body)
+    return d / proposal
+
+
 class TestGcLearnings:
     def test_deletes_a_fully_ledgered_file_whose_proposal_is_archived(self, gc_env, capsys):
         _write_learnings(gc_env, "2026-07-29.md", LEARNINGS_A)
@@ -535,6 +549,10 @@ class TestGcLearnings:
         _write_learnings(gc_env, "2026-07-30.md", LEARNINGS_B)
         _ledger_all(gc_env, "2026-07-29.md", "old.md")
         _ledger_all(gc_env, "2026-07-30.md", "new.md")
+        # old.md must actually be *somewhere* decided. Ledgering a name and
+        # leaving the file nowhere used to read as "decided"; that is the
+        # in-flight/crashed-run window, and gc now keeps those sources.
+        _archive(gc_env, "old.md")
         (gc_env["dreams"] / "new.md").write_text("pending")
 
         gc_env["dream"]._gc_learnings()
@@ -546,6 +564,7 @@ class TestGcLearnings:
     def test_prunes_ledger_keys_for_deleted_files(self, gc_env):
         _write_learnings(gc_env, "2026-07-29.md", LEARNINGS_A)
         _ledger_all(gc_env, "2026-07-29.md", "old.md")
+        _archive(gc_env, "old.md")
         assert len(gc_env["ledger"].load(gc_env["ledger_path"])["processed"]) == 2
 
         gc_env["dream"]._gc_learnings()
@@ -570,6 +589,131 @@ class TestGcLearnings:
         r = _run_dream(tmp_path, "--gc-learnings")
         assert r.returncode == 0, r.stderr
         assert "GC learnings" in r.stdout
+
+
+class TestGcDoesNotEatLiveInputs:
+    """Regression tests for the two ways gc used to delete files still in use.
+
+    Both were reported against #102 and both are unrecoverable in the moment
+    (the mitigant is that learnings files are git-tracked *once committed*).
+    Neither scenario had any coverage.
+    """
+
+    # --- #112: ledgered before the proposal file exists ---------------------
+
+    def test_keeps_sources_of_a_run_still_in_flight(self, gc_env, capsys):
+        """The window between "chunk ledgered" and "proposal written".
+
+        _draft_chunk records blocks per chunk as it goes; the proposal is only
+        written when the whole run finishes, potentially many minutes later.
+        In between, the name is fully ledgered and the file exists nowhere.
+        """
+        _write_learnings(gc_env, "2026-07-29.md", LEARNINGS_A)
+        _ledger_all(gc_env, "2026-07-29.md", "processed-learnings-2026-07-29.md")
+        # No proposal anywhere: not in the root, not in applied/rejected/superseded.
+
+        gc_env["dream"]._gc_learnings()
+
+        assert (gc_env["learnings"] / "2026-07-29.md").exists()
+        assert "proposal not yet written" in capsys.readouterr().out
+
+    def test_keeps_sources_of_a_crashed_run(self, gc_env, capsys):
+        """Same state as in-flight, but permanent — the run died.
+
+        The resumed run rebuilds from staged drafts and writes a proposal that
+        cites these files, so deleting them breaks the resume.
+        """
+        _write_learnings(gc_env, "2026-07-29.md", LEARNINGS_A)
+        _write_learnings(gc_env, "2026-07-30.md", LEARNINGS_B)
+        _ledger_all(gc_env, "2026-07-29.md", "crashed-run.md")
+        _ledger_all(gc_env, "2026-07-30.md", "crashed-run.md")
+
+        gc_env["dream"]._gc_learnings()
+
+        assert (gc_env["learnings"] / "2026-07-29.md").exists()
+        assert (gc_env["learnings"] / "2026-07-30.md").exists()
+        assert "GC learnings: deleted 0, kept 2" in capsys.readouterr().out
+
+    def test_a_decided_proposal_is_still_collected(self, gc_env, capsys):
+        """The guard must not simply stop gc working — rejected/ counts too."""
+        _write_learnings(gc_env, "2026-07-29.md", LEARNINGS_A)
+        _ledger_all(gc_env, "2026-07-29.md", "reviewed.md")
+        _archive(gc_env, "reviewed.md", "rejected")
+
+        gc_env["dream"]._gc_learnings()
+
+        assert not (gc_env["learnings"] / "2026-07-29.md").exists()
+        assert "GC learnings: deleted 1, kept 0" in capsys.readouterr().out
+
+    # --- #111: folded forward, ledger left pointing at the predecessor ------
+
+    def test_keeps_sources_a_pending_successor_still_cites(self, gc_env, capsys):
+        """P1 folded into P2: P1 lands in superseded/, so by the ledger alone
+        its sources look decided — while P2 sits pending and cites them."""
+        _write_learnings(gc_env, "2026-07-29.md", LEARNINGS_A)
+        _ledger_all(gc_env, "2026-07-29.md", "p1.md")
+        _archive(gc_env, "p1.md", "superseded")
+        (gc_env["dreams"] / "p2.md").write_text(
+            "## Updates\n\n- something learned\n\n**Source:** 2026-07-29.md:12\n"
+        )
+
+        gc_env["dream"]._gc_learnings()
+
+        assert (gc_env["learnings"] / "2026-07-29.md").exists()
+        assert "still cited by a pending proposal" in capsys.readouterr().out
+
+    def test_the_inline_filtered_out_citation_form_also_protects(self, gc_env):
+        """`(Source: f.md:12)` is the other form the template emits. A check
+        that saw only the bold form would protect strictly less than it looks."""
+        _write_learnings(gc_env, "2026-07-29.md", LEARNINGS_A)
+        _ledger_all(gc_env, "2026-07-29.md", "p1.md")
+        _archive(gc_env, "p1.md", "superseded")
+        (gc_env["dreams"] / "p2.md").write_text(
+            "## Filtered Out\n\n- too specific (Source: 2026-07-29.md:12)\n"
+        )
+
+        gc_env["dream"]._gc_learnings()
+
+        assert (gc_env["learnings"] / "2026-07-29.md").exists()
+
+    def test_an_uncited_sibling_is_still_collected(self, gc_env):
+        """Citation protection is per file, not a blanket stop."""
+        _write_learnings(gc_env, "2026-07-29.md", LEARNINGS_A)
+        _write_learnings(gc_env, "2026-07-30.md", LEARNINGS_B)
+        _ledger_all(gc_env, "2026-07-29.md", "p1.md")
+        _ledger_all(gc_env, "2026-07-30.md", "p1.md")
+        _archive(gc_env, "p1.md", "superseded")
+        (gc_env["dreams"] / "p2.md").write_text("**Source:** 2026-07-29.md:12\n")
+
+        gc_env["dream"]._gc_learnings()
+
+        assert (gc_env["learnings"] / "2026-07-29.md").exists()
+        assert not (gc_env["learnings"] / "2026-07-30.md").exists()
+
+    def test_an_unreadable_pending_proposal_stops_deletion_entirely(
+        self, gc_env, capsys, monkeypatch
+    ):
+        """Fail closed: if we cannot read what a pending proposal cites, we
+        cannot claim anything is uncited."""
+        _write_learnings(gc_env, "2026-07-29.md", LEARNINGS_A)
+        _ledger_all(gc_env, "2026-07-29.md", "p1.md")
+        _archive(gc_env, "p1.md")
+        bad = gc_env["dreams"] / "unreadable.md"
+        bad.write_text("x")
+
+        real_read = Path.read_text
+
+        def boom(self, *a, **k):
+            if self.name == "unreadable.md":
+                raise OSError("nope")
+            return real_read(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", boom)
+
+        gc_env["dream"]._gc_learnings()
+
+        assert (gc_env["learnings"] / "2026-07-29.md").exists()
+        assert "nothing deleted this pass" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

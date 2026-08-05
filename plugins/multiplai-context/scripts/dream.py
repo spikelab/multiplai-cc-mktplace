@@ -49,7 +49,7 @@ from multiplai_core.config import load_yaml, save_yaml
 from multiplai_core.log_utils import setup_logging
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
-from lib import learnings_ledger
+from lib import citation_repair, learnings_ledger
 from lib.dream_processed import (
     PROCESSED_HEADING,
     Decision,
@@ -1933,21 +1933,45 @@ def _gc_learnings() -> None:
     when it was, so the decision moves into code, per file, with a stated reason
     for everything kept.
 
-    A file is deleted only when **both** hold:
+    A file is deleted only when **all** of these hold:
 
     (a) every ``## Session Learnings`` record in it hashes to a key the ledger
         has recorded — i.e. dream has already consolidated all of it. A file
         appended to since the run (today's, typically) fails this and is kept,
         which is why the old "today's file exception" no longer needs writing
         down;
-    (b) every proposal those keys were recorded into has left the dreams root
-        (it is in ``applied/``, ``rejected/`` or ``superseded/``). Beyond
-        retention, this is what keeps a pending review readable: its
-        ``**Source:** <file>:<line>`` citations must still resolve while the
-        reviewer is deciding.
+    (b) no proposal those keys were recorded into is still sitting in the
+        dreams root awaiting review;
+    (c) every one of those proposals is *present* in ``applied/``,
+        ``rejected/`` or ``superseded/``. Note this is positive evidence, not
+        (b)'s absence restated. A proposal's name enters the ledger chunk by
+        chunk as a run proceeds, but the file itself is only written when the
+        run completes — so during a long run, and permanently after a crashed
+        one, a fully-ledgered name exists in no directory at all. Absence used
+        to read as "decided", which meant gc deleted the inputs of the very run
+        that was still consuming them;
+    (d) no proposal still in the dreams root cites the file. The ledger names
+        the proposal a block was *first* consolidated into, and a fold-forward
+        (``_fold_pending_proposals``) moves items into a successor and archives
+        the original to ``superseded/`` without re-pointing those entries — so
+        by the ledger alone the sources behind a live, unreviewed proposal look
+        decided. The citations travel with the items, so reading them is what
+        stays true.
 
-    Anything else is kept. Takes no lock: it neither reads nor writes anything a
-    consolidation run is in the middle of.
+    (b)-(d) all serve one property: a pending review must remain readable. Its
+    ``**Source:** <file>:<line>`` citations have to resolve while the reviewer
+    is still deciding.
+
+    Anything else is kept, with the reason printed per file. Deliberately
+    conservative in every direction — an unreadable pending proposal or an
+    unreadable learnings file stops deletion rather than licensing it, because
+    the failure being guarded against is unrecoverable and the cost of keeping
+    a file too long is a few kilobytes.
+
+    Takes no lock, and does not need one: after (c) and (d) it can no longer
+    delete anything a consolidation run is mid-way through. (The previous
+    version of this docstring claimed the same immunity while (c) was missing,
+    which was simply untrue.)
     """
     paths = get_paths()
     learnings_dir = paths.learnings_dir
@@ -1961,7 +1985,39 @@ def _gc_learnings() -> None:
     dreams_dir = paths.dreams_dir()
     # Non-recursive on purpose: applied/, rejected/ and superseded/ are decided,
     # and the hub's own listing globs the root the same way.
-    pending = {p.name for p in dreams_dir.glob("*.md")} if dreams_dir.exists() else set()
+    pending_paths = sorted(dreams_dir.glob("*.md")) if dreams_dir.exists() else []
+    pending = {p.name for p in pending_paths}
+
+    # Positive evidence of a decision, rather than inferring it from absence.
+    # A proposal name is ledgered per chunk as the run goes, but the file is
+    # only written when the run finishes — so between those two moments, and
+    # forever after a crash, a fully-ledgered name exists in no directory at
+    # all. Reading that gap as "decided" is what let gc delete a live run's
+    # own inputs.
+    decided: set[str] = set()
+    for disposition in ("applied", "rejected", "superseded"):
+        sub = dreams_dir / disposition
+        if sub.exists():
+            decided |= {p.name for p in sub.glob("*.md")}
+
+    # What the pending proposals actually cite, which is the only thing that
+    # stays true across a fold-forward: `_fold_pending_proposals` moves items
+    # (citations and all) into a successor and archives the original to
+    # superseded/, but never re-points the ledger at the successor. Going by
+    # the ledger alone, those sources look decided while a reviewer is still
+    # reading them.
+    still_cited: set[str] = set()
+    for p in pending_paths:
+        try:
+            still_cited |= citation_repair.cited_files(p.read_text())
+        except OSError as exc:
+            # Fail closed. An unreadable pending proposal is the one case where
+            # we cannot know what it cites, so nothing may be deleted on the
+            # strength of not having seen a citation in it.
+            logger.warning("Pending proposal %s unreadable (%s) — keeping every "
+                           "learnings file this pass", p.name, exc.__class__.__name__)
+            print(f"GC learnings: {p.name} unreadable — nothing deleted this pass")
+            return
 
     deleted: list[str] = []
     kept: list[tuple[str, str]] = []
@@ -1987,6 +2043,14 @@ def _gc_learnings() -> None:
         undecided = sorted(n for n in proposals if Path(n).name in pending)
         if undecided:
             kept.append((f.name, "proposal still pending review: " + ", ".join(undecided)))
+            continue
+        unwritten = sorted(n for n in proposals if Path(n).name not in decided)
+        if unwritten:
+            kept.append((f.name, "proposal not yet written — a run may be in "
+                                 "flight or have crashed: " + ", ".join(unwritten)))
+            continue
+        if f.name in still_cited:
+            kept.append((f.name, "still cited by a pending proposal"))
             continue
         try:
             f.unlink()

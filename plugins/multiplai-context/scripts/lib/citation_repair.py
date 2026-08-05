@@ -116,6 +116,22 @@ def _resolve(
     )
 
 
+def cited_files(proposal: str) -> set[str]:
+    """Every learnings filename a proposal cites, in either provenance form.
+
+    Exposed because retention has to answer "is this file still spoken for?"
+    from the proposal text itself. The ledger cannot answer it: it records the
+    proposal a block was *first* consolidated into, and a fold-forward moves
+    the items to a successor without re-pointing those entries. The citations
+    move with the items, so they stay true when the ledger has gone stale.
+
+    Deliberately reuses `_CITATION_RE` rather than re-deriving it — a retention
+    check that recognised fewer forms than the repairer would silently protect
+    less than it appears to.
+    """
+    return {m.group("file") for m in _CITATION_RE.finditer(proposal)}
+
+
 def repair_citations(
     proposal: str, blocks: Iterable, learnings: dict[str, str]
 ) -> tuple[str, list[Repair]]:
