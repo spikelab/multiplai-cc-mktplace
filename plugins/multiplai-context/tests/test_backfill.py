@@ -121,11 +121,40 @@ class TestIsAlreadyProcessed:
         from backfill import _is_already_processed
         assert not _is_already_processed("sid-1", tmp_path / "lf.md", tmp_path / "diary")
 
-    def test_returns_false_when_learnings_but_no_diary(self, tmp_path):
+    def test_either_marker_alone_is_enough(self, tmp_path):
+        """The old gate required BOTH, which is why #109 happened.
+
+        Neither writer is unconditional: `write_diary_entries` returns early
+        when no unit carries a diary entry, and `append_learnings` writes its
+        `Session:` line inside a loop that skips units with no learnings. So a
+        marker's *presence* proves the session was processed; its absence
+        proves nothing. Requiring both made the gate permanently False for the
+        commonest asymmetric shape — a diary entry and no learnings — and every
+        later `--since` re-ran a full LLM pass over that transcript.
+        """
         from backfill import _is_already_processed
         lf = tmp_path / "lf.md"
         lf.write_text("Session: sid-1\n")
-        assert not _is_already_processed("sid-1", lf, tmp_path / "diary")
+        diary_dir = tmp_path / "diary"
+        diary_dir.mkdir()
+        (diary_dir / "2026-05-16.md").write_text(
+            "# Diary — 2026-05-16\n\n## Session: sid-2 — ts — /cwd\n\nbody\n"
+        )
+
+        assert _is_already_processed("sid-1", lf, diary_dir), "learnings only"
+        assert _is_already_processed("sid-2", lf, diary_dir), "diary only"
+
+    def test_the_ledger_covers_a_session_that_produced_nothing(self, tmp_path):
+        """Neither marker exists, because extraction found nothing to write.
+
+        Requiring either marker still leaves this session re-extracted on every
+        run forever — the ledger records the *act* of extracting, not its
+        output, which is the only thing that closes it.
+        """
+        from backfill import _is_already_processed
+        assert _is_already_processed(
+            "sid-quiet", tmp_path / "lf.md", tmp_path / "diary", {"sid-quiet"}
+        )
 
     def test_returns_true_when_both_exist(self, tmp_path):
         """Per-day diary layout: ``## Session: <id>`` block in diary/YYYY-MM-DD.md."""
@@ -139,11 +168,11 @@ class TestIsAlreadyProcessed:
         )
         assert _is_already_processed("sid-1", lf, diary_dir)
 
-    def test_returns_false_when_diary_has_different_session(self, tmp_path):
-        """Diary day-file exists but doesn't contain the queried session."""
+    def test_another_sessions_markers_do_not_count(self, tmp_path):
+        """Both files exist and are populated — but by a different session."""
         from backfill import _is_already_processed
         lf = tmp_path / "lf.md"
-        lf.write_text("Session: sid-1\n")
+        lf.write_text("Session: sid-OTHER\n")
         diary_dir = tmp_path / "diary"
         diary_dir.mkdir()
         (diary_dir / "2026-05-16.md").write_text(
@@ -262,6 +291,49 @@ class TestBackfillRealRun:
 
         assert summary["skipped"] >= 1
         client.query.assert_not_awaited()
+        from multiplai_core.paths import _reset_cache
+        _reset_cache()
+
+    def test_a_second_run_does_not_re_extract(self, tmp_path, monkeypatch):
+        """The whole point of #109, end to end.
+
+        The mock returns a diary entry and no learnings — the shape that used
+        to defeat the gate forever. The second run must not reach the model.
+        """
+        from backfill import backfill
+        self._setup_env(tmp_path, monkeypatch)
+        since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
+
+        first = _mock_client("Fixed a bug in auth module.")
+        with patch("backfill.create_client", new_callable=AsyncMock, return_value=first):
+            asyncio.run(backfill(since, run_catalogs=False, run_now=False))
+        assert first.query.await_count >= 1, "first run must actually extract"
+
+        second = _mock_client("Fixed a bug in auth module.")
+        with patch("backfill.create_client", new_callable=AsyncMock, return_value=second):
+            summary = asyncio.run(backfill(since, run_catalogs=False, run_now=False))
+
+        second.query.assert_not_awaited()
+        assert summary["skipped"] >= 1
+        from multiplai_core.paths import _reset_cache
+        _reset_cache()
+
+    def test_a_failed_extraction_is_retried_not_recorded(self, tmp_path, monkeypatch):
+        """A 429 means the transcript was never read.
+
+        Recording it as processed would lose the session permanently, which is
+        strictly worse than the re-extraction this ledger exists to prevent.
+        """
+        from backfill import backfill, _read_ledger, _ledger_path
+        self._setup_env(tmp_path, monkeypatch)
+        since = datetime(2026, 5, 16, 0, 0, tzinfo=timezone.utc)
+
+        client = AsyncMock()
+        client.query = AsyncMock(side_effect=RuntimeError("429 rate limited"))
+        with patch("backfill.create_client", new_callable=AsyncMock, return_value=client):
+            asyncio.run(backfill(since, run_catalogs=False, run_now=False))
+
+        assert _read_ledger(_ledger_path()) == set()
         from multiplai_core.paths import _reset_cache
         _reset_cache()
 

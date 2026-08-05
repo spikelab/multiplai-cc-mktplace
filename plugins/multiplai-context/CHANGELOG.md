@@ -18,6 +18,23 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.18.4] - 2026-08-05
+
+### Fixed
+
+- **`backfill.py` no longer re-extracts the same sessions on every run.** The
+  "have I done this one already?" check demanded a marker in *both* the
+  learnings file and the diary. A session that produced only a diary entry —
+  or only learnings, or, most commonly, nothing worth recording at all — never
+  satisfied both, so every `--since` run read the whole transcript and called
+  the model again, and again. Either marker now counts, and a run additionally
+  records the *act* of extracting in `processed-sessions.txt`, which is what
+  covers the session that legitimately yielded no output.
+
+  A session whose extraction **failed** — a rate limit, a timeout — is
+  deliberately not recorded, so a later run still retries it. Losing a
+  transcript permanently is worse than reading one twice.
+
 ## [0.18.3] - 2026-08-05
 
 ### Fixed
