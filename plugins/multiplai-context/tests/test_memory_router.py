@@ -52,7 +52,7 @@ class TestResolveStrategy:
 
     def test_explicit_arg_wins(self, monkeypatch):
         from lib.memory_router import resolve_strategy
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_router", "token_overlap")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_ROUTER", "token_overlap")
         assert resolve_strategy("llm") == "llm"
 
 

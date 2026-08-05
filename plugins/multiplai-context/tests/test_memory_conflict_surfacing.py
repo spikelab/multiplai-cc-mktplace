@@ -98,7 +98,7 @@ class TestConflictPreambleRendering:
         out = _run_hook(
             env_setup,
             prompt="writing a blog post",
-            extra_env={"CLAUDE_PLUGIN_OPTION_enable_skills": "true"},
+            extra_env={"CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS": "true"},
         )
         ctx = out["context"]
         assert "=== SKILLS ===" in ctx
@@ -112,7 +112,7 @@ class TestConflictPreambleRendering:
         out = _run_hook(
             env_setup,
             prompt="tell me something",
-            extra_env={"CLAUDE_PLUGIN_OPTION_memory_conflict_preamble": "false"},
+            extra_env={"CLAUDE_PLUGIN_OPTION_MEMORY_CONFLICT_PREAMBLE": "false"},
         )
         ctx = out["context"]
         assert "## me.md" in ctx

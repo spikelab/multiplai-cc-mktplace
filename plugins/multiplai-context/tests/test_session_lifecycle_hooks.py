@@ -418,7 +418,7 @@ class TestSessionStartMemoryLoading:
         data_dir.mkdir()
 
         with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_OPTION_memory_dir": str(memory_dir),
+            "CLAUDE_PLUGIN_OPTION_MEMORY_DIR": str(memory_dir),
             "CLAUDE_PLUGIN_DATA": str(data_dir),
         }, clear=False):
             _reset_cache()
@@ -576,7 +576,7 @@ class TestSessionStartMemoryLoading:
         data_dir.mkdir()
 
         with patch.dict(os.environ, {
-            "CLAUDE_PLUGIN_OPTION_memory_dir": str(memory_dir),
+            "CLAUDE_PLUGIN_OPTION_MEMORY_DIR": str(memory_dir),
             "CLAUDE_PLUGIN_DATA": str(data_dir),
         }, clear=False):
             from multiplai_core.paths import _reset_cache
@@ -737,7 +737,7 @@ class TestSessionEndDiaryEntry:
 
         with patch.dict(os.environ, {
             "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
+            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
         }, clear=False):
             from multiplai_core.paths import _reset_cache
             _reset_cache()
@@ -767,7 +767,7 @@ class TestSessionEndDiaryEntry:
 
         with patch.dict(os.environ, {
             "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
+            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
         }, clear=False):
             from multiplai_core.paths import _reset_cache
             _reset_cache()
@@ -801,7 +801,7 @@ class TestSessionEndDiaryEntry:
 
         with patch.dict(os.environ, {
             "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
+            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
         }, clear=False):
             from multiplai_core.paths import _reset_cache
             _reset_cache()
@@ -832,7 +832,7 @@ class TestSessionEndDiaryEntry:
 
         with patch.dict(os.environ, {
             "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
+            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
         }, clear=False):
             from multiplai_core.paths import _reset_cache
             _reset_cache()
@@ -858,7 +858,7 @@ class TestSessionEndDiaryEntry:
 
         with patch.dict(os.environ, {
             "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
+            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
         }, clear=False):
             from multiplai_core.paths import _reset_cache
             _reset_cache()
@@ -1019,7 +1019,7 @@ class TestSessionLifecycleFlow:
 
         with patch.dict(os.environ, {
             "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
+            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
         }, clear=False):
             from multiplai_core.paths import _reset_cache
             _reset_cache()
@@ -1058,7 +1058,7 @@ class TestSessionLifecycleFlow:
 
         with patch.dict(os.environ, {
             "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
+            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
         }, clear=False):
             from multiplai_core.paths import _reset_cache
             _reset_cache()

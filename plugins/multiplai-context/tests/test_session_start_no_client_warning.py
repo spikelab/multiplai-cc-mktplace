@@ -44,12 +44,12 @@ def test_detect_client_type_none_string_format():
     from multiplai_core.model_client import detect_client_type
     import os
     saved_sdk = sys.modules.pop("claude_agent_sdk", None)
-    saved_key = os.environ.pop("CLAUDE_PLUGIN_OPTION_anthropic_api_key", None)
+    saved_key = os.environ.pop("CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY", None)
     try:
         # Try a real call only if sdk is actually unavailable
         result = detect_client_type()
         if "claude_agent_sdk" not in sys.modules and not os.environ.get(
-            "CLAUDE_PLUGIN_OPTION_anthropic_api_key"
+            "CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY"
         ):
             assert result.startswith("none"), (
                 f"detect_client_type should start with 'none' when neither "
@@ -59,4 +59,4 @@ def test_detect_client_type_none_string_format():
         if saved_sdk is not None:
             sys.modules["claude_agent_sdk"] = saved_sdk
         if saved_key is not None:
-            os.environ["CLAUDE_PLUGIN_OPTION_anthropic_api_key"] = saved_key
+            os.environ["CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY"] = saved_key

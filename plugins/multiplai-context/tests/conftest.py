@@ -200,9 +200,9 @@ def run_context_hook(
             del env[k]
     env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
     env["CLAUDE_PLUGIN_DATA"] = str(env_setup["data_dir"])
-    env["CLAUDE_PLUGIN_OPTION_memory_dir"] = str(env_setup["memory_dir"])
-    env["CLAUDE_PLUGIN_OPTION_skills_dir"] = str(env_setup["skills_dir"])
-    env["CLAUDE_PLUGIN_OPTION_resources_dir"] = str(env_setup["resources_dir"])
+    env["CLAUDE_PLUGIN_OPTION_MEMORY_DIR"] = str(env_setup["memory_dir"])
+    env["CLAUDE_PLUGIN_OPTION_SKILLS_DIR"] = str(env_setup["skills_dir"])
+    env["CLAUDE_PLUGIN_OPTION_RESOURCES_DIR"] = str(env_setup["resources_dir"])
     if extra_env:
         env.update(extra_env)
 
@@ -246,7 +246,7 @@ def _isolate_env(monkeypatch):
     """Scrub ambient CLAUDE_PLUGIN_* / WORKSPACE before every test.
 
     ``data_dir`` is workspace-anchored: a leaked host ``WORKSPACE`` (or
-    ``CLAUDE_PLUGIN_OPTION_workspace_dir``) would point runtime state at
+    ``CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR``) would point runtime state at
     the real workspace and break isolation. Tests that need these set
     them explicitly via monkeypatch (applied after this autouse fixture).
     WORKSPACE is deliberately NOT re-pinned here: an explicit workspace

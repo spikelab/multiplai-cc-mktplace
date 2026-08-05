@@ -502,8 +502,8 @@ class TestAutodreamFunctional:
 
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path))
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(plugin_data))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_dir", str(diary_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_DIARY_DIR", str(diary_dir))
 
         return {
             "root": tmp_path,
@@ -545,7 +545,7 @@ class TestAutodreamFunctional:
         from multiplai_core.paths import get_paths
         paths = get_paths()
         assert paths.memory_dir() == mock_env["memory"], (
-            "Memory dir should resolve to the configured CLAUDE_PLUGIN_OPTION_memory_dir"
+            "Memory dir should resolve to the configured CLAUDE_PLUGIN_OPTION_MEMORY_DIR"
         )
 
 

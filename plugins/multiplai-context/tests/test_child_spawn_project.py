@@ -119,7 +119,7 @@ class TestLocksLiveInTheWorkspace:
         import multiplai_core.paths as core_paths
         from lib.runtime import lock_path
 
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_data_dir", str(tmp_path / "data"))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_DATA_DIR", str(tmp_path / "data"))
         core_paths._reset_cache()
         try:
             p = lock_path("costs-collector")

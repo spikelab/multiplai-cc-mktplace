@@ -4,7 +4,7 @@ The ``/multiplai-context:config-audit`` skill is prompt-driven — the audit
 itself runs in the model. This script is the deterministic part: recording
 that an audit happened. It resolves the state file exactly the way the
 SessionStart gate does (``get_paths().data_dir / "config_audit_state.yaml"``,
-the same env cascade: CLAUDE_PLUGIN_OPTION_data_dir → <workspace>/.multiplai/
+the same env cascade: the ``data_dir`` option → <workspace>/.multiplai/
 data → CLAUDE_PLUGIN_DATA → ~/.multiplai/data), so the stamp always lands
 where ``session_start._config_audit_gate_open()`` looks. Hand-locating the
 directory from the skill prompt (the previous design) broke on installs where

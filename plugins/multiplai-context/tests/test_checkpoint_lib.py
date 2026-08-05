@@ -57,10 +57,10 @@ class TestLoadConfig:
         assert cfg.enabled is True
 
     def test_env_overrides(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_tokens", "50000,90000,150000")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_handoff_tokens", "150000")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_refresh_tokens", "10000")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_model", "sonnet")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_TOKENS", "50000,90000,150000")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HANDOFF_TOKENS", "150000")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_REFRESH_TOKENS", "10000")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_MODEL", "sonnet")
         cfg = cp.load_config()
         assert cfg.bands == (50_000, 90_000, 150_000)
         assert cfg.handoff_tokens == 150_000
@@ -68,22 +68,22 @@ class TestLoadConfig:
         assert cfg.model == "sonnet"
 
     def test_malformed_bands_fall_back(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_tokens", "banana,42x")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_TOKENS", "banana,42x")
         cfg = cp.load_config()
         assert cfg.bands == (100_000, 200_000)
 
     def test_malformed_int_falls_back(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_handoff_tokens", "many")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HANDOFF_TOKENS", "many")
         cfg = cp.load_config()
         assert cfg.handoff_tokens == 200_000
 
     def test_handoff_clamped_to_last_band(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_handoff_tokens", "50000")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HANDOFF_TOKENS", "50000")
         cfg = cp.load_config()
         assert cfg.handoff_tokens == 200_000  # clamped up to bands[-1]
 
     def test_disabled(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_enabled", "false")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_ENABLED", "false")
         assert cp.load_config().enabled is False
 
 

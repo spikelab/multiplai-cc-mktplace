@@ -86,7 +86,7 @@ class TestContextRouterPathResolution:
         })
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path / "plugin"))
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(mem_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(mem_dir))
 
         from multiplai_core.paths import _reset_cache, Paths
         _reset_cache()
@@ -233,7 +233,7 @@ class TestMetadataFirstRanking:
         old_file = mem_dir / "old-small.md"
         os.utime(old_file, (time.time() - 86400 * 30, time.time() - 86400 * 30))
 
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(mem_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(mem_dir))
 
         from multiplai_core.paths import _reset_cache, Paths
         _reset_cache()
@@ -420,7 +420,7 @@ class TestTimeoutCompliance:
 
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path / "plugin"))
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(mem_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(mem_dir))
 
         from multiplai_core.paths import _reset_cache
         _reset_cache()

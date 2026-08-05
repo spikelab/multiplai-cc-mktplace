@@ -29,7 +29,7 @@ def data_env(tmp_path, monkeypatch):
     from multiplai_core.paths import _reset_cache
 
     data_dir = tmp_path / "data"
-    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_data_dir", str(data_dir))
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_DATA_DIR", str(data_dir))
     _reset_cache()
     yield data_dir
     _reset_cache()
@@ -139,7 +139,7 @@ class TestSessionStopCheckpoint:
         assert out.strip() == ""
 
     def test_disabled_config_noop(self, tmp_path, data_env, monkeypatch, capsys):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_enabled", "false")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_ENABLED", "false")
         rec = _SpawnRecorder()
         monkeypatch.setattr(session_stop, "_spawn_writer", rec)
         out = _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 210_000))

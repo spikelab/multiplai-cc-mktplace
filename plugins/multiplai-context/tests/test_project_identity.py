@@ -174,7 +174,7 @@ class TestConfigLoading:
         (ws / ".multiplai" / "project-map.yaml").write_text(
             "project_roots:\n  - /work/PROJECTS\n"
         )
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_workspace_dir", str(ws))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR", str(ws))
 
         from lib.project_identity import load_project_map
 
@@ -186,7 +186,7 @@ class TestConfigLoading:
     ):
         ws = tmp_path / "ws2"
         ws.mkdir()
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_workspace_dir", str(ws))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR", str(ws))
 
         from lib.project_identity import load_project_map
 

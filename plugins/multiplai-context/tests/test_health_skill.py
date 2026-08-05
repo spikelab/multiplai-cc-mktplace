@@ -185,7 +185,7 @@ class TestDetectClientTypeFunction:
         """When no SDK and no API key, reports 'none'."""
         with patch.dict(os.environ, {}, clear=False):
             # Remove API key if present
-            os.environ.pop("CLAUDE_PLUGIN_OPTION_anthropic_api_key", None)
+            os.environ.pop("CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY", None)
             import importlib
             import multiplai_core.model_client as mc
             # Mock claude_agent_sdk import to fail
@@ -197,7 +197,7 @@ class TestDetectClientTypeFunction:
 
     def test_detect_client_type_with_api_key(self):
         """When API key is set, reports AnthropicAPIClient."""
-        with patch.dict(os.environ, {"CLAUDE_PLUGIN_OPTION_anthropic_api_key": "sk-test"}):
+        with patch.dict(os.environ, {"CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY": "sk-test"}):
             import importlib
             import multiplai_core.model_client as mc
             # Mock claude_agent_sdk import to fail so API key fallback is tested

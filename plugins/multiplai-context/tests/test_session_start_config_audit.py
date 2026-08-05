@@ -218,7 +218,7 @@ class TestConfigAuditStamp:
     The stamp resolves the data dir via ``get_paths()`` (same env cascade
     as the gate) instead of the model hand-locating a directory — the
     deterministic fix for installs where the data dir comes from
-    CLAUDE_PLUGIN_DATA or CLAUDE_PLUGIN_OPTION_data_dir.
+    CLAUDE_PLUGIN_DATA or CLAUDE_PLUGIN_OPTION_DATA_DIR.
     """
 
     @pytest.fixture(autouse=True)

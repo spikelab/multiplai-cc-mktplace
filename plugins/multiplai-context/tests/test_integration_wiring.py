@@ -150,12 +150,19 @@ class TestPluginJsonFullWiring:
 
     def test_user_config_fields_correspond_to_env_vars(self):
         """WHEN userConfig fields are declared in plugin.json
-        THEN some module reads the corresponding CLAUDE_PLUGIN_OPTION_* env var.
+        THEN some module reads that option through the shared accessor.
+
+        Reads go through ``multiplai_core.plugin_options``, which takes the
+        **bare** option key and derives the ``CLAUDE_PLUGIN_OPTION_<KEY>``
+        variable the harness exports (uppercased). So the thing to look for is
+        the accessor call, not the variable name — this test used to build the
+        expected name as ``f"CLAUDE_PLUGIN_OPTION_{field_name}"`` and thereby
+        encoded the very bug it was supposed to catch (#148).
 
         Config consumption is split across two locations: the plugin's own
         context modules (scripts/lib, scripts/generators) and the extracted
         multiplai_core package (which owns path/config/model-client resolution
-        and therefore the path + api-key + catalog-model env vars)."""
+        and therefore the path + api-key + catalog-model options)."""
         source_dirs = [SCRIPTS_DIR / "lib", SCRIPTS_DIR / "generators"]
         all_sources = []
         for src_dir in source_dirs:
@@ -175,10 +182,20 @@ class TestPluginJsonFullWiring:
         all_source_text = "\n".join(all_sources)
 
         for field_name in self.plugin.get("userConfig", {}):
-            env_var = f"CLAUDE_PLUGIN_OPTION_{field_name}"
-            assert env_var in all_source_text, \
-                f"userConfig field '{field_name}' has no corresponding {env_var} " \
-                "in any plugin or multiplai_core module"
+            # Either a direct accessor call — option("x") / option_int("x") /
+            # option_var("x") — or the bare key bound to a module constant that
+            # is then passed to one (lib/memory_router.py does the latter).
+            read = re.compile(
+                r'option(?:_bool|_int|_float|_present|_var)?\(\s*"%s"' % field_name
+                + r'|_OPTION\s*=\s*"%s"' % field_name
+            )
+            assert read.search(all_source_text), (
+                f"userConfig field '{field_name}' is never read via "
+                "multiplai_core.plugin_options in any plugin or multiplai_core "
+                "module. Reading os.environ directly is the #148 bug: the "
+                "harness exports CLAUDE_PLUGIN_OPTION_"
+                f"{field_name.upper()}, and a lowercase read misses silently."
+            )
 
     def test_hooks_scripts_all_exist_and_are_python(self):
         """WHEN every hook script path in hooks.json is checked
@@ -331,8 +348,8 @@ class TestEndToEndSessionLifecycle:
         env = {
             "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
             "CLAUDE_PLUGIN_DATA": str(data_dir),
-            "CLAUDE_PLUGIN_OPTION_memory_dir": str(memory_dir),
-            "CLAUDE_PLUGIN_OPTION_diary_dir": str(diary_dir),
+            "CLAUDE_PLUGIN_OPTION_MEMORY_DIR": str(memory_dir),
+            "CLAUDE_PLUGIN_OPTION_DIARY_DIR": str(diary_dir),
         }
         return env
 
@@ -362,7 +379,7 @@ class TestEndToEndSessionLifecycle:
         injected here — context_manager.py performs routed, per-prompt
         memory injection on UserPromptSubmit"). It only enumerates the
         available files into the session_state record."""
-        memory_dir = Path(plugin_env["CLAUDE_PLUGIN_OPTION_memory_dir"])
+        memory_dir = Path(plugin_env["CLAUDE_PLUGIN_OPTION_MEMORY_DIR"])
         (memory_dir / "me.md").write_text("# About Me\nI am a test user")
 
         result = _run_plugin_script(
@@ -793,7 +810,7 @@ class TestTemplateCopyIntegration:
         env = {
             "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
             "CLAUDE_PLUGIN_DATA": str(tmp_path / "data"),
-            "CLAUDE_PLUGIN_OPTION_memory_dir": str(memory_dir),
+            "CLAUDE_PLUGIN_OPTION_MEMORY_DIR": str(memory_dir),
         }
         result = _run_plugin_script(
             "scripts/setup_check.py",
@@ -879,7 +896,7 @@ class TestModelClientFactoryWiring:
         import builtins
 
         # Ensure no API key env var is set
-        env_key = "CLAUDE_PLUGIN_OPTION_anthropic_api_key"
+        env_key = "CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY"
         old_val = os.environ.pop(env_key, None)
         try:
             # Block claude_agent_sdk import to simulate missing SDK
@@ -972,8 +989,8 @@ class TestPathResolverIntegration:
         THEN is_plugin_mode() returns True."""
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "/tmp/test-plugin")
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_memory_dir", raising=False)
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_DIARY_DIR", raising=False)
 
         from multiplai_core.paths import Paths
         p = Paths.resolve()
@@ -985,8 +1002,8 @@ class TestPathResolverIntegration:
         THEN is_plugin_mode() returns False and paths fall back to ~/.multiplai/."""
         monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_memory_dir", raising=False)
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_DIARY_DIR", raising=False)
 
         from multiplai_core.paths import Paths
         p = Paths.resolve()
@@ -1004,12 +1021,12 @@ class TestPathResolverIntegration:
         assert p.is_plugin_mode() is False
 
     def test_custom_memory_dir_override(self, monkeypatch, reset_paths_cache):
-        """WHEN CLAUDE_PLUGIN_OPTION_memory_dir is set
+        """WHEN CLAUDE_PLUGIN_OPTION_MEMORY_DIR is set
         THEN memory_dir() returns that path."""
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "/tmp/plugin")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", "/custom/mem")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", "/custom/mem")
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_DIARY_DIR", raising=False)
 
         from multiplai_core.paths import Paths
         p = Paths.resolve()
@@ -1020,8 +1037,8 @@ class TestPathResolverIntegration:
         THEN venv_dir, catalogs_dir are derived from it."""
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "/tmp/plugin")
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", "/tmp/data")
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_memory_dir", raising=False)
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_DIARY_DIR", raising=False)
 
         from multiplai_core.paths import Paths
         p = Paths.resolve()
@@ -1033,8 +1050,8 @@ class TestPathResolverIntegration:
         THEN it returns a pathlib.Path instance."""
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "/tmp/plugin")
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", "/tmp/data")
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_memory_dir", raising=False)
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_DIARY_DIR", raising=False)
 
         from multiplai_core.paths import Paths
         p = Paths.resolve()
@@ -1057,12 +1074,12 @@ class TestPathResolverIntegration:
                 f"{method_name}() must return Path, got {type(val)}"
 
     def test_tilde_expansion_in_env_var(self, monkeypatch, reset_paths_cache):
-        """WHEN CLAUDE_PLUGIN_OPTION_memory_dir is set to ~/my-memory
+        """WHEN CLAUDE_PLUGIN_OPTION_MEMORY_DIR is set to ~/my-memory
         THEN memory_dir() returns an absolute expanded path."""
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "/tmp/plugin")
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", "~/my-memory")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", "~/my-memory")
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_DIARY_DIR", raising=False)
 
         from multiplai_core.paths import Paths
         p = Paths.resolve()
@@ -1075,17 +1092,17 @@ class TestPathResolverIntegration:
     def test_cached_resolution_survives_env_mutation(self, monkeypatch, reset_paths_cache):
         """WHEN paths are resolved and then env var changes
         THEN get_paths() returns the original cached value."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", "/first/path")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", "/first/path")
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "/tmp/plugin")
         monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_diary_dir", raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_DIARY_DIR", raising=False)
 
         from multiplai_core.paths import get_paths, _reset_cache
         _reset_cache()
         p1 = get_paths()
 
         # Mutate env var
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", "/second/path")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", "/second/path")
         p2 = get_paths()
 
         assert p1.memory_dir == p2.memory_dir, \

@@ -27,7 +27,7 @@ class _PopenSpy:
 class TestLaunchCostCollection:
     def test_no_launch_when_disabled(self, monkeypatch):
         """enable_costs unset → no subprocess, returns False."""
-        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_enable_costs", raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_ENABLE_COSTS", raising=False)
         import session_start
 
         spy = _PopenSpy()
@@ -37,7 +37,7 @@ class TestLaunchCostCollection:
 
     def test_launches_when_enabled(self, monkeypatch):
         """enable_costs=true → detached collector launched, returns True."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_costs", "true")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_COSTS", "true")
         import session_start
 
         spy = _PopenSpy()
@@ -51,7 +51,7 @@ class TestLaunchCostCollection:
 
     def test_missing_script_no_launch(self, monkeypatch, tmp_path):
         """enable_costs=true but no collect_costs.py present → no launch, no raise."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_costs", "true")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_COSTS", "true")
         import session_start
 
         spy = _PopenSpy()
@@ -61,7 +61,7 @@ class TestLaunchCostCollection:
 
     def test_launch_failure_is_swallowed(self, monkeypatch):
         """A Popen that raises must not propagate — returns False."""
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_enable_costs", "true")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_COSTS", "true")
         import session_start
 
         def _boom(*a, **k):

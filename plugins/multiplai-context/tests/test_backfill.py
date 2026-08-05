@@ -196,9 +196,9 @@ class TestBackfillDryRun:
 
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_dir", str(tmp_path / "diary"))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_learnings_dir", str(tmp_path / "learnings"))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(tmp_path / "memory"))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_DIARY_DIR", str(tmp_path / "diary"))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_LEARNINGS_DIR", str(tmp_path / "learnings"))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(tmp_path / "memory"))
         from multiplai_core.paths import _reset_cache
         _reset_cache()
 
@@ -218,9 +218,9 @@ class TestBackfillDryRun:
 
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_dir", str(tmp_path / "diary"))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_learnings_dir", str(tmp_path / "learnings"))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(tmp_path / "memory"))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_DIARY_DIR", str(tmp_path / "diary"))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_LEARNINGS_DIR", str(tmp_path / "learnings"))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(tmp_path / "memory"))
         from multiplai_core.paths import _reset_cache
         _reset_cache()
 
@@ -244,9 +244,9 @@ class TestBackfillRealRun:
 
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "data"))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_diary_dir", str(tmp_path / "diary"))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_learnings_dir", str(tmp_path / "learnings"))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(tmp_path / "memory"))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_DIARY_DIR", str(tmp_path / "diary"))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_LEARNINGS_DIR", str(tmp_path / "learnings"))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(tmp_path / "memory"))
         from multiplai_core.paths import _reset_cache
         _reset_cache()
         return t

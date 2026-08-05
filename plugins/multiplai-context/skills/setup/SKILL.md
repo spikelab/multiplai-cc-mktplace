@@ -107,8 +107,10 @@ default and belongs in the full interview.
    Only include keys the user actually set. Preserve every other top-level
    key in `settings.json`. Write the file back with a 2-space-indented JSON
    dump. (Sideloaded installs via `claude --plugin-dir …` ignore
-   `pluginConfigs` — pass options as `CLAUDE_PLUGIN_OPTION_<name>` env vars
-   there instead.)
+   `pluginConfigs` — pass options as `CLAUDE_PLUGIN_OPTION_<KEY>` env vars
+   there instead, where `<KEY>` is the option key **uppercased**:
+   `workspace_dir` → `CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR`. The lowercase
+   spelling is never read.)
 
    This file configures **all of Claude Code** — a malformed write is worse
    than no write. So: before writing, copy the existing file to

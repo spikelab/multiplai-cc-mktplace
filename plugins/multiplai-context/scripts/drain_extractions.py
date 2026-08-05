@@ -18,7 +18,7 @@ Usage::
     uv run --project <plugin>/scripts drain_extractions.py --wait --verbose
 
 ``--data-dir`` is optional; without it the standard path cascade applies
-(``CLAUDE_PLUGIN_OPTION_data_dir`` → ``<workspace>/.multiplai/data`` → …).
+(the ``data_dir`` option → ``<workspace>/.multiplai/data`` → …).
 
 Environment the caller must supply
 ----------------------------------
@@ -27,7 +27,7 @@ The drain makes no LLM call itself, but the ``extract_learnings.py`` children
 it launches inherit this process's environment, and they do. Audited against
 what the extraction path actually reads:
 
-``CLAUDE_PLUGIN_OPTION_workspace_dir`` (or ``WORKSPACE``)
+``CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR`` (or ``WORKSPACE``)
     **Required off-host-default.** Everything extraction writes — the diary,
     learnings, ``now/``, the registry — is resolved from this by
     ``multiplai_core.paths``. Unset, it all silently lands in
@@ -44,7 +44,7 @@ what the extraction path actually reads:
 Deliberately left unset
 -----------------------
 
-``CLAUDE_PLUGIN_OPTION_anthropic_api_key``
+``CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY``
     Its *absence* is the point: ``create_client()`` returns ``AgentSDKClient``
     and the existing OAuth token is used, rather than billing a separate API
     key. It is only ever consulted as a fallback when the SDK is unimportable.

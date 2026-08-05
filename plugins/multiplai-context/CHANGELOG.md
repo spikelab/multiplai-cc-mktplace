@@ -18,6 +18,54 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.23.0] - 2026-08-05
+
+### Fixed
+
+- **Your plugin configuration had no effect before this version.** Claude Code
+  hands options to hooks as `CLAUDE_PLUGIN_OPTION_<KEY>` with `<KEY>`
+  **uppercased**; every read in this plugin used the lowercase key, so nothing
+  you set in `pluginConfigs` was ever seen. Each option silently fell back to
+  its default — and because the defaults are mostly "off", the symptom was a
+  feature that just never ran, with no error and clean-looking logs.
+
+  **What changes for you on updating:** every option you have configured starts
+  working, possibly for the first time. If you set `enable_skills: true`, skill
+  routing now actually runs; `enable_costs: true` now actually launches the cost
+  collector; `memory_router: llm` now actually selects the LLM router (it had
+  been silently using `token_overlap`); `keep_ratio`, `recommend_cooldown_turns`,
+  the `qmd_*` knobs, `catalog_model`, `router_model`, `skills_dir`,
+  `resources_dir` and the `*_dir` paths likewise. **Worth re-reading your
+  `pluginConfigs` before updating** — a value you set months ago and forgot is
+  about to take effect. `workspace_dir` is the exception: it kept working by
+  accident through the `WORKSPACE` fallback.
+
+- **`checkpoint_timeout_s` from 0.20.0 only takes effect now.** The 0.20.0 fix
+  raised the checkpoint writer's timeout and was correct in settings, but the
+  code reading it could not see it. Same for the rest of the `checkpoint_*`
+  family.
+
+### Added
+
+- **`catalog_concurrency` and `plugins_dir` are now declared options.** Both
+  were read by the code and (in `plugins_dir`'s case) announced in an earlier
+  changelog, but neither appeared in the plugin's option schema. Same names,
+  same defaults (`5` and empty → `$CLAUDE_CONFIG_DIR/plugins`); they are simply
+  visible and documented now.
+
+- **One INFO line per prompt naming the options that fell back to defaults.**
+  Names only, never values. The reason this bug survived eight days is that a
+  *dead* option and a *deliberately off* option looked identical in the logs.
+  In `.multiplai/data/logs/context_manager.log`.
+
+### Changed
+
+- Every option read goes through `multiplai_core.plugin_options` (new in core),
+  which takes the bare option key and uppercases it once. There is deliberately
+  **no lowercase fallback**, and a test fails the build if a lowercase name
+  reappears anywhere under `scripts/`. Defaults, names and cascade order are
+  otherwise unchanged — only the variable name consulted changed.
+
 ## [0.22.0] - 2026-08-05
 
 ### Changed

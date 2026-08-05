@@ -69,7 +69,7 @@ def _make_memory_generator(tmp_path, *, client=None, config=None):
 
     # Point generator at our temp directories
     os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
-    os.environ["CLAUDE_PLUGIN_OPTION_memory_dir"] = str(memory_dir)
+    os.environ["CLAUDE_PLUGIN_OPTION_MEMORY_DIR"] = str(memory_dir)
 
     return gen, catalogs_dir, memory_dir
 
@@ -143,7 +143,7 @@ class TestMemoryGeneratorIdentity:
     def test_generator_name_is_memory(self, tmp_path, monkeypatch):
         """Generator name must be 'memory' for state namespacing."""
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(tmp_path / "mem"))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(tmp_path / "mem"))
         from generators.memory import MemoryGenerator
         from generators.config import CatalogConfig
 
@@ -153,7 +153,7 @@ class TestMemoryGeneratorIdentity:
     def test_catalog_filename_is_memory_json(self, tmp_path, monkeypatch):
         """Catalog output must be named memory.json."""
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(tmp_path / "mem"))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(tmp_path / "mem"))
         from generators.memory import MemoryGenerator
         from generators.config import CatalogConfig
 
@@ -177,7 +177,7 @@ class TestDiscoverSources:
         """Single memory file in directory is discovered."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "memory.md")
 
         sources = gen.discover_sources()
@@ -190,7 +190,7 @@ class TestDiscoverSources:
         """Multiple memory files are all discovered."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "preferences.md", "# Preferences\nContent")
         _write_memory_file(memory_dir, "projects.md", "# Projects\nContent")
         _write_memory_file(memory_dir, "tools.md", "# Tools\nContent")
@@ -202,7 +202,7 @@ class TestDiscoverSources:
         """Empty memory directory returns empty dict."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         sources = gen.discover_sources()
         assert sources == {}
@@ -212,7 +212,7 @@ class TestDiscoverSources:
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         nonexistent = tmp_path / "does_not_exist"
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(nonexistent))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(nonexistent))
 
         sources = gen.discover_sources()
         assert sources == {}
@@ -234,7 +234,7 @@ class TestHashSource:
         """Hash must be a SHA-256 hex digest of file contents."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         path = _write_memory_file(memory_dir, "test.md", "hello world")
 
         result = gen.hash_source(path)
@@ -245,7 +245,7 @@ class TestHashSource:
         """Same content in two files produces the same hash."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         content = "identical content here"
         path_a = _write_memory_file(memory_dir, "a.md", content)
         path_b = _write_memory_file(memory_dir, "b.md", content)
@@ -256,7 +256,7 @@ class TestHashSource:
         """Modified content produces a different hash."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         path_a = _write_memory_file(memory_dir, "a.md", "version 1")
         path_b = _write_memory_file(memory_dir, "b.md", "version 2")
 
@@ -266,7 +266,7 @@ class TestHashSource:
         """Hash depends on content, not file modification time."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         path = _write_memory_file(memory_dir, "test.md", "stable content")
         hash1 = gen.hash_source(path)
 
@@ -295,7 +295,7 @@ class TestBuildPrompt:
         """The LLM prompt must include the source memory file content."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         content = "# My Preferences\nI like Python and dark themes."
         path = _write_memory_file(memory_dir, "prefs.md", content)
 
@@ -307,7 +307,7 @@ class TestBuildPrompt:
         """The prompt must ask for structured/JSON output."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         path = _write_memory_file(memory_dir, "test.md", "some content")
 
         prompt = gen.build_prompt(path)
@@ -319,7 +319,7 @@ class TestBuildPrompt:
         """build_prompt must return a non-empty string."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         path = _write_memory_file(memory_dir, "test.md", "content")
 
         prompt = gen.build_prompt(path)
@@ -337,7 +337,7 @@ class TestBuildPrompt:
         """
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         path = _write_memory_file(memory_dir, "career.md", "career bio")
 
         prompt = gen.build_prompt(path).lower()
@@ -362,7 +362,7 @@ class TestParseResponse:
         """Valid JSON response is parsed into a dict."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         raw = '{"summary": "User preferences for tooling", "topics": ["python", "dark-theme"]}'
         result = gen.parse_response(raw)
@@ -373,7 +373,7 @@ class TestParseResponse:
         """Parsed entry must contain a summary field."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         raw = '{"summary": "Technical preferences", "topics": ["arch"]}'
         result = gen.parse_response(raw)
@@ -383,7 +383,7 @@ class TestParseResponse:
         """Parsed entry should include topics or keywords for routing."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         raw = '{"summary": "test", "topics": ["python", "testing"]}'
         result = gen.parse_response(raw)
@@ -394,7 +394,7 @@ class TestParseResponse:
         """LLM may wrap JSON in markdown code fences — parser should handle it."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         raw = '```json\n{"summary": "fenced output", "topics": ["a"]}\n```'
         result = gen.parse_response(raw)
@@ -418,7 +418,7 @@ class TestMergeEntry:
         """Hand-authored 'sections' field must survive regeneration."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         existing = {
             "source": "prefs.md",
@@ -439,7 +439,7 @@ class TestMergeEntry:
         """Hand-authored 'bundle' field must survive regeneration."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         existing = {
             "source": "work.md",
@@ -459,7 +459,7 @@ class TestMergeEntry:
         """Hand-authored 'co_retrieve_for' field must survive regeneration."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         existing = {
             "source": "tools.md",
@@ -478,7 +478,7 @@ class TestMergeEntry:
         """Hand-authored 'section_anchors' field must survive regeneration (1.2.0)."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         existing = {
             "source": "big.md",
@@ -498,7 +498,7 @@ class TestMergeEntry:
         """All hand-authored fields preserved simultaneously."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         existing = {
             "source": "all.md",
@@ -526,7 +526,7 @@ class TestMergeEntry:
         """LLM-generated fields (summary, topics) are updated during merge."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         existing = {
             "source": "x.md",
@@ -548,7 +548,7 @@ class TestMergeEntry:
         """New entries (no existing) must NOT invent hand-authored fields."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         new = {
             "source": "brand-new.md",
@@ -574,7 +574,7 @@ class TestMergeEntry:
         """When existing is None (first run), merge returns the new entry."""
         gen, _, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         new = {"source": "new.md", "summary": "first run"}
         merged = gen.merge_entry(None, new)
@@ -597,7 +597,7 @@ class TestFullRunLifecycle:
         """First run with no prior state generates catalog for all sources."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "prefs.md", "# Preferences\nDark theme")
 
         result = await gen.run()
@@ -618,7 +618,7 @@ class TestFullRunLifecycle:
         """First run creates .generation-state.json with memory hashes."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "test.md", "content")
 
         await gen.run()
@@ -635,7 +635,7 @@ class TestFullRunLifecycle:
         """Generated catalog must include schema_version field."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "test.md", "content")
 
         await gen.run()
@@ -649,7 +649,7 @@ class TestFullRunLifecycle:
         """Generated catalog must include generated_at ISO-8601 timestamp."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "test.md", "content")
 
         await gen.run()
@@ -662,7 +662,7 @@ class TestFullRunLifecycle:
         """Each catalog entry must have a source identifier."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "prefs.md", "# Prefs")
 
         await gen.run()
@@ -691,7 +691,7 @@ class TestStateAwareSkipping:
         client = _make_mock_client()
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path, client=client)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "stable.md", "unchanged content")
 
         # First run — generates
@@ -711,7 +711,7 @@ class TestStateAwareSkipping:
         client = _make_mock_client()
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path, client=client)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "changing.md", "version 1")
 
         await gen.run()
@@ -730,7 +730,7 @@ class TestStateAwareSkipping:
         client = _make_mock_client()
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path, client=client)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "first.md", "first file")
 
         await gen.run()
@@ -748,7 +748,7 @@ class TestStateAwareSkipping:
         """State file contains current hashes for all memory files after run."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "a.md", "content a")
         _write_memory_file(memory_dir, "b.md", "content b")
 
@@ -776,7 +776,7 @@ class TestDeletionPruning:
         """Deleted memory file is removed from catalog on next run."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         path = _write_memory_file(memory_dir, "temporary.md", "temp content")
 
         await gen.run()
@@ -796,7 +796,7 @@ class TestDeletionPruning:
         """Deleted memory file's hash is removed from state file."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         path = _write_memory_file(memory_dir, "doomed.md", "will be deleted")
 
         await gen.run()
@@ -815,7 +815,7 @@ class TestDeletionPruning:
         """Multiple deleted files are all pruned in one run."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         p1 = _write_memory_file(memory_dir, "a.md", "a")
         p2 = _write_memory_file(memory_dir, "b.md", "b")
         p3 = _write_memory_file(memory_dir, "c.md", "c")
@@ -848,7 +848,7 @@ class TestEmptyOrMissingMemoryDir:
         """Empty memory dir produces valid catalog with empty entries."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
         result = await gen.run()
 
@@ -864,7 +864,7 @@ class TestEmptyOrMissingMemoryDir:
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         nonexistent = tmp_path / "nowhere"
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(nonexistent))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(nonexistent))
 
         result = await gen.run()
 
@@ -887,7 +887,7 @@ class TestForceMode:
         client = _make_mock_client()
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path, client=client)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "stable.md", "same content")
 
         await gen.run()
@@ -912,7 +912,7 @@ class TestDryRunMode:
         client = _make_mock_client()
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path, client=client)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "test.md", "content")
 
         result = await gen.run(dry_run=True)
@@ -927,7 +927,7 @@ class TestDryRunMode:
         """Dry run does not write state file."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "test.md", "content")
 
         await gen.run(dry_run=True)
@@ -968,7 +968,7 @@ class TestLLMFailureHandling:
 
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path, client=client)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "fail.md", "will fail")
         _write_memory_file(memory_dir, "pass.md", "will succeed")
 
@@ -987,7 +987,7 @@ class TestLLMFailureHandling:
         success_client = _make_mock_client()
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path, client=success_client)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "file.md", "initial content")
 
         await gen.run()
@@ -1033,7 +1033,7 @@ class TestConfigurableModelAndEffort:
             tmp_path, client=client, config=config
         )
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "test.md", "content")
 
         await gen.run()
@@ -1055,7 +1055,7 @@ class TestConfigurableModelAndEffort:
             tmp_path, client=client, config=config
         )
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "test.md", "content")
 
         await gen.run()
@@ -1083,7 +1083,7 @@ class TestCatalogContentForRouting:
         """Each catalog entry has a non-empty summary."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "prefs.md", "# Preferences\nI like Python")
 
         await gen.run()
@@ -1098,7 +1098,7 @@ class TestCatalogContentForRouting:
         """Three memory files produce three catalog entries."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "a.md", "file a")
         _write_memory_file(memory_dir, "b.md", "file b")
         _write_memory_file(memory_dir, "c.md", "file c")
@@ -1126,7 +1126,7 @@ class TestLLMCallsRouting:
         client = _make_mock_client()
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path, client=client)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "test.md", "content")
 
         await gen.run()
@@ -1162,7 +1162,7 @@ class TestAtomicCatalogWrite:
         """Written catalog must be valid, parseable JSON."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "test.md", "content")
 
         await gen.run()
@@ -1191,7 +1191,7 @@ class TestMergePreservationDuringFullRun:
         """Full cycle: generate → hand-edit catalog → modify source → re-run preserves edits."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "prefs.md", "# Preferences v1")
 
         # First run — generates initial catalog
@@ -1224,7 +1224,7 @@ class TestMergePreservationDuringFullRun:
         """When source is unchanged, entire entry (including hand-authored) is kept."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
         _write_memory_file(memory_dir, "stable.md", "stable content")
 
         await gen.run()

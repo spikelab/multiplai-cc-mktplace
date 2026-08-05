@@ -24,7 +24,7 @@ def _make_ws(tmp_path, monkeypatch, *, detection="basename"):
     ws = tmp_path / "ws"
     (ws / ".multiplai" / "now").mkdir(parents=True)
     (ws / ".multiplai" / "project-map.yaml").write_text(f"detection: {detection}\n")
-    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_workspace_dir", str(ws))
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR", str(ws))
     return ws
 
 
@@ -74,7 +74,7 @@ class TestInjectProjectState:
         (ws / ".multiplai" / "project-map.yaml").write_text(
             f"umbrella_roots:\n  - {ws}\n"
         )
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_workspace_dir", str(ws))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR", str(ws))
         (ws / ".multiplai" / "now" / "workspace.md").write_text(
             "# Project Status: workspace\n\n- cross-project work\n"
         )

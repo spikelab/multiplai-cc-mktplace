@@ -18,7 +18,7 @@ from multiplai_core.costing import append_records  # noqa: E402
 def _workspace(monkeypatch, tmp_path):
     """Isolated workspace so ledger reads/writes land in tmp."""
     for key in ("CLAUDE_PLUGIN_ROOT", "CLAUDE_PLUGIN_DATA",
-                "CLAUDE_PLUGIN_OPTION_workspace_dir", "CLAUDE_PLUGIN_OPTION_data_dir"):
+                "CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR", "CLAUDE_PLUGIN_OPTION_DATA_DIR"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("WORKSPACE", str(tmp_path))
     from multiplai_core.paths import _reset_cache

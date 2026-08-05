@@ -200,8 +200,8 @@ class TestHookIntegration:
 
         env = dict(os.environ)
         env["CLAUDE_CONFIG_DIR"] = str(tmp_path / "claude-config")
-        env["CLAUDE_PLUGIN_OPTION_workspace_dir"] = str(tmp_path / "ws")
-        env["CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns"] = "0"
+        env["CLAUDE_PLUGIN_OPTION_WORKSPACE_DIR"] = str(tmp_path / "ws")
+        env["CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS"] = "0"
         payload = json.dumps({"prompt": prompt, "cwd": str(cwd), "session_id": "t"})
         result = subprocess.run(
             [sys.executable, str(SCRIPTS / "context_manager.py")],

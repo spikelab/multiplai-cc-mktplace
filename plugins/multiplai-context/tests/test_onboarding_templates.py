@@ -470,13 +470,13 @@ class TestSetupRespectsconfiguredDir:
     """The setup flow must use the path-resolved memory_dir, not defaults."""
 
     def test_custom_memory_dir_via_env(self, tmp_path, monkeypatch, reset_paths_cache):
-        """WHEN CLAUDE_PLUGIN_OPTION_memory_dir is set, setup should use it."""
+        """WHEN CLAUDE_PLUGIN_OPTION_MEMORY_DIR is set, setup should use it."""
         from multiplai_core.paths import _reset_cache, Paths
 
         _reset_cache()
         custom_mem = tmp_path / "custom-memory"
         custom_mem.mkdir()
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(custom_mem))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(custom_mem))
 
         paths = Paths.resolve()
         assert paths.memory_dir == custom_mem

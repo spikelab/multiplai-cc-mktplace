@@ -18,7 +18,7 @@ def data_env(tmp_path, monkeypatch):
     from multiplai_core.paths import _reset_cache
 
     data_dir = tmp_path / "data"
-    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_data_dir", str(data_dir))
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_DATA_DIR", str(data_dir))
     # scripts_dir() must resolve to the real plugin so checkpoint_writer.py
     # exists (the autouse _isolate_env fixture scrubs CLAUDE_PLUGIN_ROOT).
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN_ROOT))
@@ -89,7 +89,7 @@ class TestSyncCheckpoint:
         assert calls == []
 
     def test_skips_when_disabled(self, tmp_path, data_env, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_enabled", "false")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_ENABLED", "false")
         calls = []
         monkeypatch.setattr(
             pre_compact.subprocess, "run", lambda *a, **k: calls.append(1)
@@ -190,7 +190,7 @@ class TestSummaryDirective:
         )
 
     def test_silent_when_disabled(self, tmp_path, data_env, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_enabled", "false")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_ENABLED", "false")
         self._write_valid_checkpoint(data_env)
         assert (
             pre_compact._summary_directive(_hook_input(tmp_path, 90_000), data_env)
@@ -298,7 +298,7 @@ class TestFreshnessGate:
     ):
         """Fail path 2: writer-lock (in-flight marker) wait times out."""
         self._write_stale_valid_checkpoint(data_env)
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_checkpoint_timeout_s", "0")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_TIMEOUT_S", "0")
         monkeypatch.setattr(pre_compact, "_INFLIGHT_POLL_S", 0.01)
         cp.claim_writer(data_env, "sess-pc")  # marker that never releases
         out = self._run_main(

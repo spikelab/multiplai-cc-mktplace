@@ -15,7 +15,7 @@ missed a document you expect to exist.
 
 The plugin options (in `settings.json` → `pluginConfigs` →
 `multiplai-context@<marketplace>` → `options`, or the matching
-`CLAUDE_PLUGIN_OPTION_*` env vars) decide how to reach qmd:
+`CLAUDE_PLUGIN_OPTION_<KEY>` env vars, key uppercased) decide how to reach qmd:
 
 | Option | Default | Meaning |
 |---|---|---|

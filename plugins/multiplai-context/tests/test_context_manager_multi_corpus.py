@@ -110,7 +110,7 @@ class TestMultiCorpusOutput:
         out = _run_hook(
             env_setup,
             prompt="writing a blog post",
-            extra_env={"CLAUDE_PLUGIN_OPTION_enable_skills": "true"},
+            extra_env={"CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS": "true"},
         )
         assert "=== SKILLS ===" in out["context"]
         # Recommendation: catalog summary + invocation hint, not the body.
@@ -138,7 +138,7 @@ class TestMultiCorpusOutput:
             env_setup,
             prompt="researching voice AI frameworks",
             extra_env={
-                "CLAUDE_PLUGIN_OPTION_enable_resources": "true",
+                "CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES": "true",
                 # resources_dir already set in _run_hook
             },
         )
@@ -428,7 +428,7 @@ class TestRoutingScoresEmission:
         out = _run_hook(
             env_setup, prompt=prompt,
             extra_env={
-                "CLAUDE_PLUGIN_OPTION_enable_skills": "true",
+                "CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS": "true",
                 "MULTIPLAI_LOG_LEVEL": "INFO",
             },
         )
@@ -619,7 +619,7 @@ class TestRecommendationCooldown:
 
     def test_injected_file_suppressed_next_turn(self, env_setup):
         self._one_memory_file(env_setup)
-        env = {"CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns": "4"}
+        env = {"CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS": "4"}
         first = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
         assert first["memory_files"] == 1
         assert "python.md" in first["context"]
@@ -629,7 +629,7 @@ class TestRecommendationCooldown:
 
     def test_cooldown_expires_after_window(self, env_setup):
         self._one_memory_file(env_setup)
-        env = {"CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns": "1"}
+        env = {"CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS": "1"}
         # turn 1: injected
         assert _run_hook(env_setup, prompt="debugging python async code",
                          extra_env=env)["memory_files"] == 1
@@ -642,7 +642,7 @@ class TestRecommendationCooldown:
 
     def test_cooldown_zero_disables(self, env_setup):
         self._one_memory_file(env_setup)
-        env = {"CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns": "0"}
+        env = {"CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS": "0"}
         a = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
         b = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
         assert a["memory_files"] == 1
@@ -650,7 +650,7 @@ class TestRecommendationCooldown:
 
     def test_turn_state_persisted_to_session_state(self, env_setup):
         self._one_memory_file(env_setup)
-        env = {"CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns": "4"}
+        env = {"CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS": "4"}
         _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
         state = json.loads(
             (env_setup["data_dir"] / "session_state.json").read_text()
@@ -679,7 +679,7 @@ class TestRecommendationCooldown:
             ],
         )
         env = {
-            "CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns": "4",
+            "CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS": "4",
             "MULTIPLAI_LOG_LEVEL": "INFO",
         }
         # Turn 1: only the strong anchor matches → injected.
@@ -726,7 +726,7 @@ class TestRecommendationCooldown:
         out = _run_hook(
             env_setup,
             prompt="debugging python async concurrency event loop tooling",
-            extra_env={"CLAUDE_PLUGIN_OPTION_recommend_cooldown_turns": "4"},
+            extra_env={"CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS": "4"},
         )
         assert out["memory_files"] == 2
         assert "weak.md" in out["context"]
@@ -775,7 +775,7 @@ class TestTtlStalenessE2E:
     """End-to-end proof that catalog_ttl_hours reaches the read path.
 
     Runs context_manager.py as a subprocess with a stale catalog and a
-    tight CLAUDE_PLUGIN_OPTION_catalog_ttl_hours, and asserts the advisory
+    tight CLAUDE_PLUGIN_OPTION_CATALOG_TTL_HOURS, and asserts the advisory
     staleness warning is emitted (to the logs, surfaced on stderr) while
     the catalog is still used — the full env-var → config → _load_corpora
     → _read_catalog_or_scan → _validate_catalog chain.
@@ -788,7 +788,7 @@ class TestTtlStalenessE2E:
                 del env[k]
         env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
         env["CLAUDE_PLUGIN_DATA"] = str(env_setup["data_dir"])
-        env["CLAUDE_PLUGIN_OPTION_memory_dir"] = str(env_setup["memory_dir"])
+        env["CLAUDE_PLUGIN_OPTION_MEMORY_DIR"] = str(env_setup["memory_dir"])
         if extra_env:
             env.update(extra_env)
         stdin = json.dumps({
@@ -821,7 +821,7 @@ class TestTtlStalenessE2E:
         result = self._run_hook_capture(
             env_setup,
             prompt="help me with writing voice",
-            extra_env={"CLAUDE_PLUGIN_OPTION_catalog_ttl_hours": "1"},
+            extra_env={"CLAUDE_PLUGIN_OPTION_CATALOG_TTL_HOURS": "1"},
         )
         assert result.returncode == 0, result.stderr[:500]
         assert "stale" in result.stderr.lower(), (
@@ -844,7 +844,7 @@ class TestTtlStalenessE2E:
         result = self._run_hook_capture(
             env_setup,
             prompt="help me with writing voice",
-            extra_env={"CLAUDE_PLUGIN_OPTION_catalog_ttl_hours": "9999999"},
+            extra_env={"CLAUDE_PLUGIN_OPTION_CATALOG_TTL_HOURS": "9999999"},
         )
         assert result.returncode == 0, result.stderr[:500]
         assert "stale" not in result.stderr.lower(), (

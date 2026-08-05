@@ -51,7 +51,7 @@ def dream_env(tmp_path, monkeypatch):
 
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(data_dir))
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN_ROOT))
-    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_memory_dir", str(memory_dir))
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
 
     from multiplai_core.paths import _reset_cache, get_paths
 

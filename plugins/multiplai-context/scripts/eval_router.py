@@ -35,6 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.paths import get_paths  # noqa: E402
+from multiplai_core.plugin_options import option, option_var  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +271,7 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.strategy:
-        os.environ["CLAUDE_PLUGIN_OPTION_memory_router"] = args.strategy
+        os.environ[option_var("memory_router")] = args.strategy
 
     case_files = args.cases or _default_case_paths()
     if not case_files:
@@ -289,7 +290,7 @@ def main() -> None:
     print(
         f"eval: {len(cases)} cases · catalog {catalog_path.name} "
         f"({len(catalog)} entries) · strategy "
-        f"{args.strategy or os.environ.get('CLAUDE_PLUGIN_OPTION_memory_router','token_overlap')} "
+        f"{args.strategy or option('memory_router', 'token_overlap')} "
         f"· k={args.k}"
         + (f" · keep_ratio={args.keep_ratio}" if args.keep_ratio is not None else "")
         + "\n"

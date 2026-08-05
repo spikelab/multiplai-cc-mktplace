@@ -2,8 +2,7 @@
 
 Context routing picks which catalog entries (across memory, skills,
 and resources) to inject into each user prompt. Two strategies are
-supported, selected via the ``CLAUDE_PLUGIN_OPTION_memory_router``
-environment variable:
+supported, selected via the ``memory_router`` plugin option:
 
     token_overlap  (default)   Cheap, offline. Tokenizes the prompt
                                (plus the last assistant response if
@@ -41,18 +40,23 @@ import os
 import re
 from typing import Protocol, runtime_checkable
 
+from multiplai_core.plugin_options import option, option_var
+
 from lib.router_prompt import SYSTEM_PROMPT, FEW_SHOT_EXAMPLES, build_user_message
 
 logger = logging.getLogger(__name__)
 
-# Env var name — matches the plugin's CLAUDE_PLUGIN_OPTION_* convention.
-ROUTER_ENV_VAR = "CLAUDE_PLUGIN_OPTION_memory_router"
+# Bare option key; ``option_var`` derives the variable the harness exports
+# (``CLAUDE_PLUGIN_OPTION_MEMORY_ROUTER``) for messages that name it.
+ROUTER_OPTION = "memory_router"
+ROUTER_ENV_VAR = option_var(ROUTER_OPTION)
 
 # Model used by the llm router. Haiku is the right default for a
 # per-prompt blocking hook: routing is a cheap classification, so the
 # smallest/fastest model keeps latency tolerable. Overridable via
-# CLAUDE_PLUGIN_OPTION_router_model.
-ROUTER_MODEL_ENV_VAR = "CLAUDE_PLUGIN_OPTION_router_model"
+# the ``router_model`` option.
+ROUTER_MODEL_OPTION = "router_model"
+ROUTER_MODEL_ENV_VAR = option_var(ROUTER_MODEL_OPTION)
 DEFAULT_ROUTER_MODEL = "claude-haiku-4-5"
 
 STRATEGY_TOKEN_OVERLAP = "token_overlap"
@@ -575,7 +579,7 @@ class LLMRouter:
         self._timeout_seconds = timeout_seconds
         self._model = (
             model
-            or os.environ.get(ROUTER_MODEL_ENV_VAR, "").strip()
+            or option(ROUTER_MODEL_OPTION)
             or DEFAULT_ROUTER_MODEL
         )
 
@@ -659,7 +663,7 @@ def resolve_strategy(raw: str | None = None) -> str:
     still degrade an explicit ``llm`` → ``token_overlap`` when no
     client exists.
     """
-    value = (raw if raw is not None else os.environ.get(ROUTER_ENV_VAR, "")).strip().lower()
+    value = (raw if raw is not None else option(ROUTER_OPTION)).strip().lower()
     if not value:
         return DEFAULT_STRATEGY
     if value not in KNOWN_STRATEGIES:

@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",
@@ -84,6 +84,12 @@
       "description": "Number of days of diary history the diary catalog generator processes",
       "default": 7
     },
+    "catalog_concurrency": {
+      "type": "number",
+      "title": "Catalog Generation Concurrency",
+      "description": "How many catalog-generation model calls run at once. 5 is comfortable for the Anthropic API; raise it only if you have higher quotas.",
+      "default": 5
+    },
     "enable_skills": {
       "type": "boolean",
       "title": "Enable Skills Catalog",
@@ -95,6 +101,12 @@
       "title": "Skills Directory",
       "description": "Directory to scan for skills when enable_skills is true",
       "default": "~/.claude/skills"
+    },
+    "plugins_dir": {
+      "type": "string",
+      "title": "Plugins Directory",
+      "description": "Directory holding installed_plugins.json, used to discover plugin-bundled skills when enable_skills is true. Empty = $CLAUDE_CONFIG_DIR/plugins.",
+      "default": ""
     },
     "enable_resources": {
       "type": "boolean",
