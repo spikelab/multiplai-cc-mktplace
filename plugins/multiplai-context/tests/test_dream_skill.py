@@ -429,23 +429,54 @@ class TestDreamTimeoutDefault:
     900 s, not the old 1800: chunk sizes are now derived FROM this ceiling
     (``plan_chunks(timeout_s=…)``) rather than hoped to fit under it, so a lower
     value makes a stuck call fail fast instead of burning half an hour.
+
+    The number itself lives in ``lib/dream_chunking`` and everything else derives
+    from it. That module is pure, so a *supervisor* can import it to size its own
+    deadline — which `memory_maintainer` could not do while the constant sat in
+    `dream.py` (importing that configures logging and mutates the environment), and
+    it therefore carried a hardcoded 600 s cap against a 900 s per-chunk budget.
+    Six of six unattended runs in the week to 2026-08-05 timed out on that.
+
+    So these tests assert the *derivation*, not the literals. Two literals that
+    have to agree by hand are the defect; asserting both of them only pins the
+    defect in place.
     """
 
     @pytest.fixture(autouse=True)
     def load_source(self):
         self.source = (SCRIPTS_DIR / "dream.py").read_text()
 
-    def test_sets_900s_default(self):
+    def test_the_ceiling_is_900s(self):
+        from lib.dream_chunking import CHUNK_TIMEOUT_S
+
+        assert CHUNK_TIMEOUT_S == 900.0
+
+    def test_the_sdk_default_is_derived_from_the_ceiling(self):
+        """A chunk sized for a deadline the SDK does not enforce is a timeout, so
+        the two must be the same number — by construction, not by agreement."""
         assert re.search(
-            r'os\.environ\.setdefault\(\s*["\']MULTIPLAI_SDK_CALL_TIMEOUT_S["\']\s*,\s*["\']900["\']',
+            r'os\.environ\.setdefault\(\s*["\']MULTIPLAI_SDK_CALL_TIMEOUT_S["\']\s*,\s*'
+            r"str\(int\(CHUNK_TIMEOUT_S\)\)",
             self.source,
         )
 
-    def test_chunk_timeout_matches_the_sdk_ceiling(self):
-        """A chunk sized for a deadline the SDK does not enforce is a timeout."""
-        assert re.search(r"^CHUNK_TIMEOUT_S = 900\.0$", self.source, re.M)
+    def test_dream_does_not_define_its_own_ceiling(self):
+        """A local definition here is what a supervisor cannot reach."""
+        assert not re.search(r"^CHUNK_TIMEOUT_S\s*=", self.source, re.M)
+        assert "from lib.dream_chunking import CHUNK_TIMEOUT_S" in self.source
 
     def test_set_before_model_client_import(self):
         setdefault_idx = self.source.index("MULTIPLAI_SDK_CALL_TIMEOUT_S")
         import_idx = self.source.index("from multiplai_core.model_client import")
         assert setdefault_idx < import_idx
+
+    def test_the_ceiling_is_reachable_without_importing_dream(self):
+        """The property that made the maintainer's fix possible: reading the
+        constant must not configure logging or touch the environment."""
+        import importlib
+        import os
+
+        before = dict(os.environ)
+        mod = importlib.import_module("lib.dream_chunking")
+        importlib.reload(mod)
+        assert dict(os.environ) == before
