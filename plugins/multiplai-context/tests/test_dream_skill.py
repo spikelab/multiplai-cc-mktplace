@@ -241,9 +241,13 @@ class TestAutodreamCheckMode:
         """dream.py must accept --check flag for checking pending learnings."""
         assert re.search(r"--check", self.source)
 
-    def test_supports_run_flag(self):
-        """dream.py must accept --run flag for triggering consolidation."""
-        assert re.search(r"--run", self.source)
+    def test_supports_auto_flag(self):
+        """dream.py must accept --auto for autonomous consolidation.
+
+        The `--run` alias it replaced is gone; nothing may reintroduce it.
+        """
+        assert re.search(r"--auto", self.source)
+        assert not re.search(r"--run\b", self.source)
 
 
 # ---------------------------------------------------------------------------

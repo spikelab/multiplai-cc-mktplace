@@ -2043,8 +2043,6 @@ def main() -> None:
         action="store_true",
         help="Apply changes directly to memory files without review (autonomous mode)",
     )
-    # --run kept as deprecated alias for --auto
-    parser.add_argument("--run", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--stamp",
         action="store_true",
@@ -2223,7 +2221,7 @@ def main() -> None:
         print(f"Estimated wall clock: at least {eta / 60:.0f} min")
         return
 
-    if args.auto or args.run:
+    if args.auto:
         asyncio.run(dream_auto())
     else:
         asyncio.run(dream_report())
