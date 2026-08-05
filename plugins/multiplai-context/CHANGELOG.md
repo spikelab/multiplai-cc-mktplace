@@ -18,6 +18,30 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.18.5] - 2026-08-05
+
+### Fixed
+
+- **The digest's own pointer named a command that does not exist.** It said
+  `Full detail: /fleet-status --full`; the invocation is
+  `/multiplai-context:fleet-status --full`.
+- **A waiting session with no project printed its name twice** —
+  `hostname \`hostname\` — …`. It now prints the project and the container when
+  both are known, and just the container when only that is.
+- **The INBOX count only counted `*.md`.** Screenshots and saved links live
+  there too, so a "swept" INBOX could still hold twenty things. Every top-level
+  file counts now; subdirectories still do not, since those are your filing.
+- **A stalled repo can no longer eat the digest's time budget.** Six bounded
+  `git` calls at five seconds each is thirty seconds for one unreachable
+  checkout. A repo now has ten seconds total, after which it reports what it
+  learned and says the rest is missing.
+- **Two concurrent runs could drop each other's cache entries.** The cache
+  file is written under a lock.
+
+### Changed
+
+- `collect_backlog()` no longer accepts a `now` argument. It never used it.
+
 ## [0.18.4] - 2026-08-05
 
 ### Fixed

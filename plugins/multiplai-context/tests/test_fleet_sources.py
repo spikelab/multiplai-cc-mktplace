@@ -98,6 +98,16 @@ def test_broken_checkout_reports_one_error(tmp_path):
     assert [s for s in states if s.path == "broken" and s.error]
 
 
+def test_a_slow_repo_gives_up_inside_its_budget(tmp_path, repo, monkeypatch):
+    """Six bounded calls is still 30s on a stalled mount; the digest promises
+    "a few seconds and one line", so the repo stops answering and says so."""
+    monkeypatch.setattr(git_repos, "REPO_BUDGET", 0.0)
+    (state,) = [r for r in git_repos.collect_repos(tmp_path) if r.path == "proj"]
+    assert "per-repo budget" in state.error
+    # What it did learn before the budget ran out is still reported.
+    assert state.dirty == 0 and not state.worktrees
+
+
 def test_worktree_is_listed_against_its_owner(tmp_path, repo):
     linked = tmp_path / ".worktrees" / "wt"
     _git(repo, "worktree", "add", "-q", "-b", "side", str(linked))
@@ -273,7 +283,7 @@ def test_backlog_counts_lines_not_files(tmp_path):
     learnings.mkdir()
     (learnings / "2026-08-01.md").write_text("a\nb\n\nc\n")
     (learnings / "2026-08-02.md").write_text("d\n")
-    got = backlog_mod.collect_backlog(data, now=NOW)
+    got = backlog_mod.collect_backlog(data)
     assert got.learnings_lines == 4
     assert got.learnings_files == 2
     assert got.oldest_learning == "2026-08-01"
@@ -282,7 +292,7 @@ def test_backlog_counts_lines_not_files(tmp_path):
 def test_empty_backlog_is_empty(tmp_path):
     data = tmp_path / ".multiplai" / "data"
     data.mkdir(parents=True)
-    assert backlog_mod.collect_backlog(data, now=NOW).empty
+    assert backlog_mod.collect_backlog(data).empty
 
 
 def test_only_proposals_count_as_pending_dreams(tmp_path):
@@ -297,16 +307,30 @@ def test_only_proposals_count_as_pending_dreams(tmp_path):
     (dreams / "memory-lint-latest.md").write_text("# lint report\n")
     (dreams / "applied" / "processed-learnings-2026-07-01.md").write_text("done\n")
 
-    assert backlog_mod.collect_backlog(data, now=NOW).dreams_pending == 0
+    assert backlog_mod.collect_backlog(data).dreams_pending == 0
 
     (dreams / "processed-learnings-2026-08-04.md").write_text("# proposal\n")
 
-    assert backlog_mod.collect_backlog(data, now=NOW).dreams_pending == 1
+    assert backlog_mod.collect_backlog(data).dreams_pending == 1
+
+
+def test_inbox_counts_every_top_level_file_not_just_markdown(tmp_path):
+    """INBOX is where screenshots and saved links land too."""
+    data = tmp_path / ".multiplai" / "data"
+    data.mkdir(parents=True)
+    inbox = tmp_path / "INBOX"
+    (inbox / "sub").mkdir(parents=True)
+    (inbox / "note.md").write_text("x")
+    (inbox / "screenshot.png").write_bytes(b"x")
+    (inbox / "link.webloc").write_text("x")
+    (inbox / "sub" / "filed.md").write_text("x")   # the user's own filing
+
+    assert backlog_mod.collect_backlog(data).inbox_items == 3
 
 
 def test_failed_extractions_are_counted_separately(tmp_path):
     data = tmp_path / ".multiplai" / "data"
     (data / "failed_extractions").mkdir(parents=True)
     (data / "failed_extractions" / "x.json").write_text("{}")
-    got = backlog_mod.collect_backlog(data, now=NOW)
+    got = backlog_mod.collect_backlog(data)
     assert got.failed_extractions == 1 and not got.empty

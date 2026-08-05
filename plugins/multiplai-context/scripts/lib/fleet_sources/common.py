@@ -1,5 +1,6 @@
 """Shared plumbing for the expensive fleet collectors: subprocess + cache."""
 
+import fcntl
 import json
 import logging
 import subprocess
@@ -96,18 +97,40 @@ def cache_read(data_dir: Path, key: str, ttl: float = DEFAULT_TTL_SECONDS):
 
 
 def cache_write(data_dir: Path, key: str, value) -> None:
-    """Store *value* under *key*. A failure here is never fatal — it is a cache."""
+    """Store *value* under *key*. A failure here is never fatal — it is a cache.
+
+    Read-modify-write, so it is serialised on a sidecar lock: the collectors run
+    in a thread pool and two of them landing between each other's read and write
+    would silently drop a key. The lock is advisory and best-effort — if it
+    cannot be taken (a filesystem without ``flock``), the write still happens,
+    because losing a cache entry is cheaper than not caching at all.
+    """
     path = data_dir / CACHE_FILENAME
     try:
-        blob = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(blob, dict):
-            blob = {}
-    except (OSError, json.JSONDecodeError, ValueError):
-        blob = {}
-    blob[key] = {"at": time.time(), "value": value}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock = open(path.with_suffix(".lock"), "a+")
+    except OSError as exc:
+        logger.debug("fleet cache lock unavailable: %s", exc)
+        lock = None
     try:
-        from lib.fsio import atomic_write_json
+        if lock is not None:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            except OSError as exc:
+                logger.debug("fleet cache not locked: %s", exc)
+        try:
+            blob = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(blob, dict):
+                blob = {}
+        except (OSError, json.JSONDecodeError, ValueError):
+            blob = {}
+        blob[key] = {"at": time.time(), "value": value}
+        try:
+            from lib.fsio import atomic_write_json
 
-        atomic_write_json(path, blob)
-    except (OSError, ImportError) as exc:
-        logger.debug("fleet cache not written: %s", exc)
+            atomic_write_json(path, blob)
+        except (OSError, ImportError) as exc:
+            logger.debug("fleet cache not written: %s", exc)
+    finally:
+        if lock is not None:
+            lock.close()
