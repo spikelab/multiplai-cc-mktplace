@@ -18,6 +18,26 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.24.0] - 2026-08-05
+
+### Changed
+
+- **The fleet digest now counts every agent you have, not just the quiet
+  ones.** `RUNNING (2)` was the count of sessions in the `Working` group
+  alone — but a session that stops to ask you something leaves that group for
+  `Needs you`, so four live containers reported as two, and the line was wrong
+  in the same direction every time. It now reads
+  `IN FLIGHT (4) · 2 waiting on you · 1 working · 1 parked`: one total for
+  "how many agents do I have", then what each is doing. Idle and stale prompts
+  keep their counts on the same line, in the same lowercase form.
+- **`AGENTS.md` no longer prints each entry's involved files.** Six paths per
+  entry, under every heading, wrapped across the terminal and pushed the next
+  agent's heading off screen — the same bulk 0.17.0 trimmed the file to
+  remove. Nothing is lost that you were reading: the paths are still collected
+  absolute, `fleet.json` still ships them, and collision detection still reads
+  them, so the one question the line stood in for — *is another agent holding a
+  file I am about to write?* — is still answered, on the `Collisions` line.
+
 ## [0.23.0] - 2026-08-05
 
 ### Fixed

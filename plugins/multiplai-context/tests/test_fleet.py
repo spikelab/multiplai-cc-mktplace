@@ -783,82 +783,67 @@ class TestContainerRoster:
 
 
 # ---------------------------------------------------------------------------
-# The involved-files bullet — a glance aid, not an inventory
+# The involved-files bullet is gone from the render — and only from the render
 # ---------------------------------------------------------------------------
 
-class TestFilesLine:
-    """Checkpoints record absolute paths and must keep doing so — collisions
-    and a resuming session both need them. The *display* is what shortens: one
-    real entry carried 41 absolute paths on one line, which is the reason
-    AGENTS.md became unreadable."""
+class TestFilesAreNotRendered:
+    """`AGENTS.md` no longer prints an agent's involved files. The paths
+    themselves are load-bearing elsewhere, so what these pin is the seam: the
+    *display* went, the data did not."""
 
-    def _agent(self, *files, repo_root="", cwd="/work/knowhere"):
-        return fleet.Agent(session_id="s", cwd=cwd, repo_root=repo_root,
-                           files=list(files))
+    def _agent(self, *files):
+        return fleet.Agent(
+            session_id="s", project="app", cwd="/work/knowhere",
+            repo_root="/work/knowhere", status="working",
+            files=list(files), has_checkpoint=True,
+            intent="do the thing", next_action="ship it",
+        )
 
-    def test_paths_under_the_checkout_are_shown_relative_to_it(self):
-        agent = self._agent("/work/knowhere/PROJECTS/app/src/x.py",
-                            repo_root="/work/knowhere/PROJECTS/app")
+    def test_the_render_has_no_files_bullet(self):
+        agent = self._agent("/work/knowhere/src/x.py", "/work/knowhere/src/y.py")
 
-        assert fleet._files_line(agent) == "- **Files:** `src/x.py`"
+        rendered = "\n".join(fleet._render_agent(agent, NOW))
 
-    def test_paths_elsewhere_in_the_workspace_lose_the_workspace_prefix(self):
-        """The workspace root is derived from the agent's own cwd, so a file in
-        a sibling project still says which project it is in."""
-        agent = self._agent("/work/knowhere/.multiplai/memory/dev.md",
-                            repo_root="/work/knowhere/PROJECTS/app")
+        assert "Files:" not in rendered
+        assert "src/x.py" not in rendered
 
-        assert fleet._files_line(agent) == "- **Files:** `.multiplai/memory/dev.md`"
+    def test_what_the_entry_is_for_survives(self):
+        """Dropping the paths must not drop the two lines a reader acts on."""
+        agent = self._agent("/work/knowhere/src/x.py")
 
-    def test_paths_outside_the_workspace_keep_two_segments(self):
-        """A bare basename would collapse six sibling `state.py` into one."""
-        agent = self._agent("/tmp/claude-501/abc/scratchpad/probe.py")
+        rendered = "\n".join(fleet._render_agent(agent, NOW))
 
-        assert fleet._files_line(agent) == "- **Files:** `…/scratchpad/probe.py`"
+        assert "**Doing:** do the thing" in rendered
+        assert "**Next:** ship it" in rendered
 
-    def test_a_worktree_is_a_checkout_not_a_workspace(self):
-        """Peeling `.worktrees/<name>` off is what lets a path in the main
-        checkout render as `PROJECTS/...` instead of `…/lib/fleet.py`."""
-        agent = self._agent("/work/knowhere/PROJECTS/app/README.md",
-                            repo_root="/work/knowhere/.worktrees/feat")
+    def test_an_agent_with_files_is_not_marked_checkpointless(self):
+        """The `_No checkpoint_` line is about the checkpoint, not about
+        whether anything is left to print after the files bullet went."""
+        agent = self._agent("/work/knowhere/src/x.py")
 
-        assert fleet._files_line(agent) == "- **Files:** `PROJECTS/app/README.md`"
+        assert "No checkpoint" not in "\n".join(fleet._render_agent(agent, NOW))
 
-    def test_directory_entries_keep_their_trailing_slash(self):
-        agent = self._agent("/work/knowhere/src/pkg/", repo_root="/work/knowhere")
+    def test_the_paths_stay_absolute_on_the_agent(self):
+        """`fleet.json` ships these and `find_collisions` reads them; both
+        break on a relative path."""
+        agent = self._agent("/work/knowhere/src/x.py")
 
-        assert fleet._files_line(agent) == "- **Files:** `src/pkg/`"
-
-    def test_the_checkout_root_itself_renders_as_dot(self):
-        agent = self._agent("/work/knowhere/PROJECTS/app",
-                            repo_root="/work/knowhere/PROJECTS/app")
-
-        assert fleet._files_line(agent) == "- **Files:** `.`"
-
-    def test_the_list_is_capped_and_says_how_many_it_dropped(self):
-        agent = self._agent(*(f"/work/knowhere/src/f{i}.py" for i in range(10)),
-                            repo_root="/work/knowhere")
-
-        line = fleet._files_line(agent)
-
-        assert line.count("`") == 2 * fleet._MAX_FILES_SHOWN
-        assert "_+4 more_" in line
-
-    def test_shortening_may_not_produce_duplicate_entries(self):
-        """Two paths outside the workspace can shorten to the same two
-        segments; showing `…/tests/test_x.py` twice wastes one of six slots."""
-        agent = self._agent("/a/one/tests/test_x.py", "/b/two/tests/test_x.py")
-
-        assert fleet._files_line(agent) == "- **Files:** `…/tests/test_x.py`"
-
-    def test_the_underlying_paths_stay_absolute(self):
-        """Display only. `fleet.json` and `find_collisions` read `.files`, and
-        both break on a relative path."""
-        agent = self._agent("/work/knowhere/src/x.py", repo_root="/work/knowhere")
-
-        fleet._files_line(agent)
+        fleet._render_agent(agent, NOW)
 
         assert agent.files == ["/work/knowhere/src/x.py"]
+
+    def test_collisions_still_come_out_of_the_same_files(self, tmp_path):
+        """The point of the removal: the line was a display of data that is
+        read for collisions independently. Two working agents holding one file
+        must still collide with nothing rendering that file."""
+        for sid in ("a", "b"):
+            make_session(tmp_path, sid, ago=timedelta(minutes=5))
+            make_checkpoint(tmp_path, sid, files=["/work/knowhere/src/x.py"])
+
+        f = fleet.collect(tmp_path, NOW)
+
+        assert [c.path for c in f.collisions] == ["/work/knowhere/src/x.py"]
+        assert "Files:" not in fleet.render_agents_md(f, NOW)
 
 
 # ---------------------------------------------------------------------------
@@ -971,7 +956,7 @@ class TestCacheProperty:
 
 class TestRendering:
 
-    def test_entries_carry_intent_next_action_and_files(self, tmp_path):
+    def test_entries_carry_intent_and_next_action(self, tmp_path):
         make_session(tmp_path, "a", project="alpha")
         make_checkpoint(
             tmp_path, "a",
@@ -983,8 +968,9 @@ class TestRendering:
 
         assert "**Doing:** Rewiring the drain" in md
         assert "**Next:** Run the gates" in md
-        # Shortened against the agent's own root — see TestFilesLine.
-        assert "**Files:** `src/x.py`" in md
+        # Involved files are collected but never rendered — see
+        # TestFilesAreNotRendered.
+        assert "Files:" not in md
 
     def test_groups_appear_only_when_populated(self, tmp_path):
         make_session(tmp_path, "a", kind="notification")

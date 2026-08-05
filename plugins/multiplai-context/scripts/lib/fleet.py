@@ -783,83 +783,17 @@ def _sanitize_reason(reason: str) -> str:
     return reason.replace("|", "/")
 
 
-# How many involved files an entry shows before it says "+N more". The list is
-# a glance aid, not an inventory — one real entry carried 41 absolute paths,
-# which is a 4000-character line that pushes the *next* agent's heading off the
-# screen. Six is roughly what a reader takes in without scanning.
-_MAX_FILES_SHOWN = 6
-
-
-def _short_path(path: str, agent: Agent) -> str:
-    """One involved-file path, shortened for reading rather than for machines.
-
-    Checkpoints record **absolute** paths by mandate, and that mandate is
-    right: :func:`_collision_key` needs them to tell two worktrees of one repo
-    apart, and a resuming session needs a path it can hand straight to `Read`.
-    But every one of them repeats a 40-character workspace prefix that the
-    entry's own ``cwd``/``branch`` line already established, so the information
-    a reader actually wants — *which* file — sits at the far right of a wrapped
-    line. This shortens the display only; :attr:`Agent.files` keeps the
-    absolute paths, and `fleet.json` still ships them.
-
-    Three cases, in order:
-
-    * inside the agent's checkout — show it relative to that checkout, because
-      the checkout is what the heading already named;
-    * inside the workspace but outside the checkout (another project, a memory
-      file) — show it relative to the workspace root, which is the shortest
-      form that still says *where*;
-    * anywhere else (``/tmp`` scratchpads, ``$HOME`` dotfiles) — keep the last
-      two segments behind an ellipsis. A bare basename would collapse six
-      sibling ``state.py`` into six identical entries.
-    """
-    trailing = "/" if path.endswith("/") else ""
-    clean = path.rstrip("/")
-    for root in (agent.repo_root, _workspace_root(agent)):
-        if not root:
-            continue
-        prefix = root.rstrip("/") + "/"
-        if clean.startswith(prefix):
-            return clean[len(prefix):] + trailing
-        if clean == root.rstrip("/"):
-            return "." + trailing
-    parts = clean.split("/")
-    if len(parts) <= 2:
-        return clean + trailing
-    return "…/" + "/".join(parts[-2:]) + trailing
-
-
-def _workspace_root(agent: Agent) -> str:
-    """The workspace directory containing this agent's ``cwd``, or ``""``.
-
-    Derived from ``cwd`` rather than read from config, because this module is
-    imported by a session hook and must stay a pure file read — and because the
-    workspace that matters is the one the *agent* was in, which need not be the
-    one the renderer is running in. ``.worktrees/<name>`` is peeled off first:
-    a linked worktree is a checkout, not a workspace, and leaving it in would
-    make every path in the sibling repo look unrelated.
-    """
-    cwd = (agent.repo_root or agent.cwd).rstrip("/")
-    if not cwd:
-        return ""
-    for marker in ("/.worktrees/", "/PROJECTS/"):
-        head, sep, _ = cwd.partition(marker)
-        if sep:
-            return head
-    return cwd
-
-
-def _files_line(agent: Agent) -> str:
-    """The ``**Files:**`` bullet — deduplicated, shortened, and capped."""
-    seen: list[str] = []
-    for path in agent.files:
-        shown = _short_path(path, agent)
-        if shown not in seen:
-            seen.append(shown)
-    head = ", ".join(f"`{p}`" for p in seen[:_MAX_FILES_SHOWN])
-    extra = len(seen) - _MAX_FILES_SHOWN
-    return f"- **Files:** {head}" + (f" _+{extra} more_" if extra > 0 else "")
-
+# `AGENTS.md` deliberately does NOT list an agent's involved files.
+#
+# It did, and the line never earned its space: six paths per entry, repeated
+# under every heading, wrapping across the terminal and pushing the next
+# agent's heading off screen — the same bulk this file was trimmed to remove.
+# The paths themselves stay exactly where they are useful: `Agent.files` holds
+# them absolute, `fleet.json` ships them to the hub, and :func:`find_collisions`
+# reads them to answer the one question the rendered line was standing in for
+# — *is another agent holding a file I am about to write?* — which the digest
+# reports on its own line. Dropping the display costs no collision detection;
+# that is pinned by a test.
 
 def _render_agent(agent: Agent, now: datetime) -> list[str]:
     head = agent.project or agent.cwd or agent.session_id[:8]
@@ -883,8 +817,6 @@ def _render_agent(agent: Agent, now: datetime) -> list[str]:
         lines.append(f"- **Doing:** {agent.intent}")
     if agent.next_action:
         lines.append(f"- **Next:** {agent.next_action}")
-    if agent.files:
-        lines.append(_files_line(agent))
     if not agent.has_checkpoint:
         lines.append("- _No checkpoint — registry only._")
     lines.append("")

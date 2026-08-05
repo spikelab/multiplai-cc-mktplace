@@ -1023,7 +1023,7 @@ the whole question:
 | When | B's group | in the `/fleet-status` digest |
 |---|---|---|
 | 13:15 Tue — 35 min after B's last event | **Needs you** | ranked item: B, waiting on your answer |
-| 01:00 Wed — 13h quiet | **Idle** — counted in the `AGENTS.md` header, not listed, not a front | `IDLE (1, oldest 13h)` count line |
+| 01:00 Wed — 13h quiet | **Idle** — counted in the `AGENTS.md` header, not listed, not a front | `1 idle (oldest 13h)` on the in-flight line |
 | following Tuesday | still **Idle**; still only a number | unchanged |
 | +30 days | entry GC'd — B disappears | unchanged |
 
@@ -1280,12 +1280,13 @@ which merely went quiet is not — that is the whole difference between
 parking something and abandoning it. It is also why parking is the way
 to keep something on this list.
 
-Each listed entry shows its **involved files**, shortened for reading:
-paths inside the agent's own checkout render relative to it, paths
-elsewhere in the workspace relative to the workspace root, anything else
-as `…/parent/name`, and the list stops at six with `_+N more_`. The
-stored paths stay absolute — `fleet.json` ships them and collision
-detection needs them; only the display is short.
+An entry does **not** list its involved files. It did, shortened and
+capped at six, and the line still never earned its space: repeated under
+every heading it wrapped across the terminal and pushed the next agent's
+heading off screen, which is the same bulk this file was trimmed to
+remove. The paths are still collected and still absolute — `fleet.json`
+ships them, and collision detection reads them to answer the one question
+the line stood in for, on its own line, below.
 
 A **Collisions** section names every file two agents both have in hand.
 Both holders must be `Working` or `Parked` *and* have been heard from

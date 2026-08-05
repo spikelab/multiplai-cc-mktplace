@@ -153,6 +153,54 @@ def test_empty_fleet_says_so_plainly():
 
 
 # ---------------------------------------------------------------------------
+# The in-flight line — one total, then its breakdown
+# ---------------------------------------------------------------------------
+
+def test_in_flight_counts_every_live_agent_not_just_the_working_ones():
+    """The bug this replaces: a session that stops to ask a question leaves
+    `Working` for `Needs you`, so four live containers rendered as
+    `RUNNING (2)` and every reading of that line was low."""
+    agents = [
+        agent(status="waiting_input", minutes=1, session_id="w1"),
+        agent(status="waiting_input", minutes=2, session_id="w2"),
+        agent(status="working", minutes=3, session_id="k1"),
+        Agent(session_id="p1", status="ended", disposition="parked",
+              last_ts=NOW - timedelta(hours=3)),
+    ]
+
+    text = render_digest(fleet(agents), NOW)
+
+    assert "IN FLIGHT (4)" in text
+    assert "2 waiting on you" in text
+    assert "1 working" in text
+    assert "1 parked" in text
+
+
+def test_the_breakdown_omits_empty_categories():
+    text = render_digest(fleet([agent(status="working", session_id="k1")]), NOW)
+
+    assert "IN FLIGHT (1)" in text
+    assert "1 working" in text
+    assert "waiting on you" not in text
+    assert "parked" not in text
+
+
+def test_idle_is_not_in_flight_but_is_still_counted():
+    """Idle is a guess at death, so it must not inflate the fleet size — but a
+    fleet that has gone entirely quiet still has to say so."""
+    idle = agent(status="idle", minutes=60 * 30, session_id="old")
+
+    text = render_digest(fleet([idle, agent(status="working", session_id="k")]), NOW)
+
+    assert "IN FLIGHT (1)" in text
+    assert "1 idle (oldest " in text
+
+
+def test_an_empty_fleet_says_zero_in_flight():
+    assert "IN FLIGHT (0)" in render_digest(fleet(), NOW)
+
+
+# ---------------------------------------------------------------------------
 # Honest gaps — "not collected" must never print as "none"
 # ---------------------------------------------------------------------------
 
