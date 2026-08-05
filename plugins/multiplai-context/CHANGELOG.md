@@ -63,6 +63,40 @@ are the release dates recorded at the time, not derived from a tag.
   file could interleave. Locks moved to `<data_dir>/locks/`, on the shared
   workspace filesystem, matching what `/dream` already does.
 
+## [0.18.2] - 2026-08-05
+
+### Fixed
+
+- **`/dream-remember` Step 5 could delete learnings files that were still in
+  use.** Two separate ways, both of which destroyed the sources behind work you
+  had not finished reviewing. If you run `--gc-learnings` (Step 5 says to run it
+  every time), update.
+
+  **A consolidation run's own inputs.** `dream` records each chunk against the
+  proposal name as it goes, but only writes the proposal file at the very end —
+  minutes later on a long run. In between, the name was fully recorded and the
+  file existed nowhere, and gc read "no such proposal" as "already decided", so
+  it deleted the learnings the run was still consuming. After a crashed run the
+  window never closed: the resumed run would rebuild from its staged drafts and
+  produce a proposal citing files that no longer existed. gc now requires the
+  proposal to actually be *present* in `applied/`, `rejected/` or `superseded/`
+  before treating its sources as collectable.
+
+  **Sources a folded-forward proposal still cites.** When a new run absorbs an
+  undecided proposal, the old one moves to `superseded/` and its items — source
+  citations and all — move into the new one, but the internal record still
+  pointed at the old proposal. The old one looked decided, so gc deleted the
+  files while the *new*, still-pending proposal cited them; the `**Source:**`
+  lines in your open review stopped resolving. gc now reads what the pending
+  proposals actually cite, which stays correct across a fold no matter what the
+  record says.
+
+  Both paths are now covered by tests, and gc fails closed throughout — a
+  proposal it cannot read stops collection entirely rather than licensing a
+  delete. If you were bitten by either, learnings files are git-tracked once
+  committed, so `git log --diff-filter=D -- .multiplai/learnings/` will find
+  them.
+
 ## [0.18.1] - 2026-08-04
 
 ### Fixed
