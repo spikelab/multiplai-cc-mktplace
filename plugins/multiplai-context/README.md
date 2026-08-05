@@ -913,14 +913,17 @@ discard the transcript.
 
 #### Stage 6 — how it stops
 
-One observed case, everything else inferred from silence. It has its own
-section: [How the end of a session is detected](#3-how-the-end-of-a-session-is-detected).
-In brief: a clean quit fires `SessionEnd` and is recorded at once.
-Nothing else records anything — a reboot, a closed terminal, a `docker
-kill`, an OOM, or a session you simply walked away from all look
-identical from outside, and are filed as **idle** after 12h. That is a
-conservative guess rather than a claim that it died, and it is why idle
-is counted but never ranked — nor, since 0.21.0, listed.
+Two observers, neither of them the session. It has its own section:
+[How the end of a session is detected](#3-how-the-end-of-a-session-is-detected).
+In brief: a clean quit fires `SessionEnd` and is recorded at once. Nothing
+inside the session records a reboot, a closed terminal, a `docker kill` or
+an OOM — but since 0.22.0 the kit launcher writes the running container
+names on every launch, and a container missing from a reading taken after
+the session's last event is proof it is over. What is left over is the
+session you simply walked away from: still running, just quiet, filed as
+**idle** after 12h. That one is a conservative guess rather than a claim
+that it died, which is why idle is counted but never ranked — nor, since
+0.21.0, listed.
 
 #### Stage 7 — the drain
 
@@ -1022,10 +1025,15 @@ the whole question:
 | following Tuesday | still **Idle**; still only a number | unchanged |
 | +30 days | entry GC'd — B disappears | unchanged |
 
-**B never becomes `ended`, and it cannot.** Nothing proves it died: no
-hook fires for a session that is still sitting there, and none fires for
-one whose container was killed either. All the system can honestly say is
-"quiet for 13 hours", which is `idle`.
+**B never becomes `ended`, and that is correct here** — B's tab is still
+open, so its container is still in every roster the launcher writes, and
+`idle` is the honest reading: quiet for 13 hours, not dead. No hook fires
+for a session that is merely sitting there.
+
+Close that tab, though, and B is `ended` at the next launch — not
+thirteen hours later, and not on a guess. That is the whole of what the
+roster buys: it is the difference between "quiet" and "gone", which
+before 0.22.0 read the same.
 
 That is why counting and ranking are kept apart. The digest does **not
 rank** B, because a tab that went quiet has no claim on your attention
@@ -1136,15 +1144,19 @@ write which:
 
 | Path | Written by | Holds |
 |---|---|---|
-| `data/sessions/<sid>.json` | this plugin's lifecycle hooks | the registry entry — project, cwd, container hostname, `started_at`, `last_event`, `disposition` |
+| `data/sessions/<sid>.json` | this plugin's lifecycle hooks | the registry entry — project, cwd, container hostname, `in_container`, `started_at`, `last_event`, `disposition` |
+| `data/live_containers.json` | **multiplai-kit's launcher**, on the host | which containers were running, and when it looked. Read-only here; absent without the kit |
 | `data/sessions/<sid>.adopt` | the multiplai hub | nothing. Its existence means "the hub has taken the driver seat" |
 | `data/checkpoints/<sid>/checkpoint.md` | this plugin's checkpoint writer | what the session is *doing* — intent, next action, files in hand |
 
-**Only this plugin writes the JSON.** Anything outside a session that
-needs to say something leaves an empty marker file next to it instead —
-a second writer of registry *state* is how two stores start disagreeing
-silently, and a marker is a one-bit channel that cannot corrupt
-anything.
+**Only this plugin writes a registry entry.** Nothing outside a session
+may edit one — a second writer of session *state* is how two stores start
+disagreeing silently. What an outside observer may do is deposit its own
+evidence in its own file, which this plugin then reads: the hub's `.adopt`
+marker is a one-bit channel that cannot corrupt anything, and the
+launcher's `live_containers.json` is a dated observation, never a verdict
+about any particular session. Both are inputs to a derivation here; the
+entry stays single-writer.
 
 `data/AGENTS.md` and `data/fleet.json` are **outputs, never inputs** —
 pure aggregation over the stores above, no LLM call. Delete them and
@@ -1175,42 +1187,63 @@ to `active` whenever the model is unsure.
 
 This is the part that surprises people, so it is worth stating flatly:
 **a hook is code running inside a session, and a session cannot report
-its own death.** Exactly one way of stopping is observed; everything
-else is inferred from silence:
+its own death.** Only two things observe it, and neither is the session:
 
 | How it stopped | Fires | Recorded as | Noticed |
 |---|---|---|---|
 | `/exit`, Ctrl-D, Ctrl-C Ctrl-C — a clean quit | `SessionEnd` | `last_event.kind = end` | at once |
-| Reboot, closed terminal, `docker kill`, OOM-kill, crash | **nothing** | nothing | quiet ⇒ `idle` after 12h |
-| Still running; you walked away | nothing | nothing | quiet ⇒ `idle` after 12h |
+| Reboot, closed terminal, `docker kill`, OOM-kill, crash | **nothing** | nothing | its container is missing from the next roster |
+| Still running; you walked away | nothing | nothing | still listed — quiet ⇒ `idle` after 12h |
 
-Rows 2 and 3 collapsing into the same reading is not an oversight, it is
-the honest answer: **from the outside they are indistinguishable.** A
-session that died and a session sitting at a prompt both look like an
-entry that has not spoken in a while.
+**The roster is what separates rows 2 and 3**, which used to be
+indistinguishable and both decayed to `idle`. multiplai-kit's launcher
+writes the running container names to
+`.multiplai/data/live_containers.json` on every launch — before it
+starts your session container and again after that container exits. When
+a reading is *newer* than a session's last event and that session's
+container is not in it, the session is over. Nothing is inferred; the
+host looked.
 
-So quiet is treated as a **guess, deliberately the conservative one** —
-the entry is filed as `idle`, not declared over, because it may just be
-thinking or you may be at lunch. What that buys is that `idle` is *never
-a front*: an entry the system is unsure about can never inflate the one
-number you actually read.
+Everything about it is conditional on evidence, and its absence changes
+nothing:
 
-The threshold is **12h**, and it was 24h until 0.21.0. A day sounds
-conservative until you notice it spans the previous evening: every
-container you opened after dinner still claimed a slot under **Working**
-the next morning, which read as nine running agents where there was one.
-Half a day is roughly one working session — quiet since this morning is
-plausibly still yours, quiet since yesterday is not.
+- **No roster file** — no kit, or a kit that has not launched since —
+  and the quiet-window behaviour below applies unchanged.
+- **A roster older than a session's last event** decides nothing about
+  that session. A reading can only retire what already existed when it
+  was taken.
+- **Only container sessions are judged.** Entries record an
+  `in_container` flag, because outside a container the hostname is a
+  *machine* name and no string comparison could tell it from a container
+  name — so a `--local` session, or one run through `claude-wrapped` on
+  the Mac, would otherwise be declared dead by a roster that could never
+  have listed it. Entries written before 0.22.0 are not judged either.
+- **A corrupt or unreadable roster** is ignored rather than trusted.
+- **Parked sessions are never retired this way.** Parking is a stated
+  intent; the container being gone is exactly what you meant.
 
-*This was tried the other way.* 0.15.1 briefly had the kit launcher drop
-an `.exited` marker beside the entry when `docker run` returned, on the
-theory that an observer outside the container could close the gap. It
-was removed before release once measured: a clean quit already records
-`end`, and a reboot or a closed terminal kills the launcher along with
-the container, so the marker only ever covered `docker kill` and
-OOM-kills — worth zero entries on a real 118-entry registry, against a
-permanent filename contract between two repos. Counting idle sessions
-correctly did all of the work.
+The quiet window still governs everything the roster cannot see — a
+session whose container is alive but which has not spoken. The threshold
+is **12h**, and it was 24h until 0.21.0. A day sounds conservative until
+you notice it spans the previous evening: every container you opened
+after dinner still claimed a slot under **Working** the next morning,
+which read as nine running agents where there was one. Half a day is
+roughly one working session. And quiet is still treated as a **guess,
+deliberately the conservative one** — the entry is filed as `idle`, not
+declared over, because it may just be thinking or you may be at lunch.
+What that buys is that `idle` is *never a front*.
+
+*A different design was tried and rejected.* 0.15.1 briefly had the kit
+launcher drop an `.exited` marker beside the entry when `docker run`
+returned. It was removed before release once measured: a clean quit
+already records `end`, and a reboot or a closed terminal kills the
+launcher along with the container, so the marker only ever covered
+`docker kill` and OOM-kills — worth zero entries on a real 118-entry
+registry. The roster is not that design. A marker is a **write on the
+way out**, so it needs the launcher to survive the thing it is reporting;
+a roster is a **poll**, and it does not care whether any launcher
+survived. That single difference is why it reaches the cases the marker
+could not — 49 stuck entries on the registry that motivated it.
 
 #### 4. What you actually see
 

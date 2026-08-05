@@ -6,12 +6,16 @@ the lifecycle hooks — hooks are the source of truth because Claude Code keeps
 no open fd on its transcript JSONL, so file ownership is undiscoverable by
 inspection. Entries live at ``<data_dir>/sessions/<session_id>.json``:
 
-    {session_id, hostname, cwd, project?, workspace, started_at,
+    {session_id, hostname, in_container, cwd, project?, workspace, started_at,
      last_event: {ts, kind: start|stop|notification|end}}
 
 ``hostname`` equals the container name in kit containers ($HOSTNAME) and the
 plain machine hostname otherwise — it is how the launcher wrapper maps a
-container back to its session. The hub additionally writes
+container back to its session. ``in_container`` says which of those two it is:
+the string alone cannot tell you, and the fleet view uses it to decide whether
+this entry may be judged against the host's live-container roster at all.
+
+The hub additionally writes
 ``<session_id>.adopt`` markers beside the entries; this module never touches
 those beyond GC of orphans, and updates preserve any keys it doesn't own
 (read-merge-write) so hub-written fields survive. Concurrent writers
@@ -80,6 +84,28 @@ def _hostname() -> str:
         return socket.gethostname()
     except OSError:
         return ""
+
+
+def _in_container() -> bool:
+    """Is this session running inside a container?
+
+    Recorded so a reader can tell whether ``hostname`` is a *container name* or
+    a machine name. Both look like an identifier and neither says which it is,
+    and the fleet view now judges liveness by asking the host which containers
+    exist — so mistaking a laptop's hostname for a missing container would
+    declare a perfectly live bare session dead. ``--local`` mode and
+    `scripts/claude-wrapped` make that a real configuration, not a hypothetical.
+
+    ``/.dockerenv`` is the marker the runtime itself creates; a pure file check,
+    which matters because this runs inside kill-within-seconds hooks. Entries
+    written before this field existed simply lack it, and a reader that finds no
+    answer must fall back rather than guess — which is why the field is written
+    as an explicit ``True``/``False`` and never inferred from its absence.
+    """
+    try:
+        return Path("/.dockerenv").exists()
+    except OSError:
+        return False
 
 
 def _workspace_root(data_dir: Path) -> str:
@@ -207,6 +233,10 @@ def record_event(data_dir: Path, hook_input: dict, kind: str) -> bool:
                 entry["hostname"] = hostname
             else:
                 entry.setdefault("hostname", "")
+            # Refreshed alongside hostname and for the same reason: a session
+            # resumed outside a container must stop being judged against the
+            # container roster.
+            entry["in_container"] = _in_container()
             entry.setdefault("workspace", _workspace_root(data_dir))
             entry.setdefault("started_at", now)
             if cwd:
