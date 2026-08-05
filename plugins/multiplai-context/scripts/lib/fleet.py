@@ -244,6 +244,73 @@ def load_roster(data_dir: Path) -> Roster | None:
     )
 
 
+# How long a roster-confirmed-dead session is left in the registry before GC
+# takes it. Not a hedge against the roster being wrong — it cannot be, in this
+# direction: the host looked, and the container was not there. It is a hedge
+# against *ordering*. The deferred extraction that writes an entry's
+# `disposition` runs minutes after the session exits, and only a marker on disk
+# protects an entry from GC; a session killed hard never wrote one. An hour is
+# comfortably longer than a drain takes and short enough that the graveyard
+# never forms.
+ROSTER_DEAD_GRACE_HOURS = 1
+
+
+def roster_dead_sids(
+    data_dir: Path,
+    now: datetime | None = None,
+    grace: timedelta | None = None,
+) -> set[str]:
+    """Session ids the host has *observed* to be gone, ready for collection.
+
+    The registry's age-based GC has two windows — 7 days for a clean
+    ``SessionEnd``, 30 for everything else — and the second one exists purely
+    because nothing could tell a killed session from a quiet one. The roster
+    can: :class:`Roster` is a poll of ``docker ps`` taken by the launcher on the
+    host. When it is entitled to judge an entry (see :meth:`Roster.judges`) and
+    that entry's container is not in it, the session is over as a matter of
+    observation, not inference — and a fortnight of "might still be alive" is
+    just a graveyard with a countdown.
+
+    Deliberately **not** a status check: this reads the registry directly rather
+    than going through :func:`collect`, because it is called from a session hook
+    and :func:`load_agent` shells out to ``git`` for every entry. Same evidence,
+    none of the cost.
+
+    Everything that protects an entry from age-based GC protects it here too:
+    parked entries are excluded below, and pending-extraction markers are
+    honoured by the collector itself (:func:`lib.session_registry.gc_stale`).
+    Returns an empty set when there is no roster, which is the vanilla case.
+    """
+    roster = load_roster(data_dir)
+    if roster is None:
+        return set()
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - (grace if grace is not None else timedelta(hours=ROSTER_DEAD_GRACE_HOURS))
+
+    dead: set[str] = set()
+    for path in (data_dir / "sessions").glob("*.json"):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        if entry_disposition_block(raw)[0] == "parked":
+            continue
+        last = raw.get("last_event") or {}
+        last_ts = _parse_ts(last.get("ts")) if isinstance(last, dict) else None
+        if last_ts is None or last_ts > cutoff:
+            continue
+        raw_in_container = raw.get("in_container")
+        in_container = raw_in_container if isinstance(raw_in_container, bool) else None
+        hostname = str(raw.get("hostname") or "")
+        if not hostname or not roster.judges(last_ts, in_container):
+            continue
+        if hostname not in roster.ids:
+            dead.add(str(raw.get("session_id") or path.stem))
+    return dead
+
+
 @dataclass
 class Collision:
     """One file two or more live agents both have in hand."""

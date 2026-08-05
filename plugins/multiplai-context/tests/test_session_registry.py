@@ -284,6 +284,66 @@ class TestGcStale:
         assert sr.gc_stale(tmp_path) == 0
 
 
+class TestGcRosterDead:
+    """A session confirmed dead by an outside observer does not wait out a
+    window that exists only because nothing could confirm it. The set comes
+    from `lib.fleet.roster_dead_sids`; this module keeps no opinion about
+    containers, which is why it is passed in."""
+
+    def test_a_confirmed_dead_entry_goes_now_not_in_a_month(self, tmp_path):
+        recent = datetime.now(timezone.utc) - timedelta(hours=2)
+        _write_entry(tmp_path, "killed", "stop", recent)
+
+        assert sr.gc_stale(tmp_path, dead_sids={"killed"}) == 1
+        assert not (tmp_path / "sessions" / "killed.json").exists()
+
+    def test_an_entry_not_in_the_set_keeps_its_window(self, tmp_path):
+        recent = datetime.now(timezone.utc) - timedelta(hours=2)
+        _write_entry(tmp_path, "quiet", "stop", recent)
+
+        assert sr.gc_stale(tmp_path, dead_sids={"other"}) == 0
+
+    def test_no_set_is_the_behaviour_before_this_existed(self, tmp_path):
+        recent = datetime.now(timezone.utc) - timedelta(hours=2)
+        _write_entry(tmp_path, "quiet", "stop", recent)
+
+        assert sr.gc_stale(tmp_path) == 0
+
+    def test_a_parked_entry_survives_being_confirmed_dead(self, tmp_path):
+        """Parking says "I am coming back"; the process being gone is the
+        normal state of a parked session, not evidence against it."""
+        recent = datetime.now(timezone.utc) - timedelta(hours=2)
+        path = _write_entry(tmp_path, "parked", "end", recent)
+        raw = json.loads(path.read_text())
+        raw["disposition"] = {"state": "parked", "reason": "Monday"}
+        path.write_text(json.dumps(raw))
+
+        assert sr.gc_stale(tmp_path, dead_sids={"parked"}) == 0
+        assert path.exists()
+
+    def test_a_pending_extraction_still_protects_a_dead_entry(self, tmp_path):
+        """The drain is what writes `disposition`, and it runs after GC within
+        one SessionStart. Collecting first would delete the entry it is about
+        to label."""
+        recent = datetime.now(timezone.utc) - timedelta(hours=2)
+        _write_entry(tmp_path, "draining", "end", recent)
+        pend = tmp_path / "pending_extractions"
+        pend.mkdir(parents=True)
+        (pend / "m.json").write_text(json.dumps({"session_id": "draining"}))
+
+        assert sr.gc_stale(tmp_path, dead_sids={"draining"}) == 0
+
+    def test_an_entry_that_spoke_since_the_scan_began_is_kept(self, tmp_path):
+        """The roster reading is from before this pass; an entry whose
+        `last_event` is in the future relative to it has come back — a resume,
+        or a writer we serialized behind. The set must not outvote that."""
+        future = datetime.now(timezone.utc) + timedelta(minutes=5)
+        _write_entry(tmp_path, "resumed", "start", future)
+
+        assert sr.gc_stale(tmp_path, dead_sids={"resumed"}) == 0
+        assert (tmp_path / "sessions" / "resumed.json").exists()
+
+
 class TestGcConcurrency:
     """GC vs writer races: an entry can't be deleted out from under a writer."""
 

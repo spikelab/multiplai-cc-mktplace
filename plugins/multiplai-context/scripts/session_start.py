@@ -46,7 +46,7 @@ from multiplai_core.log_utils import setup_logging, log_event
 # stops matching the other.
 from lib.extraction_drain import process_deferred_extractions
 from lib.runtime import uv_run_argv
-from lib.fleet import write_fleet_view
+from lib.fleet import roster_dead_sids, write_fleet_view
 
 logger = setup_logging("session_start")
 
@@ -582,10 +582,16 @@ def main() -> None:
     # Hub session registry (hub input contract): GC week-old ended entries,
     # then stamp this session's "start" event. Best-effort — with no hub
     # installed the files are simply never read.
+    #
+    # The roster read is the launcher's `docker ps` from moments ago (it writes
+    # it just before starting this container), so a session whose container is
+    # gone is collected on the very next launch instead of ageing out over a
+    # week or a month. No roster — vanilla Claude Code — and this is an empty
+    # set and the age windows are all there is, exactly as before.
     try:
         from lib import session_registry
 
-        session_registry.gc_stale(data_dir)
+        session_registry.gc_stale(data_dir, dead_sids=roster_dead_sids(data_dir))
         session_registry.record_event(data_dir, hook_input, "start")
     except Exception:
         logger.warning("Session registry start-event failed", exc_info=True)

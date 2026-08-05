@@ -783,6 +783,93 @@ class TestContainerRoster:
 
 
 # ---------------------------------------------------------------------------
+# Roster-confirmed-dead sessions, for the registry collector
+# ---------------------------------------------------------------------------
+
+class TestRosterDeadSids:
+    """The two age windows in the registry GC (7 days ended / 30 days
+    anything-else) are not really about age — they are guesses standing in for
+    "a session cannot report its own death". Where the host has looked, the
+    guess is not needed, and a fortnight of "might still be alive" is a
+    graveyard with a countdown."""
+
+    OLD = timedelta(hours=fleet.ROSTER_DEAD_GRACE_HOURS + 1)
+
+    def test_a_session_whose_container_is_gone_is_collectable(self, tmp_path):
+        make_contained_session(tmp_path, "gone", host="cc-01", ago=self.OLD)
+        make_roster(tmp_path, "cc-99")
+
+        assert fleet.roster_dead_sids(tmp_path, NOW) == {"gone"}
+
+    def test_a_session_still_on_the_roster_is_not(self, tmp_path):
+        make_contained_session(tmp_path, "alive", host="cc-01", ago=self.OLD)
+        make_roster(tmp_path, "cc-01")
+
+        assert fleet.roster_dead_sids(tmp_path, NOW) == set()
+
+    def test_no_roster_means_no_opinion(self, tmp_path):
+        """Vanilla Claude Code writes no roster; the age windows are all there
+        is, exactly as before."""
+        make_contained_session(tmp_path, "gone", host="cc-01", ago=self.OLD)
+
+        assert fleet.roster_dead_sids(tmp_path, NOW) == set()
+
+    def test_a_roster_older_than_the_entry_decides_nothing(self, tmp_path):
+        """The entry may have started in the gap — the same monotonicity rule
+        the status reader applies."""
+        make_contained_session(tmp_path, "gone", host="cc-01", ago=self.OLD)
+        make_roster(tmp_path, "cc-99", ago=timedelta(hours=6))
+
+        assert fleet.roster_dead_sids(tmp_path, NOW) == set()
+
+    def test_a_session_outside_a_container_is_never_judged(self, tmp_path):
+        """`hostname` is a machine name there, and a machine is not in any
+        `docker ps`. Declaring a live `--local` session dead is the one
+        direction this must never fail in."""
+        make_session(tmp_path, "local", hostname="spikes-mac", ago=self.OLD)
+
+        make_roster(tmp_path, "cc-01")
+
+        assert fleet.roster_dead_sids(tmp_path, NOW) == set()
+
+    def test_the_grace_period_keeps_a_just_exited_session(self, tmp_path):
+        """The deferred extraction that writes `disposition` runs minutes after
+        exit, and only its marker protects an entry. A session killed hard never
+        wrote one, so the grace is what stops GC racing the drain."""
+        make_contained_session(tmp_path, "fresh", host="cc-01",
+                               ago=timedelta(minutes=2))
+        make_roster(tmp_path, "cc-99")
+
+        assert fleet.roster_dead_sids(tmp_path, NOW) == set()
+
+    def test_a_parked_session_is_never_collectable(self, tmp_path):
+        """Its container being gone is the normal state of a parked session —
+        that is what parking is. Disposition outranks liveness here."""
+        entry = make_contained_session(tmp_path, "parked", host="cc-01",
+                                       ago=self.OLD)
+        raw = json.loads(entry.read_text())
+        raw["disposition"] = {"state": "parked", "reason": "back on Monday"}
+        entry.write_text(json.dumps(raw))
+        make_roster(tmp_path, "cc-99")
+
+        assert fleet.roster_dead_sids(tmp_path, NOW) == set()
+
+    def test_an_unreadable_entry_is_skipped_not_collected(self, tmp_path):
+        (tmp_path / "sessions").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "sessions" / "junk.json").write_text("{not json")
+        make_roster(tmp_path, "cc-99")
+
+        assert fleet.roster_dead_sids(tmp_path, NOW) == set()
+
+    def test_a_roster_this_reader_cannot_interpret_is_refused(self, tmp_path):
+        """A pid means something only in the namespace that observed it."""
+        make_contained_session(tmp_path, "gone", host="cc-01", ago=self.OLD)
+        make_roster(tmp_path, "cc-99", kind="pid")
+
+        assert fleet.roster_dead_sids(tmp_path, NOW) == set()
+
+
+# ---------------------------------------------------------------------------
 # The involved-files bullet is gone from the render — and only from the render
 # ---------------------------------------------------------------------------
 

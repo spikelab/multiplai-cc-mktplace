@@ -18,6 +18,25 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.25.0] - 2026-08-05
+
+### Changed
+
+- **A session whose container is gone is now dropped from the registry within
+  the hour, instead of sitting there for a month.** Entries that never fired
+  `SessionEnd` — a closed terminal, a reboot, `docker kill`, the OOM killer —
+  were kept for 30 days on the grounds that nothing could prove they were not
+  still running. Since 0.22.0 something can: the kit launcher records the
+  host's running containers, and `AGENTS.md` has been reading it to retire
+  those sessions on sight. Now the registry collector reads the same evidence,
+  so the files go too and the graveyard stops accumulating (140 entries for 4
+  live sessions, on the registry that prompted this).
+- Two things still protect an entry, unchanged: **parking it** keeps it
+  forever, since a parked session's process being gone is the normal case, and
+  a **queued or in-flight extraction** keeps it until that extraction has
+  written its disposition. Without the kit — so without a roster — collection
+  is exactly what it was: 7 days after a clean exit, 30 days otherwise.
+
 ## [0.24.0] - 2026-08-05
 
 ### Changed
