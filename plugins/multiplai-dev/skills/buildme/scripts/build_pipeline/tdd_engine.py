@@ -1752,10 +1752,23 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
     )
 
 
-async def run_tdd_engine(config: BuildConfig, args) -> int:
+async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) -> int:
     """Main entry point for the TDD engine.
 
     Orchestrates: parse blocks → baseline gate → per-block TDD → final review.
+
+    *standalone* says who owns the build's lifecycle. True (the
+    `python -m build_pipeline tdd` entry point) means the engine IS the build:
+    on success it advances the checkpoint to COMPLETE and deletes it. False
+    (the orchestrator's TDD_BUILD sub-phase) means the orchestrator owns phase
+    advancement and cleanup, and the engine must leave the checkpoint alone —
+    deleting it here made the orchestrator's post-engine reload
+    (`if state_path.exists(): state = BuildState.load(state_path)`) fall
+    through to a stale in-memory copy with `tdd is None`, so a crash in
+    DOCS_UPDATE/RESPEC/PUBLISH resumed at TDD_BUILD with no block state and
+    re-ran the whole build; and a crash in the few lines between the advance
+    and the cleanup left a checkpoint at COMPLETE, silently skipping every
+    remaining phase.
     """
     state_path = config.state_file_path()
     progress = ProgressWriter(config.progress_file_path())
@@ -1915,7 +1928,13 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
             progress.log_phase("E2E_CHECK", "PASSED")
 
     # Success
-    state.advance_to(BuildPhase.COMPLETE, state_path)
+    if standalone:
+        state.advance_to(BuildPhase.COMPLETE, state_path)
+    else:
+        # Persist the finished TDD sub-state so the orchestrator's reload sees
+        # it; the phase pointer stays at TDD_BUILD for the orchestrator to
+        # advance.
+        state.checkpoint(state_path)
     # Report the spend even when nothing stopped: a build that finished at 95%
     # of its ceiling is the one worth knowing about before the next run.
     spend = budget_mod.get_budget()
@@ -1923,7 +1942,8 @@ async def run_tdd_engine(config: BuildConfig, args) -> int:
              total_blocks, spend.total_tokens, spend.cost_usd, spend.calls)
     progress.log_phase("BUDGET", spend.diagnosis())
     progress.log_phase("COMPLETE", f"All {total_blocks} blocks implemented successfully")
-    state.cleanup(state_path)
+    if standalone:
+        state.cleanup(state_path)
     return EXIT_SUCCESS
 
 

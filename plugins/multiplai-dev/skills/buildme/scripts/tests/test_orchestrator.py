@@ -807,6 +807,41 @@ class TestRespecPhaseWiring:
         assert rc == 0
 
 
+class TestTDDSubPhaseWiring:
+    """The orchestrator owns the checkpoint's lifecycle, so it must tell the
+    engine it is a sub-phase — otherwise the engine advances to COMPLETE and
+    deletes the file the reload below depends on."""
+
+    @pytest.mark.asyncio
+    async def test_engine_is_invoked_as_a_sub_phase(self, tmp_path):
+        from unittest.mock import AsyncMock, patch
+        from argparse import Namespace
+        from build_pipeline.models import GateResult
+        from build_pipeline.orchestrator import run_orchestrator
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        config = BuildConfig(
+            project_dir=project_dir, change_name="feat", mode="only", auto=False,
+            config_dir=tmp_path / "config",
+        )
+        config.specs_dir = project_dir / "specs"
+        config.change_dir.mkdir(parents=True)
+
+        with patch("build_pipeline.tdd_engine.run_tdd_engine",
+                   new_callable=AsyncMock, return_value=0) as engine, \
+             patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   new_callable=AsyncMock, return_value=[]), \
+             patch("build_pipeline.llm_steps.docs_steps.run_docs_update",
+                   new_callable=AsyncMock,
+                   return_value=([], GateResult(passed=True, reason="ok"))), \
+             patch("build_pipeline.llm_steps.respec_steps.run_respec_audit",
+                   new_callable=AsyncMock, return_value=None):
+            assert await run_orchestrator(config, Namespace(interview_summary="")) == 0
+
+        assert engine.await_args.kwargs.get("standalone") is False
+
+
 class TestDocsUpdatePhaseWiring:
     """DOCS_UPDATE runs between TDD_BUILD and RESPEC, always on, and never
     fails the build."""

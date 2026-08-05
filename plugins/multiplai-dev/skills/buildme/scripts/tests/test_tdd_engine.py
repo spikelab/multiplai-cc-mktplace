@@ -46,6 +46,7 @@ from build_pipeline.models import (
     AgentResult,
     BlockInfo,
     BlockStatus,
+    BuildPhase,
     FinalReviewVerdict,
     FindingAdjudication,
     FindingVerdict,
@@ -3089,6 +3090,91 @@ class TestRefactorAllOrdering:
 
         assert result == EXIT_BUILD_FAILURE
         final.assert_not_awaited()
+
+
+class TestCheckpointLifecycleOwnership:
+    """Who owns the checkpoint on success: the engine when it IS the build
+    (`python -m build_pipeline tdd`), the orchestrator when the engine is a
+    sub-phase.
+
+    Deleting the checkpoint as a sub-phase defeated the orchestrator's reload
+    guard (`if state_path.exists()`), which then rewrote a stale in-memory
+    state with `tdd = None`: a crash in DOCS_UPDATE/RESPEC/PUBLISH resumed at
+    tdd_build with no block state and re-ran the whole TDD build.
+    """
+
+    @staticmethod
+    def _patches():
+        ok = AgentResult(success=True, output="done")
+        return [
+            patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}),
+            patch("build_pipeline.tdd_engine.run_test_writer", new_callable=AsyncMock, return_value=ok),
+            patch("build_pipeline.tdd_engine.run_implementer", new_callable=AsyncMock, return_value=ok),
+            patch("build_pipeline.tdd_engine.run_test_suite", return_value=RED_SUITE_RESULT),
+            patch("build_pipeline.tdd_engine._audit_test_quality", new_callable=AsyncMock,
+                  return_value=QualityAudit(passed=True)),
+            patch("build_pipeline.tdd_engine._run_quality_review", new_callable=AsyncMock,
+                  return_value=ReviewResult(
+                      scores=[ReviewScore(dimension="Q", weight=2, score=5, evidence="e")])),
+            patch("build_pipeline.tdd_engine._adjudicate_review_findings", new_callable=AsyncMock,
+                  side_effect=lambda review, *a, **k: review),
+            patch("build_pipeline.tdd_engine._run_refactor_all", new_callable=AsyncMock, return_value=True),
+            patch("build_pipeline.tdd_engine._run_final_review", new_callable=AsyncMock,
+                  return_value=GateResult(passed=True, reason="ok")),
+        ]
+
+    async def _run(self, config, args, **kwargs):
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for p in self._patches():
+                stack.enter_context(p)
+            return await run_tdd_engine(config, args, **kwargs)
+
+    @pytest.mark.asyncio
+    async def test_sub_phase_run_leaves_the_checkpoint_for_the_orchestrator(self, tdd_setup):
+        config, args = tdd_setup
+        state_path = config.state_file_path()
+
+        assert await self._run(config, args, standalone=False) == EXIT_SUCCESS
+
+        assert state_path.exists(), "sub-phase run deleted the orchestrator's checkpoint"
+        state = BuildState.load(state_path)
+        assert state.tdd is not None, "checkpoint lost its TDD sub-state"
+        assert all(b.status == BlockStatus.DONE for b in state.tdd.blocks)
+        # The orchestrator owns phase advancement: the pointer must not have
+        # jumped past TDD_BUILD, or DOCS_UPDATE/RESPEC/PUBLISH would be skipped.
+        assert state.phase == BuildPhase.TDD_BUILD
+        for later in (BuildPhase.DOCS_UPDATE, BuildPhase.RESPEC, BuildPhase.PUBLISH):
+            assert not state.is_phase_complete(later)
+
+    @pytest.mark.asyncio
+    async def test_standalone_run_still_completes_and_cleans_up(self, tdd_setup):
+        """The `python -m build_pipeline tdd` entry point keeps its old
+        behavior: the engine IS the build, so it completes and removes the
+        checkpoint."""
+        config, args = tdd_setup
+
+        assert await self._run(config, args) == EXIT_SUCCESS
+        assert not config.state_file_path().exists()
+
+    @pytest.mark.asyncio
+    async def test_a_post_tdd_resume_does_not_re_run_the_build(self, tdd_setup):
+        """The consequence of the bug, asserted end to end: after the sub-phase
+        run, a fresh engine invocation (as a crashed DOCS_UPDATE would produce)
+        finds every block DONE and spawns no agent."""
+        config, args = tdd_setup
+        assert await self._run(config, args, standalone=False) == EXIT_SUCCESS
+
+        with patch.dict(os.environ, {"BUILDME_TRUST_REPO": "1"}), \
+             patch("build_pipeline.tdd_engine.run_test_writer",
+                   new_callable=AsyncMock) as writer, \
+             patch("build_pipeline.tdd_engine._run_refactor_all",
+                   new_callable=AsyncMock, return_value=True), \
+             patch("build_pipeline.tdd_engine._run_final_review",
+                   new_callable=AsyncMock, return_value=GateResult(passed=True, reason="ok")):
+            assert await run_tdd_engine(config, args, standalone=False) == EXIT_SUCCESS
+
+        writer.assert_not_awaited()
 
 
 class TestBudgetCircuitBreaker:
