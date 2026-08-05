@@ -1,6 +1,7 @@
 """Tests for state management — checkpoint, resume, phase transitions."""
 
 import json
+import os
 import pytest
 from pathlib import Path
 
@@ -58,6 +59,75 @@ class TestBuildState:
         assert s.is_phase_complete(BuildPhase.RESEARCH)
         assert s.is_phase_complete(BuildPhase.SPEC_GENERATION)
         assert not s.is_phase_complete(BuildPhase.COMPLETE)
+
+
+class TestAtomicCheckpoint:
+    """The checkpoint is the only crash-recovery record, so a half-written one
+    is unrecoverable: temp file in the same directory + os.replace."""
+
+    def _state(self, state_file):
+        return BuildState(
+            change_name="atomic", mode="scratch", tier="advanced",
+            state_file=str(state_file),
+        )
+
+    def test_writes_through_a_same_directory_temp_then_replaces(self, tmp_path, monkeypatch):
+        state_file = tmp_path / "sub" / "state.json"
+        seen = {}
+        real_replace = os.replace
+
+        def spy_replace(src, dst):
+            seen["src"] = Path(src)
+            seen["dst"] = Path(dst)
+            # The temp file must be a sibling of the target, or the rename is
+            # a cross-filesystem move and stops being atomic.
+            assert Path(src).parent == Path(dst).parent
+            assert Path(src).exists()
+            return real_replace(src, dst)
+
+        monkeypatch.setattr("build_pipeline.state.os.replace", spy_replace)
+        self._state(state_file).checkpoint(state_file)
+
+        assert seen["dst"] == state_file
+        assert seen["src"] != state_file
+        assert json.loads(state_file.read_text())["change_name"] == "atomic"
+
+    def test_serialization_failure_leaves_no_partial_and_no_temp(self, tmp_path, monkeypatch):
+        state_file = tmp_path / "state.json"
+        s = self._state(state_file)
+        s.checkpoint(state_file)
+        good = state_file.read_text()
+
+        s.phase = BuildPhase.TDD_BUILD
+        monkeypatch.setattr(
+            BuildState, "model_dump_json",
+            lambda self, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        with pytest.raises(RuntimeError):
+            s.checkpoint(state_file)
+
+        # Previous checkpoint intact, still loadable, and no scratch left behind.
+        assert state_file.read_text() == good
+        assert BuildState.load(state_file).phase == BuildPhase.INIT
+        assert [p.name for p in tmp_path.iterdir()] == ["state.json"]
+
+    def test_a_crashed_write_never_leaves_a_truncated_checkpoint(self, tmp_path, monkeypatch):
+        """os.replace dying mid-checkpoint is the crash we cannot recover from
+        if the write were in place — the old checkpoint must still parse."""
+        state_file = tmp_path / "state.json"
+        s = self._state(state_file)
+        s.checkpoint(state_file)
+
+        s.phase = BuildPhase.PUBLISH
+        monkeypatch.setattr(
+            "build_pipeline.state.os.replace",
+            lambda src, dst: (_ for _ in ()).throw(OSError("crash")),
+        )
+        with pytest.raises(OSError):
+            s.checkpoint(state_file)
+
+        assert BuildState.load(state_file).phase == BuildPhase.INIT
+        assert list(tmp_path.glob("*.tmp")) == []
 
 
 class TestTDDState:
