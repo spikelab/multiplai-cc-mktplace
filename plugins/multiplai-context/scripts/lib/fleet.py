@@ -10,6 +10,11 @@ lives in your head. Two stores already hold the answer and neither is readable:
 * ``<data_dir>/checkpoints/<sid>/checkpoint.md`` — the 11-section checkpoint.
   Knows *what*: current intent, next action, involved files. Written only when
   a token band is crossed, so plenty of sessions have none.
+* ``<data_dir>/live_containers.json`` — optional, written by the kit launcher
+  from ``docker ps``. Knows *whether*: which containers exist, and when that
+  was observed. The only one of the three a session cannot produce itself, and
+  the only one that turns "quiet" from a guess into an answer. Absent on
+  vanilla Claude Code, where everything below falls back to the clock.
 
 This module joins them into one reading. It is **pure aggregation** — no LLM
 call, no network, and nothing here is a source of truth. Delete both outputs
@@ -103,6 +108,7 @@ class Agent:
     last_ts: datetime | None = None
     last_kind: str = ""
     status: str = "idle"          # working | waiting_input | idle | ended
+    in_container: bool | None = None   # None = entry predates the field
     disposition: str = "active"   # active | parked | done — how it was LEFT
     disposition_reason: str = ""
     intent: str = ""
@@ -156,6 +162,86 @@ class Agent:
         if self.last_ts is None:
             return timedelta(0)
         return max(timedelta(0), now - self.last_ts)
+
+
+ROSTER_FILENAME = "live_containers.json"
+
+
+@dataclass(frozen=True)
+class Roster:
+    """What the host observed to be running, and when.
+
+    Written by the kit launcher (`claude.sh` → ``write_container_roster``) from
+    ``docker ps``, at every launch and every exit. This module only ever reads
+    it, and only ever as evidence about entries it is entitled to judge.
+
+    Three fields carry the entitlement, and none of them is decoration:
+
+    ``observed_at``
+        A roster older than an entry's last event proves nothing about it — the
+        session may have started in the gap. Only a *later* observation counts,
+        which is what makes this monotone: a stale roster degrades to "no
+        opinion", never to a wrong one.
+    ``kind`` / ``observer``
+        A container name is globally meaningful because there is one daemon. A
+        pid is meaningful only in the namespace that saw it, and this system
+        already carries that scar — ``fleet_sources/jobs.py`` exists partly to
+        say *"judge liveness by mtime, never by pid; the roster's pids belong
+        to another process namespace"*. When session identity moves to a pid
+        under the SDK, these two fields are what stops a reader from matching a
+        locally-observed pid against a host-observed roster and confidently
+        reporting a dead session as running. Anything but the pair this reader
+        understands is refused outright.
+    """
+
+    observed_at: datetime
+    ids: frozenset[str]
+    kind: str = "container"
+    observer: str = "host"
+
+    def judges(self, last_ts: datetime | None, in_container: bool | None) -> bool:
+        """May this roster decide the fate of one entry?
+
+        ``in_container`` must be explicitly ``True``. ``hostname`` is a
+        container name in a container and a machine name outside one, and the
+        string cannot tell you which — so an entry that predates the field
+        (``None``) or ran bare (``False``) is never matched against a list of
+        container names. Getting this wrong would declare a live ``--local``
+        session dead, which is the one direction this must never fail in.
+        """
+        if self.kind != "container" or self.observer != "host":
+            return False
+        if in_container is not True:
+            return False
+        return last_ts is not None and self.observed_at > last_ts
+
+
+def load_roster(data_dir: Path) -> Roster | None:
+    """Read the host's live-container roster, or ``None`` if there isn't one.
+
+    ``None`` is the ordinary case, not an error: vanilla Claude Code has no
+    launcher to write this, and every caller falls back to the quiet heuristic.
+    Malformed content is treated the same way — the roster is an optimization
+    over a working default, so there is never a reason to raise.
+    """
+    try:
+        raw = json.loads((data_dir / ROSTER_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    observed_at = _parse_ts(raw.get("observed_at"))
+    if observed_at is None:
+        return None
+    ids = raw.get("ids")
+    if not isinstance(ids, list):
+        return None
+    return Roster(
+        observed_at=observed_at,
+        ids=frozenset(str(i) for i in ids if isinstance(i, str)),
+        kind=str(raw.get("kind") or ""),
+        observer=str(raw.get("observer") or ""),
+    )
 
 
 @dataclass
@@ -336,7 +422,14 @@ def _git_info(cwd: str) -> tuple[str, str, str]:
     return "", "", ""
 
 
-def _status_of(kind: str, last_ts: datetime | None, now: datetime) -> str:
+def _status_of(
+    kind: str,
+    last_ts: datetime | None,
+    now: datetime,
+    roster: "Roster | None" = None,
+    hostname: str = "",
+    in_container: bool | None = None,
+) -> str:
     """Map a registry entry onto the contracted liveness vocabulary.
 
     ``working | waiting_input | idle | ended`` is frozen in the multiplai-gui
@@ -344,6 +437,24 @@ def _status_of(kind: str, last_ts: datetime | None, now: datetime) -> str:
     record, rather than inventing a parallel notion of "needs you". A
     Notification hook fires precisely when Claude Code is waiting on the user,
     which is what ``waiting_input`` means.
+
+    **A roster reading beats the clock, because it is evidence and the clock is
+    a guess.** Everything below about quiet is a heuristic standing in for a
+    fact nothing inside a session can observe. When the host has told us which
+    containers exist, and told us *after* this entry last spoke, the guess is
+    not needed: present means alive, absent means over. No fifth status is
+    coined for it — "the container is gone" is ``ended``, which is what it
+    means; the contract is untouched and the hub gains accuracy, not a shape.
+
+    Note what this fixes beyond retiring corpses: a session genuinely *thinking*
+    for longer than the quiet window used to drift to ``idle``. With its
+    container on the roster it stays ``working``, which is true.
+
+    See :func:`Roster.judges` for the three conditions that make a reading
+    admissible. When any of them fails — no kit, no roster file, a roster older
+    than the entry, a session that is not in a container — this falls through to
+    the quiet heuristic unchanged, which is also what a vanilla Claude Code
+    install does permanently.
 
     **Quiet is checked before kind, and that ordering is the whole point.**
     Only a clean quit fires ``SessionEnd``; a container killed by a reboot, a
@@ -356,13 +467,26 @@ def _status_of(kind: str, last_ts: datetime | None, now: datetime) -> str:
 
     Quiet is a *guess* at death, and deliberately the conservative one — the
     entry stays on the board as ``idle`` rather than being declared over,
-    because the session may merely be thinking. Nothing outside a session can
-    do better: a hook is code running inside one, so it cannot report its own
-    process dying, and an external observer that could was measured to buy
-    nothing here (see the 0.15.1 changelog).
+    because the session may merely be thinking. No hook can do better: a hook
+    is code running inside a session, so it cannot report its own process
+    dying.
+
+    An observer outside the session *can*, and that is what the roster above
+    is. Worth being precise about why this is not the thing 0.15.1 tried and
+    dropped: that was a **marker written on exit**, and the launcher dies with
+    the terminal on a reboot or a closed window, so it only ever covered
+    ``docker kill`` and OOM — zero entries on a real registry, against a
+    permanent filename contract between two repos. A **poll** does not care
+    whether any launcher survived. It asks what exists right now, which is
+    exactly the population the marker could not reach, and on the registry that
+    prompted it that was 49 entries.
     """
     if kind == "end":
         return "ended"
+    if roster is not None and roster.judges(last_ts, in_container) and hostname:
+        if hostname not in roster.ids:
+            return "ended"
+        return "waiting_input" if kind == "notification" else "working"
     if last_ts is None:
         return "idle"
     if (now - last_ts) >= timedelta(hours=IDLE_AFTER_HOURS):
@@ -370,7 +494,12 @@ def _status_of(kind: str, last_ts: datetime | None, now: datetime) -> str:
     return "waiting_input" if kind == "notification" else "working"
 
 
-def load_agent(entry_path: Path, data_dir: Path, now: datetime) -> Agent | None:
+def load_agent(
+    entry_path: Path,
+    data_dir: Path,
+    now: datetime,
+    roster: Roster | None = None,
+) -> Agent | None:
     """Build one :class:`Agent` from a registry entry plus its checkpoint.
 
     A session with no checkpoint directory is a valid entry with the fields
@@ -399,10 +528,16 @@ def load_agent(entry_path: Path, data_dir: Path, now: datetime) -> Agent | None:
     # same block is how they drift.
     disp_state, disp_reason = entry_disposition_block(raw)
     branch, repo_root, repo_id = _git_info(cwd)
+    hostname = str(raw.get("hostname") or "")
+    # Strictly tri-state. An entry written before the field existed says
+    # nothing about where it ran, and `Roster.judges` must be able to tell that
+    # apart from a recorded `False` — see its docstring.
+    raw_in_container = raw.get("in_container")
+    in_container = raw_in_container if isinstance(raw_in_container, bool) else None
     agent = Agent(
         session_id=sid,
         project=str(raw.get("project") or ""),
-        hostname=str(raw.get("hostname") or ""),
+        hostname=hostname,
         cwd=cwd,
         branch=branch,
         repo_root=repo_root,
@@ -410,7 +545,8 @@ def load_agent(entry_path: Path, data_dir: Path, now: datetime) -> Agent | None:
         started_at=str(raw.get("started_at") or ""),
         last_ts=last_ts,
         last_kind=last_kind,
-        status=_status_of(last_kind, last_ts, now),
+        in_container=in_container,
+        status=_status_of(last_kind, last_ts, now, roster, hostname, in_container),
         disposition=disp_state,
         disposition_reason=disp_reason,
     )
@@ -553,13 +689,16 @@ def collect(data_dir: Path, now: datetime | None = None) -> Fleet:
     """Read both stores and join them. Never raises on bad input."""
     now = now or datetime.now(timezone.utc)
     sessions_dir = data_dir / "sessions"
+    # One read for the whole pass: every entry is judged against the same
+    # observation, so the reading cannot shift underneath a single render.
+    roster = load_roster(data_dir)
     agents: list[Agent] = []
     try:
         entries = sorted(sessions_dir.glob("*.json"))
     except OSError:
         entries = []
     for entry in entries:
-        agent = load_agent(entry, data_dir, now)
+        agent = load_agent(entry, data_dir, now, roster)
         if agent is not None:
             agents.append(agent)
 

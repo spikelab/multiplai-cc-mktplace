@@ -631,6 +631,158 @@ class TestInvolvedFilesParsing:
 
 
 # ---------------------------------------------------------------------------
+# The container roster — evidence beats the clock
+# ---------------------------------------------------------------------------
+
+def make_roster(data_dir, *names, ago=timedelta(0), kind="container",
+                observer="host", now=NOW):
+    """Write a live-container roster as the kit launcher writes it."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / fleet.ROSTER_FILENAME).write_text(json.dumps({
+        "version": 1,
+        "observed_at": (now - ago).isoformat(),
+        "observer": observer,
+        "kind": kind,
+        "ids": list(names),
+    }))
+
+
+def make_contained_session(data_dir, sid, *, host, **kw):
+    """A registry entry that records running inside a container."""
+    entry = make_session(data_dir, sid, hostname=host, **kw)
+    raw = json.loads(entry.read_text())
+    raw["in_container"] = True
+    entry.write_text(json.dumps(raw))
+    return entry
+
+
+class TestContainerRoster:
+    """A session cannot observe its own death — a hook is code running inside
+    it. The host can just look. When it has looked *since* the entry last
+    spoke, that reading replaces the quiet heuristic outright."""
+
+    def test_a_missing_container_is_proof_the_session_ended(self, tmp_path):
+        make_contained_session(tmp_path, "gone", host="claude-personal-01",
+                               ago=timedelta(minutes=2))
+        make_roster(tmp_path, "claude-personal-99")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.status == "ended"
+        assert agent.live is False
+
+    def test_a_live_container_beats_the_quiet_window(self, tmp_path):
+        """The other half, and the one that fixes a real error: a session
+        thinking for longer than IDLE_AFTER_HOURS used to drift to `idle`."""
+        old = timedelta(hours=fleet.IDLE_AFTER_HOURS + 5)
+        make_contained_session(tmp_path, "busy", host="claude-personal-01", ago=old)
+        make_roster(tmp_path, "claude-personal-01")
+
+        assert fleet.collect(tmp_path, NOW).agents[0].status == "working"
+
+    def test_a_live_container_at_a_prompt_still_needs_you(self, tmp_path):
+        old = timedelta(hours=fleet.IDLE_AFTER_HOURS + 5)
+        make_contained_session(tmp_path, "ask", host="claude-personal-01",
+                               kind="notification", ago=old)
+        make_roster(tmp_path, "claude-personal-01")
+
+        assert fleet.collect(tmp_path, NOW).agents[0].status == "waiting_input"
+
+    def test_a_roster_older_than_the_entry_decides_nothing(self, tmp_path):
+        """It proves nothing: the session may have started in the gap. Falling
+        back is what makes a stale roster harmless rather than wrong."""
+        make_contained_session(tmp_path, "new", host="claude-personal-01",
+                               ago=timedelta(minutes=2))
+        make_roster(tmp_path, ago=timedelta(hours=3))
+
+        assert fleet.collect(tmp_path, NOW).agents[0].status == "working"
+
+    def test_no_roster_at_all_changes_nothing(self, tmp_path):
+        """Vanilla Claude Code has no launcher to write one. The degradation
+        contract is satisfied by the ordinary path, not a special case."""
+        make_contained_session(tmp_path, "quiet", host="claude-personal-01",
+                               ago=timedelta(days=3))
+
+        assert fleet.collect(tmp_path, NOW).agents[0].status == "idle"
+
+    def test_a_bare_session_is_never_judged_against_container_names(self, tmp_path):
+        """`--local` mode and claude-wrapped run on the Mac, where `hostname`
+        is the machine name. It will never be in `docker ps`, and declaring a
+        live session dead is the one direction this must not fail in."""
+        make_session(tmp_path, "bare", hostname="Spikes-MacBook",
+                     ago=timedelta(minutes=2))
+        make_roster(tmp_path, "claude-personal-01")
+
+        assert fleet.collect(tmp_path, NOW).agents[0].status == "working"
+
+    def test_an_entry_predating_the_field_falls_back(self, tmp_path):
+        """`in_container` absent means "unknown", which must not be read as
+        `False` *or* as `True` — hence the explicit tri-state."""
+        make_session(tmp_path, "old", hostname="claude-personal-01",
+                     ago=timedelta(minutes=2))
+        make_roster(tmp_path, "claude-personal-99")
+
+        agents = fleet.collect(tmp_path, NOW).agents
+        assert agents[0].in_container is None
+        assert agents[0].status == "working"
+
+    def test_a_clean_quit_is_still_ended_without_any_roster_reading(self, tmp_path):
+        make_contained_session(tmp_path, "done", host="claude-personal-01",
+                               kind="end", ago=timedelta(minutes=2))
+        make_roster(tmp_path, "claude-personal-01")
+
+        assert fleet.collect(tmp_path, NOW).agents[0].status == "ended"
+
+    def test_parking_survives_a_dead_container(self, tmp_path):
+        """The whole point of parking: "I am coming back to this" outlives the
+        process. Disposition beats liveness, and a proven death is still
+        liveness."""
+        entry = make_contained_session(tmp_path, "parked", host="claude-personal-01",
+                                       ago=timedelta(minutes=2))
+        raw = json.loads(entry.read_text())
+        raw["disposition"] = {"state": "parked", "reason": "back Monday"}
+        entry.write_text(json.dumps(raw))
+        make_roster(tmp_path, "claude-personal-99")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.status == "ended"
+        assert agent.group == "Parked"
+        assert agent.live is True
+
+    def test_a_pid_roster_is_refused(self, tmp_path):
+        """`fleet_sources/jobs.py` carries this scar already: a pid means
+        something only in the namespace that observed it. When session identity
+        moves to a pid under the SDK, a reader expecting containers must refuse
+        rather than match — confidently reporting a dead session as running is
+        the failure mode `kind`/`observer` exist to prevent."""
+        make_contained_session(tmp_path, "s", host="claude-personal-01",
+                               ago=timedelta(days=3))
+        make_roster(tmp_path, "claude-personal-01", kind="pid", observer="local")
+
+        assert fleet.collect(tmp_path, NOW).agents[0].status == "idle"
+
+    def test_a_corrupt_roster_is_no_roster(self, tmp_path):
+        (tmp_path).mkdir(parents=True, exist_ok=True)
+        (tmp_path / fleet.ROSTER_FILENAME).write_text("{not json")
+        make_contained_session(tmp_path, "s", host="claude-personal-01",
+                               ago=timedelta(days=3))
+
+        assert fleet.load_roster(tmp_path) is None
+        assert fleet.collect(tmp_path, NOW).agents[0].status == "idle"
+
+    def test_the_status_vocabulary_is_still_the_contracted_four(self, tmp_path):
+        """No fifth value is coined for "container gone" — it is `ended`."""
+        make_roster(tmp_path, "claude-personal-01")
+        roster = fleet.load_roster(tmp_path)
+        for kind in ("start", "stop", "notification", "end"):
+            for host in ("claude-personal-01", "claude-personal-99"):
+                assert fleet._status_of(
+                    kind, NOW - timedelta(days=3), NOW, roster, host, True,
+                ) in {"working", "waiting_input", "idle", "ended"}
+
+
+# ---------------------------------------------------------------------------
 # The involved-files bullet — a glance aid, not an inventory
 # ---------------------------------------------------------------------------
 
