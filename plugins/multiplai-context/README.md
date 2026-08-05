@@ -918,9 +918,9 @@ section: [How the end of a session is detected](#3-how-the-end-of-a-session-is-d
 In brief: a clean quit fires `SessionEnd` and is recorded at once.
 Nothing else records anything — a reboot, a closed terminal, a `docker
 kill`, an OOM, or a session you simply walked away from all look
-identical from outside, and are filed as **idle** after 24h. That is a
+identical from outside, and are filed as **idle** after 12h. That is a
 conservative guess rather than a claim that it died, and it is why idle
-is listed but never counted.
+is counted but never ranked — nor, since 0.21.0, listed.
 
 #### Stage 7 — the drain
 
@@ -994,7 +994,7 @@ Everything above that can go two ways, in one table:
 | which drain got there first | in-session / host *(kit)* | atomic rename |
 | extraction outcome | diary + disposition + retire · partial · requeue · quarantine | the model call |
 | disposition | `active` · `parked` · `done` | how you left, read from the transcript |
-| fleet grouping | Needs you · Working · Parked · Idle · not listed | status × disposition |
+| fleet grouping | Needs you · Working · Parked (listed) · Idle (counted only) · finished (neither) | status × disposition |
 
 #### A worked example — two sessions, one line of output
 
@@ -1018,21 +1018,25 @@ the whole question:
 | When | B's group | in the `/fleet-status` digest |
 |---|---|---|
 | 13:15 Tue — 35 min after B's last event | **Needs you** | ranked item: B, waiting on your answer |
-| 14:00 Wed — 25h quiet | **Idle** — listed in `AGENTS.md`, not a front | `IDLE (1, oldest 25h)` count line |
-| following Tuesday | still **Idle**; still listed | unchanged |
+| 01:00 Wed — 13h quiet | **Idle** — counted in the `AGENTS.md` header, not listed, not a front | `IDLE (1, oldest 13h)` count line |
+| following Tuesday | still **Idle**; still only a number | unchanged |
 | +30 days | entry GC'd — B disappears | unchanged |
 
 **B never becomes `ended`, and it cannot.** Nothing proves it died: no
 hook fires for a session that is still sitting there, and none fires for
 one whose container was killed either. All the system can honestly say is
-"quiet for 25 hours", which is `idle`.
+"quiet for 13 hours", which is `idle`.
 
-That is why listing and counting are kept apart. `AGENTS.md` **lists**
-B — the idle section is exactly where you go looking for the tab you
-forgot about. The digest does **not rank** it, because a tab that went
-quiet has no claim on your attention while a session waiting on an answer
-does. Every entry the system is unsure about lands on the listed-but-not-
-ranked side, which is what keeps the list you actually read honest.
+That is why counting and ranking are kept apart. The digest does **not
+rank** B, because a tab that went quiet has no claim on your attention
+while a session waiting on an answer does. Every entry the system is
+unsure about lands on the counted-but-not-ranked side, which is what
+keeps the list you actually read honest.
+
+Its **checkpoint is untouched** either way. `data/checkpoints/<sid>/` is
+still on disk with B's intent, next action and files in it, and the diary
+is where "what did that session decide" is answered. Dropping B from the
+listing costs you nothing you cannot get back by name.
 
 And if you reboot the Mac on Wednesday, B looks **exactly the same** —
 which is the point of [How the end of a session is detected](#3-how-the-end-of-a-session-is-detected).
@@ -1053,8 +1057,11 @@ The same registry, same instant, with 0.15.1's counting:
 ```
 
 The 29 that vanished are B-shaped: tabs that went quiet days or weeks
-ago. They are still in `AGENTS.md` under **Idle** — nothing was hidden —
-they simply stopped being counted as things needing you. `oldest` fell
+ago. At the time they were still listed in `AGENTS.md` under **Idle** —
+nothing was hidden — they simply stopped being counted as things needing
+you. (0.21.0 took the second step and dropped the section too, once the
+same registry showed 36 idle entries to 17 fronts: the graveyard *was*
+the file. They are still counted in the header.) `oldest` fell
 from 19d to 7h for the same reason: it now measures the oldest *front*,
 not the oldest corpse. All 8 collisions were between pairs of sessions
 last heard from over a week ago, which is shared history, not a live
@@ -1174,8 +1181,8 @@ else is inferred from silence:
 | How it stopped | Fires | Recorded as | Noticed |
 |---|---|---|---|
 | `/exit`, Ctrl-D, Ctrl-C Ctrl-C — a clean quit | `SessionEnd` | `last_event.kind = end` | at once |
-| Reboot, closed terminal, `docker kill`, OOM-kill, crash | **nothing** | nothing | quiet ⇒ `idle` after 24h |
-| Still running; you walked away | nothing | nothing | quiet ⇒ `idle` after 24h |
+| Reboot, closed terminal, `docker kill`, OOM-kill, crash | **nothing** | nothing | quiet ⇒ `idle` after 12h |
+| Still running; you walked away | nothing | nothing | quiet ⇒ `idle` after 12h |
 
 Rows 2 and 3 collapsing into the same reading is not an oversight, it is
 the honest answer: **from the outside they are indistinguishable.** A
@@ -1183,10 +1190,17 @@ session that died and a session sitting at a prompt both look like an
 entry that has not spoken in a while.
 
 So quiet is treated as a **guess, deliberately the conservative one** —
-the entry is filed as `idle`, still listed, not declared over, because
-it may just be thinking or you may be at lunch. What that buys is that
-`idle` is *listed but never counted*: an entry the system is unsure
-about can never inflate the one number you actually read.
+the entry is filed as `idle`, not declared over, because it may just be
+thinking or you may be at lunch. What that buys is that `idle` is *never
+a front*: an entry the system is unsure about can never inflate the one
+number you actually read.
+
+The threshold is **12h**, and it was 24h until 0.21.0. A day sounds
+conservative until you notice it spans the previous evening: every
+container you opened after dinner still claimed a slot under **Working**
+the next morning, which read as nine running agents where there was one.
+Half a day is roughly one working session — quiet since this morning is
+plausibly still yours, quiet since yesterday is not.
 
 *This was tried the other way.* 0.15.1 briefly had the kit launcher drop
 an `.exited` marker beside the entry when `docker run` returned, on the
@@ -1207,26 +1221,43 @@ Listing and counting are deliberately kept apart:
 | Needs you | yes | **yes** |
 | Working | yes | **yes** |
 | Parked | yes | **yes** |
-| Idle | yes | no |
+| Idle | no — a count in the header | no |
 | ended / `done` | no (counted as "finished") | no |
 
-`AGENTS.md` **lists** everything on the board — the idle section is
-where you go looking for the tab you forgot about. The
-`/multiplai-context:fleet-status` digest ranks and counts **fronts**:
-what has a claim on you. Idle is the difference, and on a real registry
-it is most of the entries. (`fleet.txt`, the old one-line status-bar
-count of the same fronts, is retired — a count with no referent said
-there was a fire without saying where.)
+`AGENTS.md` **lists the fronts**: what has a claim on you. The
+`/multiplai-context:fleet-status` digest ranks the same set. Idle is the
+difference, and on a real registry it is most of the entries — 36 to 17
+on the reading that prompted 0.21.0, each up to forty lines long, which
+put the answer at the top of the file and a graveyard under it. It is now
+a number in the header (`… · 36 idle, not listed`) and nothing more.
+(`fleet.txt`, the old one-line status-bar count of the same fronts, is
+retired — a count with no referent said there was a fire without saying
+where.)
+
+What that gives up is "where did I leave that thing last Tuesday", which
+an idle entry's checkpoint used to answer in passing. Nothing was
+deleted: `data/checkpoints/<sid>/checkpoint.md` is still there, and the
+diary is the place that question is supposed to be asked.
 
 Parked counts as a front on purpose. Its process is usually long gone,
 but "I am coming back to this" is a claim on you in a way that a tab
 which merely went quiet is not — that is the whole difference between
-parking something and abandoning it.
+parking something and abandoning it. It is also why parking is the way
+to keep something on this list.
+
+Each listed entry shows its **involved files**, shortened for reading:
+paths inside the agent's own checkout render relative to it, paths
+elsewhere in the workspace relative to the workspace root, anything else
+as `…/parent/name`, and the list stops at six with `_+N more_`. The
+stored paths stay absolute — `fleet.json` ships them and collision
+detection needs them; only the display is short.
 
 A **Collisions** section names every file two agents both have in hand.
-Both holders must be fronts *and* have been heard from within 24h: a
-collision is the claim that two agents might **now** write the same
-file, and a file two sessions both touched last week is shared history.
+Both holders must be `Working` or `Parked` *and* have been heard from
+within 24h. In practice unparked work is bounded by the shorter idle
+window, since it leaves `Working` at 12h; parked work keeps the full 24,
+because uncommitted edits nobody is watching hold a file harder, not
+less. A file two sessions both touched last week is shared history.
 
 #### 5. When entries are collected
 

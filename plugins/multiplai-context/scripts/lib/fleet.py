@@ -18,7 +18,9 @@ and re-run and they come back identical; anything that ever wrote *into*
 disagrees with the other three.
 
 The hook-path output is ``AGENTS.md`` — the full read, grouped by whether an
-agent needs you, listing everything still on the board, idle tabs included.
+agent needs you, listing every front. Idle tabs are counted in the header and
+not listed: they are a guess at death rather than a queue, and at ten to one
+against the fronts they were the file.
 The ranked console digest and ``fleet.json`` (see :mod:`lib.fleet_digest` and
 :func:`fleet_json`) are further renderings of the same collection, produced
 only when a human runs the ``fleet-status`` CLI.
@@ -56,14 +58,21 @@ logger = logging.getLogger(__name__)
 AGENTS_FILENAME = "AGENTS.md"
 
 # A session quiet for longer than this is "idle" rather than "working".
-# One day, because the unit that matters is "did I touch this today" — a
-# 30-minute window would file half a working fleet as idle every lunch break.
-IDLE_AFTER_HOURS = 24
+# Half a day, because that is the span of one working session: a tab last
+# heard from this morning is plausibly still yours, one last heard from
+# yesterday is a corpse. It was 24h, and against the real registry that read
+# nine sessions as "Working" of which one had a process — a day is long enough
+# for every container from the previous evening to still be claiming the board.
+# Shorter than ~8h would file a working fleet as idle over a long lunch.
+IDLE_AFTER_HOURS = 12
 
 # Two agents holding one file is only a collision while both are still in a
-# position to write it. Same window as IDLE_AFTER_HOURS, and for the same
-# reason: past a day, "we both touched this" is shared history, not a clash.
-COLLISION_MAX_AGE_HOURS = IDLE_AFTER_HOURS
+# position to write it. Deliberately NOT tied to IDLE_AFTER_HOURS, though it
+# once was: that threshold is about *attention* (is this tab still mine?),
+# while this one is about *file tenure* (could uncommitted work still land?).
+# Parked work holds its files for as long as it sits there, so shortening the
+# attention window must not silently shorten this one.
+COLLISION_MAX_AGE_HOURS = 24
 
 # Checkpoint sections this view reads. The other eight are for context
 # rebuild, not for a fleet glance.
@@ -597,6 +606,23 @@ _GROUP_ORDER = ("Needs you", "Working", "Parked", "Idle")
 # parking something and abandoning it.
 _FRONT_GROUPS = frozenset(_GROUP_ORDER) - {"Idle"}
 
+# The groups `AGENTS.md` writes a section for — the fronts, and only them.
+#
+# Idle stays a *classification* (it is what makes an agent not a front, it is
+# what the digest counts, and `fleet.json` still carries every entry) but it no
+# longer gets a section, because the section was the bulk of the file and none
+# of it was actionable: 36 idle entries to 17 fronts, each up to forty lines,
+# with the answer at the top and a graveyard under it. Idle is a guess at death
+# — nothing inside a session can report its own container being killed — so
+# past the quiet threshold these are overwhelmingly closed terminals, not work
+# waiting to be picked up. The header keeps the count, so a fleet that has gone
+# entirely quiet still says so rather than rendering as an empty file.
+#
+# What is genuinely lost: "where did I leave that thing last Tuesday", which
+# the checkpoint under an idle entry used to answer. That is the diary's job
+# and `.multiplai/checkpoints/<sid>/checkpoint.md` is still on disk, unchanged.
+_RENDERED_GROUPS = tuple(g for g in _GROUP_ORDER if g != "Idle")
+
 # The groups that can hold a file against another agent (see
 # :func:`find_collisions`): a front, minus "Needs you". An agent stopped at a
 # prompt will not write anything until it is answered, so it cannot be about to
@@ -616,6 +642,84 @@ def _sanitize_reason(reason: str) -> str:
     """
     reason = reason.strip().lstrip("#").strip()
     return reason.replace("|", "/")
+
+
+# How many involved files an entry shows before it says "+N more". The list is
+# a glance aid, not an inventory — one real entry carried 41 absolute paths,
+# which is a 4000-character line that pushes the *next* agent's heading off the
+# screen. Six is roughly what a reader takes in without scanning.
+_MAX_FILES_SHOWN = 6
+
+
+def _short_path(path: str, agent: Agent) -> str:
+    """One involved-file path, shortened for reading rather than for machines.
+
+    Checkpoints record **absolute** paths by mandate, and that mandate is
+    right: :func:`_collision_key` needs them to tell two worktrees of one repo
+    apart, and a resuming session needs a path it can hand straight to `Read`.
+    But every one of them repeats a 40-character workspace prefix that the
+    entry's own ``cwd``/``branch`` line already established, so the information
+    a reader actually wants — *which* file — sits at the far right of a wrapped
+    line. This shortens the display only; :attr:`Agent.files` keeps the
+    absolute paths, and `fleet.json` still ships them.
+
+    Three cases, in order:
+
+    * inside the agent's checkout — show it relative to that checkout, because
+      the checkout is what the heading already named;
+    * inside the workspace but outside the checkout (another project, a memory
+      file) — show it relative to the workspace root, which is the shortest
+      form that still says *where*;
+    * anywhere else (``/tmp`` scratchpads, ``$HOME`` dotfiles) — keep the last
+      two segments behind an ellipsis. A bare basename would collapse six
+      sibling ``state.py`` into six identical entries.
+    """
+    trailing = "/" if path.endswith("/") else ""
+    clean = path.rstrip("/")
+    for root in (agent.repo_root, _workspace_root(agent)):
+        if not root:
+            continue
+        prefix = root.rstrip("/") + "/"
+        if clean.startswith(prefix):
+            return clean[len(prefix):] + trailing
+        if clean == root.rstrip("/"):
+            return "." + trailing
+    parts = clean.split("/")
+    if len(parts) <= 2:
+        return clean + trailing
+    return "…/" + "/".join(parts[-2:]) + trailing
+
+
+def _workspace_root(agent: Agent) -> str:
+    """The workspace directory containing this agent's ``cwd``, or ``""``.
+
+    Derived from ``cwd`` rather than read from config, because this module is
+    imported by a session hook and must stay a pure file read — and because the
+    workspace that matters is the one the *agent* was in, which need not be the
+    one the renderer is running in. ``.worktrees/<name>`` is peeled off first:
+    a linked worktree is a checkout, not a workspace, and leaving it in would
+    make every path in the sibling repo look unrelated.
+    """
+    cwd = (agent.repo_root or agent.cwd).rstrip("/")
+    if not cwd:
+        return ""
+    for marker in ("/.worktrees/", "/PROJECTS/"):
+        head, sep, _ = cwd.partition(marker)
+        if sep:
+            return head
+    return cwd
+
+
+def _files_line(agent: Agent) -> str:
+    """The ``**Files:**`` bullet — deduplicated, shortened, and capped."""
+    seen: list[str] = []
+    for path in agent.files:
+        shown = _short_path(path, agent)
+        if shown not in seen:
+            seen.append(shown)
+    head = ", ".join(f"`{p}`" for p in seen[:_MAX_FILES_SHOWN])
+    extra = len(seen) - _MAX_FILES_SHOWN
+    return f"- **Files:** {head}" + (f" _+{extra} more_" if extra > 0 else "")
 
 
 def _render_agent(agent: Agent, now: datetime) -> list[str]:
@@ -641,7 +745,7 @@ def _render_agent(agent: Agent, now: datetime) -> list[str]:
     if agent.next_action:
         lines.append(f"- **Next:** {agent.next_action}")
     if agent.files:
-        lines.append("- **Files:** " + ", ".join(f"`{p}`" for p in agent.files))
+        lines.append(_files_line(agent))
     if not agent.has_checkpoint:
         lines.append("- _No checkpoint — registry only._")
     lines.append("")
@@ -672,7 +776,7 @@ def render_agents_md(fleet: Fleet, now: datetime, generated_at: str | None = Non
         f"{len(fleet.collisions)} collision(s)**"
     )
     if idle:
-        counts += f" · {len(idle)} idle"
+        counts += f" · {len(idle)} idle, not listed"
     if finished:
         counts += f" · {len(finished)} finished, not listed"
 
@@ -686,7 +790,7 @@ def render_agents_md(fleet: Fleet, now: datetime, generated_at: str | None = Non
         "",
     ]
 
-    for title in _GROUP_ORDER:
+    for title in _RENDERED_GROUPS:
         group = fleet.in_group(title)
         if not group:
             continue

@@ -18,6 +18,46 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.21.0] - 2026-08-05
+
+### Changed
+
+- **`AGENTS.md` no longer lists idle sessions.** On a real registry the file was
+  36 idle entries to 17 fronts — the thing you opened it for sat at the top with
+  a graveyard under it. Idle is a *guess at death*, not a queue: nothing inside a
+  session can report its container being killed, so past the quiet threshold
+  those entries are overwhelmingly closed terminals. They are still counted in
+  the header (`… · 36 idle, not listed`), so a fleet that has gone entirely quiet
+  still says so, and `fleet.json` still carries every entry for the hub.
+
+  Nothing was deleted. The per-session checkpoint — intent, next action, files —
+  is still at `data/checkpoints/<sid>/checkpoint.md`, and the diary is where
+  "what did that session decide" is answered. If you want something to stay on
+  the list, **park it**: parked sessions are listed at any age, which is the
+  difference between coming back to something and abandoning it.
+
+- **A session goes idle after 12 hours of silence, was 24.** A day sounds
+  conservative until you notice it spans the previous evening: every container
+  opened after dinner still claimed a slot under **Working** the next morning,
+  which read as nine running agents where there was one. Half a day is about one
+  working session — quiet since this morning is plausibly still yours, quiet
+  since yesterday is not.
+
+  The collision window stays at 24h and is now a separate constant, because it
+  answers a different question (could uncommitted work still land on this file?)
+  than the idle threshold does (is this tab still mine?). In practice unparked
+  work is bounded by the shorter one, since it leaves `Working` at 12h; parked
+  work keeps the full 24.
+
+- **Involved-file lists are readable.** They were absolute paths, all of them,
+  one line — one real entry carried 41, which is a 4000-character line that
+  pushes the next agent's heading off the screen. Paths inside the agent's own
+  checkout now render relative to it, paths elsewhere in the workspace relative
+  to the workspace root, anything else as `…/parent/name`, and the list stops at
+  six with `_+N more_`. Duplicates that collapse to the same short form are
+  shown once. This is display only: the stored paths stay absolute, so
+  `fleet.json` and collision detection are unaffected.
+
 ## [0.20.0] - 2026-08-05
 
 ### Fixed
