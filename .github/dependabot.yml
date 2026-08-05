@@ -36,6 +36,14 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # Refresh the LOCK, do not rewrite the declared ranges in the members'
+    # pyproject.toml files. Dependabot's default strategy raises every floor to
+    # whatever it just resolved, which is wrong here for the same reason it is
+    # wrong in multiplai-core: a floor raised by weekly automation narrows what
+    # a member can resolve alongside its siblings, and states a compatibility
+    # claim nobody verified. The third-party ceilings that ARE deliberate
+    # (claude-agent-sdk <0.3) must likewise not be edged upward by a bot.
+    versioning-strategy: "increase-if-necessary"
     groups:
       # One PR for the routine churn, so the noise stays reviewable. Security
       # updates are deliberately NOT grouped — Dependabot raises those

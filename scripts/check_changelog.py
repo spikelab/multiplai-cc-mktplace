@@ -16,12 +16,16 @@ things:
     1. its version in `.claude-plugin/marketplace.json` differs from the base
     2. `plugins/<name>/CHANGELOG.md` is modified in the same diff
 
-Two exemptions, because a gate that fires on changes it cannot possibly be
+Three exemptions, because a gate that fires on changes it cannot possibly be
 about is a gate people learn to bypass:
 
   * **Docs-only.** If everything changed under `plugins/<name>/` is a
     `README.md` or the `CHANGELOG.md` itself, there is no behaviour to
     describe and no version to bump.
+  * **Lockfile-only.** If the only thing that changed is a `uv.lock`, this is a
+    dependency re-resolve — in practice always a Dependabot PR, which cannot
+    write release notes. Unlike docs-only this is *not* a claim that nothing
+    changed for the user; see `LOCKFILE_NAMES` for the reasoning and its limit.
   * **An explicit opt-out**, for the genuine exception: a `no-changelog` label
     on the PR, or a `[skip changelog]` line in its body. Deliberate, visible
     in review, and recorded on the PR.
@@ -53,6 +57,17 @@ MANIFEST = ".claude-plugin/marketplace.json"
 # Files under a plugin that describe it rather than do anything. Changing only
 # these cannot change what the plugin does on an installing user's machine.
 DOCS_ONLY_NAMES = {"README.md", "CHANGELOG.md"}
+
+# A lockfile records what the declared dependencies resolved to. This exemption
+# is deliberately kept separate from DOCS_ONLY_NAMES because it does NOT make
+# the same claim: a re-locked dependency genuinely does change the code that
+# runs on an installing user's machine. It is exempted for a narrower reason —
+# Dependabot opens these weekly and cannot write release notes, so gating them
+# only ever produced a red check that a human cleared by hand. A dependency
+# change worth telling users about (a security advisory, a behaviour change in
+# a library a skill leans on) still deserves a bump and an entry, and that is a
+# judgement for whoever reviews the bump; the gate can no longer make it.
+LOCKFILE_NAMES = {"uv.lock"}
 
 SKIP_LABEL = "no-changelog"
 SKIP_MARKER = "[skip changelog]"
@@ -128,6 +143,12 @@ def check(
         rel = touched[name]
         if all(Path(r).name in DOCS_ONLY_NAMES for r in rel):
             f.notes.append(f"{name}: docs-only change, not gated")
+            continue
+
+        # Lockfile-only: see LOCKFILE_NAMES. Note this is `all`, so a diff that
+        # touches a lock *and* anything else is still gated on the whole thing.
+        if all(Path(r).name in LOCKFILE_NAMES for r in rel):
+            f.notes.append(f"{name}: lockfile-only change, not gated")
             continue
 
         # A plugin deleted wholesale has nothing left to document.
