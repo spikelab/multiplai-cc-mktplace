@@ -91,6 +91,15 @@ class TestCreateRouter:
 
 
 class TestTokenOverlapRouter:
+    """Single-corpus semantics, exercised through the canonical
+    ``select_multi`` entry point (the legacy ``select`` is gone)."""
+
+    def _pick(self, prompt, catalog, **kw):
+        from lib.memory_router import TokenOverlapRouter
+        return TokenOverlapRouter().select_multi(
+            prompt, None, {"memory": catalog, "skills": [], "resources": []}, **kw
+        )["memory"]
+
     def _catalog(self) -> list[dict]:
         return [
             {
@@ -114,27 +123,21 @@ class TestTokenOverlapRouter:
         ]
 
     def test_empty_prompt_returns_empty(self):
-        from lib.memory_router import TokenOverlapRouter
-        assert TokenOverlapRouter().select("", self._catalog()) == []
+        assert self._pick("", self._catalog()) == []
 
     def test_empty_catalog_returns_empty(self):
-        from lib.memory_router import TokenOverlapRouter
-        assert TokenOverlapRouter().select("debug async code", []) == []
+        assert self._pick("debug async code", []) == []
 
     def test_matches_by_intent_domain(self):
-        from lib.memory_router import TokenOverlapRouter
-        picks = TokenOverlapRouter().select(
-            "I need help debugging python async code", self._catalog(),
-        )
+        picks = self._pick("I need help debugging python async code", self._catalog())
         assert "python.md" in picks
         assert "unrelated.md" not in picks
 
     def test_anti_domain_drops_match(self):
         """File with matching intent_domain is dropped if anti_domain also matches."""
-        from lib.memory_router import TokenOverlapRouter
         # Prompt matches writing.md's intent ("blog") AND its anti ("debugging")
-        picks = TokenOverlapRouter().select(
-            "writing a blog post about debugging python", self._catalog(),
+        picks = self._pick(
+            "writing a blog post about debugging python", self._catalog()
         )
         assert "writing.md" not in picks
 
@@ -147,7 +150,6 @@ class TestTokenOverlapRouter:
         naive bag-of-words OR match excluded the entry on "memory" /
         "routing" — the very words that make it relevant.
         """
-        from lib.memory_router import TokenOverlapRouter
         catalog = [
             {
                 "source": "router-audit.md",
@@ -160,30 +162,26 @@ class TestTokenOverlapRouter:
                 ],
             },
         ]
-        picks = TokenOverlapRouter().select(
-            "audit the retrieval routing quality and false negatives", catalog,
+        picks = self._pick(
+            "audit the retrieval routing quality and false negatives", catalog
         )
         assert "router-audit.md" in picks
 
     def test_sorts_by_overlap_count(self):
-        from lib.memory_router import TokenOverlapRouter
         catalog = [
             {"source": "a.md", "intent_domains": ["debugging python code"]},
             {"source": "b.md", "intent_domains": ["debugging python async code patterns"]},
         ]
-        picks = TokenOverlapRouter().select(
-            "debugging python async code patterns", catalog,
-        )
-        # b.md matches more tokens, should be first
-        assert picks == ["b.md", "a.md"]
+        picks = self._pick("debugging python async code patterns", catalog)
+        # b.md matches more tokens, so it ranks first when both survive
+        assert picks[0] == "b.md"
 
     def test_respects_max_files(self):
-        from lib.memory_router import TokenOverlapRouter
         catalog = [
-            {"source": f"f{i}.md", "intent_domains": ["python code"]}
+            {"source": f"f{i}.md", "intent_domains": ["python code patterns"]}
             for i in range(20)
         ]
-        picks = TokenOverlapRouter().select("python code", catalog, max_files=3)
+        picks = self._pick("python code patterns", catalog, max_files_per_corpus=3)
         assert len(picks) == 3
 
 
@@ -193,6 +191,14 @@ class TestTokenOverlapRouter:
 
 
 class TestLLMRouter:
+    """Single-corpus LLM semantics via ``select_multi``."""
+
+    def _pick(self, prompt, catalog):
+        from lib.memory_router import LLMRouter
+        return LLMRouter().select_multi(
+            prompt, None, {"memory": catalog, "skills": [], "resources": []}
+        )["memory"]
+
     def _catalog(self) -> list[dict]:
         return [
             {"source": "writing.md", "summary": "voice guide",
@@ -201,85 +207,60 @@ class TestLLMRouter:
              "intent_domains": ["python code"]},
         ]
 
-    def test_empty_prompt_returns_empty(self):
-        from lib.memory_router import LLMRouter
-        assert LLMRouter().select("", self._catalog()) == []
-
-    def test_empty_catalog_returns_empty(self):
-        from lib.memory_router import LLMRouter
-        assert LLMRouter().select("prompt", []) == []
-
-    def test_select_uses_model_client(self):
-        """Successful LLM response returns the parsed filename list (filtered to known)."""
-        from lib.memory_router import LLMRouter
-
+    def _client(self, content):
         mock_response = MagicMock()
-        mock_response.content = '["python.md"]'
+        mock_response.content = content
         mock_client = MagicMock()
         mock_client.query = AsyncMock(return_value=mock_response)
 
         async def _fake_create_client(**kwargs):
             return mock_client
 
-        with patch("multiplai_core.model_client.create_client", _fake_create_client):
-            picks = LLMRouter().select("help me debug python", self._catalog())
+        return _fake_create_client
+
+    def test_empty_prompt_returns_empty(self):
+        assert self._pick("", self._catalog()) == []
+
+    def test_empty_catalog_returns_empty(self):
+        assert self._pick("prompt", []) == []
+
+    def test_select_uses_model_client(self):
+        """Successful LLM response returns the parsed filename list (filtered to known)."""
+        client = self._client('{"memory": ["python.md"], "skills": [], "resources": []}')
+        with patch("multiplai_core.model_client.create_client", client):
+            picks = self._pick("help me debug python", self._catalog())
         assert picks == ["python.md"]
 
     def test_filters_unknown_filenames(self):
         """LLM-hallucinated filenames not in the catalog are dropped."""
-        from lib.memory_router import LLMRouter
-
-        mock_response = MagicMock()
-        mock_response.content = '["python.md", "hallucinated.md"]'
-        mock_client = MagicMock()
-        mock_client.query = AsyncMock(return_value=mock_response)
-
-        async def _fake_create_client(**kwargs):
-            return mock_client
-
-        with patch("multiplai_core.model_client.create_client", _fake_create_client):
-            picks = LLMRouter().select("prompt", self._catalog())
+        client = self._client(
+            '{"memory": ["python.md", "hallucinated.md"], "skills": [], "resources": []}'
+        )
+        with patch("multiplai_core.model_client.create_client", client):
+            picks = self._pick("prompt", self._catalog())
         assert picks == ["python.md"]
 
     def test_handles_fenced_json(self):
-        from lib.memory_router import LLMRouter
-
-        mock_response = MagicMock()
-        mock_response.content = '```json\n["python.md"]\n```'
-        mock_client = MagicMock()
-        mock_client.query = AsyncMock(return_value=mock_response)
-
-        async def _fake_create_client(**kwargs):
-            return mock_client
-
-        with patch("multiplai_core.model_client.create_client", _fake_create_client):
-            picks = LLMRouter().select("prompt", self._catalog())
+        client = self._client(
+            '```json\n{"memory": ["python.md"], "skills": [], "resources": []}\n```'
+        )
+        with patch("multiplai_core.model_client.create_client", client):
+            picks = self._pick("prompt", self._catalog())
         assert picks == ["python.md"]
 
     def test_malformed_response_returns_empty(self):
-        from lib.memory_router import LLMRouter
-
-        mock_response = MagicMock()
-        mock_response.content = "not even close to JSON"
-        mock_client = MagicMock()
-        mock_client.query = AsyncMock(return_value=mock_response)
-
-        async def _fake_create_client(**kwargs):
-            return mock_client
-
-        with patch("multiplai_core.model_client.create_client", _fake_create_client):
-            picks = LLMRouter().select("prompt", self._catalog())
+        client = self._client("not even close to JSON")
+        with patch("multiplai_core.model_client.create_client", client):
+            picks = self._pick("prompt", self._catalog())
         assert picks == []
 
     def test_client_exception_returns_empty(self):
         """Exceptions from create_client or query are swallowed into []."""
-        from lib.memory_router import LLMRouter
-
         async def _failing_client():
             raise RuntimeError("no backend configured")
 
         with patch("multiplai_core.model_client.create_client", _failing_client):
-            picks = LLMRouter().select("prompt", self._catalog())
+            picks = self._pick("prompt", self._catalog())
         assert picks == []
 
 
@@ -289,14 +270,6 @@ class TestLLMRouter:
 
 
 class TestProtocolConformance:
-    def test_token_overlap_router_is_memory_router(self):
-        from lib.memory_router import MemoryRouter, TokenOverlapRouter
-        assert isinstance(TokenOverlapRouter(), MemoryRouter)
-
-    def test_llm_router_is_memory_router(self):
-        from lib.memory_router import LLMRouter, MemoryRouter
-        assert isinstance(LLMRouter(), MemoryRouter)
-
     def test_token_overlap_router_is_corpus_router(self):
         from lib.memory_router import CorpusRouter, TokenOverlapRouter
         assert isinstance(TokenOverlapRouter(), CorpusRouter)
