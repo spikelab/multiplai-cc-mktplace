@@ -18,6 +18,46 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.26.0] - 2026-08-06
+
+### Added
+
+- **`/dream-remember` now triages a proposal before showing it to you.** A
+  proposal was never too long to *review* — it was too long to review item by
+  item. At ~190 items the walk costs a whole context window and gets abandoned
+  partway, which is how a backlog grows instead of shrinking.
+
+  So the skill now runs `dream.py --triage` first. It splits the proposal
+  **deterministically** — no model judgement — and applies only the items with
+  no decision in them: an additive entry, to a non-behavioural memory file,
+  that no gate flagged. On a real 194-item proposal that is 175 applied and
+  **19 left for you**.
+
+  What always reaches you, and never gets auto-applied:
+
+  - anything marked `[RULE-PROPOSAL]` — it changes how the agent behaves;
+  - anything landing in `CLAUDE.md`, for the same reason, however additive;
+  - anything the routing gate flagged (wrong file, section collision, duplicate);
+  - anything the drafter marked low confidence;
+  - anything that **revises or replaces** existing memory rather than appending
+    — an `update` can destroy a line that was right, an `add` cannot;
+  - anything whose block did not parse cleanly. The classifier is deliberately
+    pessimistic: a false "needs review" costs you one line of reading, a false
+    "auto" writes something you never agreed to.
+  - Conflict Resolutions, which live in their own section and by definition
+    revise existing lines.
+
+  **Auto-applied is not unreviewed.** Every item is written to a receipt at
+  `.multiplai/dreams/applied/<date>-auto-apply-receipt.md` with its target,
+  section, text and source citation, and memory is under git — so the receipt
+  plus `git -C .multiplai/memory diff` is the whole audit trail, and reverting
+  is a `git checkout`. Skim the receipt; that is what it is for.
+
+  Run `dream.py --triage --dry-run` to see the split without writing anything.
+  If a file's applier returns something unsafe, nothing is written for that
+  file and its items stay pending — a partial apply nobody can describe is
+  worse than none.
+
 ## [0.25.0] - 2026-08-05
 
 ### Changed

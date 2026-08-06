@@ -35,7 +35,7 @@ that is newer but sorts *before* the base name).
 
 - **Found:** load it, report its date and summary line to the user, and **record its
   exact path — Step 6 archives that exact file; never re-discover it later** (a newer
-  proposal from another session may appear mid-review). Proceed to Step 3.
+  proposal from another session may appear mid-review). Proceed to Step 1b.
 - **Not found:** tell the user "No pre-generated proposal found — generating one now" and run:
   ```
   uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py"
@@ -44,7 +44,7 @@ that is newer but sorts *before* the base name).
   invoke it via the Bash tool with **`run_in_background: true`** (no `&`, no `nohup`).
   The harness re-invokes you automatically when the process exits. Confirm success by
   the sentinel line **`Proposal written to <path>`**; then load the newly written file
-  from the dreams directory and proceed to Step 3.
+  from the dreams directory and proceed to Step 1b.
 
   **NEVER** wait via a process-liveness loop (`until ! ps -p "$PID" …`): here PID 1 is
   the `claude` process, not an init reaper, so a finished script becomes an unreaped
@@ -54,6 +54,43 @@ that is newer but sorts *before* the base name).
 Determine `CLAUDE_PLUGIN_ROOT` from the environment variable `$CLAUDE_PLUGIN_ROOT`.
 The learnings directory is `.multiplai/learnings/` relative to the workspace root
 (or the path returned by `paths.learnings_dir` — same thing).
+
+---
+
+## Step 1b: Triage — apply the uncontroversial half first
+
+**Always run this before presenting anything.** A proposal is not too long to
+review; it is too long to review *item by item*. At ~190 items the walk costs a
+whole context window and gets abandoned partway, which is how the backlog grew
+to 380 bullets instead of shrinking.
+
+```bash
+uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" \
+  --triage --proposal <exact-proposal-path>
+```
+
+It classifies every pending item **deterministically** (no model judgement) and
+applies only the ones with no decision in them: an additive entry, to a
+non-behavioural memory file, that no gate flagged. Everything else stays
+pending for you to present in Step 3 — rule proposals, anything landing in
+`CLAUDE.md`, anything the routing gate flagged, anything the drafter marked low
+confidence, and anything that rewrites rather than appends.
+
+Auto-applied items are marked processed in the proposal and written to a
+**receipt** under `.multiplai/dreams/applied/<date>-auto-apply-receipt.md`,
+naming each one's target, section, text and source. Memory is under git, so the
+pair "receipt + `git diff`" is what makes applying-without-reading reversible.
+
+Report to the user, in this order:
+
+1. the auto-applied count and the receipt path — **tell them to skim it**;
+2. any `NOT APPLIED` lines (a file whose applier result was unsafe — those items
+   are still pending and will appear in Step 3);
+3. then move to Step 3 with what remains.
+
+Use `--dry-run` to see the partition without writing anything. If triage exits
+non-zero, or the script is unavailable, fall back to reviewing every item —
+never skip items because triage failed.
 
 ---
 
