@@ -28,6 +28,7 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1700,8 +1701,20 @@ def _memory_dir_is_git_repo(memory_dir: Path) -> bool:
         return False
 
 
-def _commit_memory_changes(memory_dir: Path) -> bool:
-    """Stage and commit memory changes. Returns True on commit, False otherwise."""
+def _commit_memory_changes(
+    memory_dir: Path,
+    *,
+    pathspec: Sequence[str] = ("*.md",),
+    message: str | None = None,
+) -> bool:
+    """Stage and commit memory changes. Returns True on commit, False otherwise.
+
+    ``pathspec`` narrows what is staged and recorded. The default sweeps every
+    memory file, which is right for a full consolidation but wrong for triage:
+    there, only the files the applier actually rewrote should be in the commit,
+    so an unrelated hand-edit sitting in the working tree is not attributed to
+    the dream run.
+    """
     if not _memory_dir_is_git_repo(memory_dir):
         logger.warning(
             "Memory auto-commit skipped — %s is not a git repository.", memory_dir
@@ -1713,14 +1726,14 @@ def _commit_memory_changes(memory_dir: Path) -> bool:
         # sweep in unrelated dirty work when memory_dir lives inside a
         # larger repo (dotfiles/workspace) and record it in the snapshot.
         subprocess.run(
-            ["git", "-C", str(memory_dir), "add", "--", "*.md"],
+            ["git", "-C", str(memory_dir), "add", "--", *pathspec],
             check=True, timeout=15, capture_output=True,
         )
         # Check for staged changes scoped to the *.md pathspec only — otherwise
         # anything the user had pre-staged elsewhere would make this look
         # "dirty" and fire a snapshot that sweeps those unrelated files in.
         diff = subprocess.run(
-            ["git", "-C", str(memory_dir), "diff", "--cached", "--quiet", "--", "*.md"],
+            ["git", "-C", str(memory_dir), "diff", "--cached", "--quiet", "--", *pathspec],
             timeout=10, capture_output=True,
         )
         if diff.returncode == 0:
@@ -1732,7 +1745,7 @@ def _commit_memory_changes(memory_dir: Path) -> bool:
         # records just those paths and leaves any other staged files untouched.
         subprocess.run(
             ["git", "-C", str(memory_dir), "commit",
-             "-m", f"dream: consolidate {today}", "--", "*.md"],
+             "-m", message or f"dream: consolidate {today}", "--", *pathspec],
             check=True, timeout=30, capture_output=True,
         )
         logger.info("Memory auto-committed in %s", memory_dir)
@@ -1812,6 +1825,51 @@ def _is_safe_memory_update(current: str, new: str) -> bool:
     if len(current.strip()) >= 200 and len(stripped) < 0.6 * len(current.strip()):
         return False
     return True
+
+
+def _is_additive_result(current: str, new: str, proposed_texts: Sequence[str]) -> str | None:
+    """Check an applier result really only *added* to *current*.
+
+    Returns ``None`` when the result is additive, else a one-line reason.
+
+    ``_is_safe_memory_update`` is a floor, not a check: it accepts a result that
+    threw away 40% of the file, which for triage — where every item is an
+    ``add`` into an existing section — is not a near-miss, it is exactly the
+    outcome the triage path promises cannot happen. The human reviewed nothing,
+    so the only thing standing between a hallucinating applier and a silently
+    rewritten memory file is this function.
+
+    Two deterministic conditions, both necessary:
+
+    - **Every original line survives**, as a multiset. Order is not checked (an
+      insert legitimately moves lines) but count is: dropping or altering a
+      single line fails. This is what makes the operation reviewable — the diff
+      can only be additions.
+    - **Growth is bounded by what was proposed.** The applier may reword an
+      item, so the added text is not compared literally; it is compared in
+      *size* against the proposed texts plus a 3x allowance for formatting and
+      section headers. An applier that pads the file with invented content
+      trips this even though every original line is intact.
+    """
+    original = [ln for ln in current.splitlines() if ln.strip()]
+    updated = [ln for ln in new.splitlines() if ln.strip()]
+
+    from collections import Counter
+
+    missing = Counter(original) - Counter(updated)
+    if missing:
+        lost = sum(missing.values())
+        sample = next(iter(missing)).strip()[:60]
+        return f"{lost} original line(s) lost or altered, e.g. {sample!r}"
+
+    added_chars = len(new.strip()) - len(current.strip())
+    budget = 3 * sum(len(t) for t in proposed_texts) + 200
+    if added_chars > budget:
+        return (
+            f"grew by {added_chars} chars, more than 3x the {len(proposed_texts)} "
+            f"proposed item(s) can account for (budget {budget})"
+        )
+    return None
 
 
 async def _apply_proposal_to_file(client, memory_file: Path, proposal_section: str) -> str | None:
@@ -2009,15 +2067,23 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
     file, flagged by nothing — there is no decision in them to make.
 
     So: classify deterministically (``lib.dream_triage``), apply the additive
-    ones through the same applier ``--auto`` uses, write a receipt naming every
-    one, and leave only the items that carry a real decision pending in the
-    proposal. What reaches the human is rule proposals, anything touching
-    ``CLAUDE.md``, anything the routing gate flagged, anything the drafter
-    marked low-confidence, and anything that rewrites rather than appends.
+    ones through the same applier ``--auto`` uses, verify the result really was
+    additive, write a receipt naming every one, and leave only the items that
+    carry a real decision pending in the proposal. What reaches the human is
+    rule proposals, anything normative, anything targeting a file that
+    instructs rather than records, anything the routing gate flagged, anything
+    the drafter marked low-confidence, and anything that rewrites rather than
+    appends.
+
+    Takes the same exclusive run lock as report and ``--auto`` modes: this
+    writes memory files, which is the case the lock exists for.
 
     Returns a process exit code.
     """
     from lib import dream_triage as triage_lib
+
+    if not acquire_run_lock():
+        return 0
 
     paths = get_paths()
     dreams_dir = paths.dreams_dir()
@@ -2030,8 +2096,22 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
     if not proposal_path.is_file():
         print(f"ERROR: proposal not found: {proposal_path}")
         return 1
+    print(f"triage: reading {proposal_path}")
 
     proposal = proposal_path.read_text()
+    if not triage_lib.has_routing_section(proposal):
+        # `flagged_by_routing` returns an empty set both when nothing was
+        # flagged and when the section is absent, so a proposal written before
+        # routing validation existed — or by a drafter that failed to emit it —
+        # would auto-apply every item the gate would have caught. Refuse: the
+        # classifier's "no gate doubts it" precondition cannot be evaluated.
+        print(
+            f"ERROR: {proposal_path.name} has no '## Routing Warnings' section, so "
+            "routing-flagged items cannot be identified. Refusing to auto-apply "
+            "anything — review this proposal by hand, or regenerate it."
+        )
+        return 1
+
     triage = triage_lib.classify(proposal)
     if triage.total == 0:
         print(f"triage: {proposal_path.name} has no pending update items")
@@ -2047,6 +2127,13 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         ))
         return 0
 
+    if not by_file:
+        print(f"triage: {proposal_path.name} — {triage.total} pending item(s)")
+        print(triage_lib.render_summary(
+            triage, applied_count=0, receipt_path="(none — nothing auto-appliable)",
+        ))
+        return 0
+
     # Apply per file, concurrently — files are independent. Each call gets a
     # *rebuilt* section holding only that file's auto items, never the
     # proposal's own text, which still contains the review items.
@@ -2059,23 +2146,30 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
             skipped[filename] = "target memory file does not exist"
             logger.warning("triage: proposal targets unknown file %s — skipped", filename)
             continue
-        targets.append((filename, memory_file, items))
+        targets.append((filename, memory_file, items, memory_file.read_text()))
 
     results = await asyncio.gather(*(
         _apply_proposal_to_file(client, memory_file, triage_lib.auto_slice(items))
-        for _, memory_file, items in targets
+        for _, memory_file, items, _before in targets
     ))
 
     applied: dict[str, list] = {}
     failed: dict[str, str] = dict(skipped)
     decisions: list[Decision] = []
-    for (filename, memory_file, items), updated_content in zip(targets, results):
+    for (filename, memory_file, items, before), updated_content in zip(targets, results):
         if not updated_content:
             # The applier failed or returned something `_is_safe_memory_update`
             # rejected. Write nothing and leave every one of that file's items
             # pending — a partial apply we cannot describe is worse than none.
             failed[filename] = "applier returned no safe content — items left pending"
             logger.warning("triage: %s not applied (unsafe/empty applier result)", filename)
+            continue
+        not_additive = _is_additive_result(before, updated_content, [i.text for i in items])
+        if not_additive:
+            # Every triage item is an `add`, so the result must be a superset.
+            # It is not — and nobody reviewed this, so refuse the write.
+            failed[filename] = f"applier result was not purely additive: {not_additive}"
+            logger.error("triage: %s not applied — %s", filename, not_additive)
             continue
         memory_file.write_text(updated_content)
         applied[filename] = items
@@ -2124,7 +2218,16 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         for name, reason in sorted(failed.items()):
             print(f"    {name} — {reason}")
 
-    _commit_memory_changes(memory_dir)
+    if applied:
+        # Pathspec is the files this run actually rewrote, not `*.md`: a
+        # hand-edit sitting unstaged in memory must not be swept into a commit
+        # captioned as an automatic triage apply.
+        _commit_memory_changes(
+            memory_dir,
+            pathspec=sorted(applied),
+            message=f"dream: triage auto-apply {applied_count} item(s) "
+                    f"from {proposal_path.name}",
+        )
     return 0
 
 
@@ -2388,6 +2491,12 @@ def main() -> None:
              "and why it kept the rest.",
     )
     args = parser.parse_args()
+
+    # `--dry-run` is read only by the triage path. Without this, `dream.py
+    # --dry-run` silently runs a full consolidation and writes a proposal —
+    # the opposite of what the flag's name promises.
+    if args.dry_run and not args.triage:
+        parser.error("--dry-run requires --triage")
 
     if args.mark_processed and args.decisions:
         if not args.proposal:

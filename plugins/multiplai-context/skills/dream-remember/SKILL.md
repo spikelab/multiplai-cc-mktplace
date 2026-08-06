@@ -70,16 +70,30 @@ uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/
 ```
 
 It classifies every pending item **deterministically** (no model judgement) and
-applies only the ones with no decision in them: an additive entry, to a
-non-behavioural memory file, that no gate flagged. Everything else stays
-pending for you to present in Step 3 — rule proposals, anything landing in
-`CLAUDE.md`, anything the routing gate flagged, anything the drafter marked low
-confidence, and anything that rewrites rather than appends.
+applies only the ones with no decision in them: an additive, purely factual
+entry, to a memory file that records rather than instructs, whose target is a
+plain memory filename, that no gate flagged. Everything else stays pending for
+you to present in Step 3 — rule proposals, anything phrased as a standing
+instruction wherever it lands, anything targeting a file the agent reads to
+decide how to act (`CLAUDE.md`, `preferences.md`, `git-policy.md`,
+`technical-pref.md`, the voice and workflow guides), anything the routing gate
+flagged, anything the drafter marked low confidence, and anything that rewrites
+rather than appends.
+
+Expect roughly a third to be auto-applied, not most of it: on the measured
+194-item proposal the split was 74 auto / 120 review. Do not promise the user a
+bigger cut than that.
+
+A proposal with **no `## Routing Warnings` section** is refused outright
+(exit 1, nothing written) — an absent section is indistinguishable from a clean
+one, so treating it as clean would auto-apply exactly what the gate exists to
+catch. Review that proposal by hand, or regenerate it.
 
 Auto-applied items are marked processed in the proposal and written to a
 **receipt** under `.multiplai/dreams/applied/<date>-auto-apply-receipt.md`,
 naming each one's target, section, text and source. Memory is under git, so the
-pair "receipt + `git diff`" is what makes applying-without-reading reversible.
+pair "receipt + `git diff`" is what makes applying-without-reading reversible;
+the commit names only the files triage rewrote.
 
 Report to the user, in this order:
 
@@ -88,9 +102,10 @@ Report to the user, in this order:
    are still pending and will appear in Step 3);
 3. then move to Step 3 with what remains.
 
-Use `--dry-run` to see the partition without writing anything. If triage exits
-non-zero, or the script is unavailable, fall back to reviewing every item —
-never skip items because triage failed.
+Use `--triage --dry-run` to see the partition without writing anything
+(`--dry-run` is only valid with `--triage`). If triage exits non-zero, or the
+script is unavailable, fall back to reviewing every item — never skip items
+because triage failed.
 
 ---
 
