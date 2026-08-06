@@ -1019,7 +1019,7 @@ class TestConfigurableModelAndEffort:
     """Requirement: Respects plugin.json userConfig for model and effort.
 
     MemoryGenerator uses config.model for LLM calls, defaulting to
-    claude-sonnet-4-6.
+    generators.config.DEFAULT_MODEL.
     """
 
     @pytest.mark.asyncio
@@ -1046,8 +1046,8 @@ class TestConfigurableModelAndEffort:
 
     @pytest.mark.asyncio
     async def test_default_model_when_no_config(self, tmp_path, monkeypatch):
-        """Default model claude-sonnet-4-6 is used when no override set."""
-        from generators.config import CatalogConfig
+        """DEFAULT_MODEL is used when no override is set."""
+        from generators.config import DEFAULT_MODEL, CatalogConfig
 
         config = CatalogConfig()  # defaults
         client = _make_mock_client()
@@ -1063,7 +1063,7 @@ class TestConfigurableModelAndEffort:
         assert client.query.call_count >= 1
         call_kwargs = client.query.call_args
         model_used = call_kwargs.kwargs.get("model", "")
-        assert "claude-sonnet-4-6" in model_used or "claude-sonnet" in model_used
+        assert model_used == DEFAULT_MODEL
 
 
 # ---------------------------------------------------------------------------

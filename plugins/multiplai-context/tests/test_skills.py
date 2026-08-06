@@ -820,12 +820,12 @@ class TestSkillsDeletionPruning:
 class TestSkillsModelConfig:
     """Requirement: Skills catalog generator uses configured model.
 
-    LLM calls must use the model from config, defaulting to claude-sonnet-4-6.
+    LLM calls must use the model from config, defaulting to DEFAULT_MODEL.
     """
 
     def test_default_model_and_effort(self, tmp_path, monkeypatch):
-        """Default model is claude-sonnet-4-6."""
-        from generators.config import CatalogConfig
+        """With no override, the call carries generators.config.DEFAULT_MODEL."""
+        from generators.config import DEFAULT_MODEL, CatalogConfig
 
         gen, catalogs_dir, skills_dir = _make_skills_generator(tmp_path)
         monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
@@ -836,7 +836,7 @@ class TestSkillsModelConfig:
         client = gen._model_client
         call_kwargs = client.query.call_args
         assert call_kwargs is not None
-        assert call_kwargs.kwargs.get("model", call_kwargs[1].get("model", "")) == "claude-sonnet-4-6"
+        assert call_kwargs.kwargs.get("model", call_kwargs[1].get("model", "")) == DEFAULT_MODEL
 
     def test_custom_model_override(self, tmp_path, monkeypatch):
         """Custom catalog_model is used when configured."""

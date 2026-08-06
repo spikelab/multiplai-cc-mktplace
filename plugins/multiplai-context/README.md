@@ -196,7 +196,7 @@ over the anchor:
 | Option | Default | Purpose |
 |--------|---------|---------|
 | `anthropic_api_key` | _(unset, sensitive)_ | API key fallback when the Agent SDK is unavailable. Marked sensitive — stored in the system keychain, never logged. |
-| `catalog_model` | `claude-sonnet-4-6` | Model for LLM catalog generation |
+| `catalog_model` | `claude-sonnet-5` | Model for LLM catalog generation |
 | `catalog_model_diary` | _(inherits)_ | Optional model override for the diary catalog |
 | `catalog_ttl_hours` | `168` | Hours a generated catalog stays valid before the read path flags it stale (advisory warning only — never regenerates inline) |
 | `diary_catalog_days` | `7` | Days of diary history the diary catalog covers |

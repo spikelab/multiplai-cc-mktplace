@@ -484,10 +484,18 @@ class TestPromptCarriesCharters:
     point of charter-based routing."""
 
     def _sent_prompt(self, valid_targets) -> str:
+        """Everything the model is sent, both channels.
+
+        The static instructions (charters included) ride in ``system`` and only
+        the date + transcript in ``messages``, so that the stable half is a
+        cacheable prefix. These assertions are about what the model *sees*, not
+        which channel carried it — concatenate both.
+        """
         from lib.extraction import extract_units
         client = _make_mock_client(_tag_response([]))
         asyncio.run(extract_units("transcript", valid_targets=valid_targets, client=client))
-        return client.query.call_args.kwargs["messages"][0]["content"]
+        kwargs = client.query.call_args.kwargs
+        return kwargs["system"] + "\n" + kwargs["messages"][0]["content"]
 
     def test_prompt_renders_purpose_and_not_lines(self):
         prompt = self._sent_prompt([{

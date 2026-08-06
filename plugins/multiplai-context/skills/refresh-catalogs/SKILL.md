@@ -50,7 +50,7 @@ By default (no arguments), all enabled catalogs are regenerated using state-awar
 ## Configuration
 
 The dispatcher respects these `plugin.json` userConfig settings:
-- `catalog_model` — Model for LLM-based catalog generation (default: `claude-sonnet-4-6`)
+- `catalog_model` — Model for LLM-based catalog generation (default: `claude-sonnet-5`)
 - `catalog_model_diary` — Optional model override for the diary generator (default: inherit `catalog_model`)
 - `enable_skills` — Whether to include the skills catalog generator (default: false)
 - `enable_resources` — Whether to include the resources catalog generator (default: false)

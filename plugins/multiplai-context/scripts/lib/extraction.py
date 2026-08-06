@@ -102,8 +102,24 @@ def _lock_path(target: Path) -> Path:
 # sample. Prose between tags needs no escaping, and a truncated response
 # still yields every completed <unit> block instead of losing everything.
 # Bake-off on the 4 failed sessions, 2026-07-07: tags 12/12 clean.
-EXTRACTION_PROMPT = """\
-Today's date: {today}
+# Split into a static half and a per-call half, and sent as `system` +
+# `messages` rather than one giant user message. Every token before the first
+# byte that changes between calls is a cacheable prefix; every token after it
+# is re-written at 1.25x input price and never read again. With the transcript
+# and the date interleaved into the instructions, that prefix was ~0 bytes and
+# extraction ran at a 59% cache-WRITE share (26.7M written vs 18.5M read over
+# 1,086 calls, 30d to 2026-08-06) — the worst cache citizen in the ledger.
+# EXTRACTION_SYSTEM is byte-identical across every call on a machine
+# (`{valid_targets}` moves only when the memory catalog does), so it caches
+# once and reads thereafter. EXTRACTION_USER holds the only genuinely variable
+# parts. Do NOT move `{today}` or `{transcript}` back into the system half:
+# either one invalidates the whole prefix.
+#
+# The untrusted transcript still sits BETWEEN instructions — the closing
+# "## Output" block follows it — and the instructions now arrive over the
+# stronger `system` channel. See docs/untrusted-content.md.
+EXTRACTION_SYSTEM = """\
+You are a learnings extractor. Output ONLY the tag-delimited format requested.
 
 You are analyzing a conversation transcript between a user and an AI \
 assistant ("Claude"). Extract diary entries and learnings grouped by \
@@ -173,7 +189,7 @@ Write the description in one of exactly two shapes, so it can be stored
 machine-readably:
 - `due: YYYY-MM-DD — <what to do>` when a date is stated or clearly implied
   (resolve relative dates like "in September" or "in two weeks" against today's
-  date, given above).
+  date, stated at the top of the user message).
 - `on: <condition in plain words> — <what to do>` when the trigger is an event
   rather than a date. Do NOT invent a date for a condition; "when X ships" has
   no date and guessing one produces a reminder that fires at the wrong time.
@@ -229,6 +245,10 @@ parked means they SAID they were setting it down.
 - Deduplicate: emit each insight ONCE, even if it spans multiple units
 - If something was CORRECTED later, output only the final corrected version
 - Skip trivial exchanges, greetings, routine tool usage
+"""
+
+EXTRACTION_USER = """\
+Today's date: {today}
 
 ## Transcript
 
@@ -239,6 +259,11 @@ parked means they SAID they were setting it down.
 Output ONLY <unit> blocks (or <no-units/>), then one <disposition> block — \
 no markdown fences, no explanation.
 """
+
+# The two halves as one string, in the order the model sees them. Kept because
+# a large test surface asserts on the prompt's content as a whole; nothing at
+# runtime sends this — the call site sends the halves separately.
+EXTRACTION_PROMPT = EXTRACTION_SYSTEM + "\n" + EXTRACTION_USER
 
 
 class ExtractionParseError(ValueError):
@@ -404,16 +429,18 @@ async def extract_units_and_disposition(
     )
     # NOT str.format: transcript text routinely contains literal { } (JSON,
     # code, f-strings) which would raise KeyError/ValueError and silently
-    # kill extraction. Plain replacement never interprets braces. Replace
-    # valid_targets first (controlled), transcript last (untrusted).
+    # kill extraction. Plain replacement never interprets braces. The
+    # untrusted transcript is substituted last, and into the user half only —
+    # it can never reach the system half, whose placeholders are already gone
+    # by then.
     # An INTENTION must resolve "in September" / "in two weeks" to a real date,
     # and the model has no clock. Without this the relative dates it emits are
     # anchored to training time, i.e. wrong, i.e. reminders that fire on the
     # wrong day — worse than no reminder.
+    system = EXTRACTION_SYSTEM.replace("{valid_targets}", targets_block)
     prompt = (
-        EXTRACTION_PROMPT
+        EXTRACTION_USER
         .replace("{today}", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-        .replace("{valid_targets}", targets_block)
         .replace("{transcript}", text)
     )
     # Parse failures are stochastic (a fresh sample of the same prompt
@@ -422,10 +449,7 @@ async def extract_units_and_disposition(
     last_error: Optional[ExtractionParseError] = None
     for attempt in range(2):
         response = await client.query(
-            system=(
-                "You are a learnings extractor. Output ONLY the "
-                "tag-delimited format requested."
-            ),
+            system=system,
             messages=[{
                 "role": "user",
                 "content": prompt,
