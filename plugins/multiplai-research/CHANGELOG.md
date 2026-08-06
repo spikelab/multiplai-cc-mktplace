@@ -20,6 +20,48 @@ dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.6.5] - 2026-08-06
+
+A review of 0.6.4 found each of its three protections applied to one code path
+when two existed. Nothing here is a new idea — it is the same three guards,
+extended to the route that was missed, and pinned with tests so the next one
+cannot be missed silently.
+
+### Security
+
+- **Deep research no longer fetches internal addresses on any path.** 0.6.4
+  blocked URLs resolving to loopback, private, link-local, or cloud-metadata
+  addresses — but only on the direct HTTP path. Research runs by default
+  through the Claude Agent fetcher instead, which reaches the network through
+  WebFetch and was never covered. A search result or a link scraped off a page
+  pointing at `http://169.254.169.254/` — the standard way to steal cloud
+  credentials — was therefore still fetched on the path you actually use. Both
+  paths now apply the same check, before the URL reaches any tool.
+
+- **Read stays open on very large prompts; nothing that can send data does.**
+  Prompts above the operating-system argument limit are handed to the agent as
+  a file, so the Read tool has to remain available for them. That exception is
+  now bounded and visible: every tool that could carry text off the machine —
+  shell, network, publishing, messaging, scheduled work — stays blocked, a
+  warning is logged whenever the exception applies, and a test fails if a
+  future change widens it.
+
+- **The blocked-tool list can no longer fall behind.** It is intentionally a
+  copy of the shared library's list rather than an import, so that it still
+  holds on an older install. A test now fails when the library learns about a
+  tool this copy does not — the drift that previously left several tools
+  available.
+
+### Fixed
+
+- **A crash no longer destroys the run in progress or its report.** Only the
+  resume checkpoint was written crash-safely. The report itself, the challenge
+  review, and the API-quota file were written in place, so an interruption
+  could leave a truncated file — losing a finished report, or silently
+  resetting quota accounting and re-granting a month of paid API calls. All
+  four now write to a temporary file and swap it in atomically: an interrupted
+  write leaves the previous version, never a half-written one.
+
 ## [0.6.4] - 2026-08-06
 
 Review of 0.6.3 found the deny-list it introduced was stale, and that the one

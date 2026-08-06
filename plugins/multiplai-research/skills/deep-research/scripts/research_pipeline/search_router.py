@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
 
+from .atomic import atomic_write_text
 from .models import APIQuota, QuotaState, SearchResult
 
 log = logging.getLogger(__name__)
@@ -165,9 +166,11 @@ class QuotaStore:
         """Write pending state to disk if dirty. Safe to call any time."""
         if not self._dirty:
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self._state.updated_at = datetime.now(timezone.utc).isoformat()
-        self.path.write_text(self._state.model_dump_json(indent=2))
+        # Atomic: this is rewritten throughout a run, and `_load` treats a
+        # truncated file as "no quota history", which silently re-grants a
+        # month's worth of paid API calls.
+        atomic_write_text(self.path, self._state.model_dump_json(indent=2))
         self._dirty = False
         self._last_save = time.monotonic()
 

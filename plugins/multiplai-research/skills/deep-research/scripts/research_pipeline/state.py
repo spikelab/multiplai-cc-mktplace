@@ -6,11 +6,7 @@ fine-grained resume (per-source, not per-phase).
 
 from __future__ import annotations
 
-import contextlib
 import logging
-import os
-import stat
-import tempfile
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -19,6 +15,7 @@ log = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 
+from .atomic import atomic_write_text
 from .models import (
     ClaimVerdict,
     Finding,
@@ -59,22 +56,6 @@ STAGE_ORDER: list[Stage] = list(Stage)
 
 def stage_index(stage: Stage) -> int:
     return STAGE_ORDER.index(stage)
-
-
-def _replacement_mode(path: Path) -> int:
-    """Mode a temp file should carry before it replaces *path*.
-
-    ``mkstemp`` creates 0600, and ``os.replace`` carries the temp file's mode
-    onto the destination — so without this, the first checkpoint silently turns
-    a user-readable state file owner-only. Keep the existing file's mode when
-    there is one; otherwise use what a plain ``open()`` would have produced.
-    """
-    try:
-        return stat.S_IMODE(path.stat().st_mode)
-    except OSError:
-        umask = os.umask(0)
-        os.umask(umask)
-        return 0o666 & ~umask
 
 
 class ResearchState(BaseModel):
@@ -144,43 +125,10 @@ class ResearchState(BaseModel):
         during READ, so a crash mid-write is a realistic way to lose a run —
         and it loses it badly, leaving truncated JSON that makes `load()` raise
         on resume, i.e. the checkpoint destroys the very thing it exists to
-        protect. The temp file is created in the same directory so `os.replace`
-        is atomic (a cross-filesystem rename is not).
+        protect. See `atomic.atomic_write_text` for the mechanics.
         """
         self.updated_at = datetime.now(timezone.utc).isoformat()
-        path = Path(self.state_file)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = self.model_dump_json(indent=2)
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(payload)
-                # Rename is only atomic with respect to *ordering*; without
-                # this the data may still be in the page cache when the rename
-                # commits, so a machine crash can leave the new name pointing
-                # at a zero-length file — the exact loss this method exists to
-                # prevent. Once per source, not per byte.
-                f.flush()
-                os.fsync(f.fileno())
-            # mkstemp creates 0600. Inheriting that would silently make a
-            # user-visible artifact owner-only on the first checkpoint, so
-            # carry the existing file's mode when there is one.
-            with contextlib.suppress(OSError):
-                os.chmod(tmp_name, _replacement_mode(path))
-            os.replace(tmp_name, path)
-            # Durability of the rename itself lives in the directory entry.
-            with contextlib.suppress(OSError):
-                dir_fd = os.open(str(path.parent), os.O_RDONLY)
-                try:
-                    os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
-        except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp_name)
-            raise
+        atomic_write_text(Path(self.state_file), self.model_dump_json(indent=2))
 
     @classmethod
     def load(cls, state_file: Path) -> "ResearchState":

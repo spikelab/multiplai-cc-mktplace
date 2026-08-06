@@ -104,11 +104,26 @@ def _deny_list(prompt: str, allowed_tools: list[str] | None) -> list[str]:
     prompt to a temp file and directs the agent to Read it, so denying Read
     would break every synthesis call over the E2BIG threshold. Same carve-out
     as buildme's `_deny_list`.
+
+    The carve-out opens *read* on a prompt built from attacker-authored page
+    text, so it is worth being precise about what it does and does not cost.
+    It grants the ability to read local files; it does not grant a way to send
+    what was read anywhere, because every egress tool (Bash, Write, WebFetch,
+    Artifact, SendMessage, …) stays denied in both branches — the exfiltration
+    half of the chain is what the deny-list is really holding, and the
+    carve-out does not touch it. `test_sdk.py` pins that invariant so a future
+    edit to this function cannot widen it by accident.
     """
     opened = set(allowed_tools or ())
     denied = [t for t in _TOOL_UNIVERSE if t not in opened]
     if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
         denied = [t for t in denied if t != "Read"]
+        log.warning(
+            "prompt is %d bytes (> %d): Read left open for the tempfile "
+            "fallback; all egress tools remain denied",
+            len(prompt.encode("utf-8")),
+            MAX_PROMPT_BYTES,
+        )
     return denied
 
 
