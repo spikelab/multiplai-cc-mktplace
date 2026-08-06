@@ -6,7 +6,10 @@ fine-grained resume (per-source, not per-phase).
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
+import tempfile
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -118,11 +121,30 @@ class ResearchState(BaseModel):
         )
 
     def checkpoint(self) -> None:
-        """Serialize state to disk. Called after every stage transition."""
+        """Serialize state to disk. Called after every stage transition.
+
+        Write-then-rename, not write-in-place: this runs after *every source*
+        during READ, so a crash mid-write is a realistic way to lose a run —
+        and it loses it badly, leaving truncated JSON that makes `load()` raise
+        on resume, i.e. the checkpoint destroys the very thing it exists to
+        protect. The temp file is created in the same directory so `os.replace`
+        is atomic (a cross-filesystem rename is not).
+        """
         self.updated_at = datetime.now(timezone.utc).isoformat()
         path = Path(self.state_file)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.model_dump_json(indent=2))
+        payload = self.model_dump_json(indent=2)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+            os.replace(tmp_name, path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name)
+            raise
 
     @classmethod
     def load(cls, state_file: Path) -> "ResearchState":

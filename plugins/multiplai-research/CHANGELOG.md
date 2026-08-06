@@ -20,6 +20,45 @@ dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.6.3] - 2026-08-06
+
+### Security
+
+- **deep-research's LLM calls now deny every tool they don't need.** The
+  pipeline runs its calls under `bypassPermissions`, where naming a tool in the
+  allow-list *adds* it but never removes the rest — and it passed no deny-list
+  at all. Since every one of those prompts carries text fetched from a web
+  page, an instruction injected into a page reached a `Bash`, `Read`, `Write`
+  and `WebFetch` that were not only available but pre-approved. Each call now
+  denies the complement of what it opens: the fetcher gets `WebFetch` and
+  nothing else, the search provider `WebSearch` and nothing else, and every
+  reasoning call gets no tools at all. Nothing to change in your config — this
+  is how these calls were always documented to behave.
+
+- **Page-derived text is defanged where it is stored, not where it is
+  printed.** Findings from the default fetch path were extracted inside the
+  fetch call, straight off the page, and then interpolated *unfenced* into the
+  reassess, synthesize, triage and adversarial-review prompts — so a page could
+  close the `<untrusted-content>` fence and promote itself from data to
+  instruction. Search-result titles and snippets took the same route from six
+  provider parsers. Defang now happens on the models themselves, which covers
+  both fetch paths, all six providers, and any prompt added later. Wording is
+  untouched: an injection attempt still reaches the extractor intact, so it can
+  be reported.
+
+- **The fetch-extract prompt states the data-not-instructions rule and pins the
+  URL.** That fetch happens inside the SDK call, so there is no page text in
+  hand to wrap in a literal fence; the instruction plus the storage-boundary
+  defang above are the mitigation.
+
+### Fixed
+
+- **A crash mid-checkpoint no longer destroys a research run.** State was
+  written in place after *every source*, so a crash during the write left
+  truncated JSON and `--resume` raised on it — the checkpoint destroying the
+  run it exists to protect. Writes now go to a temp file in the same directory
+  and are renamed into place atomically.
+
 ## [0.6.2] - 2026-08-05
 
 ### Security

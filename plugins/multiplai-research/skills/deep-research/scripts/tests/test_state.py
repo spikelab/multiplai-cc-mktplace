@@ -194,3 +194,49 @@ class TestExtractedContentTruncation:
         fresh_state.mark_source_extracted("https://small.example", "short content", [])
         loaded = ResearchState.load(Path(fresh_state.state_file))
         assert loaded.sources[0].extracted_content == "short content"
+
+
+class TestAtomicCheckpoint:
+    """checkpoint() runs after every source during READ, so a crash mid-write
+    is a realistic way to lose a run. Write-in-place loses it badly: truncated
+    JSON makes load() raise, so the checkpoint destroys what it exists to
+    protect."""
+
+    def test_failed_serialization_leaves_the_previous_checkpoint_intact(
+        self, fresh_state: ResearchState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fresh_state.checkpoint()
+        good = Path(fresh_state.state_file).read_text()
+
+        def boom(*a, **kw):
+            raise RuntimeError("serialization blew up")
+
+        monkeypatch.setattr(type(fresh_state), "model_dump_json", boom)
+        with pytest.raises(RuntimeError):
+            fresh_state.checkpoint()
+
+        assert Path(fresh_state.state_file).read_text() == good
+        ResearchState.load(Path(fresh_state.state_file))  # still parses
+
+    def test_no_temp_files_left_behind(
+        self, fresh_state: ResearchState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fresh_state.checkpoint()
+        directory = Path(fresh_state.state_file).parent
+
+        def boom(*a, **kw):
+            raise RuntimeError("nope")
+
+        monkeypatch.setattr(type(fresh_state), "model_dump_json", boom)
+        with pytest.raises(RuntimeError):
+            fresh_state.checkpoint()
+
+        assert [p.name for p in directory.glob("*.tmp")] == []
+
+    def test_checkpoint_still_round_trips(self, fresh_state: ResearchState) -> None:
+        fresh_state.sources.append(
+            Source(url="https://a.example", title="A", snippet="s")
+        )
+        fresh_state.checkpoint()
+        loaded = ResearchState.load(Path(fresh_state.state_file))
+        assert [s.url for s in loaded.sources] == ["https://a.example"]

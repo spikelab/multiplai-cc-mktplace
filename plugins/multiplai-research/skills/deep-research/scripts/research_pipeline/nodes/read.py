@@ -236,7 +236,16 @@ def _store_pre_extracted(
     findings_raw: list[dict],
     state: ResearchState,
 ) -> None:
-    """Convert Strategy C pre-extracted findings and store them."""
+    """Convert Strategy C pre-extracted findings and store them.
+
+    These findings come straight off the page, extracted inside the fetch SDK
+    call, so nothing has defanged them at this point — unlike the httpx path,
+    whose extractor prompt defangs on the way in. `Finding`'s own field
+    validator closes that: constructing one here defangs `fact`/`quote`/
+    `source_title`, which is the storage boundary for every downstream prompt
+    that interpolates them unfenced (reassess, synthesize, triage,
+    adversarial review).
+    """
     findings: list[Finding] = []
     for item in findings_raw:
         if not isinstance(item, dict):

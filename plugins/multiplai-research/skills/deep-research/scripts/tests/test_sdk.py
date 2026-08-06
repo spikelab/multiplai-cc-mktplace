@@ -7,7 +7,9 @@ import asyncio
 import pytest
 from pydantic import BaseModel
 
+from research_pipeline import sdk as sdk_module
 from research_pipeline.sdk import (
+    MAX_PROMPT_BYTES,
     LLMCallTimeoutError,
     LLMCallUsage,
     _record_usage,
@@ -396,3 +398,81 @@ class TestMaxAttempts:
         results = await ClaudeAgentSearchProvider().search("q")
         assert results == []
         assert captured["max_attempts"] == 1
+
+
+class TestToolDenyList:
+    """Every prompt here carries fetched web text, so an allow-list alone is
+    not a boundary — under bypassPermissions only disallowed_tools removes a
+    tool. These assert the deny-list actually reaches run_agent."""
+
+    def _patch_run_agent(self, monkeypatch: pytest.MonkeyPatch, text: str = "[]") -> dict:
+        return TestMaxAttempts()._patch_run_agent(monkeypatch, text=text)
+
+    @pytest.mark.asyncio
+    async def test_text_only_call_denies_the_whole_universe(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured = self._patch_run_agent(monkeypatch)
+        await llm_call("p")
+        assert captured["disallowed_tools"] == sdk_module._TOOL_UNIVERSE
+
+    @pytest.mark.asyncio
+    async def test_allow_list_denies_the_complement(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured = self._patch_run_agent(monkeypatch)
+        await llm_call("p", allowed_tools=["WebFetch"])
+        denied = captured["disallowed_tools"]
+        assert "WebFetch" not in denied
+        for tool in ("Bash", "Read", "Write", "WebSearch"):
+            assert tool in denied
+
+    @pytest.mark.asyncio
+    async def test_structured_call_carries_the_deny_list(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """llm_call_structured routes through llm_call — pin it, so a future
+        refactor that gives it its own run_agent call cannot lose the list."""
+        self._patch_run_agent(monkeypatch, text='{"content_markdown": "c"}')
+        captured = self._patch_run_agent(monkeypatch, text='{"value": 1}')
+
+        class _Schema(BaseModel):
+            value: int
+
+        await llm_call_structured("p", _Schema)
+        assert "Bash" in captured["disallowed_tools"]
+
+    @pytest.mark.asyncio
+    async def test_fetcher_opens_only_webfetch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from research_pipeline.claude_agent_fetcher import ClaudeAgentFetcher
+
+        captured = self._patch_run_agent(monkeypatch, text='{"content_markdown": "c"}')
+        await ClaudeAgentFetcher().fetch_url("https://a.example")
+        assert captured["allowed_tools"] == ["WebFetch"]
+        assert "Bash" in captured["disallowed_tools"]
+        assert "WebFetch" not in captured["disallowed_tools"]
+
+    @pytest.mark.asyncio
+    async def test_search_provider_opens_only_websearch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from research_pipeline.search_router import ClaudeAgentSearchProvider
+
+        captured = self._patch_run_agent(monkeypatch, text="[]")
+        await ClaudeAgentSearchProvider().search("q")
+        assert captured["allowed_tools"] == ["WebSearch"]
+        assert "Bash" in captured["disallowed_tools"]
+        assert "WebSearch" not in captured["disallowed_tools"]
+
+    @pytest.mark.asyncio
+    async def test_oversized_prompt_keeps_read_available(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """run_agent's E2BIG fallback writes the prompt to a file and tells the
+        agent to Read it — denying Read would break every large synthesis."""
+        captured = self._patch_run_agent(monkeypatch)
+        await llm_call("x" * (MAX_PROMPT_BYTES + 1))
+        assert "Read" not in captured["disallowed_tools"]
+        assert "Bash" in captured["disallowed_tools"]

@@ -40,6 +40,48 @@ log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 
+# Every tool an SDK call could otherwise reach. Copied verbatim from
+# multiplai-core's `agent_runner.TOOL_UNIVERSE` (formerly
+# `model_client._DISALLOWED_TOOLS`) rather than imported: this is the
+# belt-and-braces layer, and it has to hold on an installed plugin that
+# resolved a core release predating core's own fail-closed default.
+#
+# Why it exists: run_agent runs under permission_mode="bypassPermissions",
+# where `allowed_tools` is an allow-list only — it adds tools, it never removes
+# any. Every prompt this module sends carries fetched web-page text, i.e. text
+# an attacker can author. Without an explicit deny-list, an instruction injected
+# into a page reaches a Bash/Read/Write/WebFetch that is not merely available
+# but pre-approved. ToolSearch and Skill are denied too, or a deferred tool
+# could be loaded back in.
+_TOOL_UNIVERSE = [
+    # mutation / execution
+    "Bash", "BashOutput", "KillShell", "Edit", "Write", "NotebookEdit",
+    "Task", "Agent", "AskUserQuestion", "SlashCommand", "ExitPlanMode",
+    # read / network / meta — closes the prompt-injection exfiltration chain
+    "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "ToolSearch",
+    "Skill",
+]
+
+
+def _deny_list(prompt: str, allowed_tools: list[str] | None) -> list[str]:
+    """Deny everything the caller did not explicitly open.
+
+    The pipeline opens exactly one tool at a time — `WebFetch` for the agent
+    fetcher, `WebSearch` for the agent search provider — so the complement is
+    the whole universe minus that one.
+
+    `Read` is left available on an oversized prompt: run_agent then writes the
+    prompt to a temp file and directs the agent to Read it, so denying Read
+    would break every synthesis call over the E2BIG threshold. Same carve-out
+    as buildme's `_deny_list`.
+    """
+    opened = set(allowed_tools or ())
+    denied = [t for t in _TOOL_UNIVERSE if t not in opened]
+    if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
+        denied = [t for t in denied if t != "Read"]
+    return denied
+
+
 # ---------------------------------------------------------------------------
 # Usage tracking — accumulates cost/token data across all SDK calls in a run
 # ---------------------------------------------------------------------------
@@ -185,7 +227,10 @@ async def llm_call(
 
     Returns the assistant's text response. No tools are allowed by default —
     the pipeline provides all context as prompt text and parses structured
-    output from the response.
+    output from the response. Whatever is not in `allowed_tools` is explicitly
+    *denied* (`_deny_list`), because these prompts carry attacker-authorable
+    web-page text and an allow-list alone removes nothing under
+    bypassPermissions.
 
     Args:
         max_attempts: Transient-error retries at the run_agent level (default 2:
@@ -222,6 +267,7 @@ async def llm_call(
                 prompt,
                 system_prompt=system_prompt,
                 allowed_tools=allowed_tools,
+                disallowed_tools=_deny_list(prompt, allowed_tools),
                 max_turns=max_turns,
                 max_attempts=max_attempts,
                 model=model,
