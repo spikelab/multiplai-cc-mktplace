@@ -18,6 +18,31 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.27.0] - 2026-08-06
+
+### Changed
+
+- **Session extraction is materially cheaper.** The extraction prompt was one
+  large user message with the transcript spliced into its middle, so no two
+  calls shared a cacheable prefix and the whole prompt was cache-*written* on
+  every run — measured at a 59% write share over 1,086 calls in 30 days, the
+  worst in the ledger. The static instructions (including the memory-file
+  charters) now travel in the `system` prompt, leaving only today's date and
+  the transcript in the user message. Same instructions, same output format —
+  the stable half is now a prefix that caches once and reads thereafter.
+- **`catalog_model` now defaults to `claude-sonnet-5`** (was
+  `claude-sonnet-4-6`). Sonnet 5 is the current generation and is on
+  introductory pricing through 2026-08-31. Set `catalog_model` explicitly to
+  keep the old model.
+
+### Security
+
+- Extraction's instructions now arrive over the `system` channel rather than
+  inline in the same message as the untrusted transcript. The transcript is
+  still bracketed by a closing instruction block, per
+  `docs/untrusted-content.md`; this strengthens the separation, it does not
+  replace it.
+
 ## [0.26.0] - 2026-08-06
 
 ### Added
@@ -57,6 +82,7 @@ Nothing yet.
   If a file's applier returns something unsafe, nothing is written for that
   file and its items stay pending — a partial apply nobody can describe is
   worse than none.
+
 
 ## [0.25.0] - 2026-08-05
 

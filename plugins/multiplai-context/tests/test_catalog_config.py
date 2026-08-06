@@ -52,11 +52,17 @@ class TestPluginJsonUserConfigSchema:
             f"catalog_model type must be 'string', got {entry.get('type')}"
         )
 
-    def test_catalog_model_default_is_claude_sonnet(self):
-        """Scenario: Default catalog model is claude-sonnet-4-6."""
+    def test_catalog_model_default_matches_the_code(self):
+        """Scenario: the manifest default and generators.config agree.
+
+        The invariant is that the two stay in step — pinning the literal ID
+        here is what let plugin.json drift a model generation behind.
+        """
+        from generators.config import DEFAULT_MODEL
+
         entry = self.user_config.get("catalog_model", {})
-        assert entry.get("default") == "claude-sonnet-4-6", (
-            f"catalog_model default must be 'claude-sonnet-4-6', got {entry.get('default')}"
+        assert entry.get("default") == DEFAULT_MODEL, (
+            f"catalog_model default must be {DEFAULT_MODEL!r}, got {entry.get('default')}"
         )
 
     def test_catalog_model_has_description(self):
@@ -331,11 +337,11 @@ class TestCatalogConfigDefaults:
     """
 
     def test_default_model(self):
-        """Scenario: Default catalog model is claude-sonnet-4-6."""
-        from generators.config import CatalogConfig
+        """Scenario: an unconfigured CatalogConfig uses DEFAULT_MODEL."""
+        from generators.config import DEFAULT_MODEL, CatalogConfig
 
         config = CatalogConfig()
-        assert config.model == "claude-sonnet-4-6"
+        assert config.model == DEFAULT_MODEL
 
     def test_default_ttl_hours(self):
         """Scenario: Default TTL is 168 hours (7 days)."""
@@ -557,8 +563,9 @@ class TestModelValidation:
         try:
             config = CatalogConfig(model="")
             # If it doesn't raise, it should use the default
-            assert config.model == "claude-sonnet-4-6", (
-                "Empty model should fall back to default 'claude-sonnet-4-6'"
+            from generators.config import DEFAULT_MODEL
+            assert config.model == DEFAULT_MODEL, (
+                f"Empty model should fall back to default {DEFAULT_MODEL!r}"
             )
         except (ValueError, TypeError):
             pass  # Raising is also acceptable behavior per spec
@@ -598,8 +605,9 @@ class TestConfigLoadingFromPluginSettings:
 
         from generators.config import load_catalog_config
 
+        from generators.config import DEFAULT_MODEL
         config = load_catalog_config()
-        assert config.model == "claude-sonnet-4-6"
+        assert config.model == DEFAULT_MODEL
         assert config.ttl_hours == 168
         assert config.diary_catalog_days == 7
         assert config.enable_skills is False

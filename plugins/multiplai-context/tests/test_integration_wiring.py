@@ -957,10 +957,17 @@ class TestModelClientFactoryWiring:
             AnthropicAPIClient(None)
 
     def test_default_model_is_correct(self):
-        """WHEN DEFAULT_MODEL is inspected
-        THEN it matches claude-sonnet-4-6."""
+        """WHEN DEFAULT_MODEL is inspected THEN it is a sonnet-tier model.
+
+        The tier is what this plugin depends on — every unattended call here
+        (extraction, dream, catalogs) is budgeted for sonnet, and a default
+        that silently became opus-tier would be a cost incident. The exact
+        generation is core's invariant, asserted there against its own
+        ``CURRENT_MODEL`` table; pinning a dated ID in this repo would only
+        break the suite in the window between a core bump and the re-lock.
+        """
         from multiplai_core.model_client import DEFAULT_MODEL
-        assert DEFAULT_MODEL == "claude-sonnet-4-6"
+        assert "sonnet" in DEFAULT_MODEL
 
     def test_default_max_tokens_is_4096(self):
         """WHEN DEFAULT_MAX_TOKENS is inspected

@@ -19,7 +19,7 @@ from multiplai_core.plugin_options import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "claude-sonnet-5"
 DEFAULT_MODEL_DIARY = ""  # empty → inherits DEFAULT_MODEL
 DEFAULT_TTL_HOURS = 168  # 7 days
 DEFAULT_DIARY_CATALOG_DAYS = 7
