@@ -416,6 +416,22 @@ class TestToolDenyList:
         await llm_call("p")
         assert captured["disallowed_tools"] == sdk_module._TOOL_UNIVERSE
 
+    def test_universe_names_the_capabilities_that_carry_the_risk(self) -> None:
+        """Pin names, not the list against itself.
+
+        `disallowed_tools == _TOOL_UNIVERSE` passes no matter what the universe
+        forgot — which is how Artifact, SendMessage, REPL and the Task/Cron
+        family sat outside it while every deny-list test stayed green.
+        """
+        for tool in (
+            "Bash", "REPL",                             # execution
+            "WebFetch", "Artifact", "SendMessage",      # egress
+            "TaskCreate", "CronCreate", "Workflow",     # deferred execution
+            "Read", "Write", "Edit",                    # local files
+            "ToolSearch", "Skill",                      # loading tools back in
+        ):
+            assert tool in sdk_module._TOOL_UNIVERSE, tool
+
     @pytest.mark.asyncio
     async def test_allow_list_denies_the_complement(
         self, monkeypatch: pytest.MonkeyPatch

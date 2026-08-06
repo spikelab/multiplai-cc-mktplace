@@ -9,9 +9,9 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .untrusted import defang_untrusted
+from .untrusted import defang_untrusted, safe_url_text
 
 
 # ---------------------------------------------------------------------------
@@ -21,6 +21,11 @@ from .untrusted import defang_untrusted
 
 class SearchResult(BaseModel):
     """A single result from a search API, normalized across providers."""
+
+    # Defang runs in field validators, which by default fire on construction
+    # only. Without this, `source.title = raw_page_text` — one plausible future
+    # edit — walks straight past the boundary this class exists to be.
+    model_config = ConfigDict(validate_assignment=True)
 
     url: str
     title: str
@@ -43,6 +48,15 @@ class SearchResult(BaseModel):
     def _defang(cls, v: str) -> str:
         return defang_untrusted(v)
 
+    # A URL is page-authored text too — it reaches the triage prompt, the
+    # bibliography, and (for follow-links) the fetch prompt. Whether the
+    # pipeline will *act* on one is decided separately by `is_fetchable_url`;
+    # this only makes it safe to print.
+    @field_validator("url")
+    @classmethod
+    def _defang_url(cls, v: str) -> str:
+        return safe_url_text(v)
+
 
 class ReputationTier(str, Enum):
     AUTHORITATIVE = "authoritative"
@@ -61,6 +75,11 @@ class SourceStatus(str, Enum):
 
 class Source(BaseModel):
     """A source selected after triage, tracked through READ."""
+
+    # Defang runs in field validators, which by default fire on construction
+    # only. Without this, `source.title = raw_page_text` — one plausible future
+    # edit — walks straight past the boundary this class exists to be.
+    model_config = ConfigDict(validate_assignment=True)
 
     url: str
     title: str
@@ -84,6 +103,19 @@ class Source(BaseModel):
     def _defang(cls, v: str) -> str:
         return defang_untrusted(v)
 
+    @field_validator("url")
+    @classmethod
+    def _defang_url(cls, v: str) -> str:
+        return safe_url_text(v)
+
+    # `error` is built as f"extraction: {e}", and a pydantic ValidationError
+    # echoes the model output that failed — which is page-derived. It reaches
+    # the quality-check prompt.
+    @field_validator("error", "extracted_content")
+    @classmethod
+    def _defang_optional(cls, v: str | None) -> str | None:
+        return defang_untrusted(v) if v is not None else None
+
 
 # ---------------------------------------------------------------------------
 # Findings
@@ -98,6 +130,11 @@ class Confidence(str, Enum):
 
 class Finding(BaseModel):
     """A single fact extracted from a source by the LLM."""
+
+    # Defang runs in field validators, which by default fire on construction
+    # only. Without this, `source.title = raw_page_text` — one plausible future
+    # edit — walks straight past the boundary this class exists to be.
+    model_config = ConfigDict(validate_assignment=True)
 
     fact: str
     source_url: str
@@ -114,10 +151,15 @@ class Finding(BaseModel):
     # page, so nothing has defanged them before this point — only the httpx
     # fallback's extractor prompt defangs on the way in. Doing it on the model
     # covers both paths, plus any prompt added later.
-    @field_validator("fact", "source_title", "quote")
+    @field_validator("fact", "source_title", "quote", "date")
     @classmethod
     def _defang(cls, v: str | None) -> str | None:
         return defang_untrusted(v) if v is not None else None
+
+    @field_validator("source_url")
+    @classmethod
+    def _defang_url(cls, v: str) -> str:
+        return safe_url_text(v)
 
 
 def format_numbered_findings(

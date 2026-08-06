@@ -20,6 +20,49 @@ dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.6.4] - 2026-08-06
+
+Review of 0.6.3 found the deny-list it introduced was stale, and that the one
+field with a tool-enabled consequence was the one field it did not cover.
+
+### Security
+
+- **Links harvested from a page are now rejected, not escaped.** A page's
+  `links` are model output derived from that page's HTML, and deep-research
+  follows them by interpolating each into the fetch prompt — the only prompt in
+  the pipeline that runs with a tool enabled. Escaping cannot help there,
+  because the URL *is* the argument: text smuggled into it lands inside the
+  instruction, after the "fetch this and nothing else" line. Anything that is
+  not a plain `http(s)` URL — another scheme, embedded whitespace or newlines,
+  control characters, absurd length — is now dropped before anything acts on
+  it, with a warning in the log, and the fetcher re-checks independently of its
+  caller. The URL fields themselves are also defanged, so an unfetchable link
+  is still safe to show you in the bibliography.
+
+- **The deny-list covers the tools that actually exist.** It was written from
+  memory and named 18 tools; the CLI ships 44. Missing were `Artifact` (which
+  publishes a page to the web) and `SendMessage` (which hands text to another
+  agent) — both exfiltration channels as direct as `WebFetch` — plus `REPL`
+  next to a carefully denied `Bash`, and the `Task*`/`Cron*`/`Workflow` family,
+  which can queue work that gets tools later. It is now derived from the CLI's
+  own generated schema list, and the command to re-derive it sits in the source.
+
+- **Defang now holds on assignment, not only on construction.** Field
+  validators fire when a model is built; `source.title = raw_page_text` walked
+  straight past them. It no longer does. `error` and `extracted_content` are
+  covered too — the first quotes failed model output back into a prompt.
+
+### Fixed
+
+- **Checkpoint durability now matches what 0.6.3 claimed.** The rename was
+  atomic with respect to *ordering* only: without an `fsync` the data could
+  still be in the page cache when the rename committed, so a machine crash
+  could leave `--resume` reading a zero-length file — the exact failure the
+  change was made to prevent. The temp file and its directory entry are now
+  both flushed. The state file also keeps its original permissions instead of
+  silently becoming owner-only (`mkstemp` creates `0600`, and the rename
+  carried that across).
+
 ## [0.6.3] - 2026-08-06
 
 ### Security

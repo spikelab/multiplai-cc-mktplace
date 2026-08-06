@@ -16,6 +16,7 @@ import time
 from typing import Protocol
 
 from .models import FetchError, FetchErrorType, FetchResult
+from .untrusted import is_fetchable_url
 from . import sdk
 
 log = logging.getLogger(__name__)
@@ -109,6 +110,25 @@ class ClaudeAgentFetcher:
     ) -> FetchResult:
         """Strategy C: one SDK call with WebFetch + extraction."""
         start = time.monotonic()
+
+        # The URL becomes an argument inside the only prompt in this pipeline
+        # that runs with a tool enabled, so it is checked here as well as at
+        # the call sites: whatever a future caller hands this method, a value
+        # that is not a plain http(s) URL never reaches the prompt.
+        if not is_fetchable_url(url):
+            log.warning("fetch_url: refusing non-http(s) URL (%d chars)", len(str(url)))
+            safe = str(url)[:200]
+            elapsed = time.monotonic() - start
+            return FetchResult(
+                url=safe,
+                success=False,
+                error=FetchError(
+                    url=safe,
+                    error_type=FetchErrorType.UNKNOWN,
+                    message="rejected: not a plain http(s) URL",
+                    elapsed_seconds=elapsed,
+                ),
+            )
 
         prompt = FETCH_EXTRACT_PROMPT.format(
             url=url,

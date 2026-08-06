@@ -40,26 +40,56 @@ log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 
-# Every tool an SDK call could otherwise reach. Copied verbatim from
-# multiplai-core's `agent_runner.TOOL_UNIVERSE` (formerly
-# `model_client._DISALLOWED_TOOLS`) rather than imported: this is the
-# belt-and-braces layer, and it has to hold on an installed plugin that
-# resolved a core release predating core's own fail-closed default.
+# Every tool an SDK call could otherwise reach. Copied rather than imported
+# from multiplai-core: this is the belt-and-braces layer, and it has to hold on
+# an installed plugin that resolved a core release predating core's own
+# fail-closed default. In the core version this repo currently resolves the
+# list lives in `model_client._DISALLOWED_TOOLS`; core's `agent_runner`
+# additionally exports it as `TOOL_UNIVERSE` and pairs it with the SDK's
+# `tools` option, which is the real fix — see core's CHANGELOG. Once this repo
+# re-locks onto that core, the deny-list here is the *second* layer under a
+# base set that no longer depends on a list being complete.
 #
 # Why it exists: run_agent runs under permission_mode="bypassPermissions",
 # where `allowed_tools` is an allow-list only — it adds tools, it never removes
 # any. Every prompt this module sends carries fetched web-page text, i.e. text
 # an attacker can author. Without an explicit deny-list, an instruction injected
 # into a page reaches a Bash/Read/Write/WebFetch that is not merely available
-# but pre-approved. ToolSearch and Skill are denied too, or a deferred tool
-# could be loaded back in.
+# but pre-approved.
+#
+# Best-effort, not exhaustive — a name missing here is a tool left open, which
+# is why it is not the only layer. Re-derive on a CLI bump, from the CLI's own
+# generated schema list:
+#
+#   grep -oE '^export (type|interface) [A-Za-z]+Input' \
+#     "$(dirname "$(readlink -f "$(command -v claude)")")/../sdk-tools.d.ts" \
+#     | sed 's/.* //;s/Input$//' | sort -u
+#
 _TOOL_UNIVERSE = [
     # mutation / execution
     "Bash", "BashOutput", "KillShell", "Edit", "Write", "NotebookEdit",
-    "Task", "Agent", "AskUserQuestion", "SlashCommand", "ExitPlanMode",
+    "MultiEdit", "REPL", "Task", "Agent", "AskUserQuestion", "SlashCommand",
+    "ExitPlanMode", "EnterPlanMode", "TodoWrite",
     # read / network / meta — closes the prompt-injection exfiltration chain
-    "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "ToolSearch",
-    "Skill",
+    "Read", "NotebookRead", "Grep", "Glob", "LS", "WebFetch", "WebSearch",
+    "ToolSearch", "Skill",
+    # egress: each can carry text off the machine. Artifact publishes a page,
+    # SendMessage hands it to another agent — exfiltration channels every bit
+    # as much as WebFetch, and this pipeline's whole input is attacker-authored.
+    "Artifact", "SendMessage", "PushNotification", "RemoteTrigger",
+    "SendFeedback",
+    # background / scheduled execution — a denied Bash is worth little if the
+    # run can queue work that gets one later
+    "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskStop",
+    "TaskOutput", "Workflow", "ScheduleWakeup", "Monitor",
+    "CronCreate", "CronDelete", "CronList",
+    # MCP: separately contained by core's strict-mcp-config + setting_sources=[],
+    # listed so this layer does not depend on that one
+    "Mcp", "ListMcpResources", "ReadMcpResource", "ReadMcpResourceDir",
+    "RefreshMcpTools",
+    # remaining harness surface
+    "EnterWorktree", "ExitWorktree", "ReportFindings", "ProposeSkills",
+    "Projects", "ClaudeDesign", "ShowOnboardingRolePicker",
 ]
 
 
