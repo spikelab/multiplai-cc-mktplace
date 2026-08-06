@@ -1984,6 +1984,150 @@ async def dream_auto() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _latest_pending_proposal(dreams_dir: Path) -> Path | None:
+    """Newest pending proposal in the dreams root, by mtime.
+
+    Root only — ``applied/``, ``rejected/`` and ``superseded/`` hold decided
+    proposals. By mtime and not by name: a same-day re-run writes ``-2``,
+    ``-3``… which is newer but sorts *before* the base name.
+    """
+    if not dreams_dir.exists():
+        return None
+    candidates = [p for p in dreams_dir.glob("processed-learnings-*.md") if p.is_file()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
+    """Apply the uncontroversial half of a proposal; leave the rest for review.
+
+    The reviewing bottleneck was never judgement, it was volume: a ~190-item
+    proposal costs a whole context window to walk item by item, so reviews got
+    abandoned partway and the backlog grew instead of shrinking. Most of those
+    items are one additive bullet into an existing section of a non-behavioural
+    file, flagged by nothing — there is no decision in them to make.
+
+    So: classify deterministically (``lib.dream_triage``), apply the additive
+    ones through the same applier ``--auto`` uses, write a receipt naming every
+    one, and leave only the items that carry a real decision pending in the
+    proposal. What reaches the human is rule proposals, anything touching
+    ``CLAUDE.md``, anything the routing gate flagged, anything the drafter
+    marked low-confidence, and anything that rewrites rather than appends.
+
+    Returns a process exit code.
+    """
+    from lib import dream_triage as triage_lib
+
+    paths = get_paths()
+    dreams_dir = paths.dreams_dir()
+    memory_dir = paths.memory_dir()
+
+    proposal_path = Path(proposal_arg) if proposal_arg else _latest_pending_proposal(dreams_dir)
+    if proposal_path is None:
+        print("triage: no pending proposal in the dreams root — nothing to do")
+        return 0
+    if not proposal_path.is_file():
+        print(f"ERROR: proposal not found: {proposal_path}")
+        return 1
+
+    proposal = proposal_path.read_text()
+    triage = triage_lib.classify(proposal)
+    if triage.total == 0:
+        print(f"triage: {proposal_path.name} has no pending update items")
+        return 0
+
+    by_file = triage.auto_by_file()
+
+    if dry_run:
+        print(f"triage (dry run): {proposal_path.name} — {triage.total} pending item(s)")
+        print(triage_lib.render_summary(
+            triage, applied_count=len(triage.auto),
+            receipt_path="(not written)", dry_run=True,
+        ))
+        return 0
+
+    # Apply per file, concurrently — files are independent. Each call gets a
+    # *rebuilt* section holding only that file's auto items, never the
+    # proposal's own text, which still contains the review items.
+    client = await create_client(component="dream")
+    targets = []
+    skipped: dict[str, str] = {}
+    for filename, items in sorted(by_file.items()):
+        memory_file = memory_dir / filename
+        if not memory_file.exists():
+            skipped[filename] = "target memory file does not exist"
+            logger.warning("triage: proposal targets unknown file %s — skipped", filename)
+            continue
+        targets.append((filename, memory_file, items))
+
+    results = await asyncio.gather(*(
+        _apply_proposal_to_file(client, memory_file, triage_lib.auto_slice(items))
+        for _, memory_file, items in targets
+    ))
+
+    applied: dict[str, list] = {}
+    failed: dict[str, str] = dict(skipped)
+    decisions: list[Decision] = []
+    for (filename, memory_file, items), updated_content in zip(targets, results):
+        if not updated_content:
+            # The applier failed or returned something `_is_safe_memory_update`
+            # rejected. Write nothing and leave every one of that file's items
+            # pending — a partial apply we cannot describe is worse than none.
+            failed[filename] = "applier returned no safe content — items left pending"
+            logger.warning("triage: %s not applied (unsafe/empty applier result)", filename)
+            continue
+        memory_file.write_text(updated_content)
+        applied[filename] = items
+        decisions += [
+            Decision(kind="update", file=filename, index=item.number,
+                     status="applied", target=filename)
+            for item in items
+        ]
+        logger.info("triage: auto-applied %d item(s) to %s", len(items), filename)
+
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    receipt = triage_lib.render_receipt(
+        triage, proposal_name=proposal_path.name, applied=applied,
+        failed=failed, generated=generated,
+    )
+    receipts_dir = dreams_dir / "applied"
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    receipt_path = receipts_dir / f"{today}-auto-apply-receipt.md"
+    n = 2
+    while receipt_path.exists():
+        receipt_path = receipts_dir / f"{today}-auto-apply-receipt-{n}.md"
+        n += 1
+    receipt_path.write_text(receipt)
+
+    # Only now mark them processed. Receipt first, so a crash between the two
+    # leaves items pending with a receipt (a visible, re-runnable state) rather
+    # than processed with no record of what was written.
+    if decisions:
+        try:
+            marked, _ = mark_many_processed(proposal_path, decisions)
+            logger.info("triage: marked %d item(s) processed in %s",
+                        marked, proposal_path.name)
+        except OSError:
+            logger.exception("triage: could not mark items processed in %s — they "
+                             "were applied and are in the receipt", proposal_path)
+
+    applied_count = sum(len(v) for v in applied.values())
+    print(f"triage: {proposal_path.name} — {triage.total} pending item(s)")
+    print(triage_lib.render_summary(
+        triage, applied_count=applied_count, receipt_path=str(receipt_path),
+    ))
+    if failed:
+        print("")
+        print(f"NOT APPLIED ({len(failed)} file(s)) — items left pending:")
+        for name, reason in sorted(failed.items()):
+            print(f"    {name} — {reason}")
+
+    _commit_memory_changes(memory_dir)
+    return 0
+
+
 def _gc_learnings() -> None:
     """Delete learnings files that are fully consolidated **and** fully decided.
 
@@ -2168,6 +2312,23 @@ def main() -> None:
         help="Apply changes directly to memory files without review (autonomous mode)",
     )
     parser.add_argument(
+        "--triage",
+        action="store_true",
+        help="Apply the uncontroversial half of a pending proposal and leave the "
+             "rest for review. Additive entries to non-behavioural memory files "
+             "that no gate flagged are applied and recorded in a receipt under "
+             "dreams/applied/; rule proposals, CLAUDE.md items, routing-flagged "
+             "items, low-confidence items and anything that rewrites rather than "
+             "appends stay pending. Uses the newest pending proposal unless "
+             "--proposal names one.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --triage: print the partition and exit. Writes nothing, "
+             "calls no model.",
+    )
+    parser.add_argument(
         "--stamp",
         action="store_true",
         help="Record that a consolidation was applied (updates dream_state). "
@@ -2344,6 +2505,9 @@ def main() -> None:
         # is the difference between under-promising and being wrong.
         print(f"Estimated wall clock: at least {eta / 60:.0f} min")
         return
+
+    if args.triage:
+        sys.exit(asyncio.run(dream_triage(args.proposal, dry_run=args.dry_run)))
 
     if args.auto:
         asyncio.run(dream_auto())
