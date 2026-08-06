@@ -22,6 +22,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
+from .atomic import atomic_write_text
 from .config import PRESETS, ResearchConfig
 from .env import load_env
 from .gates import (
@@ -256,7 +257,7 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
             review = await challenge_node.adversarial_review(
                 config, report, review_findings
             )
-            review_path.write_text(challenge_node.render_review(review))
+            atomic_write_text(review_path, challenge_node.render_review(review))
             progress.log_stage(
                 "CHALLENGE REVIEW",
                 f"trigger={challenge_trigger} | overall={review.overall:.1f} | "
@@ -525,7 +526,7 @@ async def _run_main_stages(
             report = synthesize_node.write_incomplete_report(
                 config, state, cs_result.reason, cs_result.metadata,
             )
-            Path(state.output_file).write_text(report)
+            atomic_write_text(Path(state.output_file), report)
             progress.log_stage("ABORTED", cs_result.reason)
             state.advance_to(Stage.DONE)
             return
@@ -579,7 +580,7 @@ async def _run_main_stages(
                 config, state, qc_result.reasoning,
                 {"critical_gaps": qc_result.critical_gaps},
             )
-            Path(state.output_file).write_text(report)
+            atomic_write_text(Path(state.output_file), report)
             progress.log_stage("ABORTED", qc_result.reasoning)
             state.advance_to(Stage.DONE)
             return
@@ -588,7 +589,7 @@ async def _run_main_stages(
     # SYNTHESIZE
     if not state.is_complete(Stage.SYNTHESIZE_COMPLETE):
         report = await synthesize_node.synthesize(config, state)
-        Path(state.output_file).write_text(report)
+        atomic_write_text(Path(state.output_file), report)
         state.advance_to(Stage.SYNTHESIZE_COMPLETE)
         progress.log_stage("SYNTHESIZE COMPLETE", f"written to {state.output_file}")
 
@@ -821,7 +822,7 @@ async def run_parallel(config: ResearchConfig) -> int:
 
     # Synthesize merged report (simplified — just concatenate pointers + run synthesize)
     merged_text = _merge_sub_reports(config, completed_files)
-    Path(state.output_file).write_text(merged_text)
+    atomic_write_text(Path(state.output_file), merged_text)
     print(f"PATH: {state.output_file}")
     print(f"SUMMARY: Parallel research complete. {len(completed_files)}/{len(sub_topics)} sub-pipelines succeeded.")
     return 0

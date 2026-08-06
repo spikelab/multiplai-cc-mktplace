@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 from pydantic import BaseModel
@@ -470,6 +471,7 @@ class TestToolDenyList:
         assert "Bash" in captured["disallowed_tools"]
         assert "WebFetch" not in captured["disallowed_tools"]
 
+
     @pytest.mark.asyncio
     async def test_search_provider_opens_only_websearch(
         self, monkeypatch: pytest.MonkeyPatch
@@ -492,3 +494,77 @@ class TestToolDenyList:
         await llm_call("x" * (MAX_PROMPT_BYTES + 1))
         assert "Read" not in captured["disallowed_tools"]
         assert "Bash" in captured["disallowed_tools"]
+
+
+class TestOversizedPromptCarveOut:
+    """`_deny_list` re-opens Read above the E2BIG threshold, because run_agent
+    then hands the prompt over as a temp file. That is a real widening on the
+    one code path whose input is entirely attacker-authored, so what it costs
+    is pinned here rather than left to the comment."""
+
+    # Comfortably over MAX_PROMPT_BYTES without depending on its exact value.
+    _BIG = "x" * (sdk_module.MAX_PROMPT_BYTES + 1024)
+
+    def test_read_is_denied_on_an_ordinary_prompt(self) -> None:
+        assert "Read" in sdk_module._deny_list("short prompt", None)
+
+    def test_threshold_is_measured_in_bytes_not_characters(self) -> None:
+        """A prompt of multi-byte characters can be under the character count
+        and over the byte limit — run_agent's own check is on bytes, so this
+        one must be too or the two disagree about which mode is in force."""
+        just_under = "€" * ((sdk_module.MAX_PROMPT_BYTES // 3) - 16)
+        assert len(just_under) < sdk_module.MAX_PROMPT_BYTES
+        assert "Read" in sdk_module._deny_list(just_under, None)
+
+    def test_the_carve_out_opens_read_and_nothing_else(self) -> None:
+        ordinary = set(sdk_module._deny_list("short prompt", None))
+        oversized = set(sdk_module._deny_list(self._BIG, None))
+        assert ordinary - oversized == {"Read"}
+
+    def test_every_egress_tool_stays_denied_in_the_carve_out(self) -> None:
+        """The half that matters. Read alone is disclosure to a subprocess that
+        has no way to speak; it becomes exfiltration only if something can also
+        carry the bytes out. Nothing that can may be opened here."""
+        denied = set(sdk_module._deny_list(self._BIG, None))
+        for tool in (
+            "Bash", "BashOutput", "REPL", "Task", "Agent",       # execution
+            "Write", "Edit", "MultiEdit", "NotebookEdit",        # local writes
+            "WebFetch", "WebSearch",                             # network
+            "Artifact", "SendMessage", "PushNotification",       # publish / message
+            "RemoteTrigger", "SendFeedback",
+            "TaskCreate", "Workflow", "CronCreate",              # deferred execution
+            "ToolSearch", "Skill", "SlashCommand",               # loading tools back in
+        ):
+            assert tool in denied, tool
+
+    def test_the_carve_out_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A silent widening is one nobody audits."""
+        with caplog.at_level(logging.WARNING, logger="research_pipeline.sdk"):
+            sdk_module._deny_list(self._BIG, None)
+        assert any("Read left open" in r.getMessage() for r in caplog.records)
+
+
+class TestToolUniverseDrift:
+    """`_TOOL_UNIVERSE` is deliberately a copy of core's, not an import — it has
+    to hold on an installed plugin that resolved a core release predating core's
+    fail-closed default (see the comment on the constant). A copy drifts, and a
+    tool missing from it is a tool left open, so pin the two together: when core
+    learns about a new tool, this list must learn about it in the same bump."""
+
+    def test_covers_everything_core_knows_about(self) -> None:
+        core = __import__(
+            "multiplai_core.agent_runner", fromlist=["TOOL_UNIVERSE"]
+        ).TOOL_UNIVERSE
+        missing = sorted(set(core) - set(sdk_module._TOOL_UNIVERSE))
+        assert not missing, (
+            f"multiplai-core knows about tools this deny-list does not: {missing}. "
+            "Add them to _TOOL_UNIVERSE — each one is a tool left pre-approved "
+            "under bypassPermissions."
+        )
+
+    def test_has_no_duplicates(self) -> None:
+        dupes = {t for t in sdk_module._TOOL_UNIVERSE
+                 if sdk_module._TOOL_UNIVERSE.count(t) > 1}
+        assert not dupes, dupes

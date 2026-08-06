@@ -16,6 +16,7 @@ import time
 from typing import Protocol
 
 from .models import FetchError, FetchErrorType, FetchResult
+from .netguard import UnsafeURLError, _assert_safe_url
 from .untrusted import is_fetchable_url
 from . import sdk
 
@@ -126,6 +127,29 @@ class ClaudeAgentFetcher:
                     url=safe,
                     error_type=FetchErrorType.UNKNOWN,
                     message="rejected: not a plain http(s) URL",
+                    elapsed_seconds=elapsed,
+                ),
+            )
+
+        # Shape is not destination. `is_fetchable_url` accepts
+        # http://169.254.169.254/ and http://localhost:8080/ — both are plain
+        # http(s) URLs. The httpx path has resolved and rejected non-public
+        # hosts since the SSRF guard landed (fetcher._assert_safe_url); this
+        # path reached the network through WebFetch instead and so was never
+        # covered, even though its URLs come from the same attacker-influenced
+        # search results and scraped links. Same guard, same policy, both paths.
+        try:
+            await _assert_safe_url(url)
+        except UnsafeURLError as e:
+            log.warning("fetch_url: refusing non-public destination: %s", e)
+            elapsed = time.monotonic() - start
+            return FetchResult(
+                url=url,
+                success=False,
+                error=FetchError(
+                    url=url,
+                    error_type=FetchErrorType.UNKNOWN,
+                    message=f"rejected: {e}",
                     elapsed_seconds=elapsed,
                 ),
             )
