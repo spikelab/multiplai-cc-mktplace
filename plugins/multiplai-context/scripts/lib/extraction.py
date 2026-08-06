@@ -109,11 +109,13 @@ def _lock_path(target: Path) -> Path:
 # and the date interleaved into the instructions, that prefix was ~0 bytes and
 # extraction ran at a 59% cache-WRITE share (26.7M written vs 18.5M read over
 # 1,086 calls, 30d to 2026-08-06) — the worst cache citizen in the ledger.
-# EXTRACTION_SYSTEM is byte-identical across every call on a machine
-# (`{valid_targets}` moves only when the memory catalog does), so it caches
-# once and reads thereafter. EXTRACTION_USER holds the only genuinely variable
-# parts. Do NOT move `{today}` or `{transcript}` back into the system half:
-# either one invalidates the whole prefix.
+# EXTRACTION_SYSTEM is byte-identical from one call to the next in the steady
+# state; `{valid_targets}` rewrites it when a memory file is added or the
+# catalog is regenerated (168h TTL), which costs one write and then caches
+# again. EXTRACTION_USER holds the only per-call parts. Do NOT move `{today}`
+# or `{transcript}` back into the system half: either one invalidates the
+# prefix on every extraction. TestSystemHalfIsACacheablePrefix enforces this —
+# no other test in the suite can tell the two halves apart.
 #
 # The untrusted transcript still sits BETWEEN instructions — the closing
 # "## Output" block follows it — and the instructions now arrive over the
@@ -433,11 +435,11 @@ async def extract_units_and_disposition(
     # untrusted transcript is substituted last, and into the user half only —
     # it can never reach the system half, whose placeholders are already gone
     # by then.
+    system = EXTRACTION_SYSTEM.replace("{valid_targets}", targets_block)
     # An INTENTION must resolve "in September" / "in two weeks" to a real date,
     # and the model has no clock. Without this the relative dates it emits are
     # anchored to training time, i.e. wrong, i.e. reminders that fire on the
     # wrong day — worse than no reminder.
-    system = EXTRACTION_SYSTEM.replace("{valid_targets}", targets_block)
     prompt = (
         EXTRACTION_USER
         .replace("{today}", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
