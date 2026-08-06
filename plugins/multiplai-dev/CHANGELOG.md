@@ -16,8 +16,21 @@ release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-06
+
 ### Fixed
 
+- **buildme's agents can no longer reach a tool nobody remembered to deny.**
+  Every buildme LLM call denies the tools it did not explicitly ask for, but
+  the list it computed that denial from named ~18 tools out of the ~44 the CLI
+  now ships. Everything unnamed stayed available — and auto-approved, because
+  these calls run with permissions bypassed. That included a second
+  code-execution tool (`REPL`), two ways to send text off the machine
+  (`Artifact`, `SendMessage`), and the whole background/scheduled-execution
+  surface (`TaskCreate`, `Workflow`, `CronCreate`, …), which is what a denied
+  `Bash` is worth nothing against. The list is re-derived from the CLI's own
+  schema, and its test now names the tools that carry the risk instead of
+  comparing the list to itself.
 - **A crash after the TDD build no longer re-runs the whole build.** The TDD
   engine deleted the build's checkpoint on success even when it was running as
   one phase of `buildme` rather than on its own. Everything after it — the

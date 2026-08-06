@@ -40,6 +40,22 @@ class TestDenyList:
     def test_no_tools_denies_everything(self):
         assert _deny_list("short prompt", None) == _TOOL_UNIVERSE
 
+    def test_universe_names_the_capabilities_that_carry_the_risk(self):
+        """Pin names, not the list against itself.
+
+        `_deny_list(...) == _TOOL_UNIVERSE` passes no matter what the universe
+        forgot — which is how Artifact, SendMessage, REPL and the Task/Cron
+        family sat outside it while every deny-list test stayed green.
+        """
+        for tool in (
+            "Bash", "REPL",                             # execution
+            "WebFetch", "Artifact", "SendMessage",      # egress
+            "TaskCreate", "CronCreate", "Workflow",     # deferred execution
+            "Read", "Write", "Edit",                    # local files
+            "ToolSearch", "Skill",                      # loading tools back in
+        ):
+            assert tool in _TOOL_UNIVERSE, tool
+
     def test_bash_is_denied(self):
         assert "Bash" in _deny_list("short prompt", None)
 

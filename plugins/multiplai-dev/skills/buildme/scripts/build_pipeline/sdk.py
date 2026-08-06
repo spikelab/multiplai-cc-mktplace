@@ -93,10 +93,55 @@ def _repo_is_trusted() -> bool:
 # allow-list is advisory under bypassPermissions; only disallowed_tools
 # actually removes a tool — so every call denies the complement of what it
 # explicitly allows (a text-only call denies all of it).
+#
+# Copied rather than imported from multiplai-core, for the same reason
+# deep-research copies it: this is the belt-and-braces layer, and it has to hold
+# on an installed plugin that resolved a core release predating core's own
+# fail-closed default. Current core (`agent_runner.TOOL_UNIVERSE`) pairs its
+# copy with the SDK's `tools` option — the CLI's `--tools`, which sets the
+# *base set* of tools that exist at all rather than adding to the built-in set.
+# `tools=[]` is "no tools" with no list to keep current, and that is the real
+# guarantee; this list is the second layer under it.
+#
+# Best-effort enumeration, not a safety floor. Adding a name tightens the
+# second layer; a name missing from it is a tool the base set still has to
+# close. Derived 2026-08-06 from the CLI's own generated schema list
+# (`@anthropic-ai/claude-code/sdk-tools.d.ts`) plus the harness-only names that
+# file does not carry (Skill, ToolSearch, SlashCommand, BashOutput, KillShell,
+# Task). Re-derive it on a CLI bump:
+#
+#   grep -oE '^export (type|interface) [A-Za-z]+Input' \
+#     "$(dirname "$(readlink -f "$(command -v claude)")")/../sdk-tools.d.ts" \
+#     | sed 's/.* //;s/Input$//' | sort -u
+#
+# (That file names schemas, not tools, so FileRead/FileEdit/FileWrite appear
+# there as the schemas behind Read/Edit/Write.)
 _TOOL_UNIVERSE = [
+    # mutation / execution
     "Bash", "BashOutput", "KillShell", "Edit", "Write", "NotebookEdit",
-    "Task", "Agent", "AskUserQuestion", "SlashCommand", "ExitPlanMode",
-    "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "ToolSearch", "Skill",
+    "MultiEdit", "REPL", "Task", "Agent", "AskUserQuestion", "SlashCommand",
+    "ExitPlanMode", "EnterPlanMode", "TodoWrite",
+    # read / network / meta
+    "Read", "NotebookRead", "Grep", "Glob", "LS", "WebFetch", "WebSearch",
+    "ToolSearch", "Skill",
+    # egress: each can carry text off the machine. buildme's prompts are
+    # assembled from the target repo's own specs/, so they are as
+    # attacker-authored as a fetched page the moment the repo is not the
+    # user's own — which is exactly what the trust gate above is about.
+    "Artifact", "SendMessage", "PushNotification", "RemoteTrigger",
+    "SendFeedback",
+    # background / scheduled execution — a denied Bash is worth little if the
+    # run can queue work that gets one later
+    "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskStop",
+    "TaskOutput", "Workflow", "ScheduleWakeup", "Monitor",
+    "CronCreate", "CronDelete", "CronList",
+    # MCP: separately contained by core's strict-mcp-config + setting_sources=[],
+    # listed so this layer does not depend on that one
+    "Mcp", "ListMcpResources", "ReadMcpResource", "ReadMcpResourceDir",
+    "RefreshMcpTools",
+    # remaining harness surface
+    "EnterWorktree", "ExitWorktree", "ReportFindings", "ProposeSkills",
+    "Projects", "ClaudeDesign", "ShowOnboardingRolePicker",
 ]
 
 
