@@ -10,32 +10,36 @@ learnings line, flagged by nothing.
 
 Triage separates the two populations **deterministically** — no model call, no
 judgement — so the human's attention goes only where a mistake would actually
-cost something:
+cost something. An item is auto-appliable only when *all* of these hold:
 
-- an item that changes how the agent *behaves* (a rule, or anything landing in
-  ``CLAUDE.md``) is a decision, not a data entry;
-- an item that *revises or replaces* existing memory can destroy a line that
-  was right, which an append never can;
-- an item the routing gate flagged is one the deterministic checks already
-  doubt;
-- an item the drafter itself marked low-confidence is one the drafter doubts.
+- it does not change how the agent behaves: not a ``[RULE-PROPOSAL]``, not
+  phrased as a standing instruction (``_NORMATIVE_RE``), and landing in a file
+  that records rather than instructs (``RECALL_FILES``);
+- it *appends*. An ``update`` can destroy a line that was right; an ``add``
+  cannot;
+- its target is a plain memory filename — a model-authored ``../../CLAUDE.md``
+  is not a memory file however much it looks like one;
+- no gate doubts it: not flagged by routing, not marked low-confidence by the
+  drafter, and parsed cleanly with actual text to insert.
 
-Everything else is auto-appliable. "Auto" is not "unreviewed": every item is
-written to a receipt naming its target, section, text and source citation, and
-memory lives in git — the auditable-and-revertible pair is what makes the
-default-apply safe. The reviewer reads a 20-item list instead of a 190-item
-one, and the ones they read are the ones that matter.
+"Auto" is not "unreviewed": every applied item is written to a receipt naming
+its target, section, text and source citation, and memory lives in git — the
+auditable-and-revertible pair is what makes the default-apply safe. The
+reviewer reads a 20-item list instead of a 190-item one, and the ones they read
+are the ones that matter.
 
-The classifier is intentionally *pessimistic*: anything it cannot parse
-confidently — a missing ``**Change:**`` field, an unknown change verb — goes to
-the human. A false "needs review" costs one line of reading; a false "auto"
-writes something nobody agreed to.
+Every gate is **pessimistic**, and the two directions are not symmetric: a false
+"needs review" costs one line of reading, a false "auto" writes something nobody
+agreed to. So the file check is an allowlist rather than a denylist, the
+normative-language check accepts false positives, and anything that does not
+parse the way the format promises goes to the human.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from lib.routing_validation import parse_proposal_entries
 
@@ -47,10 +51,52 @@ _LOW_CONFIDENCE_RE = re.compile(r"\[warning:?\s*low confidence\]", re.IGNORECASE
 # warning. We only need the (file, number) pair to match warnings to items.
 _WARNING_LABEL_RE = re.compile(r"^-\s+`(?P<target>[^`]+)`\s+#(?P<number>\d+)\b")
 
-# Files whose contents are behavioural instruction rather than recall. An entry
-# landing here changes what the agent *does*, so it is always the human's call —
-# regardless of how additive or well-cited it looks.
-BEHAVIORAL_FILES = frozenset({"CLAUDE.md"})
+# Auto-apply targets an **allowlist of recall files**, not a denylist of
+# behavioural ones. The first version of this module denied only `CLAUDE.md`,
+# and running it against the real 2026-08-05 proposal auto-applied 8 items into
+# `git-policy.md`, 3 into `preferences.md` and 2 more into `technical-pref.md`
+# and `prompt-eng-guide.md` — files whose own headers say "policy" and
+# "principles ... that should always be applied". Standing rules, written with
+# nobody's consent, by the very feature whose stated policy is that a
+# behavioural change is the human's call.
+#
+# The direction is the whole point. A denylist fails open: a memory file added
+# next month is auto-appliable until someone remembers to classify it. An
+# allowlist fails closed — the new file's items wait for a human, which costs a
+# few lines of reading once.
+#
+# Membership test: does this file *record* something (a project's state, a
+# person's history, a technical gotcha), or does it *instruct* — voice guides,
+# preference and policy files, anything the agent reads to decide how to act?
+RECALL_FILES = frozenset({
+    # people, projects, money — pure record
+    "career-history.md", "dolcebot.md", "dolcedata.md", "dolcesim.md",
+    "finances.md", "life.md", "me.md", "multiplai.md", "personal-projects.md",
+    "taxes-italy.md", "career-strategy.md",
+    # technical knowledge: gotchas, benchmarks, platform behaviour. Normative
+    # sentences do turn up in these, which is what `_NORMATIVE_RE` below is for
+    # — the file being on this list is necessary, never sufficient.
+    "ai-agent-patterns.md", "apple.md", "audiovideo.md", "claude-code-tools.md",
+    "dev.md", "infra-patterns.md", "python.md",
+})
+
+# An item can carry a rule into a recall file — "always stage with a pathspec",
+# "never use bare git add" — and a file-level gate alone would wave it through.
+# So the *text* is checked too: anything phrased as a standing instruction goes
+# to the human wherever it lands.
+#
+# Deliberately trigger-happy. These words appear in plenty of harmless factual
+# sentences ("the API always returns UTF-8"), and every false positive costs
+# one line of reading, while a false negative writes a rule nobody approved.
+_NORMATIVE_RE = re.compile(
+    r"\b("
+    r"always|never|must|should|shall|"
+    r"don'?t|do not|avoid|refuse|forbidden|required|mandatory|"
+    r"prefer|instead of|rather than|"
+    r"make sure|ensure that|remember to|be sure to"
+    r")\b",
+    re.IGNORECASE,
+)
 
 # The only change verb that cannot destroy existing memory. `update`/`replace`
 # rewrite a line that may well have been correct; an empty or unrecognised verb
@@ -62,11 +108,13 @@ ADDITIVE_CHANGES = frozenset({"add"})
 # trip several; `Item.reasons` keeps all of them, and the receipt shows the set.
 REASON_LABELS = {
     "rule-proposal": "changes a behavioural rule",
-    "behavioral-file": "targets a behavioural-rule file",
+    "not-recall-file": "targets a file that instructs rather than records",
+    "normative-language": "reads as a standing instruction, not a fact",
+    "unsafe-target": "target filename is not a plain memory filename",
     "routing-warning": "flagged by the routing gate",
     "low-confidence": "drafter marked it low confidence",
     "not-additive": "revises or replaces existing memory",
-    "unparsed": "block did not parse — no change verb",
+    "unparsed": "block did not parse — no change verb, or no text",
 }
 
 
@@ -80,6 +128,7 @@ class Item:
     section: str
     change: str
     text: str
+    source: str
     reasons: tuple[str, ...]
 
     @property
@@ -122,6 +171,45 @@ def _group(items) -> dict[str, list[Item]]:
     for item in items:
         out.setdefault(item.target, []).append(item)
     return out
+
+
+_SAFE_TARGET_RE = re.compile(r"^[A-Za-z0-9._-]+\.md$")
+
+
+def is_safe_target(filename: str) -> bool:
+    """Is *filename* a plain memory filename, safe to join onto memory_dir?
+
+    The target comes from a ``## Updates for `x` `` heading written by a model,
+    captured as ``[^`]+`` — so it is arbitrary text, and ``memory_dir / target``
+    happily resolves ``../../CLAUDE.md`` to the workspace file. The existing
+    ``.exists()`` check is no guard at all: the interesting traversal targets
+    are precisely the files that exist.
+
+    A basename ending in ``.md``, with no separators and no ``..``. Anything
+    else is not a memory file, whatever it claims.
+    """
+    return (
+        bool(_SAFE_TARGET_RE.match(filename))
+        and ".." not in filename
+        and filename == PurePosixPath(filename).name
+    )
+
+
+def has_routing_section(proposal: str) -> bool:
+    """Did the routing gate actually run on this proposal?
+
+    ``dream.py``'s ``_with_routing_warnings`` is fail-open: on any exception it
+    returns the proposal with no warnings section at all. An absent section is
+    therefore indistinguishable from a clean one to
+    :func:`flagged_by_routing`, and treating it as clean would auto-apply every
+    item the gate would have flagged — 6 of them in the run this module was
+    built against. The renderer always writes ``(none)`` when it finds nothing,
+    so "clean" and "never ran" *are* distinguishable — but only if somebody
+    checks, which is what this exists for.
+    """
+    return any(
+        line.startswith("## Routing Warnings") for line in proposal.splitlines()
+    )
 
 
 def flagged_by_routing(proposal: str) -> set[tuple[str, int]]:
@@ -179,8 +267,12 @@ def classify(proposal: str) -> Triage:
 
         if _RULE_PROPOSAL_RE.search(blob):
             reasons.append("rule-proposal")
-        if entry["target"] in BEHAVIORAL_FILES:
-            reasons.append("behavioral-file")
+        if not is_safe_target(entry["target"]):
+            reasons.append("unsafe-target")
+        elif entry["target"] not in RECALL_FILES:
+            reasons.append("not-recall-file")
+        if _NORMATIVE_RE.search(blob):
+            reasons.append("normative-language")
         if (entry["target"], number) in flagged:
             reasons.append("routing-warning")
         if _LOW_CONFIDENCE_RE.search(blob):
@@ -189,6 +281,13 @@ def classify(proposal: str) -> Triage:
             reasons.append("unparsed")
         elif entry["change"] not in ADDITIVE_CHANGES:
             reasons.append("not-additive")
+        # A block with a change verb but no quoted body parses "successfully"
+        # into an empty text. The applier would then be handed a title and told
+        # to apply it, under a prompt that says not to invent — best case a
+        # no-op, realistic case a bullet it composes from the title, which is
+        # unreviewed, unsourced, and absent from the receipt as well.
+        if not entry["text"].strip() and "unparsed" not in reasons:
+            reasons.append("unparsed")
 
         item = Item(
             target=entry["target"],
@@ -197,6 +296,7 @@ def classify(proposal: str) -> Triage:
             section=entry["section"],
             change=entry["change"],
             text=entry["text"],
+            source=entry.get("source", ""),
             reasons=tuple(reasons),
         )
         (review if reasons else auto).append(item)
@@ -229,6 +329,9 @@ def auto_slice(items: list[Item]) -> str:
         lines.append("")
         for text_line in item.text.splitlines():
             lines.append(f"> {text_line}")
+        if item.source:
+            lines.append("")
+            lines.append(f"**Source:** {item.source}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -284,6 +387,10 @@ def render_receipt(
             out.append("")
             for text_line in item.text.splitlines():
                 out.append(f"> {text_line}")
+            # Provenance is the part that makes an unreviewed line traceable
+            # back to the session that produced it.
+            out.append("")
+            out.append(f"**Source:** {item.source or '(none recorded)'}")
             out.append("")
 
     if triage.review:

@@ -35,6 +35,7 @@ _ENTRY_RE = re.compile(r"^### +(?P<num>A?\d+)\.\s*(?P<title>.*)$")
 _UPDATES_FOR_RE = re.compile(r"^## Updates for `(?P<file>[^`]+)`")
 _SECTION_FIELD_RE = re.compile(r"^\*\*Section:\*\*\s*(?P<value>.+?)\s*$")
 _CHANGE_FIELD_RE = re.compile(r"^\*\*Change:\*\*\s*(?P<value>.+?)\s*$")
+_SOURCE_FIELD_RE = re.compile(r"^\*\*Source:\*\*\s*(?P<value>.+?)\s*$")
 _NEW_SECTION_RE = re.compile(r"^new section\b\s*[:—\-]?\s*", re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 
@@ -75,7 +76,8 @@ def parse_proposal_entries(proposal: str) -> list[dict]:
     Returns dicts with ``target`` (filename), ``number``, ``title``,
     ``section`` (the ``**Section:**`` value, may be empty), ``change``
     (the ``**Change:**`` value lowercased — add/update/replace, may be
-    empty), and ``text`` (the blockquoted insert text, unquoted). Action
+    empty), ``source`` (the ``**Source:**`` citation, may be empty) and
+    ``text`` (the blockquoted insert text, unquoted). Action
     items (``### A{N}.``) and non-update sections (Filtered Out, Action
     Items) are skipped.
     """
@@ -113,6 +115,7 @@ def parse_proposal_entries(proposal: str) -> list[dict]:
                 "title": m.group("title").strip(),
                 "section": "",
                 "change": "",
+                "source": "",
                 "_text_lines": [],
             }
             continue
@@ -125,6 +128,12 @@ def parse_proposal_entries(proposal: str) -> list[dict]:
         m = _CHANGE_FIELD_RE.match(line)
         if m:
             entry["change"] = m.group("value").lower()
+            continue
+        # Provenance. Kept because an item applied without a human reading it
+        # is only auditable if the receipt can say where it came from.
+        m = _SOURCE_FIELD_RE.match(line)
+        if m:
+            entry["source"] = m.group("value")
             continue
         if line.startswith(">"):
             entry["_text_lines"].append(line.lstrip("> ").rstrip())

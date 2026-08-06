@@ -18,6 +18,67 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.28.0] - 2026-08-06
+
+### Changed
+
+- **`/dream-remember` triage now auto-applies about a third of a proposal, not
+  most of it.** 0.26.0 claimed 175 of 194 items applied and 19 left for you.
+  That number came from a classifier with two holes, and the honest split on
+  the same proposal is **74 applied, 120 left for you**. Expect a third, and
+  read the 120 — they were always yours to decide.
+
+  Two gates were wrong:
+
+  - The file check was a denylist naming `CLAUDE.md` alone, so every other
+    memory file was auto-appliable — including `preferences.md`,
+    `git-policy.md`, `technical-pref.md` and the voice and workflow guides,
+    which the agent reads *to decide how to act*. It is now an allowlist of the
+    files that **record** rather than instruct, so a memory file added next
+    month waits for you instead of being auto-appliable until someone
+    remembers to classify it.
+  - Nothing looked at what an item actually *said*. A rule carried into a facts
+    file ("never run `uv sync` against a shared venv") was an additive entry to
+    a non-behavioural file and sailed through. Items **phrased as standing
+    instructions** now go to you wherever they land — 104 of the 120 on the
+    measured run. The check is deliberately trigger-happy: it fires on factual
+    sentences that merely contain "always"/"must"/"prefer", and each false
+    positive costs one line of reading.
+
+### Fixed
+
+- **A proposal with no `## Routing Warnings` section is now refused outright**
+  rather than fully auto-applied. The section is absent whenever the routing
+  gate failed — it is fail-open — and an absent section was indistinguishable
+  from a clean one, so exactly the items the gate exists to catch were the ones
+  applied unattended (6 of them on the measured proposal). Triage exits 1 and
+  writes nothing; review that proposal by hand or regenerate it.
+
+- **An applier result that is not purely additive is refused.** Every
+  auto-applied item is an `add`, so the rewritten file must still contain every
+  original line and grow no more than the proposed items account for. The
+  previous guard accepted a result that had discarded 40% of the file — on a
+  path where, by construction, nobody read the diff.
+
+- **A proposal cannot target a file outside your memory directory.** The target
+  comes from a model-written heading and was joined onto the memory path
+  as-is, so `../../CLAUDE.md` resolved to the workspace file — and the
+  "does it exist?" check was no guard, because the interesting traversal
+  targets are precisely the files that exist.
+
+- **The triage commit names only the files it rewrote**, instead of staging
+  `*.md` across the whole memory directory — an unrelated hand-edit is no
+  longer swept into a commit captioned as an automatic apply. Triage also takes
+  dream's exclusive run lock, like `--auto` does, so two concurrent runs cannot
+  both write memory.
+
+- **`--dry-run` without `--triage` is now an argument error.** It was silently
+  ignored, so `dream.py --dry-run` ran a full consolidation and wrote a
+  proposal — the opposite of what the flag promises.
+
+- The receipt's per-item **source citation** is now populated. It was always in
+  the template and always blank, because the parser dropped the field.
+
 ## [0.27.0] - 2026-08-06
 
 ### Changed
