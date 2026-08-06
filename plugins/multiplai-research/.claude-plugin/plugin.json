@@ -1,6 +1,6 @@
 {
   "name": "multiplai-research",
-  "version": "0.6.2",
+  "version": "0.6.4",
   "description": "Research skill pack: code-driven deep research pipeline, insight extraction, structured interviewing.",
   "author": {"name": "Spike", "email": "fsm@spikelab.org"},
   "license": "MIT",

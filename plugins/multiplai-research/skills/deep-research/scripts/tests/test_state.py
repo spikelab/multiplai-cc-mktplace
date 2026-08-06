@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -194,3 +196,101 @@ class TestExtractedContentTruncation:
         fresh_state.mark_source_extracted("https://small.example", "short content", [])
         loaded = ResearchState.load(Path(fresh_state.state_file))
         assert loaded.sources[0].extracted_content == "short content"
+
+
+class TestAtomicCheckpoint:
+    """checkpoint() runs after every source during READ, so a crash mid-write
+    is a realistic way to lose a run. Write-in-place loses it badly: truncated
+    JSON makes load() raise, so the checkpoint destroys what it exists to
+    protect."""
+
+    def test_crash_midway_through_the_write_leaves_the_old_state_loadable(
+        self, fresh_state: ResearchState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The property the whole change exists for.
+
+        This must fail on write-in-place, so the failure has to happen *during*
+        the write — after some bytes have landed. Patching model_dump_json (as
+        an earlier version of this test did) raises before any file is touched,
+        which write-in-place survives just as happily; it pinned nothing.
+        """
+        fresh_state.sources.append(
+            Source(url="https://before.example", title="Before", snippet="s")
+        )
+        fresh_state.checkpoint()
+        good = Path(fresh_state.state_file).read_text()
+
+        real_open = os.fdopen
+
+        def half_writing_fdopen(fd, *a, **kw):
+            f = real_open(fd, *a, **kw)
+            real_write = f.write
+
+            def write(data):
+                real_write(data[: len(data) // 2])
+                raise RuntimeError("crashed mid-write")
+
+            f.write = write  # type: ignore[method-assign]
+            return f
+
+        monkeypatch.setattr(os, "fdopen", half_writing_fdopen)
+        with pytest.raises(RuntimeError):
+            fresh_state.checkpoint()
+
+        assert Path(fresh_state.state_file).read_text() == good
+        loaded = ResearchState.load(Path(fresh_state.state_file))
+        assert [s.url for s in loaded.sources] == ["https://before.example"]
+
+    def test_a_failed_rename_leaves_the_old_state_and_no_temp_file(
+        self, fresh_state: ResearchState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The last failure point: everything written, rename refused."""
+        fresh_state.checkpoint()
+        directory = Path(fresh_state.state_file).parent
+        good = Path(fresh_state.state_file).read_text()
+
+        monkeypatch.setattr(
+            os, "replace", lambda *a, **kw: (_ for _ in ()).throw(OSError("EXDEV"))
+        )
+        with pytest.raises(OSError):
+            fresh_state.checkpoint()
+
+        assert Path(fresh_state.state_file).read_text() == good
+        assert list(directory.glob("*.tmp")) == []
+
+    def test_no_temp_files_left_behind_when_serialization_fails(
+        self, fresh_state: ResearchState, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fresh_state.checkpoint()
+        directory = Path(fresh_state.state_file).parent
+
+        def boom(*a, **kw):
+            raise RuntimeError("nope")
+
+        monkeypatch.setattr(type(fresh_state), "model_dump_json", boom)
+        with pytest.raises(RuntimeError):
+            fresh_state.checkpoint()
+
+        assert [p.name for p in directory.glob("*.tmp")] == []
+
+    def test_checkpoint_keeps_the_existing_file_mode(
+        self, fresh_state: ResearchState
+    ) -> None:
+        """mkstemp is 0600 and os.replace carries the temp's mode across.
+
+        Without the explicit chmod, the second checkpoint silently makes a
+        user-visible artifact owner-only.
+        """
+        path = Path(fresh_state.state_file)
+        fresh_state.checkpoint()
+        os.chmod(path, 0o644)
+        fresh_state.checkpoint()
+        assert stat.S_IMODE(path.stat().st_mode) == 0o644
+
+    def test_checkpoint_still_round_trips(self, fresh_state: ResearchState) -> None:
+        fresh_state.sources.append(
+            Source(url="https://a.example", title="A", snippet="s")
+        )
+        fresh_state.checkpoint()
+        loaded = ResearchState.load(Path(fresh_state.state_file))
+        assert [s.url for s in loaded.sources] == ["https://a.example"]

@@ -30,7 +30,7 @@ from ..prompts.extract import EXTRACT_PROMPT
 from ..search_router import SearchRouter
 from ..sdk import llm_call_structured
 from ..state import ResearchState
-from ..untrusted import defang_untrusted
+from ..untrusted import defang_untrusted, is_fetchable_url
 
 log = logging.getLogger(__name__)
 
@@ -236,7 +236,16 @@ def _store_pre_extracted(
     findings_raw: list[dict],
     state: ResearchState,
 ) -> None:
-    """Convert Strategy C pre-extracted findings and store them."""
+    """Convert Strategy C pre-extracted findings and store them.
+
+    These findings come straight off the page, extracted inside the fetch SDK
+    call, so nothing has defanged them at this point — unlike the httpx path,
+    whose extractor prompt defangs on the way in. `Finding`'s own field
+    validator closes that: constructing one here defangs `fact`/`quote`/
+    `source_title`, which is the storage boundary for every downstream prompt
+    that interpolates them unfenced (reassess, synthesize, triage,
+    adversarial review).
+    """
     findings: list[Finding] = []
     for item in findings_raw:
         if not isinstance(item, dict):
@@ -333,12 +342,33 @@ async def _follow_links(
     fetcher: FetcherProtocol,
     batch: list[Source],
 ) -> None:
-    """Follow LLM-flagged links from a completed batch."""
+    """Follow LLM-flagged links from a completed batch.
+
+    These URLs are the pipeline's sharpest untrusted input: they are model
+    output derived from an attacker's HTML, and they end up interpolated into
+    the fetch prompt — the one prompt that runs with a tool enabled. Fencing
+    does not help, because the URL *is* the argument: text smuggled into it
+    lands inside the instruction, after the "fetch this and nothing else" pin.
+    So they are rejected on shape rather than escaped, before anything acts on
+    them.
+    """
     candidate_links: list[tuple[str, Source]] = []
+    rejected = 0
     for source in batch:
         follow_urls = getattr(source, "_follow_links", []) or []
         for url in follow_urls:
+            if not is_fetchable_url(url):
+                rejected += 1
+                continue
             candidate_links.append((url, source))
+
+    if rejected:
+        # Worth a warning, not a debug line: a page emitting a non-http or
+        # whitespace-carrying "URL" is either broken or probing.
+        log.warning(
+            "READ: dropped %d follow-link(s) that are not plain http(s) URLs",
+            rejected,
+        )
 
     if not candidate_links:
         return
