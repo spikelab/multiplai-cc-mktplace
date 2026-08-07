@@ -7,12 +7,12 @@ installed Claude Code plugins (themed skill packs).
 Design Decision 10: Gated on enable_skills config flag (default: false).
 """
 
-import json
 import os
 from pathlib import Path
 from typing import Any
 
 from generators.base import GenerationResult, GeneratorBase
+from lib.plugin_skills import plugin_skills
 
 # Hand-authored intent fields preserved across regeneration. Skills use
 # the same intent_domains / anti_domains schema as memory and resources
@@ -67,36 +67,19 @@ class SkillsGenerator(GeneratorBase):
         and globs ``<installPath>/skills/*/SKILL.md`` for every install
         record. Missing or malformed manifests yield no sources — plugin
         discovery must never break catalog generation.
+
+        The manifest walk itself lives in ``lib.plugin_skills`` because
+        ``context_manager`` needs the same traversal to work out that a skill
+        is invoked as ``/plugin:skill`` and not ``/skill``. Two copies of it
+        would drift, and the copy that drifts is the one that teaches the
+        model a name that does not exist.
         """
         plugins_dir = self._config.plugins_dir or os.path.join(
             os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")),
             "plugins",
         )
-        manifest = Path(plugins_dir).expanduser() / "installed_plugins.json"
-        if not manifest.is_file():
-            return {}
-        try:
-            data = json.loads(manifest.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {}
-
-        found: dict[str, Path] = {}
-        plugins = data.get("plugins")
-        if not isinstance(plugins, dict):
-            return {}
-        for records in plugins.values():
-            if not isinstance(records, list):
-                continue
-            for rec in records:
-                if not isinstance(rec, dict):
-                    continue
-                install = rec.get("installPath")
-                if not install:
-                    continue
-                for path in sorted(Path(install).glob("skills/*/SKILL.md")):
-                    if path.is_file():
-                        found.setdefault(path.parent.name, path)
-        return found
+        found = plugin_skills(Path(plugins_dir).expanduser())
+        return {name: path for name, (path, _plugin) in found.items()}
 
     def build_prompt(self, source: Path) -> str:
         """Build an LLM prompt for summarizing a skill file.

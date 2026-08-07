@@ -18,6 +18,29 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.32.1] - 2026-08-07
+
+### Fixed
+
+- **A skill the router recommends can now actually be invoked.** When the
+  routing hook suggested a relevant skill it wrote `Invoke with /<name>`,
+  taking the name from the catalog's source key — which is the skill's
+  *directory* name. For every skill shipped by a plugin that is not a valid
+  identifier: the real one is `/<plugin>:<name>`, and the bare form fails with
+  `Unknown skill`. So the hook was reliably teaching a name that does not work.
+
+  An audit of 111,780 real tool calls on 2026-08-07 measured the consequence:
+  the `Skill` tool failed **23.2%** of the time, and every single failure was
+  an unqualified name — `extract-insights` (24 attempts), `youtube-transcript`
+  (19), `deep-research` (13). Those are three of this suite's own skills,
+  unreachable at the exact moment the router had decided they were the right
+  thing to reach for.
+
+  The hint now names the invocable identifier:
+  `Invoke with /multiplai-research:extract-insights when relevant.` A skill in
+  your own `skills_dir` is still suggested bare, because that is genuinely how
+  it is invoked.
+
 ## [0.32.0] - 2026-08-07
 
 ### Added
