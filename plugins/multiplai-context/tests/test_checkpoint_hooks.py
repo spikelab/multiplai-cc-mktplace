@@ -338,3 +338,120 @@ class TestAutoModeNudgeSuppression:
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_stop_payload(tmp_path, 210_000))))
         checkpoint_nudge.main()
         assert capsys.readouterr().out.strip() == ""
+
+
+class TestHardStop:
+    """checkpoint_hard_stop_tokens: the nudge stops asking and starts refusing.
+
+    Every test sets the option explicitly — the feature is off by default,
+    which is itself asserted below.
+    """
+
+    def _run(self, monkeypatch, capsys, payload):
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+        checkpoint_nudge.main()
+        return capsys.readouterr().out
+
+    def _payload(self, tmp_path, tokens, prompt="carry on"):
+        p = _stop_payload(tmp_path, tokens)
+        p["prompt"] = prompt
+        return p
+
+    def test_off_by_default(self, tmp_path, data_env, monkeypatch, capsys):
+        """A huge session with no option set still only gets advice."""
+        out = self._run(monkeypatch, capsys, self._payload(tmp_path, 900_000))
+        assert "CONTEXT BUDGET" in out
+        assert "decision" not in out
+
+    def test_blocks_above_threshold(self, tmp_path, data_env, monkeypatch, capsys):
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
+        out = self._run(monkeypatch, capsys, self._payload(tmp_path, 260_000))
+        frame = json.loads(out)
+        assert frame["decision"] == "block"
+        assert "/clear" in frame["reason"]
+        assert "!keepgoing" in frame["reason"]
+        # A blocked prompt is never also nudged.
+        assert "CONTEXT BUDGET" not in out
+
+    def test_advisory_between_handoff_and_hard_stop(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
+        out = self._run(monkeypatch, capsys, self._payload(tmp_path, 210_000))
+        assert "CONTEXT BUDGET" in out
+        assert "decision" not in out
+
+    def test_slash_commands_pass_through(self, tmp_path, data_env, monkeypatch, capsys):
+        """The wall must have a door: /clear and /compact are the way out."""
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
+        for prompt in ("/clear", "  /compact", "/status"):
+            out = self._run(monkeypatch, capsys, self._payload(tmp_path, 260_000, prompt))
+            assert "decision" not in out, prompt
+
+    def test_override_token_lets_one_prompt_through(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
+        out = self._run(
+            monkeypatch, capsys, self._payload(tmp_path, 260_000, "finish this !keepgoing")
+        )
+        assert "decision" not in out
+
+    def test_override_persists_for_one_refresh_band(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        """Otherwise the override has to be re-typed on every single prompt."""
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
+        self._run(monkeypatch, capsys, self._payload(tmp_path, 260_000, "!keepgoing"))
+        # Within one refresh band (25K) of the override → still allowed
+        out = self._run(monkeypatch, capsys, self._payload(tmp_path, 270_000))
+        assert "decision" not in out
+        # Beyond it → the wall comes back
+        out = self._run(monkeypatch, capsys, self._payload(tmp_path, 300_000))
+        assert json.loads(out)["decision"] == "block"
+
+    def test_clamped_below_handoff(self, tmp_path, data_env, monkeypatch, capsys):
+        """A hard stop under the handoff threshold would block with no warning."""
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "50000")
+        assert cp.load_config().hard_stop_tokens == cp.load_config().handoff_tokens
+        out = self._run(monkeypatch, capsys, self._payload(tmp_path, 150_000))
+        assert out.strip() == ""
+
+    def test_blocks_in_auto_mode_too(self, tmp_path, data_env, monkeypatch, capsys):
+        """Compaction that has not fired by the hard stop is not going to."""
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
+        out = self._run(monkeypatch, capsys, self._payload(tmp_path, 260_000))
+        assert json.loads(out)["decision"] == "block"
+
+    def test_child_sessions_never_blocked(self, tmp_path, data_env, monkeypatch, capsys):
+        """A blocked subagent would strand the parent's task, silently."""
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
+        sub = tmp_path / "subagents"
+        sub.mkdir()
+        out = self._run(monkeypatch, capsys, {
+            "session_id": "sub-1",
+            "transcript_path": str(_transcript(sub, 260_000)),
+            "cwd": str(tmp_path),
+            "prompt": "carry on",
+        })
+        assert out.strip() == ""
+
+    def test_disabled_config_never_blocks(self, tmp_path, data_env, monkeypatch, capsys):
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_ENABLED", "false")
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
+        out = self._run(monkeypatch, capsys, self._payload(tmp_path, 260_000))
+        assert out.strip() == ""
+
+    def test_missing_prompt_key_still_blocks(self, tmp_path, data_env, monkeypatch, capsys):
+        """No prompt field is not an implicit carve-out."""
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
+        out = self._run(monkeypatch, capsys, _stop_payload(tmp_path, 260_000))
+        assert json.loads(out)["decision"] == "block"
+
+    def test_garbage_stdin_never_blocks(self, data_env, monkeypatch, capsys):
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_HARD_STOP_TOKENS", "250000")
+        monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
+        checkpoint_nudge.main()
+        assert capsys.readouterr().out.strip() == ""

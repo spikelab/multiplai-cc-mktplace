@@ -9,7 +9,24 @@ of sailing past the budget.
 Deliberately tiny and fast: one transcript-tail read, no LLM, no state
 mutation beyond its own cooldown file. Emits nothing in the common case
 (below threshold), for child sessions, or when checkpointing is disabled.
-Never blocks a prompt.
+
+**Advisory by default, enforcing on request.** With
+``checkpoint_hard_stop_tokens`` set, a session past that threshold stops
+accepting new prompts (``decision: block``) until the user hands off. The
+option exists because advice is not a guardrail: with native auto-compaction
+disabled, nothing else sits between the handoff threshold and the model's
+real context ceiling, and a session that sails past it degrades in exactly
+the way the checkpoint system exists to prevent.
+
+Three carve-outs keep the block from being a trap — a hook that can refuse
+every prompt must leave a way out that does not require editing config from
+inside the blocked session:
+
+* slash commands pass through, so ``/clear`` and ``/compact`` — the two
+  things the block is asking for — always work;
+* ``!keepgoing`` anywhere in a prompt overrides for one refresh band of
+  growth, for the case where finishing the thought matters more;
+* any failure in this hook falls through to "do not block".
 """
 
 import json
@@ -19,26 +36,119 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import setup_logging
+from multiplai_core.log_utils import setup_logging, log_event
 from lib import checkpoint as cp
 
 logger = setup_logging("checkpoint_nudge")
 
 
 def _cooldown_ok(data_dir: Path, session_id: str, tokens: int, step: int) -> bool:
-    """At most one nudge per *step* tokens of growth (own bookkeeping file)."""
+    """At most one nudge per *step* tokens of growth (own bookkeeping file).
+
+    Merges rather than overwrites: ``claude_nudge.json`` also carries the
+    hard-stop override watermark, and a nudge on the same prompt that set it
+    would otherwise erase it.
+    """
     cfile = cp.session_dir(data_dir, session_id) / "claude_nudge.json"
+    payload = _read_state(cfile)
     try:
-        last = int(json.loads(cfile.read_text()).get("tokens") or 0)
-    except (OSError, json.JSONDecodeError, ValueError, TypeError, AttributeError):
+        last = int(payload.get("tokens") or 0)
+    except (ValueError, TypeError):
         last = 0
     if last and tokens - last < step:
         return False
+    payload["tokens"] = tokens
+    _write_state(cfile, payload)
+    return True
+
+
+def _read_state(cfile: Path) -> dict:
+    """Best-effort read of the nudge bookkeeping file; garbage reads as {}."""
+    try:
+        payload = json.loads(cfile.read_text())
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_state(cfile: Path, payload: dict) -> None:
     try:
         cfile.parent.mkdir(parents=True, exist_ok=True)
-        cfile.write_text(json.dumps({"tokens": tokens}))
+        cfile.write_text(json.dumps(payload))
     except OSError:
         pass
+
+
+_OVERRIDE_TOKEN = "!keepgoing"
+
+
+def _override_ok(data_dir: Path, session_id: str, tokens: int, step: int) -> bool:
+    """True when a recent ``!keepgoing`` still covers this prompt.
+
+    Scoped to one refresh band of growth rather than the rest of the
+    session: an override that never expires is a disabled feature with extra
+    steps, and re-typing it every single prompt is the other failure mode.
+    """
+    cfile = cp.session_dir(data_dir, session_id) / "claude_nudge.json"
+    try:
+        at = int(_read_state(cfile).get("override_tokens") or 0)
+    except (ValueError, TypeError):
+        return False
+    return bool(at) and tokens - at < step
+
+
+def _record_override(data_dir: Path, session_id: str, tokens: int) -> None:
+    """Stamp the override watermark, preserving the nudge cooldown."""
+    cfile = cp.session_dir(data_dir, session_id) / "claude_nudge.json"
+    payload = _read_state(cfile)
+    payload["override_tokens"] = tokens
+    _write_state(cfile, payload)
+
+
+def _hard_stop(
+    data_dir: Path, session_id: str, prompt: str, tokens: int, cfg
+) -> bool:
+    """Block this prompt? Emits the block JSON as a side effect when True.
+
+    Only reached above ``handoff_tokens``; returns False whenever the hard
+    stop is unset, carved out, or overridden.
+    """
+    if not cfg.hard_stop_tokens or tokens < cfg.hard_stop_tokens:
+        return False
+    # /clear and /compact are the way out of the block — never block a slash
+    # command, or the wall has no door.
+    if prompt.lstrip().startswith("/"):
+        return False
+    if _OVERRIDE_TOKEN in prompt:
+        _record_override(data_dir, session_id, tokens)
+        logger.info("Hard stop overridden at %d tokens for %s", tokens, session_id)
+        return False
+    if _override_ok(data_dir, session_id, tokens, cfg.refresh_tokens):
+        return False
+
+    has_checkpoint = cp.checkpoint_file(data_dir, session_id).exists()
+    state = (
+        "This session's work state is checkpointed and will be restored "
+        "automatically in the next one"
+        if has_checkpoint
+        else "A checkpoint is being written now and will be restored in the "
+        "next session"
+    )
+    print(json.dumps({
+        "decision": "block",
+        "reason": (
+            f"Context hard stop: {tokens:,} tokens (limit "
+            f"{cfg.hard_stop_tokens:,}). {state} — run /clear to hand off, or "
+            f"/compact to stay in this session. To continue here anyway, "
+            f"include {_OVERRIDE_TOKEN} in your prompt."
+        ),
+    }))
+    logger.info("Hard stop blocked a prompt at %d tokens for %s", tokens, session_id)
+    log_event(
+        "checkpoint", "hard_stop",
+        f"prompt blocked at {tokens:,} tokens (limit {cfg.hard_stop_tokens:,})",
+        session_id=session_id, tokens=tokens,
+    )
     return True
 
 
@@ -66,6 +176,12 @@ def main() -> None:
     state = cp.load_state(data_dir, session_id)
     tokens = cp.read_context_tokens(transcript_path, after_ts=state.get("rebuild_ts"))
     if tokens < cfg.handoff_tokens:
+        return
+
+    # Enforcement before advice: a blocked prompt is never also nudged, and
+    # the block outranks auto mode (if compaction were going to save this
+    # session it would have fired by now).
+    if _hard_stop(data_dir, session_id, hook_input.get("prompt") or "", tokens, cfg):
         return
 
     # Auto mode: steered auto-compaction + SessionStart(compact) re-injection

@@ -16,7 +16,9 @@ implements the plumbing for the checkpoint lifecycle:
      wall-clock age instead.
   3. **Handoff** — at/above the handoff threshold (default 200K) a pending
      marker is written for the session's project. The user is advised (via
-     Stop-hook systemMessage and a per-prompt nudge) to ``/clear``.
+     Stop-hook systemMessage and a per-prompt nudge) to ``/clear``. Advice
+     only, unless ``hard_stop_tokens`` is set: above that the nudge stops
+     accepting new prompts until the handoff happens.
   4. **Rebuild** — the next SessionStart in the same project consumes the
      pending marker (TTL-gated) and injects the checkpoint as
      additionalContext, so the fresh session resumes where the old one left
@@ -69,6 +71,19 @@ _DEFAULT_HANDOFF = 200_000
 _DEFAULT_REFRESH = 25_000
 _DEFAULT_TTL_HOURS = 6.0
 _DEFAULT_TIMEOUT_S = 240
+
+# Hard stop. 0 (the default) means "advisory only" — the handoff nudge asks
+# for a /clear and nothing enforces it. Set it and checkpoint_nudge.py stops
+# *accepting new prompts* above the threshold instead of merely mentioning it.
+#
+# Off by default on purpose. The nudge is safe everywhere; a block is a
+# behaviour a user has to choose, because getting it wrong means a session
+# that refuses to talk. It exists for the setup where auto-compaction is
+# disabled outright (DISABLE_AUTO_COMPACT / autoCompactEnabled:false): there
+# the only thing between the handoff threshold and the model's real context
+# ceiling is advice, and advice does not stop a session drifting into the
+# degraded zone the checkpoint system exists to avoid.
+_DEFAULT_HARD_STOP = 0
 
 # Age-based checkpointing (the `stale` trigger). Deliberately NOT ttl_hours:
 # that one means pending-marker expiry and is consumed by
@@ -140,6 +155,9 @@ class CheckpointConfig:
     # token-band behaviour exactly as it was.
     stale_hours: float = _DEFAULT_STALE_HOURS
     min_session_minutes: int = _DEFAULT_MIN_SESSION_MINUTES
+    # ``hard_stop_tokens = 0`` disables the block entirely (the default),
+    # leaving the handoff nudge advisory exactly as it was.
+    hard_stop_tokens: int = _DEFAULT_HARD_STOP
 
 
 def load_config() -> CheckpointConfig:
@@ -175,6 +193,17 @@ def load_config() -> CheckpointConfig:
         )
         handoff = bands[-1]
 
+    # A hard stop below the handoff threshold would block prompts before the
+    # nudge ever asks for a handoff — the user would meet the wall with no
+    # warning. Clamp rather than honour it.
+    hard_stop = max(0, option_int("checkpoint_hard_stop_tokens", _DEFAULT_HARD_STOP))
+    if hard_stop and hard_stop < handoff:
+        logger.warning(
+            "checkpoint_hard_stop_tokens=%d below handoff %d; clamping",
+            hard_stop, handoff,
+        )
+        hard_stop = handoff
+
     return CheckpointConfig(
         bands=bands,
         handoff_tokens=handoff,
@@ -187,6 +216,7 @@ def load_config() -> CheckpointConfig:
         min_session_minutes=max(
             0, option_int("checkpoint_min_session_minutes", _DEFAULT_MIN_SESSION_MINUTES)
         ),
+        hard_stop_tokens=hard_stop,
     )
 
 
