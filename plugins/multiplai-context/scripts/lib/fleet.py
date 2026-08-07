@@ -448,11 +448,17 @@ def _seen_at(
     on today's — and crediting one tab's attention to an unrelated session
     would make the board confidently wrong, which is worse than the board
     saying nothing. Mismatch degrades to ``None``: not seen.
+
+    The comparison is against **this pane's** server, not the document's. The
+    map merges across tabs, so its top-level socket belongs to whichever launch
+    wrote the file last; comparing every entry against that one both credits
+    attention across servers and denies it within them. ``pane_map`` is still
+    required — no map is no join — but it no longer supplies the socket.
     """
     if pane is None or pane_map is None or not viewed:
         return None
     mark = viewed.get(pane.pane.lstrip("%"))
-    if mark is None or mark.server != pane_map.server:
+    if mark is None or mark.server != pane.server:
         return None
     return mark.at
 

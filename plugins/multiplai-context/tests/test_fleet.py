@@ -1651,6 +1651,46 @@ class TestSeenAxis:
         assert agent.seen is False
         assert agent.seen_at is None
 
+    def test_the_marker_is_checked_against_the_pane_s_own_server(self, tmp_path):
+        """Not the map's. `panes.json` merges across tabs, so its top-level
+        socket is whichever launch wrote the file last — and comparing every
+        entry against that one is wrong in both directions at once. Here the
+        agent sits on a second tmux server and its marker was written by that
+        same server, so it *has* been looked at; checking the document value
+        would deny it."""
+        make_session(tmp_path, "a", hostname="claude-a-01",
+                     ago=timedelta(minutes=5))
+        make_pane_map(
+            tmp_path,
+            ("claude-a-01", "%12", "kit", "/private/tmp/tmux-501/second"),
+            server="/private/tmp/tmux-501/default",
+        )
+        make_viewed(tmp_path, "%12", ago=timedelta(minutes=1),
+                    server="/private/tmp/tmux-501/second")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.seen is True
+
+    def test_a_marker_matching_only_the_documents_server_is_not_credited(self, tmp_path):
+        """The other direction. The pane is on the second server; a marker for
+        `%12` on the *default* server is a different pane entirely, and the
+        document-level match is a coincidence of who wrote the file last."""
+        make_session(tmp_path, "a", hostname="claude-a-01",
+                     ago=timedelta(minutes=5))
+        make_pane_map(
+            tmp_path,
+            ("claude-a-01", "%12", "kit", "/private/tmp/tmux-501/second"),
+            server="/private/tmp/tmux-501/default",
+        )
+        make_viewed(tmp_path, "%12", ago=timedelta(minutes=1),
+                    server="/private/tmp/tmux-501/default")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.seen is False
+        assert agent.seen_at is None
+
     def test_an_agent_with_no_pane_is_never_seen(self, tmp_path):
         make_session(tmp_path, "a", hostname="claude-a-01")
         make_viewed(tmp_path, "%12")

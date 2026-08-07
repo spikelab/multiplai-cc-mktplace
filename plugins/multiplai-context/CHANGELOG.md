@@ -46,10 +46,14 @@ Nothing yet.
   recording attention*, which is deliberately distinct from *you have looked at
   nothing*, and only the second one licenses printing a count.
 
-  A marker is ignored unless its tmux server matches the pane map's. tmux
-  recycles pane ids per server, and crediting one tab's attention to an
-  unrelated session would make the board confidently wrong — worse than saying
-  nothing.
+  A marker is ignored unless its tmux server matches **that pane's** — the
+  socket recorded on the pane's own map entry, not the map's document-level
+  one, which belongs to whichever launch wrote the file last. tmux recycles
+  pane ids per server, and crediting one tab's attention to an unrelated
+  session would make the board confidently wrong — worse than saying nothing.
+  If you run two tmux servers, the document-level comparison got it wrong in
+  both directions at once: it credited attention across servers and denied it
+  within them.
 
   `seen` is a **third axis**, not a new status. `status` stays
   `working | waiting_input | idle | ended` per the hub's API contract, and
