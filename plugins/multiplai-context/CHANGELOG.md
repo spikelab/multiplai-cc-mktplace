@@ -18,6 +18,44 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.29.0] - 2026-08-07
+
+### Changed
+
+- **`fleet.json` is now refreshed by every session start and every post-exit
+  drain, not only when you run `/fleet-status`.** It was written by
+  `/fleet-status` alone, so anything reading it was as old as the last time you
+  ran that command by hand — on 2026-08-06 `AGENTS.md` was stamped 21:23 while
+  `fleet.json` still carried the previous day. The two files are two renderings
+  of one truth; they are now written together, by the same function, at the
+  same moment.
+
+- **Sections a session start cannot collect are carried forward instead of
+  blanked, and now say how old they are.** The hook path reads local files; PRs,
+  repo state, background jobs, the backlog and scheduled routines need `git` and
+  `gh`, which only `/fleet-status` runs. So a session start keeps whatever the
+  last `/fleet-status` saw for those five, together with a new `collected_at`
+  stamp per section — enough for a consumer to render `PRs 3 open · 14m ago`
+  rather than implying it just looked.
+
+  Without this, wiring the JSON into the hook path would have been a
+  regression rather than a fix: you run `/fleet-status`, you get your PRs, and
+  the next session start — seconds later, and with ten tabs open they are
+  constant — overwrites them with "not collected".
+
+  A carried section reverts to *not collected* after **one hour**. That bound
+  is the point: `null` means "I didn't look" and `[]` means "I looked and there
+  was nothing", and a board showing yesterday's PR state indefinitely while
+  looking confident about it is the failure that distinction exists to prevent.
+  An empty list is carried as an empty list, never converted to `null`.
+
+  `/fleet-status` is unchanged and remains the deliberate refresh: what it
+  actually collected always wins over what a previous pass remembered.
+
+  Both files remain pure caches — delete them, run anything that renders, and
+  they come back. The `fleet.json` version stays at `1`: `collected_at` is
+  additive and no existing field changed meaning.
+
 ## [0.28.0] - 2026-08-06
 
 ### Changed

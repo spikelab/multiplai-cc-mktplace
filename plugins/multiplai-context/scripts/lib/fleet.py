@@ -1126,18 +1126,36 @@ def _agent_json(agent: Agent, now: datetime) -> dict:
     return data
 
 
-def fleet_json(fleet: Fleet, now: datetime, generated_at: str | None = None) -> str:
-    """Serialize a :class:`Fleet` for another program to render.
+# The five sections :func:`collect` cannot fill. They come from ``git`` and
+# ``gh``, which is why only :func:`collect_full` — a person running
+# ``/fleet-status`` on purpose — ever collects them.
+CARRIED_SECTIONS = ("prs", "repos", "jobs", "backlog", "scheduled")
 
-    Carries the derived properties — ``group``, ``front``, ``age_seconds`` —
-    alongside the raw fields, because they encode rules (disposition beats
-    liveness; idle is not a front) that a consumer re-deriving them would get
-    subtly wrong. The hub rendering a different set of fronts from the digest
-    would be worse than the hub having no fleet view at all.
+# How long a carried section may keep being shown. Past this it reverts to
+# ``None``, which renders as *not collected*.
+#
+# Without an expiry the board would show yesterday's PR state indefinitely and
+# look confident about it — which is the exact failure the ``None``/``[]``
+# distinction exists to prevent. An hour is chosen against what the data is:
+# "3 open, 1 red" an hour old is still a useful reading if it says so, and a
+# stale-by-a-day one is a lie however it is labelled.
+CARRY_FORWARD_MAX_AGE = timedelta(hours=1)
+
+
+def fleet_payload(
+    fleet: Fleet,
+    now: datetime,
+    generated_at: str | None = None,
+) -> dict:
+    """The ``fleet.json`` document as a dict, before any carry-forward.
+
+    Split out from :func:`fleet_json` so :func:`carry_forward` has something to
+    operate on that is not a string.
     """
-    payload = {
+    stamp = generated_at or now.isoformat()
+    return {
         "version": FLEET_JSON_VERSION,
-        "generated_at": generated_at or now.isoformat(),
+        "generated_at": stamp,
         "counts": {
             "agents": len(fleet.agents),
             "live": len(fleet.live),
@@ -1153,21 +1171,122 @@ def fleet_json(fleet: Fleet, now: datetime, generated_at: str | None = None) -> 
         "jobs": _jsonable(fleet.jobs),
         "backlog": _jsonable(fleet.backlog),
         "scheduled": _jsonable(fleet.scheduled),
+        # When each optional section was genuinely looked at. A section this
+        # pass did not collect has no entry, and a carried one keeps the stamp
+        # from the pass that did — so a consumer can render "PRs 3 open · 14m
+        # ago", which is honest: it does not claim freshness, it states when
+        # somebody looked.
+        "collected_at": {
+            name: stamp for name in CARRIED_SECTIONS
+            if getattr(fleet, name) is not None
+        },
     }
+
+
+def carry_forward(payload: dict, existing: dict | None, now: datetime) -> dict:
+    """Preserve optional sections *this* pass did not collect. Mutates *payload*.
+
+    The problem this solves is a clobber, not a nicety. :func:`write_fleet_view`
+    runs from :func:`collect`, which fills ``agents`` and ``collisions`` and
+    nothing else; ``/fleet-status`` runs from ``collect_full``, which shells out
+    to ``git`` and ``gh`` for the other five. Wiring the hook path to write
+    ``fleet.json`` without this would mean: you run ``/fleet-status``, you get a
+    payload with your PRs in it, and the next session start — seconds later, and
+    with ten tabs open they are frequent — overwrites it with ``prs: null``. A
+    board would flip from "PRs 3 open (1 red)" to "not collected" through no
+    action of yours, and the rich payload would almost never survive.
+
+    So a ``None`` here means *this pass did not look*, and the honest response
+    to that is to keep what the last pass saw **together with when it saw it**,
+    not to overwrite a fact with an absence. ``agents`` and ``collisions`` are
+    always replaced — they are what this pass did collect.
+
+    ``[]`` is a value and is carried as one. "Collected, nothing found" and "I
+    didn't look" must never print the same, and converting the first into the
+    second here would erase exactly that distinction.
+    """
+    if not isinstance(existing, dict):
+        return payload
+    old_stamps = existing.get("collected_at")
+    if not isinstance(old_stamps, dict):
+        old_stamps = {}
+    for name in CARRIED_SECTIONS:
+        if payload.get(name) is not None:
+            continue
+        previous = existing.get(name)
+        if previous is None:
+            continue
+        stamped = _parse_ts(old_stamps.get(name))
+        # No stamp is not "old", it is unknown — and an unknown age cannot be
+        # rendered honestly, so it is dropped rather than shown undated.
+        if stamped is None or (now - stamped) > CARRY_FORWARD_MAX_AGE:
+            continue
+        payload[name] = previous
+        payload["collected_at"][name] = old_stamps[name]
+    return payload
+
+
+def _read_fleet_json(data_dir: Path) -> dict | None:
+    """The ``fleet.json`` already on disk, or ``None``.
+
+    Absent and malformed are the same answer, for the reason :func:`load_roster`
+    gives: this is an optimization over a working default, so there is never a
+    reason to raise.
+    """
+    try:
+        raw = json.loads((data_dir / FLEET_JSON_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def fleet_json(
+    fleet: Fleet,
+    now: datetime,
+    generated_at: str | None = None,
+    existing: dict | None = None,
+) -> str:
+    """Serialize a :class:`Fleet` for another program to render.
+
+    Carries the derived properties — ``group``, ``front``, ``age_seconds`` —
+    alongside the raw fields, because they encode rules (disposition beats
+    liveness; idle is not a front) that a consumer re-deriving them would get
+    subtly wrong. The hub rendering a different set of fronts from the digest
+    would be worse than the hub having no fleet view at all.
+
+    Pass *existing* — the previous document — to carry uncollected sections
+    forward instead of blanking them; see :func:`carry_forward`.
+    """
+    payload = carry_forward(fleet_payload(fleet, now, generated_at), existing, now)
     return json.dumps(payload, indent=2, sort_keys=False) + "\n"
 
 
 def write_fleet_view(data_dir: Path, now: datetime | None = None) -> Path:
-    """Render ``AGENTS.md`` into *data_dir*; return its path.
+    """Render ``AGENTS.md`` **and** ``fleet.json`` into *data_dir*.
+
+    Returns the ``AGENTS.md`` path, which is what every caller wants to log.
 
     One function so the hook and the CLI cannot drift into rendering two
-    different files.
+    different files — and, since both files are now written here, so they can
+    no longer drift into disagreeing about *when*. ``fleet.json`` used to be
+    written by ``fleet_status.py`` alone, which meant it was refreshed only when
+    a human ran ``/fleet-status`` by hand: on 2026-08-06 ``AGENTS.md`` was
+    stamped 21:23 and ``fleet.json`` still carried the previous day. Anything
+    reading the JSON was a day behind the Markdown rendering of the same truth.
+
+    Both remain pure caches: delete them, run this, get them back.
     """
     now = now or datetime.now(timezone.utc)
     fleet = collect(data_dir, now)
 
     agents_path = data_dir / AGENTS_FILENAME
     atomic_write(agents_path, render_agents_md(fleet, now))
+
+    # Read before writing: this path collects agents and collisions only, so
+    # the other five sections must be carried from whatever the last
+    # `/fleet-status` saw rather than blanked. See `carry_forward`.
+    payload = fleet_json(fleet, now, existing=_read_fleet_json(data_dir))
+    atomic_write(data_dir / FLEET_JSON_FILENAME, payload)
 
     logger.info(
         "Fleet: %d front(s), %d listed of %d session(s), %d collision(s) → %s",
