@@ -1395,23 +1395,42 @@ def make_pane_map(data_dir, *entries, server="/private/tmp/tmux-501/default",
                   kind="tmux", observer="host"):
     """Write `tmux/panes.json` as the kit launcher writes it.
 
-    ``entries`` are ``(container, pane, window)`` triples.
+    ``entries`` are ``(container, pane, window)`` triples, or
+    ``(container, pane, window, server)`` quadruples when the entry sits on a
+    tmux server other than the document's — which is the ordinary state of a
+    merged map, not an exotic one.
     """
     d = data_dir / "tmux"
     d.mkdir(parents=True, exist_ok=True)
+    panes = {}
+    for entry in entries:
+        name, pane, window = entry[:3]
+        body = {"pane": pane, "window": window, "session": "work",
+                "at": NOW.strftime("%Y-%m-%dT%H:%M:%SZ")}
+        if len(entry) > 3:
+            body["server"] = entry[3]
+        elif server is not None:
+            body["server"] = server
+        panes[name] = body
     (d / "panes.json").write_text(json.dumps({
         "version": 1,
         "observed_at": NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "observer": observer,
         "kind": kind,
         "server": server,
-        "panes": {
-            name: {"pane": pane, "window": window, "session": "work",
-                   "at": NOW.strftime("%Y-%m-%dT%H:%M:%SZ")}
-            for name, pane, window in entries
-        },
+        "panes": panes,
     }, indent=2))
     return d / "panes.json"
+
+
+def make_legacy_pane_map(data_dir, *entries, server="/private/tmp/tmux-501/default"):
+    """A map from before `server` was per entry — document level only."""
+    path = make_pane_map(data_dir, *entries, server=server)
+    raw = json.loads(path.read_text())
+    for body in raw["panes"].values():
+        body.pop("server", None)
+    path.write_text(json.dumps(raw, indent=2))
+    return path
 
 
 class TestPaneMap:
@@ -1433,6 +1452,34 @@ class TestPaneMap:
 
         assert agent.tmux_pane == "%12"
         assert agent.tmux_window == "pi-eval"
+        assert agent.tmux_server == "/private/tmp/tmux-501/default"
+
+    def test_the_server_comes_from_the_entry_not_the_document(self, tmp_path):
+        """The map merges across tabs, and tabs can be attached to different
+        tmux servers — the document's `server` is whichever launch wrote the
+        file last. Reading it for every entry stamps a carried-forward tab with
+        a socket it was never on, and a socket is what tells `%12` here from
+        `%12` there. The wrong one is worse than none."""
+        make_session(tmp_path, "a", hostname="claude-a-01")
+        make_pane_map(
+            tmp_path,
+            ("claude-a-01", "%3", "kit", "/private/tmp/tmux-501/second"),
+            server="/private/tmp/tmux-501/default",
+        )
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.tmux_server == "/private/tmp/tmux-501/second"
+
+    def test_a_map_without_per_entry_servers_falls_back_to_the_document(self, tmp_path):
+        """Written by a launcher older than the field. The document value is
+        the only answer available, and it is right for the one entry that
+        launch wrote — which on an older map is the common case."""
+        make_session(tmp_path, "a", hostname="claude-a-01")
+        make_legacy_pane_map(tmp_path, ("claude-a-01", "%12", "pi-eval"))
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
         assert agent.tmux_server == "/private/tmp/tmux-501/default"
 
     def test_a_container_not_in_the_map_is_left_empty(self, tmp_path):

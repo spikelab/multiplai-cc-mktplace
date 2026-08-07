@@ -256,9 +256,17 @@ PANE_MAP_FILENAME = "tmux/panes.json"
 
 @dataclass(frozen=True)
 class Pane:
-    """Where one container's session is sitting, as tmux saw it."""
+    """Where one container's session is sitting, as tmux saw it.
+
+    ``server`` is per pane and not merely a copy of :attr:`PaneMap.server`.
+    The map merges across tabs, and two tabs can be attached to two different
+    tmux servers; the entry carries the socket that issued *its* pane id, and
+    only that entry's own reader may use it. Falls back to the document-level
+    value for a map written before the field existed.
+    """
 
     pane: str
+    server: str = ""
     window: str = ""
     session: str = ""
     at: str = ""
@@ -283,12 +291,18 @@ class PaneMap:
         the reason :class:`Roster` gives at length: a payload you cannot
         interpret must be rejected, not guessed at.
     ``server``
-        The tmux socket path, and load-bearing rather than informational.
-        **tmux recycles pane ids per server**, so ``%12`` means nothing without
-        knowing which server issued it. Anything joining to a pane id must
-        compare servers first and degrade to "unknown" rather than to the wrong
-        session — attributing one pane's attention to another agent is the one
-        failure this data must not produce.
+        The tmux socket path of the launch that wrote the document, and
+        load-bearing rather than informational. **tmux recycles pane ids per
+        server**, so ``%12`` means nothing without knowing which server issued
+        it. Anything joining to a pane id must compare servers first and
+        degrade to "unknown" rather than to the wrong session — attributing one
+        pane's attention to another agent is the one failure this data must not
+        produce.
+
+        Prefer :attr:`Pane.server`: this one describes whoever wrote the file
+        last, and the file merges across tabs that may be on different servers.
+        It survives only as the fallback for entries written before the field
+        was per-pane.
     """
 
     server: str
@@ -321,6 +335,7 @@ def load_pane_map(data_dir: Path) -> PaneMap | None:
     entries = raw.get("panes")
     if not isinstance(entries, dict):
         return None
+    doc_server = str(raw.get("server") or "")
     panes: dict[str, Pane] = {}
     for name, value in entries.items():
         if not isinstance(name, str) or not isinstance(value, dict):
@@ -332,12 +347,18 @@ def load_pane_map(data_dir: Path) -> PaneMap | None:
             continue
         panes[name] = Pane(
             pane=pane_id,
+            # The document-level socket is the fallback, not the default: it
+            # describes the launch that wrote the file, and every *other*
+            # entry in it was merged forward from a tab that may be on a
+            # different tmux server. Older maps have no per-entry field, and
+            # for those the document value is the only answer available.
+            server=str(value.get("server") or doc_server),
             window=str(value.get("window") or ""),
             session=str(value.get("session") or ""),
             at=str(value.get("at") or ""),
         )
     return PaneMap(
-        server=str(raw.get("server") or ""),
+        server=doc_server,
         panes=panes,
         kind="tmux",
         observer="host",
@@ -721,7 +742,11 @@ def load_agent(
         in_container=in_container,
         tmux_pane=pane.pane if pane else "",
         tmux_window=pane.window if pane else "",
-        tmux_server=pane_map.server if (pane and pane_map) else "",
+        # This entry's own socket, not the document's. The map merges across
+        # tabs, so the document-level value is the server of whichever launch
+        # wrote the file last — using it here would stamp every carried-forward
+        # tab with a socket it was never on.
+        tmux_server=pane.server if pane else "",
         status=_status_of(last_kind, last_ts, now, roster, hostname, in_container),
         disposition=disp_state,
         disposition_reason=disp_reason,

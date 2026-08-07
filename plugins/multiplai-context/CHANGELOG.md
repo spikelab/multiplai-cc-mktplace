@@ -35,8 +35,16 @@ Nothing yet.
   that survives a `/clear`.
 
   A pane id is only meaningful alongside the tmux server that issued it — tmux
-  recycles them per server — so the server path is carried with it, and
-  anything joining to a pane id is expected to compare servers first.
+  recycles them per server — so the server path is carried with it, **per
+  entry**, and anything joining to a pane id is expected to compare servers
+  first. Per entry because the map merges across tabs and two tabs can be on
+  two servers; a map written by an older launcher has one socket for the whole
+  document, and that is used as the fallback.
+
+  A tab keeps its auto-generated name out of this: the launcher records a
+  window name only when you pinned it (`automatic-rename off`), so a label
+  never reads `mktplace@bash`, and an unnamed tab falls through to the
+  worktree-or-branch qualifier as before.
 
   **Without the kit, or without tmux, nothing changes.** No map, a malformed
   map, or a payload that does not declare itself as host-observed tmux data is
