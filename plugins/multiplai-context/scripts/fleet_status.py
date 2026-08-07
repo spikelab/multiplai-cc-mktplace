@@ -45,6 +45,7 @@ from lib.fleet import (
     Fleet,
     collect,
     fleet_json,
+    read_fleet_json,
     render_agents_md,
 )
 from lib.fleet_digest import render_digest
@@ -139,7 +140,13 @@ def main() -> int:
     )
 
     agents_md = render_agents_md(fleet, now)
-    payload = fleet_json(fleet, now)
+    # Read before writing, exactly as `write_fleet_view` does. `collect_full`
+    # reaches every section, but reaching one is not collecting it: `--offline`
+    # skips GitHub outright, and any source that errors returns `None`. Without
+    # the previous document, a single offline run would blank a PR reading that
+    # a run ten minutes earlier did collect — replacing "3 open, 14m ago" with
+    # "nobody looked", which is the one distinction this file exists to keep.
+    payload = fleet_json(fleet, now, existing=read_fleet_json(data_dir))
     agents_path = data_dir / AGENTS_FILENAME
 
     if not args.no_write:

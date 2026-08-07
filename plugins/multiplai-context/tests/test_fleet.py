@@ -1154,3 +1154,233 @@ class TestOutputLocation:
         fleet.write_fleet_view(data, NOW)
 
         assert list(now_dir.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# fleet.json on the hook path — and the clobber that had to be solved first
+# ---------------------------------------------------------------------------
+
+class TestFleetJsonIsWrittenOnEveryRender:
+    """`write_fleet_view` writes both files.
+
+    It used not to. `fleet_status.py` was the sole writer of `fleet.json`,
+    which meant the JSON was refreshed only when a human ran `/fleet-status`
+    by hand — on 2026-08-06 `AGENTS.md` was stamped 21:23 while `fleet.json`
+    still carried the previous day. Two renderings of one truth, a day apart.
+    """
+
+    def test_both_files_appear(self, tmp_path):
+        make_session(tmp_path, "a", project="alpha")
+
+        fleet.write_fleet_view(tmp_path, NOW)
+
+        assert (tmp_path / "AGENTS.md").exists()
+        assert (tmp_path / "fleet.json").exists()
+
+    def test_the_json_parses_and_declares_its_shape(self, tmp_path):
+        make_session(tmp_path, "a", project="alpha")
+
+        fleet.write_fleet_view(tmp_path, NOW)
+        payload = json.loads((tmp_path / "fleet.json").read_text())
+
+        assert payload["version"] == 1
+        assert [a["session_id"] for a in payload["agents"]] == ["a"]
+
+    def test_the_version_did_not_move(self):
+        """`FLEET_JSON_VERSION` is bumped when a field changes meaning or
+        disappears. `collected_at` is purely additive, and every existing field
+        still means what it did, so a consumer holding version 1 is not
+        holding a different shape."""
+        assert fleet.FLEET_JSON_VERSION == 1
+
+    def test_sections_this_path_cannot_collect_are_null_not_empty(self, tmp_path):
+        """The hook path reads local files only; PRs and repo state need `git`
+        and `gh`. `null` says "I didn't look", which is a different statement
+        from `[]`, "I looked and there was nothing"."""
+        make_session(tmp_path, "a")
+
+        fleet.write_fleet_view(tmp_path, NOW)
+        payload = json.loads((tmp_path / "fleet.json").read_text())
+
+        for section in ("prs", "repos", "jobs", "backlog", "scheduled"):
+            assert payload[section] is None
+        assert payload["collected_at"] == {}
+
+    def test_the_json_is_a_cache_like_the_markdown(self, tmp_path):
+        """Delete both, re-run, get both back — the property everything else
+        rests on. Nothing may write into either as primary state."""
+        make_session(tmp_path, "a", project="alpha", kind="notification")
+        make_checkpoint(tmp_path, "a")
+        fleet.write_fleet_view(tmp_path, NOW)
+        before_md = (tmp_path / "AGENTS.md").read_text()
+        before_json = (tmp_path / "fleet.json").read_text()
+
+        (tmp_path / "AGENTS.md").unlink()
+        (tmp_path / "fleet.json").unlink()
+        fleet.write_fleet_view(tmp_path, NOW)
+
+        assert (tmp_path / "AGENTS.md").read_text() == before_md
+        assert (tmp_path / "fleet.json").read_text() == before_json
+
+    def test_agents_md_is_unchanged_by_the_json_writer(self, tmp_path):
+        """The other half of the same claim: adding a second output must not
+        move a byte of the first."""
+        make_session(tmp_path, "a", project="alpha")
+        make_checkpoint(tmp_path, "a")
+        f = fleet.collect(tmp_path, NOW)
+        expected = fleet.render_agents_md(f, NOW)
+
+        fleet.write_fleet_view(tmp_path, NOW)
+
+        assert (tmp_path / "AGENTS.md").read_text() == expected
+
+
+class TestCarryForward:
+    """A `None` means *this pass did not look*, and the honest response is to
+    keep what the last pass saw with the time it saw it — not to overwrite a
+    fact with an absence.
+
+    Without this, wiring `fleet.json` into the hook path would be a
+    regression: run `/fleet-status`, get a payload with your PRs in it, and the
+    next session start (seconds later, with ten tabs open) blanks it. A board
+    would flip from "PRs 3 open (1 red)" to "not collected" through no action
+    of yours.
+    """
+
+    def _existing(self, tmp_path, *, prs, stamp, section="prs"):
+        (tmp_path / "fleet.json").write_text(json.dumps({
+            "version": 1,
+            "generated_at": stamp,
+            "counts": {},
+            "agents": [{"session_id": "stale-one"}],
+            "collisions": [],
+            "prs": None, "repos": None, "jobs": None,
+            "backlog": None, "scheduled": None,
+            section: prs,
+            "collected_at": {section: stamp},
+        }, indent=2))
+
+    def test_a_recent_pr_scan_survives_a_session_start(self, tmp_path):
+        make_session(tmp_path, "a")
+        stamp = (NOW - timedelta(minutes=14)).isoformat()
+        self._existing(tmp_path, prs={"open": 3, "red": 1}, stamp=stamp)
+
+        fleet.write_fleet_view(tmp_path, NOW)
+        payload = json.loads((tmp_path / "fleet.json").read_text())
+
+        assert payload["prs"] == {"open": 3, "red": 1}
+        # With its own stamp, so a consumer can render "PRs 3 open · 14m ago"
+        # rather than implying it looked just now.
+        assert payload["collected_at"]["prs"] == stamp
+
+    def test_agents_and_collisions_are_replaced_not_carried(self, tmp_path):
+        """They are what this pass *did* collect. Carrying them would make the
+        file a record of every session that ever existed."""
+        make_session(tmp_path, "a")
+        self._existing(tmp_path, prs={"open": 3},
+                       stamp=(NOW - timedelta(minutes=1)).isoformat())
+
+        fleet.write_fleet_view(tmp_path, NOW)
+        payload = json.loads((tmp_path / "fleet.json").read_text())
+
+        assert [a["session_id"] for a in payload["agents"]] == ["a"]
+
+    def test_a_section_older_than_an_hour_reverts_to_not_collected(self, tmp_path):
+        """The expiry is what stops the board showing yesterday's PR state
+        forever while looking confident about it — the exact failure the
+        null/empty distinction exists to prevent."""
+        make_session(tmp_path, "a")
+        self._existing(tmp_path, prs={"open": 3},
+                       stamp=(NOW - timedelta(hours=1, minutes=1)).isoformat())
+
+        fleet.write_fleet_view(tmp_path, NOW)
+        payload = json.loads((tmp_path / "fleet.json").read_text())
+
+        assert payload["prs"] is None
+        assert "prs" not in payload["collected_at"]
+
+    def test_an_empty_list_is_carried_as_an_empty_list(self, tmp_path):
+        """"Collected, nothing found" and "I didn't look" must never print the
+        same. Turning `[]` into `null` here would erase exactly that."""
+        make_session(tmp_path, "a")
+        self._existing(tmp_path, prs=[], stamp=(NOW - timedelta(minutes=5)).isoformat(),
+                       section="repos")
+
+        fleet.write_fleet_view(tmp_path, NOW)
+        payload = json.loads((tmp_path / "fleet.json").read_text())
+
+        assert payload["repos"] == []
+        assert payload["prs"] is None
+
+    def test_a_section_with_no_stamp_is_not_carried(self, tmp_path):
+        """An unknown age cannot be rendered honestly, and showing it undated
+        would be the board claiming freshness it cannot support."""
+        make_session(tmp_path, "a")
+        (tmp_path / "fleet.json").write_text(json.dumps({
+            "version": 1, "agents": [], "collisions": [],
+            "prs": {"open": 3}, "repos": None, "jobs": None,
+            "backlog": None, "scheduled": None,
+        }))
+
+        fleet.write_fleet_view(tmp_path, NOW)
+
+        assert json.loads((tmp_path / "fleet.json").read_text())["prs"] is None
+
+    def test_a_malformed_existing_file_is_overwritten_not_fatal(self, tmp_path):
+        """Same rule as the roster: absent and unreadable are one answer, and
+        a status view never raises."""
+        make_session(tmp_path, "a")
+        (tmp_path / "fleet.json").write_text("{not json")
+
+        fleet.write_fleet_view(tmp_path, NOW)
+
+        assert json.loads((tmp_path / "fleet.json").read_text())["prs"] is None
+
+    def test_a_collected_section_beats_a_carried_one(self, tmp_path):
+        """`/fleet-status` stays the deliberate refresh: what it actually
+        looked at always wins over what a previous pass remembered."""
+        f = fleet.Fleet(agents=[], collisions=[], repos=[])
+        existing = {"repos": ["stale"],
+                    "collected_at": {"repos": (NOW - timedelta(minutes=1)).isoformat()}}
+
+        payload = json.loads(fleet.fleet_json(f, NOW, existing=existing))
+
+        assert payload["repos"] == []
+        assert payload["collected_at"]["repos"] == payload["generated_at"]
+
+    def test_fleet_status_carries_forward_too(self, tmp_path, monkeypatch):
+        """The other writer. `write_fleet_view` is not the only path to
+        `fleet.json` — `fleet_status.py` writes it as well, and it was passing
+        no *existing* at all.
+
+        Reaching a section is not collecting it: `--offline` skips GitHub
+        outright, and any source that errors returns `None`. So a single
+        offline run erased a PR reading a run ten minutes earlier had taken,
+        turning "3 open, 14m ago" into "nobody looked" — the one distinction
+        the whole null/empty discipline exists to keep. That it survived
+        `write_fleet_view` and died in the CLI is exactly why this is pinned
+        against the CLI and not the library.
+        """
+        import importlib.util
+
+        make_session(tmp_path, "a")
+        # `main()` takes its own `datetime.now`, so the stamp has to be recent
+        # in real time or the one-hour expiry drops it before carry-forward
+        # ever gets a say — and the test would pass for the wrong reason.
+        stamp = (datetime.now(timezone.utc) - timedelta(minutes=14)).isoformat()
+        self._existing(tmp_path, prs={"open": 3, "red": 1}, stamp=stamp)
+
+        spec = importlib.util.spec_from_file_location(
+            "fleet_status_under_test", SCRIPTS_DIR / "fleet_status.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        monkeypatch.setattr(
+            "sys.argv",
+            ["fleet_status.py", "--offline", "--data-dir", str(tmp_path)])
+        module.main()
+
+        payload = json.loads((tmp_path / "fleet.json").read_text())
+
+        assert payload["prs"] == {"open": 3, "red": 1}
+        assert payload["collected_at"]["prs"] == stamp
