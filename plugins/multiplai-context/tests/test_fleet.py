@@ -22,6 +22,7 @@ import json
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -1384,3 +1385,284 @@ class TestCarryForward:
 
         assert payload["prs"] == {"open": 3, "red": 1}
         assert payload["collected_at"]["prs"] == stamp
+
+
+# ---------------------------------------------------------------------------
+# The tmux pane map — labelling a session with the tab the user named
+# ---------------------------------------------------------------------------
+
+def make_pane_map(data_dir, *entries, server="/private/tmp/tmux-501/default",
+                  kind="tmux", observer="host"):
+    """Write `tmux/panes.json` as the kit launcher writes it.
+
+    ``entries`` are ``(container, pane, window)`` triples.
+    """
+    d = data_dir / "tmux"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "panes.json").write_text(json.dumps({
+        "version": 1,
+        "observed_at": NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "observer": observer,
+        "kind": kind,
+        "server": server,
+        "panes": {
+            name: {"pane": pane, "window": window, "session": "work",
+                   "at": NOW.strftime("%Y-%m-%dT%H:%M:%SZ")}
+            for name, pane, window in entries
+        },
+    }, indent=2))
+    return d / "panes.json"
+
+
+class TestPaneMap:
+    """The join that lets the fleet view say `pi-eval` instead of
+    `claude-personal-06175625`.
+
+    Nothing inside a container can produce this. `record_event()` runs in the
+    container and tmux runs on the Mac, so `$TMUX_PANE` there is not missing —
+    it is unknowable. The launcher writes it host-side and this module joins it
+    on the container name, which is `Agent.hostname` and the only key that
+    survives a `/clear`.
+    """
+
+    def test_a_matching_container_gets_its_tab(self, tmp_path):
+        make_session(tmp_path, "a", hostname="claude-a-01")
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "pi-eval"))
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.tmux_pane == "%12"
+        assert agent.tmux_window == "pi-eval"
+        assert agent.tmux_server == "/private/tmp/tmux-501/default"
+
+    def test_a_container_not_in_the_map_is_left_empty(self, tmp_path):
+        """The ordinary case for anyone who does not use tmux, and for a
+        session that started before the current map was written."""
+        make_session(tmp_path, "a", hostname="claude-a-01")
+        make_pane_map(tmp_path, ("claude-other-02", "%3", "kit"))
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert (agent.tmux_pane, agent.tmux_window, agent.tmux_server) == ("", "", "")
+
+    def test_a_payload_of_the_wrong_kind_is_refused_wholesale(self, tmp_path):
+        """Same contract as the roster's, for the same reason: a reader that
+        shrugged at a payload it cannot interpret would join a pid to a pane
+        id. Refused means `None`, not "use it anyway"."""
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "pi-eval"), kind="pid")
+
+        assert fleet.load_pane_map(tmp_path) is None
+
+    def test_a_payload_from_the_wrong_observer_is_refused_too(self, tmp_path):
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "x"), observer="container")
+
+        assert fleet.load_pane_map(tmp_path) is None
+
+    def test_a_missing_map_is_none_not_an_error(self, tmp_path):
+        assert fleet.load_pane_map(tmp_path) is None
+
+    def test_a_malformed_map_is_none_not_an_error(self, tmp_path):
+        """Labels are an enrichment over a working default, so there is never a
+        reason to raise — the same rule `load_roster` follows."""
+        (tmp_path / "tmux").mkdir()
+        (tmp_path / "tmux" / "panes.json").write_text("{not json")
+
+        assert fleet.load_pane_map(tmp_path) is None
+
+    def test_an_entry_with_no_pane_id_is_dropped(self, tmp_path):
+        """The map exists to answer "which pane". An entry that cannot is worse
+        than a missing one — it would join to whatever a blank id matched."""
+        (tmp_path / "tmux").mkdir()
+        (tmp_path / "tmux" / "panes.json").write_text(json.dumps({
+            "version": 1, "observer": "host", "kind": "tmux", "server": "/s",
+            "panes": {"claude-a-01": {"pane": "", "window": "x"}},
+        }))
+
+        assert fleet.load_pane_map(tmp_path).panes == {}
+
+    def test_the_server_is_carried_so_a_pane_id_can_be_disambiguated(self, tmp_path):
+        """tmux recycles pane ids per server, so `%12` means nothing on its
+        own. Anything joining to a pane id has to compare servers first and
+        degrade to "unknown" rather than to the wrong session."""
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "x"), server="/tmp/other")
+
+        assert fleet.load_pane_map(tmp_path).server == "/tmp/other"
+
+
+class TestPaneMapRendering:
+
+    def test_agents_md_shows_the_tab_name(self, tmp_path):
+        make_session(tmp_path, "a", hostname="claude-a-01", project="mktplace")
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "pi-eval"))
+
+        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert "tab `pi-eval`" in md
+
+    def test_a_collision_label_prefers_the_tab_over_the_branch(self, tmp_path):
+        """The label exists to identify *which tab* to switch to. A name the
+        user chose mid-session, once they knew what the work was, beats a
+        branch name or a session-id prefix at that job."""
+        agent = fleet.Agent(session_id="abcdef12", project="mktplace",
+                            branch="feat/x", tmux_window="pi-eval")
+
+        assert fleet._label(agent) == "mktplace@pi-eval"
+
+    def test_without_a_tab_the_label_is_exactly_what_it_was(self, tmp_path):
+        agent = fleet.Agent(session_id="abcdef12", project="mktplace",
+                            branch="feat/x")
+
+        assert fleet._label(agent) == "mktplace@feat/x"
+
+    def test_the_new_fields_reach_fleet_json_with_no_serialization_code(self, tmp_path):
+        """`_agent_json` is `asdict(agent)`, so a field added to the dataclass
+        is shipped automatically. Asserted rather than hand-wired, because
+        hand-wiring is how the two drift."""
+        make_session(tmp_path, "a", hostname="claude-a-01")
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "pi-eval"))
+
+        payload = json.loads(fleet.fleet_json(fleet.collect(tmp_path, NOW), NOW))
+        entry = payload["agents"][0]
+
+        assert entry["tmux_pane"] == "%12"
+        assert entry["tmux_window"] == "pi-eval"
+        assert entry["tmux_server"] == "/private/tmp/tmux-501/default"
+
+    def test_agent_json_did_not_grow_a_special_case(self):
+        src = (SCRIPTS_DIR / "lib" / "fleet.py").read_text(encoding="utf-8")
+        body = src.split("def _agent_json(", 1)[1].split("\ndef ", 1)[0]
+
+        assert "tmux" not in body
+
+
+# ---------------------------------------------------------------------------
+# Vanilla degradation — no kit, no tmux, no map
+# ---------------------------------------------------------------------------
+
+VANILLA_NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
+VANILLA_STAMP = "2026-08-01T12:00:00+00:00"
+VANILLA_DIR = Path(__file__).resolve().parent / "fixtures" / "fleet_vanilla"
+
+
+def build_vanilla_data_dir(data_dir):
+    """A fixed fleet exercising every branch the renderers take.
+
+    A working session, one waiting on the user, one with no checkpoint at all,
+    and two agents holding the same file. `cwd` points at paths that do not
+    exist, so `_git_info` returns empty strings on any machine and the render
+    is a function of this function alone.
+    """
+    sessions = data_dir / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+
+    def entry(sid, *, kind, ago_minutes, project, hostname, cwd):
+        ts = (VANILLA_NOW - timedelta(minutes=ago_minutes)).isoformat()
+        (sessions / f"{sid}.json").write_text(json.dumps({
+            "session_id": sid,
+            "hostname": hostname,
+            "cwd": cwd,
+            "project": project,
+            "workspace": "/vanilla",
+            "started_at": ts,
+            "in_container": True,
+            "last_event": {"ts": ts, "kind": kind},
+        }, indent=2), encoding="utf-8")
+
+    def checkpoint(sid, intent, nxt, files):
+        d = data_dir / "checkpoints" / sid
+        d.mkdir(parents=True, exist_ok=True)
+        text = "".join(f"## {s}\n\nplaceholder\n" for s in cp.CHECKPOINT_SECTIONS)
+        text = text.replace("## Current intent\n\nplaceholder\n",
+                            f"## Current intent\n\n{intent}\n")
+        text = text.replace("## Next action\n\nplaceholder\n",
+                            f"## Next action\n\n{nxt}\n")
+        listing = "\n".join(f"- `{f}` — because reasons" for f in files)
+        text = text.replace("## Involved files\n\nplaceholder\n",
+                            f"## Involved files\n\n{listing}\n")
+        (d / "checkpoint.md").write_text(text, encoding="utf-8")
+
+    entry("vanilla-working", kind="stop", ago_minutes=3,
+          project="mktplace", hostname="claude-a-01", cwd="/vanilla/mktplace")
+    checkpoint("vanilla-working", "Wiring fleet.json into the hook path",
+               "Run the mktplace gates", ["/vanilla/mktplace/lib/fleet.py"])
+
+    entry("vanilla-waiting", kind="notification", ago_minutes=18,
+          project="kit", hostname="claude-b-02", cwd="/vanilla/kit")
+    checkpoint("vanilla-waiting", "Writing write_pane_map",
+               "Approve the edit to lib/fleet.py",
+               ["/vanilla/kit/lib/fleet.py", "/vanilla/kit/claude.sh"])
+
+    entry("vanilla-collide", kind="stop", ago_minutes=9,
+          project="mktplace", hostname="claude-d-04", cwd="/vanilla/mktplace-wt")
+    checkpoint("vanilla-collide", "Adding the seen axis",
+               "Extend fleet_digest", ["/vanilla/mktplace/lib/fleet.py"])
+
+    entry("vanilla-bare", kind="stop", ago_minutes=41,
+          project="workspace", hostname="claude-c-03", cwd="/vanilla/workspace")
+
+    (data_dir / "live_containers.json").write_text(json.dumps({
+        "version": 1,
+        "observed_at": (VANILLA_NOW - timedelta(minutes=1)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"),
+        "observer": "host",
+        "kind": "container",
+        "ids": ["claude-a-01", "claude-b-02", "claude-c-03", "claude-d-04"],
+    }, indent=2), encoding="utf-8")
+    return data_dir
+
+
+class TestVanillaDegradation:
+    """With no `tmux/panes.json` and no `tmux/viewed/`, both renderings must be
+    what they were before any of this landed.
+
+    The fixtures under `fixtures/fleet_vanilla/` were generated on `main`
+    **before the first change of this plan**, which is the only way a
+    byte-comparison proves anything: a golden captured afterwards would pin
+    whatever the code happened to do, including the bug.
+    """
+
+    def test_agents_md_is_byte_identical_to_the_pre_change_capture(self, tmp_path):
+        build_vanilla_data_dir(tmp_path)
+
+        rendered = fleet.render_agents_md(
+            fleet.collect(tmp_path, VANILLA_NOW), VANILLA_NOW,
+            generated_at=VANILLA_STAMP)
+
+        assert rendered == (VANILLA_DIR / "AGENTS.md").read_text(encoding="utf-8")
+
+    def test_fleet_json_differs_from_the_pre_change_capture_by_one_added_key(
+            self, tmp_path):
+        """`collected_at` is what the previous work item added, deliberately and
+        additively. Nothing else may have moved — so this asserts the exact
+        shape of the difference rather than allowing any difference at all."""
+        build_vanilla_data_dir(tmp_path)
+
+        payload = json.loads(fleet.fleet_json(
+            fleet.collect(tmp_path, VANILLA_NOW), VANILLA_NOW,
+            generated_at=VANILLA_STAMP))
+        golden = json.loads((VANILLA_DIR / "fleet.json").read_text(encoding="utf-8"))
+
+        assert set(payload) - set(golden) == {"collected_at"}
+        assert payload.pop("collected_at") == {}
+        # Every agent grew the three tmux fields, all empty with no map.
+        for entry in payload["agents"]:
+            assert entry.pop("tmux_pane") == ""
+            assert entry.pop("tmux_window") == ""
+            assert entry.pop("tmux_server") == ""
+
+        assert payload == golden
+
+    def test_an_absent_map_changes_nothing_a_present_one_would(self, tmp_path):
+        """Belt and braces on the same claim, without a golden: rendering with
+        no map at all and rendering with an empty map agree."""
+        build_vanilla_data_dir(tmp_path)
+        without = fleet.render_agents_md(
+            fleet.collect(tmp_path, VANILLA_NOW), VANILLA_NOW,
+            generated_at=VANILLA_STAMP)
+        make_pane_map(tmp_path)
+
+        with_empty = fleet.render_agents_md(
+            fleet.collect(tmp_path, VANILLA_NOW), VANILLA_NOW,
+            generated_at=VANILLA_STAMP)
+
+        assert with_empty == without
