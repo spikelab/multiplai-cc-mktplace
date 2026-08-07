@@ -46,6 +46,7 @@ from multiplai_core.paths import get_paths
 from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.log_utils import setup_logging, log_event
 from lib.memory_router import create_router
+from lib.plugin_skills import plugin_skill_owners, qualify
 from lib import reference_docs
 from lib.routing_logic import expand_picks
 from lib.section_loader import load_picked_content, parse_section_ref
@@ -396,12 +397,18 @@ def _build_skills_recommendations(
         key = entry.get("name") or entry.get("source")
         if key:
             by_name[key] = entry
+    # A plugin-shipped skill is invoked as /plugin:skill; the bare directory
+    # name is not a valid identifier for it. Suggesting the bare name is what
+    # produced a measured 23.2% Skill-tool failure rate, every failure an
+    # "Unknown skill" on a name this hook had just taught. See lib/plugin_skills.
+    owners = plugin_skill_owners(getattr(cfg, "plugins_dir", None))
+    skills_dir = getattr(cfg, "skills_dir", None)
     result: dict[str, str] = {}
     for pick in picks:
         # Skills entries don't use section refs.
         base, _ = parse_section_ref(pick)
         summary = (by_name.get(base) or {}).get("summary", "").strip()
-        hint = f"Invoke with /{base} when relevant."
+        hint = f"Invoke with /{qualify(base, owners, skills_dir)} when relevant."
         result[base] = f"{summary}\n{hint}" if summary else hint
     return result
 
