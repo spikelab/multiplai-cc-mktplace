@@ -39,12 +39,20 @@ def _is_ambient_key(key: str) -> bool:
     CLAUDE_PLUGIN_* / WORKSPACE anchor runtime paths; the autocompact vars
     flip the checkpoint hooks into silent "auto mode" (nudge tests then fail
     on any machine where the launcher steers native auto-compaction).
+
+    The DISABLE_* vars and CLAUDE_CONFIG_DIR are the same hazard read from
+    the other side: ``autocompact_trigger_tokens`` consults them (and the
+    user settings.json that CLAUDE_CONFIG_DIR points at) to tell steered
+    auto-compaction from disabled auto-compaction, so a developer who has
+    turned compaction off on their own machine would otherwise see the
+    auto-mode tests fail. Tests that need any of these set them explicitly.
     """
     return (
         key.startswith("CLAUDE_PLUGIN")
         or key == "WORKSPACE"
         or key.startswith("CLAUDE_CODE_AUTO_COMPACT")
         or key.startswith("CLAUDE_AUTOCOMPACT")
+        or key in ("DISABLE_AUTO_COMPACT", "DISABLE_COMPACT", "CLAUDE_CONFIG_DIR")
     )
 
 

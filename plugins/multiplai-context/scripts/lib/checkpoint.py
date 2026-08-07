@@ -751,6 +751,33 @@ _NATIVE_OUTPUT_RESERVE_CAP = 20_000
 _NATIVE_THRESHOLD_MARGIN = 13_000
 
 
+def _truthy(raw: str | None) -> bool:
+    """Env-var truthiness, matching the CLI's own reading of these flags."""
+    return (raw or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _autocompact_disabled_in_settings() -> bool:
+    """Best-effort read of ``autoCompactEnabled: false`` from user settings.
+
+    The env vars above are authoritative and always visible to a hook. This
+    key is not: it lives in a settings file, and Claude Code layers several
+    (managed / user / project / local) with rules this function does not
+    reproduce. It reads the user-level file only — the one the /config
+    toggle writes — because a false negative here costs a nudge that was
+    already being shown, while missing the disable entirely costs the
+    silence this whole function exists to prevent.
+    """
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    if not cfg:
+        return False
+    try:
+        with open(os.path.join(cfg, "settings.json"), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("autoCompactEnabled") is False
+
+
 def autocompact_trigger_tokens() -> int | None:
     """Expected native auto-compaction trigger, when steered via env.
 
@@ -767,7 +794,21 @@ def autocompact_trigger_tokens() -> int | None:
 
     Returns the estimated trigger in tokens, or None when auto mode isn't
     effectively configured. Hooks inherit the Claude Code process env.
+
+    Checked in the binary's own order: ``DISABLE_COMPACT``, then
+    ``DISABLE_AUTO_COMPACT``, then the ``autoCompactEnabled`` setting. Either
+    env var beats the steering vars — leaving a window/pct pair behind when
+    you disable compaction is the normal shape of that config, not a
+    contradiction, and reading it as "auto mode on" silences the handoff
+    advice in exactly the setup that has nothing else to fall back on.
     """
+    if _truthy(os.environ.get("DISABLE_COMPACT")) or _truthy(
+        os.environ.get("DISABLE_AUTO_COMPACT")
+    ):
+        return None
+    if _autocompact_disabled_in_settings():
+        return None
+
     raw_window = os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "").strip()
     if not raw_window:
         return None

@@ -428,6 +428,39 @@ auto-compact *threshold* is steerable via env, and compaction both preserves
 the session (id, session-scoped hooks, terminal) and fires SessionStart with
 `source="compact"`, which is a supported context-injection point.
 
+### Turning auto-compaction off instead
+
+The steering above is one of two supported shapes. The other is to disable
+native auto-compaction outright and hand off at the threshold every time —
+no summary, no summarized-context degradation, one `/clear` per window:
+
+```json
+{
+  "env": { "DISABLE_AUTO_COMPACT": "1" },
+  "autoCompactEnabled": false
+}
+```
+
+Either alone is enough (the CLI checks `DISABLE_COMPACT`, then
+`DISABLE_AUTO_COMPACT`, then the setting). Manual `/compact` still works —
+these gate the *automatic* trigger only.
+
+`autocompact_trigger_tokens()` detects all three, so the plugin reports
+"auto mode off" and resumes its handoff advice rather than waiting for a
+compaction that will never fire. Leaving the window/pct pair in place
+alongside a disable is fine and expected — the disable wins. One limit
+worth knowing: the env vars are always visible to a hook, but
+`autoCompactEnabled` is read best-effort from the **user-level**
+`settings.json` only ( `$CLAUDE_CONFIG_DIR/settings.json`, the file the
+`/config` toggle writes). Set the env var if you want the detection to be
+certain.
+
+**What this costs you:** with the automatic trigger gone, nothing acts on
+its own. The handoff nudges are advice, and the next real wall is the
+model's actual context ceiling — `CLAUDE_CODE_AUTO_COMPACT_WINDOW` does not
+move it, since it only ever fed the compaction trigger. That is what the
+next section is for.
+
 ### Enforcing the handoff: `checkpoint_hard_stop_tokens`
 
 Everything above is advice. Advice is enough when auto-compaction is doing

@@ -55,6 +55,19 @@ Nothing yet.
   are avoiding, `checkpoint_hard_stop_tokens` addresses it at the source by
   handing off instead.
 
+### Fixed
+
+- **Disabled auto-compaction is no longer mistaken for steered
+  auto-compaction.** `autocompact_trigger_tokens()` decided "auto mode is on"
+  from `CLAUDE_CODE_AUTO_COMPACT_WINDOW` / `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`
+  alone, and never checked whether compaction was disabled. Leaving those
+  vars in place while setting `DISABLE_AUTO_COMPACT=1` (or
+  `autoCompactEnabled: false`) is the normal shape of that config — and the
+  plugin read it as "compaction will handle this", suppressing the handoff
+  advice for the one setup where nothing else would act. It now checks
+  `DISABLE_COMPACT`, `DISABLE_AUTO_COMPACT`, and the `autoCompactEnabled`
+  setting first, in the CLI's own order.
+
 ### Changed
 
 - The pending rebuild marker — which makes a manual `/compact` below the

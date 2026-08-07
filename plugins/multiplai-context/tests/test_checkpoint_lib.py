@@ -274,6 +274,11 @@ class TestAutoCompactSteering:
             "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
             "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
             "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+            # The developer's own machine may have compaction disabled —
+            # without these the ambient config decides the assertions.
+            "DISABLE_AUTO_COMPACT",
+            "DISABLE_COMPACT",
+            "CLAUDE_CONFIG_DIR",
         ):
             monkeypatch.delenv(var, raising=False)
 
@@ -308,6 +313,56 @@ class TestAutoCompactSteering:
     def test_malformed_returns_none(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "lots")
         assert cp.autocompact_trigger_tokens() is None
+
+    # --- disable flags beat the steering vars ---
+    #
+    # Leaving a window/pct pair in place while disabling auto-compact is the
+    # normal shape of that config. Reading it as "auto mode on" silences the
+    # handoff advice for the one setup with nothing else to fall back on.
+
+    def test_disable_auto_compact_env_wins(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
+        monkeypatch.setenv("DISABLE_AUTO_COMPACT", "1")
+        assert cp.autocompact_trigger_tokens() is None
+
+    def test_disable_compact_env_wins(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
+        monkeypatch.setenv("DISABLE_COMPACT", "true")
+        assert cp.autocompact_trigger_tokens() is None
+
+    def test_falsey_disable_var_is_not_a_disable(self, monkeypatch):
+        """`DISABLE_AUTO_COMPACT=0` means "no", not "the var is present"."""
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
+        monkeypatch.setenv("DISABLE_AUTO_COMPACT", "0")
+        assert cp.autocompact_trigger_tokens() == 207_000
+
+    def test_settings_autocompact_false_wins(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
+        (tmp_path / "settings.json").write_text(
+            json.dumps({"autoCompactEnabled": False})
+        )
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        assert cp.autocompact_trigger_tokens() is None
+
+    def test_settings_autocompact_true_is_not_a_disable(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
+        (tmp_path / "settings.json").write_text(
+            json.dumps({"autoCompactEnabled": True})
+        )
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        assert cp.autocompact_trigger_tokens() == 207_000
+
+    def test_unreadable_settings_never_decides(self, monkeypatch, tmp_path):
+        """A garbage settings file must not silently flip auto mode off."""
+        (tmp_path / "settings.json").write_text("{not json")
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
+        assert cp.autocompact_trigger_tokens() == 207_000
 
 
 class TestResetSessionCounters:
