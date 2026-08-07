@@ -18,6 +18,48 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.31.0] - 2026-08-07
+
+### Added
+
+- **The fleet view now knows which agents you have already looked at.** With
+  six tabs running, "what is everyone doing" is not the question — "which of
+  these has done something since I last looked" is. An agent whose tmux tab was
+  on your screen more recently than its last event is **seen**; anything it
+  does afterwards makes it unseen again, automatically, with nothing to dismiss
+  or mark read.
+
+  What this changes where you look:
+
+  - `AGENTS.md` marks a seen entry (`### mktplace — 5m · seen 2m ago`) and
+    leaves everything else exactly as it was;
+  - within every group, **unseen agents sort first** — ordering only, nothing
+    is hidden by being seen;
+  - the digest's in-flight line gains `N unseen`;
+  - each agent in `fleet.json` gains `seen` and `seen_at`.
+
+  It reads `$WORKSPACE/.multiplai/data/tmux/viewed/`, written by the kit's
+  `fleet-viewed.sh` from tmux's pane-selection hooks. **Those hooks are four
+  lines you add to your own `~/.tmux.conf`** — see the kit's
+  `docs/TMUX-FLEET-BOARD.md`. Without them nothing here activates and the board
+  renders exactly as it did before: no marker directory means *nobody is
+  recording attention*, which is deliberately distinct from *you have looked at
+  nothing*, and only the second one licenses printing a count.
+
+  A marker is ignored unless its tmux server matches **that pane's** — the
+  socket recorded on the pane's own map entry, not the map's document-level
+  one, which belongs to whichever launch wrote the file last. tmux recycles
+  pane ids per server, and crediting one tab's attention to an unrelated
+  session would make the board confidently wrong — worse than saying nothing.
+  If you run two tmux servers, the document-level comparison got it wrong in
+  both directions at once: it credited attention across servers and denied it
+  within them.
+
+  `seen` is a **third axis**, not a new status. `status` stays
+  `working | waiting_input | idle | ended` per the hub's API contract, and
+  `disposition` stays how you left a session. Attention is neither: an agent's
+  state must not change because you glanced at a tab.
+
 ## [0.30.0] - 2026-08-07
 
 ### Added

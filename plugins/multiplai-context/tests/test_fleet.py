@@ -1583,6 +1583,276 @@ class TestPaneMapRendering:
 
 
 # ---------------------------------------------------------------------------
+# The seen/unseen axis
+# ---------------------------------------------------------------------------
+
+def make_viewed(data_dir, pane, *, ago=timedelta(minutes=1), window="pi-eval",
+                server="/private/tmp/tmux-501/default", now=NOW, lines=None):
+    """Write a `tmux/viewed/<n>` marker as `fleet-viewed.sh` writes it.
+
+    Three lines: timestamp, window name, tmux socket. *lines* overrides the
+    whole body, for the malformed cases.
+    """
+    d = data_dir / "tmux" / "viewed"
+    d.mkdir(parents=True, exist_ok=True)
+    body = lines if lines is not None else [
+        (now - ago).strftime("%Y-%m-%dT%H:%M:%SZ"), window, server,
+    ]
+    path = d / pane.lstrip("%")
+    path.write_text("\n".join(body) + "\n", encoding="utf-8")
+    return path
+
+
+def _one(data_dir, *, viewed_ago, last_ago=timedelta(minutes=5), **kw):
+    """One agent in one pane, with a marker at a chosen distance from its work."""
+    make_session(data_dir, "a", hostname="claude-a-01", ago=last_ago)
+    make_pane_map(data_dir, ("claude-a-01", "%12", "pi-eval"))
+    make_viewed(data_dir, "%12", ago=viewed_ago, **kw)
+    return fleet.collect(data_dir, NOW).agents[0]
+
+
+class TestSeenAxis:
+    """Have you looked at this tab since it last did anything?
+
+    The question the whole fleet board exists to answer with six tabs open, and
+    the one thing the container genuinely cannot know: tmux runs on the Mac.
+    Two host-written files carry the halves — `tmux/panes.json` says which pane
+    holds which container, `tmux/viewed/<n>` says when that pane was last on
+    screen — and this module is where they meet.
+
+    `seen` is derived at render time and stored nowhere. Both output files stay
+    caches: an agent that acts after you looked at it goes unseen again on the
+    next render, with nothing to invalidate.
+    """
+
+    def test_a_marker_newer_than_the_last_event_is_seen(self, tmp_path):
+        agent = _one(tmp_path, last_ago=timedelta(minutes=5),
+                     viewed_ago=timedelta(minutes=1))
+
+        assert agent.seen is True
+        assert agent.seen_at is not None
+
+    def test_a_marker_older_than_the_last_event_is_not_seen(self, tmp_path):
+        """The mechanism, stated as a test: the agent did something after you
+        looked, so it is unseen again."""
+        agent = _one(tmp_path, last_ago=timedelta(minutes=1),
+                     viewed_ago=timedelta(minutes=5))
+
+        assert agent.seen is False
+        assert agent.seen_at is not None, "we know when you looked; it was just earlier"
+
+    def test_a_marker_from_a_different_tmux_server_is_ignored(self, tmp_path):
+        """tmux recycles pane ids per server. `%12` on yesterday's server is an
+        unrelated pane, and crediting its attention here would make the board
+        confidently wrong — worse than saying nothing."""
+        agent = _one(tmp_path, viewed_ago=timedelta(minutes=1),
+                     server="/private/tmp/tmux-501/other")
+
+        assert agent.seen is False
+        assert agent.seen_at is None
+
+    def test_the_marker_is_checked_against_the_pane_s_own_server(self, tmp_path):
+        """Not the map's. `panes.json` merges across tabs, so its top-level
+        socket is whichever launch wrote the file last — and comparing every
+        entry against that one is wrong in both directions at once. Here the
+        agent sits on a second tmux server and its marker was written by that
+        same server, so it *has* been looked at; checking the document value
+        would deny it."""
+        make_session(tmp_path, "a", hostname="claude-a-01",
+                     ago=timedelta(minutes=5))
+        make_pane_map(
+            tmp_path,
+            ("claude-a-01", "%12", "kit", "/private/tmp/tmux-501/second"),
+            server="/private/tmp/tmux-501/default",
+        )
+        make_viewed(tmp_path, "%12", ago=timedelta(minutes=1),
+                    server="/private/tmp/tmux-501/second")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.seen is True
+
+    def test_a_marker_matching_only_the_documents_server_is_not_credited(self, tmp_path):
+        """The other direction. The pane is on the second server; a marker for
+        `%12` on the *default* server is a different pane entirely, and the
+        document-level match is a coincidence of who wrote the file last."""
+        make_session(tmp_path, "a", hostname="claude-a-01",
+                     ago=timedelta(minutes=5))
+        make_pane_map(
+            tmp_path,
+            ("claude-a-01", "%12", "kit", "/private/tmp/tmux-501/second"),
+            server="/private/tmp/tmux-501/default",
+        )
+        make_viewed(tmp_path, "%12", ago=timedelta(minutes=1),
+                    server="/private/tmp/tmux-501/default")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.seen is False
+        assert agent.seen_at is None
+
+    def test_an_agent_with_no_pane_is_never_seen(self, tmp_path):
+        make_session(tmp_path, "a", hostname="claude-a-01")
+        make_viewed(tmp_path, "%12")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.seen is False
+        assert agent.seen_at is None
+
+    def test_no_marker_for_this_pane_is_not_seen(self, tmp_path):
+        make_session(tmp_path, "a", hostname="claude-a-01")
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "pi-eval"))
+        make_viewed(tmp_path, "%99")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.seen is False
+
+    def test_a_marker_with_no_server_line_is_dropped(self, tmp_path):
+        """Without line 3 there is nothing to check the pane id against, which
+        is precisely the mis-attribution the server field exists to prevent."""
+        agent = _one(tmp_path, viewed_ago=timedelta(minutes=1),
+                     lines=["2026-08-01T11:59:00Z", "pi-eval"])
+
+        assert agent.seen is False
+
+    def test_a_marker_with_an_unparseable_timestamp_is_dropped(self, tmp_path):
+        agent = _one(tmp_path, viewed_ago=timedelta(minutes=1),
+                     lines=["not a date", "pi-eval", "/private/tmp/tmux-501/default"])
+
+        assert agent.seen is False
+
+    def test_no_viewed_directory_is_none_not_empty(self, tmp_path):
+        """The not-collected/collected-empty distinction this module runs on.
+        `None` is "nobody is recording attention"; `{}` is "the hooks are wired
+        and you have looked at nothing" — and only the second licenses printing
+        an unseen count."""
+        assert fleet.load_viewed(tmp_path) is None
+
+        (tmp_path / "tmux" / "viewed").mkdir(parents=True)
+        assert fleet.load_viewed(tmp_path) == {}
+
+    def test_seen_reaches_fleet_json_with_no_serialization_code(self, tmp_path):
+        _one(tmp_path, viewed_ago=timedelta(minutes=1))
+
+        payload = json.loads(fleet.fleet_json(fleet.collect(tmp_path, NOW), NOW))
+        entry = payload["agents"][0]
+
+        assert entry["seen"] is True
+        assert entry["seen_at"].startswith("2026-08-01T11:59:00")
+
+
+class TestSeenIsAnAxisNotAStatus:
+    """`status` is frozen at `working | waiting_input | idle | ended` by the
+    hub's API contract, and `disposition` is how the user left a session.
+    Attention is neither. Folding it into either would mean an agent's state
+    changed because someone glanced at a tab.
+    """
+
+    def test_the_group_of_a_seen_agent_is_unchanged(self, tmp_path):
+        make_session(tmp_path, "a", hostname="claude-a-01", kind="notification")
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "pi-eval"))
+        before = fleet.collect(tmp_path, NOW).agents[0]
+        make_viewed(tmp_path, "%12", ago=timedelta(minutes=1))
+
+        after = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert after.seen is True
+        assert after.group == before.group == "Needs you"
+        assert after.status == before.status == "waiting_input"
+
+    def test_status_is_still_exactly_the_four_contract_values(self, tmp_path):
+        for kind, ago in (("notification", timedelta(minutes=1)),
+                          ("stop", timedelta(minutes=1)),
+                          ("stop", timedelta(days=2))):
+            d = tmp_path / f"{kind}{ago.days}"
+            make_session(d, "a", hostname="claude-a-01", kind=kind, ago=ago)
+            make_pane_map(d, ("claude-a-01", "%12", "pi-eval"))
+            make_viewed(d, "%12", ago=timedelta(seconds=1))
+
+            agent = fleet.collect(d, NOW).agents[0]
+
+            assert agent.status in {"working", "waiting_input", "idle", "ended"}
+
+    def test_the_seen_code_path_never_touches_status(self):
+        """Read from the source, not inferred: the two functions that compute
+        `seen` must not mention `status` at all, in either direction."""
+        src = (SCRIPTS_DIR / "lib" / "fleet.py").read_text(encoding="utf-8")
+        for name in ("_seen_at(", "load_viewed("):
+            # Two blank lines end a top-level definition, which is what
+            # bounds the body — splitting on the next `def` would swallow the
+            # module constants that sit between two functions.
+            body = src.split(f"def {name}", 1)[1].split("\n\n\n", 1)[0]
+            assert "status" not in body
+            assert "disposition" not in body
+
+
+class TestSeenOrdersButNeverHides:
+
+    def test_unseen_sorts_before_seen_within_a_group(self, tmp_path):
+        """Two agents, the *seen* one more recent — so recency alone would put
+        it first. Unseen wins."""
+        make_session(tmp_path, "seen-one", hostname="claude-a-01",
+                     ago=timedelta(minutes=1))
+        make_session(tmp_path, "unseen-one", hostname="claude-b-02",
+                     ago=timedelta(minutes=9))
+        make_pane_map(tmp_path,
+                      ("claude-a-01", "%12", "one"),
+                      ("claude-b-02", "%13", "two"))
+        make_viewed(tmp_path, "%12", ago=timedelta(seconds=30))
+
+        order = [a.session_id for a in fleet.collect(tmp_path, NOW).in_group("Working")]
+
+        assert order == ["unseen-one", "seen-one"]
+
+    def test_being_seen_hides_nothing(self, tmp_path):
+        """Hiding is what `Idle` already does. Doing it twice, for two
+        unrelated reasons, is how a board starts lying."""
+        make_session(tmp_path, "a", hostname="claude-a-01", project="mktplace")
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "pi-eval"))
+        make_viewed(tmp_path, "%12", ago=timedelta(seconds=30))
+
+        f = fleet.collect(tmp_path, NOW)
+
+        assert len(f.in_group("Working")) == 1
+        assert "mktplace" in fleet.render_agents_md(f, NOW)
+
+    def test_recency_still_decides_between_two_unseen_agents(self, tmp_path):
+        make_session(tmp_path, "older", hostname="claude-a-01",
+                     ago=timedelta(minutes=9))
+        make_session(tmp_path, "newer", hostname="claude-b-02",
+                     ago=timedelta(minutes=1))
+
+        order = [a.session_id for a in fleet.collect(tmp_path, NOW).in_group("Working")]
+
+        assert order == ["newer", "older"]
+
+
+class TestSeenRendering:
+
+    def test_agents_md_marks_a_seen_agent(self, tmp_path):
+        make_session(tmp_path, "a", hostname="claude-a-01", project="mktplace")
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "pi-eval"))
+        make_viewed(tmp_path, "%12", ago=timedelta(minutes=2))
+
+        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert "· seen 2m ago" in md
+
+    def test_it_marks_seen_rather_than_unseen(self, tmp_path):
+        """Unseen is the default wherever nobody records attention, so marking
+        it would badge every row of a vanilla board with something that means
+        nothing there. Marking *seen* states what only evidence can state."""
+        make_session(tmp_path, "a", hostname="claude-a-01", project="mktplace")
+
+        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
+
+        assert "seen" not in md
+        assert "unseen" not in md
+
+
+# ---------------------------------------------------------------------------
 # Vanilla degradation — no kit, no tmux, no map
 # ---------------------------------------------------------------------------
 
@@ -1691,11 +1961,16 @@ class TestVanillaDegradation:
 
         assert set(payload) - set(golden) == {"collected_at"}
         assert payload.pop("collected_at") == {}
-        # Every agent grew the three tmux fields, all empty with no map.
+        # Every agent grew the three tmux fields and the seen pair. All five
+        # are inert with no map and no markers, which is the claim: the
+        # additions are visible to a consumer and change nothing for one that
+        # ignores them.
         for entry in payload["agents"]:
             assert entry.pop("tmux_pane") == ""
             assert entry.pop("tmux_window") == ""
             assert entry.pop("tmux_server") == ""
+            assert entry.pop("seen") is False
+            assert entry.pop("seen_at") is None
 
         assert payload == golden
 

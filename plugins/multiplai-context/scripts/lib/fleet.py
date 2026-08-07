@@ -116,6 +116,17 @@ class Agent:
     tmux_pane: str = ""
     tmux_window: str = ""
     tmux_server: str = ""
+    # Have you looked at this tab since it last did anything? A third axis,
+    # deliberately **not** a status and **not** a disposition: `status` is the
+    # session's own state and is frozen at `working | waiting_input | idle |
+    # ended` by the hub's API contract, `disposition` is how you left it, and
+    # this is about your attention. Folding attention into either would mean an
+    # agent's state changed because you glanced at a tab, which is false.
+    #
+    # It costs nothing when unknown: no kit, no tmux, or hooks not wired leaves
+    # every agent `seen=False`, which renders exactly as the board did before.
+    seen: bool = False
+    seen_at: datetime | None = None
     disposition: str = "active"   # active | parked | done — how it was LEFT
     disposition_reason: str = ""
     intent: str = ""
@@ -365,6 +376,93 @@ def load_pane_map(data_dir: Path) -> PaneMap | None:
     )
 
 
+VIEWED_DIRNAME = "tmux/viewed"
+
+
+@dataclass(frozen=True)
+class Viewed:
+    """When one tmux pane was last on the user's screen.
+
+    Written by the kit's ``fleet-viewed.sh``, one file per pane, from tmux's
+    pane-selection hooks. Three lines: the timestamp, the window name at that
+    moment, and the tmux socket.
+
+    ``server`` is the same load-bearing field it is on :class:`PaneMap`, and
+    the reason the two must be compared before this is joined to anything.
+    """
+
+    at: datetime
+    window: str = ""
+    server: str = ""
+
+
+def load_viewed(data_dir: Path) -> dict[str, Viewed] | None:
+    """Read every viewed marker, keyed by pane id **without** the ``%``.
+
+    ``None`` means *nobody is recording attention* — no kit, no tmux, or the
+    hooks are not wired into ``~/.tmux.conf`` — and is distinct from an empty
+    dict, which means the mechanism is live and no pane has been looked at yet.
+    Consumers need the difference: "you have not looked at any of these" is a
+    statement worth printing, and "we cannot tell" is not.
+
+    A file that will not parse is skipped rather than raised on, for the reason
+    every loader in this module gives: this is an enrichment over a fleet view
+    that works without it.
+    """
+    viewed_dir = data_dir / VIEWED_DIRNAME
+    try:
+        entries = sorted(viewed_dir.iterdir())
+    except OSError:
+        return None
+    out: dict[str, Viewed] = {}
+    for entry in entries:
+        try:
+            lines = entry.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        at = _parse_ts(lines[0]) if lines else None
+        # A marker whose timestamp does not parse answers no question, and a
+        # marker with no server cannot be checked against the pane map — which
+        # means using it would be exactly the mis-attribution the server field
+        # exists to prevent.
+        if at is None or len(lines) < 3 or not lines[2].strip():
+            continue
+        out[entry.name] = Viewed(
+            at=at,
+            window=lines[1].strip(),
+            server=lines[2].strip(),
+        )
+    return out
+
+
+def _seen_at(
+    pane: "Pane | None",
+    pane_map: "PaneMap | None",
+    viewed: dict[str, Viewed] | None,
+) -> datetime | None:
+    """When the user last looked at this agent's tab, if that is knowable.
+
+    The server check is the whole reason this is a function rather than a dict
+    lookup at the call site. **tmux recycles pane ids per server**, so a marker
+    for ``%12`` written by yesterday's tmux server says nothing about ``%12``
+    on today's — and crediting one tab's attention to an unrelated session
+    would make the board confidently wrong, which is worse than the board
+    saying nothing. Mismatch degrades to ``None``: not seen.
+
+    The comparison is against **this pane's** server, not the document's. The
+    map merges across tabs, so its top-level socket belongs to whichever launch
+    wrote the file last; comparing every entry against that one both credits
+    attention across servers and denies it within them. ``pane_map`` is still
+    required — no map is no join — but it no longer supplies the socket.
+    """
+    if pane is None or pane_map is None or not viewed:
+        return None
+    mark = viewed.get(pane.pane.lstrip("%"))
+    if mark is None or mark.server != pane.server:
+        return None
+    return mark.at
+
+
 # How long a roster-confirmed-dead session is left in the registry before GC
 # takes it. Not a hedge against the roster being wrong — it cannot be, in this
 # direction: the host looked, and the container was not there. It is a hedge
@@ -468,12 +566,29 @@ class Fleet:
     # enumerate them (CronList). The script cannot, so this stays None there —
     # and the digest says "not tracked" rather than implying zero.
     scheduled: list[str] | None = None
+    # Whether anything is recording attention at all — the `tmux/viewed/`
+    # directory exists. `False` is vanilla (no kit, no tmux, hooks unwired) and
+    # is why nothing may print an unseen *count*: with nobody recording, every
+    # agent is unseen by default and "12 unseen" would be a claim about the
+    # user's attention drawn from no evidence.
+    viewed_known: bool = False
 
     def by_status(self, *statuses: str) -> list[Agent]:
         return [a for a in self.agents if a.status in statuses]
 
     def in_group(self, title: str) -> list[Agent]:
-        return [a for a in self.agents if a.group == title]
+        """The group's members, **unseen first**, recency-ordered within each.
+
+        Ordering, never exclusion. Being seen must not hide an agent: hiding is
+        what the `Idle` group already does, and a board that dropped rows for
+        two independent reasons would be one you stop trusting. This only moves
+        what you have already dealt with below what you have not.
+
+        `agents` is pre-sorted by recency and the sort is stable, so this is a
+        single partition on top of that order.
+        """
+        return sorted((a for a in self.agents if a.group == title),
+                      key=lambda a: a.seen)
 
     @property
     def live(self) -> list[Agent]:
@@ -688,6 +803,7 @@ def load_agent(
     now: datetime,
     roster: Roster | None = None,
     pane_map: "PaneMap | None" = None,
+    viewed: "dict[str, Viewed] | None" = None,
 ) -> Agent | None:
     """Build one :class:`Agent` from a registry entry plus its checkpoint.
 
@@ -728,6 +844,12 @@ def load_agent(
     # written — and leaves the three fields empty, which every consumer already
     # renders as "no label".
     pane = pane_map.lookup(hostname) if pane_map is not None else None
+    # Seen is derived here and stored nowhere: `AGENTS.md` and `fleet.json`
+    # remain caches of `sessions/`, `checkpoints/`, `tmux/panes.json` and
+    # `tmux/viewed/`, and this is a comparison between two of them. An agent
+    # that does something after you looked at it goes unseen again on the next
+    # render, with nothing to invalidate — that *is* the mechanism.
+    seen_at = _seen_at(pane, pane_map, viewed)
     agent = Agent(
         session_id=sid,
         project=str(raw.get("project") or ""),
@@ -747,6 +869,8 @@ def load_agent(
         # wrote the file last — using it here would stamp every carried-forward
         # tab with a socket it was never on.
         tmux_server=pane.server if pane else "",
+        seen_at=seen_at,
+        seen=bool(seen_at and last_ts and seen_at > last_ts),
         status=_status_of(last_kind, last_ts, now, roster, hostname, in_container),
         disposition=disp_state,
         disposition_reason=disp_reason,
@@ -904,13 +1028,17 @@ def collect(data_dir: Path, now: datetime | None = None) -> Fleet:
     # every entry is labelled against the same observation, so the map cannot
     # shift underneath a single render.
     pane_map = load_pane_map(data_dir)
+    # And the third, for the third time and the same reason: one reading of
+    # attention for the whole pass, so an agent cannot be judged seen and the
+    # next one unseen against a directory that moved in between.
+    viewed = load_viewed(data_dir)
     agents: list[Agent] = []
     try:
         entries = sorted(sessions_dir.glob("*.json"))
     except OSError:
         entries = []
     for entry in entries:
-        agent = load_agent(entry, data_dir, now, roster, pane_map)
+        agent = load_agent(entry, data_dir, now, roster, pane_map, viewed)
         if agent is not None:
             agents.append(agent)
 
@@ -919,7 +1047,11 @@ def collect(data_dir: Path, now: datetime | None = None) -> Fleet:
     # depends on this).
     agents.sort(key=lambda a: (-(a.last_ts or datetime.min.replace(
         tzinfo=timezone.utc)).timestamp(), a.session_id))
-    return Fleet(agents=agents, collisions=find_collisions(agents, now))
+    return Fleet(
+        agents=agents,
+        collisions=find_collisions(agents, now),
+        viewed_known=viewed is not None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1009,7 +1141,17 @@ def _sanitize_reason(reason: str) -> str:
 
 def _render_agent(agent: Agent, now: datetime) -> list[str]:
     head = agent.project or agent.cwd or agent.session_id[:8]
-    lines = [f"### {head} — {format_age(agent.age(now))}"]
+    # Marked on the *seen* side, not the unseen one, and that choice is load-
+    # bearing. Unseen is the default whenever nobody is recording attention, so
+    # marking it would put a badge on every row of a vanilla board — where it
+    # would mean nothing. Marking seen says something only evidence can say:
+    # you looked at this tab, and it has not moved since.
+    seen = ""
+    if agent.seen and agent.seen_at is not None:
+        # `format_age` bottoms out at "just now", which does not take an "ago".
+        age = format_age(max(timedelta(0), now - agent.seen_at))
+        seen = f" · seen {age}" if age == "just now" else f" · seen {age} ago"
+    lines = [f"### {head} — {format_age(agent.age(now))}{seen}"]
     meta = []
     # Before the container name, because it is the one identifier the reader
     # can act on without a lookup: it is what the tab is called on their screen
