@@ -392,43 +392,35 @@ re-check on CLI major upgrades):
 (including the 200K disable gate, reported as "auto mode off") so the
 overdue warning and nudge suppression track native behavior exactly.
 
-**Near-instant compaction (automatic since 0.6.9).** The built-in compactor
-can't be replaced (and disabling it via `DISABLE_AUTO_COMPACT` would remove
-the automatic trigger this design rides on), but it can be steered: Claude
-Code appends a PreCompact hook's **stdout** to the compaction summarization
-prompt as custom instructions (verified in the CLI 2.1.207 binary; the
-background-precompute path honors them too). The plugin's PreCompact hook
-uses this to tell the summarizer to emit a **one-sentence stub** instead of
-a multi-KB summary — generation length dominates compaction wall-clock
-(the prefill is prompt-cache-hit), so the visible pause collapses to the
-synchronous checkpoint write plus a near-instant summary call. The injected
-checkpoint is the real state carrier.
+**Removed in 0.32.0: the summary-stub directive.** Up to 0.31.0 the
+PreCompact hook used a real CLI affordance — a hook's stdout is appended to
+the compaction prompt as custom instructions — to ask the summarizer for a
+one-sentence stub instead of a multi-KB summary, on the grounds that the
+injected checkpoint already carries the state. The channel works. The
+directive did not.
 
-The directive is emitted only when it is safe to discard the summary:
-checkpointing enabled, not a child (subagent) session, `checkpoint.md`
-exists and validates, **and the checkpoint is fresh** — the synchronous
-pre-compaction checkpoint succeeded this invocation, or the checkpoint's
-recorded token watermark / file mtime is demonstrably close to the live
-context size. A stale checkpoint (writer timed out, script missing,
-context size unreadable) keeps the native full summary, because stubbing
-it would silently lose the tail of the session. The pending rebuild marker
-is written first, so even a **manual `/compact` below the handoff
-threshold** gets the checkpoint re-injected (session_start additionally
-falls back to the session's own checkpoint on `source="compact"`). On any
-doubt or failure the hook stays silent and the native full summary
-proceeds unchanged. No `CLAUDE.md` compact-instructions snippet is needed
-anymore.
+To outrank the summarizer's own instructions it had to be phrased as a
+priority override telling the model to disregard them, and that is
+indistinguishable, from inside the summarizer, from a prompt injection
+embedded in the conversation being summarized. Sessions declined it and
+produced the full summary anyway; one reported it to its user as a live
+injection attack against their own tooling — the correct call on the
+evidence it had. Both outcomes cost more than the summary saved. Steering a
+model by impersonating an authority it is trained to distrust does not get
+more reliable with better wording, so the hook now prints nothing at all and
+compaction produces its normal summary.
 
-**CLI-version canary.** The steering channel rides a CLI implementation
-detail (hook stdout → `newCustomInstructions` → summary prompt), verified
-against CLI **2.1.207**. The hook reads the running CLI version from the
-`AI_AGENT` env var (e.g. `claude-code_2-1-207_agent`) and logs a warning
-when the major is newer than the last verified one
-(`_STEERING_VERIFIED_CLI_MAJOR` in `pre_compact.py`) — it still emits the
-directive, because the worst case of a removed channel is just the native
-summary. If the env var is absent the check is skipped; the residual risk
-is that a future CLI silently drops the channel and compaction reverts to
-full-length summaries (no data loss — re-verify and bump the constant).
+What survives is the part that was doing real work: the pending rebuild
+marker, still written on every compaction with a valid checkpoint, so a
+**manual `/compact` below the handoff threshold** still gets the checkpoint
+re-injected (session_start additionally falls back to the session's own
+checkpoint on `source="compact"`). Freshness gating went with the directive
+— it existed to stop a stale checkpoint *replacing* the summary, and the
+summary is no longer being replaced.
+
+If compaction cost is what you are trying to avoid, the answer is to not
+compact: hand off at the threshold instead, and set
+`checkpoint_hard_stop_tokens` if advice alone does not get you there.
 
 Why compaction (not `/clear`) is the automatic path: hooks cannot invoke
 slash commands, so a hook-triggered `/clear` is impossible — but the
@@ -436,10 +428,76 @@ auto-compact *threshold* is steerable via env, and compaction both preserves
 the session (id, session-scoped hooks, terminal) and fires SessionStart with
 `source="compact"`, which is a supported context-injection point.
 
+### Turning auto-compaction off instead
+
+The steering above is one of two supported shapes. The other is to disable
+native auto-compaction outright and hand off at the threshold every time —
+no summary, no summarized-context degradation, one `/clear` per window:
+
+```json
+{
+  "env": { "DISABLE_AUTO_COMPACT": "1" },
+  "autoCompactEnabled": false
+}
+```
+
+Either alone is enough (the CLI checks `DISABLE_COMPACT`, then
+`DISABLE_AUTO_COMPACT`, then the setting). Manual `/compact` still works —
+these gate the *automatic* trigger only.
+
+`autocompact_trigger_tokens()` detects all three, so the plugin reports
+"auto mode off" and resumes its handoff advice rather than waiting for a
+compaction that will never fire. Leaving the window/pct pair in place
+alongside a disable is fine and expected — the disable wins. One limit
+worth knowing: the env vars are always visible to a hook, but
+`autoCompactEnabled` is read best-effort from the **user-level**
+`settings.json` only ( `$CLAUDE_CONFIG_DIR/settings.json`, the file the
+`/config` toggle writes). Set the env var if you want the detection to be
+certain.
+
+**What this costs you:** with the automatic trigger gone, nothing acts on
+its own. The handoff nudges are advice, and the next real wall is the
+model's actual context ceiling — `CLAUDE_CODE_AUTO_COMPACT_WINDOW` does not
+move it, since it only ever fed the compaction trigger. That is what the
+next section is for.
+
+### Enforcing the handoff: `checkpoint_hard_stop_tokens`
+
+Everything above is advice. Advice is enough when auto-compaction is doing
+the rebuilding, because something else eventually acts. It is not enough
+when auto-compaction is **disabled outright** (`DISABLE_AUTO_COMPACT=1` or
+`autoCompactEnabled: false`), a reasonable choice if you would rather hand
+off cleanly than be summarized: with it off, nothing sits between the
+handoff threshold and the model's real context ceiling, and a session
+sails on into exactly the degraded zone this system exists to avoid.
+
+Set `checkpoint_hard_stop_tokens` and the per-prompt nudge stops asking.
+Above the threshold it returns `{"decision": "block"}` and the prompt is
+never sent — the CLI shows the reason instead, naming the token count and
+what to do about it.
+
+Three carve-outs, because a hook that can refuse every prompt needs a door
+that does not require editing config from inside the blocked session:
+
+- **Slash commands always pass.** `/clear` and `/compact` are what the
+  block is asking for; blocking them would be a locked room.
+- **`!keepgoing` anywhere in a prompt overrides it**, for one
+  `checkpoint_refresh_tokens` band of growth — long enough to finish a
+  thought, short enough not to be a silent opt-out.
+- **Any failure falls through to not blocking.** A hook that cannot read
+  its own state must not be the reason a session stops working.
+
+Child sessions are never blocked (a stopped subagent strands its parent),
+and the block is off unless you set it: it changes what a session does when
+you talk to it, which is not a default anyone should inherit.
+
 Safety properties, by construction:
 
 - The Stop hook **never emits a `decision`** — it cannot block a Stop, so
-  `/goal` loops and other Stop hooks are unaffected.
+  `/goal` loops and other Stop hooks are unaffected. The hard stop is the
+  deliberate exception and lives elsewhere on purpose: it blocks a
+  *UserPromptSubmit*, which stops the human adding work, not the agent
+  finishing it.
 - Child sessions (subagents, nested hook sessions) are excluded — a research
   subagent's own giant context never triggers checkpoints, and its sidechain
   usage records are ignored when measuring the main session.
@@ -455,6 +513,7 @@ Safety properties, by construction:
 | `checkpoint_tokens` | `100000,200000` | Comma-separated checkpoint bands (absolute tokens) |
 | `checkpoint_handoff_tokens` | last band | Threshold where handoff advice + pending marker kick in (clamped to ≥ last band) |
 | `checkpoint_refresh_tokens` | `25000` | Above the handoff threshold, re-checkpoint every this many tokens of growth |
+| `checkpoint_hard_stop_tokens` | `0` (off) | Above this, refuse new prompts until the user hands off. `0` keeps the handoff advisory (clamped to ≥ handoff threshold) |
 | `checkpoint_stale_hours` | `3` | Age trigger: re-checkpoint when the last one is this old. `0` disables it, restoring size-only triggering |
 | `checkpoint_min_session_minutes` | `30` | Minimum session age before the staleness trigger applies |
 | `checkpoint_ttl_hours` | `6` | Pending rebuild marker expiry (unrelated to `stale_hours`) |

@@ -16,7 +16,9 @@ implements the plumbing for the checkpoint lifecycle:
      wall-clock age instead.
   3. **Handoff** — at/above the handoff threshold (default 200K) a pending
      marker is written for the session's project. The user is advised (via
-     Stop-hook systemMessage and a per-prompt nudge) to ``/clear``.
+     Stop-hook systemMessage and a per-prompt nudge) to ``/clear``. Advice
+     only, unless ``hard_stop_tokens`` is set: above that the nudge stops
+     accepting new prompts until the handoff happens.
   4. **Rebuild** — the next SessionStart in the same project consumes the
      pending marker (TTL-gated) and injects the checkpoint as
      additionalContext, so the fresh session resumes where the old one left
@@ -69,6 +71,19 @@ _DEFAULT_HANDOFF = 200_000
 _DEFAULT_REFRESH = 25_000
 _DEFAULT_TTL_HOURS = 6.0
 _DEFAULT_TIMEOUT_S = 240
+
+# Hard stop. 0 (the default) means "advisory only" — the handoff nudge asks
+# for a /clear and nothing enforces it. Set it and checkpoint_nudge.py stops
+# *accepting new prompts* above the threshold instead of merely mentioning it.
+#
+# Off by default on purpose. The nudge is safe everywhere; a block is a
+# behaviour a user has to choose, because getting it wrong means a session
+# that refuses to talk. It exists for the setup where auto-compaction is
+# disabled outright (DISABLE_AUTO_COMPACT / autoCompactEnabled:false): there
+# the only thing between the handoff threshold and the model's real context
+# ceiling is advice, and advice does not stop a session drifting into the
+# degraded zone the checkpoint system exists to avoid.
+_DEFAULT_HARD_STOP = 0
 
 # Age-based checkpointing (the `stale` trigger). Deliberately NOT ttl_hours:
 # that one means pending-marker expiry and is consumed by
@@ -140,6 +155,9 @@ class CheckpointConfig:
     # token-band behaviour exactly as it was.
     stale_hours: float = _DEFAULT_STALE_HOURS
     min_session_minutes: int = _DEFAULT_MIN_SESSION_MINUTES
+    # ``hard_stop_tokens = 0`` disables the block entirely (the default),
+    # leaving the handoff nudge advisory exactly as it was.
+    hard_stop_tokens: int = _DEFAULT_HARD_STOP
 
 
 def load_config() -> CheckpointConfig:
@@ -175,6 +193,17 @@ def load_config() -> CheckpointConfig:
         )
         handoff = bands[-1]
 
+    # A hard stop below the handoff threshold would block prompts before the
+    # nudge ever asks for a handoff — the user would meet the wall with no
+    # warning. Clamp rather than honour it.
+    hard_stop = max(0, option_int("checkpoint_hard_stop_tokens", _DEFAULT_HARD_STOP))
+    if hard_stop and hard_stop < handoff:
+        logger.warning(
+            "checkpoint_hard_stop_tokens=%d below handoff %d; clamping",
+            hard_stop, handoff,
+        )
+        hard_stop = handoff
+
     return CheckpointConfig(
         bands=bands,
         handoff_tokens=handoff,
@@ -187,6 +216,7 @@ def load_config() -> CheckpointConfig:
         min_session_minutes=max(
             0, option_int("checkpoint_min_session_minutes", _DEFAULT_MIN_SESSION_MINUTES)
         ),
+        hard_stop_tokens=hard_stop,
     )
 
 
@@ -721,6 +751,33 @@ _NATIVE_OUTPUT_RESERVE_CAP = 20_000
 _NATIVE_THRESHOLD_MARGIN = 13_000
 
 
+def _truthy(raw: str | None) -> bool:
+    """Env-var truthiness, matching the CLI's own reading of these flags."""
+    return (raw or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _autocompact_disabled_in_settings() -> bool:
+    """Best-effort read of ``autoCompactEnabled: false`` from user settings.
+
+    The env vars above are authoritative and always visible to a hook. This
+    key is not: it lives in a settings file, and Claude Code layers several
+    (managed / user / project / local) with rules this function does not
+    reproduce. It reads the user-level file only — the one the /config
+    toggle writes — because a false negative here costs a nudge that was
+    already being shown, while missing the disable entirely costs the
+    silence this whole function exists to prevent.
+    """
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    if not cfg:
+        return False
+    try:
+        with open(os.path.join(cfg, "settings.json"), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("autoCompactEnabled") is False
+
+
 def autocompact_trigger_tokens() -> int | None:
     """Expected native auto-compaction trigger, when steered via env.
 
@@ -737,7 +794,21 @@ def autocompact_trigger_tokens() -> int | None:
 
     Returns the estimated trigger in tokens, or None when auto mode isn't
     effectively configured. Hooks inherit the Claude Code process env.
+
+    Checked in the binary's own order: ``DISABLE_COMPACT``, then
+    ``DISABLE_AUTO_COMPACT``, then the ``autoCompactEnabled`` setting. Either
+    env var beats the steering vars — leaving a window/pct pair behind when
+    you disable compaction is the normal shape of that config, not a
+    contradiction, and reading it as "auto mode on" silences the handoff
+    advice in exactly the setup that has nothing else to fall back on.
     """
+    if _truthy(os.environ.get("DISABLE_COMPACT")) or _truthy(
+        os.environ.get("DISABLE_AUTO_COMPACT")
+    ):
+        return None
+    if _autocompact_disabled_in_settings():
+        return None
+
     raw_window = os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "").strip()
     if not raw_window:
         return None

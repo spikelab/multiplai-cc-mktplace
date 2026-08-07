@@ -18,6 +18,64 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.32.0] - 2026-08-07
+
+### Added
+
+- **`checkpoint_hard_stop_tokens` — enforce the handoff instead of suggesting
+  it.** Set it, and past that many context tokens the plugin stops accepting
+  new prompts, showing you the count and what to do about it. Off by default;
+  the handoff stays advisory unless you ask for a wall.
+
+  It is for the setup where you have disabled native auto-compaction
+  (`DISABLE_AUTO_COMPACT=1` or `autoCompactEnabled: false`) because you would
+  rather hand off to a fresh session than be summarized. With compaction off,
+  nothing between the handoff threshold and the model's real context ceiling
+  actually *does* anything — the nudges are advice, and a session drifts deep
+  into the degraded zone the checkpoint system exists to avoid.
+
+  Ways out, so it is a wall with a door: slash commands always go through
+  (`/clear` and `/compact` are the point), `!keepgoing` in a prompt overrides
+  it for one refresh band, and any internal failure falls through to not
+  blocking. Subagents are never blocked.
+
+### Removed
+
+- **The compaction summary stub.** Since 0.6.9 the PreCompact hook told the
+  built-in summarizer to emit one sentence instead of a full summary, since
+  the checkpoint re-injection carries the state anyway. It never worked, and
+  could not: to outrank the summarizer's own instructions the directive was
+  phrased as a priority override telling it to ignore them — which, from
+  inside the summarizer, is indistinguishable from a prompt injection hidden
+  in the conversation being summarized. Sessions refused it and wrote the full
+  summary regardless; one flagged it to its user as an attack on their own
+  tooling, which was the right call on the evidence it had.
+
+  Compaction now produces its normal summary. If compaction cost is what you
+  are avoiding, `checkpoint_hard_stop_tokens` addresses it at the source by
+  handing off instead.
+
+### Fixed
+
+- **Disabled auto-compaction is no longer mistaken for steered
+  auto-compaction.** `autocompact_trigger_tokens()` decided "auto mode is on"
+  from `CLAUDE_CODE_AUTO_COMPACT_WINDOW` / `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`
+  alone, and never checked whether compaction was disabled. Leaving those
+  vars in place while setting `DISABLE_AUTO_COMPACT=1` (or
+  `autoCompactEnabled: false`) is the normal shape of that config — and the
+  plugin read it as "compaction will handle this", suppressing the handoff
+  advice for the one setup where nothing else would act. It now checks
+  `DISABLE_COMPACT`, `DISABLE_AUTO_COMPACT`, and the `autoCompactEnabled`
+  setting first, in the CLI's own order.
+
+### Changed
+
+- The pending rebuild marker — which makes a manual `/compact` below the
+  handoff threshold still re-inject your checkpoint — is now written whenever
+  a valid checkpoint exists. It was previously gated on the checkpoint being
+  *fresh*, a check that only existed to protect the removed summary stub;
+  a checkpoint lagging by a band is strictly better than no injection.
+
 ## [0.31.0] - 2026-08-07
 
 ### Added
