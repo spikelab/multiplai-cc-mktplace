@@ -435,32 +435,73 @@ def load_viewed(data_dir: Path) -> dict[str, Viewed] | None:
     return out
 
 
-def _seen_at(
+def _marker_for(
     pane: "Pane | None",
     pane_map: "PaneMap | None",
     viewed: dict[str, Viewed] | None,
-) -> datetime | None:
-    """When the user last looked at this agent's tab, if that is knowable.
+) -> "Viewed | None":
+    """This pane's viewed marker, or ``None`` if it cannot be trusted.
 
     The server check is the whole reason this is a function rather than a dict
     lookup at the call site. **tmux recycles pane ids per server**, so a marker
     for ``%12`` written by yesterday's tmux server says nothing about ``%12``
     on today's — and crediting one tab's attention to an unrelated session
     would make the board confidently wrong, which is worse than the board
-    saying nothing. Mismatch degrades to ``None``: not seen.
+    saying nothing. Mismatch degrades to ``None``.
 
     The comparison is against **this pane's** server, not the document's. The
     map merges across tabs, so its top-level socket belongs to whichever launch
     wrote the file last; comparing every entry against that one both credits
     attention across servers and denies it within them. ``pane_map`` is still
     required — no map is no join — but it no longer supplies the socket.
+
+    Two callers now read this marker, and they must agree about which pane it
+    describes: an attention timestamp credited to one tab and a label taken
+    from another would be worse than either being absent.
     """
     if pane is None or pane_map is None or not viewed:
         return None
     mark = viewed.get(pane.pane.lstrip("%"))
     if mark is None or mark.server != pane.server:
         return None
-    return mark.at
+    return mark
+
+
+def _seen_at(
+    pane: "Pane | None",
+    pane_map: "PaneMap | None",
+    viewed: dict[str, Viewed] | None,
+) -> datetime | None:
+    """When the user last looked at this agent's tab, if that is knowable."""
+    mark = _marker_for(pane, pane_map, viewed)
+    return mark.at if mark else None
+
+
+def _window_of(
+    pane: "Pane | None",
+    pane_map: "PaneMap | None",
+    viewed: dict[str, Viewed] | None,
+) -> str:
+    """What this agent's tab is *currently* called.
+
+    The marker wins over ``panes.json``. Both carry a window name, but they are
+    answers to different questions: the pane map records what the tab was
+    called at **launch**, and only when the launcher could tell that a human
+    had named it; the marker records what it is called **now**, refreshed by
+    the ``after-rename-window`` hook every time you rename a tab.
+
+    So the marker is both fresher and available in cases the map is not, and it
+    needs no guess about whether a name was chosen deliberately — it is simply
+    the tab's name. A tab renamed mid-session relabels here on the next render
+    instead of at the next launch.
+
+    Falls back to the pane map, then to nothing, which every consumer already
+    renders by dropping to the container name.
+    """
+    mark = _marker_for(pane, pane_map, viewed)
+    if mark is not None and mark.window:
+        return mark.window
+    return pane.window if pane else ""
 
 
 # How long a roster-confirmed-dead session is left in the registry before GC
@@ -863,7 +904,7 @@ def load_agent(
         last_kind=last_kind,
         in_container=in_container,
         tmux_pane=pane.pane if pane else "",
-        tmux_window=pane.window if pane else "",
+        tmux_window=_window_of(pane, pane_map, viewed),
         # This entry's own socket, not the document's. The map merges across
         # tabs, so the document-level value is the server of whichever launch
         # wrote the file last — using it here would stamp every carried-forward

@@ -1723,6 +1723,87 @@ class TestSeenAxis:
 
         assert agent.seen is False
 
+    def test_the_marker_supplies_the_tab_name(self, tmp_path):
+        """`panes.json` records what the tab was called at **launch**, and only
+        when the launcher could tell a human had named it. The marker records
+        what it is called **now** — the `after-rename-window` hook rewrites it
+        on every rename — so it is both fresher and available in cases the map
+        is not.
+
+        The map here carries the empty string the launcher wrote for a year:
+        it read `automatic-rename` window-locally, so a global
+        `set -g automatic-rename off` returned "" and the name was never
+        recorded (kit `tmux_capture_window`, fixed separately). Every board
+        fell back to `claude-a-01` for every agent. The marker was carrying the
+        answer the whole time.
+        """
+        make_session(tmp_path, "a", hostname="claude-a-01")
+        make_pane_map(tmp_path, ("claude-a-01", "%12", ""))
+        make_viewed(tmp_path, "%12", window="compactions")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.tmux_window == "compactions"
+
+    def test_the_marker_wins_over_a_stale_pane_map_name(self, tmp_path):
+        """Renaming a tab mid-session relabels it on the next render, rather
+        than at the next launch."""
+        make_session(tmp_path, "a", hostname="claude-a-01")
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "old-name"))
+        make_viewed(tmp_path, "%12", window="new-name")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.tmux_window == "new-name"
+
+    def test_a_marker_from_another_server_supplies_no_name_either(self, tmp_path):
+        """The same check `seen` makes, for the same reason: pane ids are
+        recycled per server, so this marker describes an unrelated tab. A
+        label taken from one pane while attention is credited to another would
+        be worse than either being absent — which is why both read through one
+        function."""
+        make_session(tmp_path, "a", hostname="claude-a-01")
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "from-the-map"))
+        make_viewed(tmp_path, "%12", window="from-another-server",
+                    server="/private/tmp/tmux-501/other")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.tmux_window == "from-the-map"
+        assert agent.seen is False
+
+    def test_the_pane_map_still_supplies_the_name_with_no_marker(self, tmp_path):
+        """No tmux hooks wired is the ordinary case, not a broken one."""
+        make_session(tmp_path, "a", hostname="claude-a-01")
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "pi-eval"))
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.tmux_window == "pi-eval"
+
+    def test_an_empty_marker_name_falls_back_rather_than_blanking(self, tmp_path):
+        """`fleet-viewed.sh` writes whatever tmux reports, and a window can be
+        called the empty string. Preferring it would *lose* a label the map
+        already had."""
+        make_session(tmp_path, "a", hostname="claude-a-01")
+        make_pane_map(tmp_path, ("claude-a-01", "%12", "pi-eval"))
+        make_viewed(tmp_path, "%12", window="")
+
+        agent = fleet.collect(tmp_path, NOW).agents[0]
+
+        assert agent.tmux_window == "pi-eval"
+
+    def test_the_tab_name_reaches_the_label_every_reader_prints(self, tmp_path):
+        """The point of fixing it here rather than in one board: `_label` feeds
+        `AGENTS.md`, `/fleet-status` and `fleet.json` alike."""
+        make_session(tmp_path, "a", hostname="claude-a-01", project="mktplace")
+        make_pane_map(tmp_path, ("claude-a-01", "%12", ""))
+        make_viewed(tmp_path, "%12", window="compactions")
+
+        payload = json.loads(fleet.fleet_json(fleet.collect(tmp_path, NOW), NOW))
+
+        assert payload["agents"][0]["tmux_window"] == "compactions"
+
     def test_no_viewed_directory_is_none_not_empty(self, tmp_path):
         """The not-collected/collected-empty distinction this module runs on.
         `None` is "nobody is recording attention"; `{}` is "the hooks are wired

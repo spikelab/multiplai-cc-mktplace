@@ -18,6 +18,34 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.32.2] - 2026-08-07
+
+### Fixed
+
+- **The fleet view shows your tab names again, not `claude-personal-07213856`.**
+  Every board — `AGENTS.md`, `/multiplai-context:fleet-status`, `fleet.json` and
+  anything reading it — labelled agents with their container name, because the
+  only place it looked for a tab name was `tmux/panes.json`, and the kit's
+  launcher had been writing `"window": ""` into every entry. (That half is fixed
+  in multiplai-kit: it read `automatic-rename` window-locally, so a global
+  `set -g automatic-rename off` returned empty and the name was never recorded.)
+
+  The name was already on disk the whole time. Each `tmux/viewed/<n>` marker
+  carries the window name on its second line, rewritten by the
+  `after-rename-window` hook every time you rename a tab — so it is both fresher
+  than the pane map and available in cases the map is not. The marker now
+  supplies the label, with the pane map as fallback, and neither requires a
+  guess about whether a human chose the name: it is simply what the tab is
+  called.
+
+  A tab renamed mid-session now relabels on the next render instead of at the
+  next launch.
+
+  The marker is read through the same guarded lookup `seen` uses, so both agree
+  about which pane they are describing — **tmux recycles pane ids per server**,
+  and a label taken from one tab while attention is credited to another would be
+  worse than either being absent.
+
 ## [0.32.1] - 2026-08-07
 
 ### Fixed
