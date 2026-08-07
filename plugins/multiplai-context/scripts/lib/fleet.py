@@ -109,6 +109,13 @@ class Agent:
     last_kind: str = ""
     status: str = "idle"          # working | waiting_input | idle | ended
     in_container: bool | None = None   # None = entry predates the field
+    # Where this session's tab is, joined host-side — see :class:`PaneMap`.
+    # Empty is the vanilla case: no kit, or no tmux. `tmux_server` is not
+    # decoration; a pane id is only meaningful alongside the server that
+    # issued it.
+    tmux_pane: str = ""
+    tmux_window: str = ""
+    tmux_server: str = ""
     disposition: str = "active"   # active | parked | done — how it was LEFT
     disposition_reason: str = ""
     intent: str = ""
@@ -241,6 +248,120 @@ def load_roster(data_dir: Path) -> Roster | None:
         ids=frozenset(str(i) for i in ids if isinstance(i, str)),
         kind=str(raw.get("kind") or ""),
         observer=str(raw.get("observer") or ""),
+    )
+
+
+PANE_MAP_FILENAME = "tmux/panes.json"
+
+
+@dataclass(frozen=True)
+class Pane:
+    """Where one container's session is sitting, as tmux saw it.
+
+    ``server`` is per pane and not merely a copy of :attr:`PaneMap.server`.
+    The map merges across tabs, and two tabs can be attached to two different
+    tmux servers; the entry carries the socket that issued *its* pane id, and
+    only that entry's own reader may use it. Falls back to the document-level
+    value for a map written before the field existed.
+    """
+
+    pane: str
+    server: str = ""
+    window: str = ""
+    session: str = ""
+    at: str = ""
+
+
+@dataclass(frozen=True)
+class PaneMap:
+    """Which tmux pane each container is in, and what the user calls that tab.
+
+    Written by the kit launcher (`claude.sh` → ``write_pane_map``) at every
+    launch and every exit, keyed by **container name** — which is this
+    module's ``Agent.hostname``, and the only key that survives a ``/clear``.
+
+    Nothing inside a container could produce this. ``record_event()`` runs in
+    the container and tmux runs on the Mac, so ``$TMUX_PANE`` there is not
+    merely absent, it is unknowable; the launcher is the one process that ever
+    holds the pane id and the container name at the same moment. Same shape,
+    and same reasoning, as :class:`Roster`.
+
+    ``kind`` / ``observer``
+        Refused outright unless they are the pair this reader understands, for
+        the reason :class:`Roster` gives at length: a payload you cannot
+        interpret must be rejected, not guessed at.
+    ``server``
+        The tmux socket path of the launch that wrote the document, and
+        load-bearing rather than informational. **tmux recycles pane ids per
+        server**, so ``%12`` means nothing without knowing which server issued
+        it. Anything joining to a pane id must compare servers first and
+        degrade to "unknown" rather than to the wrong session — attributing one
+        pane's attention to another agent is the one failure this data must not
+        produce.
+
+        Prefer :attr:`Pane.server`: this one describes whoever wrote the file
+        last, and the file merges across tabs that may be on different servers.
+        It survives only as the fallback for entries written before the field
+        was per-pane.
+    """
+
+    server: str
+    panes: dict[str, Pane]
+    kind: str = "tmux"
+    observer: str = "host"
+
+    def lookup(self, hostname: str) -> Pane | None:
+        return self.panes.get(hostname) if hostname else None
+
+
+def load_pane_map(data_dir: Path) -> PaneMap | None:
+    """Read the host's tmux pane map, or ``None`` if there isn't one.
+
+    ``None`` is the ordinary case and not an error: vanilla Claude Code has no
+    launcher to write this, and neither does anyone who does not use tmux.
+    Malformed content is treated the same way — labels are an enrichment over a
+    working default, so there is never a reason to raise.
+    """
+    try:
+        raw = json.loads((data_dir / PANE_MAP_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    # A roster of pids in a file named `panes.json` is not a pane map, and a
+    # reader that shrugged and used it anyway would join a pid to a pane id.
+    if raw.get("kind") != "tmux" or raw.get("observer") != "host":
+        return None
+    entries = raw.get("panes")
+    if not isinstance(entries, dict):
+        return None
+    doc_server = str(raw.get("server") or "")
+    panes: dict[str, Pane] = {}
+    for name, value in entries.items():
+        if not isinstance(name, str) or not isinstance(value, dict):
+            continue
+        pane_id = value.get("pane")
+        # No pane id is no entry. The map exists to answer "which pane", and a
+        # record that cannot is worse than a missing one.
+        if not isinstance(pane_id, str) or not pane_id:
+            continue
+        panes[name] = Pane(
+            pane=pane_id,
+            # The document-level socket is the fallback, not the default: it
+            # describes the launch that wrote the file, and every *other*
+            # entry in it was merged forward from a tab that may be on a
+            # different tmux server. Older maps have no per-entry field, and
+            # for those the document value is the only answer available.
+            server=str(value.get("server") or doc_server),
+            window=str(value.get("window") or ""),
+            session=str(value.get("session") or ""),
+            at=str(value.get("at") or ""),
+        )
+    return PaneMap(
+        server=doc_server,
+        panes=panes,
+        kind="tmux",
+        observer="host",
     )
 
 
@@ -566,6 +687,7 @@ def load_agent(
     data_dir: Path,
     now: datetime,
     roster: Roster | None = None,
+    pane_map: "PaneMap | None" = None,
 ) -> Agent | None:
     """Build one :class:`Agent` from a registry entry plus its checkpoint.
 
@@ -601,6 +723,11 @@ def load_agent(
     # apart from a recorded `False` — see its docstring.
     raw_in_container = raw.get("in_container")
     in_container = raw_in_container if isinstance(raw_in_container, bool) else None
+    # The tab, joined on the container name. A miss is the ordinary case — no
+    # kit, no tmux, or a session that started before this launch's map was
+    # written — and leaves the three fields empty, which every consumer already
+    # renders as "no label".
+    pane = pane_map.lookup(hostname) if pane_map is not None else None
     agent = Agent(
         session_id=sid,
         project=str(raw.get("project") or ""),
@@ -613,6 +740,13 @@ def load_agent(
         last_ts=last_ts,
         last_kind=last_kind,
         in_container=in_container,
+        tmux_pane=pane.pane if pane else "",
+        tmux_window=pane.window if pane else "",
+        # This entry's own socket, not the document's. The map merges across
+        # tabs, so the document-level value is the server of whichever launch
+        # wrote the file last — using it here would stamp every carried-forward
+        # tab with a socket it was never on.
+        tmux_server=pane.server if pane else "",
         status=_status_of(last_kind, last_ts, now, roster, hostname, in_container),
         disposition=disp_state,
         disposition_reason=disp_reason,
@@ -639,8 +773,15 @@ def _label(agent: Agent) -> str:
     worktrees of the *same* project, which renders as "workspace, workspace"
     and identifies nobody. Qualify with the worktree — that is what a tmux tab
     actually is here — falling back to the branch and then the session id.
+
+    The tmux window name comes first when there is one. It is the best
+    qualifier available: the user chose it mid-session, once they knew what the
+    work was, which is more than a branch name or a session-id prefix can say
+    — and it is the string they are scanning their tab bar for.
     """
     project = agent.project or agent.hostname or agent.session_id[:8]
+    if agent.tmux_window:
+        return f"{project}@{agent.tmux_window}"
     branch = agent.branch
     if branch.endswith(")") and "(worktree: " in branch:
         qualifier = branch.split("(worktree: ", 1)[1][:-1]
@@ -759,13 +900,17 @@ def collect(data_dir: Path, now: datetime | None = None) -> Fleet:
     # One read for the whole pass: every entry is judged against the same
     # observation, so the reading cannot shift underneath a single render.
     roster = load_roster(data_dir)
+    # Read once for the whole pass, like the roster and for the same reason:
+    # every entry is labelled against the same observation, so the map cannot
+    # shift underneath a single render.
+    pane_map = load_pane_map(data_dir)
     agents: list[Agent] = []
     try:
         entries = sorted(sessions_dir.glob("*.json"))
     except OSError:
         entries = []
     for entry in entries:
-        agent = load_agent(entry, data_dir, now, roster)
+        agent = load_agent(entry, data_dir, now, roster, pane_map)
         if agent is not None:
             agents.append(agent)
 
@@ -866,6 +1011,11 @@ def _render_agent(agent: Agent, now: datetime) -> list[str]:
     head = agent.project or agent.cwd or agent.session_id[:8]
     lines = [f"### {head} — {format_age(agent.age(now))}"]
     meta = []
+    # Before the container name, because it is the one identifier the reader
+    # can act on without a lookup: it is what the tab is called on their screen
+    # right now.
+    if agent.tmux_window:
+        meta.append(f"tab `{agent.tmux_window}`")
     if agent.hostname:
         meta.append(f"container `{agent.hostname}`")
     if agent.branch:

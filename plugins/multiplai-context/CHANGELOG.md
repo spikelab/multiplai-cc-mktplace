@@ -18,6 +18,40 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.30.0] - 2026-08-07
+
+### Added
+
+- **The fleet view now labels a session with the name you gave its tmux tab.**
+  `AGENTS.md` entries carry `tab \`pi-eval\`` alongside the container name, and
+  a collision line reads `mktplace@pi-eval` instead of `mktplace@feat/x` — the
+  string you are actually scanning your tab bar for. Each agent in `fleet.json`
+  gains `tmux_pane`, `tmux_window` and `tmux_server`.
+
+  The data comes from `$WORKSPACE/.multiplai/data/tmux/panes.json`, written by
+  the kit launcher. It has to: this plugin's hooks run inside the container and
+  tmux runs on your Mac, so `$TMUX_PANE` is not merely missing in here, it is
+  unknowable. The join key is the container name, which is the one identifier
+  that survives a `/clear`.
+
+  A pane id is only meaningful alongside the tmux server that issued it — tmux
+  recycles them per server — so the server path is carried with it, **per
+  entry**, and anything joining to a pane id is expected to compare servers
+  first. Per entry because the map merges across tabs and two tabs can be on
+  two servers; a map written by an older launcher has one socket for the whole
+  document, and that is used as the fallback.
+
+  A tab keeps its auto-generated name out of this: the launcher records a
+  window name only when you pinned it (`automatic-rename off`), so a label
+  never reads `mktplace@bash`, and an unnamed tab falls through to the
+  worktree-or-branch qualifier as before.
+
+  **Without the kit, or without tmux, nothing changes.** No map, a malformed
+  map, or a payload that does not declare itself as host-observed tmux data is
+  refused wholesale and the three fields stay empty, which every surface
+  already renders as no label. Pinned against a golden capture taken before any
+  of this work landed.
+
 ## [0.29.0] - 2026-08-07
 
 ### Changed

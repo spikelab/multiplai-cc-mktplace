@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "generated_at": "2026-08-01T12:00:00+00:00",
+  "counts": {
+    "agents": 4,
+    "live": 4,
+    "fronts": 4,
+    "needs_you": 1,
+    "collisions": 1
+  },
+  "agents": [
+    {
+      "session_id": "vanilla-working",
+      "project": "mktplace",
+      "hostname": "claude-a-01",
+      "cwd": "/vanilla/mktplace",
+      "branch": "",
+      "repo_root": "",
+      "repo_id": "",
+      "started_at": "2026-08-01T11:57:00+00:00",
+      "last_ts": "2026-08-01T11:57:00+00:00",
+      "last_kind": "stop",
+      "status": "working",
+      "in_container": true,
+      "disposition": "active",
+      "disposition_reason": "",
+      "intent": "Wiring fleet.json into the hook path",
+      "next_action": "Run the mktplace gates",
+      "files": [
+        "/vanilla/mktplace/lib/fleet.py"
+      ],
+      "has_checkpoint": true,
+      "group": "Working",
+      "front": true,
+      "age_seconds": 180
+    },
+    {
+      "session_id": "vanilla-collide",
+      "project": "mktplace",
+      "hostname": "claude-d-04",
+      "cwd": "/vanilla/mktplace-wt",
+      "branch": "",
+      "repo_root": "",
+      "repo_id": "",
+      "started_at": "2026-08-01T11:51:00+00:00",
+      "last_ts": "2026-08-01T11:51:00+00:00",
+      "last_kind": "stop",
+      "status": "working",
+      "in_container": true,
+      "disposition": "active",
+      "disposition_reason": "",
+      "intent": "Adding the seen axis",
+      "next_action": "Extend fleet_digest",
+      "files": [
+        "/vanilla/mktplace/lib/fleet.py"
+      ],
+      "has_checkpoint": true,
+      "group": "Working",
+      "front": true,
+      "age_seconds": 540
+    },
+    {
+      "session_id": "vanilla-waiting",
+      "project": "kit",
+      "hostname": "claude-b-02",
+      "cwd": "/vanilla/kit",
+      "branch": "",
+      "repo_root": "",
+      "repo_id": "",
+      "started_at": "2026-08-01T11:42:00+00:00",
+      "last_ts": "2026-08-01T11:42:00+00:00",
+      "last_kind": "notification",
+      "status": "waiting_input",
+      "in_container": true,
+      "disposition": "active",
+      "disposition_reason": "",
+      "intent": "Writing write_pane_map",
+      "next_action": "Approve the edit to lib/fleet.py",
+      "files": [
+        "/vanilla/kit/lib/fleet.py",
+        "/vanilla/kit/claude.sh"
+      ],
+      "has_checkpoint": true,
+      "group": "Needs you",
+      "front": true,
+      "age_seconds": 1080
+    },
+    {
+      "session_id": "vanilla-bare",
+      "project": "workspace",
+      "hostname": "claude-c-03",
+      "cwd": "/vanilla/workspace",
+      "branch": "",
+      "repo_root": "",
+      "repo_id": "",
+      "started_at": "2026-08-01T11:19:00+00:00",
+      "last_ts": "2026-08-01T11:19:00+00:00",
+      "last_kind": "stop",
+      "status": "working",
+      "in_container": true,
+      "disposition": "active",
+      "disposition_reason": "",
+      "intent": "",
+      "next_action": "",
+      "files": [],
+      "has_checkpoint": false,
+      "group": "Working",
+      "front": true,
+      "age_seconds": 2460
+    }
+  ],
+  "collisions": [
+    {
+      "path": "/vanilla/mktplace/lib/fleet.py",
+      "session_ids": [
+        "vanilla-working",
+        "vanilla-collide"
+      ],
+      "labels": [
+        "mktplace@vanilla- (vanilla-)",
+        "mktplace@vanilla- (vanilla-)"
+      ]
+    }
+  ],
+  "prs": null,
+  "repos": null,
+  "jobs": null,
+  "backlog": null,
+  "scheduled": null
+}
