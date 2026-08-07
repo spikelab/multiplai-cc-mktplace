@@ -1347,3 +1347,40 @@ class TestCarryForward:
 
         assert payload["repos"] == []
         assert payload["collected_at"]["repos"] == payload["generated_at"]
+
+    def test_fleet_status_carries_forward_too(self, tmp_path, monkeypatch):
+        """The other writer. `write_fleet_view` is not the only path to
+        `fleet.json` — `fleet_status.py` writes it as well, and it was passing
+        no *existing* at all.
+
+        Reaching a section is not collecting it: `--offline` skips GitHub
+        outright, and any source that errors returns `None`. So a single
+        offline run erased a PR reading a run ten minutes earlier had taken,
+        turning "3 open, 14m ago" into "nobody looked" — the one distinction
+        the whole null/empty discipline exists to keep. That it survived
+        `write_fleet_view` and died in the CLI is exactly why this is pinned
+        against the CLI and not the library.
+        """
+        import importlib.util
+
+        make_session(tmp_path, "a")
+        # `main()` takes its own `datetime.now`, so the stamp has to be recent
+        # in real time or the one-hour expiry drops it before carry-forward
+        # ever gets a say — and the test would pass for the wrong reason.
+        stamp = (datetime.now(timezone.utc) - timedelta(minutes=14)).isoformat()
+        self._existing(tmp_path, prs={"open": 3, "red": 1}, stamp=stamp)
+
+        spec = importlib.util.spec_from_file_location(
+            "fleet_status_under_test", SCRIPTS_DIR / "fleet_status.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        monkeypatch.setattr(
+            "sys.argv",
+            ["fleet_status.py", "--offline", "--data-dir", str(tmp_path)])
+        module.main()
+
+        payload = json.loads((tmp_path / "fleet.json").read_text())
+
+        assert payload["prs"] == {"open": 3, "red": 1}
+        assert payload["collected_at"]["prs"] == stamp

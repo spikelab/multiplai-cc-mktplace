@@ -1226,12 +1226,18 @@ def carry_forward(payload: dict, existing: dict | None, now: datetime) -> dict:
     return payload
 
 
-def _read_fleet_json(data_dir: Path) -> dict | None:
+def read_fleet_json(data_dir: Path) -> dict | None:
     """The ``fleet.json`` already on disk, or ``None``.
 
     Absent and malformed are the same answer, for the reason :func:`load_roster`
     gives: this is an optimization over a working default, so there is never a
     reason to raise.
+
+    Public because **every** writer of ``fleet.json`` has to pair it with
+    :func:`fleet_json`'s *existing* argument — ``fleet_status.py`` as much as
+    :func:`write_fleet_view`. A writer that skips it does not write a
+    less-complete document, it writes a *wrong* one: an uncollected section
+    lands as ``null`` and erases a reading somebody did take.
     """
     try:
         raw = json.loads((data_dir / FLEET_JSON_FILENAME).read_text(encoding="utf-8"))
@@ -1285,7 +1291,7 @@ def write_fleet_view(data_dir: Path, now: datetime | None = None) -> Path:
     # Read before writing: this path collects agents and collisions only, so
     # the other five sections must be carried from whatever the last
     # `/fleet-status` saw rather than blanked. See `carry_forward`.
-    payload = fleet_json(fleet, now, existing=_read_fleet_json(data_dir))
+    payload = fleet_json(fleet, now, existing=read_fleet_json(data_dir))
     atomic_write(data_dir / FLEET_JSON_FILENAME, payload)
 
     logger.info(

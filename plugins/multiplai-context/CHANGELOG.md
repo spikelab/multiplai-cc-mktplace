@@ -49,8 +49,11 @@ Nothing yet.
   looking confident about it is the failure that distinction exists to prevent.
   An empty list is carried as an empty list, never converted to `null`.
 
-  `/fleet-status` is unchanged and remains the deliberate refresh: what it
-  actually collected always wins over what a previous pass remembered.
+  `/fleet-status` remains the deliberate refresh: what it actually collected
+  always wins over what a previous pass remembered. It carries the rest
+  forward on the same terms, which matters when it *cannot* collect — `--offline`
+  skips GitHub outright, and any source that errors reports nothing. An
+  offline run no longer erases a PR reading a run ten minutes earlier took.
 
   Both files remain pure caches — delete them, run anything that renders, and
   they come back. The `fleet.json` version stays at `1`: `collected_at` is
