@@ -201,6 +201,41 @@ def test_an_empty_fleet_says_zero_in_flight():
 
 
 # ---------------------------------------------------------------------------
+# The unseen count — only when something is recording attention
+# ---------------------------------------------------------------------------
+
+def test_the_unseen_count_appears_when_attention_is_recorded():
+    agents = [
+        agent(status="working", minutes=1, session_id="k1", seen=True),
+        agent(status="working", minutes=2, session_id="k2"),
+        agent(status="waiting_input", minutes=3, session_id="w1"),
+    ]
+
+    text = render_digest(fleet(agents, viewed_known=True), NOW)
+
+    assert "2 unseen" in text
+
+
+def test_no_unseen_count_without_a_viewed_directory():
+    """Unseen is the default when nobody is recording, so on a vanilla install
+    this count would just restate the in-flight count while implying somebody
+    watched you not look at them. `viewed_known` is the same not-collected /
+    collected-empty distinction the rest of this module runs on."""
+    text = render_digest(fleet([agent(status="working", session_id="k1")]), NOW)
+
+    assert "unseen" not in text
+
+
+def test_a_fully_seen_fleet_prints_no_unseen_count():
+    agents = [agent(status="working", minutes=1, session_id="k1", seen=True)]
+
+    text = render_digest(fleet(agents, viewed_known=True), NOW)
+
+    assert "unseen" not in text
+    assert "IN FLIGHT (1)" in text
+
+
+# ---------------------------------------------------------------------------
 # Honest gaps — "not collected" must never print as "none"
 # ---------------------------------------------------------------------------
 

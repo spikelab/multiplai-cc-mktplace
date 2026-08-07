@@ -194,6 +194,15 @@ def _summary_lines(fleet: Fleet, now: datetime, stale_prompts: int) -> list[str]
         bits.append(f"{len(idle)} idle (oldest {format_age(oldest)})")
     if stale_prompts:
         bits.append(f"{stale_prompts} stale prompt(s)")
+    # Only when something is actually recording attention. Unseen is the
+    # default with no `tmux/viewed/` directory, so on a vanilla install this
+    # count would equal the in-flight count and assert something about the
+    # user's attention that nothing observed. `viewed_known` is the same
+    # not-collected/collected-empty distinction the rest of this file runs on.
+    if fleet.viewed_known:
+        unseen = [a for a in needs + working + parked if not a.seen]
+        if unseen:
+            bits.append(f"{len(unseen)} unseen")
     out.append(" · ".join(bits))
 
     if fleet.prs is not None:
