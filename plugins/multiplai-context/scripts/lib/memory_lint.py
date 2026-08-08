@@ -12,13 +12,14 @@ The convention this enforces is one suffix on the fact itself:
     (as of 2026-07)                       — when the fact was true
     (as of 2026-07, review by 2026-10)    — and when to re-check it
 
-Three checks:
+Four kinds of finding:
 
-  expired    a ``review by`` date that has passed
-  unmarked   a volatile-class fact with no ``as of`` at all
+  expired       a ``review by`` date that has passed
+  undated       an ``as of`` over a year old with no ``review by`` to expire it
+  unmarked      a volatile-class fact with no ``as of`` at all
   duplicate-h2  the same H2 section name in more than one memory file
 
-The third is not about staleness. It guards the corpus-wide uniqueness rule
+The last is not about staleness. It guards the corpus-wide uniqueness rule
 stated in the memory ``CLAUDE.md`` — *"H2 section names must be unique
 corpus-wide. Duplicate top-level section names across memory files break
 deterministic routing."* That rule was unenforced while it only mattered for
