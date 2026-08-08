@@ -18,6 +18,87 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.36.0] - 2026-08-08
+
+### Changed
+
+- **Triage now judges what an item *says*, not what it looks like.** The old
+  classifier was eight regex-and-allowlist gates, and on the real 194-item
+  proposal it sent 120 items to you — **90 of them for one reason**: the text
+  contained a word like "always" or "never". That gate fires on "the API always
+  returns UTF-8", because the difference between a fact and an instruction is
+  semantic and a pattern match is not. It is gone, along with the 18-name
+  hand-maintained list of "files that are safe to write to", which went stale
+  and could not see any memory file added after it was written.
+
+  What replaces them is a separate model call whose only job is to find reasons
+  to escalate. It is never told it is grading another pass's output. Per item it
+  re-derives the provenance/kind labels, checks whether the cited source
+  actually supports the claim, and checks whether the target file already says
+  it — three questions no pattern could ever answer.
+
+- **What may be applied without you reading it is now a table you can read.**
+  Provenance sets confidence, kind sets blast radius, and only the intersection
+  applies:
+
+  | | fact | decision | rule |
+  |---|---|---|---|
+  | you corrected it / you stated it | apply | apply | **review** |
+  | observed while working / read in a source | apply, if the citation holds | review | **review** |
+  | Claude inferred it | review | review | **review** |
+
+  **A rule never applies automatically. Not in any mode, not even when you
+  yourself said it.** That is about blast radius, not trust: a wrong fact is one
+  you notice later; a wrong rule changes what you notice.
+
+  The model cannot move an item *up* this table. It can only escalate for
+  review, or drop. So talking the judge into approving a rule changes nothing.
+
+### Added
+
+- **`memory_write_mode`** — a new setting, defaulting to **`triage`**.
+  - `review` — nothing is ever applied automatically. This is exactly the old
+    behaviour, one word away.
+  - `triage` *(default)* — the judge runs and the table decides; everything else
+    waits for you.
+  - `auto` — also applies plain facts the table would have held back. Rules
+    still never apply.
+
+  The nightly maintenance pass now applies under `triage` and `auto`. **This is
+  a real change: until now nothing unattended ever wrote to your memory files.**
+  Every applied item is in a receipt, memory is a git repository, and the
+  receipt ends with the exact `git revert` command that undoes the whole batch.
+
+- **A rejection log at `.multiplai/data/rejections.jsonl`.** When the judge
+  drops an item — usually because your memory already says it — the item is
+  written here in full: its text, its labels, its source citation and the
+  judge's own one-line reason. Dropping means "not promoted to memory", never
+  "deleted": the source learning is untouched and any drop can be read back and
+  overruled. The receipt shows every rejection while there are 25 or fewer, and
+  grouped counts above that.
+
+- **The receipt now has both an `Applied` and a `Rejected` section**, each item
+  carrying the labels it was judged under and the judge's reason.
+
+### Fixed
+
+- **A model failure can no longer widen what gets written.** A timed-out batch,
+  a rate limit, an unparseable reply, or no SDK at all now yields *zero*
+  verdicts — and with zero verdicts nothing is applied at all, which is
+  identical to `review` mode. The count of items that kept a conservative
+  default because their batch failed is printed and logged rather than passed
+  over in silence.
+
+- **Verdicts are cached, so re-runs are stable.** Triaging the same proposal
+  twice produces the same partition and costs nothing the second time, and a
+  killed run resumes instead of re-judging.
+
+- **`.multiplai/memory/CLAUDE.md` (and `AGENTS.md`) can never be written
+  unattended**, whatever an item claims to be. Neither can a filename that tries
+  to escape the memory directory, an item that revises rather than appends, or
+  one that did not parse. These checks run *after* the model's verdict and can
+  only refuse it.
+
 ## [0.35.0] - 2026-08-08
 
 ### Added

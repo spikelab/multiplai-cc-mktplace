@@ -5,7 +5,7 @@ dream fires when Spike runs it, the catalog is rebuilt when something asks.
 The result is that maintenance happens exactly as often as it is remembered,
 which for a background chore is "eventually".
 
-This runs six passes, unattended, at most once a day:
+This runs seven passes, unattended, at most once a day:
 
   1. **Staleness lint** (`lib/memory_lint`) — expired `review by` dates and
      volatile facts with no annotation. Deterministic, no model call.
@@ -25,13 +25,38 @@ This runs six passes, unattended, at most once a day:
      yet. Cheap tier, fails closed: a failed call leaves the record *unjudged*,
      never judged-unused.
 
-**This process never modifies `.multiplai/memory/`.** That is the whole
-safety story: an unattended pass that could rewrite memory is an unattended
-pass that can silently corrupt it. Passes 1 and 2 write to `.multiplai/dreams/`
-and the health log; 3 and 4 write derived files (catalogs, `now/`) that are
-rebuilt from source and carry no unique state; 5 and 6 write only
-`data/utilisation.jsonl`, which is telemetry — nothing reads it to decide what
-memory says.
+  7. **Triage apply** — the one pass that writes `.multiplai/memory/`. Gated on
+     `memory_write_mode`; see below.
+
+**Until 0.36.0 this process never modified `.multiplai/memory/`, and that was
+the whole safety story.** Pass 7 trades it, deliberately, and the trade is
+worth stating rather than deleting: an unattended pass that can rewrite memory
+is an unattended pass that can silently corrupt it, so what was bought had to
+be worth more than that.
+
+What was bought is that the corpus stops growing behind a gate nobody can get
+through. The old property held only because the review queue was unbounded —
+227 pending records in two days, a 194-item proposal that costs a whole context
+window to walk, and a backlog that grew instead of shrinking. "Never writes" is
+not safety when the alternative is "never consolidates".
+
+What replaces it is not trust in a model, it is four independent things, none
+of which the model can reach:
+
+* `memory_write_mode` **defaults to `triage`**, and `review` restores the old
+  behaviour exactly — this pass then judges nothing and writes nothing;
+* a **rubric in code** (`lib/dream_triage.py`) decides what may be written at
+  all from the provenance/kind pair; `kind: RULE` never qualifies, in any mode,
+  so nothing that changes how the agent behaves can arrive this way;
+* a **code floor** (`lib/memory_write_floor.py`) runs after the verdict and can
+  only refuse — path containment, reserved filenames, append-only;
+* every applied item is in a **receipt**, and memory is a git repo, so the
+  containment is `git revert <sha>` on one commit.
+
+Passes 1 and 2 write to `.multiplai/dreams/` and the health log; 3 and 4 write
+derived files (catalogs, `now/`) that are rebuilt from source and carry no
+unique state; 5 and 6 write only `data/utilisation.jsonl`, which is telemetry —
+nothing reads it to decide what memory says.
 
 Pass 4 runs on a cheap tier via ``pick_model("haiku", …)`` — unattended work
 should not spend the session's model budget, and a 3-line status summary does
@@ -207,9 +232,10 @@ def run_dream(script_dir: Path, dream_state: Path, learnings_dir: Path,
               dreams_dir: Path, *, dry_run: bool = False) -> PassResult:
     """Generate a consolidation proposal when there is a backlog to consolidate.
 
-    Runs plain `dream.py` — deliberately NOT `--auto`. The plan's hard
-    constraint is that `/dream-remember` stays the only path that writes to
-    memory, and an unattended `--auto` would quietly become a second one.
+    Runs plain `dream.py` — deliberately NOT `--auto`. `--auto` applies a whole
+    proposal on the drafting pass's own say-so, with no separate judge, no
+    rubric and no floor; the classified path in :func:`run_triage` is what
+    replaced it here, and it is not the same thing wearing a different flag.
 
     Skipped entirely while an un-archived proposal is already waiting.
     Generating does not (and should not) stamp the dream gate, since nothing
@@ -430,6 +456,51 @@ def run_utilisation_judge(data_dir: Path, *, dry_run: bool = False) -> PassResul
         return PassResult("utilisation-judge", False, f"error: {exc}")
 
 
+# --- pass 7: classified triage apply ----------------------------------------
+
+def run_triage(script_dir: Path, dreams_dir: Path, *, dry_run: bool = False) -> PassResult:
+    """Classify the waiting proposal and apply what clears every check.
+
+    The only pass that writes `.multiplai/memory/`. See the module docstring for
+    what was traded to get here and what holds the line in its place.
+
+    Off entirely under `memory_write_mode=review`, which is a one-word config
+    change back to the pre-0.36.0 behaviour. Runs only when a proposal is
+    actually waiting — `dream.py --triage` picks the newest pending one itself,
+    so this pass exists to decide *whether* to call it, not to find its input.
+    """
+    try:
+        from lib.dream_triage import write_mode
+
+        mode = write_mode()
+        if mode == "review":
+            return PassResult("triage", False,
+                              "memory_write_mode=review — nothing applied")
+        waiting = pending_proposals(dreams_dir)
+        if not waiting:
+            return PassResult("triage", False, "no proposal awaiting triage")
+        if dry_run:
+            return PassResult("triage", True,
+                              f"would triage {waiting[-1].name} in {mode} mode "
+                              f"(dry run)")
+
+        proc = run_supervised(
+            uv_run_argv(script_dir / "dream.py", "--triage",
+                        "--proposal", str(waiting[-1])),
+            timeout=DREAM_PASS_TIMEOUT_S,
+        )
+        if proc.returncode != 0:
+            return PassResult("triage", False, f"exit {proc.returncode}")
+        return PassResult("triage", True, f"triaged {waiting[-1].name} in {mode} mode")
+    except subprocess.TimeoutExpired:
+        logger.warning("Triage pass timed out after %.0fs; its process group was killed",
+                       DREAM_PASS_TIMEOUT_S)
+        return PassResult("triage", False, "timed out")
+    except Exception as exc:
+        logger.exception("Triage pass failed")
+        return PassResult("triage", False, f"error: {exc}")
+
+
 # --- orchestration ----------------------------------------------------------
 
 def run_maintenance(*, force: bool = False, dry_run: bool = False) -> MaintenanceReport:
@@ -453,6 +524,10 @@ def run_maintenance(*, force: bool = False, dry_run: bool = False) -> Maintenanc
     report.passes.append(run_status(paths.diary_dir(), dry_run=dry_run))
     report.passes.append(run_utilisation_compact(data_dir, dry_run=dry_run))
     report.passes.append(run_utilisation_judge(data_dir, dry_run=dry_run))
+    # Last: it consumes what pass 2 produced, and it is the only pass that
+    # writes memory — so everything that reads memory has already run against
+    # the state the session started with.
+    report.passes.append(run_triage(script_dir, paths.dreams_dir(), dry_run=dry_run))
 
     if not dry_run:
         stamp(state)
@@ -462,7 +537,7 @@ def run_maintenance(*, force: bool = False, dry_run: bool = False) -> Maintenanc
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Proactive memory maintenance (lint, dream, catalog, "
-                    "status, utilisation compaction, utilisation judge)")
+                    "status, utilisation compaction, utilisation judge, triage)")
     parser.add_argument("--force", action="store_true",
                         help="Run even if the 24h gate is closed")
     parser.add_argument("--dry-run", action="store_true",

@@ -2089,23 +2089,177 @@ def _latest_pending_proposal(dreams_dir: Path) -> Path | None:
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
+# ---------------------------------------------------------------------------
+# The memory judge (--triage) — one batched model call over pending items
+# ---------------------------------------------------------------------------
+
+# Items per judge call. Small enough that one failure loses little (contract C4
+# makes a failed batch contribute *zero* verdicts, so batch size is the blast
+# radius of a timeout), large enough that a 194-item proposal is 8 calls rather
+# than 194. Each item carries a bounded section excerpt, so the prompt size is
+# roughly linear in this number.
+_JUDGE_BATCH_ITEMS = 12
+
+
+async def _judge_batch(client, items, target_texts, sem, index: int, total: int):
+    """One judge call over one batch. Returns ``(verdicts, ok)``.
+
+    **Fails closed**, which is the one way this differs from ``_critique_batch``
+    above — and the difference is deliberate, not an oversight to be tidied up.
+    A lost critique loses a cosmetic edit; a lost verdict, if it defaulted the
+    other way, would write something into memory that no model ever approved. So
+    a batch that times out, 429s past its retry, or returns garbage contributes
+    **nothing**, and every one of its items keeps the conservative default.
+
+    A rate limit still gets the single retry ``_critique_batch`` gets, for the
+    same reason: the batch was fine, the account was busy, and the pass's own
+    fan-out is usually what made it busy.
+    """
+    from lib import memory_judge
+
+    content = memory_judge.render_batch(items, target_texts)
+    n_bytes = len(content.encode("utf-8"))
+
+    async with sem:
+        started = time.monotonic()
+        response = None
+        for attempt in range(1, _RATE_LIMIT_ATTEMPTS + 1):
+            try:
+                response = await _query(
+                    client, memory_judge.SYSTEM,
+                    [{"role": "user", "content": content}], CHUNK_TIMEOUT_S,
+                )
+                break
+            except Exception as exc:
+                if attempt < _RATE_LIMIT_ATTEMPTS and _is_rate_limit(exc):
+                    logger.warning(
+                        "Judge batch %d/%d rate limited (%s) — retrying once in "
+                        "%.0fs", index, total, exc, _RATE_LIMIT_BACKOFF_S,
+                    )
+                    await asyncio.sleep(_RATE_LIMIT_BACKOFF_S)
+                    continue
+                logger.exception(
+                    "Judge batch %d/%d failed (%d items, %d bytes) — its %d item(s) "
+                    "keep the conservative default and stay pending",
+                    index, total, len(items), n_bytes, len(items),
+                )
+                return {}, False
+        elapsed = max(time.monotonic() - started, 1e-6)
+
+    if response is None:  # pragma: no cover - defensive
+        return {}, False
+
+    verdicts = memory_judge.parse_verdicts(response.content or "")
+    logger.info(
+        "Judge batch %d/%d: %d item(s) in, %d verdict(s) out, %.0fs",
+        index, total, len(items), len(verdicts), elapsed,
+    )
+    if not verdicts:
+        # An empty parse is indistinguishable from a failed call as far as the
+        # partition goes, but not as far as diagnosis goes: this one produced a
+        # reply that matched nothing, which is a prompt or format problem.
+        logger.warning(
+            "Judge batch %d/%d returned no parseable verdict lines — its %d "
+            "item(s) keep the conservative default", index, total, len(items),
+        )
+        return {}, False
+    return verdicts, True
+
+
+async def _judge_items(client, items, memory_dir: Path, cache_path: Path):
+    """Judge every item in *items*. Returns ``(verdicts, unjudged_count)``.
+
+    Cached verdicts short-circuit the call entirely: the same item must not
+    classify differently across runs, or a receipt is impossible to reason
+    about, and a killed run should resume rather than pay to re-judge what it
+    already decided.
+
+    A ``client`` of ``None`` (no SDK — contract C3) is not an error path here;
+    it simply produces zero verdicts, and zero verdicts is the same partition
+    ``review`` mode produces.
+    """
+    from lib import memory_judge
+
+    cache = memory_judge.load_cache(cache_path)
+    known, pending = memory_judge.cached_verdicts(items, cache)
+    if known:
+        logger.info("Judge: %d verdict(s) served from cache", len(known))
+    if not pending:
+        return known, 0
+    if client is None:
+        return known, len(pending)
+
+    target_texts: dict[str, str] = {}
+    for item in pending:
+        if item.target in target_texts:
+            continue
+        path = memory_dir / item.target
+        try:
+            target_texts[item.target] = path.read_text()
+        except OSError:
+            target_texts[item.target] = ""
+
+    batches = [
+        pending[i:i + _JUDGE_BATCH_ITEMS]
+        for i in range(0, len(pending), _JUDGE_BATCH_ITEMS)
+    ]
+    sem = asyncio.Semaphore(_concurrency())
+    results = await asyncio.gather(*(
+        _judge_batch(client, batch, target_texts, sem, i, len(batches))
+        for i, batch in enumerate(batches, 1)
+    ))
+
+    fresh: dict[tuple[str, int], object] = {}
+    unjudged = 0
+    for batch, (verdicts, ok) in zip(batches, results):
+        if not ok:
+            unjudged += len(batch)
+            continue
+        for item in batch:
+            hit = verdicts.get((item.target, item.number))
+            if hit is None:
+                # The batch succeeded but skipped this item. It is not a batch
+                # failure, and it is still an item with no verdict.
+                unjudged += 1
+                continue
+            fresh[(item.target, item.number)] = hit
+            cache[memory_judge.item_key(item)] = hit
+
+    if fresh:
+        try:
+            memory_judge.save_cache(cache_path, cache)
+        except OSError:
+            logger.exception("Judge: could not write the verdict cache %s", cache_path)
+    if unjudged:
+        logger.warning(
+            "Judge: %d item(s) kept a conservative default because their batch "
+            "failed or skipped them", unjudged,
+        )
+    known.update(fresh)
+    return known, unjudged
+
+
 async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
-    """Apply the uncontroversial half of a proposal; leave the rest for review.
+    """Classify a proposal with a model, apply what clears, leave the rest.
 
     The reviewing bottleneck was never judgement, it was volume: a ~190-item
     proposal costs a whole context window to walk item by item, so reviews got
-    abandoned partway and the backlog grew instead of shrinking. Most of those
-    items are one additive bullet into an existing section of a non-behavioural
-    file, flagged by nothing — there is no decision in them to make.
+    abandoned partway and the backlog grew instead of shrinking.
 
-    So: classify deterministically (``lib.dream_triage``), apply the additive
-    ones through the same applier ``--auto`` uses, verify the result really was
-    additive, write a receipt naming every one, and leave only the items that
-    carry a real decision pending in the proposal. What reaches the human is
-    rule proposals, anything normative, anything targeting a file that
-    instructs rather than records, anything the routing gate flagged, anything
-    the drafter marked low-confidence, and anything that rewrites rather than
-    appends.
+    Three layers decide each item, and only one of them is a model.
+    ``lib.dream_triage.classify`` computes what the provenance/kind rubric
+    *permits* — nothing is applied on that alone. ``_judge_items`` asks a
+    separate model call, which never learns it is grading a sibling pass's
+    output, to re-derive the pair, check the citation against the claim, check
+    the target file for redundancy, and return apply/review/drop; it may only
+    ever make an item more conservative. ``lib.memory_write_floor`` then refuses
+    anything whose target, verb or parse is wrong, after the verdict, where no
+    prompt can reach it.
+
+    What that buys, concretely: a model failure of any kind — a timeout, a rate
+    limit, an unparseable reply, no SDK at all — produces zero verdicts, and
+    zero verdicts is the same partition ``review`` mode produces. Degradation
+    goes toward more human review, never less.
 
     Takes the same exclusive run lock as report and ``--auto`` modes: this
     writes memory files, which is the case the lock exists for.
@@ -2113,6 +2267,7 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
     Returns a process exit code.
     """
     from lib import dream_triage as triage_lib
+    from lib import memory_judge, rejections
 
     if not acquire_run_lock():
         return 0
@@ -2135,12 +2290,13 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         # `flagged_by_routing` returns an empty set both when nothing was
         # flagged and when the section is absent, so a proposal written before
         # routing validation existed — or by a drafter that failed to emit it —
-        # would auto-apply every item the gate would have caught. Refuse: the
-        # classifier's "no gate doubts it" precondition cannot be evaluated.
+        # would reach the judge with the gate's evidence silently missing, on
+        # exactly the proposals where that evidence matters most. Refuse.
         print(
             f"ERROR: {proposal_path.name} has no '## Routing Warnings' section, so "
-            "routing-flagged items cannot be identified. Refusing to auto-apply "
-            "anything — review this proposal by hand, or regenerate it."
+            "routing-flagged items cannot be identified and the judge would be "
+            "given incomplete evidence. Refusing to apply anything — review this "
+            "proposal by hand, or regenerate it."
         )
         return 1
 
@@ -2149,31 +2305,106 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         print(f"triage: {proposal_path.name} has no pending update items")
         return 0
 
+    mode = triage_lib.write_mode()
+    if mode == "review":
+        # Nothing is judged and nothing is written: this is today's flow, kept
+        # as a mode so turning the feature off is a config change rather than
+        # an uninstall. The partition is still printed, because knowing what
+        # *would* have applied is the point of leaving the mode reachable.
+        print(f"triage: {proposal_path.name} — {triage.total} pending item(s)")
+        print("memory_write_mode=review — nothing judged, nothing applied.")
+        print(triage_lib.render_summary(
+            triage, applied_count=0, receipt_path="(none — review mode)",
+            dry_run=True, mode=mode,
+        ))
+        return 0
+
+    # Contract C3: no SDK must never be a hard failure, and must never widen
+    # what gets written. A client we cannot create yields zero verdicts, and
+    # zero verdicts is the `review`-mode partition.
+    client = None
+    try:
+        client = await create_client(component="dream")
+    except Exception:
+        logger.exception(
+            "triage: no model client — every item keeps its conservative default "
+            "and nothing is applied"
+        )
+        print("triage: no model client available — falling back to review for "
+              "every item (nothing applied).")
+
+    verdicts, unjudged = await _judge_items(
+        client, triage.review, memory_dir,
+        memory_judge.default_cache_path(paths.data_dir()),
+    )
+    disagreements = sum(
+        1 for item in triage.review
+        if triage_lib.reconciled_pair(
+            item, verdicts.get((item.target, item.number))
+        )[2]
+    )
+    if disagreements:
+        logger.info(
+            "triage: judge and extractor disagreed on the provenance/kind pair for "
+            "%d item(s); the more conservative half of each won", disagreements,
+        )
+    triage = triage_lib.apply_verdicts(triage, verdicts, mode=mode)
+    if unjudged:
+        # `apply_verdicts` recounts this from the verdict map; the batch-level
+        # number is logged above. Both should agree — if they ever do not, the
+        # cache handed back a verdict for an item no batch covered.
+        logger.info("triage: %d item(s) unjudged after folding verdicts",
+                    triage.unjudged)
+
     by_file = triage.auto_by_file()
+    rejections_path = rejections.default_path(paths.data_dir())
 
     if dry_run:
         print(f"triage (dry run): {proposal_path.name} — {triage.total} pending item(s)")
         print(triage_lib.render_summary(
             triage, applied_count=len(triage.auto),
-            receipt_path="(not written)", dry_run=True,
+            receipt_path="(not written)", dry_run=True, mode=mode,
         ))
         return 0
 
-    if not by_file:
+    # Rejections are logged before anything is applied. A drop writes nothing to
+    # memory, so recording it first cannot leave an inconsistent state — and a
+    # crash mid-apply must not lose the record of what was refused.
+    if triage.dropped:
+        try:
+            written = rejections.append(
+                rejections_path,
+                triage_lib.rejection_records(
+                    triage, proposal_name=proposal_path.name,
+                    key_of=memory_judge.item_key,
+                ),
+            )
+            logger.info("triage: logged %d rejection(s) to %s", written, rejections_path)
+        except OSError:
+            logger.exception("triage: could not write the rejection log %s",
+                             rejections_path)
+
+    if not by_file and not triage.dropped:
         print(f"triage: {proposal_path.name} — {triage.total} pending item(s)")
         print(triage_lib.render_summary(
-            triage, applied_count=0, receipt_path="(none — nothing auto-appliable)",
+            triage, applied_count=0, receipt_path="(none — nothing appliable)",
+            mode=mode,
         ))
         return 0
 
     # Apply per file, concurrently — files are independent. Each call gets a
     # *rebuilt* section holding only that file's auto items, never the
     # proposal's own text, which still contains the review items.
-    client = await create_client(component="dream")
     targets = []
     skipped: dict[str, str] = {}
     for filename, items in sorted(by_file.items()):
         memory_file = memory_dir / filename
+        if client is None:
+            # Reachable only from the verdict cache: a previous run judged these
+            # and this one has no SDK to run the applier. Applying needs a model
+            # too, so they stay pending.
+            skipped[filename] = "no model client — the applier could not run"
+            continue
         if not memory_file.exists():
             skipped[filename] = "target memory file does not exist"
             logger.warning("triage: proposal targets unknown file %s — skipped", filename)
@@ -2212,10 +2443,20 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         ]
         logger.info("triage: auto-applied %d item(s) to %s", len(items), filename)
 
+    # A dropped item is decided: it is in the rejection log in full, and leaving
+    # it pending in the proposal would put it back in front of the human, which
+    # is exactly the queue `drop` exists to shorten.
+    decisions += [
+        Decision(kind="update", file=item.target, index=item.number,
+                 status="rejected")
+        for item in triage.dropped
+    ]
+
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     receipt = triage_lib.render_receipt(
         triage, proposal_name=proposal_path.name, applied=applied,
-        failed=failed, generated=generated,
+        failed=failed, generated=generated, mode=mode,
+        rejections_log=str(rejections_path),
     )
     receipts_dir = dreams_dir / "applied"
     receipts_dir.mkdir(parents=True, exist_ok=True)
@@ -2243,6 +2484,7 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
     print(f"triage: {proposal_path.name} — {triage.total} pending item(s)")
     print(triage_lib.render_summary(
         triage, applied_count=applied_count, receipt_path=str(receipt_path),
+        mode=mode,
     ))
     if failed:
         print("")
@@ -2257,10 +2499,33 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         _commit_memory_changes(
             memory_dir,
             pathspec=sorted(applied),
-            message=f"dream: triage auto-apply {applied_count} item(s) "
+            message=f"dream: triage apply {applied_count} item(s) "
                     f"from {proposal_path.name}",
         )
+        # The receipt is written before the commit on purpose (a crash between
+        # the two must leave a visible, re-runnable state), so the sha it tells
+        # you to revert only exists afterwards. Appending it is best-effort: the
+        # receipt already names the log command that finds it.
+        _append_revert_line(receipt_path, memory_dir)
     return 0
+
+
+def _append_revert_line(receipt_path: Path, memory_dir: Path) -> None:
+    """Append the exact `git revert` command for the commit just written."""
+    try:
+        sha = subprocess.run(
+            ["git", "-C", str(memory_dir), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.strip()
+        if not sha:
+            return
+        with open(receipt_path, "a") as f:
+            f.write(
+                f"\n**Revert this batch:** `git -C {memory_dir} revert {sha}`\n"
+            )
+    except (OSError, subprocess.SubprocessError):
+        logger.warning("triage: could not record the revert sha in the receipt",
+                       exc_info=True)
 
 
 def _gc_learnings() -> None:
