@@ -657,6 +657,50 @@ markdown files, so it won't sweep unrelated work when memory lives inside
 a larger repo. If `memory_dir` isn't a git repo, auto-commit is skipped
 with a log warning and everything else keeps working.
 
+### Section-level retrieval (`file.md#Section`)
+
+A memory file that grows past a hundred kilobytes stops being one thing. Ask
+about your release process and routing would hand Claude all thirty sections of
+it — twenty-nine of them irrelevant, all of them charged to your context window.
+
+Catalog generation writes a **`section_anchors`** list for every memory file
+that is at least **8 KB** and has at least **three `##` sections**:
+
+```json
+"section_anchors": [
+  {"name": "Container Runtime", "gloss": "OrbStack container, host bridge, no-docker rule"},
+  {"name": "Release Flow",      "gloss": "dev vs runtime checkouts, release.sh, the version pin"}
+]
+```
+
+The router sees those one-line glosses and may answer with
+`multiplai.md#Release Flow` instead of `multiplai.md`, in which case only that
+section is injected. On a 180 KB file with 30 sections that is roughly 6 KB in
+place of 180.
+
+Three things keep it safe:
+
+- **The names are not written by a model.** They are read off your file's `##`
+  headers in code and handed to the model as a fixed list to describe. An
+  anchor therefore cannot drift from the header it points at.
+- **A wrong anchor costs nothing.** If a name matches no header — a stale
+  catalog, a section you renamed — the loader returns the **whole file**, which
+  is what happened before this existed. No prompt can come out with less
+  context than it would have had.
+- **Anchors are regenerated, not remembered.** Unlike `sections`, `bundle` and
+  `co_retrieve_for`, they are re-derived whenever the file's content changes.
+  Hand-editing them is pointless: your edit is replaced on the next rebuild of
+  that file.
+
+Files under either threshold get no anchors at all. That is the intended
+outcome, not a failure — a 4 KB file is already about one section's worth of
+context, so indexing it costs catalog tokens to save nothing.
+
+**One thing you have to get right yourself:** `##` section names must be unique
+across *all* your memory files. Two files both headed `## Overview` make
+`#Overview` an ambiguous request. `memory_lint` reports collisions (below); it
+will not rename anything for you.
+
 ### Fact-level freshness (`as of` / `review by`)
 
 A memory file carries one `**Last Updated:**` stamp. That says when the *file*
@@ -677,16 +721,21 @@ month is the review window. Treating it as the 1st would make every
 month-granular annotation fire up to 31 days early, which is the kind of steady
 early noise that gets a linter switched off.
 
-A staleness linter (`scripts/lib/memory_lint.py`) reports three kinds of finding
-— `expired` (a `review by` date that has passed), `undated` (an `as of` stamp
-more than a year old with no `review by` at all, so nothing can ever expire it)
-and `unmarked` (a volatile-class fact with no annotation whatsoever). It is
+A linter (`scripts/lib/memory_lint.py`) reports four kinds of finding. Three are
+about staleness — `expired` (a `review by` date that has passed), `undated` (an
+`as of` stamp more than a year old with no `review by` at all, so nothing can
+ever expire it) and `unmarked` (a volatile-class fact with no annotation
+whatsoever). The fourth, `duplicate-h2`, is about retrieval: it names any `##`
+section title that appears in more than one memory file, which is what makes a
+`file.md#Section` pick ambiguous (see
+[Section-level retrieval](#section-level-retrieval-filemdsection)). It is
 **warn-only and never rewrites a file**:
 volatile-class detection is heuristic, so a false positive must cost one noisy
 line in a report, never a silently edited fact. Findings surface in
-`/multiplai-context:health` (as `memory_validity`) and in the maintainer's
-report, and `/multiplai-context:dream` asks for the annotation on newly proposed
-volatile lines.
+`/multiplai-context:health` (as `memory_validity`, with collisions under
+`memory_validity.duplicate_h2`) and in the maintainer's report, and
+`/multiplai-context:dream` asks for the annotation on newly proposed volatile
+lines.
 
 ## Prospective memory — intentions that fire later
 
@@ -745,7 +794,7 @@ fetch at session start. Four passes:
 
 | Pass | What it does | Model call? |
 |---|---|---|
-| 1. Staleness lint | `lib/memory_lint` — expired `review by` dates, unannotated volatile facts | no |
+| 1. Memory lint | `lib/memory_lint` — expired `review by` dates, unannotated volatile facts, duplicate `##` section names | no |
 | 2. Dream proposal | Only when the dream gate is open, a learnings backlog exists, **and** no un-archived proposal is already waiting | yes |
 | 3. Catalog refresh | Only when a memory file is newer than the catalog that indexes it | yes |
 | 4. `now/` rebuild | `synthesize_now` for the **active project only**, on a **Haiku** tier | yes (cheap) |
@@ -1578,6 +1627,20 @@ tail -f <workspace>/.multiplai/data/logs/activity.log
 
 `activity.jsonl` mirrors the same events as one JSON object per line,
 for tooling and the health audit (rotated the same way).
+
+An `inject` record carries the attribution the human line has no room for:
+
+| Field | Meaning |
+|---|---|
+| `files` | every injected name, memory + skills + resources, in that order |
+| `files_by_corpus` | the same names split by corpus |
+| `sections_by_file` | memory only, keyed by **bare filename**: which `##` sections were loaded. An **empty list means the whole file** — a file with nothing loaded has no key at all |
+| `bytes_by_file` | memory only, same keys: characters injected for that file, summed over its picks |
+| `bytes` | the whole assembled context block |
+
+`sections_by_file` and `bytes_by_file` are what let you answer "did that
+180 KB file cost me 180 KB this turn, or 6 KB?" — see
+[Section-level retrieval](#section-level-retrieval-filemdsection).
 
 ### Debug mode — see every script
 
