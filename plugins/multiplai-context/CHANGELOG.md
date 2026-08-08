@@ -18,6 +18,58 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.35.0] - 2026-08-08
+
+### Added
+
+- **You can now see which memory is earning its place — as an honest estimate,
+  never a measurement.** Retrieval counts were always available and always
+  misleading: a section injected on every prompt and relevant on none of them
+  looks maximally valuable counted that way. Nothing can observe *use*
+  directly, so this release estimates it two independent ways and shows both
+  side by side.
+  - **Self-report**, free. The end-of-session pass already reads your whole
+    transcript; it is now also handed the list of sections that were injected
+    and asked which it relied on — with a quote or a concrete reference as
+    evidence. A claim with no evidence is recorded as unsupported and never
+    counts. "None of them" is offered as a normal answer, because otherwise a
+    model finds a reason for everything.
+  - **An offline judge**, sampled. A new cheap-tier pass in the nightly
+    maintainer compares the injected list against a distilled transcript for a
+    handful of sessions per run (`utilisation_judge_sample`, default 5; `0`
+    turns it off). It is independent of the session's own reasoning, so where
+    the two estimators disagree, that disagreement is itself the signal.
+- **A ranked table, ordered by cost per estimated use.** Run
+  `scripts/utilisation_report.py` (add `--json` for a machine-readable form),
+  or read it inside `/multiplai-context:memory-health-audit`. The expensive
+  and seldom-used rows sort to the top, which is what makes a pruning
+  candidate obvious.
+- **Records accumulate in `<data_dir>/utilisation.jsonl`** — one record per
+  session, written atomically, with detail older than 90 days collapsing into
+  per-section running totals so the file cannot grow without bound. Totals
+  survive compaction exactly; only the per-session detail goes.
+
+### Notes on reading the numbers
+
+- **Everything on this surface is labelled *estimated*, everywhere, and there
+  is deliberately no single blended "utilisation score".** Two estimates with
+  opposite biases averaged into one number would be exactly the fabricated
+  precision this feature exists to avoid. Where they disagree by more than 35
+  points the row is marked, not reconciled.
+- **Rows with too few observations are not ranked at all.** They appear under
+  "insufficient data" with their sample size, rather than being sorted into a
+  position they have not earned. "Never retrieved" is kept as a separate list
+  again — a section that never reached a prompt tells you about routing, not
+  about value.
+- **Nothing is pruned, edited, or auto-applied by any of this.** The table is
+  evidence for you to act on; `/multiplai-context:dream-remember` is still the
+  only path that writes to memory.
+- **A blank is not a zero.** If the judge pass fails or times out it writes no
+  verdict at all, leaving the session unjudged — so a bad night can never make
+  your whole corpus read as dead weight. With no model client available, no
+  estimate is recorded; what was injected is still recorded, because that part
+  needs no model.
+
 ## [0.33.0] - 2026-08-08
 
 ### Added

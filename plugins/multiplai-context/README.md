@@ -712,6 +712,58 @@ across *all* your memory files. Two files both headed `## Overview` make
 `#Overview` an ambiguous request. `memory_lint` reports collisions (below); it
 will not rename anything for you.
 
+### Utilisation — which memory is earning its place (all numbers ESTIMATED)
+
+Section-level retrieval tells you what got *loaded*. It says nothing about what
+got *used*, and those are not the same question: a section injected on every
+prompt and relevant on none of them looks maximally valuable counted by
+retrievals. Nothing can observe use directly — so this plugin estimates it two
+independent ways and shows both, side by side, never blended.
+
+| Estimator | How it works | Its bias |
+|---|---|---|
+| **self-report** | The end-of-session extraction pass already reads the whole transcript; it is also handed the list of sections that were injected and asked which it relied on, **with evidence**. No extra model call. | Over-reports — the model is grading its own session. A claim with no evidence is recorded `supported: false` and never counted. |
+| **offline judge** | A separate cheap-tier pass in `memory_maintainer` compares the injected list against a distilled transcript, sampled (5 sessions/run by default). | Independent of the session's own reasoning, but sampled, so it accumulates slowly and is absent for most sessions. |
+
+Records accumulate in `<data_dir>/utilisation.jsonl` — append-only, one record
+per session, rewritten atomically. Read the table with:
+
+```bash
+uv run --project scripts scripts/utilisation_report.py          # human table
+uv run --project scripts scripts/utilisation_report.py --json   # machine-readable
+```
+
+`/multiplai-context:memory-health-audit` renders the same table as part of its
+report. It is ranked by **bytes injected per estimated use** — cost per value,
+so the expensive-and-unused rows sort to the top.
+
+**How to read it, and how not to.**
+
+- **Every number is an estimate, not a measurement**, and the surface says so
+  everywhere. Two model-based estimates with opposite biases, kept apart on
+  purpose: there is no single "utilisation score" here and adding one would be
+  fabricated precision.
+- **Disagreement is a finding.** Where the two estimators' use rates differ by
+  more than 35 percentage points the row is marked `!`. That is information
+  about how much to trust either one — it is not averaged away.
+- **`n` is shown, and thin rows are not ranked.** A section with three
+  observations is not evidence of anything, so it appears under *insufficient
+  data* rather than at some flattering or damning position in the ranking.
+- **"Never retrieved" is a separate list** from "retrieved and unused". A
+  section that never reached a prompt has no evidence either way about its
+  value; that is a routing question, not a pruning one.
+- **"Candidate" means a suggestion to a human, never an automatic deletion.**
+  Nothing in this plugin prunes memory from this table. It is evidence for you
+  (and for a future doctor pass) to act on; `/multiplai-context:dream-remember`
+  remains the only path that edits memory.
+- **A blank is not a zero.** A missing judgement means *not judged* — during an
+  outage the judge writes nothing rather than a verdict, precisely so a bad
+  night cannot make the whole corpus read as dead weight.
+
+Configure the sample size with `utilisation_judge_sample` (default 5); set it
+to `0` to turn the judge pass off entirely, leaving self-report as the only
+estimator.
+
 ### Fact-level freshness (`as of` / `review by`)
 
 A memory file carries one `**Last Updated:**` stamp. That says when the *file*
@@ -801,7 +853,7 @@ owns a **24-hour gate**. `SessionStart` checks that same gate *in-process first*
 and skips the spawn entirely when it's closed — the child is authoritative, but
 reaching it costs a `uv run` startup, and since the maintainer declares its
 dependencies in a PEP 723 header a cold `uv` cache turns that into a network
-fetch at session start. Four passes:
+fetch at session start. Six passes:
 
 | Pass | What it does | Model call? |
 |---|---|---|
@@ -809,13 +861,23 @@ fetch at session start. Four passes:
 | 2. Dream proposal | Only when the dream gate is open, a learnings backlog exists, **and** no un-archived proposal is already waiting | yes |
 | 3. Catalog refresh | Only when a memory file is newer than the catalog that indexes it | yes |
 | 4. `now/` rebuild | `synthesize_now` for the **active project only**, on a **Haiku** tier | yes (cheap) |
+| 5. Utilisation retention | Collapses `utilisation.jsonl` records older than 90 days into per-section totals | no |
+| 6. Utilisation judge | Rules on a sample of un-judged sessions (`utilisation_judge_sample`, default 5), on a **Haiku** tier | yes (cheap) |
 
 **It never modifies `.multiplai/memory/`.** That is the whole safety story: an
 unattended pass that could rewrite memory is an unattended pass that can
 silently corrupt it. Passes 1–2 write to `.multiplai/dreams/` and the health
 log; 3–4 write derived files (catalogs, `now/`) that are rebuilt from source and
-hold no unique state. `/multiplai-context:dream-remember` stays the only path
-that edits memory.
+hold no unique state; 5–6 write only `utilisation.jsonl`, which is telemetry —
+nothing reads it to decide what memory *says*.
+`/multiplai-context:dream-remember` stays the only path that edits memory.
+
+Pass 6 **fails closed**: a timed-out, rate-limited or unparseable call writes no
+verdict at all, leaving that session unjudged rather than judged-unused. A
+missing judgement is never counted as "not used" — otherwise one bad night
+would mark your whole corpus dead weight. The run logs how many sessions it
+sampled out of how many were eligible, and how many kept their default because
+a call failed.
 
 It is silent (nothing at session start needs your attention) and best-effort — a
 launch failure, a crashed pass, or an unwritable state file costs at most one

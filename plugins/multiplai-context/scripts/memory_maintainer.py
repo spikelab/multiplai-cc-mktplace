@@ -5,7 +5,7 @@ dream fires when Spike runs it, the catalog is rebuilt when something asks.
 The result is that maintenance happens exactly as often as it is remembered,
 which for a background chore is "eventually".
 
-This runs four passes, unattended, at most once a day:
+This runs six passes, unattended, at most once a day:
 
   1. **Staleness lint** (`lib/memory_lint`) — expired `review by` dates and
      volatile facts with no annotation. Deterministic, no model call.
@@ -17,12 +17,21 @@ This runs four passes, unattended, at most once a day:
   4. **Project status** (`synthesize_now`) — rebuilds `now/<project>.md` for
      the active project only, so the state injected at the next SessionStart
      reflects yesterday's work rather than whenever `/now` was last run.
+  5. **Utilisation retention** — collapses `utilisation.jsonl` records older
+     than 90 days into per-section running totals. Deterministic, no model
+     call.
+  6. **Utilisation judge** — the independent estimator of whether injected
+     memory was actually used, on a sample of sessions that have no verdict
+     yet. Cheap tier, fails closed: a failed call leaves the record *unjudged*,
+     never judged-unused.
 
 **This process never modifies `.multiplai/memory/`.** That is the whole
 safety story: an unattended pass that could rewrite memory is an unattended
 pass that can silently corrupt it. Passes 1 and 2 write to `.multiplai/dreams/`
 and the health log; 3 and 4 write derived files (catalogs, `now/`) that are
-rebuilt from source and carry no unique state.
+rebuilt from source and carry no unique state; 5 and 6 write only
+`data/utilisation.jsonl`, which is telemetry — nothing reads it to decide what
+memory says.
 
 Pass 4 runs on a cheap tier via ``pick_model("haiku", …)`` — unattended work
 should not spend the session's model budget, and a 3-line status summary does
@@ -322,6 +331,110 @@ def run_status(diary_dir: Path, *, dry_run: bool = False) -> PassResult:
         return PassResult("status", False, f"error: {exc}")
 
 
+# --- pass 5: utilisation retention ------------------------------------------
+
+def run_utilisation_compact(data_dir: Path, *, dry_run: bool = False) -> PassResult:
+    """Collapse utilisation records older than 90 days into running totals.
+
+    Deterministic, no model call. The per-section aggregate survives exactly —
+    only the per-session detail is dropped — so the table reads identically
+    before and after. Without this the file grows one record per session
+    forever, and the first thing to suffer is the pass that reads it whole.
+    """
+    try:
+        from lib.utilisation import RETENTION_DAYS, compact, read_records, utilisation_path
+
+        path = utilisation_path(data_dir)
+        if not path.exists():
+            return PassResult("utilisation-compact", False, "no utilisation log yet")
+        if dry_run:
+            n = len(read_records(path))
+            return PassResult("utilisation-compact", True,
+                              f"would compact {n} record(s) older than "
+                              f"{RETENTION_DAYS}d (dry run)")
+        result = compact(path)
+        if not result["collapsed"]:
+            return PassResult("utilisation-compact", False, "nothing older than "
+                              f"{RETENTION_DAYS}d")
+        return PassResult(
+            "utilisation-compact", True,
+            f"collapsed {result['collapsed']} session record(s) into totals "
+            f"over {result['sections']} section(s)")
+    except Exception as exc:
+        logger.exception("Utilisation compaction failed")
+        return PassResult("utilisation-compact", False, f"error: {exc}")
+
+
+# --- pass 6: utilisation judge (estimator B) --------------------------------
+
+#: Sessions judged per run. Overridable via the ``utilisation_judge_sample``
+#: plugin option; 0 turns the pass off.
+JUDGE_SAMPLE_DEFAULT = 5
+
+
+def run_utilisation_judge(data_dir: Path, *, dry_run: bool = False) -> PassResult:
+    """Judge a sample of un-judged sessions on the cheap tier.
+
+    The independent half of the utilisation estimate. Three behaviours are
+    load-bearing and asserted by the tests:
+
+    * **degrades** — no model client means this pass records *nothing*; there
+      is no heuristic fallback, because a guessed verdict is worse than a
+      missing one (contract C3);
+    * **fails closed** — a failed call writes no verdict, leaving the record
+      ``judge: null``. A missing judgement is never counted as unused
+      (contract C4), and the count that kept its default is reported;
+    * **reports coverage** — how many were sampled out of how many were
+      eligible, so the sampling rate is visible rather than assumed.
+    """
+    try:
+        from multiplai_core.plugin_options import option_int
+
+        from lib.utilisation import read_records, sessions_awaiting_judge, utilisation_path
+        from lib.utilisation_judge import judge_sessions
+
+        sample_size = option_int("utilisation_judge_sample", JUDGE_SAMPLE_DEFAULT)
+        if sample_size <= 0:
+            return PassResult("utilisation-judge", False,
+                              "disabled (utilisation_judge_sample=0)")
+
+        path = utilisation_path(data_dir)
+        eligible = sessions_awaiting_judge(read_records(path))
+        if not eligible:
+            return PassResult("utilisation-judge", False, "no sessions awaiting a judgement")
+        if dry_run:
+            return PassResult(
+                "utilisation-judge", True,
+                f"would judge {min(sample_size, len(eligible))} of "
+                f"{len(eligible)} eligible session(s) (dry run)")
+
+        from multiplai_core.env import pick_model
+        from multiplai_core.model_client import create_client
+
+        model = pick_model("haiku", "utilisation_judge")
+
+        async def _run() -> dict:
+            client = await create_client(component="utilisation_judge")
+            return await judge_sessions(
+                path, client=client, model=model, sample_size=sample_size,
+            )
+
+        report = asyncio.run(_run())
+        detail = (
+            f"judged {report['judged']}/{report['sampled']} sampled of "
+            f"{report['eligible']} eligible on {model}"
+        )
+        if report["kept_default"]:
+            detail += (f"; {report['kept_default']} kept the conservative "
+                       f"default (call failed — recorded as unjudged, not unused)")
+        return PassResult("utilisation-judge", True, detail)
+    except Exception as exc:
+        # Includes create_client raising on vanilla Claude Code: record
+        # nothing, say so, never guess.
+        logger.exception("Utilisation judge pass failed")
+        return PassResult("utilisation-judge", False, f"error: {exc}")
+
+
 # --- orchestration ----------------------------------------------------------
 
 def run_maintenance(*, force: bool = False, dry_run: bool = False) -> MaintenanceReport:
@@ -343,6 +456,8 @@ def run_maintenance(*, force: bool = False, dry_run: bool = False) -> Maintenanc
     report.passes.append(run_catalog(script_dir, memory_dir, paths.catalogs_dir(),
                                      dry_run=dry_run))
     report.passes.append(run_status(paths.diary_dir(), dry_run=dry_run))
+    report.passes.append(run_utilisation_compact(data_dir, dry_run=dry_run))
+    report.passes.append(run_utilisation_judge(data_dir, dry_run=dry_run))
 
     if not dry_run:
         stamp(state)
@@ -351,7 +466,8 @@ def run_maintenance(*, force: bool = False, dry_run: bool = False) -> Maintenanc
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Proactive memory maintenance (lint, dream, catalog, status)")
+        description="Proactive memory maintenance (lint, dream, catalog, "
+                    "status, utilisation compaction, utilisation judge)")
     parser.add_argument("--force", action="store_true",
                         help="Run even if the 24h gate is closed")
     parser.add_argument("--dry-run", action="store_true",

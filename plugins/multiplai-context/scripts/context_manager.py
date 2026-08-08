@@ -1293,6 +1293,11 @@ def main() -> None:
         files_by_corpus=files_by_corpus,
         sections_by_file=sections_by_file,
         bytes_by_file=bytes_by_file,
+        # Which turn this injection belongs to, so utilisation telemetry can
+        # tell one injection from a re-injection later in the same session.
+        # 0 whenever the cooldown is off — that path never advances the
+        # counter — which is why nothing downstream may treat it as a key.
+        turn=turn_index,
         bytes=len(session_context),
     )
 

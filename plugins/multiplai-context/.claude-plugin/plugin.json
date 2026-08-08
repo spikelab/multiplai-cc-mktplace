@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.33.0",
+  "version": "0.35.0",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",
@@ -203,6 +203,12 @@
       "title": "Memory Conflict Surfacing",
       "description": "Render a conflict-surfacing directive plus per-file last-updated stamps above every injected MEMORY block, making the model flag memory-vs-session disagreements to the user. Costs ~90 tokens per memory-carrying turn; turn off to save them.",
       "default": true
+    },
+    "utilisation_judge_sample": {
+      "type": "number",
+      "title": "Utilisation Judge Sample Size",
+      "description": "How many recent sessions the nightly offline utilisation judge rules on per maintenance run. It is the independent check on the session's own (upward-biased) self-report of which injected memory it used; both numbers are reported side by side and always labelled estimates. 0 turns the judge off, leaving self-report as the only estimator.",
+      "default": 5
     },
     "enable_dev_references": {
       "type": "boolean",

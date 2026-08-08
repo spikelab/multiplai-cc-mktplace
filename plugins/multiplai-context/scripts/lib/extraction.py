@@ -240,6 +240,30 @@ error; leaving finished work labelled active costs nothing.
 Half-finished work the user did not comment on is `active`, not `parked`: \
 parked means they SAID they were setting it down.
 
+## Memory utilisation (which injected memory this session actually used)
+
+The user message lists the memory sections that were injected into this \
+session's context. AFTER the <disposition> block, emit exactly one:
+
+<utilisation>
+<used file="FILENAME" section="SECTION NAME">short quote from the session, or a \
+concrete statement of what it informed</used>
+</utilisation>
+
+- List ONLY sections the session demonstrably RELIED ON. Judge dependence, not \
+topical similarity: a section about the same subject the session touched was \
+not used unless the work actually leaned on what it said.
+- **"None of them" is a normal and expected answer.** Most injected memory goes \
+unused. Emit an empty <utilisation></utilisation> block and move on — do not \
+look for a reason to name one.
+- Every <used> MUST carry evidence in its body. A <used> with an empty body is \
+recorded as unsupported and does not count. If you cannot point at anything, \
+leave the section out.
+- Omit the `section` attribute when the listed entry has no section (the whole \
+file was injected). Copy `file` and `section` EXACTLY as listed.
+- Never name a file or section that is not in the injected list.
+- When the list is empty, emit an empty <utilisation></utilisation> block.
+
 ## Rules
 
 - diary is PRIMARY — learnings are a projection of it
@@ -252,14 +276,18 @@ parked means they SAID they were setting it down.
 EXTRACTION_USER = """\
 Today's date: {today}
 
+## Injected memory sections
+
+{injected_sections}
+
 ## Transcript
 
 {transcript}
 
 ## Output
 
-Output ONLY <unit> blocks (or <no-units/>), then one <disposition> block — \
-no markdown fences, no explanation.
+Output ONLY <unit> blocks (or <no-units/>), then one <disposition> block, then \
+one <utilisation> block — no markdown fences, no explanation.
 """
 
 # The two halves as one string, in the order the model sees them. Kept because
@@ -335,6 +363,72 @@ def parse_disposition(raw: str) -> dict:
 
     reason_match = _DISPOSITION_REASON_RE.search(body)
     return {"state": state, "reason": reason_match.group(1).strip() if reason_match else ""}
+
+
+# --- Memory utilisation (estimator A: self-report) --------------------------
+# The session grading its own session. Biased upward by construction, so the
+# ONE available brake is the evidence requirement: a claim with an empty body
+# is recorded `supported: False` and never counts toward use. See
+# lib/utilisation.py for how that flows into the aggregate, and the master
+# plan's decision 9 for why this number is always labelled an estimate.
+
+_UTILISATION_RE = re.compile(r"<utilisation>(.*?)</utilisation>", re.DOTALL)
+_USED_RE = re.compile(r"<used\b([^>]*)>(.*?)</used>", re.DOTALL)
+_ATTR_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
+
+# Shown when nothing was injected — an explicit statement beats a blank, which
+# the model would otherwise try to fill.
+NO_INJECTED_SECTIONS = "(none — no memory was injected into this session)"
+
+
+def render_injected_sections(keys: Sequence[str]) -> str:
+    """Render the injected-section list for the prompt, fenced as untrusted.
+
+    Section names come from memory files, which are themselves distilled from
+    transcripts that ingested web pages, repos and documents — so they are
+    externally-authored text and contract C2 applies (`docs/untrusted-content.md`).
+    """
+    if not keys:
+        return NO_INJECTED_SECTIONS
+    from multiplai_core.untrusted import fence
+
+    body = "\n".join(f"- {key}" for key in keys)
+    lines = fence(body, "memory catalog — injected section names")
+    return "\n".join(lines) if lines else NO_INJECTED_SECTIONS
+
+
+def parse_utilisation(raw: str) -> list[dict]:
+    """Read the ``<utilisation>`` block into self-report entries.
+
+    Returns ``[{"file", "section", "evidence", "supported"}]``. Never raises
+    and never fails extraction: this field is telemetry layered on a pass whose
+    real job is the diary, and a malformed block must not cost a session its
+    diary entry. An absent block yields ``[]``, which is also what an explicit
+    "none of them" yields — the caller distinguishes "asked and got nothing"
+    from "never asked" by whether it passed an injected list at all.
+    """
+    blocks = _UTILISATION_RE.findall(raw or "")
+    if not blocks:
+        return []
+    out: list[dict] = []
+    seen: set[tuple[str, Optional[str]]] = set()
+    for attrs, body in _USED_RE.findall(blocks[-1]):
+        parsed = dict(_ATTR_RE.findall(attrs))
+        file = (parsed.get("file") or "").strip()
+        if not file:
+            continue
+        section = (parsed.get("section") or "").strip() or None
+        if (file, section) in seen:
+            continue
+        seen.add((file, section))
+        evidence = " ".join((body or "").split())
+        out.append({
+            "file": file,
+            "section": section,
+            "evidence": evidence,
+            "supported": bool(evidence),
+        })
+    return out
 
 
 def _parse_learning(block: str) -> Optional[dict]:
@@ -424,6 +518,36 @@ async def extract_units_and_disposition(
     several callers and a large test surface, and only the live extraction
     path cares how the session was left. The disposition rides along on the
     *same* model response — it costs no extra call.
+
+    See :func:`extract_session_signals` for the variant that also returns the
+    self-reported memory utilisation.
+    """
+    units, disposition, _ = await extract_session_signals(
+        text, valid_targets=valid_targets, client=client
+    )
+    return units, disposition
+
+
+async def extract_session_signals(
+    text: str,
+    *,
+    valid_targets: Sequence[Union[str, dict]],
+    client,
+    injected_sections: Optional[Sequence[str]] = None,
+) -> tuple[list[dict], dict, list[dict]]:
+    """Units, disposition, and self-reported memory utilisation, in one call.
+
+    ``injected_sections`` is the list of ``file.md#Section`` keys this session
+    had injected. Passing it is what makes the utilisation answer meaningful;
+    passing nothing still asks the question (the prompt's static half cannot
+    vary — it is the cacheable prefix) but tells the model the list is empty,
+    so the honest answer is an empty block.
+
+    The utilisation answer rides on the *same* response as the diary and the
+    learnings, costing no extra call. That is deliberate, and so is the order
+    of precedence if it ever conflicts: the diary is this pass's primary
+    product, and a shorter diary is not a trade worth making for telemetry —
+    split this into its own call before letting that happen.
     """
     targets_block = (
         "\n".join(render_target_line(t) for t in valid_targets)
@@ -443,6 +567,8 @@ async def extract_units_and_disposition(
     prompt = (
         EXTRACTION_USER
         .replace("{today}", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        .replace("{injected_sections}",
+                 render_injected_sections(injected_sections or []))
         .replace("{transcript}", text)
     )
     # Parse failures are stochastic (a fresh sample of the same prompt
@@ -464,9 +590,13 @@ async def extract_units_and_disposition(
             logger.warning("extraction parse failed (attempt %d): %s", attempt + 1, e)
             continue
         # Parsed only after the units did: a missing or malformed
-        # disposition falls back to "active" rather than costing the
-        # session its diary entry.
-        return units, parse_disposition(response.content)
+        # disposition (or utilisation block) falls back to a safe default
+        # rather than costing the session its diary entry.
+        return (
+            units,
+            parse_disposition(response.content),
+            parse_utilisation(response.content),
+        )
     assert last_error is not None  # loop either returned or set last_error
     raise last_error
 

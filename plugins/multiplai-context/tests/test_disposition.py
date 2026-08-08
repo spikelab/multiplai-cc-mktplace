@@ -534,12 +534,15 @@ class TestExtractLearningsWiring:
             def diary_dir(self): return tmp_path / "diary"
             def catalogs_dir(self): return tmp_path / "catalogs"
             def data_dir(self): return tmp_path
+            def logs_dir(self): return tmp_path / "logs"
 
         async def _fake_extract(chunk, **kwargs):
             result = chunk_results[int(chunk)]
             if isinstance(result, Exception):
                 raise result
-            return result
+            # extract() consumes (units, disposition, self-reported
+            # utilisation); these cases are about the disposition only.
+            return result[0], result[1], []
 
         stdin = json.dumps({"session_id": session_id, "cwd": "/work"})
         with patch.object(el, "get_paths", _Paths), \
@@ -547,7 +550,7 @@ class TestExtractLearningsWiring:
              patch.object(el, "create_client", AsyncMock(return_value=object())), \
              patch.object(el, "_distill_transcript",
                           lambda *a: [str(i) for i in range(len(chunk_results))]), \
-             patch.object(el, "extract_units_and_disposition", _fake_extract), \
+             patch.object(el, "extract_session_signals", _fake_extract), \
              patch.object(el.sys, "stdin", type("S", (), {"read": staticmethod(lambda: stdin)})):
             return asyncio.run(el.extract())
 
