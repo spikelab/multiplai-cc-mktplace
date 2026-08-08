@@ -75,9 +75,13 @@ slash-command match exists.
 9. SLASH-COMMAND ECHO: do NOT return a skill the user already typed as \
 a slash command (e.g., user wrote "/code-review" → don't echo it back).
 
-10. SECTION ANCHORS: when a memory entry has section_anchors and only \
-ONE section is relevant, prefer "file#Section" over the whole file. \
-When the whole file is relevant, return the bare filename.
+10. SECTION ANCHORS. When a memory entry lists Sections, the DEFAULT is \
+to name the sections you need, not the file. Emit one array entry per \
+section — "file#Section A", "file#Section B" — reading each section's \
+description to decide. Fall back to the bare filename only when most of \
+the file is relevant, or when no single section's description covers the \
+prompt and you need the file to find out. Naming a section that is not \
+in the list loads the whole file, so copy section names exactly as given.
 """
 
 

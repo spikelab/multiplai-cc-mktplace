@@ -29,8 +29,11 @@ Nothing yet.
   injected whole. Catalog generation now writes it for you: each memory file of
   at least 8 KB with at least three `##` sections gets one entry per section,
   carrying the section name and a one-line description of what is in it. The
-  router reads those descriptions and can ask for the one section it needs. On a
-  180 KB file with 30 sections that is roughly 6 KB in place of 180.
+  router reads those descriptions and asks for the sections it needs — naming
+  sections is now its **default** for an anchored file, with the whole file
+  reserved for when most of it is relevant. On a 180 KB file with 30 sections
+  that is roughly 6 KB in place of 180. Measured over 17 routing prompts against
+  a 921 KB corpus, injected memory fell 68% (814 KB → 260 KB).
 
   Section names are extracted from your file in code and handed to the model as
   a fixed list to describe — it never writes the name — so an anchor cannot
@@ -66,6 +69,17 @@ Nothing yet.
   list meaning the whole file) and `bytes_by_file`. Without them `files` alone
   cannot tell you whether a large file cost you 180 KB or 6 KB this turn.
   `files` and `files_by_corpus` are unchanged.
+
+### Known issue
+
+- **If you run `memory_router: llm`, routing calls got slower.** The catalog the
+  router reads roughly doubled (30 KB → 61 KB on a 29-file corpus) because every
+  section now carries a description, and the reply is longer too. Median routing
+  latency in our measurement went from 16 s to 22 s, with one 35-section file
+  reaching 84 s. The router's ceiling is **25 s**, and a call that hits it
+  injects **no memory at all** for that turn — the pre-existing failure mode,
+  now easier to reach. The default router (`token_overlap`) makes no model call
+  and is unaffected.
 
 ## [0.32.2] - 2026-08-07
 

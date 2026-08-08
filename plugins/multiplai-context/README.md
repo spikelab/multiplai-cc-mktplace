@@ -673,10 +673,21 @@ that is at least **8 KB** and has at least **three `##` sections**:
 ]
 ```
 
-The router sees those one-line glosses and may answer with
-`multiplai.md#Release Flow` instead of `multiplai.md`, in which case only that
-section is injected. On a 180 KB file with 30 sections that is roughly 6 KB in
-place of 180.
+The router reads those one-line glosses and, for an anchored file, naming
+sections is its **default**: it answers `multiplai.md#Release Flow` rather than
+`multiplai.md`, listing as many sections as the prompt needs, and falls back to
+the bare filename only when most of the file is relevant. On a 180 KB file with
+30 sections that is roughly 6 KB in place of 180. Measured over 17 routing
+prompts against a 921 KB corpus, total injected memory fell **68%**
+(814 KB → 260 KB).
+
+**Cost, if you run `memory_router: llm`:** the catalog the router reads roughly
+doubles, because every section carries a description — 30 KB → 61 KB on a
+29-file corpus — and the reply is longer. That showed up as median routing
+latency of 22 s against 16 s before, and one 35-section file took 84 s. The
+router gives up at **25 s** and injects nothing for that turn, so on a corpus
+with very large files you may see more of those. The default `token_overlap`
+router makes no model call and is unaffected — anchors simply sit unused.
 
 Three things keep it safe:
 
