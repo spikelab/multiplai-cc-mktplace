@@ -38,10 +38,23 @@ import re
 from dataclasses import dataclass
 from datetime import date
 
-# A learnings line as written by extraction._format_learning_entry:
-#   - **[trust: verified]** CORRECTION <desc> → Target: <file> — <action>
+from lib.taxonomy import normalize_kind, normalize_provenance
+
+# A learnings line as written by extraction._format_learning_entry, in either
+# of the two forms it emits:
+#   - **[CORRECTION/FACT]** <desc> → Target: <file> — <action>       (taxonomy)
+#   - **[trust: verified]** CORRECTION <desc> → Target: <file> — …   (legacy)
+#
+# Both are matched because both are on disk simultaneously and will be for as
+# long as the pending backlog lives. A parser that knew only the old form would
+# not fail loudly — it would quietly stop seeing every new learning, which is
+# the worst available outcome for a detector whose whole job is noticing.
+_MARKER = (
+    r"(?:\[(?P<provenance>[A-Z?]+)/(?P<kind>[A-Z?]+)\]\*\*\s+"
+    r"|\[trust:\s*(?P<trust>\w+)\]\*\*\s+(?P<type>[A-Z-]+)\s+)"
+)
 LEARNING_LINE_RE = re.compile(
-    r"^-\s+\*\*\[trust:\s*(?P<trust>\w+)\]\*\*\s+(?P<type>[A-Z-]+)\s+"
+    r"^-\s+\*\*" + _MARKER +
     r"(?P<description>.*?)"
     r"(?:\s+→\s+Target:\s*(?P<target>[\w.-]+)(?:\s+—\s+(?P<action>.*))?)?$")
 
@@ -77,6 +90,8 @@ class Learning:
     description: str
     target: str
     action: str
+    provenance: str = ""
+    kind: str = ""
 
     @property
     def is_conflict_candidate(self) -> bool:
@@ -85,8 +100,24 @@ class Learning:
         A `trust: medium` OBSERVATION that happens to touch an existing line is
         not evidence the line is wrong — it's an inference. Superseding on that
         basis would let a weak guess overwrite a confirmed fact.
+
+        A record written under the two-axis taxonomy carries no `trust` on its
+        line, so only the first arm applies to it: `provenance: CORRECTION`.
+        That is strictly narrower than the legacy rule, which is the safe
+        direction — this detector only ever *surfaces* a candidate for a human,
+        and reading the confidence half of the pair as a verification claim
+        would be inventing a policy that belongs downstream.
         """
+        if self.provenance:
+            return self.provenance == "CORRECTION"
         return self.type == "CORRECTION" or self.trust == "verified"
+
+    @property
+    def basis(self) -> str:
+        """How this learning describes itself, for the reviewer's benefit."""
+        if self.provenance or self.kind:
+            return f"{self.provenance or '?'}/{self.kind or '?'}"
+        return f"{self.type}, trust: {self.trust}"
 
 
 @dataclass(frozen=True)
@@ -104,7 +135,7 @@ class ConflictEdit:
             f"- **Superseded** (was): {self.old_line.strip()}\n"
             f"- **Now**: {self.learning.description}\n"
             f"- **Edit**: {self.learning.action or 'replace the superseded line'}\n"
-            f"- **Basis**: {self.learning.type}, trust: {self.learning.trust}; "
+            f"- **Basis**: {self.learning.basis}; "
             f"match confidence {self.overlap:.2f}\n"
             f"- **If keeping both**: mark the old line "
             f"`(superseded {stamp})` rather than deleting it.\n"
@@ -136,11 +167,13 @@ def parse_learnings(text: str) -> list[Learning]:
         if not match:
             continue
         out.append(Learning(
-            trust=match.group("trust"),
-            type=match.group("type"),
+            trust=match.group("trust") or "",
+            type=match.group("type") or "",
             description=(match.group("description") or "").strip(),
             target=(match.group("target") or "").strip(),
             action=(match.group("action") or "").strip(),
+            provenance=normalize_provenance(match.group("provenance")) or "",
+            kind=normalize_kind(match.group("kind")) or "",
         ))
     return out
 

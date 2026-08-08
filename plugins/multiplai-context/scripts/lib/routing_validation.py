@@ -22,6 +22,8 @@ import logging
 import re
 from pathlib import Path
 
+from lib import taxonomy
+
 logger = logging.getLogger(__name__)
 
 NGRAM_SIZE = 8
@@ -36,6 +38,7 @@ _UPDATES_FOR_RE = re.compile(r"^## Updates for `(?P<file>[^`]+)`")
 _SECTION_FIELD_RE = re.compile(r"^\*\*Section:\*\*\s*(?P<value>.+?)\s*$")
 _CHANGE_FIELD_RE = re.compile(r"^\*\*Change:\*\*\s*(?P<value>.+?)\s*$")
 _SOURCE_FIELD_RE = re.compile(r"^\*\*Source:\*\*\s*(?P<value>.+?)\s*$")
+_PROVENANCE_FIELD_RE = re.compile(r"^\*\*Provenance:\*\*\s*(?P<value>.+?)\s*$")
 _NEW_SECTION_RE = re.compile(r"^new section\b\s*[:—\-]?\s*", re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 
@@ -76,10 +79,18 @@ def parse_proposal_entries(proposal: str) -> list[dict]:
     Returns dicts with ``target`` (filename), ``number``, ``title``,
     ``section`` (the ``**Section:**`` value, may be empty), ``change``
     (the ``**Change:**`` value lowercased — add/update/replace, may be
-    empty), ``source`` (the ``**Source:**`` citation, may be empty) and
+    empty), ``source`` (the ``**Source:**`` citation, may be empty),
+    ``provenance`` and ``kind`` (the two halves of the ``**Provenance:**``
+    pair, each empty when absent or not a recognised value) and
     ``text`` (the blockquoted insert text, unquoted). Action
     items (``### A{N}.``) and non-update sections (Filtered Out, Action
     Items) are skipped.
+
+    ``provenance``/``kind`` are validated against ``lib.taxonomy``'s closed
+    sets and come back empty rather than as whatever string was written, so a
+    consumer never sees a label the vocabulary does not define. Both halves are
+    empty for a proposal drafted before the taxonomy existed — an absent pair
+    is a legitimate state, not a parse failure.
     """
     entries: list[dict] = []
     current_file: str | None = None
@@ -116,6 +127,8 @@ def parse_proposal_entries(proposal: str) -> list[dict]:
                 "section": "",
                 "change": "",
                 "source": "",
+                "provenance": "",
+                "kind": "",
                 "_text_lines": [],
             }
             continue
@@ -134,6 +147,17 @@ def parse_proposal_entries(proposal: str) -> list[dict]:
         m = _SOURCE_FIELD_RE.match(line)
         if m:
             entry["source"] = m.group("value")
+            continue
+        # The two-axis taxonomy, carried through from the learning this entry
+        # was distilled from. Nothing in this module acts on it — it is parsed
+        # here because this is the function every consumer of a proposal item
+        # already calls, and a pair that stops at the learnings file cannot be
+        # used by anything downstream.
+        m = _PROVENANCE_FIELD_RE.match(line)
+        if m:
+            provenance, kind = taxonomy.parse_pair(m.group("value"))
+            entry["provenance"] = provenance or ""
+            entry["kind"] = kind or ""
             continue
         if line.startswith(">"):
             entry["_text_lines"].append(line.lstrip("> ").rstrip())

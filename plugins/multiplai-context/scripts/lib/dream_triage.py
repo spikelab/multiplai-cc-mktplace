@@ -130,10 +130,25 @@ class Item:
     text: str
     source: str
     reasons: tuple[str, ...]
+    # The two-axis taxonomy (lib/taxonomy.py), carried from the learning this
+    # item came from. Empty for items with no pair — every proposal drafted
+    # before the taxonomy shipped, and any half the drafter could not read off
+    # its source. **Nothing here classifies on them**: `classify` is unchanged,
+    # and the pair rides along so the receipt can say where an unreviewed line
+    # came from and so a later classifier has the fields to work with.
+    provenance: str = ""
+    kind: str = ""
 
     @property
     def auto(self) -> bool:
         return not self.reasons
+
+    @property
+    def pair(self) -> str:
+        """``PROVENANCE/KIND`` for display, or ``""`` when neither is known."""
+        if not (self.provenance or self.kind):
+            return ""
+        return f"{self.provenance or '?'}/{self.kind or '?'}"
 
     @property
     def label(self) -> str:
@@ -298,6 +313,8 @@ def classify(proposal: str) -> Triage:
             text=entry["text"],
             source=entry.get("source", ""),
             reasons=tuple(reasons),
+            provenance=entry.get("provenance", ""),
+            kind=entry.get("kind", ""),
         )
         (review if reasons else auto).append(item)
 
@@ -326,6 +343,8 @@ def auto_slice(items: list[Item]) -> str:
         if item.section:
             lines.append(f"**Section:** {item.section}")
         lines.append(f"**Change:** {item.change}")
+        if item.pair:
+            lines.append(f"**Provenance:** {item.pair}")
         lines.append("")
         for text_line in item.text.splitlines():
             lines.append(f"> {text_line}")
@@ -384,6 +403,8 @@ def render_receipt(
             out.append(f"### {item.number}. {item.title}")
             if item.section:
                 out.append(f"**Section:** {item.section}")
+            if item.pair:
+                out.append(f"**Provenance:** {item.pair}")
             out.append("")
             for text_line in item.text.splitlines():
                 out.append(f"> {text_line}")
