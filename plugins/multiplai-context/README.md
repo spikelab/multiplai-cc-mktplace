@@ -556,7 +556,7 @@ Everything stays on your machine under `<workspace>/.multiplai/`
 | `diary/YYYY-MM-DD/` | One file per session — a narrative of what happened. |
 | `learnings/` | Extracted insights pending consolidation. |
 | `now/` | Per-project current-state summaries. |
-| `data/` | Runtime state — catalogs, logs, session state, gate stamps (`dream_state.yaml`, `config_audit_state.yaml`, `maintainer_state.yaml`). Disposable; recreated as needed. |
+| `data/` | Runtime state — catalogs, logs, session state, gate stamps (`dream_state.yaml`, `config_audit_state.yaml`, `maintainer_state.yaml`). Disposable; recreated as needed. Two files here are worth knowing by name: **`rejections.jsonl`**, the append-only record of every proposed memory entry the judge refused ([what may be written](#what-may-be-written-without-you-reading-it)), and `judge_cache.json`, which keeps those verdicts stable across re-runs — delete it to have everything re-judged. |
 
 Delete any of these any time; the plugin recreates what it needs. If
 `.multiplai/` lives inside a git repo and you don't want diary/learnings
@@ -853,7 +853,7 @@ owns a **24-hour gate**. `SessionStart` checks that same gate *in-process first*
 and skips the spawn entirely when it's closed — the child is authoritative, but
 reaching it costs a `uv run` startup, and since the maintainer declares its
 dependencies in a PEP 723 header a cold `uv` cache turns that into a network
-fetch at session start. Six passes:
+fetch at session start. Seven passes:
 
 | Pass | What it does | Model call? |
 |---|---|---|
@@ -863,14 +863,26 @@ fetch at session start. Six passes:
 | 4. `now/` rebuild | `synthesize_now` for the **active project only**, on a **Haiku** tier | yes (cheap) |
 | 5. Utilisation retention | Collapses `utilisation.jsonl` records older than 90 days into per-section totals | no |
 | 6. Utilisation judge | Rules on a sample of un-judged sessions (`utilisation_judge_sample`, default 5), on a **Haiku** tier | yes (cheap) |
+| 7. Triage apply | Judges the waiting proposal and applies what clears — see [What may be written without you reading it](#what-may-be-written-without-you-reading-it). Off under `memory_write_mode=review` | yes |
 
-**It never modifies `.multiplai/memory/`.** That is the whole safety story: an
-unattended pass that could rewrite memory is an unattended pass that can
-silently corrupt it. Passes 1–2 write to `.multiplai/dreams/` and the health
-log; 3–4 write derived files (catalogs, `now/`) that are rebuilt from source and
-hold no unique state; 5–6 write only `utilisation.jsonl`, which is telemetry —
-nothing reads it to decide what memory *says*.
-`/multiplai-context:dream-remember` stays the only path that edits memory.
+Passes 1–2 write to `.multiplai/dreams/` and the health log; 3–4 write derived
+files (catalogs, `now/`) that are rebuilt from source and hold no unique state;
+5–6 write only `utilisation.jsonl`, which is telemetry — nothing reads it to
+decide what memory *says*.
+
+**Pass 7 is the one that writes your memory files, and until 0.36.0 nothing
+unattended did.** That was a real safety property and it was traded
+deliberately, so it is worth saying what for. It held only because the review
+queue was unbounded — a 194-item proposal costs a whole context window to walk,
+so reviews got abandoned partway and the backlog grew instead of shrinking.
+"Never writes" is not safety when the alternative is "never consolidates".
+
+Set **`memory_write_mode: review`** to get the old behaviour back exactly; pass 7
+then judges nothing and writes nothing. Otherwise what stands in its place is
+four things, none of which a model can reach: a rubric in code that `kind: RULE`
+never clears, a judge that may only lower an item, a code floor that runs after
+the verdict and can only refuse, and a receipt next to a git repository whose
+last line is the `git revert` command for the batch.
 
 Pass 6 **fails closed**: a timed-out, rate-limited or unparseable call writes no
 verdict at all, leaving that session unjudged rather than judged-unused. A
@@ -1359,7 +1371,67 @@ exist to make trustworthy.
 
 Both labels ride through into the `**Provenance:**` line of each item in a
 dream proposal, so you can see what a proposed memory entry was distilled from
-while you review it. Nothing is currently *decided* by them.
+while you review it — and, since 0.36.0, they decide what may be applied without
+you reading it.
+
+#### What may be written without you reading it
+
+Three layers decide each proposed memory entry, and **only one of them is a
+model**. Any of them can refuse; only all three together can approve.
+
+**1. The rubric, in code.** Provenance sets confidence, kind sets blast radius,
+and the intersection is what may be applied:
+
+| | `FACT` | `DECISION` | `RULE` |
+|---|---|---|---|
+| `CORRECTION` / `DECLARATION` | apply | apply | **review** |
+| `EMPIRICAL` / `RESEARCH` | apply, if the citation holds | review | **review** |
+| `INFERENCE` | review | review | **review** |
+
+**A `RULE` never applies automatically. Not in any mode, not even one you stated
+yourself.** That is about blast radius, not trust: a wrong fact is one you notice
+later; a wrong rule changes what you notice. An item with no labels at all —
+every proposal drafted before the taxonomy existed — reads as the cautious end of
+both axes and waits for you.
+
+**2. The judge, a separate model call.** It is never told it is grading another
+pass's output, and its stated job is to find reasons to escalate. Per item it
+re-derives both labels, checks whether the cited source actually supports the
+claim, and checks the target file for redundancy — three questions no pattern
+match could answer, which is the whole reason it exists. **It may only ever
+lower an item.** It cannot promote anything the table refused, so text that
+talks the judge into "apply" on a rule changes nothing at all.
+
+**3. The floor, in code, after the verdict.** It refuses a target that is not a
+plain memory filename, any `CLAUDE.md` or `AGENTS.md`, anything that revises
+rather than appends, and anything that did not parse. Running *after* the
+verdict is the point: a check consulted before it is one a model can be argued
+past; a check on the concrete write is not.
+
+Failure always goes the same way. A timed-out batch, a rate limit, an
+unparseable reply, or no SDK at all yields zero verdicts — and with zero
+verdicts nothing is applied, which is identical to `memory_write_mode: review`.
+The count of items that kept a conservative default is printed rather than
+passed over.
+
+**`memory_write_mode`** picks how much of this runs:
+
+| Mode | Behaviour |
+|---|---|
+| `review` | Nothing is judged, nothing is applied — the pre-0.36.0 flow, one word away. |
+| `triage` **(default)** | The judge runs; items the table clears are applied; the rest wait for you. |
+| `auto` | Also applies plain `FACT` items the table would have held back. Rules still never apply. |
+
+**Rejections are logged.** When the judge drops an item — usually because your
+memory already says it — it is written in full to
+`.multiplai/data/rejections.jsonl`: its text, its labels, its source citation and
+the judge's one-line reason. Dropping means "not promoted to memory", never
+"deleted": the source learning is untouched and the record carries its content
+hash, so any drop can be read back and overruled by hand. The receipt shows
+every rejection while there are 25 or fewer, and grouped counts above that.
+
+Auditing refusals is how the judge earns the delegation. A pass that reports only
+what it wrote is indistinguishable from one that quietly discards good items.
 
 ### Session accounting
 
