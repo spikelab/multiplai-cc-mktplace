@@ -255,6 +255,37 @@ def unprocessed(blocks: list[Block], ledger: dict) -> list[Block]:
     return out
 
 
+def migrate(ledger: dict, blocks: list[Block]) -> int:
+    """Re-key pre-version-2 entries onto projection keys. Returns how many moved.
+
+    Mutates *ledger* in place and does not touch disk — the caller decides
+    whether to persist, because writing the ledger outside dream's run lock
+    could clobber a key a concurrent run had just recorded.
+
+    Migration needs the records themselves: a legacy key is a hash of the raw
+    text and cannot be converted into a projection key without the text it was
+    computed from. The learnings files on disk are that text, which is why this
+    takes *blocks*. Records whose file has since been deleted keep their legacy
+    key and are dropped by :func:`prune` in the ordinary way.
+
+    Idempotent, and safe to run against an already-migrated ledger: a block
+    whose projection key is present is left alone.
+    """
+    processed = ledger.get("processed")
+    if not isinstance(processed, dict):
+        return 0
+    moved = 0
+    for b in blocks:
+        if not b.legacy_key or b.legacy_key == b.key:
+            continue
+        if b.key in processed or b.legacy_key not in processed:
+            continue
+        processed[b.key] = processed.pop(b.legacy_key)
+        moved += 1
+    ledger["version"] = LEDGER_VERSION
+    return moved
+
+
 def lookup(processed: dict, block: Block) -> dict | None:
     """The ledger entry for *block* under either key scheme, or ``None``.
 

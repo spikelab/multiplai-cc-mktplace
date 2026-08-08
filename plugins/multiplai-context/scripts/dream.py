@@ -1501,18 +1501,35 @@ async def _critique_proposal(client, proposal: str, memory_context: str = "",
         return proposal
 
 
-def _plan_run(learnings_dir: Path) -> tuple[list, list, list[Path], float]:
-    """Shared planning for ``--check`` and a real run — no LLM, no lock, no spend.
+def _plan_run(
+    learnings_dir: Path, *, persist_migration: bool = False
+) -> tuple[list, list, list[Path], float]:
+    """Shared planning for ``--check`` and a real run — no LLM, no spend.
 
     Returns ``(pending_blocks, chunks, files, throughput)``. Keeping one
     implementation is the point: ``--check``'s prediction is worthless if it is
     computed differently from what the run actually does.
+
+    Ledger keys are migrated to the version-2 projection scheme here, since
+    this is the one place that holds both the ledger and the records it was
+    computed from. ``persist_migration`` is the caller's assertion that it holds
+    the run lock: ``--check`` deliberately takes no lock, so it migrates in
+    memory (its count stays right) and writes nothing, rather than racing a
+    live run's ``record`` and dropping a key that was just written.
     """
     from lib import dream_chunking
 
     blocks, files = _collect_blocks(learnings_dir)
     ledger_path = learnings_ledger.default_ledger_path()
     ledger = learnings_ledger.load(ledger_path)
+    moved = learnings_ledger.migrate(ledger, blocks)
+    if moved:
+        logger.info(
+            "Migrated %d ledger key(s) to the format-invariant scheme%s",
+            moved, "" if persist_migration else " (in memory — no lock held)",
+        )
+        if persist_migration:
+            learnings_ledger.save(ledger_path, ledger)
     pending = learnings_ledger.unprocessed(blocks, ledger)
     throughput = dream_chunking.resolve_throughput(_calibrated_throughput())
     chunks = dream_chunking.plan_chunks(pending, timeout_s=CHUNK_TIMEOUT_S,
@@ -1538,7 +1555,9 @@ async def dream_report() -> None:
     dreams_dir = paths.dreams_dir()
     ledger_path = learnings_ledger.default_ledger_path()
 
-    pending, chunks, source_files, throughput = _plan_run(learnings_dir)
+    pending, chunks, source_files, throughput = _plan_run(
+        learnings_dir, persist_migration=True
+    )
 
     # Resume BEFORE pruning: a staged draft is kept only while its blocks are
     # ledgered, and pruning drops keys for learnings files that have since been
