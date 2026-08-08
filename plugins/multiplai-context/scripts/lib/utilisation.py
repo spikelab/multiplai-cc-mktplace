@@ -851,7 +851,10 @@ def render_table(table: dict, *, limit: int = 25) -> str:
         f"Rows with fewer than {thresholds['min_observations']} estimator "
         f"observations are NOT ranked — see \"insufficient data\" below. "
         f"`!` marks estimators disagreeing by more than "
-        f"{thresholds['disagreement_margin']:.0%}; they are marked, not averaged."
+        f"{thresholds['disagreement_margin']:.0%}; they are marked, not averaged. "
+        f"`∞` in B/est.use means zero estimated uses under that row's basis — "
+        f"the strongest pruning candidate, and a suggestion to a human, never "
+        f"a deletion."
     )
     out.append("")
 
@@ -868,7 +871,7 @@ def render_table(table: dict, *, limit: int = 25) -> str:
             basis = row["rank_basis"] or "—"
             cost = row["cost_per_use"]
             zero = row["zero_estimated_use"].get(basis)
-            cost_txt = "∞ (0 est. uses)" if zero else _fmt_bytes(cost)
+            cost_txt = "∞" if zero else _fmt_bytes(cost)
             mark = " !" if row["disagreement"] else ""
             out.append(
                 f"{row['key'][:44]:<44} {row['retrieved']:>5} "
@@ -940,6 +943,7 @@ def compact(
     *,
     older_than_days: int = RETENTION_DAYS,
     now: Optional[datetime] = None,
+    dry_run: bool = False,
 ) -> dict:
     """Collapse session records older than *older_than_days* into totals.
 
@@ -951,6 +955,9 @@ def compact(
 
     A record with no parseable timestamp is kept: guessing its age in order to
     delete it is the wrong direction to guess in.
+
+    ``dry_run`` returns the same counts and writes nothing — so the maintainer
+    can report what it *would* collapse rather than a number it assumed.
     """
     path = Path(path)
     records = read_records(path)
@@ -978,6 +985,10 @@ def compact(
     if not stale:
         return {"collapsed": 0, "kept": len(kept), "sections": sum(
             len(t.get("sections") or {}) for t in totals_records)}
+
+    if dry_run:
+        return {"collapsed": len(stale), "kept": len(kept), "sections": len(
+            aggregate(totals_records + stale).sections)}
 
     folded = aggregate(totals_records + stale)
     through = max(

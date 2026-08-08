@@ -43,11 +43,25 @@ logger = logging.getLogger(__name__)
 #: independent sample that accumulates, not a second full pass over everything.
 DEFAULT_SAMPLE_SIZE = 5
 
+#: Plugin option that overrides it. Read here rather than at the call site
+#: because option resolution belongs with the thing it configures — and
+#: because a config key read outside `scripts/lib` is invisible to the wiring
+#: test that exists to catch dead options (#148).
+SAMPLE_OPTION = "utilisation_judge_sample"
+
 #: Per-session ceiling for the judge call.
 JUDGE_TIMEOUT_S = 180
 
 #: Characters of distilled transcript fed to one judge call.
 TRANSCRIPT_CHAR_BUDGET = 60_000
+
+
+def configured_sample_size() -> int:
+    """Sessions to judge per maintenance run; ``0`` disables the pass."""
+    from multiplai_core.plugin_options import option_int
+
+    return option_int(SAMPLE_OPTION, DEFAULT_SAMPLE_SIZE)
+
 
 JUDGE_SYSTEM = """\
 You are auditing whether injected memory was actually used in a work session.

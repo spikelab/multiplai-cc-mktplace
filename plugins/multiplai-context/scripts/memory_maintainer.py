@@ -342,16 +342,18 @@ def run_utilisation_compact(data_dir: Path, *, dry_run: bool = False) -> PassRes
     forever, and the first thing to suffer is the pass that reads it whole.
     """
     try:
-        from lib.utilisation import RETENTION_DAYS, compact, read_records, utilisation_path
+        from lib.utilisation import RETENTION_DAYS, compact, utilisation_path
 
         path = utilisation_path(data_dir)
         if not path.exists():
             return PassResult("utilisation-compact", False, "no utilisation log yet")
         if dry_run:
-            n = len(read_records(path))
-            return PassResult("utilisation-compact", True,
-                              f"would compact {n} record(s) older than "
-                              f"{RETENTION_DAYS}d (dry run)")
+            preview = compact(path, dry_run=True)
+            return PassResult(
+                "utilisation-compact", True,
+                f"would collapse {preview['collapsed']} session record(s) "
+                f"older than {RETENTION_DAYS}d, keeping {preview['kept']} "
+                f"(dry run)")
         result = compact(path)
         if not result["collapsed"]:
             return PassResult("utilisation-compact", False, "nothing older than "
@@ -366,11 +368,6 @@ def run_utilisation_compact(data_dir: Path, *, dry_run: bool = False) -> PassRes
 
 
 # --- pass 6: utilisation judge (estimator B) --------------------------------
-
-#: Sessions judged per run. Overridable via the ``utilisation_judge_sample``
-#: plugin option; 0 turns the pass off.
-JUDGE_SAMPLE_DEFAULT = 5
-
 
 def run_utilisation_judge(data_dir: Path, *, dry_run: bool = False) -> PassResult:
     """Judge a sample of un-judged sessions on the cheap tier.
@@ -388,12 +385,10 @@ def run_utilisation_judge(data_dir: Path, *, dry_run: bool = False) -> PassResul
       eligible, so the sampling rate is visible rather than assumed.
     """
     try:
-        from multiplai_core.plugin_options import option_int
-
         from lib.utilisation import read_records, sessions_awaiting_judge, utilisation_path
-        from lib.utilisation_judge import judge_sessions
+        from lib.utilisation_judge import configured_sample_size, judge_sessions
 
-        sample_size = option_int("utilisation_judge_sample", JUDGE_SAMPLE_DEFAULT)
+        sample_size = configured_sample_size()
         if sample_size <= 0:
             return PassResult("utilisation-judge", False,
                               "disabled (utilisation_judge_sample=0)")
