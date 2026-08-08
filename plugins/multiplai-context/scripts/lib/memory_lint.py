@@ -12,10 +12,21 @@ The convention this enforces is one suffix on the fact itself:
     (as of 2026-07)                       — when the fact was true
     (as of 2026-07, review by 2026-10)    — and when to re-check it
 
-Two checks:
+Three checks:
 
   expired    a ``review by`` date that has passed
   unmarked   a volatile-class fact with no ``as of`` at all
+  duplicate-h2  the same H2 section name in more than one memory file
+
+The third is not about staleness. It guards the corpus-wide uniqueness rule
+stated in the memory ``CLAUDE.md`` — *"H2 section names must be unique
+corpus-wide. Duplicate top-level section names across memory files break
+deterministic routing."* That rule was unenforced while it only mattered for
+humans skimming. It stopped being cosmetic once catalog generation started
+emitting ``section_anchors``: the router picks ``file.md#Section``, so two
+files both offering ``## Overview`` make the pick ambiguous, and whichever
+file the router names is the one whose ``Overview`` gets loaded — including
+the wrong one.
 
 Deliberately warn-only and non-rewriting. A linter that edits memory would be
 applying unreviewed changes to the one artifact the whole pipeline keeps behind
@@ -95,6 +106,13 @@ _SKIP_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|```|\||-{3,}\s*$|\*\*Last Updated)"
 
 _FENCE_RE = re.compile(r"^\s*```")
 
+# Same shape as ``lib/section_loader._H2_RE``, kept local so this file stays a
+# runnable standalone script (it is invoked as ``python lib/memory_lint.py``,
+# where a sibling ``lib.*`` import does not resolve). Divergence here costs a
+# missing or spurious *warning* — the generator path, where a mismatched name
+# would silently degrade routing forever, imports the canonical parser instead.
+_H2_RE = re.compile(r"^##\s+(.+?)\s*$")
+
 # How old an `(as of ...)` with no `review by` gets before it is reported. Twelve
 # months is chosen to be uncontroversial: it is long enough that nobody is
 # nagged about a fact they stamped this year, and short enough that a stamp from
@@ -106,7 +124,7 @@ AS_OF_STALE_DAYS = 365
 class Finding:
     path: Path
     lineno: int
-    kind: str          # "expired" | "unmarked" | "undated"
+    kind: str          # "expired" | "unmarked" | "undated" | "duplicate-h2"
     fact_class: str
     line: str
     detail: str
@@ -217,13 +235,79 @@ def lint_text(text: str, path: Path, today: date) -> list[Finding]:
     return findings
 
 
+def _h2_positions(text: str) -> list[tuple[str, int]]:
+    """``(header text, 1-based line number)`` for each H2, code fences skipped.
+
+    Uses the same ``## `` shape ``section_loader`` matches on, so what this
+    reports as a duplicate is exactly what would be ambiguous to resolve.
+    Fenced blocks are excluded: a ``## `` inside a shell snippet is a
+    comment, not a section, and would produce findings nobody can act on.
+    """
+    out: list[tuple[str, int]] = []
+    in_fence = False
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        m = _H2_RE.match(line)
+        if m:
+            header = m.group(1).strip()
+            if header:
+                out.append((header, lineno))
+    return out
+
+
+def find_duplicate_h2(texts: dict[Path, str]) -> list[Finding]:
+    """Report H2 names that appear in more than one file.
+
+    Warn-only, like the rest of this module: it names the collision and
+    the other files holding it, and renames nothing. Which of two
+    colliding sections should be retitled is a judgement about what the
+    memory *means*, and this module's standing rule is that it never
+    edits the corpus.
+
+    A name repeated *within* one file is not reported here — that is one
+    addressable section as far as ``extract_section`` is concerned (it
+    returns the first match), not a cross-file routing ambiguity.
+    """
+    by_name: dict[str, list[tuple[Path, int, str]]] = {}
+    for path in sorted(texts):
+        seen_in_file: set[str] = set()
+        for header, lineno in _h2_positions(texts[path]):
+            key = header.lower()
+            if key in seen_in_file:
+                continue
+            seen_in_file.add(key)
+            by_name.setdefault(key, []).append((path, lineno, header))
+
+    findings: list[Finding] = []
+    for key, occurrences in sorted(by_name.items()):
+        if len(occurrences) < 2:
+            continue
+        names = [p.name for p, _, _ in occurrences]
+        for path, lineno, header in occurrences:
+            others = [n for n in names if n != path.name] or names
+            findings.append(Finding(
+                path=path, lineno=lineno, kind="duplicate-h2",
+                fact_class="section", line=f"## {header}",
+                detail=f"'{header}' is also an H2 in {', '.join(sorted(set(others)))}"
+                       f" — a '#{header}' section pick is ambiguous; retitle one"))
+    return findings
+
+
 def lint_dir(memory_dir: Path, today: date | None = None) -> list[Finding]:
     today = today or date.today()
     findings: list[Finding] = []
+    texts: dict[Path, str] = {}
     for path in sorted(memory_dir.glob("*.md")):
         if path.name == "CLAUDE.md":
             continue  # the index, not a fact store
-        findings.extend(lint_text(path.read_text(encoding="utf-8"), path, today))
+        text = path.read_text(encoding="utf-8")
+        texts[path] = text
+        findings.extend(lint_text(text, path, today))
+    findings.extend(find_duplicate_h2(texts))
     return findings
 
 
@@ -233,6 +317,7 @@ def summarize(findings: list[Finding], root: Path | None = None) -> str:
     expired = [f for f in findings if f.kind == "expired"]
     unmarked = [f for f in findings if f.kind == "unmarked"]
     undated = [f for f in findings if f.kind == "undated"]
+    duplicate = [f for f in findings if f.kind == "duplicate-h2"]
     lines: list[str] = []
     if expired:
         lines.append(f"## Expired ({len(expired)})")
@@ -246,8 +331,12 @@ def summarize(findings: list[Finding], root: Path | None = None) -> str:
         lines.append(f"## Missing validity annotation ({len(unmarked)})")
         lines.extend(f.render(root) for f in unmarked)
         lines.append("")
+    if duplicate:
+        lines.append(f"## Duplicate H2 section names ({len(duplicate)})")
+        lines.extend(f.render(root) for f in duplicate)
+        lines.append("")
     lines.append(f"memory_lint: {len(expired)} expired, {len(undated)} undated, "
-                 f"{len(unmarked)} unmarked")
+                 f"{len(unmarked)} unmarked, {len(duplicate)} duplicate-h2")
     return "\n".join(lines)
 
 

@@ -617,6 +617,37 @@ def _stamp_memory_dates(
     return stamped
 
 
+def _section_attribution(
+    memory_content: dict[str, str],
+) -> tuple[dict[str, list[str]], dict[str, int]]:
+    """Attribute injected memory to ``(sections_by_file, bytes_by_file)``.
+
+    ``memory_content`` is keyed by the *raw pick*, so ``"dev.md"`` and
+    ``"dev.md#Testing"`` are different keys for the same file. Both
+    returned maps are keyed by the bare filename instead:
+
+    * ``sections_by_file`` — the H2 names loaded from that file, in pick
+      order. **An empty list means the whole file was injected**, which
+      is what a bare filename pick produces; it never means "nothing was
+      loaded", because a file with nothing loaded has no key at all.
+    * ``bytes_by_file`` — characters of content injected for that file,
+      summed across its picks (before the date stamp and section
+      headers the renderer adds).
+
+    Together these are what makes a section pick measurable: ``files``
+    alone cannot say whether ``multiplai.md`` cost 181 KB or 6 KB.
+    """
+    sections: dict[str, list[str]] = {}
+    sizes: dict[str, int] = {}
+    for pick, content in memory_content.items():
+        base, section = parse_section_ref(pick)
+        bucket = sections.setdefault(base, [])
+        if section and section not in bucket:
+            bucket.append(section)
+        sizes[base] = sizes.get(base, 0) + len(content)
+    return sections, sizes
+
+
 def _render_memory_section(
     memory_dir: Path, memory_content: dict[str, str], conflict_preamble: bool
 ) -> str:
@@ -1229,6 +1260,11 @@ def main() -> None:
         "resources": sorted(resources_content),
     }
     injected = files_by_corpus["memory"] + files_by_corpus["skills"] + files_by_corpus["resources"]
+    # Section-level attribution for the memory corpus — the only corpus
+    # whose catalog carries section_anchors. Added alongside `files` and
+    # `files_by_corpus` rather than replacing them: the fleet and
+    # log-doctor tooling reads those two by name.
+    sections_by_file, bytes_by_file = _section_attribution(memory_content)
     file_groups = [
         f"{corpus}: {', '.join(names)}"
         for corpus, names in files_by_corpus.items()
@@ -1255,6 +1291,8 @@ def main() -> None:
         resources=corpus_counts["resources"],
         files=injected,
         files_by_corpus=files_by_corpus,
+        sections_by_file=sections_by_file,
+        bytes_by_file=bytes_by_file,
         bytes=len(session_context),
     )
 

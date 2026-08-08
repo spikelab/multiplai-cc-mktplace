@@ -113,6 +113,39 @@ User prompt: "review this codebase"
 """
 
 
+def _render_anchors(anchors: object) -> list[str]:
+    """Render ``section_anchors`` to one ``name — gloss`` line per anchor.
+
+    Two shapes are accepted, because a catalog on disk may predate the
+    generator that writes the richer one:
+
+    * ``{"name": ..., "gloss": ...}`` — current, written by
+      ``MemoryGenerator``. The gloss is the whole point: a bare list of
+      30 header names tells the router nothing about which one to pick.
+    * a plain string — legacy hand-authored form; rendered as the name
+      alone.
+
+    Anything else in the list is skipped rather than stringified, so a
+    malformed entry costs one missing line, not a ``{'name': ...}``
+    dict rendered into the router's prompt.
+    """
+    if not isinstance(anchors, list):
+        return []
+    lines: list[str] = []
+    for anchor in anchors:
+        if isinstance(anchor, str):
+            name, gloss = anchor.strip(), ""
+        elif isinstance(anchor, dict):
+            name = str(anchor.get("name") or "").strip()
+            gloss = str(anchor.get("gloss") or "").strip()
+        else:
+            continue
+        if not name:
+            continue
+        lines.append(f"{name} — {gloss}" if gloss else name)
+    return lines
+
+
 def format_catalog_for_llm(corpus_label: str, entries: Iterable[dict]) -> str:
     """Render one corpus's entries as a labeled block for the LLM input.
 
@@ -141,12 +174,12 @@ def format_catalog_for_llm(corpus_label: str, entries: Iterable[dict]) -> str:
         anti = entry.get("anti_domains") or []
         if isinstance(anti, list) and anti:
             block.append(f"  NOT relevant for: {', '.join(str(a) for a in anti)}")
-        anchors = entry.get("section_anchors") or []
-        if isinstance(anchors, list) and anchors:
+        anchor_lines = _render_anchors(entry.get("section_anchors"))
+        if anchor_lines:
             block.append(
-                f"  Sections: {', '.join(str(a) for a in anchors)} "
-                f"(emit '{filename}#<section>' for partial loads)"
+                f"  Sections (emit '{filename}#<section>' to load just one):"
             )
+            block.extend(f"    - {line}" for line in anchor_lines)
         bundle = entry.get("bundle")
         if isinstance(bundle, str) and bundle.strip():
             block.append(f"  Bundle: {bundle.strip()}")

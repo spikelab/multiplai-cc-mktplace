@@ -25,6 +25,31 @@ import re
 _H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 
 
+def h2_names(text: str) -> list[str]:
+    """Return the file's H2 header texts, in document order, de-duplicated.
+
+    The single place any caller should learn what sections a file has.
+    Catalog generation glosses this exact list and the router picks from
+    it, so extraction MUST use the same regex ``extract_section`` matches
+    with — an anchor name produced by a second, subtly different parser is
+    a permanent silent full-file fallback.
+
+    De-duplication is case-insensitive on the trimmed text, keeping the
+    first spelling: ``extract_section`` returns the first match anyway, so
+    a repeated header is one addressable section, not two.
+    """
+    seen: set[str] = set()
+    names: list[str] = []
+    for m in _H2_RE.finditer(text or ""):
+        header = m.group(1).strip()
+        key = header.lower()
+        if not header or key in seen:
+            continue
+        seen.add(key)
+        names.append(header)
+    return names
+
+
 def parse_section_ref(name: str) -> tuple[str, str | None]:
     """Split ``"file.md#Section"`` into ``("file.md", "Section")``.
 

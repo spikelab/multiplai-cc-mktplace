@@ -18,6 +18,55 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.33.0] - 2026-08-08
+
+### Added
+
+- **Routing can now load one section of a memory file instead of the whole
+  file.** The machinery for `file.md#Section` picks has shipped since 1.2.0, but
+  the field that switches it on — `section_anchors` — was marked hand-authored,
+  so unless you wrote it yourself it was empty and every picked memory file was
+  injected whole. Catalog generation now writes it for you: each memory file of
+  at least 8 KB with at least three `##` sections gets one entry per section,
+  carrying the section name and a one-line description of what is in it. The
+  router reads those descriptions and can ask for the one section it needs. On a
+  180 KB file with 30 sections that is roughly 6 KB in place of 180.
+
+  Section names are extracted from your file in code and handed to the model as
+  a fixed list to describe — it never writes the name — so an anchor cannot
+  drift from the header it points at. If one is wrong anyway, the loader still
+  falls back to the whole file, which is what happens today, so no prompt can
+  come out with less context than before.
+
+  Files under either threshold get no anchors. That is deliberate, not a
+  failure: a 4 KB file is already about one section's worth of context.
+
+- **`memory_lint` reports duplicate `##` section names across your memory
+  files.** Your memory `CLAUDE.md` has always asked for these to be unique
+  corpus-wide; nothing checked. It matters now, because two files both offering
+  `## Overview` make a `#Overview` section pick ambiguous. Warn-only and it
+  renames nothing — which of the two should change is a judgement about what the
+  memory means. Findings appear in the maintainer's lint report and in
+  `/multiplai-context:health` under `memory_validity.duplicate_h2`.
+
+### Changed
+
+- **`section_anchors` is regenerated rather than preserved across catalog
+  rebuilds.** It used to sit with the hand-authored fields, which meant the
+  first list ever written was frozen: rename or delete a section and the catalog
+  kept advertising the old name forever, silently, because a missed anchor just
+  loads the whole file. It is now derived from the file each time that file
+  changes. If you had hand-written anchors, they will be replaced on the next
+  regeneration of that file — any that name a real `##` header will come back
+  with a description attached. `sections`, `bundle` and `co_retrieve_for` are
+  untouched and still preserved.
+
+- **The injection log records which sections were sent, and what each file
+  cost.** `inject` events in `activity.jsonl` gain `sections_by_file` (an empty
+  list meaning the whole file) and `bytes_by_file`. Without them `files` alone
+  cannot tell you whether a large file cost you 180 KB or 6 KB this turn.
+  `files` and `files_by_corpus` are unchanged.
+
 ## [0.32.2] - 2026-08-07
 
 ### Fixed
