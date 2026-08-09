@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.35.0",
+  "version": "0.36.0",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",
@@ -221,6 +221,12 @@
       "title": "Dev Reference Injection",
       "description": "Detect the project's stack from its manifests and inject pointers to the matching engineering-standards docs under $CLAUDE_CONFIG_DIR/reference/dev/ (paths and section index, not contents), once per session per project. Silently does nothing when that directory does not exist.",
       "default": true
+    },
+    "memory_write_mode": {
+      "type": "string",
+      "title": "Memory Write Mode",
+      "description": "How much of a dream proposal may be written to memory without you reading it. 'review' = nothing is applied automatically (the pre-0.36.0 behaviour). 'triage' (default) = a model judges each item and only items the provenance/kind rubric permits are applied, each one recorded in a receipt. 'auto' = also applies plain facts the rubric would have held back. Rules never apply automatically in any mode, and a model failure always falls back to leaving everything for you.",
+      "default": "triage"
     }
   }
 }

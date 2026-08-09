@@ -1,121 +1,271 @@
-"""Split a dream proposal into what a human must read and what need not be read.
+"""Decide which proposed memory entries a human must read, and which need not be.
 
 A proposal is not too long to *review*; it is too long to review **item by
-item**. At ~190 items across 14 memory files, the review costs a session's
-whole context window and gets abandoned partway — which is why the pending
-backlog reached 380 bullets rather than shrinking. Meanwhile the great majority
-of those items are the same shape: append one factual bullet to a section that
-already exists, in a file that is not a behavioural-rule file, cited to a
-learnings line, flagged by nothing.
+item**. At ~190 items the review costs a session's whole context window and gets
+abandoned partway — which is why the pending backlog reached 380 bullets rather
+than shrinking.
 
-Triage separates the two populations **deterministically** — no model call, no
-judgement — so the human's attention goes only where a mistake would actually
-cost something. An item is auto-appliable only when *all* of these hold:
+The first version of this module answered that with eight deterministic gates.
+Measured against the real 2026-08-05 proposal it split 194 items 74 auto / 120
+review, and **90 of those 120 were flagged for one reason**: the text contained
+a word from a normative-language regex. That gate fires on "the API always
+returns UTF-8", because the difference between a fact and an instruction is
+semantic and a regex is not. Shape gates can judge an item's *form*; they can
+never judge whether it is *true*, whether its citation supports it, or whether
+the target file already says it. So the classifier is now a model
+(``lib/memory_judge.py``) and this module holds what a model must not decide.
 
-- it does not change how the agent behaves: not a ``[RULE-PROPOSAL]``, not
-  phrased as a standing instruction (``_NORMATIVE_RE``), and landing in a file
-  that records rather than instructs (``RECALL_FILES``);
-- it *appends*. An ``update`` can destroy a line that was right; an ``add``
-  cannot;
-- its target is a plain memory filename — a model-authored ``../../CLAUDE.md``
-  is not a memory file however much it looks like one;
-- no gate doubts it: not flagged by routing, not marked low-confidence by the
-  drafter, and parsed cleanly with actual text to insert.
+## The three layers, in the order they run
 
-"Auto" is not "unreviewed": every applied item is written to a receipt naming
-its target, section, text and source citation, and memory lives in git — the
-auditable-and-revertible pair is what makes the default-apply safe. The
-reviewer reads a 20-item list instead of a 190-item one, and the ones they read
-are the ones that matter.
+**1. The rubric — code, from the taxonomy pair.** Provenance sets confidence,
+kind sets blast radius, and auto-apply is the intersection:
 
-Every gate is **pessimistic**, and the two directions are not symmetric: a false
-"needs review" costs one line of reading, a false "auto" writes something nobody
-agreed to. So the file check is an allowlist rather than a denylist, the
-normative-language check accepts false positives, and anything that does not
-parse the way the format promises goes to the human.
+===========================  ========  ============  ========
+                             ``FACT``  ``DECISION``  ``RULE``
+===========================  ========  ============  ========
+``CORRECTION``/``DECLARATION``  apply     apply       review
+``EMPIRICAL``/``RESEARCH``      apply*    review      review
+``INFERENCE``                   review    review      review
+===========================  ========  ============  ========
+
+\\* only when the judge reports the citation actually supports the claim.
+
+``kind: RULE`` is ``review`` in every row **and every mode**. The reason is
+blast radius, not confidence: a wrong fact is one you notice later, a wrong rule
+changes what you notice. That holds even for a ``CORRECTION`` straight from the
+user — the most trustworthy input in the system — because trustworthiness is not
+the axis being managed.
+
+**2. The judge — a model, and it may only lower.** It re-derives the pair, checks
+the citation, checks for redundancy, and returns ``apply``/``review``/``drop``.
+An item is applied only when the rubric permits it **and** the judge affirms it:
+no verdict means no write, so a failed batch, an unparseable reply, or a missing
+SDK all produce exactly the partition ``review`` mode produces. Failure goes
+toward more human review, never less, and that is a property of the data flow
+rather than of an error handler someone has to remember to write.
+
+**3. The floor — code, and it can only refuse** (``lib/memory_write_floor.py``).
+Path containment, reserved filenames, append-only, parse integrity. It runs
+*after* the verdict, on the concrete write, so nothing a model returns can clear
+it.
+
+## What was deleted, and why
+
+``_NORMATIVE_RE`` (75% of the review burden, and semantically wrong) and
+``RECALL_FILES`` — an 18-name hand-maintained allowlist that went stale and was
+invisible to every memory file added after it was written. The ``rule-proposal``
+and ``low-confidence`` gates are superseded upstream: the first by ``kind:
+RULE``, the second by the judge's own verdict. What replaces them judges content
+instead of counting words.
+
+The asymmetry that shaped the old gates still shapes these: a false "needs
+review" costs one line of reading; a false "apply" writes something nobody
+agreed to. Every ambiguity below resolves toward the human.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from pathlib import PurePosixPath
+from dataclasses import dataclass, replace
+from typing import Mapping, Optional
 
+from multiplai_core.plugin_options import option
+
+from lib import taxonomy
+from lib.memory_write_floor import (
+    ADDITIVE_CHANGES,
+    floor_check,
+    is_reserved_target,
+    is_safe_target,
+)
 from lib.routing_validation import parse_proposal_entries
 
-# The drafter emits both `[RULE-PROPOSAL]` and `**[RULE-PROPOSAL]**`, in the
-# title or in the body. Match the bare token anywhere in the block.
-_RULE_PROPOSAL_RE = re.compile(r"\[RULE-PROPOSAL\]", re.IGNORECASE)
-_LOW_CONFIDENCE_RE = re.compile(r"\[warning:?\s*low confidence\]", re.IGNORECASE)
+__all__ = [
+    "ADDITIVE_CHANGES",
+    "DEFAULT_WRITE_MODE",
+    "Item",
+    "REASON_LABELS",
+    "REJECTION_DETAIL_LIMIT",
+    "Triage",
+    "WRITE_MODES",
+    "apply_verdicts",
+    "auto_slice",
+    "classify",
+    "flagged_by_routing",
+    "floor_check",
+    "has_routing_section",
+    "duplicate_labels",
+    "is_reserved_target",
+    "is_safe_target",
+    "reconciled_pair",
+    "render_receipt",
+    "render_summary",
+    "rubric_verdict",
+    "write_mode",
+]
+
 # `- \`file.md\` #3 (title): …` — the label routing_validation renders per
 # warning. We only need the (file, number) pair to match warnings to items.
 _WARNING_LABEL_RE = re.compile(r"^-\s+`(?P<target>[^`]+)`\s+#(?P<number>\d+)\b")
 
-# Auto-apply targets an **allowlist of recall files**, not a denylist of
-# behavioural ones. The first version of this module denied only `CLAUDE.md`,
-# and running it against the real 2026-08-05 proposal auto-applied 8 items into
-# `git-policy.md`, 3 into `preferences.md` and 2 more into `technical-pref.md`
-# and `prompt-eng-guide.md` — files whose own headers say "policy" and
-# "principles ... that should always be applied". Standing rules, written with
-# nobody's consent, by the very feature whose stated policy is that a
-# behavioural change is the human's call.
-#
-# The direction is the whole point. A denylist fails open: a memory file added
-# next month is auto-appliable until someone remembers to classify it. An
-# allowlist fails closed — the new file's items wait for a human, which costs a
-# few lines of reading once.
-#
-# Membership test: does this file *record* something (a project's state, a
-# person's history, a technical gotcha), or does it *instruct* — voice guides,
-# preference and policy files, anything the agent reads to decide how to act?
-RECALL_FILES = frozenset({
-    # people, projects, money — pure record
-    "career-history.md", "dolcebot.md", "dolcedata.md", "dolcesim.md",
-    "finances.md", "life.md", "me.md", "multiplai.md", "personal-projects.md",
-    "taxes-italy.md", "career-strategy.md",
-    # technical knowledge: gotchas, benchmarks, platform behaviour. Normative
-    # sentences do turn up in these, which is what `_NORMATIVE_RE` below is for
-    # — the file being on this list is necessary, never sufficient.
-    "ai-agent-patterns.md", "apple.md", "audiovideo.md", "claude-code-tools.md",
-    "dev.md", "infra-patterns.md", "python.md",
-})
 
-# An item can carry a rule into a recall file — "always stage with a pathspec",
-# "never use bare git add" — and a file-level gate alone would wave it through.
-# So the *text* is checked too: anything phrased as a standing instruction goes
-# to the human wherever it lands.
+# --- the write modes --------------------------------------------------------
+
+WRITE_MODES: tuple[str, ...] = ("review", "triage", "auto")
+
+# `triage`, not `auto`. Auto-apply without a measured revert rate is a promise
+# nobody has evidence for; `triage` is what produces that evidence, and flipping
+# the default later is a config change rather than a redesign.
+DEFAULT_WRITE_MODE = "triage"
+
+
+def write_mode() -> str:
+    """The configured ``memory_write_mode``, or the safe value.
+
+    Read through :mod:`multiplai_core.plugin_options`, which uppercases the key
+    once — Claude Code exports ``CLAUDE_PLUGIN_OPTION_MEMORY_WRITE_MODE``, and
+    reading it under the key's own spelling misses *silently* (#148 cost eight
+    days that way).
+
+    A value outside :data:`WRITE_MODES` falls back to ``review``, not to the
+    default. A typo in a config file must not be able to widen what gets
+    written unattended, and ``review`` is the mode where nothing does.
+    """
+    raw = option("memory_write_mode", DEFAULT_WRITE_MODE).strip().lower()
+    return raw if raw in WRITE_MODES else "review"
+
+
+# --- the rubric -------------------------------------------------------------
+
+# P2 deliberately exported no ordering: ranking is a judgement about what may be
+# written unreviewed, and it belongs to whatever makes that decision. This is
+# that decision. Higher means *more* caution, and reconciliation takes the max
+# of the extractor's label and the judge's, so a disagreement always resolves
+# toward the more conservative reading.
 #
-# Deliberately trigger-happy. These words appear in plenty of harmless factual
-# sentences ("the API always returns UTF-8"), and every false positive costs
-# one line of reading, while a false negative writes a rule nobody approved.
-_NORMATIVE_RE = re.compile(
-    r"\b("
-    r"always|never|must|should|shall|"
-    r"don'?t|do not|avoid|refuse|forbidden|required|mandatory|"
-    r"prefer|instead of|rather than|"
-    r"make sure|ensure that|remember to|be sure to"
-    r")\b",
-    re.IGNORECASE,
-)
+# Only the tier boundaries are policy. CORRECTION and DECLARATION are one tier
+# because both come from the user; EMPIRICAL and RESEARCH are one tier because
+# both are re-verifiable without asking them; INFERENCE stands alone because
+# nothing verified it at all.
+PROVENANCE_CAUTION: dict[str, int] = {
+    "CORRECTION": 0,
+    "DECLARATION": 0,
+    "EMPIRICAL": 1,
+    "RESEARCH": 1,
+    "INFERENCE": 2,
+}
 
-# The only change verb that cannot destroy existing memory. `update`/`replace`
-# rewrite a line that may well have been correct; an empty or unrecognised verb
-# means the block did not parse the way the format promises, and an unparsed
-# item is not one to apply unattended.
-ADDITIVE_CHANGES = frozenset({"add"})
+# Blast radius, least to most. A wrong FACT is noticed when it contradicts
+# something; a wrong RULE changes what gets noticed at all.
+KIND_BLAST: dict[str, int] = {
+    "FACT": 0,
+    "DECISION": 1,
+    "INTENTION": 2,
+    "RULE": 3,
+}
 
-# Reason codes, ordered by how much they should worry a reader. An item can
-# trip several; `Item.reasons` keeps all of them, and the receipt shows the set.
+# `taxonomy.LEGACY_TYPE_MAP` maps `RULE-PROPOSAL` to `(None, "RULE")` — a
+# genuinely absent provenance, which P2 refused to substitute a default for
+# because the old vocabulary never recorded one. The substitution is the
+# consumer's to make, so it is made here, explicitly: a missing provenance reads
+# as INFERENCE. Note this changes no outcome — every INFERENCE cell of the
+# rubric is already `review` — which is exactly why it is the safe reading.
+UNLABELLED_PROVENANCE = "INFERENCE"
+# And a missing kind reads as RULE, matching `taxonomy.UNCLEAR_KIND`: the widest
+# blast radius, so an unlabelled item lands in front of a human. Every proposal
+# drafted before the taxonomy existed has no pair at all, and the 921 KB corpus
+# is unlabelled by design — an absent pair is a legitimate state, not an error.
+UNLABELLED_KIND = taxonomy.UNCLEAR_KIND
+
+
+def rubric_verdict(provenance: Optional[str], kind: Optional[str]) -> str:
+    """``"apply"`` or ``"review"`` for a ``(provenance, kind)`` pair.
+
+    Nine cells, no model. ``apply`` here is **permission**, not a decision: the
+    judge still has to affirm it and the floor still has to allow it.
+    """
+    p = (provenance or UNLABELLED_PROVENANCE).upper()
+    k = (kind or UNLABELLED_KIND).upper()
+    if k in ("RULE", "INTENTION"):
+        return "review"
+    if PROVENANCE_CAUTION.get(p, 2) == 0:
+        return "apply"  # from the user: FACT and DECISION both clear
+    if PROVENANCE_CAUTION.get(p, 2) == 1:
+        return "apply" if k == "FACT" else "review"
+    return "review"  # INFERENCE, or anything unrecognised
+
+
+def rubric_reason(provenance: Optional[str], kind: Optional[str]) -> str:
+    """The reason code explaining a ``review`` from :func:`rubric_verdict`."""
+    k = (kind or UNLABELLED_KIND).upper()
+    p = (provenance or UNLABELLED_PROVENANCE).upper()
+    if k == "RULE":
+        return "kind-rule"
+    if PROVENANCE_CAUTION.get(p, 2) >= 2:
+        return "weak-provenance"
+    return "rubric-review"
+
+
+def reconciled_pair(item, verdict) -> tuple[str, str, bool]:
+    """The pair to judge *item* by: the more conservative of the two readings.
+
+    The extractor saw the whole session; the judge sees the item as it will
+    land. Neither is authoritative alone, so each half is taken from whichever
+    source is more cautious about it, and the disagreement is reported so it can
+    be counted rather than silently absorbed.
+    """
+    ext_p = (getattr(item, "provenance", "") or "").upper()
+    ext_k = (getattr(item, "kind", "") or "").upper()
+    jud_p = (getattr(verdict, "provenance", "") or "").upper() if verdict else ""
+    jud_k = (getattr(verdict, "kind", "") or "").upper() if verdict else ""
+
+    def _pick(a: str, b: str, ranks: Mapping[str, int]) -> str:
+        if not a:
+            return b
+        if not b:
+            return a
+        return a if ranks.get(a, 99) >= ranks.get(b, 99) else b
+
+    provenance = _pick(ext_p, jud_p, PROVENANCE_CAUTION)
+    kind = _pick(ext_k, jud_k, KIND_BLAST)
+    disagreed = bool(
+        (ext_p and jud_p and ext_p != jud_p) or (ext_k and jud_k and ext_k != jud_k)
+    )
+    return provenance, kind, disagreed
+
+
+# --- reason codes -----------------------------------------------------------
+
+# Ordered by how much they should worry a reader. An item can trip several;
+# `Item.reasons` keeps all of them in this order, and the first is the bucket it
+# appears under.
 REASON_LABELS = {
-    "rule-proposal": "changes a behavioural rule",
-    "not-recall-file": "targets a file that instructs rather than records",
-    "normative-language": "reads as a standing instruction, not a fact",
+    # The code floor. These are refusals, never judgements about content.
     "unsafe-target": "target filename is not a plain memory filename",
-    "routing-warning": "flagged by the routing gate",
-    "low-confidence": "drafter marked it low confidence",
+    "symlinked-target": "target is a symlink, so the write would land elsewhere",
+    "escapes-memory-dir": "target resolves outside the memory directory",
+    "reserved-filename": "targets a reserved instruction file (CLAUDE.md / AGENTS.md)",
     "not-additive": "revises or replaces existing memory",
     "unparsed": "block did not parse — no change verb, or no text",
+    # The judge.
+    "redundant": "already stated in the target file",
+    "judge-drop": "the judge says it does not belong in memory",
+    "citation-unsupported": "the cited source does not support the claim",
+    "judge-doubt": "the judge escalated it for a human despite the rubric",
+    "unjudged": "no model verdict — the judge was unavailable or its batch failed",
+    # The rubric, from the provenance/kind pair.
+    "kind-rule": "a standing rule — never applied without you reading it",
+    "weak-provenance": "inferred or unlabelled — nobody confirmed it",
+    "rubric-review": "its provenance/kind pair does not clear the auto-apply rubric",
+    # Evidence the judge is shown. Not a veto: an explicit judge `apply` clears
+    # it, because the judge was told the gate had fired and applied anyway.
+    "routing-warning": "flagged by the routing gate",
 }
+
+# Above this many rejections the receipt shows grouped counts instead of every
+# item. A 200-line rejection list recreates exactly the review fatigue this
+# whole programme exists to remove.
+REJECTION_DETAIL_LIMIT = 25
 
 
 @dataclass(frozen=True)
@@ -133,11 +283,16 @@ class Item:
     # The two-axis taxonomy (lib/taxonomy.py), carried from the learning this
     # item came from. Empty for items with no pair — every proposal drafted
     # before the taxonomy shipped, and any half the drafter could not read off
-    # its source. **Nothing here classifies on them**: `classify` is unchanged,
-    # and the pair rides along so the receipt can say where an unreviewed line
-    # came from and so a later classifier has the fields to work with.
+    # its source. The rubric reads an absent half as its most cautious value.
     provenance: str = ""
     kind: str = ""
+    # Did the routing gate name this item? Evidence for the judge, not a veto.
+    routing_flagged: bool = False
+    # What the rubric alone permits, before the judge and before the floor.
+    rubric: str = "review"
+    # The judge's one-line English, carried so a receipt can say *why* without
+    # the reader going back to the proposal.
+    judge_reason: str = ""
 
     @property
     def auto(self) -> bool:
@@ -157,6 +312,15 @@ class Item:
 
 @dataclass(frozen=True)
 class Triage:
+    """The partition of a proposal's pending items.
+
+    ``auto`` is **empty until** :func:`apply_verdicts` has run: :func:`classify`
+    computes what the rubric permits, and permission is not a decision. That is
+    the fail-closed property stated structurally — a caller that forgets to
+    judge, or whose judging failed entirely, gets nothing to apply rather than
+    getting the rubric's permissive cells.
+    """
+
     auto: tuple[Item, ...]
     review: tuple[Item, ...]
     # Conflict Resolutions live under their own heading and revise lines that
@@ -164,10 +328,16 @@ class Triage:
     # update entries. Counted here only so the caller can tell the reviewer
     # they are still waiting.
     conflict_resolutions: int
+    dropped: tuple[Item, ...] = ()
+    judged: bool = False
+    # How many items kept their conservative default because their judge batch
+    # failed, timed out, or was never made. Contract C4 requires this be
+    # visible: a silent fallback is indistinguishable from a working judge.
+    unjudged: int = 0
 
     @property
     def total(self) -> int:
-        return len(self.auto) + len(self.review)
+        return len(self.auto) + len(self.review) + len(self.dropped)
 
     def auto_by_file(self) -> dict[str, list[Item]]:
         return _group(self.auto)
@@ -177,7 +347,13 @@ class Triage:
         for item in self.review:
             # Bucket by the first (most significant) reason so an item appears
             # once; `item.reasons` still carries the rest for the detail line.
-            out.setdefault(item.reasons[0], []).append(item)
+            out.setdefault(item.reasons[0] if item.reasons else "unjudged", []).append(item)
+        return out
+
+    def dropped_by_reason(self) -> dict[str, list[Item]]:
+        out: dict[str, list[Item]] = {}
+        for item in self.dropped:
+            out.setdefault(item.reasons[0] if item.reasons else "judge-drop", []).append(item)
         return out
 
 
@@ -188,43 +364,52 @@ def _group(items) -> dict[str, list[Item]]:
     return out
 
 
-_SAFE_TARGET_RE = re.compile(r"^[A-Za-z0-9._-]+\.md$")
-
-
-def is_safe_target(filename: str) -> bool:
-    """Is *filename* a plain memory filename, safe to join onto memory_dir?
-
-    The target comes from a ``## Updates for `x` `` heading written by a model,
-    captured as ``[^`]+`` — so it is arbitrary text, and ``memory_dir / target``
-    happily resolves ``../../CLAUDE.md`` to the workspace file. The existing
-    ``.exists()`` check is no guard at all: the interesting traversal targets
-    are precisely the files that exist.
-
-    A basename ending in ``.md``, with no separators and no ``..``. Anything
-    else is not a memory file, whatever it claims.
-    """
-    return (
-        bool(_SAFE_TARGET_RE.match(filename))
-        and ".." not in filename
-        and filename == PurePosixPath(filename).name
-    )
-
-
 def has_routing_section(proposal: str) -> bool:
     """Did the routing gate actually run on this proposal?
 
     ``dream.py``'s ``_with_routing_warnings`` is fail-open: on any exception it
     returns the proposal with no warnings section at all. An absent section is
     therefore indistinguishable from a clean one to
-    :func:`flagged_by_routing`, and treating it as clean would auto-apply every
-    item the gate would have flagged — 6 of them in the run this module was
-    built against. The renderer always writes ``(none)`` when it finds nothing,
-    so "clean" and "never ran" *are* distinguishable — but only if somebody
-    checks, which is what this exists for.
+    :func:`flagged_by_routing`, and treating it as clean would hide the gate's
+    evidence from the judge on exactly the proposals where it matters. The
+    renderer always writes ``(none)`` when it finds nothing, so "clean" and
+    "never ran" *are* distinguishable — but only if somebody checks, which is
+    what this exists for.
     """
     return any(
         line.startswith("## Routing Warnings") for line in proposal.splitlines()
     )
+
+
+def duplicate_labels(proposal: str) -> list[tuple[str, int]]:
+    """``(target, number)`` pairs *proposal* uses more than once, sorted.
+
+    ``(target, number)`` is the item identity everywhere in this pipeline — the
+    judge's label, the verdict lookup, the receipt — and nothing enforced its
+    uniqueness. ``parse_proposal_entries`` appends every ``### N.`` block with no
+    dedupe or renumber check, so two ``### 3.`` entries under one
+    ``## Updates for`` heading make two items that are indistinguishable
+    downstream: both resolve to whichever verdict came back for that label, so
+    one of them is written to standing instructions on a verdict rendered about
+    the *other* one's text.
+
+    Refused rather than repaired, and refused at the same place the missing
+    routing section is: renumbering would silently change which item a cached
+    verdict or an existing receipt refers to, and there is no way to know which
+    of the two the drafter meant.
+    """
+    seen: set[tuple[str, int]] = set()
+    dupes: set[tuple[str, int]] = set()
+    for entry in parse_proposal_entries(proposal):
+        try:
+            number = int(entry["number"])
+        except (TypeError, ValueError):
+            continue
+        key = (entry["target"], number)
+        if key in seen:
+            dupes.add(key)
+        seen.add(key)
+    return sorted(dupes)
 
 
 def flagged_by_routing(proposal: str) -> set[tuple[str, int]]:
@@ -261,15 +446,18 @@ def _count_conflict_resolutions(proposal: str) -> int:
 
 
 def classify(proposal: str) -> Triage:
-    """Partition *proposal*'s pending update items into auto-apply and review.
+    """Partition *proposal*'s pending items **before** any model has seen them.
+
+    Model-free by construction: this is the rubric and the floor, nothing else.
+    Every item lands in ``review`` — including the ones the rubric permits,
+    which carry the reason ``unjudged`` until :func:`apply_verdicts` replaces it
+    with a verdict. So a caller that never judges applies nothing.
 
     Items already under ``## Processed`` are excluded: the entry parser only
-    reads blocks under a ``## Updates for`` heading, and processed blocks sit
-    under ``## Processed``. So triaging a partly-reviewed proposal is safe and
-    idempotent — it never re-proposes a decided item.
+    reads blocks under a ``## Updates for`` heading, so triaging a
+    partly-reviewed proposal is safe and idempotent.
     """
     flagged = flagged_by_routing(proposal)
-    auto: list[Item] = []
     review: list[Item] = []
 
     for entry in parse_proposal_entries(proposal):
@@ -277,32 +465,6 @@ def classify(proposal: str) -> Triage:
             number = int(entry["number"])
         except (TypeError, ValueError):
             continue  # not an `### N.` update entry; nothing to decide
-        blob = f"{entry['title']}\n{entry['text']}"
-        reasons: list[str] = []
-
-        if _RULE_PROPOSAL_RE.search(blob):
-            reasons.append("rule-proposal")
-        if not is_safe_target(entry["target"]):
-            reasons.append("unsafe-target")
-        elif entry["target"] not in RECALL_FILES:
-            reasons.append("not-recall-file")
-        if _NORMATIVE_RE.search(blob):
-            reasons.append("normative-language")
-        if (entry["target"], number) in flagged:
-            reasons.append("routing-warning")
-        if _LOW_CONFIDENCE_RE.search(blob):
-            reasons.append("low-confidence")
-        if not entry["change"]:
-            reasons.append("unparsed")
-        elif entry["change"] not in ADDITIVE_CHANGES:
-            reasons.append("not-additive")
-        # A block with a change verb but no quoted body parses "successfully"
-        # into an empty text. The applier would then be handed a title and told
-        # to apply it, under a prompt that says not to invent — best case a
-        # no-op, realistic case a bullet it composes from the title, which is
-        # unreviewed, unsourced, and absent from the receipt as well.
-        if not entry["text"].strip() and "unparsed" not in reasons:
-            reasons.append("unparsed")
 
         item = Item(
             target=entry["target"],
@@ -312,17 +474,159 @@ def classify(proposal: str) -> Triage:
             change=entry["change"],
             text=entry["text"],
             source=entry.get("source", ""),
-            reasons=tuple(reasons),
+            reasons=(),
             provenance=entry.get("provenance", ""),
             kind=entry.get("kind", ""),
+            routing_flagged=(entry["target"], number) in flagged,
         )
-        (review if reasons else auto).append(item)
+        rubric = rubric_verdict(item.provenance, item.kind)
+        reasons: list[str] = []
+        refusal = floor_check(item)
+        if refusal:
+            reasons.append(refusal)
+        if rubric != "apply":
+            reasons.append(rubric_reason(item.provenance, item.kind))
+        if item.routing_flagged:
+            reasons.append("routing-warning")
+        if not reasons:
+            reasons.append("unjudged")
+        review.append(replace(item, reasons=tuple(reasons), rubric=rubric))
+
+    return Triage(
+        auto=(),
+        review=tuple(review),
+        conflict_resolutions=_count_conflict_resolutions(proposal),
+        judged=False,
+        unjudged=len(review),
+    )
+
+
+def apply_verdicts(
+    triage: Triage,
+    verdicts: Mapping[tuple[str, int], object],
+    *,
+    mode: str = DEFAULT_WRITE_MODE,
+) -> Triage:
+    """Fold the judge's verdicts into *triage*. Pure — no model, no I/O.
+
+    The only-lower rule, stated once: an item is applied when **the rubric
+    permits it and the judge affirms it and the floor allows it**. A judge
+    ``apply`` on an item the rubric refused therefore changes nothing, which is
+    what makes ``kind: RULE`` unreachable from a prompt. A judge ``review`` or
+    ``drop`` always takes effect, in either direction of the rubric.
+
+    Verdicts for a ``(target, number)`` that is not in the proposal are ignored.
+    Items with no verdict at all keep ``unjudged`` and stay in ``review`` —
+    which is how a failed batch, an unparseable reply and an absent SDK all
+    produce the same partition ``review`` mode produces.
+
+    ``mode`` widens exactly one thing: in ``auto``, an item whose *rubric*
+    reason was its provenance still applies when its kind is ``FACT``. It never
+    widens past ``kind: RULE``, never past the judge's own escalation, and never
+    past the floor.
+    """
+    auto: list[Item] = []
+    review: list[Item] = []
+    dropped: list[Item] = []
+    unjudged = 0
+
+    for item in list(triage.auto) + list(triage.review) + list(triage.dropped):
+        verdict = verdicts.get((item.target, item.number))
+        outcome, reasons, judge_reason = _decide(item, verdict, mode=mode)
+        if verdict is None:
+            unjudged += 1
+        provenance, kind, _ = reconciled_pair(item, verdict)
+        decided = replace(
+            item,
+            reasons=tuple(reasons),
+            provenance=provenance or item.provenance,
+            kind=kind or item.kind,
+            judge_reason=judge_reason,
+        )
+        if outcome == "apply":
+            auto.append(decided)
+        elif outcome == "drop":
+            dropped.append(decided)
+        else:
+            review.append(decided)
 
     return Triage(
         auto=tuple(auto),
         review=tuple(review),
-        conflict_resolutions=_count_conflict_resolutions(proposal),
+        conflict_resolutions=triage.conflict_resolutions,
+        dropped=tuple(dropped),
+        judged=True,
+        unjudged=unjudged,
     )
+
+
+def _decide(item: Item, verdict, *, mode: str) -> tuple[str, list[str], str]:
+    """``(outcome, reasons, judge_reason)`` for one item. The whole policy."""
+    provenance, kind, _ = reconciled_pair(item, verdict)
+    rubric = rubric_verdict(provenance, kind)
+    judge_reason = (getattr(verdict, "reason", "") or "") if verdict else ""
+    reasons: list[str] = []
+
+    # 1. The judge's own escalations win outright, in either direction of the
+    #    rubric. Redundancy is checked before the verdict word because a judge
+    #    that reports `redundant=yes` and then says `apply` has contradicted
+    #    itself, and the conservative half of a contradiction is the answer.
+    if verdict is not None and getattr(verdict, "redundant", False):
+        return "drop", ["redundant"], judge_reason
+    if verdict is not None and getattr(verdict, "verdict", "") == "drop":
+        return "drop", ["judge-drop"], judge_reason
+
+    # 2. The floor. Recorded whatever the outcome, enforced below.
+    refusal = floor_check(item)
+    if refusal:
+        reasons.append(refusal)
+
+    # 3. No verdict — a failed batch, an unparseable reply, or no SDK at all.
+    if verdict is None:
+        if rubric != "apply":
+            reasons.append(rubric_reason(provenance, kind))
+        if item.routing_flagged:
+            reasons.append("routing-warning")
+        if not reasons:
+            reasons.append("unjudged")
+        return "review", reasons, judge_reason
+
+    # 4. The judge escalated.
+    if getattr(verdict, "verdict", "") != "apply":
+        reasons.append("judge-doubt")
+        if item.routing_flagged:
+            reasons.append("routing-warning")
+        return "review", reasons, judge_reason
+
+    # 5. The judge affirmed. The rubric now has to permit it.
+    permitted = rubric == "apply" or (mode == "auto" and (kind or "").upper() == "FACT")
+    if not permitted:
+        reasons.append(rubric_reason(provenance, kind))
+        return "review", reasons, judge_reason
+
+    # 6. Every cell the rubric conditions on the judge's citation check.
+    #
+    # `>= 1`, not `== 1`. With `== 1` the check applied to caution-1
+    # (EMPIRICAL, RESEARCH) and *skipped* caution-2 (INFERENCE) — so in `auto`
+    # mode, where step 5's bypass lets any FACT through, an unverified model
+    # inference with NO citation at all was applied, while a fact read in a real
+    # source whose citation the judge could not corroborate was held for review.
+    # The one cell deliberately conditioned on evidence was bypassed by the cell
+    # with less of it. Caution 0 (CORRECTION, DECLARATION) is exempt by design:
+    # a correction and a statement of the user's own preference are not claims
+    # about an external source, so there is nothing for a citation to support.
+    if (
+        (kind or "").upper() == "FACT"
+        and PROVENANCE_CAUTION.get((provenance or "").upper(), 2) >= 1
+        and getattr(verdict, "citation", "none") != "supported"
+    ):
+        reasons.append("citation-unsupported")
+        return "review", reasons, judge_reason
+
+    # 7. The floor is the last word, and it can only refuse.
+    if refusal:
+        return "review", reasons, judge_reason
+    return "apply", [], judge_reason
 
 
 def auto_slice(items: list[Item]) -> str:
@@ -355,6 +659,24 @@ def auto_slice(items: list[Item]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _render_item_detail(out: list[str], item: Item, *, drop_reason: str = "") -> None:
+    out.append(f"### {item.number}. {item.title}")
+    if item.section:
+        out.append(f"**Section:** {item.section}")
+    if item.pair:
+        out.append(f"**Provenance:** {item.pair}")
+    if drop_reason:
+        out.append(f"**Dropped:** {REASON_LABELS.get(drop_reason, drop_reason)}")
+    if item.judge_reason:
+        out.append(f"**Judge:** {item.judge_reason}")
+    out.append("")
+    for text_line in item.text.splitlines():
+        out.append(f"> {text_line}")
+    out.append("")
+    out.append(f"**Source:** {item.source or '(none recorded)'}")
+    out.append("")
+
+
 def render_receipt(
     triage: Triage,
     *,
@@ -362,57 +684,87 @@ def render_receipt(
     applied: dict[str, list[Item]],
     failed: dict[str, str],
     generated: str,
+    mode: str = DEFAULT_WRITE_MODE,
+    rejections_log: str = "",
 ) -> str:
-    """The audit trail for everything applied without a human reading it.
+    """The audit trail for everything a model decided without a human reading it.
 
-    This file is the other half of the bargain: items skip review only because
-    every one of them is written down here with its target, section, text and
-    source, next to a memory directory under git. Without the receipt this is
-    silent mutation; with it, it is a reviewable commit.
+    This file is the other half of the bargain. Items skip review only because
+    every one of them is written down here — target, section, text, source, the
+    labels it was judged under and the judge's own sentence — next to a memory
+    directory under git. Without the receipt this is silent mutation; with it,
+    it is a reviewable commit and a one-command revert.
+
+    The ``Rejected`` section is not decoration. Auditing refusals is how a judge
+    earns the delegation: a pass that only reports what it wrote is
+    indistinguishable from one that quietly discards good items.
     """
     total_applied = sum(len(v) for v in applied.values())
     out = [
-        f"# Dream auto-apply receipt — {generated}",
+        f"# Dream triage receipt — {generated}",
         "",
         f"**Proposal:** `{proposal_name}`",
-        f"**Auto-applied:** {total_applied} item(s) across {len(applied)} file(s)",
+        f"**Mode:** `{mode}`",
+        f"**Applied:** {total_applied} item(s) across {len(applied)} file(s)",
+        f"**Rejected (dropped):** {len(triage.dropped)} item(s)",
         f"**Left for review:** {len(triage.review)} item(s)",
+        f"**Kept a conservative default because no verdict arrived:** "
+        f"{triage.unjudged} item(s)",
         "",
-        "Every item below was applied **without human review**, because it is an "
-        "additive entry to a non-behavioural memory file that no gate flagged. "
-        "Memory is under git: `git -C .multiplai/memory diff` shows exactly what "
-        "changed, and reverting is a `git checkout`.",
+        "Every item under **Applied** was classified by a **model** and written "
+        "**without a human reading it**. The containment is this receipt plus git: "
+        "`git -C .multiplai/memory log -1` names the commit and "
+        "`git -C .multiplai/memory revert <sha>` undoes the whole batch.",
         "",
     ]
+    if rejections_log:
+        out += [f"**Rejection log:** `{rejections_log}`", ""]
+
     if failed:
         out += [
             "## Failed to apply",
             "",
-            "These were classified auto-appliable but the applier did not produce a "
-            "safe result, so **nothing was written** for them and their items stay "
+            "These cleared every check but the applier did not produce a safe "
+            "result, so **nothing was written** for them and their items stay "
             "pending in the proposal.",
             "",
         ]
         out += [f"- `{name}` — {reason}" for name, reason in sorted(failed.items())]
         out.append("")
 
+    out += ["## Applied", ""]
+    if not applied:
+        out += ["(nothing)", ""]
     for target in sorted(applied):
         items = applied[target]
-        out += [f"## `{target}` — {len(items)} item(s)", ""]
+        out += [f"### `{target}` — {len(items)} item(s)", ""]
         for item in items:
-            out.append(f"### {item.number}. {item.title}")
-            if item.section:
-                out.append(f"**Section:** {item.section}")
-            if item.pair:
-                out.append(f"**Provenance:** {item.pair}")
-            out.append("")
-            for text_line in item.text.splitlines():
-                out.append(f"> {text_line}")
-            # Provenance is the part that makes an unreviewed line traceable
-            # back to the session that produced it.
-            out.append("")
-            out.append(f"**Source:** {item.source or '(none recorded)'}")
-            out.append("")
+            _render_item_detail(out, item)
+
+    out += ["## Rejected", ""]
+    if not triage.dropped:
+        out += ["(nothing dropped)", ""]
+    elif len(triage.dropped) <= REJECTION_DETAIL_LIMIT:
+        out += [
+            "Dropped means **not promoted to memory** — the source learning is "
+            "untouched and every one of these is in the rejection log, so a drop "
+            "can be read back and overruled.",
+            "",
+        ]
+        for item in triage.dropped:
+            _render_item_detail(out, item, drop_reason=item.reasons[0] if item.reasons else "")
+    else:
+        out += [
+            f"{len(triage.dropped)} items were dropped — too many to read here "
+            f"(the limit is {REJECTION_DETAIL_LIMIT}; a list this long recreates "
+            "the review fatigue triage exists to remove). Grouped by reason; every "
+            "one is in the rejection log in full.",
+            "",
+        ]
+        for reason, items in sorted(triage.dropped_by_reason().items()):
+            label = REASON_LABELS.get(reason, reason)
+            out.append(f"- **{label}** ({len(items)})")
+        out.append("")
 
     if triage.review:
         out += [
@@ -431,13 +783,26 @@ def render_receipt(
 
 
 def render_summary(
-    triage: Triage, *, applied_count: int, receipt_path: str, dry_run: bool = False
+    triage: Triage,
+    *,
+    applied_count: int,
+    receipt_path: str,
+    dry_run: bool = False,
+    mode: str = DEFAULT_WRITE_MODE,
 ) -> str:
     """The short console block the reviewing skill shows instead of 190 items."""
-    heading = "WOULD AUTO-APPLY" if dry_run else "AUTO-APPLIED"
-    lines = [f"{heading} ({applied_count})  → receipt: {receipt_path}"]
+    heading = "WOULD APPLY" if dry_run else "APPLIED"
+    lines = [f"mode: {mode}"]
+    lines.append(f"{heading} ({applied_count})  → receipt: {receipt_path}")
     for target, items in sorted(triage.auto_by_file().items()):
         lines.append(f"    {target:<28} {len(items)}")
+    lines.append("")
+    lines.append(f"DROPPED ({len(triage.dropped)})")
+    for reason, items in sorted(triage.dropped_by_reason().items()):
+        label = REASON_LABELS.get(reason, reason)
+        refs = ", ".join(i.label for i in items[:6])
+        more = f", +{len(items) - 6} more" if len(items) > 6 else ""
+        lines.append(f"    {label}: {refs}{more}")
     lines.append("")
     lines.append(f"NEEDS YOU ({len(triage.review)})")
     for reason, items in sorted(triage.review_by_reason().items()):
@@ -453,4 +818,30 @@ def render_summary(
             f"    conflict resolutions: {triage.conflict_resolutions} "
             f"(own section — always reviewed)"
         )
+    if triage.unjudged:
+        lines.append("")
+        lines.append(
+            f"    {triage.unjudged} item(s) kept a conservative default because no "
+            f"judge verdict arrived."
+        )
     return "\n".join(lines)
+
+
+def rejection_records(triage: Triage, *, proposal_name: str, key_of=None) -> list[dict]:
+    """Rejection-log records for every dropped item. Import-light helper.
+
+    ``key_of`` computes an item's content hash (``memory_judge.item_key``); it
+    is injected rather than imported so this module stays free of the judge.
+    """
+    from lib import rejections
+
+    return [
+        rejections.record_for(
+            item,
+            proposal=proposal_name,
+            reason=item.reasons[0] if item.reasons else "judge-drop",
+            judge_reason=item.judge_reason,
+            item_key=key_of(item) if key_of else "",
+        )
+        for item in triage.dropped
+    ]

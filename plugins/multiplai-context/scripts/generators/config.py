@@ -160,7 +160,7 @@ _KNOWN_OPTIONS = (
     "qmd_ssh_host", "qmd_collection", "qmd_strategy", "qmd_http_url",
     "qmd_candidate_limit", "qmd_min_score", "catalog_concurrency",
     "recommend_cooldown_turns", "keep_ratio", "enable_costs",
-    "memory_conflict_preamble", "enable_dev_references",
+    "memory_conflict_preamble", "enable_dev_references", "memory_write_mode",
 )
 
 

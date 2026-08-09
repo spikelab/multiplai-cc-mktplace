@@ -18,6 +18,154 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.36.0] - 2026-08-08
+
+### Changed
+
+- **Triage now judges what an item *says*, not what it looks like.** The old
+  classifier was eight regex-and-allowlist gates, and on the real 194-item
+  proposal it sent 120 items to you — **90 of them for one reason**: the text
+  contained a word like "always" or "never". That gate fires on "the API always
+  returns UTF-8", because the difference between a fact and an instruction is
+  semantic and a pattern match is not. It is gone, along with the 18-name
+  hand-maintained list of "files that are safe to write to", which went stale
+  and could not see any memory file added after it was written.
+
+  What replaces them is a separate model call whose only job is to find reasons
+  to escalate. It is never told it is grading another pass's output. Per item it
+  re-derives the provenance/kind labels, checks whether the cited source
+  actually supports the claim, and checks whether the target file already says
+  it — three questions no pattern could ever answer.
+
+- **What may be applied without you reading it is now a table you can read.**
+  Provenance sets confidence, kind sets blast radius, and only the intersection
+  applies:
+
+  | | fact | decision | rule |
+  |---|---|---|---|
+  | you corrected it / you stated it | apply | apply | **review** |
+  | observed while working / read in a source | apply, if the citation holds | review | **review** |
+  | Claude inferred it | review | review | **review** |
+
+  **A rule never applies automatically. Not in any mode, not even when you
+  yourself said it.** That is about blast radius, not trust: a wrong fact is one
+  you notice later; a wrong rule changes what you notice.
+
+  The model cannot move an item *up* this table. It can only escalate for
+  review, or drop. So talking the judge into approving a rule changes nothing.
+
+### Added
+
+- **`memory_write_mode`** — a new setting, defaulting to **`triage`**.
+  - `review` — nothing is ever applied automatically. This is exactly the old
+    behaviour, one word away.
+  - `triage` *(default)* — the judge runs and the table decides; everything else
+    waits for you.
+  - `auto` — also applies plain facts the table would have held back. Rules
+    still never apply.
+
+  The nightly maintenance pass now applies under `triage` and `auto`. **This is
+  a real change: until now nothing unattended ever wrote to your memory files.**
+  Every applied item is in a receipt, memory is a git repository, and the
+  receipt ends with the exact `git revert` command that undoes the whole batch.
+
+  **Read this before you upgrade, because the default turns it on.** With
+  `memory_write_mode: triage`, the whole chain — learnings → proposal → judge →
+  memory write → git commit — runs on the daily maintenance cadence with no
+  human present and without you invoking `/dream-remember` at all. The
+  maintenance pass can even generate the proposal it then triages, in one run.
+  Set `memory_write_mode: review` to keep the old behaviour exactly.
+
+  One related narrowing worth knowing: destination protection used to be a list
+  of 18 filenames that could never be written unattended. It is now two —
+  `CLAUDE.md` and `AGENTS.md` — because a filename is a poor proxy for "this
+  file holds behaviour". What protects `preferences.md`, `git-policy.md`,
+  `technical-pref.md` and the voice guides now is the classification: an item
+  whose **kind** is `RULE` is never applied unattended in any mode. That is a
+  better rule and a *model's* judgement rather than a filename match, so it is a
+  genuine trade rather than a straight improvement.
+
+- **A rejection log at `.multiplai/data/rejections.jsonl`.** When the judge
+  drops an item — usually because your memory already says it — the item is
+  written here in full: its text, its labels, its source citation and the
+  judge's own one-line reason. Dropping means "not promoted to memory", never
+  "deleted": the source learning is untouched and any drop can be read back and
+  overruled. The receipt shows every rejection while there are 25 or fewer, and
+  grouped counts above that.
+
+- **The receipt now has both an `Applied` and a `Rejected` section**, each item
+  carrying the labels it was judged under and the judge's reason.
+
+### Fixed
+
+- **A model failure can no longer widen what gets written.** A timed-out batch,
+  a rate limit, an unparseable reply, or no SDK at all now yields *zero*
+  verdicts — and with zero verdicts nothing is applied at all, which is
+  identical to `review` mode. The count of items that kept a conservative
+  default because their batch failed is printed and logged rather than passed
+  over in silence.
+
+- **Verdicts are cached, so re-runs are stable.** Triaging the same proposal
+  twice produces the same partition and costs nothing the second time, and a
+  killed run resumes instead of re-judging. The cache key covers everything the
+  judge was shown — including the citation the item carried, whether the routing
+  gate had flagged it, and the judge's own prompt — so a cache hit is always the
+  answer to the same question. It is not reused when any of those change.
+
+- **Two items numbered the same can no longer be applied on each other's
+  judgement.** A proposal that numbers two entries `### 3.` under one file is
+  now refused outright, with both labels named, rather than triaged: the number
+  is how an item is identified end to end, so two items sharing one would each
+  have been written on the other's verdict. Renumber them, or regenerate.
+
+- **A stricter reading of the judge's reply.** A verdict line for an item that
+  was not in the batch it answers is discarded, and a reply that answers twice
+  for one item is thrown away whole. This closes a route by which text inside a
+  learning could pose as a verdict for a *different* item — most cheaply as a
+  forged `drop`, which would have removed a legitimate learning from your queue.
+
+- **`--dry-run` really does write nothing.** It still calls the model (the
+  partition *is* the judge's answer, so a preview that skipped judging could only
+  report "nothing would apply"), but it no longer saves the verdict cache — so a
+  preview cannot leave behind something a later real run applies from. The help
+  text now says all of this, and no longer describes gates that were removed.
+
+- **An unsupported citation now holds back every fact it should.** The rule is
+  "a factual claim about the world needs a citation the judge could corroborate";
+  it was being applied to facts from research and observation but *skipped* for
+  the weakest class of all — a conclusion the model merely inferred. Under
+  `auto` that meant an uncited inference was applied while a cited fact was held.
+  Corrections and your own stated preferences remain exempt: neither is a claim
+  about an external source.
+
+- **Memory files are written atomically, and a failed write cannot lose a
+  receipt.** The write was truncate-then-write with no error handling, so a
+  failure on the second of two files left the first rewritten with no receipt,
+  no commit and nothing marked processed — the one state the receipt ordering is
+  designed to make impossible. A file that cannot be written is now reported like
+  any other refusal and its items stay pending.
+
+- **The write floor checks where the file actually is.** A symlink sitting in the
+  memory directory used to satisfy every filename check while sending the write
+  somewhere else entirely — including to `CLAUDE.md`. The resolved destination is
+  now checked too, and a symlink is refused outright. Also: a target with a
+  trailing newline is no longer a valid filename (Python's `$` matches before
+  one, so `"CLAUDE.md\n"` had been passing).
+
+- **The rejection log is capped at 5,000 records.** It holds every dropped
+  item's text verbatim and was designed to grow forever — and since
+  `/dream-remember` deletes the source learnings files, it was the one permanent
+  copy. It is not redacted, deliberately (a regex screen over free text fails
+  open while reading as protection); it is bounded, git-ignored, and documented
+  as holding what it holds.
+
+- **`.multiplai/memory/CLAUDE.md` (and `AGENTS.md`) can never be written
+  unattended**, whatever an item claims to be. Neither can a filename that tries
+  to escape the memory directory, an item that revises rather than appends, or
+  one that did not parse. These checks run *after* the model's verdict and can
+  only refuse it.
+
+
 ## [0.35.0] - 2026-08-08
 
 ### Added
@@ -94,6 +242,12 @@ Nothing yet.
   retention window the second is a permanent, growing baseline — which buried the
   first. The report now breaks the total into `unavailable`, `not_judgeable` and
   `empty_verdicts`, and only `unavailable` warns.
+
+- **A blank is not a zero.** If the judge pass fails or times out it writes no
+  verdict at all, leaving the session unjudged — so a bad night can never make
+  your whole corpus read as dead weight. With no model client available, no
+  estimate is recorded; what was injected is still recorded, because that part
+  needs no model.
 
 ## [0.34.0] - 2026-08-08
 
@@ -178,6 +332,8 @@ Nothing yet.
   Routing and injection are unchanged, and dream's triage still does not read
   the pair.
 
+- **Nothing acts on the new labels yet.** Routing, injection and dream's own
+  triage behave exactly as before. This release only records the information.
 ## [0.33.0] - 2026-08-08
 
 ### Added
