@@ -100,6 +100,7 @@ __all__ = [
     "render_receipt",
     "render_summary",
     "rubric_verdict",
+    "shared_bank_items",
     "write_mode",
 ]
 
@@ -240,6 +241,10 @@ def reconciled_pair(item, verdict) -> tuple[str, str, bool]:
 # appears under.
 REASON_LABELS = {
     # The code floor. These are refusals, never judgements about content.
+    "shared-bank-write": (
+        "belongs to a shared memory bank — it leaves as a pull request, never "
+        "as a local write"
+    ),
     "unsafe-target": "target filename is not a plain memory filename",
     "reserved-filename": "targets a reserved instruction file (CLAUDE.md / AGENTS.md)",
     "not-additive": "revises or replaces existing memory",
@@ -583,6 +588,25 @@ def _decide(item: Item, verdict, *, mode: str) -> tuple[str, list[str], str]:
     if refusal:
         return "review", reasons, judge_reason
     return "apply", [], judge_reason
+
+
+def shared_bank_items(triage: Triage) -> tuple[Item, ...]:
+    """Items the floor refused because they target a shared bank.
+
+    These are not rejections. They are the items that should leave as a pull
+    request on the bank (``lib/bank_proposals``), and they are read off the
+    same partition every other outcome is read off — so an item can be
+    *either* applied locally *or* proposed to a bank, never both, and never
+    neither by accident.
+
+    Read from ``review`` only. The floor puts a refused item there, whereas
+    ``dropped`` means the judge said something about the *content* — and a
+    dropped item must not become a pull request on somebody else's repo just
+    because it also happened to be bank-bound.
+    """
+    return tuple(
+        item for item in triage.review if "shared-bank-write" in item.reasons
+    )
 
 
 def auto_slice(items: list[Item]) -> str:

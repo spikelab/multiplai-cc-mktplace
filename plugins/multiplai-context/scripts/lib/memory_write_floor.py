@@ -48,6 +48,23 @@ A block with a verb but no quoted body parses "successfully" into empty text;
 the applier is then handed a title and told to apply it, and composes a bullet
 from the title — unreviewed, unsourced, and absent from the receipt too.
 
+**Shared banks.** A target may now name a bank: ``dolcebot-team/dev.md``. A
+bank other than ``personal`` is memory **other people also read and write**,
+reached over a git remote, and a local apply must never write into it — in any
+mode, under any verdict, in any configuration. That refusal lives here rather
+than in the dream pipeline for the same reason as everything else in this file:
+it is applied to the concrete write, after the verdict, where it cannot be
+argued past. ``auto`` mode cannot reach a shared bank because ``auto`` mode
+runs through ``apply_verdicts``, ``apply_verdicts`` consults the floor, and the
+floor says no.
+
+It is a **refusal, not a rejection of the content**: a shared-bound item is
+exactly the item that should become a pull request on the bank
+(``lib/bank_proposals.py``). The reason code ``shared-bank-write`` is what
+routes it there, which is why the check is lexical — it holds even if the bank
+config is unreadable, and it does not need to know which banks are subscribed
+to know that ``team/dev.md`` is not a local file.
+
 ## Shape, not truth
 
 Every check here judges an item's *form*. None of them can tell whether the
@@ -62,6 +79,8 @@ import re
 from pathlib import PurePosixPath
 from typing import Optional, Protocol
 
+from multiplai_core.banks import PERSONAL_BANK, split_bank_ref
+
 __all__ = [
     "ADDITIVE_CHANGES",
     "RESERVED_BASENAMES",
@@ -69,9 +88,16 @@ __all__ = [
     "floor_check",
     "is_safe_target",
     "is_reserved_target",
+    "target_bank",
+    "targets_shared_bank",
 ]
 
 _SAFE_TARGET_RE = re.compile(r"^[A-Za-z0-9._-]+\.md$")
+
+# Mirrors ``multiplai_core.banks``'s own name rule. Kept as a literal here
+# rather than imported because it guards a *refusal*: this file must be able to
+# reject a target with nothing loaded but stdlib and a regex.
+_BANK_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 # The only change verb that cannot destroy existing memory.
 ADDITIVE_CHANGES = frozenset({"add"})
@@ -83,6 +109,7 @@ RESERVED_BASENAMES = frozenset({"claude.md", "agents.md"})
 # The reason codes this module can return, in the order it checks them. Kept
 # here so the caller's label table and the floor cannot drift apart.
 FLOOR_REASONS: tuple[str, ...] = (
+    "shared-bank-write",
     "unsafe-target",
     "reserved-filename",
     "unparsed",
@@ -99,16 +126,53 @@ class _WriteCandidate(Protocol):
 
 
 def is_safe_target(filename: str) -> bool:
-    """Is *filename* a plain memory filename, safe to join onto ``memory_dir``?
+    """Is *filename* a plain memory filename, safe to join onto a bank dir?
 
     A basename ending in ``.md``, with no separators and no ``..``. Anything
-    else is not a memory file, whatever it claims to be.
+    else is not a memory file, whatever it claims to be. **Unchanged by
+    banks**: a bank-qualified target is not a plain filename and this function
+    still says so. :func:`target_bank` is what splits one.
     """
     return (
         bool(_SAFE_TARGET_RE.match(filename))
         and ".." not in filename
         and filename == PurePosixPath(filename).name
     )
+
+
+def target_bank(target: str) -> tuple[str, str]:
+    """``(bank_name, filename)`` for a proposal target. Purely lexical.
+
+    ``"dev.md"`` and ``"personal/dev.md"`` both name the personal bank; the
+    second spelling is accepted because a model shown bank-qualified refs will
+    sometimes qualify the personal one too, and refusing that would look like a
+    content judgement when it is a naming preference.
+
+    A prefix that is not a **legal bank name** is not treated as a bank at all:
+    ``"../CLAUDE.md"`` returns ``("", "../CLAUDE.md")``, so the traversal falls
+    through to the filename check and is refused as ``unsafe-target`` — the
+    reason it has always been refused for — rather than being relabelled as a
+    bank write. Getting this order wrong would report a path escape as a
+    sharing decision.
+    """
+    bank, filename = split_bank_ref(target or "")
+    if "/" not in (target or ""):
+        return PERSONAL_BANK, target or ""
+    if not _BANK_NAME_RE.match(bank):
+        return "", target or ""
+    return bank, filename
+
+
+def targets_shared_bank(target: str) -> bool:
+    """Does *target* name a bank other than ``personal``?
+
+    Deliberately independent of the configured bank list: whether a *local
+    write* is permitted must not depend on a config file being readable, and
+    ``team/dev.md`` is not a local memory file whether or not ``team`` is
+    subscribed.
+    """
+    bank, _ = target_bank(target)
+    return bool(bank) and bank != PERSONAL_BANK
 
 
 def is_reserved_target(filename: str) -> bool:
@@ -131,9 +195,15 @@ def floor_check(item: _WriteCandidate) -> Optional[str]:
     change = (getattr(item, "change", "") or "").strip().lower()
     text = getattr(item, "text", "") or ""
 
-    if not is_safe_target(target):
+    bank, filename = target_bank(target)
+    if bank and bank != PERSONAL_BANK:
+        # Not a judgement on the content: this is the item that should become
+        # a pull request on the bank. `lib/bank_proposals` picks it up by this
+        # very reason code. What is refused is the *local write*, always.
+        return "shared-bank-write"
+    if not is_safe_target(filename):
         return "unsafe-target"
-    if is_reserved_target(target):
+    if is_reserved_target(filename):
         return "reserved-filename"
     if not change:
         return "unparsed"

@@ -367,6 +367,38 @@ def _maintainer_gate_open(maintainer_state_file: Path) -> bool:
     )
 
 
+def _launch_bank_sync(scripts_dir: Path) -> bool:
+    """Fast-forward subscribed shared banks, detached — if any exist.
+
+    A bank is a git remote, so a sync is a network call of unbounded duration,
+    which a kill-within-seconds hook cannot host. It runs detached and
+    TTL-gated (the child owns the authoritative TTL); a failure inside the
+    child leaves the previously synced content in place and logs, so a bank
+    that cannot be reached is stale-but-working and never a session-start
+    error. No shared banks configured means no child is spawned at all.
+    """
+    try:
+        from lib.banks import shared_banks
+
+        if not shared_banks():
+            return False
+        script = scripts_dir / "memory_bank.py"
+        if not script.exists():
+            return False
+        subprocess.Popen(
+            uv_run_argv(script, "sync", "--quiet"),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        logger.info("Launched detached memory-bank sync")
+        return True
+    except Exception:
+        logger.warning("Could not launch memory bank sync", exc_info=True)
+        return False
+
+
 def _launch_maintainer(scripts_dir: Path, data_dir: Path) -> bool:
     """Fire the proactive memory maintainer, detached — if its gate is open.
 
@@ -659,6 +691,11 @@ def main() -> None:
     # Price the session-transcript corpus into the cost ledger (no-op unless
     # enable_costs is set). Detached + flock-guarded — never blocks the hook.
     _launch_cost_collection(paths.scripts_dir())
+
+    # Fast-forward subscribed shared memory banks (no-op unless a bank is
+    # configured). Detached + TTL-gated — a bank that will not pull is stale,
+    # never a session-start failure.
+    _launch_bank_sync(paths.scripts_dir())
 
     # Drain any deferred extraction markers left by previous session_end
     # hooks. SessionEnd is kill-within-seconds, so the heavy LLM
