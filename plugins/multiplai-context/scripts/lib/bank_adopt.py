@@ -74,6 +74,12 @@ CONVERSATION_THRESHOLD = 5
 #: happen to have a blank line in the same place.
 _TRIVIAL_RE = re.compile(r"^(?:[-*_=#>\s`|]*|\d+[.)])$")
 
+#: Per-file bookkeeping the memory tooling maintains, not content. A bank will
+#: never carry the personal file's freshness header, and reporting it as
+#: "missing from the bank" would make every adoption look unsafe for a reason
+#: that has nothing to do with whether the content moved.
+_METADATA_RE = re.compile(r"^\*\*(?:last updated|source|status)\b", re.IGNORECASE)
+
 
 def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -84,6 +90,8 @@ def _significant_lines(text: str) -> list[str]:
     for raw in (text or "").splitlines():
         line = " ".join(raw.split())
         if not line or _TRIVIAL_RE.match(line) or len(line) < 12:
+            continue
+        if _METADATA_RE.match(line):
             continue
         out.append(line.lower())
     return out

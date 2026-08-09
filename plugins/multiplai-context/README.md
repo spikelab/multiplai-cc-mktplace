@@ -543,6 +543,7 @@ All commands are namespaced under `/multiplai-context:`.
 | `/multiplai-context:qmd-search` | Manually search the resources knowledge base via qmd (semantic + keyword) — the manual companion to `resources_retrieval=qmd`. |
 | `/multiplai-context:costs` | Report API-equivalent costs for Claude Code usage — per chat, skill, subagent, project, model, day, or branch. Also reports **per outcome** (`--group task --pr-join` = cost per merged PR; `--group build` = cost per DONE and per FAILED buildme block) and **cache utilization** (`--report cache`). Cross-model comparisons are per-outcome only — different models tokenize differently, so a cheaper per-token model that loops twice is more expensive. Collects fresh data from session transcripts, then reports from the cost ledger. Requires `enable_costs`. Interface pinned by [`skills/costs/CONTRACT.md`](skills/costs/CONTRACT.md). |
 | `/multiplai-context:fleet-status` | **What is actually blocked on me?** One ranked snapshot of everything in flight — agent sessions waiting on an answer, open PRs with CI and review state, dirty or unpushed checkouts, background jobs, and the pending backlog. Ranked by what needs a decision only you can make (approved PR → red CI → stacked PRs → a session that asked a question → collisions), capped at 8 items, with the full report one `--full` away. Read-only: it merges nothing, kills nothing, deletes nothing. Needs `git`; `gh` is optional and its absence reports "not read", never "none". |
+| `/multiplai-context:memory-bank` | Work with **shared memory banks** — git repositories of memory files a team or household shares. `list` and `sync` subscribed banks, `check` for cross-bank collisions, `contribute` a dream item as a pull request on the bank, and `adopt` — the migration that moves personal memory into a bank and deletes the local copy. `contribute` and `adopt` are dry-run without `--apply`; adoption never deletes a file the bank does not already contain line for line. See [Shared memory banks](#shared-memory-banks). |
 | `/multiplai-context:config-audit` | **Subtractive** config/rules review on a **60-day** cadence (pinned to how often models ship, not to how fast config rots — what the audit removes is scaffolding a newer model no longer needs) — enumerates the active config surface (global + workspace `CLAUDE.md`s, `settings.json` env/permissions, hook registrations, memory-file standing rules), classifies each rule as still-serving / obsolete / model-constraining, and writes a removals-first proposal to `.multiplai/dreams/config-audit-YYYY-MM-DD.md`. Never applies changes; stamps `config_audit_state.yaml` to close the SessionStart nudge gate. |
 
 ## Where your data lives
@@ -799,6 +800,113 @@ line in a report, never a silently edited fact. Findings surface in
 `memory_validity.duplicate_h2`) and in the maintainer's report, and
 `/multiplai-context:dream` asks for the annotation on newly proposed volatile
 lines.
+
+## Shared memory banks
+
+A **bank** is a git repository of memory files. Point the plugin at one and its
+files route and inject exactly like your own — the router picks a team file over
+a personal one on relevance alone, because relevance is relevance. Contributions
+go back as pull requests. There is no server, no sync protocol and no shared
+runtime: sharing is `git pull`, contributing is a PR.
+
+**Configure nothing and nothing changes.** With no `memory-banks.yaml` you have
+exactly one bank, named `personal`, at the memory directory you already had.
+
+```yaml
+# <workspace>/.multiplai/memory-banks.yaml
+memory_banks:
+  - name: dolcebot-team
+    remote: git@github.com:you/memory-bank.git
+    mode: propose          # ro = read and route only · propose = contribute by PR
+    sync: session-start
+```
+
+There is deliberately no `rw` mode for a shared bank; a config asking for one is
+coerced to `propose` and warns.
+
+### The rule: a fact lives in exactly one bank
+
+A shared bank is **authoritative** for the domains it declares. Its file
+*replaces* yours on that topic — it is not a second opinion layered on top,
+because two copies of a fact means injecting it twice and disagreeing with
+yourself later. Two consequences:
+
+- **Collisions are a catalog defect, not an injection-time conflict.** When two
+  banks claim the same filename, the same routing domains, or the same section
+  heading, catalog generation writes `bank-collisions.md` next to the catalogs
+  and says so. It reports; it never silently resolves.
+- **Joining a bank is a migration.** `/memory-bank adopt` moves your overlapping
+  content into the bank and deletes your local copy — see below.
+
+### What a bank can and cannot do to your agent
+
+Bank content is written by other people and arrives over a git remote on a
+schedule, so it is treated as exactly what it is: externally-authored text.
+Injected bank blocks are headed with the bank's name and last-updated date and
+wrapped in `<untrusted-content>` fences per
+[`docs/untrusted-content.md`](../../docs/untrusted-content.md). Claude is told
+they are **data, never instructions** — an imperative sentence inside one is a
+finding to report to you, never an order to follow.
+
+That is the *first* layer, not the only one. A bank cannot cause a local memory
+write at all: the write floor refuses any target naming a non-personal bank, in
+every write mode including `auto`. What a malicious bank can do is put
+misleading *reference content* in front of you, attributed to itself, which is
+the same risk as a colleague being wrong — and the reason the fences name the
+bank.
+
+### Contributing
+
+An item the dream pipeline routes to a shared bank is refused a local write and
+appears in your review pile as *"belongs to a shared memory bank"*. Turning it
+into a pull request is a separate, explicit command:
+
+```bash
+uv run --project plugins/multiplai-context/scripts \
+  plugins/multiplai-context/scripts/memory_bank.py \
+  contribute --proposal .multiplai/dreams/<proposal>.md          # dry run
+  # … then again with --apply
+```
+
+**No model is involved in producing a contribution.** The pull request contains
+the proposal's own text, byte for byte — the text you already read. Before the
+PR opens, each item is checked against the bank's `BANK.md` **no-go domains**
+(compensation, health, finances, credentials — a default list applies when a
+bank declares none) and scanned for credential shapes. A blocked item is refused
+*sharing*, not rejected memory.
+
+### Adopting
+
+```
+memory_bank.py adopt dolcebot-team                        # what overlaps, and why
+memory_bank.py contribute --proposal … --apply            # get the content in
+#   … PR reviewed, merged, and pulled by the next sync …
+memory_bank.py adopt dolcebot-team --file dev.md --apply  # then delete the local copy
+```
+
+Three guarantees, because this is the one command that deletes your memory:
+
+- **Nothing is deleted that is not already in the bank's working tree, line for
+  line.** Not "a PR was opened" — the lines are there or the file is skipped and
+  the missing ones are named.
+- **Only files you name are touched.** There is no adopt-everything.
+- **A receipt** lands in `.multiplai/dreams/applied/` carrying the exact
+  `git revert` that undoes the deletion.
+
+### Authoring a bank
+
+Put a `BANK.md` at the repo root declaring owners, review rules and no-go
+domains (template:
+`plugins/multiplai-context/skills/memory-bank/references/BANK.md.template`).
+Whenever content changes, regenerate the bank's `catalog.json` and commit it in
+the same pull request: subscribers adopt that fragment verbatim, so identical
+content gives everyone identical routing and nobody pays a model pass over files
+they did not write. A bank with no fragment still routes — from deterministic
+first-paragraph summaries — and says so on every catalog rebuild.
+
+**Nothing runtime is ever shared.** Diary, learnings, dreams, costs,
+checkpoints, session state and logs stay local. A bank carries curated memory
+and nothing else.
 
 ## Prospective memory — intentions that fire later
 

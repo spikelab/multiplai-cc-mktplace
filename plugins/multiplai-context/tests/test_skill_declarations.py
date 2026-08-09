@@ -21,6 +21,7 @@ _EXPECTED_SKILLS = {
     "setup", "dream", "dream-remember", "health",
     "refresh-catalogs", "memory-health-audit", "backfill", "now",
     "log-doctor", "qmd-search", "costs", "config-audit", "fleet-status",
+    "memory-bank",
 }
 
 _SKILL_FILES = [f"skills/{name}/SKILL.md" for name in sorted(_EXPECTED_SKILLS)]

@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.36.0",
+  "version": "0.38.0",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",
@@ -221,6 +221,18 @@
       "title": "Memory Write Mode",
       "description": "How much of a dream proposal may be written to memory without you reading it. 'review' = nothing is applied automatically (the pre-0.36.0 behaviour). 'triage' (default) = a model judges each item and only items the provenance/kind rubric permits are applied, each one recorded in a receipt. 'auto' = also applies plain facts the rubric would have held back. Rules never apply automatically in any mode, and a model failure always falls back to leaving everything for you.",
       "default": "triage"
+    },
+    "memory_banks_file": {
+      "type": "string",
+      "title": "Memory Banks File",
+      "description": "Path to the YAML file declaring shared memory banks. Defaults to memory-banks.yaml at your workspace's .multiplai/ root, beside project-map.yaml. Leave blank unless your banks are declared somewhere else.",
+      "default": ""
+    },
+    "bank_sync_ttl_hours": {
+      "type": "number",
+      "title": "Bank Sync Interval (hours)",
+      "description": "How long a shared bank's content stays fresh before a session start fast-forwards it again. The pull runs detached and a failure leaves the previous content in place, so a bank you cannot reach is stale, never broken.",
+      "default": 6
     }
   }
 }
