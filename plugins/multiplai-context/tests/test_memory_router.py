@@ -254,14 +254,120 @@ class TestLLMRouter:
             picks = self._pick("prompt", self._catalog())
         assert picks == []
 
-    def test_client_exception_returns_empty(self):
-        """Exceptions from create_client or query are swallowed into []."""
+    def test_client_exception_degrades_to_token_overlap(self):
+        """A raising client is a failure, so the offline router answers instead."""
         async def _failing_client():
             raise RuntimeError("no backend configured")
 
+        # A prompt token_overlap *can* match, so "empty" cannot be mistaken for
+        # "the fallback ran and found nothing".
         with patch("multiplai_core.model_client.create_client", _failing_client):
-            picks = self._pick("prompt", self._catalog())
-        assert picks == []
+            picks = self._pick("help me debug python code", self._catalog())
+        assert picks == ["python.md"]
+
+
+# ---------------------------------------------------------------------------
+# Failure is not abstention
+# ---------------------------------------------------------------------------
+
+
+class TestLLMRouterDegradesRatherThanSilencing:
+    """A failed model call must answer with token_overlap, never with nothing.
+
+    The context manager treats an empty memory pick from a router that *ran*
+    as a deliberate abstention and suppresses its own recency net. So any
+    failure that returned empty produced a prompt with no memory at all —
+    measured on 5 real prompts, every one of which returned 0 files, 0 bytes
+    under load. These tests pin the distinction between the two cases.
+    """
+
+    def _catalog(self) -> list[dict]:
+        return [
+            {"source": "writing.md", "summary": "voice guide",
+             "intent_domains": ["writing"]},
+            {"source": "python.md", "summary": "py patterns",
+             "intent_domains": ["python code"]},
+        ]
+
+    def _router(self, timeout_seconds=0.01):
+        from lib.memory_router import LLMRouter
+        return LLMRouter(timeout_seconds=timeout_seconds)
+
+    def _select(self, router, prompt):
+        return router.select_multi(
+            prompt, None,
+            {"memory": self._catalog(), "skills": [], "resources": []},
+        )["memory"]
+
+    def test_timeout_returns_token_overlap_picks_not_empty(self):
+        """The measured failure: a slow model must not cost the turn's memory."""
+        async def _slow_client(**kwargs):
+            mock_client = MagicMock()
+
+            async def _never(**_):
+                await asyncio.sleep(5)
+
+            mock_client.query = _never
+            return mock_client
+
+        with patch("multiplai_core.model_client.create_client", _slow_client):
+            picks = self._select(self._router(), "help me debug python code")
+        assert picks == ["python.md"], (
+            "a timed-out router must answer with the offline ranking; "
+            "returning [] here is read downstream as abstention and injects nothing"
+        )
+
+    def test_timeout_raises_rather_than_returning_empty(self):
+        """The mechanism, pinned directly: the async path signals failure."""
+        from lib.memory_router import LLMRouter, RouterCallFailed
+
+        async def _slow_client(**kwargs):
+            mock_client = MagicMock()
+
+            async def _never(**_):
+                await asyncio.sleep(5)
+
+            mock_client.query = _never
+            return mock_client
+
+        router = LLMRouter(timeout_seconds=0.01)
+        with patch("multiplai_core.model_client.create_client", _slow_client):
+            with pytest.raises(RouterCallFailed):
+                asyncio.run(router._select_async_multi(
+                    "prompt", None,
+                    {"memory": self._catalog(), "skills": [], "resources": []},
+                    {"memory": {"python.md", "writing.md"},
+                     "skills": set(), "resources": set()},
+                ))
+
+    def test_model_that_ran_and_chose_nothing_still_abstains(self):
+        """Abstention is preserved — the fallback must not fire on a real answer."""
+        mock_response = MagicMock()
+        mock_response.content = '{"memory": [], "skills": [], "resources": []}'
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock(return_value=mock_response)
+
+        async def _create(**kwargs):
+            return mock_client
+
+        with patch("multiplai_core.model_client.create_client", _create):
+            picks = self._select(self._router(timeout_seconds=30),
+                                 "help me debug python code")
+        assert picks == [], (
+            "a model that ran and picked nothing is a deliberate NONE; "
+            "degrading here would re-inject on every abstention"
+        )
+
+    def test_empty_prompt_is_not_a_failure(self):
+        assert self._select(self._router(), "") == []
+
+    def test_fallback_inherits_configured_keep_ratio(self):
+        """create_router must hand the fallback the user's keep_ratio."""
+        from lib.memory_router import create_router
+        with patch("multiplai_core.model_client.detect_client_type",
+                   return_value="agent_sdk"):
+            router = create_router("llm", keep_ratio=0.42)
+        assert router._fallback.keep_ratio == 0.42
 
 
 # ---------------------------------------------------------------------------

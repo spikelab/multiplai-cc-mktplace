@@ -28,6 +28,29 @@ Nothing yet.
      0.38.0 and makes it permanent. -->
 ## [0.38.0] - 2026-08-09
 
+### Fixed
+
+- **A slow router no longer costs a prompt its memory.** With
+  `memory_router: llm`, a model call that timed out returned no picks — and a
+  router that *ran* and picked nothing is read downstream as a deliberate "no
+  memory is relevant", which suppresses the recency safety net. So a slow
+  machine produced prompts with **no memory injected at all**, recorded as one
+  warning in the log and otherwise indistinguishable from correct behaviour.
+  Measured on five real prompts replayed under load: five of five injected
+  nothing.
+
+  A failed call now answers with the `token_overlap` router instead — the same
+  degradation the plugin already applied when no model client was available at
+  all, for the same stated reason. The worst case is now the offline ranking
+  you would have had anyway, not silence. A model that genuinely runs and
+  chooses nothing still abstains; only failures degrade.
+
+  One consequence worth acting on: a shorter `router_timeout_seconds` is now
+  better than a longer one. While a timeout cost the whole turn's memory you
+  wanted the ceiling as high as the hook allowed; now that it merely costs you
+  the offline ranking, waiting 25 s for an answer you are about to discard is
+  pure latency. Try 12–15 s.
+
 ### Added
 
 - **Shared memory banks.** A *bank* is a git repository of memory files. Point
