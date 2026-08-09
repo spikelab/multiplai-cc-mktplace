@@ -11,17 +11,21 @@ import logging
 from dataclasses import dataclass
 
 from multiplai_core.paths import Paths
+from generators.banks import BanksGenerator
 from generators.base import GenerationResult
 from generators.config import CatalogConfig
 from generators.diary import DiaryGenerator
 from generators.memory import MemoryGenerator
 from generators.resources import ResourcesGenerator
 from generators.skills import SkillsGenerator
+from lib.banks import shared_banks
 
 logger = logging.getLogger(__name__)
 
 # Canonical execution order
-GENERATOR_ORDER = ["memory", "diary", "skills", "resources"]
+# `banks` runs directly after `memory` because its collision detection
+# compares against the personal catalog that step has just written.
+GENERATOR_ORDER = ["memory", "banks", "diary", "skills", "resources"]
 
 # Generators that always run regardless of config flags
 _MANDATORY_GENERATORS = {"memory", "diary"}
@@ -29,6 +33,7 @@ _MANDATORY_GENERATORS = {"memory", "diary"}
 # Map names to generator classes
 GENERATOR_CLASSES = {
     "memory": MemoryGenerator,
+    "banks": BanksGenerator,
     "diary": DiaryGenerator,
     "skills": SkillsGenerator,
     "resources": ResourcesGenerator,
@@ -53,6 +58,12 @@ def _is_generator_enabled(name: str, config: CatalogConfig) -> bool:
     """
     if name in _MANDATORY_GENERATORS:
         return True
+    if name == "banks":
+        # Not config-gated: subscribing to a bank *is* the opt-in, and a
+        # subscribed bank whose catalog never regenerates is a bank whose
+        # content silently never routes. Zero shared banks makes this a no-op
+        # (the generator returns an empty result without touching disk).
+        return bool(shared_banks())
     if name == "skills":
         return config.enable_skills
     if name == "resources":

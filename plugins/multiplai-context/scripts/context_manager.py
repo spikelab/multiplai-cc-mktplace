@@ -45,6 +45,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.paths import get_paths
 from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.log_utils import setup_logging, log_event
+from lib.banks import (
+    SHARED_BANK_NOTICE,
+    configured_banks,
+    render_shared_block,
+)
+from lib.banks import resolve_ref as resolve_bank_ref
+from lib.banks import split_ref as split_bank_pick
 from lib.memory_router import create_router
 from lib.plugin_skills import plugin_skill_owners, qualify
 from lib import reference_docs
@@ -57,7 +64,7 @@ from generators.config import load_catalog_config
 logger = setup_logging("context_manager")
 
 # Catalog types supported by _read_catalog_or_scan()
-_KNOWN_CATALOG_TYPES = frozenset({"memory", "diary", "skills", "resources"})
+_KNOWN_CATALOG_TYPES = frozenset({"memory", "banks", "diary", "skills", "resources"})
 
 # Once-per-session warning deduplication (Decision 8).
 # Keyed by full catalog file path to correctly dedup across
@@ -328,10 +335,18 @@ def _load_corpora(cfg) -> dict[str, list[dict]]:
     Memory is always loaded. Skills and resources are gated by their
     respective ``enable_*`` plugin options — when disabled, the corpus
     is treated as empty (no routing, no content loading).
+
+    Shared memory banks (``banks.json``) are folded into the **memory**
+    corpus rather than routed as a corpus of their own: a bank's file
+    answers the same kind of question a personal file does, and the router
+    must be free to pick it over a personal one on relevance alone. What
+    distinguishes them is trust, not routing, and trust is applied at
+    render time (``_render_memory_section``) where it belongs.
     """
     ttl_hours = getattr(cfg, "ttl_hours", None)
     corpora: dict[str, list[dict]] = {
-        "memory": _read_catalog_or_scan("memory", ttl_hours),
+        "memory": _read_catalog_or_scan("memory", ttl_hours)
+        + _read_catalog_or_scan("banks", ttl_hours),
         "skills": [],
         "resources": [],
     }
@@ -353,17 +368,44 @@ def _load_corpora(cfg) -> dict[str, list[dict]]:
 # ---------------------------------------------------------------------------
 
 
-def _load_memory_content(memory_dir: Path, picks: list[str]) -> dict[str, str]:
+def _memory_path_for(pick: str, memory_dir: Path, banks) -> Path | None:
+    """The file a router pick names, across every subscribed bank.
+
+    A bare ``file.md`` (or ``file.md#Section``) is a personal-bank pick and
+    resolves exactly as it always has. A ``bank/file.md`` pick resolves
+    through the named bank, and resolves to ``None`` when no such bank is
+    subscribed — never to a personal file of that name, which is how a pick
+    left over in a stale catalog would otherwise read someone else's note
+    from the user's own corpus.
+    """
+    if banks is None:
+        base, _ = parse_section_ref(pick)
+        return memory_dir / base
+    resolved = resolve_bank_ref(pick, banks)
+    if resolved is None:
+        logger.debug("Picked memory ref resolves to no subscribed bank: %s", pick)
+        return None
+    return resolved[2]
+
+
+def _load_memory_content(
+    memory_dir: Path, picks: list[str], banks=None
+) -> dict[str, str]:
     """Read picked memory files; honor ``filename#Section`` for partial loads.
 
     Returns ``{display_name: content}`` where ``display_name`` is the
-    raw pick (e.g., ``"file.md#Section"``) so the assembled context
-    shows which slice was loaded.
+    raw pick (e.g., ``"file.md#Section"`` or ``"team/file.md"``) so the
+    assembled context shows which slice, from which bank, was loaded.
+
+    *banks* defaults to ``None``, which means "personal only" and is the
+    pre-banks behaviour verbatim — the parameter is additive so existing
+    callers and tests need no edit.
     """
     result: dict[str, str] = {}
     for pick in picks:
-        base, _ = parse_section_ref(pick)
-        path = memory_dir / base
+        path = _memory_path_for(pick, memory_dir, banks)
+        if path is None:
+            continue
         if not path.exists():
             logger.debug("Picked memory file missing: %s", path)
             continue
@@ -373,9 +415,20 @@ def _load_memory_content(memory_dir: Path, picks: list[str]) -> dict[str, str]:
             logger.warning("Failed to read router-picked memory file: %s", path)
             continue
         # load_picked_content returns (filename, content_or_section)
-        _, content = load_picked_content(pick, text)
+        _, content = load_picked_content(_strip_bank(pick), text)
         result[pick] = content
     return result
+
+
+def _strip_bank(pick: str) -> str:
+    """``"team/dev.md#Testing"`` → ``"dev.md#Testing"``.
+
+    ``load_picked_content`` reasons about a file and a section; the bank
+    prefix is addressing, not content, and would make its filename check
+    fail.
+    """
+    _, filename, section = split_bank_pick(pick)
+    return f"{filename}#{section}" if section else filename
 
 
 def _build_skills_recommendations(
@@ -594,8 +647,19 @@ def _memory_freshness_date(path: Path) -> str | None:
         return None
 
 
+def _memory_dates(
+    memory_dir: Path, memory_content: dict[str, str], banks=None
+) -> dict[str, str | None]:
+    """Freshness date per pick, resolved through the pick's own bank."""
+    dates: dict[str, str | None] = {}
+    for name in memory_content:
+        path = _memory_path_for(name, memory_dir, banks)
+        dates[name] = _memory_freshness_date(path) if path is not None else None
+    return dates
+
+
 def _stamp_memory_dates(
-    memory_dir: Path, memory_content: dict[str, str]
+    memory_dir: Path, memory_content: dict[str, str], banks=None
 ) -> dict[str, str]:
     """Prefix each memory file's content with its last-updated date.
 
@@ -606,13 +670,10 @@ def _stamp_memory_dates(
     carry the base file's date. Files with no obtainable date are
     passed through unstamped.
     """
-    dates: dict[str, str | None] = {}
+    dates = _memory_dates(memory_dir, memory_content, banks)
     stamped: dict[str, str] = {}
     for name, content in memory_content.items():
-        base, _ = parse_section_ref(name)
-        if base not in dates:
-            dates[base] = _memory_freshness_date(memory_dir / base)
-        date = dates[base]
+        date = dates.get(name)
         stamped[name] = f"(last updated: {date})\n{content}" if date else content
     return stamped
 
@@ -648,22 +709,82 @@ def _section_attribution(
     return sections, sizes
 
 
+def _split_by_trust(
+    memory_content: dict[str, str], banks
+) -> tuple[dict[str, str], list[tuple[str, object, str]]]:
+    """Partition picks into ``(personal, [(ref, bank, content), …])``.
+
+    The split is by **authorship**, read off the bank the pick resolves to —
+    never off anything in the text. A file that arrived in a shared bank is
+    other people's writing whatever it happens to say, and a personal file
+    is the user's own however much it looks like a team note.
+    """
+    if not banks:
+        return dict(memory_content), []
+    personal: dict[str, str] = {}
+    shared: list[tuple[str, object, str]] = []
+    for ref, content in memory_content.items():
+        resolved = resolve_bank_ref(ref, banks)
+        if resolved is not None and resolved[0].is_shared:
+            shared.append((ref, resolved[0], content))
+        else:
+            personal[ref] = content
+    return personal, shared
+
+
 def _render_memory_section(
-    memory_dir: Path, memory_content: dict[str, str], conflict_preamble: bool
+    memory_dir: Path,
+    memory_content: dict[str, str],
+    conflict_preamble: bool,
+    banks=None,
 ) -> str:
     """Render the MEMORY block, pairing the conflict preamble with stamps.
 
     The preamble promises date stamps, so the two must never render
     separately — any injection path goes through here. The config
     toggle (``memory_conflict_preamble``) disables both together.
+
+    Content from a **shared bank** is rendered differently, and the
+    difference is not cosmetic. Its heading names the bank so the user can
+    tell "my note" from "the team's note" at a glance, and its body goes
+    inside an ``<untrusted-content>`` fence per ``docs/untrusted-content.md``,
+    because a subscribed bank is memory somebody else writes and syncs in
+    over the network. Without the fence a teammate's commit becomes a
+    standing instruction to this user's agent — a prompt-injection channel
+    with a git remote in front of it. The fence is applied on the *authorship*
+    test (``bank.is_shared``), so a new file in a subscribed bank is fenced
+    the moment it syncs, with nothing to configure and no content heuristic
+    to evade. The shared notice is only rendered when shared content is
+    actually present, so a user with no banks sees byte-identical output to
+    before.
     """
+    personal, shared = _split_by_trust(memory_content, banks)
     if not conflict_preamble:
-        return _render_corpus_section("MEMORY", memory_content)
-    return _render_corpus_section(
+        block = _render_corpus_section("MEMORY", personal)
+        return _append_shared_blocks(block, memory_dir, shared, banks, stamp=False)
+    block = _render_corpus_section(
         "MEMORY",
-        _stamp_memory_dates(memory_dir, memory_content),
+        _stamp_memory_dates(memory_dir, personal, banks),
         preamble=_MEMORY_CONFLICT_PREAMBLE,
     )
+    return _append_shared_blocks(block, memory_dir, shared, banks, stamp=True)
+
+
+def _append_shared_blocks(
+    block: str, memory_dir: Path, shared, banks, *, stamp: bool
+) -> str:
+    """Append the fenced shared-bank blocks (and their notice) to *block*."""
+    if not shared:
+        return block
+    dates = (
+        _memory_dates(memory_dir, {ref: content for ref, _, content in shared}, banks)
+        if stamp
+        else {}
+    )
+    parts = [block, SHARED_BANK_NOTICE]
+    for ref, bank, content in shared:
+        parts.append(render_shared_block(ref, bank, content, date=dates.get(ref)))
+    return "\n\n".join(parts)
 
 
 def _render_qmd_resource(entry: dict) -> str:
@@ -913,6 +1034,9 @@ def main() -> None:
     """Context manager main: read stdin, route context, write JSON to stdout."""
     paths = get_paths()
     memory_dir = paths.memory_dir()
+    # The ordered banks for this workspace. With no `memory-banks.yaml` this is
+    # exactly one bank at `memory_dir`, so every path below behaves as before.
+    banks = configured_banks()
 
     # Read hook input from stdin (Claude Code UserPromptSubmit shape)
     try:
@@ -1132,7 +1256,9 @@ def main() -> None:
                 logger.debug("Could not persist dev-reference state", exc_info=True)
 
     # Load content per corpus
-    memory_content = _load_memory_content(memory_dir, picks_by_corpus.get("memory") or [])
+    memory_content = _load_memory_content(
+        memory_dir, picks_by_corpus.get("memory") or [], banks
+    )
     skills_content = _build_skills_recommendations(
         cfg, picks_by_corpus.get("skills") or [], corpora.get("skills") or []
     )
@@ -1226,7 +1352,7 @@ def main() -> None:
     parts: list[str] = []
     if memory_content:
         parts.append(_render_memory_section(
-            memory_dir, memory_content, cfg.memory_conflict_preamble,
+            memory_dir, memory_content, cfg.memory_conflict_preamble, banks,
         ))
     if skills_content:
         parts.append(_render_corpus_section("SKILLS", skills_content))
