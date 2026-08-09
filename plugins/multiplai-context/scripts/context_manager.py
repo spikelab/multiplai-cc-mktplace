@@ -400,10 +400,34 @@ def _load_memory_content(
     *banks* defaults to ``None``, which means "personal only" and is the
     pre-banks behaviour verbatim — the parameter is additive so existing
     callers and tests need no edit.
+
+    Two things happen per **file** rather than per pick, because both are
+    properties of the file and neither can be decided one pick at a time. They
+    apply to bank files exactly as they do to personal ones:
+
+    * **A whole-file pick absorbs that file's section picks.** The router may
+      legitimately emit ``["team/dev.md", "team/dev.md#Testing"]``; loading both
+      injected the section twice and made the byte attribution report more bytes
+      than the file has.
+    * **The file's pre-first-H2 preamble is prepended once.** No section slice
+      contains it, so without this a section pick silently returns less than the
+      whole file would have — including cross-file load instructions. Once per
+      file, not once per section, since several picks from one file are normal
+      for an anchored file.
+
+    (The same fix lands on the section-anchor branch for the personal-only
+    version of this function. Both must have it: whichever merges first, a
+    section pick must not drop the preamble.)
     """
-    result: dict[str, str] = {}
+    # Group by the ref the picks address, preserving first-appearance order.
+    by_ref: dict[str, list[str]] = {}
     for pick in picks:
-        path = _memory_path_for(pick, memory_dir, banks)
+        bank_name, filename, _section = split_bank_pick(pick)
+        by_ref.setdefault(f"{bank_name}/{filename}", []).append(pick)
+
+    result: dict[str, str] = {}
+    for ref_picks in by_ref.values():
+        path = _memory_path_for(ref_picks[0], memory_dir, banks)
         if path is None:
             continue
         if not path.exists():
@@ -414,10 +438,53 @@ def _load_memory_content(
         except OSError:
             logger.warning("Failed to read router-picked memory file: %s", path)
             continue
-        # load_picked_content returns (filename, content_or_section)
-        _, content = load_picked_content(_strip_bank(pick), text)
-        result[pick] = content
+
+        whole = next(
+            (p for p in ref_picks if split_bank_pick(p)[2] is None), None
+        )
+        if whole is not None:
+            if len(ref_picks) > 1:
+                logger.debug(
+                    "Memory pick %s covers %d section pick(s) of the same file — "
+                    "loading the file once", whole, len(ref_picks) - 1,
+                )
+            result[whole] = text
+            continue
+
+        head = section_preamble(text)
+        for index, pick in enumerate(ref_picks):
+            # load_picked_content returns (filename, content_or_section)
+            _, content = load_picked_content(_strip_bank(pick), text)
+            if head and index == 0 and not content.startswith(head):
+                content = f"{head}\n{content}"
+            result[pick] = content
     return result
+
+
+_PREAMBLE_H2_RE = re.compile(r"^##\s+.+?\s*$", re.MULTILINE)
+
+
+def section_preamble(text: str) -> str:
+    """Everything before the file's first H2, or ``""`` if there is none.
+
+    Not part of any section, and therefore dropped by every section pick unless
+    a caller puts it back — and it is where the load-bearing prose lives: the
+    ``**Last Updated:**`` stamp, the ``**Purpose:**`` statement,
+    ``Boundaries — route elsewhere:`` routing hints, and cross-file instructions
+    like ``> **Load core-voice.md first.**``.
+
+    Local to this module on purpose. The section-anchor branch adds the same
+    function to ``lib.section_loader``, against a **fence-aware** H2 scanner that
+    is strictly better than this one; putting a second copy there would make that
+    file conflict for no gain, whereas ``_load_memory_content`` below conflicts
+    either way (both branches rewrote it). At merge, delete this and import
+    ``section_loader.preamble`` instead.
+    """
+    match = _PREAMBLE_H2_RE.search(text or "")
+    if match is None:
+        return ""
+    head = (text or "")[: match.start()]
+    return head.rstrip() + "\n" if head.strip() else ""
 
 
 def _strip_bank(pick: str) -> str:
