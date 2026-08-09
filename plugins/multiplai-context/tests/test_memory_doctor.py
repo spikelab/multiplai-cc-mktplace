@@ -226,22 +226,53 @@ class TestStageTwoFailsClosed:
             "blocks": 2, "shortlisted": len(pairs), "threshold": dd.DEFAULT_RATIO,
             "confirmations": [], "coverage": coverage, "degraded": False,
         })
-        assert "batch(es) failed" in section
+        assert "got no usable answer" in section
         assert "No confirmed duplicate pairs" in section
 
     def test_a_same_verdict_with_no_merge_is_dropped(self, memory):
         pairs = self._pairs(memory)
-        out = dd.parse_confirmations(
+        result = dd.parse_confirmations(
             "pair=1 verdict=same merged=- reason=identical", pairs)
-        assert out == []
+        assert result.confirmations == []
+        # ...and it is NOT counted as an answer: "same, but I could not merge
+        # them" is not the same fact as "these are different".
+        assert result.answered == set()
 
     def test_a_confirmed_pair_carries_its_merge(self, memory):
         pairs = self._pairs(memory)
-        out = dd.parse_confirmations(
+        result = dd.parse_confirmations(
             "pair=1 verdict=same merged=Cloud Run rolling deploys health-check "
             "first, then shift traffic. reason=same fact", pairs)
-        assert len(out) == 1
-        assert out[0].merged.startswith("Cloud Run rolling deploys")
+        assert len(result.confirmations) == 1
+        assert result.confirmations[0].merged.startswith("Cloud Run rolling deploys")
+        assert result.answered == {1}
+
+    def test_a_different_verdict_counts_as_answered(self, memory):
+        pairs = self._pairs(memory)
+        result = dd.parse_confirmations(
+            "pair=1 verdict=different merged=- reason=not the same claim", pairs)
+        assert result.confirmations == []
+        assert result.answered == {1}
+
+    def test_an_unanswered_pair_is_unconfirmed_not_clean(self, memory):
+        """The measured failure this guards: a reply that answers some pairs and
+        rambles about the rest must not read as 'the rest are fine'."""
+        self._pairs(memory)
+        (memory / "gamma.md").write_text(
+            "# Gamma\n\n- Cloud Run rolling deploys health-check the new "
+            "revision first, then shift traffic on success as well.\n",
+            encoding="utf-8")
+        pairs = dd.shortlist(dd.split_dir(memory))
+        assert len(pairs) >= 2, "fixture must shortlist more than one pair"
+        client = StubClient(
+            "pair=1 verdict=different merged=- reason=narrower claim\n"
+            "I looked at the others but they are hard to judge.\n")
+        confirmations, coverage = _run(
+            dd.confirm_pairs(client, pairs, model="haiku"))
+        assert confirmations == []
+        assert coverage["judged"] == 1
+        assert coverage["unconfirmed"] == len(pairs) - 1
+        assert coverage["failed_batches"] == 0
 
     def test_no_client_leaves_the_shortlist_unconfirmed_and_says_so(self, memory):
         self._pairs(memory)

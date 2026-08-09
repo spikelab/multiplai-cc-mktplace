@@ -473,25 +473,42 @@ class ConfirmParseError(ValueError):
     """
 
 
-def parse_confirmations(raw: str, pairs: Sequence[Pair]) -> list[Confirmation]:
-    """Parse one stage-2 reply into confirmations.
+@dataclass(frozen=True)
+class BatchResult:
+    """One parsed stage-2 reply.
+
+    ``answered`` is the set of pair numbers that produced a **well-formed
+    line**, whatever the verdict, and it exists because "the model said
+    different" and "the model wrote prose we could not read" are different
+    facts that a bare confirmation list cannot tell apart. Without it a reply
+    that answered two pairs and rambled about the other ten looks exactly like
+    a clean "ten of these are not duplicates".
+    """
+
+    confirmations: list["Confirmation"]
+    answered: set[int]
+
+
+def parse_confirmations(raw: str, pairs: Sequence[Pair]) -> BatchResult:
+    """Parse one stage-2 reply.
 
     Everything unsound is dropped rather than repaired: an out-of-range pair
     number, an unknown verdict, a duplicate answer, or a ``same`` with no
     merged text. A ``same`` whose merge is missing is *not* reported — the
-    merge is the whole deliverable, and a duplicate finding with nothing to
-    put in its place is a line the reader cannot act on.
+    merge is the whole deliverable, and a duplicate finding with nothing to put
+    in its place is a line the reader cannot act on. Each of those drops also
+    leaves its pair out of ``answered``, so it is counted as unconfirmed rather
+    than silently as "not a duplicate".
     """
     if not (raw or "").strip():
         raise ConfirmParseError("empty response")
     seen: set[int] = set()
+    answered: set[int] = set()
     out: list[Confirmation] = []
-    matched = False
     for line in raw.splitlines():
         m = _CONFIRM_RE.match(line)
         if not m:
             continue
-        matched = True
         try:
             number = int(m.group("number"))
         except ValueError:  # pragma: no cover - regex guarantees digits
@@ -500,19 +517,25 @@ def parse_confirmations(raw: str, pairs: Sequence[Pair]) -> list[Confirmation]:
             continue
         seen.add(number)
         verdict = m.group("verdict").strip().lower().strip(".,;`")
-        if verdict not in _VERDICTS or verdict == "different":
+        if verdict not in _VERDICTS:
             continue
         merged = m.group("merged").strip().strip("`").strip()
-        if not merged or merged == "-":
+        if verdict == "different":
+            answered.add(number)
             continue
+        if not merged or merged == "-":
+            # `same` with nothing to put in its place: not an answer we can
+            # report, and not one we may count as "different" either.
+            continue
+        answered.add(number)
         out.append(Confirmation(
             pair=pairs[number - 1],
             merged=merged,
             reason=m.group("reason").strip(),
         ))
-    if not matched:
+    if not seen:
         raise ConfirmParseError("response contained no parseable verdict line")
-    return out
+    return BatchResult(confirmations=out, answered=answered)
 
 
 def _batches(pairs: Sequence[Pair], size: int) -> Iterable[Sequence[Pair]]:
@@ -530,11 +553,14 @@ async def confirm_pairs(
 ) -> tuple[list[Confirmation], dict]:
     """Stage 2 over *pairs*: ``(confirmations, coverage)``.
 
-    Fails closed per batch. A call that raises, times out or comes back
-    unparseable contributes **zero** confirmations and its pairs are counted in
-    ``coverage["unconfirmed"]`` — never reported as duplicates on the strength
-    of stage 1 alone. The count is returned (and logged) so an outage shows up
-    as a number in the report rather than as a suspiciously clean pass.
+    Fails closed per batch **and per pair**. A call that raises, times out or
+    comes back unparseable contributes zero confirmations and its whole batch
+    counts as ``unconfirmed``; a call that answers some pairs and rambles about
+    the rest counts only the ones it actually answered. Neither is ever
+    reported as a duplicate on the strength of stage 1 alone, and neither is
+    quietly folded into "not a duplicate" — which is what a bare confirmation
+    list would have done, and is how a garbled reply becomes an apparently
+    clean pass.
     """
     confirmations: list[Confirmation] = []
     failed_batches = 0
@@ -548,8 +574,10 @@ async def confirm_pairs(
                 model=model,
                 timeout_s=timeout_s,
             )
-            confirmations.extend(parse_confirmations(response.content, batch))
-            judged += len(batch)
+            result = parse_confirmations(response.content, batch)
+            confirmations.extend(result.confirmations)
+            judged += len(result.answered)
+            unconfirmed += len(batch) - len(result.answered)
         except Exception:
             logger.exception(
                 "Duplication stage 2 failed for a batch of %d pair(s) "
@@ -563,7 +591,7 @@ async def confirm_pairs(
         "failed_batches": failed_batches,
         "confirmed": len(confirmations),
     }
-    if failed_batches:
+    if unconfirmed:
         logger.warning("Duplication: %d batch(es) failed; %d pair(s) unconfirmed",
                        failed_batches, unconfirmed)
     confirmations.sort(key=lambda c: (-c.pair.ratio, c.pair.label))
@@ -633,13 +661,14 @@ def render_section(result: Mapping, *, limit: int = 40) -> str:
             "below is confirmed; the shortlist alone is a text-similarity "
             "measure that knows nothing about meaning."
         )
-    if coverage.get("failed_batches"):
+    if coverage.get("unconfirmed"):
         out.append("")
         out.append(
-            f"⚠️ {coverage['failed_batches']} stage-2 batch(es) failed, leaving "
-            f"{coverage['unconfirmed']} pair(s) unconfirmed. They are **not** "
-            f"reported below — a failed batch reports nothing rather than "
-            f"guessing."
+            f"⚠️ {coverage['unconfirmed']} pair(s) got no usable answer "
+            f"({coverage.get('failed_batches', 0)} whole batch(es) failed; the "
+            f"rest were pairs the reply did not answer in the required format). "
+            f"They are **not** reported below and were **not** counted as "
+            f"\"not a duplicate\" — an unanswered pair is unknown, not clean."
         )
     out.append("")
 
