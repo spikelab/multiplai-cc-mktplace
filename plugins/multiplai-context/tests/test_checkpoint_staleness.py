@@ -111,6 +111,25 @@ class TestStalenessTrigger:
             tmp_path, "s1", state_with_checkpoint(timedelta(minutes=12)), CFG
         ) is None
 
+    def test_a_forty_minute_session_with_a_thirty_five_minute_old_save_fires(
+        self, tmp_path
+    ):
+        """The 30-minute cadence, at the boundary the plan names. Under the
+        old 3-hour default this session had nothing written for another two
+        and a half hours."""
+        make_registry_entry(tmp_path, age=timedelta(minutes=40))
+
+        assert cp.staleness_trigger(
+            tmp_path, "s1", state_with_checkpoint(timedelta(minutes=35)), CFG
+        ) == "stale"
+
+    def test_a_twenty_minute_session_still_writes_nothing(self, tmp_path):
+        """`min_session_minutes` is unchanged at 30, so short sessions are
+        untouched by the faster cadence."""
+        make_registry_entry(tmp_path, age=timedelta(minutes=20))
+
+        assert cp.staleness_trigger(tmp_path, "s1", {}, CFG) is None
+
     def test_a_checkpoint_past_stale_hours_fires(self, tmp_path):
         make_registry_entry(tmp_path, age=timedelta(hours=6))
 

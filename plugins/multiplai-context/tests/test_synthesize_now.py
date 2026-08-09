@@ -163,3 +163,85 @@ class TestArgParsing:
         from synthesize_now import _parse_project_arg
 
         assert _parse_project_arg([]) is None
+
+
+class TestWindowAttribution:
+    """Criterion 10: the file says which window wrote it.
+
+    There is one ``now/<project>.md`` per project and several windows can be
+    open on the same project, so last writer wins. On 2026-08-08 a
+    ``multiplai-docker`` window's summary was handed to a freshly-cleared
+    pi-eval window, which read it as its own prior work — both sessions are
+    legitimately "DolceBot" and nothing in the file said otherwise.
+
+    Full per-session merging is deliberately out of scope. Attribution alone
+    makes the contamination visible, which is what the incident needed.
+    """
+
+    def test_the_header_names_the_session_that_wrote_it(
+        self, workspace, _no_llm, monkeypatch
+    ):
+        import asyncio
+
+        from multiplai_core.paths import get_paths
+        import synthesize_now
+
+        _write_diary(workspace, [("sess-writer", "/work/PROJECTS/foo", "Did a thing.")])
+        (workspace / ".multiplai" / "project-map.yaml").write_text(
+            "project_roots:\n  - /work/PROJECTS\n"
+        )
+        monkeypatch.setenv("HOSTNAME", "claude-work-04221854")
+
+        asyncio.run(
+            synthesize_now.synthesize(project_filter="foo", session_id="sess-writer")
+        )
+
+        content = (get_paths().now_dir() / "foo.md").read_text()
+        assert "Written by session: sess-writer" in content
+        assert "Written on host: claude-work-04221854" in content
+
+    def test_an_unattributed_rebuild_still_writes_a_clean_header(
+        self, workspace, _no_llm
+    ):
+        """`/multiplai-context:now` and the backfill rebuild every project at
+        once and belong to no single session — no fabricated id."""
+        import asyncio
+
+        from multiplai_core.paths import get_paths
+        import synthesize_now
+
+        _write_diary(workspace, [("sess-a", "/work/PROJECTS/foo", "Did a thing.")])
+        (workspace / ".multiplai" / "project-map.yaml").write_text(
+            "project_roots:\n  - /work/PROJECTS\n"
+        )
+
+        asyncio.run(synthesize_now.synthesize(project_filter="foo"))
+
+        content = (get_paths().now_dir() / "foo.md").read_text()
+        assert "Written by session:" not in content
+        assert content.startswith("# Project Status: foo")
+
+    def test_a_slice_marker_never_leaks_into_the_summary(
+        self, workspace, _no_llm
+    ):
+        """The diary's append-idempotency marker is a comment for machines,
+        not content for a status summary."""
+        import asyncio
+
+        from multiplai_core.paths import get_paths
+        import synthesize_now
+
+        _write_diary(
+            workspace,
+            [("sess-a", "/work/PROJECTS/foo",
+              "<!-- slice: sess-a:start -->\n\nReal work happened.")],
+        )
+        (workspace / ".multiplai" / "project-map.yaml").write_text(
+            "project_roots:\n  - /work/PROJECTS\n"
+        )
+
+        asyncio.run(synthesize_now.synthesize(project_filter="foo"))
+
+        content = (get_paths().now_dir() / "foo.md").read_text()
+        assert "slice:" not in content
+        assert "Real work happened." in content

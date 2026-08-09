@@ -186,20 +186,37 @@ def build_degraded_section(segment: str, since_iso: str | None) -> str:
     deliberately less than a checkpoint — it is the raw material a reader (or
     the next successful write) can work from, labelled as such.
     """
+    # One turn spans several lines — the distiller emits the tool_use and
+    # tool_result stubs under the turn's header line — so accumulate a turn
+    # until the next header rather than reading line by line.
     lines: list[str] = []
+    header: re.Match[str] | None = None
+    body: list[str] = []
+
+    def flush() -> None:
+        if header is None:
+            return
+        ts, role = header.group("ts"), header.group("role")
+        text = "\n".join([header.group("text"), *body])
+        if role == "user":
+            spoken = "\n".join(
+                ln for ln in text.splitlines() if not ln.lstrip().startswith("[")
+            ).strip()
+            if spoken:
+                lines.append(f"- [{ts}] user: {_clip(spoken, 300)}")
+            return
+        tools = list(dict.fromkeys(_TOOL_RE.findall(text)))
+        if tools:
+            lines.append(f"- [{ts}] tools: {', '.join(tools[:12])}")
+
     for raw in segment.splitlines():
         m = _TURN_RE.match(raw)
-        if not m:
-            continue
-        ts, role, text = m.group("ts"), m.group("role"), m.group("text").strip()
-        if role == "user":
-            if not text or text.startswith("[call "):
-                continue
-            lines.append(f"- [{ts}] user: {_clip(text, 300)}")
-        else:
-            tools = list(dict.fromkeys(_TOOL_RE.findall(raw)))
-            if tools:
-                lines.append(f"- [{ts}] tools: {', '.join(tools[:12])}")
+        if m:
+            flush()
+            header, body = m, []
+        elif header is not None:
+            body.append(raw)
+    flush()
 
     # Keep the tail within the budget.
     kept: list[str] = []
@@ -212,7 +229,7 @@ def build_degraded_section(segment: str, since_iso: str | None) -> str:
         used += len(line)
     kept.reverse()
 
-    body = "\n".join(kept) or "- (no user turns or tool calls in this window)"
+    rendered = "\n".join(kept) or "- (no user turns or tool calls in this window)"
     return (
         f"{_DEGRADED_HEADING} {since_iso or 'the start of the session'}\n\n"
         "- The model call that would have folded this window into the sections "
@@ -220,7 +237,7 @@ def build_degraded_section(segment: str, since_iso: str | None) -> str:
         "- Everything above this heading is the previous checkpoint, unchanged.\n"
         "- On the next successful checkpoint, fold these into the sections "
         "above and drop this section.\n"
-        f"{body}\n"
+        f"{rendered}\n"
     )
 
 
