@@ -45,11 +45,19 @@ Nothing yet.
   you would have had anyway, not silence. A model that genuinely runs and
   chooses nothing still abstains; only failures degrade.
 
-  One consequence worth acting on: a shorter `router_timeout_seconds` is now
-  better than a longer one. While a timeout cost the whole turn's memory you
-  wanted the ceiling as high as the hook allowed; now that it merely costs you
-  the offline ranking, waiting 25 s for an answer you are about to discard is
-  pure latency. Try 12–15 s.
+  **Do not lower `router_timeout_seconds` to compensate.** It looks like you
+  should — a timeout now costs you only the offline ranking, so waiting for an
+  answer you are about to discard reads as pure latency. It was measured, on
+  the same five real prompts, and it does not work. Uncapped, those prompts
+  take a **median 27.4 s** (range 14.8–52.6 s), so there is no ceiling below
+  the median that buys anything: at 15 s, three fell back and the two that
+  finished returned no picks at all. The shipped 25 s default already sits just
+  under the median, which is the worst place for it — roughly half of all
+  prompts lose their routing and pay the full ceiling to do so.
+
+  The cost here is the Agent SDK's ~12 s per-call subprocess spawn, not the
+  model, so no timeout value fixes it. Until that cold start is gone,
+  `token_overlap` is the better setting on most machines.
 
 ### Added
 
