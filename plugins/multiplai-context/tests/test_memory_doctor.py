@@ -356,6 +356,42 @@ class TestContradictionGate:
         assert "Cross-file contradiction was NOT run" in section
         assert result["cross_file"] is False
 
+    def test_concurrency_does_not_change_the_report(self, memory, data):
+        """Files are checked concurrently to keep the first run's wall clock
+        sane, but the report must be a function of the corpus, not of which
+        call returned first."""
+        import asyncio as _asyncio
+
+        lines = {}
+        for name, delay in (("a.md", 0.03), ("b.md", 0.0), ("c.md", 0.02)):
+            a = f"In {name} the gate is 24 hours and nothing shortens it."
+            b = f"In {name} the gate is 6 hours in practice."
+            lines[name] = (a, b, delay)
+            (memory / name).write_text(
+                f"# {name}\n\n- {a}\n- {b}\n" + "- filler line. " * 60 + "\n",
+                encoding="utf-8")
+
+        class Slow:
+            """Answers out of order on purpose."""
+
+            async def query(self, *, system, messages, model, timeout_s=None):
+                user = messages[0]["content"]
+                name = next(n for n in lines if f"In {n} the gate" in user)
+                a, b, delay = lines[name]
+                await _asyncio.sleep(delay)
+                return Reply(f"<contradictions><contradiction><a>{a}</a>"
+                             f"<b>{b}</b><why>x</why></contradiction>"
+                             f"</contradictions>")
+
+        result = _run(dc.run_pass(memory, data, client=Slow(), model="haiku"))
+        assert result["checked"] == 3
+        assert [f["file"] for f in result["findings"]] == ["a.md", "b.md", "c.md"]
+
+    def test_the_timeout_is_generous_enough_for_a_whole_file(self):
+        """Measured, not chosen: at 180s the first real run against the 29-file
+        corpus timed out on the very first file."""
+        assert dc.CHECK_TIMEOUT_S >= 600
+
     def test_the_prompt_fences_the_file(self, memory):
         prompt = dc.build_prompt("notes.md", "- a fact\n")
         assert "<untrusted-content" in prompt

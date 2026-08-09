@@ -13,11 +13,13 @@ share no subject at all, so most of the spend buys "no". Within-file is one call
 per file, is where the subject overlap actually is, and is content-hash-gated so
 an unchanged file costs nothing at all.
 
-The gate is what makes the sequential loop below the right shape. The **first**
-run pays one call per file — measured at roughly a minute each on the cheap tier
-against the real 29-file corpus, so the better part of an hour, which is fine
-for a detached weekly pass and would not be for a foreground one. Every run
-after that checks only what changed, which is typically one or two files.
+The gate is also what bounds the cost. The **first** run pays one call per file
+— 28 of them on the real corpus, each handed up to 60 KB of prose to read before
+answering — and every run after that checks only what changed, which is
+typically one or two files. Two constants exist because the first run is the
+expensive one: :data:`CHECK_TIMEOUT_S` is 600 s rather than the 180 s the other
+passes use (at 180 s the first real run timed out on the first file), and
+:data:`CHECK_CONCURRENCY` runs three at a time.
 
 **Cross-file is out of scope for this phase, and the report says so.** That
 sentence is not politeness: without it, a reader sees a contradiction section
@@ -50,6 +52,7 @@ contradiction from a qualification.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -88,8 +91,21 @@ STATE_VERSION = 1
 #: useful answer; past this the file is truncated and the report says so.
 FILE_CHAR_BUDGET = 60_000
 
-#: Per-file ceiling.
-CHECK_TIMEOUT_S = 180
+#: Per-file ceiling. **600 s, not the 180 s every other pass here uses**, and
+#: the difference is measured rather than chosen: at 180 s the first real run
+#: against Spike's 29-file corpus timed out on the very first file and burned
+#: its retry, because this is the only pass whose prompt is a whole memory file
+#: (up to :data:`FILE_CHAR_BUDGET`) and whose task is to read all of it before
+#: answering. A timeout is fail-closed — the file contributes nothing and is not
+#: cached — so a ceiling that is too tight does not corrupt anything; it just
+#: converts the pass into an expensive way to report nothing.
+CHECK_TIMEOUT_S = 600
+
+#: Files checked concurrently. Small: this is unattended background work behind
+#: a weekly gate, and the point is to keep the *first* run (29 files, nothing
+#: cached) inside a sane wall clock rather than to go fast. Results are
+#: re-sorted by filename afterwards, so concurrency never changes the report.
+CHECK_CONCURRENCY = 3
 
 #: Files under this many characters are skipped: a handful of lines has no room
 #: for two statements to have drifted apart over months.
@@ -375,6 +391,8 @@ async def run_pass(
     client=None,
     model: str = "",
     dry_run: bool = False,
+    concurrency: int = CHECK_CONCURRENCY,
+    timeout_s: float = CHECK_TIMEOUT_S,
 ) -> dict:
     """Check every changed memory file. Read-only against memory (contract C5).
 
@@ -383,6 +401,10 @@ async def run_pass(
     make a real contradiction vanish from the report just because nobody edited
     the file since — that would make the report quietly less complete every week
     it ran.
+
+    Changed files are checked *concurrently* but the result is sorted by
+    filename, so the report is a function of the corpus and not of which call
+    happened to return first.
     """
     memory_dir, data_dir = Path(memory_dir), Path(data_dir)
     state = load_state(state_path(data_dir))
@@ -399,6 +421,7 @@ async def run_pass(
 
     findings: list[dict] = []
     checked = skipped = failed = too_small = 0
+    pending: list[tuple[str, str, str]] = []   # (filename, text, digest)
 
     for filename in sorted(texts):
         text = texts[filename]
@@ -418,18 +441,36 @@ async def run_pass(
             continue
         if client is None or dry_run:
             continue
-        result = await check_file(client, filename, text, model=model)
-        if result is None:
-            failed += 1
-            continue
-        checked += 1
-        for finding in result:
-            findings.append(finding.as_dict())
-        new_state[filename] = {
-            "hash": digest,
-            "checked": _today(),
-            "findings": [f.as_dict() for f in result],
-        }
+        pending.append((filename, text, digest))
+
+    if pending:
+        # Bounded concurrency: the first run has 28 files and nothing cached,
+        # and each call reads up to 60 KB before answering. Results are
+        # re-sorted by filename below, so this changes the wall clock and
+        # nothing else about the report.
+        semaphore = asyncio.Semaphore(max(1, concurrency))
+
+        async def _one(filename: str, text: str):
+            async with semaphore:
+                return await check_file(client, filename, text, model=model,
+                                        timeout_s=timeout_s)
+
+        results = await asyncio.gather(
+            *(_one(name, text) for name, text, _ in pending))
+        for (filename, _, digest), result in zip(pending, results):
+            if result is None:
+                failed += 1
+                continue
+            checked += 1
+            for finding in result:
+                findings.append(finding.as_dict())
+            new_state[filename] = {
+                "hash": digest,
+                "checked": _today(),
+                "findings": [f.as_dict() for f in result],
+            }
+
+    findings.sort(key=lambda f: (f["file"], f["a"]["line"], f["b"]["line"]))
 
     if not dry_run and client is not None and new_state != state:
         try:
