@@ -71,6 +71,8 @@ never turn an unused section into a used one.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import logging
 import os
@@ -79,6 +81,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Iterator, Optional, Sequence
+
+from lib.runtime import lock_path
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +98,13 @@ MIN_OBSERVATIONS = 5
 #: Absolute gap between the two estimators' use rates past which a row is
 #: marked ``disagreement`` rather than reconciled. Divergence is a finding.
 DISAGREEMENT_MARGIN = 0.35
+
+#: Sessions of history below which "never retrieved" carries no information —
+#: on a fresh install, or after a telemetry outage, the answer is the whole
+#: corpus. The human renderings already caveat this; the ``--json`` contract now
+#: carries the same floor as a flag, because that is the surface a consumer acts
+#: on unattended.
+MIN_COVERAGE_SESSIONS = 10
 
 #: Session records older than this collapse into per-section running totals.
 RETENTION_DAYS = 90
@@ -210,6 +221,53 @@ def _write_all(path: Path, records: Sequence[dict]) -> None:
         raise
 
 
+@contextlib.contextmanager
+def _exclusive(path: Path):
+    """Hold an exclusive flock for the duration of a read-modify-write.
+
+    ``_write_all`` guarantees the file is never *corrupt*; it does nothing about
+    a lost update, and a lost update here drops an appended record **entirely**
+    — both estimator halves and the injected list with them. Measured on this
+    module before the lock: 40 concurrent ``record_injections`` calls for
+    distinct sessions left **2** records on disk.
+
+    The window is not narrow in steady state. On a plausible 90-day file (900
+    records × 60 entries, 4.5 MiB) one ``upsert_session`` takes ~60 ms, and
+    ``judge_sessions`` issues five back to back; this workspace runs parallel
+    containers, and extraction drains at the *next* ``SessionStart``, so
+    coinciding drains are ordinary rather than exotic.
+
+    ``learnings_ledger`` was cited as the precedent for going lock-free, but its
+    read-modify-write is safe *because* its callers hold dream's exclusive run
+    lock — which is the half that was not copied. Nothing serialises session-end
+    extraction, so the lock belongs here.
+
+    Fails open: an unopenable lock (read-only filesystem, no ``fcntl``) logs and
+    proceeds unlocked rather than costing the caller its telemetry.
+    """
+    lock_file = lock_path(f"utilisation.{Path(path).name}")
+    handle = None
+    try:
+        handle = open(lock_file, "w")
+        fcntl.flock(handle, fcntl.LOCK_EX)
+    except (OSError, AttributeError, NameError):
+        logger.debug("Could not lock %s; proceeding unlocked", lock_file)
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+            handle = None
+    try:
+        yield
+    finally:
+        if handle is not None:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+            finally:
+                handle.close()
+
+
 def is_session_record(record: dict) -> bool:
     return record.get("kind", "session") == "session"
 
@@ -231,24 +289,23 @@ def upsert_session(
 ) -> dict:
     """Merge *updates* into *session*'s record, creating it if absent.
 
-    Returns the resulting record. Callers hold no lock: sessions write their
-    own record at session end and the maintainer's judge pass runs unattended
-    once a day, so genuine contention is a rare interleaving that costs at
-    worst one session's judge verdict — while the atomic rewrite guarantees
-    the file itself is never corrupted.
+    Returns the resulting record. The whole read-modify-write happens under an
+    exclusive lock — see :func:`_exclusive` for why the atomic rewrite alone was
+    not enough.
     """
     path = Path(path)
-    records = read_records(path)
-    target: Optional[dict] = None
-    for record in records:
-        if is_session_record(record) and record.get("session") == session:
-            target = record
-            break
-    if target is None:
-        target = new_session_record(session, ts=ts)
-        records.append(target)
-    target.update(updates)
-    _write_all(path, records)
+    with _exclusive(path):
+        records = read_records(path)
+        target: Optional[dict] = None
+        for record in records:
+            if is_session_record(record) and record.get("session") == session:
+                target = record
+                break
+        if target is None:
+            target = new_session_record(session, ts=ts)
+            records.append(target)
+        target.update(updates)
+        _write_all(path, records)
     return target
 
 
@@ -434,10 +491,22 @@ class SectionStat:
         return getattr(self, f"{estimator}_used")
 
     def rate(self, estimator: str) -> Optional[float]:
-        """Estimated fraction of injections that were relied on, or ``None``.
+        """Estimated fraction of **sessions** that relied on this, or ``None``.
 
         ``None`` means *not estimated* — never *not used*. The distinction is
         the whole of contract C4 at the aggregate layer.
+
+        Note the unit carefully, because two different ones meet here. Both
+        estimators answer once per **session** — a session either leaned on a
+        section or it did not — so ``observed``/``used`` and therefore this rate
+        are per-session. ``retrieved`` counts once per **injection**, i.e. per
+        turn, and a session normally has many turns. So ``estimated_uses``
+        (``retrieved * rate``) multiplies a turn count by a session rate, and
+        ``cost_per_use`` reduces to ``bytes_per_injection / session_rate``. Both
+        are well defined and useful for ranking; neither is "uses per
+        injection", and the ``observed`` column is a session count, not an
+        injection count. Reading it the other way overstates the denominator by
+        roughly the number of turns per session.
         """
         n = self.observed(estimator)
         return (self.used(estimator) / n) if n else None
@@ -760,12 +829,19 @@ def build_table(
       ``cost_per_use`` are ``null`` there.
     * a ``null`` rate means **not estimated**, never "estimated at zero". The
       zero case is ``rate: 0.0`` with ``zero_estimated_use`` set.
+    * ``never_retrieved`` is only meaningful once there is a corpus of sessions
+      to have not retrieved anything *in*. ``never_retrieved_sufficient`` says
+      whether that floor is met; when it is ``false`` the list is still
+      populated (it is honest about what the log contains) but a consumer MUST
+      NOT read it as dead weight. On a fresh install, or after a telemetry
+      outage, "never retrieved" is the entire corpus.
     """
     agg = aggregate(records)
     ranked, insufficient = rank(
         agg, min_observations=min_observations, margin=margin
     )
     never, whole_only = never_retrieved(agg, known_keys or [])
+    observed_sessions = agg.sessions + agg.compacted_sessions
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": _now_iso(),
@@ -784,6 +860,13 @@ def build_table(
         "sections": ranked,
         "insufficient_data": insufficient,
         "never_retrieved": never,
+        "never_retrieved_sufficient": observed_sessions >= MIN_COVERAGE_SESSIONS,
+        "never_retrieved_reason": (
+            None if observed_sessions >= MIN_COVERAGE_SESSIONS
+            else f"only {observed_sessions} session(s) recorded; "
+                 f"{MIN_COVERAGE_SESSIONS} needed before 'never retrieved' "
+                 f"means anything other than 'not enough history'"
+        ),
         "only_as_whole_file": whole_only,
     }
 
@@ -856,6 +939,12 @@ def render_table(table: dict, *, limit: int = 25) -> str:
         f"the strongest pruning candidate, and a suggestion to a human, never "
         f"a deletion."
     )
+    out.append(
+        "`retr` counts injections (once per turn); the two estimator columns "
+        "count SESSIONS (`used/observed`) — each answers once per session, not "
+        "once per turn. So the two denominators are different units, and "
+        "B/est.use is bytes-per-injection divided by a per-session rate."
+    )
     out.append("")
 
     rows = table["sections"]
@@ -907,6 +996,13 @@ def render_table(table: dict, *, limit: int = 25) -> str:
         "A different finding from \"retrieved and unused\": these never reached "
         "a prompt at all, so there is no evidence either way about their value."
     )
+    if not table.get("never_retrieved_sufficient", True):
+        out.append("")
+        out.append(
+            f"**Not enough history to read this list.** "
+            f"{table.get('never_retrieved_reason') or ''} On a fresh install, or "
+            f"after a telemetry gap, \"never retrieved\" is simply everything."
+        )
     out.append("")
     if not table["never_retrieved"]:
         out.append("_None._")
@@ -958,8 +1054,26 @@ def compact(
 
     ``dry_run`` returns the same counts and writes nothing — so the maintainer
     can report what it *would* collapse rather than a number it assumed.
+
+    Runs under the same exclusive lock as :func:`upsert_session`: this rewrites
+    the whole file from a snapshot, so a session recording its own record in
+    between would be collapsed away entirely.
     """
     path = Path(path)
+    with _exclusive(path):
+        return _compact_locked(
+            path, older_than_days=older_than_days, now=now, dry_run=dry_run
+        )
+
+
+def _compact_locked(
+    path: Path,
+    *,
+    older_than_days: int,
+    now: Optional[datetime],
+    dry_run: bool,
+) -> dict:
+    """:func:`compact`'s body, with the lock already held."""
     records = read_records(path)
     if not records:
         return {"collapsed": 0, "kept": 0, "sections": 0}

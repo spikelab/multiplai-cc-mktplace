@@ -64,11 +64,36 @@ Nothing yet.
 - **Nothing is pruned, edited, or auto-applied by any of this.** The table is
   evidence for you to act on; `/multiplai-context:dream-remember` is still the
   only path that writes to memory.
-- **A blank is not a zero.** If the judge pass fails or times out it writes no
-  verdict at all, leaving the session unjudged — so a bad night can never make
-  your whole corpus read as dead weight. With no model client available, no
-  estimate is recorded; what was injected is still recorded, because that part
-  needs no model.
+- **A blank is not a zero — on both estimators.** If either pass fails, times
+  out, or comes back without an answer, nothing is written, leaving that half
+  unestimated — so a bad night can never make your corpus read as dead weight.
+  Concretely: the judge writes no verdict rather than an empty one, and the
+  in-session self-report is skipped unless the whole transcript was read *and*
+  every chunk actually answered. That second condition matters more than it
+  sounds: the self-report rides on the end of a longer reply, so a truncated one
+  used to record "used none of them", which is what puts a section you rely on
+  at the top of a pruning list. A missing estimate now shows as `—`, and only a
+  section genuinely reported as unused shows a zero.
+
+  With no model client available, no estimate is recorded; what was injected is
+  still recorded, because that part needs no model.
+- **"Never retrieved" says when it does not know.** The list needs some history
+  behind it before "never" means anything — on a fresh install it is simply
+  everything you have. Below ten recorded sessions both the report and the
+  `--json` output now say so, and the JSON carries
+  `never_retrieved_sufficient: false` so anything reading it unattended cannot
+  mistake a thin log for evidence.
+- **Two sessions ending at once no longer lose each other's telemetry.** The log
+  is read-modify-written, and without a lock the later writer silently discarded
+  the earlier one's whole record. With parallel containers and extraction
+  draining at the next session start, that overlap is ordinary rather than rare;
+  measured before the fix, 40 simultaneous writers left 2 records.
+- **The judge's coverage report distinguishes an outage from nothing to judge.**
+  `kept_default` lumped "the model call failed" together with "this session has
+  no transcript any more", and since transcripts age out faster than the 90-day
+  retention window the second is a permanent, growing baseline — which buried the
+  first. The report now breaks the total into `unavailable`, `not_judgeable` and
+  `empty_verdicts`, and only `unavailable` warns.
 
 ## [0.33.0] - 2026-08-08
 

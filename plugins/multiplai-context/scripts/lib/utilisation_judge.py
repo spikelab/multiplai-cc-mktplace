@@ -225,6 +225,58 @@ def distilled_transcript(path: Path, *, char_budget: int = TRANSCRIPT_CHAR_BUDGE
     return text[:char_budget]
 
 
+#: Why a session produced no judge verdict. Only ``"unavailable"`` is an outage
+#: signal; the other two are ordinary and permanent for that session, so folding
+#: them into the same counter buries the signal under a baseline that only grows
+#: (transcripts age out faster than the 90-day retention window, so
+#: "no transcript" is the steady state for old records).
+SKIP_NO_KEYS = "no-injected-sections"
+SKIP_NO_TRANSCRIPT = "no-transcript"
+SKIP_UNAVAILABLE = "unavailable"
+
+
+async def judge_one_detailed(
+    client,
+    record: dict,
+    *,
+    model: str,
+    timeout_s: float = JUDGE_TIMEOUT_S,
+) -> tuple[Optional[list[dict]], str]:
+    """``(verdicts, reason)`` for one session. ``reason`` is ``""`` on success.
+
+    Split from :func:`judge_one` so the caller can tell a **model outage** from
+    a session that was never judgeable. Both produce no verdict and both must
+    leave the record judge-less rather than judged-unused — but one means "the
+    judge is broken, stop trusting this column" and the other means "there was
+    nothing here to judge", and a single counter cannot say which.
+    """
+    keys = injected_keys(record)
+    if not keys:
+        return None, SKIP_NO_KEYS
+    transcript_path = record.get("transcript")
+    if not isinstance(transcript_path, str) or not transcript_path:
+        logger.info("No transcript recorded for session %s; skipping",
+                    record.get("session"))
+        return None, SKIP_NO_TRANSCRIPT
+    transcript = distilled_transcript(Path(transcript_path))
+    if not transcript:
+        logger.info("Transcript for session %s is gone or empty; skipping",
+                    record.get("session"))
+        return None, SKIP_NO_TRANSCRIPT
+    try:
+        response = await client.query(
+            system=JUDGE_SYSTEM,
+            messages=[{"role": "user", "content": build_prompt(keys, transcript)}],
+            model=model,
+            timeout_s=timeout_s,
+        )
+        return parse_verdicts(response.content, keys), ""
+    except Exception:
+        logger.exception("Utilisation judge failed for session %s (fails closed)",
+                         record.get("session"))
+        return None, SKIP_UNAVAILABLE
+
+
 async def judge_one(
     client,
     record: dict,
@@ -236,33 +288,13 @@ async def judge_one(
 
     ``None`` covers every failure mode — no transcript, model error, timeout,
     unparseable answer. The caller writes nothing for a ``None``, leaving the
-    record judge-less rather than judged-unused.
+    record judge-less rather than judged-unused. Use
+    :func:`judge_one_detailed` when you need to know *which*.
     """
-    keys = injected_keys(record)
-    if not keys:
-        return None
-    transcript_path = record.get("transcript")
-    if not isinstance(transcript_path, str) or not transcript_path:
-        logger.info("No transcript recorded for session %s; skipping",
-                    record.get("session"))
-        return None
-    transcript = distilled_transcript(Path(transcript_path))
-    if not transcript:
-        logger.info("Transcript for session %s is gone or empty; skipping",
-                    record.get("session"))
-        return None
-    try:
-        response = await client.query(
-            system=JUDGE_SYSTEM,
-            messages=[{"role": "user", "content": build_prompt(keys, transcript)}],
-            model=model,
-            timeout_s=timeout_s,
-        )
-        return parse_verdicts(response.content, keys)
-    except Exception:
-        logger.exception("Utilisation judge failed for session %s (fails closed)",
-                         record.get("session"))
-        return None
+    verdicts, _reason = await judge_one_detailed(
+        client, record, model=model, timeout_s=timeout_s
+    )
+    return verdicts
 
 
 async def judge_sessions(
@@ -287,10 +319,33 @@ async def judge_sessions(
 
     judged = 0
     kept_default = 0
+    unavailable = 0
+    not_judgeable = 0
+    empty_verdicts = 0
     for record in sample:
-        verdicts = await judge_one(client, record, model=model, timeout_s=timeout_s)
+        verdicts, reason = await judge_one_detailed(
+            client, record, model=model, timeout_s=timeout_s
+        )
         if verdicts is None:
             kept_default += 1
+            if reason == SKIP_UNAVAILABLE:
+                unavailable += 1
+            else:
+                not_judgeable += 1
+            continue
+        if not verdicts:
+            # A well-formed but empty <verdicts> block. Recording it would
+            # increment `sessions_judged` with zero observations behind it, so
+            # judge coverage would read higher than the evidence supports. Only
+            # reachable on model non-compliance — the prompt asks for one line
+            # per injected key — so it is a skip, not a zero.
+            empty_verdicts += 1
+            kept_default += 1
+            logger.info(
+                "Utilisation judge returned an empty verdict block for session "
+                "%s; not recording (it would overstate judge coverage)",
+                record.get("session"),
+            )
             continue
         util.record_judge(path, str(record.get("session") or ""), verdicts)
         judged += 1
@@ -300,12 +355,23 @@ async def judge_sessions(
         "sampled": len(sample),
         "judged": judged,
         "kept_default": kept_default,
+        # `kept_default` is the sum; these three say which. Only `unavailable`
+        # is an outage signal.
+        "unavailable": unavailable,
+        "not_judgeable": not_judgeable,
+        "empty_verdicts": empty_verdicts,
     }
-    if kept_default:
+    if unavailable:
         logger.warning(
-            "Utilisation judge: %d of %d sampled session(s) kept the "
-            "conservative default (no verdict written) because the call failed",
-            kept_default, len(sample),
+            "Utilisation judge: %d of %d sampled session(s) could not be judged "
+            "because the call failed — the judge column is degraded, not zero",
+            unavailable, len(sample),
+        )
+    if not_judgeable:
+        logger.info(
+            "Utilisation judge: %d of %d sampled session(s) had nothing to "
+            "judge (no injected sections, or the transcript has aged out)",
+            not_judgeable, len(sample),
         )
     logger.info("Utilisation judge coverage: %s", report)
     return report

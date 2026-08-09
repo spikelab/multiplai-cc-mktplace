@@ -397,19 +397,36 @@ def render_injected_sections(keys: Sequence[str]) -> str:
     return "\n".join(lines) if lines else NO_INJECTED_SECTIONS
 
 
-def parse_utilisation(raw: str) -> list[dict]:
+def parse_utilisation(raw: str) -> Optional[list[dict]]:
     """Read the ``<utilisation>`` block into self-report entries.
 
-    Returns ``[{"file", "section", "evidence", "supported"}]``. Never raises
+    Returns ``[{"file", "section", "evidence", "supported"}]``, or **``None``
+    when the response carried no ``<utilisation>`` block at all**. Never raises
     and never fails extraction: this field is telemetry layered on a pass whose
     real job is the diary, and a malformed block must not cost a session its
-    diary entry. An absent block yields ``[]``, which is also what an explicit
-    "none of them" yields — the caller distinguishes "asked and got nothing"
-    from "never asked" by whether it passed an injected list at all.
+    diary entry.
+
+    The ``None`` is the whole point, and it used to be ``[]``. "A blank is not a
+    zero" is this feature's headline invariant, and the judge half honours it by
+    raising ``JudgeParseError`` on a missing block — but this half, which runs on
+    **every** session, conflated the two. The distinction the old docstring
+    claimed ("the caller knows by whether it passed an injected list") does not
+    cover the case that matters: the caller gates on whether the model call
+    *succeeded*, and a truncated response is a success that parses. With
+    ``DEFAULT_MAX_TOKENS = 4096``, no override on this path, ``_parse_units``
+    deliberately salvaging a truncated reply, and ``<utilisation>`` emitted
+    **last** — after every diary unit — truncation is the ordinary failure, not
+    an exotic one. Recorded as ``[]`` it becomes "observed, and used nothing",
+    which ranks a genuinely-used section top of the pruning table with
+    ``zero_estimated_use: true``. That table is what the doctor pass reads to
+    propose deletions.
+
+    An explicitly empty block still returns ``[]`` — "I used none of them" is a
+    real answer and must stay distinguishable from never having answered.
     """
     blocks = _UTILISATION_RE.findall(raw or "")
     if not blocks:
-        return []
+        return None
     out: list[dict] = []
     seen: set[tuple[str, Optional[str]]] = set()
     for attrs, body in _USED_RE.findall(blocks[-1]):
@@ -534,7 +551,7 @@ async def extract_session_signals(
     valid_targets: Sequence[Union[str, dict]],
     client,
     injected_sections: Optional[Sequence[str]] = None,
-) -> tuple[list[dict], dict, list[dict]]:
+) -> tuple[list[dict], dict, Optional[list[dict]]]:
     """Units, disposition, and self-reported memory utilisation, in one call.
 
     ``injected_sections`` is the list of ``file.md#Section`` keys this session
@@ -542,6 +559,10 @@ async def extract_session_signals(
     passing nothing still asks the question (the prompt's static half cannot
     vary — it is the cacheable prefix) but tells the model the list is empty,
     so the honest answer is an empty block.
+
+    The third element is ``None`` when the reply carried no ``<utilisation>``
+    block — see :func:`parse_utilisation`. The caller must not record that as a
+    zero.
 
     The utilisation answer rides on the *same* response as the diary and the
     learnings, costing no extra call. That is deliberate, and so is the order

@@ -335,6 +335,7 @@ async def extract() -> bool:
     # writing `[]` after a total failure would fabricate an answer, and every
     # injected section would read as estimated-unused.
     chunks_ok = 0
+    utilisation_missing = 0
     if chunks:
         try:
             client = await create_client()
@@ -355,10 +356,17 @@ async def extract() -> bool:
                         injected_sections=injected_keys,
                     )
                     units.extend(chunk_units)
-                    for claim in chunk_utilisation:
-                        utilisation_claims.setdefault(
-                            (claim["file"], claim.get("section")), claim,
-                        )
+                    # None means the reply carried no <utilisation> block at
+                    # all — most often a truncated response, since that block
+                    # is emitted last. Counted separately from an explicitly
+                    # empty one, which is a real "none of them".
+                    if chunk_utilisation is None:
+                        utilisation_missing += 1
+                    else:
+                        for claim in chunk_utilisation:
+                            utilisation_claims.setdefault(
+                                (claim["file"], claim.get("section")), claim,
+                            )
                     chunks_ok += 1
                     if i == len(chunks) - 1:
                         disposition = chunk_disposition
@@ -403,9 +411,28 @@ async def extract() -> bool:
                 state, session_id,
             )
 
-    if injected_keys and chunks_ok:
+    # Recorded only when the whole transcript was actually read AND every chunk
+    # answered the utilisation question. Both conditions guard the same hazard:
+    # the denominator is *every* injected section, so a partial numerator is
+    # written as "observed, and mostly unused" rather than as "not estimated".
+    #
+    # `chunks_ok` alone was not enough. A 3-chunk session whose first two chunks
+    # failed recorded "used in the last third of the transcript" as the whole
+    # session's answer; and a chunk that succeeded but was truncated before its
+    # <utilisation> block contributed nothing while still counting toward the
+    # denominator. A null here is honest and costs one session's estimate; a
+    # false zero puts a live memory section top of the doctor's pruning list.
+    if injected_keys and chunks_ok == len(chunks) and not utilisation_missing:
         _record_self_report(
             paths, session_id, list(utilisation_claims.values()), injected_keys,
+        )
+    elif injected_keys and session_id:
+        logger.warning(
+            "Not recording self-reported utilisation for session %s: "
+            "%d/%d chunk(s) parsed, %d without a <utilisation> block. "
+            "Recording a partial answer against a full denominator would "
+            "read as 'injected and unused'.",
+            session_id[:8], chunks_ok, len(chunks), utilisation_missing,
         )
 
     if not units:

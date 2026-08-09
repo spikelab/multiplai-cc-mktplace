@@ -17,6 +17,7 @@ import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -45,11 +46,14 @@ def _session(
     self_report=None,
     judge_entries=None,
     days_ago: int = 0,
+    transcript: str = "",
 ) -> dict:
     record = util.new_session_record(name, ts=_ts(days_ago))
     record["injected"] = injected
     record["self_report"] = self_report
     record["judge"] = judge_entries
+    if transcript:
+        record["transcript"] = transcript
     return record
 
 
@@ -158,7 +162,8 @@ class TestFailedJudgeIsNotAVerdict:
         entries = [_inject("dev.md", "Testing", 900)]
         return [
             _session(f"s{i}", entries,
-                     judge_entries=([] if judged else None))
+                     judge_entries=([] if judged else None),
+                     transcript=f"/transcripts/s{i}.jsonl")
             for i in range(6)
         ]
 
@@ -170,25 +175,83 @@ class TestFailedJudgeIsNotAVerdict:
         assert stat.rate("judge") is None, "a missing judgement must not read as 0% used"
         assert stat.zero_estimated_use("judge") is False
 
-    def test_a_failed_batch_never_marks_a_section_unused(self, tmp_path):
-        """End to end: the judge call fails, nothing is written, nothing is unused."""
+    def test_a_failed_batch_never_marks_a_section_unused(self, tmp_path, monkeypatch):
+        """End to end: the judge call fails, nothing is written, nothing is unused.
+
+        The transcript is stubbed present on purpose. Without it this test never
+        reached the model at all — it asserted an outage while exercising a
+        missing transcript, which is precisely the conflation the split of
+        ``kept_default`` exists to expose.
+        """
         path = _write(util.utilisation_path(tmp_path), self._records(judged=False))
+        monkeypatch.setattr(judge, "distilled_transcript", lambda *a, **k: "transcript")
 
         client = MagicMock()
+        called = []
 
         async def blow_up(**_kw):
+            called.append(1)
             raise RuntimeError("rate limited")
 
         client.query = blow_up
         report = asyncio.run(judge.judge_sessions(
             path, client=client, model="m", sample_size=6))
 
-        assert report == {"eligible": 6, "sampled": 6, "judged": 0, "kept_default": 6}
+        assert called, "the model was never called — this is not the outage path"
+        assert report["judged"] == 0
+        assert report["kept_default"] == 6
+        assert report["unavailable"] == 6, "a model failure IS the outage signal"
+        assert report["not_judgeable"] == 0
         after = util.read_records(path)
         assert all(r["judge"] is None for r in after)
         stat = util.aggregate(after).sections["dev.md#Testing"]
         assert stat.judge_observed == 0
         assert stat.rate("judge") is None
+
+    def test_a_missing_transcript_is_not_an_outage(self, tmp_path):
+        """Transcripts age out faster than the 90-day retention window.
+
+        Folded into one counter, "no transcript" becomes a permanent, growing
+        baseline that buries the signal it shares a number with.
+        """
+        records = [
+            _session(f"s{i}", [_inject("dev.md", "Testing", 900)], judge_entries=None)
+            for i in range(3)
+        ]
+        path = _write(util.utilisation_path(tmp_path), records)
+
+        client = MagicMock()
+
+        async def never_called(**_kw):
+            raise AssertionError("should not reach the model")
+
+        client.query = never_called
+        report = asyncio.run(judge.judge_sessions(
+            path, client=client, model="m", sample_size=3))
+
+        assert report["kept_default"] == 3
+        assert report["not_judgeable"] == 3
+        assert report["unavailable"] == 0
+
+    def test_an_empty_verdict_block_is_not_judge_coverage(self, tmp_path, monkeypatch):
+        """Recording it would increment ``sessions_judged`` with no observations."""
+        path = _write(util.utilisation_path(tmp_path), self._records(judged=False))
+        monkeypatch.setattr(judge, "distilled_transcript", lambda *a, **k: "transcript")
+
+        client = MagicMock()
+
+        async def empty(**_kw):
+            return SimpleNamespace(content="<verdicts>\n</verdicts>")
+
+        client.query = empty
+        report = asyncio.run(judge.judge_sessions(
+            path, client=client, model="m", sample_size=6))
+
+        assert report["judged"] == 0
+        assert report["empty_verdicts"] == 6
+        after = util.read_records(path)
+        assert all(r["judge"] is None for r in after)
+        assert util.aggregate(after).sessions_judged == 0
 
     def test_an_explicit_unused_verdict_does_count(self):
         records = [
@@ -261,12 +324,53 @@ class TestSelfReportEvidence:
             {"file": "me.md", "section": None, "evidence": "", "supported": False},
         ]
 
-    def test_absent_block_yields_no_claims_and_never_raises(self):
+    def test_an_absent_block_is_null_and_an_empty_one_is_zero(self):
+        """The invariant this feature is *named* for, on the estimator that
+        runs every session.
+
+        `[]` for both was the defect: the caller cannot tell "asked and got
+        nothing" from "never answered" by whether it passed an injected list,
+        because it gates on whether the model call *succeeded* — and a truncated
+        reply is a success that parses. `<utilisation>` is emitted last, after
+        every diary unit, with a 4096-token default and no override, so
+        truncation is the ordinary failure. Recorded as `[]` it means "observed
+        and used nothing", which puts a live section top of the pruning table.
+        """
         from lib.extraction import parse_utilisation
 
-        assert parse_utilisation("<unit></unit>") == []
-        assert parse_utilisation("") == []
+        # No block at all -> we do not know.
+        assert parse_utilisation("<unit></unit>") is None
+        assert parse_utilisation("") is None
+        assert parse_utilisation(None) is None
+        # Truncated mid-response, the real shape of the failure.
+        assert parse_utilisation(
+            "<unit><diary_entry>a</diary_entry></unit>\n<unit>\n<diary_ent"
+        ) is None
+        # An explicit "none of them" IS an answer.
         assert parse_utilisation("<utilisation></utilisation>") == []
+        assert parse_utilisation("<utilisation>\n\n</utilisation>") == []
+
+    def test_a_null_self_report_is_not_recorded_as_a_zero(self, tmp_path):
+        """End to end: the aggregate must show `None`, not `0.0`."""
+        path = util.utilisation_path(tmp_path)
+        entries = [_inject("multiplai.md", "Release Flow", 6000)]
+        util.record_injections(path, "s1", entries, transcript="")
+
+        # Nothing recorded, because parse_utilisation said None.
+        table = util.build_table(
+            util.read_records(path), known_keys=["multiplai.md#Release Flow"]
+        )
+        row = (table["sections"] + table["insufficient_data"])[0]
+        assert row["self_report"]["rate"] is None
+        assert row["zero_estimated_use"]["self_report"] is False
+
+        # Whereas an explicit empty answer is a real zero.
+        util.record_self_report(path, "s1", [])
+        table = util.build_table(
+            util.read_records(path), known_keys=["multiplai.md#Release Flow"]
+        )
+        row = (table["sections"] + table["insufficient_data"])[0]
+        assert row["self_report"]["rate"] == 0.0
 
 
 # --- 5. ranking and the low-n flag ------------------------------------------
@@ -515,7 +619,9 @@ class TestDiaryOutputIsNotDegraded:
         assert total == self.EXPECTED_DIARY_CHARS
         assert len(units) == 2
         assert disposition["state"] == "done"
-        assert claims == []
+        # This fixture's response carries no <utilisation> block, so the honest
+        # answer is "not estimated" rather than "estimated at zero".
+        assert claims is None
 
     def test_the_legacy_two_value_entry_point_still_works(self):
         from lib.extraction import extract_units_and_disposition
@@ -746,7 +852,14 @@ class TestJudgeSampling:
             "e</verdict></verdicts>")
         report = asyncio.run(judge.judge_sessions(
             path, client=client, model="m", sample_size=3))
-        assert report == {"eligible": 8, "sampled": 3, "judged": 3, "kept_default": 0}
+        assert report["eligible"] == 8
+        assert report["sampled"] == 3
+        assert report["judged"] == 3
+        assert report["kept_default"] == 0
+        # kept_default is the sum of the three reasons below it.
+        assert report["unavailable"] == 0
+        assert report["not_judgeable"] == 0
+        assert report["empty_verdicts"] == 0
         judged = {r["session"] for r in util.read_records(path)
                   if r.get("judge") is not None}
         assert judged == {"judged", "s0", "s1", "s2"}
@@ -766,6 +879,133 @@ class TestJudgeSampling:
         assert util.sessions_awaiting_judge(util.read_records(path)) == []
 
 
+class TestConcurrentWritersDoNotLoseRecords:
+    """Requirement: two sessions writing at once both survive.
+
+    Nothing in this suite wrote to ``utilisation.jsonl`` from two writers, which
+    is exactly why the module could ship a docstring asserting contention was
+    harmless. It was not: the atomic rewrite guarantees the file is never
+    *corrupt* and says nothing about a lost update, and a lost update here drops
+    the appended record **entirely** — both estimator halves and the injected
+    list with it. Measured before the lock: 40 concurrent writers left 2 records.
+
+    This workspace runs parallel containers and extraction drains at the *next*
+    ``SessionStart``, so coinciding drains are ordinary.
+    """
+
+    WRITERS = 12
+
+    def test_every_concurrent_session_record_survives(self, tmp_path, monkeypatch):
+        import threading
+
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        path = util.utilisation_path(tmp_path)
+        start = threading.Barrier(self.WRITERS)
+        errors: list[BaseException] = []
+
+        def write(i: int) -> None:
+            try:
+                start.wait(timeout=10)
+                util.record_injections(
+                    path, f"s{i:04d}",
+                    [_inject("dev.md", "Testing", 100)],
+                    transcript="",
+                )
+            except BaseException as exc:  # pragma: no cover - diagnostic
+                errors.append(exc)
+
+        threads = [threading.Thread(target=write, args=(i,))
+                   for i in range(self.WRITERS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert not errors, errors
+        sessions = {
+            r["session"] for r in util.read_records(path) if util.is_session_record(r)
+        }
+        assert sessions == {f"s{i:04d}" for i in range(self.WRITERS)}
+
+    def test_the_file_stays_valid_jsonl_under_contention(self, tmp_path, monkeypatch):
+        import threading
+
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        path = util.utilisation_path(tmp_path)
+
+        def write(i: int) -> None:
+            util.record_injections(
+                path, f"s{i:04d}", [_inject("dev.md", None, 10)], transcript="")
+
+        threads = [threading.Thread(target=write, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                json.loads(line)
+
+    def test_a_half_written_record_is_never_left_behind(self, tmp_path, monkeypatch):
+        """The pre-existing guarantee must survive the added lock."""
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        path = util.utilisation_path(tmp_path)
+        util.record_injections(path, "s1", [_inject("dev.md", None, 10)], transcript="")
+        before = path.read_text(encoding="utf-8")
+
+        original = util._write_all
+
+        def boom(p, records):  # noqa: ANN001
+            raise OSError("disk full")
+
+        monkeypatch.setattr(util, "_write_all", boom)
+        with pytest.raises(OSError):
+            util.record_injections(path, "s2", [_inject("dev.md", None, 10)], transcript="")
+        monkeypatch.setattr(util, "_write_all", original)
+
+        assert path.read_text(encoding="utf-8") == before
+        # And the lock is released, so the next write still works.
+        util.record_injections(path, "s3", [_inject("dev.md", None, 10)], transcript="")
+        sessions = {
+            r["session"] for r in util.read_records(path) if util.is_session_record(r)
+        }
+        assert sessions == {"s1", "s3"}
+
+
+class TestCompactionIsLockedToo:
+    def test_compaction_does_not_drop_a_concurrent_session(self, tmp_path, monkeypatch):
+        """``compact`` rewrites the file from a snapshot, so an interleaved
+        session record would be collapsed away entirely."""
+        import threading
+
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        path = util.utilisation_path(tmp_path)
+        _write(path, [
+            _session(f"old{i}", [_inject("dev.md", "Testing", 100)],
+                     self_report=[], days_ago=200)
+            for i in range(4)
+        ])
+
+        def compacting() -> None:
+            util.compact(path, now=NOW)
+
+        def writing() -> None:
+            util.record_injections(
+                path, "fresh", [_inject("dev.md", "Testing", 100)], transcript="")
+
+        threads = [threading.Thread(target=compacting),
+                   threading.Thread(target=writing)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        records = util.read_records(path)
+        sessions = {r["session"] for r in records if util.is_session_record(r)}
+        assert "fresh" in sessions, "the concurrent session record was collapsed away"
+
+
 # --- the machine contract ---------------------------------------------------
 
 class TestTableContract:
@@ -777,10 +1017,40 @@ class TestTableContract:
         assert set(table) == {
             "schema_version", "generated_at", "disclaimer", "estimator_notes",
             "thresholds", "coverage", "sections", "insufficient_data",
-            "never_retrieved", "only_as_whole_file",
+            "never_retrieved", "never_retrieved_sufficient",
+            "never_retrieved_reason", "only_as_whole_file",
         }
         assert table["schema_version"] == util.SCHEMA_VERSION
         assert set(table["estimator_notes"]) == {"self_report", "judge"}
+
+    def test_never_retrieved_carries_a_coverage_floor(self):
+        """The human renderings caveat this; the machine contract must too.
+
+        ``never_retrieved`` is the surface P5's dead-weight pass consumes
+        unattended, and on a fresh install — or after a telemetry gap — it is
+        the entire corpus.
+        """
+        thin = util.build_table(
+            [_session("s1", [_inject("dev.md", "Testing", 100)])],
+            known_keys=["dev.md", "dev.md#Testing", "cold.md"])
+        # `dev.md` bare is in the list too: only its #Testing section was ever
+        # injected, so the whole file genuinely never reached a prompt.
+        assert "cold.md" in thin["never_retrieved"]
+        assert thin["never_retrieved_sufficient"] is False
+        assert "1 session" in thin["never_retrieved_reason"]
+
+        thick = util.build_table(
+            [_session(f"s{i}", [_inject("dev.md", "Testing", 100)])
+             for i in range(util.MIN_COVERAGE_SESSIONS)],
+            known_keys=["dev.md", "dev.md#Testing", "cold.md"])
+        assert thick["never_retrieved_sufficient"] is True
+        assert thick["never_retrieved_reason"] is None
+
+    def test_the_thin_log_caveat_is_rendered_for_a_human_too(self):
+        thin = util.build_table(
+            [_session("s1", [_inject("dev.md", "Testing", 100)])],
+            known_keys=["dev.md", "cold.md"])
+        assert "Not enough history to read this list" in util.render_table(thin)
 
     def test_row_shape_is_stable(self):
         table = util.build_table([
