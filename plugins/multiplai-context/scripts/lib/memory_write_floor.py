@@ -59,7 +59,7 @@ talked into ``verdict: apply`` still lands here.
 from __future__ import annotations
 
 import re
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Optional, Protocol
 
 __all__ = [
@@ -67,11 +67,16 @@ __all__ = [
     "RESERVED_BASENAMES",
     "FLOOR_REASONS",
     "floor_check",
+    "path_refusal",
     "is_safe_target",
     "is_reserved_target",
 ]
 
-_SAFE_TARGET_RE = re.compile(r"^[A-Za-z0-9._-]+\.md$")
+# `\Z`, not `$`: Python's `$` also matches immediately before a trailing
+# newline, so `"python.md\n"` and `"CLAUDE.md\n"` both passed. The reserved-name
+# check survived only because it happens to `.strip()` — luck, not design — and
+# `"python.md\n"` was contained one layer out by `memory_file.exists()`.
+_SAFE_TARGET_RE = re.compile(r"\A[A-Za-z0-9._-]+\.md\Z")
 
 # The only change verb that cannot destroy existing memory.
 ADDITIVE_CHANGES = frozenset({"add"})
@@ -87,6 +92,8 @@ FLOOR_REASONS: tuple[str, ...] = (
     "reserved-filename",
     "unparsed",
     "not-additive",
+    "symlinked-target",
+    "escapes-memory-dir",
 )
 
 
@@ -141,4 +148,42 @@ def floor_check(item: _WriteCandidate) -> Optional[str]:
         return "not-additive"
     if not text.strip():
         return "unparsed"
+    return None
+
+
+def path_refusal(memory_dir, filename: str) -> Optional[str]:
+    """Refusal reason for the **resolved** destination, or ``None``.
+
+    :func:`floor_check` inspects the target *string*. That is the right layer for
+    a proposal's claim about itself, and it is not enough for the write, because
+    every filesystem call the applier then makes — ``exists``, ``read_text``,
+    ``write_text`` — follows symlinks. A symlink already sitting in the memory
+    dir (``notes.md -> ../../CLAUDE.md``) defeats path containment *and*
+    :data:`RESERVED_BASENAMES` at once, with a target string that passes every
+    lexical check.
+
+    Not reachable from prompt injection alone — it needs a prior filesystem write
+    or a malicious commit into the memory repo, which is why it is a second layer
+    rather than the first. But the memory dir is a git repo that a bank sync or a
+    restored backup can write to, so "somebody put a file there" is not exotic.
+
+    Both sides are resolved, deliberately: ``.multiplai/`` is itself a symlink in
+    at least one real workspace, so comparing a resolved child against an
+    unresolved base would refuse every legitimate write.
+    """
+    if not is_safe_target(filename):
+        return "unsafe-target"
+    base = Path(memory_dir)
+    candidate = base / filename
+    try:
+        if candidate.is_symlink():
+            return "symlinked-target"
+        resolved_base = base.resolve()
+        resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        return "escapes-memory-dir"
+    if resolved != resolved_base / filename:
+        return "escapes-memory-dir"
+    if is_reserved_target(resolved.name):
+        return "reserved-filename"
     return None

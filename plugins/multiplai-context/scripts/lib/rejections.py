@@ -17,6 +17,18 @@ learning is still findable through the ledger, and the item's text is stored
 verbatim so a rejection can be read and overruled without going back to the
 proposal at all.
 
+**Know what that means for anything sensitive.** ``text``, ``title`` and
+``source`` are stored as written, with no redaction — and deliberately so: a
+regex screen over free text fails open (it passes a credential whose surrounding
+words do not match the pattern) while reading as protection, which is worse than
+storing the text and saying so. What matters is that this is no longer the copy
+that outlives everything else: ``/dream-remember`` step 5 deletes the source
+learnings files, so before :func:`rotate` existed this log was the one permanent
+copy of every dropped item's text, growing without bound. It is now capped —
+see :func:`rotate` — and it lives under ``.multiplai/data/``, which is
+git-ignored. If a learning ever captures a secret, the remedy is the same as
+everywhere else: revoke it. Do not rely on this file forgetting.
+
 Appending, not rewriting. A read-modify-write of a growing log is a file two
 concurrent dream runs can truncate between them; ``O_APPEND`` on a line-oriented
 file is atomic for the writes this makes, and a torn line loses one record
@@ -29,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,12 +49,21 @@ from typing import Iterable, Iterator, Mapping, Optional
 
 __all__ = [
     "REJECTIONS_FILENAME",
+    "MAX_RECORDS",
     "default_path",
     "record_for",
     "append",
+    "rotate",
     "read",
     "aggregate",
 ]
+
+#: Records kept before the oldest are dropped. "Forever" was the stated design
+#: and it is the wrong trade for this file: it holds every dropped item's text
+#: verbatim, it is the copy that outlives the source learnings, and nothing ever
+#: read a rejection from six months ago. Generous enough that the audit purpose
+#: is unaffected — a busy month produces a few hundred drops.
+MAX_RECORDS = 5000
 
 REJECTIONS_FILENAME = "rejections.jsonl"
 
@@ -141,3 +163,46 @@ def _iter_records(path: Path) -> Iterator[dict]:
 def aggregate(records: Iterable[Mapping]) -> dict[str, int]:
     """Counts by reason code, for the receipt's grouped view."""
     return dict(Counter(str(r.get("reason", "")) or "(unknown)" for r in records))
+
+
+def rotate(path: Path, *, max_records: int = MAX_RECORDS) -> int:
+    """Trim *path* to its newest *max_records* lines. Returns how many were dropped.
+
+    Called after :func:`append`, so the cap is enforced by the writer rather than
+    hoped for. Best-effort and silent on failure by the same contract as
+    ``append``: the records are already written, and a log that could not be
+    trimmed is a disk-space problem, not a correctness one.
+
+    Rewrites via temp-file-plus-rename, unlike ``append``'s ``O_APPEND``, because
+    this one genuinely rewrites the whole file — a truncate-in-place would let a
+    concurrent run's append land in the middle of nowhere.
+    """
+    path = Path(path)
+    try:
+        lines = [
+            line for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except OSError:
+        return 0
+    if len(lines) <= max_records:
+        return 0
+    kept = lines[-max_records:]
+    dropped = len(lines) - len(kept)
+    try:
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-rejections-")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(kept) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, str(path))
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    except OSError:
+        return 0
+    return dropped

@@ -26,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from collections.abc import Sequence
@@ -1859,6 +1860,30 @@ def _is_safe_memory_update(current: str, new: str) -> bool:
     return True
 
 
+def _atomic_write(path: Path, content: str) -> None:
+    """Replace *path*'s contents atomically (temp file + ``os.replace``).
+
+    ``write_text`` is truncate-then-write: a kill or an ENOSPC part-way through
+    leaves the file half-written, and the file in question is the user's
+    long-term memory. ``save_cache`` and ``learnings_ledger`` both already write
+    this way; the one file whose loss actually matters did not.
+    """
+    path = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".tmp-{path.name}-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _is_additive_result(current: str, new: str, proposed_texts: Sequence[str]) -> str | None:
     """Check an applier result really only *added* to *current*.
 
@@ -2149,7 +2174,12 @@ async def _judge_batch(client, items, target_texts, sem, index: int, total: int)
     if response is None:  # pragma: no cover - defensive
         return {}, False
 
-    verdicts = memory_judge.parse_verdicts(response.content or "")
+    # The batch's own labels are passed in, so a well-formed verdict line for
+    # anything else — including one echoed out of a learning's own text — is
+    # unaddressable rather than merely implausible.
+    verdicts = memory_judge.parse_verdicts(
+        response.content or "", memory_judge.batch_labels(items),
+    )
     logger.info(
         "Judge batch %d/%d: %d item(s) in, %d verdict(s) out, %.0fs",
         index, total, len(items), len(verdicts), elapsed,
@@ -2157,22 +2187,32 @@ async def _judge_batch(client, items, target_texts, sem, index: int, total: int)
     if not verdicts:
         # An empty parse is indistinguishable from a failed call as far as the
         # partition goes, but not as far as diagnosis goes: this one produced a
-        # reply that matched nothing, which is a prompt or format problem.
+        # reply the parser refused. Either it matched nothing (a prompt or format
+        # problem) or it was discarded wholesale — a duplicate label, which
+        # `parse_verdicts` logs with the label. Both mean the batch's items keep
+        # their conservative default, which is why one branch covers both.
         logger.warning(
-            "Judge batch %d/%d returned no parseable verdict lines — its %d "
+            "Judge batch %d/%d yielded no usable verdict lines — its %d "
             "item(s) keep the conservative default", index, total, len(items),
         )
         return {}, False
     return verdicts, True
 
 
-async def _judge_items(client, items, memory_dir: Path, cache_path: Path):
+async def _judge_items(
+    client, items, memory_dir: Path, cache_path: Path, *, persist_cache: bool = True
+):
     """Judge every item in *items*. Returns ``(verdicts, unjudged_count)``.
 
     Cached verdicts short-circuit the call entirely: the same item must not
     classify differently across runs, or a receipt is impossible to reason
     about, and a killed run should resume rather than pay to re-judge what it
     already decided.
+
+    ``persist_cache=False`` reads the cache but does not write it, so a
+    ``--dry-run`` leaves no state behind for a later real run to apply from. A
+    dry run is a preview, and a preview that changes what the next real run
+    would do is not one.
 
     A ``client`` of ``None`` (no SDK — contract C3) is not an error path here;
     it simply produces zero verdicts, and zero verdicts is the same partition
@@ -2225,7 +2265,7 @@ async def _judge_items(client, items, memory_dir: Path, cache_path: Path):
             fresh[(item.target, item.number)] = hit
             cache[memory_judge.item_key(item)] = hit
 
-    if fresh:
+    if fresh and persist_cache:
         try:
             memory_judge.save_cache(cache_path, cache)
         except OSError:
@@ -2267,7 +2307,7 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
     Returns a process exit code.
     """
     from lib import dream_triage as triage_lib
-    from lib import memory_judge, rejections
+    from lib import memory_judge, memory_write_floor, rejections
 
     if not acquire_run_lock():
         return 0
@@ -2297,6 +2337,22 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
             "routing-flagged items cannot be identified and the judge would be "
             "given incomplete evidence. Refusing to apply anything — review this "
             "proposal by hand, or regenerate it."
+        )
+        return 1
+
+    dupes = triage_lib.duplicate_labels(proposal)
+    if dupes:
+        # `(target, number)` is the item identity the judge labels by and the
+        # verdict lookup keys on. Two items sharing one label both resolve to
+        # the same verdict, so one is written on a judgement rendered about the
+        # other's text. Renumbering would silently move existing receipts and
+        # cached verdicts onto different items, so refuse instead.
+        listed = ", ".join(f"{t}#{n}" for t, n in dupes)
+        print(
+            f"ERROR: {proposal_path.name} numbers these items more than once: "
+            f"{listed}. Two items with one label cannot be judged separately — "
+            "each would be written on the other's verdict. Refusing to apply "
+            "anything — renumber them by hand, or regenerate the proposal."
         )
         return 1
 
@@ -2336,6 +2392,7 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
     verdicts, unjudged = await _judge_items(
         client, triage.review, memory_dir,
         memory_judge.default_cache_path(paths.data_dir()),
+        persist_cache=not dry_run,
     )
     disagreements = sum(
         1 for item in triage.review
@@ -2380,7 +2437,14 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
                 ),
             )
             logger.info("triage: logged %d rejection(s) to %s", written, rejections_path)
-        except OSError:
+            rejections.rotate(rejections_path)
+        except Exception:
+            # Broader than OSError on purpose. `append` serialises arbitrary item
+            # text, so a TypeError or UnicodeEncodeError is reachable, and this
+            # runs BEFORE any memory write — so swallowing it is fail-closed for
+            # the memory but fail-open for the audit trail, which is the right way
+            # round only if the failure is reported. Losing the log must never
+            # undo a decision, and must never abort the run either.
             logger.exception("triage: could not write the rejection log %s",
                              rejections_path)
 
@@ -2399,6 +2463,17 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
     skipped: dict[str, str] = {}
     for filename, items in sorted(by_file.items()):
         memory_file = memory_dir / filename
+        # The floor has already passed on the target *string*. This is the same
+        # question asked of the resolved path, because every call below follows
+        # symlinks — and a symlink in the memory dir defeats both containment and
+        # the reserved-filename list with a target string that looks perfect.
+        path_problem = memory_write_floor.path_refusal(memory_dir, filename)
+        if path_problem:
+            skipped[filename] = f"refused by the write floor: {path_problem}"
+            logger.error(
+                "triage: refusing to write %s — %s", filename, path_problem,
+            )
+            continue
         if client is None:
             # Reachable only from the verdict cache: a previous run judged these
             # and this one has no SDK to run the applier. Applying needs a model
@@ -2434,7 +2509,19 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
             failed[filename] = f"applier result was not purely additive: {not_additive}"
             logger.error("triage: %s not applied — %s", filename, not_additive)
             continue
-        memory_file.write_text(updated_content)
+        try:
+            _atomic_write(memory_file, updated_content)
+        except OSError as exc:
+            # The receipt is written after this loop, and its guarantee is that a
+            # crash between the two leaves items pending WITH a receipt rather
+            # than processed with no record. An unhandled OSError on the second
+            # file broke exactly that: the first file was already rewritten, and
+            # nothing recorded it. Treat a failed write like a failed applier —
+            # this file's items stay pending, every other file still gets its
+            # receipt line, and the run completes.
+            failed[filename] = f"could not write the memory file: {exc}"
+            logger.exception("triage: %s not applied — write failed", filename)
+            continue
         applied[filename] = items
         decisions += [
             Decision(kind="update", file=filename, index=item.number,
@@ -2716,18 +2803,27 @@ def main() -> None:
         "--triage",
         action="store_true",
         help="Apply the uncontroversial half of a pending proposal and leave the "
-             "rest for review. Additive entries to non-behavioural memory files "
-             "that no gate flagged are applied and recorded in a receipt under "
-             "dreams/applied/; rule proposals, CLAUDE.md items, routing-flagged "
-             "items, low-confidence items and anything that rewrites rather than "
-             "appends stay pending. Uses the newest pending proposal unless "
-             "--proposal names one.",
+             "rest for review, then record what was applied in a receipt under "
+             "dreams/applied/. A MODEL decides: each pending item is judged by a "
+             "separate reviewing pass that can only ever be more cautious than "
+             "the code rubric, and an item with no verdict — failed call, no SDK, "
+             "unparseable reply — always stays pending. Anything the rubric does "
+             "not already permit, anything that rewrites rather than appends, and "
+             "any item targeting CLAUDE.md stays pending regardless of what the "
+             "judge says; kind: RULE items are never applied in any mode. "
+             "Governed by the memory_write_mode option (review/triage/auto): "
+             "'review' judges nothing and applies nothing. Uses the newest "
+             "pending proposal unless --proposal names one.",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="With --triage: print the partition and exit. Writes nothing, "
-             "calls no model.",
+        help="With --triage: print the partition and exit without writing to "
+             "memory, without a receipt, and without a commit. It DOES call the "
+             "model — the partition is the judge's answer, so a preview that "
+             "skipped judging could only ever report 'nothing would apply'. The "
+             "verdict cache is not written either, so a dry run leaves nothing "
+             "behind for a later real run to apply from.",
     )
     parser.add_argument(
         "--stamp",

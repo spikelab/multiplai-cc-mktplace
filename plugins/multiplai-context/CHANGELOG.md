@@ -69,6 +69,22 @@ Nothing yet.
   Every applied item is in a receipt, memory is a git repository, and the
   receipt ends with the exact `git revert` command that undoes the whole batch.
 
+  **Read this before you upgrade, because the default turns it on.** With
+  `memory_write_mode: triage`, the whole chain — learnings → proposal → judge →
+  memory write → git commit — runs on the daily maintenance cadence with no
+  human present and without you invoking `/dream-remember` at all. The
+  maintenance pass can even generate the proposal it then triages, in one run.
+  Set `memory_write_mode: review` to keep the old behaviour exactly.
+
+  One related narrowing worth knowing: destination protection used to be a list
+  of 18 filenames that could never be written unattended. It is now two —
+  `CLAUDE.md` and `AGENTS.md` — because a filename is a poor proxy for "this
+  file holds behaviour". What protects `preferences.md`, `git-policy.md`,
+  `technical-pref.md` and the voice guides now is the classification: an item
+  whose **kind** is `RULE` is never applied unattended in any mode. That is a
+  better rule and a *model's* judgement rather than a filename match, so it is a
+  genuine trade rather than a straight improvement.
+
 - **A rejection log at `.multiplai/data/rejections.jsonl`.** When the judge
   drops an item — usually because your memory already says it — the item is
   written here in full: its text, its labels, its source citation and the
@@ -91,7 +107,57 @@ Nothing yet.
 
 - **Verdicts are cached, so re-runs are stable.** Triaging the same proposal
   twice produces the same partition and costs nothing the second time, and a
-  killed run resumes instead of re-judging.
+  killed run resumes instead of re-judging. The cache key covers everything the
+  judge was shown — including the citation the item carried, whether the routing
+  gate had flagged it, and the judge's own prompt — so a cache hit is always the
+  answer to the same question. It is not reused when any of those change.
+
+- **Two items numbered the same can no longer be applied on each other's
+  judgement.** A proposal that numbers two entries `### 3.` under one file is
+  now refused outright, with both labels named, rather than triaged: the number
+  is how an item is identified end to end, so two items sharing one would each
+  have been written on the other's verdict. Renumber them, or regenerate.
+
+- **A stricter reading of the judge's reply.** A verdict line for an item that
+  was not in the batch it answers is discarded, and a reply that answers twice
+  for one item is thrown away whole. This closes a route by which text inside a
+  learning could pose as a verdict for a *different* item — most cheaply as a
+  forged `drop`, which would have removed a legitimate learning from your queue.
+
+- **`--dry-run` really does write nothing.** It still calls the model (the
+  partition *is* the judge's answer, so a preview that skipped judging could only
+  report "nothing would apply"), but it no longer saves the verdict cache — so a
+  preview cannot leave behind something a later real run applies from. The help
+  text now says all of this, and no longer describes gates that were removed.
+
+- **An unsupported citation now holds back every fact it should.** The rule is
+  "a factual claim about the world needs a citation the judge could corroborate";
+  it was being applied to facts from research and observation but *skipped* for
+  the weakest class of all — a conclusion the model merely inferred. Under
+  `auto` that meant an uncited inference was applied while a cited fact was held.
+  Corrections and your own stated preferences remain exempt: neither is a claim
+  about an external source.
+
+- **Memory files are written atomically, and a failed write cannot lose a
+  receipt.** The write was truncate-then-write with no error handling, so a
+  failure on the second of two files left the first rewritten with no receipt,
+  no commit and nothing marked processed — the one state the receipt ordering is
+  designed to make impossible. A file that cannot be written is now reported like
+  any other refusal and its items stay pending.
+
+- **The write floor checks where the file actually is.** A symlink sitting in the
+  memory directory used to satisfy every filename check while sending the write
+  somewhere else entirely — including to `CLAUDE.md`. The resolved destination is
+  now checked too, and a symlink is refused outright. Also: a target with a
+  trailing newline is no longer a valid filename (Python's `$` matches before
+  one, so `"CLAUDE.md\n"` had been passing).
+
+- **The rejection log is capped at 5,000 records.** It holds every dropped
+  item's text verbatim and was designed to grow forever — and since
+  `/dream-remember` deletes the source learnings files, it was the one permanent
+  copy. It is not redacted, deliberately (a regex screen over free text fails
+  open while reading as protection); it is bounded, git-ignored, and documented
+  as holding what it holds.
 
 - **`.multiplai/memory/CLAUDE.md` (and `AGENTS.md`) can never be written
   unattended**, whatever an item claims to be. Neither can a filename that tries

@@ -337,20 +337,84 @@ class TestOnlyLowerEndToEnd:
 class TestVerdictCache:
     def test_a_second_run_costs_no_model_calls(self, dream):
         """Criterion 12. The same item must not classify differently across
-        runs, or a receipt is impossible to reason about."""
+        runs, or a receipt is impossible to reason about.
+
+        Both runs here are REAL runs. This test used to drive two ``dry_run=True``
+        runs and assert one model call — which only passed because a dry run
+        primed the cache, i.e. the assertion was load-bearing for a bug. A dry
+        run must not change what the next real run does.
+        """
         mod, memory_dir = dream
         (memory_dir / "dolcebot.md").write_text(MEMORY)
         proposal = _proposal_file(memory_dir)
         client = _client_returning(GOOD_VERDICTS)
 
         with patch.object(mod, "create_client", new=AsyncMock(return_value=client)):
-            first = asyncio.run(mod.dream_triage(str(proposal), dry_run=True))
+            first = asyncio.run(mod.dream_triage(str(proposal), dry_run=False))
             calls_after_first = len(client.calls)
-            second = asyncio.run(mod.dream_triage(str(proposal), dry_run=True))
+            second = asyncio.run(mod.dream_triage(str(proposal), dry_run=False))
 
         assert first == second == 0
-        assert calls_after_first == 1
-        assert len(client.calls) == 1, "the second run must not re-judge"
+        assert calls_after_first >= 1
+        assert len(client.calls) == calls_after_first, "the second run must not re-judge"
+
+    def test_a_dry_run_leaves_no_cache_behind(self, dream):
+        """Requirement: a preview does not change the next real run.
+
+        Priming the cache makes a dry run something a later run applies from,
+        which is the one thing a preview must not be — and the help text
+        promised it wrote nothing. Asserted on the cache file rather than on a
+        second run's call count, because two runs in one process share the dream
+        run lock and the second would be skipped for an unrelated reason.
+        """
+        from multiplai_core.paths import get_paths
+
+        from lib import memory_judge
+
+        mod, memory_dir = dream
+        (memory_dir / "dolcebot.md").write_text(MEMORY)
+        proposal = _proposal_file(memory_dir)
+        client = _client_returning(GOOD_VERDICTS)
+        cache_path = memory_judge.default_cache_path(get_paths().data_dir())
+
+        with patch.object(mod, "create_client", new=AsyncMock(return_value=client)):
+            asyncio.run(mod.dream_triage(str(proposal), dry_run=True))
+
+        assert client.calls, "the dry run should still judge — that is the preview"
+        assert not cache_path.exists(), (
+            "a dry run wrote the verdict cache, so a later real run would apply "
+            "from a preview"
+        )
+
+    def test_a_real_run_does_write_the_cache(self, dream):
+        """The other half: caching is the point, on a run that is not a preview."""
+        from multiplai_core.paths import get_paths
+
+        from lib import memory_judge
+
+        mod, memory_dir = dream
+        (memory_dir / "dolcebot.md").write_text(MEMORY)
+        proposal = _proposal_file(memory_dir)
+        client = _client_returning(GOOD_VERDICTS)
+        cache_path = memory_judge.default_cache_path(get_paths().data_dir())
+
+        with patch.object(mod, "create_client", new=AsyncMock(return_value=client)):
+            asyncio.run(mod.dream_triage(str(proposal), dry_run=False))
+
+        assert cache_path.exists()
+
+    def test_a_dry_run_writes_nothing_at_all(self, dream):
+        mod, memory_dir = dream
+        before = (memory_dir / "dolcebot.md")
+        before.write_text(MEMORY)
+        proposal = _proposal_file(memory_dir)
+        snapshot = before.read_text()
+        client = _client_returning(GOOD_VERDICTS)
+
+        with patch.object(mod, "create_client", new=AsyncMock(return_value=client)):
+            asyncio.run(mod.dream_triage(str(proposal), dry_run=True))
+
+        assert before.read_text() == snapshot
 
 
 class TestRejectionLog:

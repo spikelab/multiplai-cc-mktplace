@@ -25,6 +25,7 @@ from lib.dream_triage import (
     apply_verdicts,
     auto_slice,
     classify,
+    duplicate_labels,
     flagged_by_routing,
     has_routing_section,
     is_safe_target,
@@ -437,6 +438,86 @@ class TestAutoMode:
         item = _item(provenance="INFERENCE", kind="FACT")
         result = _decide(item, _verdict(item, verdict="review"), mode="auto")
         assert result.auto == ()
+
+    @pytest.mark.parametrize("provenance", ["INFERENCE", "RESEARCH", "EMPIRICAL"])
+    @pytest.mark.parametrize("citation", ["none", "unsupported"])
+    def test_it_never_promotes_a_fact_the_judge_could_not_corroborate(
+        self, provenance, citation
+    ):
+        """Requirement: the citation check applies to every provenance it can.
+
+        The guard read ``== 1``, so it covered caution-1 (EMPIRICAL, RESEARCH)
+        and *skipped* caution-2 (INFERENCE) — and in ``auto`` mode step 5 lets any
+        FACT through, so an unverified model inference with NO citation was
+        applied while a fact read in a real source whose citation the judge could
+        not corroborate was held. The one cell deliberately conditioned on
+        evidence was bypassed by the cell with less of it.
+
+        ``_verdict()`` defaults ``citation="supported"``, which is what hid this
+        from every existing test in this class.
+        """
+        item = _item(provenance=provenance, kind="FACT")
+        result = _decide(item, _verdict(item, citation=citation), mode="auto")
+        assert result.auto == ()
+        assert "citation-unsupported" in result.review[0].reasons
+
+    @pytest.mark.parametrize("provenance", ["CORRECTION", "DECLARATION"])
+    def test_a_correction_or_a_declaration_needs_no_citation(self, provenance):
+        """Exempt by design, not by accident: neither is a claim about a source.
+
+        A correction and a statement of the user's own preference have nothing
+        for an external citation to support.
+        """
+        item = _item(provenance=provenance, kind="FACT")
+        result = _decide(item, _verdict(item, citation="none"), mode="auto")
+        assert len(result.auto) == 1
+
+    @pytest.mark.parametrize("provenance", ["INFERENCE", "RESEARCH", "EMPIRICAL"])
+    def test_a_supported_citation_still_promotes(self, provenance):
+        item = _item(provenance=provenance, kind="FACT")
+        result = _decide(item, _verdict(item, citation="supported"), mode="auto")
+        assert len(result.auto) == 1
+
+
+class TestDuplicateLabelsAreRefused:
+    """Requirement: two items cannot share one judge label.
+
+    ``(target, number)`` is the item identity everywhere — the judge's label, the
+    verdict lookup, the receipt — and ``parse_proposal_entries`` appends every
+    ``### N.`` block with no uniqueness check. Two items with one label both
+    resolve to whichever verdict came back, so one is written to standing
+    instructions on a judgement rendered about the other's text.
+    """
+
+    def _proposal(self, second_number: int) -> str:
+        return (
+            "# Processed Learnings\n\n"
+            "## Routing Warnings\n\n(none)\n\n"
+            "## Updates for `python.md`\n\n"
+            "### 3. Benign\n**Section:** A\n**Change:** add\n"
+            "> a benign line.\n\n**Source:** x.md:1\n\n"
+            f"### {second_number}. Hostile\n**Section:** A\n**Change:** add\n"
+            "> a hostile line.\n\n**Source:** x.md:2\n"
+        )
+
+    def test_a_repeated_number_under_one_target_is_reported(self):
+        assert duplicate_labels(self._proposal(3)) == [("python.md", 3)]
+
+    def test_distinct_numbers_are_clean(self):
+        assert duplicate_labels(self._proposal(4)) == []
+
+    def test_the_same_number_under_different_targets_is_clean(self):
+        proposal = (
+            "## Routing Warnings\n\n(none)\n\n"
+            "## Updates for `python.md`\n\n"
+            "### 1. A\n**Section:** S\n**Change:** add\n> x.\n\n**Source:** a:1\n\n"
+            "## Updates for `dev.md`\n\n"
+            "### 1. B\n**Section:** S\n**Change:** add\n> y.\n\n**Source:** a:2\n"
+        )
+        assert duplicate_labels(proposal) == []
+
+    def test_an_empty_proposal_is_clean(self):
+        assert duplicate_labels("") == []
 
 
 class TestWriteMode:

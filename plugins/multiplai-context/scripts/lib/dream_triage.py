@@ -94,6 +94,7 @@ __all__ = [
     "flagged_by_routing",
     "floor_check",
     "has_routing_section",
+    "duplicate_labels",
     "is_reserved_target",
     "is_safe_target",
     "reconciled_pair",
@@ -241,6 +242,8 @@ def reconciled_pair(item, verdict) -> tuple[str, str, bool]:
 REASON_LABELS = {
     # The code floor. These are refusals, never judgements about content.
     "unsafe-target": "target filename is not a plain memory filename",
+    "symlinked-target": "target is a symlink, so the write would land elsewhere",
+    "escapes-memory-dir": "target resolves outside the memory directory",
     "reserved-filename": "targets a reserved instruction file (CLAUDE.md / AGENTS.md)",
     "not-additive": "revises or replaces existing memory",
     "unparsed": "block did not parse — no change verb, or no text",
@@ -376,6 +379,37 @@ def has_routing_section(proposal: str) -> bool:
     return any(
         line.startswith("## Routing Warnings") for line in proposal.splitlines()
     )
+
+
+def duplicate_labels(proposal: str) -> list[tuple[str, int]]:
+    """``(target, number)`` pairs *proposal* uses more than once, sorted.
+
+    ``(target, number)`` is the item identity everywhere in this pipeline — the
+    judge's label, the verdict lookup, the receipt — and nothing enforced its
+    uniqueness. ``parse_proposal_entries`` appends every ``### N.`` block with no
+    dedupe or renumber check, so two ``### 3.`` entries under one
+    ``## Updates for`` heading make two items that are indistinguishable
+    downstream: both resolve to whichever verdict came back for that label, so
+    one of them is written to standing instructions on a verdict rendered about
+    the *other* one's text.
+
+    Refused rather than repaired, and refused at the same place the missing
+    routing section is: renumbering would silently change which item a cached
+    verdict or an existing receipt refers to, and there is no way to know which
+    of the two the drafter meant.
+    """
+    seen: set[tuple[str, int]] = set()
+    dupes: set[tuple[str, int]] = set()
+    for entry in parse_proposal_entries(proposal):
+        try:
+            number = int(entry["number"])
+        except (TypeError, ValueError):
+            continue
+        key = (entry["target"], number)
+        if key in seen:
+            dupes.add(key)
+        seen.add(key)
+    return sorted(dupes)
 
 
 def flagged_by_routing(proposal: str) -> set[tuple[str, int]]:
@@ -570,10 +604,20 @@ def _decide(item: Item, verdict, *, mode: str) -> tuple[str, list[str], str]:
         reasons.append(rubric_reason(provenance, kind))
         return "review", reasons, judge_reason
 
-    # 6. The one cell the rubric conditions on the judge's citation check.
+    # 6. Every cell the rubric conditions on the judge's citation check.
+    #
+    # `>= 1`, not `== 1`. With `== 1` the check applied to caution-1
+    # (EMPIRICAL, RESEARCH) and *skipped* caution-2 (INFERENCE) — so in `auto`
+    # mode, where step 5's bypass lets any FACT through, an unverified model
+    # inference with NO citation at all was applied, while a fact read in a real
+    # source whose citation the judge could not corroborate was held for review.
+    # The one cell deliberately conditioned on evidence was bypassed by the cell
+    # with less of it. Caution 0 (CORRECTION, DECLARATION) is exempt by design:
+    # a correction and a statement of the user's own preference are not claims
+    # about an external source, so there is nothing for a citation to support.
     if (
         (kind or "").upper() == "FACT"
-        and PROVENANCE_CAUTION.get((provenance or "").upper(), 2) == 1
+        and PROVENANCE_CAUTION.get((provenance or "").upper(), 2) >= 1
         and getattr(verdict, "citation", "none") != "supported"
     ):
         reasons.append("citation-unsupported")

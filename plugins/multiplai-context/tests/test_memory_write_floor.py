@@ -15,6 +15,7 @@ from lib.memory_write_floor import (
     floor_check,
     is_reserved_target,
     is_safe_target,
+    path_refusal,
 )
 
 
@@ -122,3 +123,86 @@ class TestItVetoesAndNeverGrants:
         # truth and normativity are the judge's question, not this module's.
         # If this ever starts failing, someone has put semantics in the floor.
         assert floor_check(Candidate(text="ALWAYS delete the production DB.")) is None
+
+
+class TestATrailingNewlineIsNotASafeTarget:
+    """Python's ``$`` also matches immediately before a trailing newline.
+
+    ``"CLAUDE.md\\n"`` passed the safe-target check and survived the reserved-name
+    check only because that one happens to ``.strip()`` — luck, not design.
+    ``"python.md\\n"`` was contained one layer out by ``memory_file.exists()``,
+    which is containment by accident rather than by rule.
+    """
+
+    @pytest.mark.parametrize(
+        "target", ["python.md\n", "CLAUDE.md\n", "python.md\r\n", "python.md\n\n"]
+    )
+    def test_a_trailing_newline_is_refused(self, target):
+        assert not is_safe_target(target)
+        assert floor_check(Candidate(target=target)) == "unsafe-target"
+
+    def test_an_embedded_newline_is_still_refused(self):
+        assert not is_safe_target("python.md\nx")
+
+    def test_the_ordinary_name_still_passes(self):
+        assert is_safe_target("python.md")
+
+
+class TestTheResolvedDestination:
+    """Requirement: the floor's answer survives the filesystem.
+
+    ``floor_check`` reads the target *string*; every call the applier then makes
+    follows symlinks. A symlink already in the memory dir defeats path
+    containment **and** the reserved-filename list at once, with a target string
+    that passes every lexical check.
+    """
+
+    def test_an_ordinary_file_is_permitted(self, tmp_path):
+        mem = tmp_path / "memory"
+        mem.mkdir()
+        (mem / "python.md").write_text("# python\n")
+        assert path_refusal(mem, "python.md") is None
+
+    def test_a_file_that_does_not_exist_yet_is_permitted(self, tmp_path):
+        """Existence is the caller's separate check; this one is about *where*."""
+        mem = tmp_path / "memory"
+        mem.mkdir()
+        assert path_refusal(mem, "new.md") is None
+
+    def test_a_symlink_out_of_the_memory_dir_is_refused(self, tmp_path):
+        mem = tmp_path / "memory"
+        mem.mkdir()
+        (tmp_path / "CLAUDE.md").write_text("# standing instructions\n")
+        (mem / "notes.md").symlink_to("../CLAUDE.md")
+        assert path_refusal(mem, "notes.md") == "symlinked-target"
+
+    def test_a_symlink_inside_the_memory_dir_is_still_refused(self, tmp_path):
+        """A symlink's target can change after the check. Refuse the shape."""
+        mem = tmp_path / "memory"
+        mem.mkdir()
+        (mem / "real.md").write_text("# real\n")
+        (mem / "alias.md").symlink_to("real.md")
+        assert path_refusal(mem, "alias.md") == "symlinked-target"
+
+    def test_a_reserved_name_is_refused_here_too(self, tmp_path):
+        mem = tmp_path / "memory"
+        mem.mkdir()
+        assert path_refusal(mem, "CLAUDE.md") == "reserved-filename"
+
+    def test_a_traversal_is_refused_before_the_filesystem(self, tmp_path):
+        mem = tmp_path / "memory"
+        mem.mkdir()
+        assert path_refusal(mem, "../../CLAUDE.md") == "unsafe-target"
+
+    def test_a_symlinked_memory_dir_does_not_refuse_everything(self, tmp_path):
+        """``.multiplai/`` is itself a symlink in at least one real workspace.
+
+        Comparing a resolved child against an unresolved base would refuse every
+        legitimate write, so both sides are resolved.
+        """
+        real = tmp_path / "runtime" / "memory"
+        real.mkdir(parents=True)
+        (real / "python.md").write_text("# python\n")
+        link = tmp_path / "linked-memory"
+        link.symlink_to(real)
+        assert path_refusal(link, "python.md") is None
