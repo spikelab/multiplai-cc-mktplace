@@ -556,7 +556,7 @@ Everything stays on your machine under `<workspace>/.multiplai/`
 | `diary/YYYY-MM-DD/` | One file per session — a narrative of what happened. |
 | `learnings/` | Extracted insights pending consolidation. |
 | `now/` | Per-project current-state summaries. |
-| `data/` | Runtime state — catalogs, logs, session state, gate stamps (`dream_state.yaml`, `config_audit_state.yaml`, `maintainer_state.yaml`). Disposable; recreated as needed. Two files here are worth knowing by name: **`rejections.jsonl`**, the append-only record of every proposed memory entry the judge refused ([what may be written](#what-may-be-written-without-you-reading-it)), and `judge_cache.json`, which keeps those verdicts stable across re-runs — delete it to have everything re-judged. |
+| `data/` | Runtime state — catalogs, logs, session state, gate stamps (`dream_state.yaml`, `config_audit_state.yaml`, `maintainer_state.yaml`). Disposable; recreated as needed. Two files here are worth knowing by name: **`rejections.jsonl`**, the append-only record of every proposed memory entry the judge refused ([what may be written](#what-may-be-written-without-you-reading-it)), and `judge_cache.json`, which keeps those verdicts stable across re-runs — delete it to have everything re-judged. `doctor_state.json` caches the [memory doctor](#the-memory-doctor)'s per-file contradiction results; delete it to have every file re-checked. |
 
 Delete any of these any time; the plugin recreates what it needs. If
 `.multiplai/` lives inside a git repo and you don't want diary/learnings
@@ -853,7 +853,7 @@ owns a **24-hour gate**. `SessionStart` checks that same gate *in-process first*
 and skips the spawn entirely when it's closed — the child is authoritative, but
 reaching it costs a `uv run` startup, and since the maintainer declares its
 dependencies in a PEP 723 header a cold `uv` cache turns that into a network
-fetch at session start. Seven passes:
+fetch at session start. Eight passes — seven daily, one weekly:
 
 | Pass | What it does | Model call? |
 |---|---|---|
@@ -864,11 +864,12 @@ fetch at session start. Seven passes:
 | 5. Utilisation retention | Collapses `utilisation.jsonl` records older than 90 days into per-section totals | no |
 | 6. Utilisation judge | Rules on a sample of un-judged sessions (`utilisation_judge_sample`, default 5), on a **Haiku** tier | yes (cheap) |
 | 7. Triage apply | Judges the waiting proposal and applies what clears — see [What may be written without you reading it](#what-may-be-written-without-you-reading-it). Off under `memory_write_mode=review` | yes |
+| 8. **Memory doctor** — *weekly* | Duplication, within-file contradiction and dead weight over the whole corpus, on a **Haiku** tier. Writes a report; see [The memory doctor](#the-memory-doctor) | yes (cheap) |
 
-Passes 1–2 write to `.multiplai/dreams/` and the health log; 3–4 write derived
-files (catalogs, `now/`) that are rebuilt from source and hold no unique state;
-5–6 write only `utilisation.jsonl`, which is telemetry — nothing reads it to
-decide what memory *says*.
+Passes 1–2 and 8 write to `.multiplai/dreams/` and the health log; 3–4 write
+derived files (catalogs, `now/`) that are rebuilt from source and hold no unique
+state; 5–6 write only `utilisation.jsonl`, which is telemetry — nothing reads it
+to decide what memory *says*.
 
 **Pass 7 is the one that writes your memory files, and until 0.36.0 nothing
 unattended did.** That was a real safety property and it was traded
@@ -906,7 +907,57 @@ uv run --project scripts scripts/memory_maintainer.py --force
 ```
 
 State lives in `<data_dir>/maintainer_state.yaml`; runs appear in the activity
-log as `[maintenance]`.
+log as `[maintenance]`. It holds **two** independent gate stamps — `last_run`
+for the daily passes and `last_doctor_run` for the weekly doctor — so stamping
+either leaves the other alone. `--force` opens both.
+
+### The memory doctor
+
+Passes 1–7 each look at one thing at a time. Triage judges one new item against
+one file, so it cannot see the failures that only exist *across* the corpus: the
+same fact arriving five times over three months in slightly different words
+across three files, or a note that quietly contradicts one written in May. Each
+arrival was locally reasonable. Nobody was watching the whole.
+
+Once a week, pass 8 does, and writes what it finds to
+`.multiplai/dreams/doctor-YYYY-MM-DD.md`. Three sections, every finding numbered
+and citing `file:line`:
+
+| Section | How it works |
+|---|---|
+| **Duplication** | Two stages. Stage 1 splits every file into bullets and paragraphs and shortlists near-identical pairs with `difflib` — stdlib only, no new dependency, and bounded by a rare-token index so a 3,500-block corpus is not 6 million comparisons. Stage 2 asks a model, per shortlisted pair, whether it is the same fact, and if so drafts the merged wording. Only confirmed pairs are reported. |
+| **Contradiction** | One call per memory file, asking for pairs of statements that cannot both be true. Content-hash-gated: a file you have not edited since the last run costs nothing, and its earlier findings are carried forward rather than silently dropped. Every quote must be locatable verbatim in the file or the finding is discarded — a paraphrase is not evidence. |
+| **Dead weight** | Deterministic, from the [utilisation](#is-injected-memory-actually-used) table. Three findings kept apart because they mean different things: **never retrieved** (no injection record at all — no evidence either way), **retrieved but estimated unused**, and **expensive** per estimated use. |
+
+**It never edits your memory, and there is no flag, mode or config key that
+changes that.** Pass 7 writes *additions*, which a receipt records and `git
+revert` undoes cleanly. The doctor would be proposing *deletions and merges*,
+where a wrong call destroys something no receipt can reconstruct. So it hands
+you suggestions with evidence attached. The report is also built so nothing here
+can pick it up: it never contains a `## Routing Warnings` heading, which
+`dream --triage` requires before it will apply anything, so pointing the triage
+path at a doctor report exits non-zero without writing.
+
+Four things keep the dead-weight section from over-claiming, all inherited from
+the utilisation contract:
+
+- **Nothing below the sample-size floor is reported**, and the floor is printed
+  in the report. A section seen three times is not evidence.
+- **A missing estimate is never read as "not used".** A section is only called
+  unused when *both* estimators independently observed it enough times and each
+  put its use at or below the threshold. The two are never averaged.
+- **A section that reads as a behavioural rule is never proposed for removal on
+  usage grounds.** Rules are retrieved rarely by construction and are exactly the
+  content whose absence you would not notice. They are listed separately as
+  withheld, with the reason.
+- **When there is not enough telemetry yet, it proposes nothing and says so.**
+  That is the expected output for the first weeks, not a clean bill of health.
+
+Two absences the report states outright, so you do not read them as findings:
+**cross-file contradiction is not looked for**, and any model call that timed
+out or came back garbled contributed **nothing** — with the count shown. With no
+model client at all the deterministic dead-weight pass still runs and the other
+two report that they were skipped.
 
 ### What it costs
 

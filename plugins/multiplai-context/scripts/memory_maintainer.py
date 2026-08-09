@@ -5,7 +5,21 @@ dream fires when Spike runs it, the catalog is rebuilt when something asks.
 The result is that maintenance happens exactly as often as it is remembered,
 which for a background chore is "eventually".
 
-This runs seven passes, unattended, at most once a day:
+## Which passes write memory, and which do not
+
+Before 0.36.0 this was one sentence — none of them did. It is now the first
+thing a reader needs, because the answer stopped being uniform:
+
+* **Writes `.multiplai/memory/`:** pass 7 (`run_triage`) and nothing else. It is
+  gated on `memory_write_mode`, off entirely under `review`, and every applied
+  item is in a receipt on a revertable commit.
+* **Never writes memory:** passes 1-6, and pass 8's three doctor passes. The
+  doctor in particular *proposes deletions and merges*, which is precisely why
+  it may not apply them: an addition is undone by `git revert`, whereas a wrong
+  merge destroys a fact no receipt can reconstruct (contract C5). It writes one
+  markdown report and nothing else, in any mode, with no flag to change that.
+
+This runs eight passes, unattended, at most once a day (pass 8 weekly):
 
   1. **Staleness lint** (`lib/memory_lint`) — expired `review by` dates and
      volatile facts with no annotation. Deterministic, no model call.
@@ -27,6 +41,10 @@ This runs seven passes, unattended, at most once a day:
 
   7. **Triage apply** — the one pass that writes `.multiplai/memory/`. Gated on
      `memory_write_mode`; see below.
+  8. **Memory doctor** — weekly, on its own state key: duplication,
+     within-file contradiction, and dead weight read off the utilisation
+     table. Cheap tier, fails closed, and writes a *report* to
+     `.multiplai/dreams/doctor-YYYY-MM-DD.md` — never memory.
 
 **Until 0.36.0 this process never modified `.multiplai/memory/`, and that was
 the whole safety story.** Pass 7 trades it, deliberately, and the trade is
@@ -53,8 +71,8 @@ of which the model can reach:
 * every applied item is in a **receipt**, and memory is a git repo, so the
   containment is `git revert <sha>` on one commit.
 
-Passes 1 and 2 write to `.multiplai/dreams/` and the health log; 3 and 4 write
-derived files (catalogs, `now/`) that are rebuilt from source and carry no
+Passes 1, 2 and 8 write to `.multiplai/dreams/` and the health log; 3 and 4
+write derived files (catalogs, `now/`) that are rebuilt from source and carry no
 unique state; 5 and 6 write only `data/utilisation.jsonl`, which is telemetry —
 nothing reads it to decide what memory says.
 
@@ -115,6 +133,15 @@ SHORT_PASS_TIMEOUT_S = 600
 # and re-running it every session would be pure spend.
 GATE_HOURS = 24
 
+# The doctor is weekly, on its own key. Two reasons it is not folded into the
+# daily gate. It costs more than every other pass put together (one call per
+# batch of duplicate pairs plus one per changed memory file), and its findings
+# move on the timescale of the corpus, not of a session — a duplicate pair found
+# on Monday is still there on Tuesday, and re-reporting it daily is how a report
+# becomes something nobody opens. A separate key also means a doctor failure
+# cannot wedge the daily passes, and vice versa.
+DOCTOR_GATE_HOURS = 24 * 7
+
 # Catalog rebuilds are only worth it when memory has actually moved. Rebuilding
 # on a timer instead burns a model call to reproduce a byte-identical file.
 CATALOG_STALE_SECONDS = 0  # any memory file newer than the catalog counts
@@ -148,8 +175,29 @@ def _state_file(data_dir: Path) -> Path:
     return data_dir / STATE_FILENAME
 
 
-def gate_open(state_file: Path, *, now: datetime | None = None) -> bool:
-    """True when >=24h have passed since the last maintenance run.
+#: The daily gate's key, and the weekly doctor's. Separate keys in one file so
+#: that stamping either cannot disturb the other — which is why the read and
+#: write below are a merge rather than a whole-file overwrite.
+LAST_RUN_KEY = "last_run"
+DOCTOR_KEY = "last_doctor_run"
+
+
+def _load_state(state_file: Path) -> dict:
+    try:
+        return load_yaml(state_file) or {}
+    except Exception:
+        logger.warning("Unreadable maintainer state %s", state_file)
+        return {}
+
+
+def gate_open(
+    state_file: Path,
+    *,
+    now: datetime | None = None,
+    key: str = LAST_RUN_KEY,
+    hours: int = GATE_HOURS,
+) -> bool:
+    """True when >= *hours* have passed since the run recorded under *key*.
 
     Missing or unreadable state opens the gate — the failure mode of running
     an extra maintenance pass is a few cents; the failure mode of a corrupt
@@ -157,34 +205,48 @@ def gate_open(state_file: Path, *, now: datetime | None = None) -> bool:
     never runs again.
     """
     now = now or datetime.now(timezone.utc)
-    try:
-        state = load_yaml(state_file) or {}
-    except Exception:
-        logger.warning("Unreadable maintainer state %s; gate open", state_file)
-        return True
+    state = _load_state(state_file)
 
-    last_run = state.get("last_run")
+    last_run = state.get(key)
     if not last_run:
         return True
     try:
         last_dt = datetime.fromisoformat(str(last_run))
     except (TypeError, ValueError):
-        logger.warning("Unparseable last_run %r; gate open", last_run)
+        logger.warning("Unparseable %s %r; gate open", key, last_run)
         return True
     if last_dt.tzinfo is None:
         last_dt = last_dt.replace(tzinfo=timezone.utc)
-    return now - last_dt >= timedelta(hours=GATE_HOURS)
+    return now - last_dt >= timedelta(hours=hours)
 
 
-def stamp(state_file: Path, *, now: datetime | None = None) -> None:
-    """Record that maintenance ran. Best-effort: a failed stamp costs one
-    duplicate run next session, so it must never abort the passes."""
+def doctor_gate_open(state_file: Path, *, now: datetime | None = None) -> bool:
+    """True when >= a week has passed since the last doctor run."""
+    return gate_open(state_file, now=now, key=DOCTOR_KEY, hours=DOCTOR_GATE_HOURS)
+
+
+def stamp(state_file: Path, *, now: datetime | None = None,
+          key: str = LAST_RUN_KEY) -> None:
+    """Record that a run happened under *key*. Best-effort: a failed stamp costs
+    one duplicate run next session, so it must never abort the passes.
+
+    Read-modify-write, never a bare overwrite: the file holds two independent
+    gates, and writing only the key being stamped would silently reset the other
+    one — which for the weekly doctor would mean it fired every single day.
+    """
     now = now or datetime.now(timezone.utc)
     try:
+        state = _load_state(state_file)
+        state[key] = now.isoformat()
         state_file.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml(state_file, {"last_run": now.isoformat()})
+        save_yaml(state_file, state)
     except Exception:
         logger.exception("Could not stamp maintainer state %s", state_file)
+
+
+def stamp_doctor(state_file: Path, *, now: datetime | None = None) -> None:
+    """Record that the weekly doctor ran, leaving the daily gate untouched."""
+    stamp(state_file, now=now, key=DOCTOR_KEY)
 
 
 # --- pass 1: staleness lint -------------------------------------------------
@@ -501,6 +563,92 @@ def run_triage(script_dir: Path, dreams_dir: Path, *, dry_run: bool = False) -> 
         return PassResult("triage", False, f"error: {exc}")
 
 
+# --- pass 8: the memory doctor (weekly) -------------------------------------
+
+def run_doctor(memory_dir: Path, data_dir: Path, dreams_dir: Path,
+               *, dry_run: bool = False) -> PassResult:
+    """Duplication, within-file contradiction and dead weight — as a *report*.
+
+    **This pass never writes `.multiplai/memory/`** (contract C5), and there is
+    no mode or flag that makes it. It reads memory, reads the utilisation table,
+    and writes one markdown file under `dreams/`. P4's triage path writes
+    additions a receipt can revert; the doctor proposes deletions and merges,
+    where a wrong call destroys a fact no receipt can reconstruct — so it
+    proposes and Spike decides.
+
+    Three degradation properties, all asserted by the tests:
+
+    * **degrades (C3)** — if `create_client` raises, the two model-backed passes
+      are skipped and the report says so in place of their findings. The
+      deterministic dead-weight pass still runs;
+    * **fails closed (C4)** — a failed duplication batch confirms nothing and a
+      failed contradiction check reports nothing for that file, and both counts
+      appear in the report;
+    * **weekly, on its own key** — `DOCTOR_KEY`, not the daily `LAST_RUN_KEY`,
+      so a doctor run neither delays nor is delayed by the daily passes.
+    """
+    try:
+        from lib import doctor_contradiction, doctor_deadweight, doctor_duplication
+        from lib import doctor_report
+
+        if not memory_dir.is_dir():
+            return PassResult("doctor", False, f"no memory directory at {memory_dir}")
+
+        async def _run() -> tuple[dict, dict]:
+            client = None
+            model = ""
+            if not dry_run:
+                try:
+                    from multiplai_core.env import pick_model
+                    from multiplai_core.model_client import create_client
+
+                    # Unattended work does not get the session's model budget,
+                    # and both passes are short classification calls.
+                    model = pick_model("haiku", "memory_doctor")
+                    client = await create_client(component="memory_doctor")
+                except Exception:
+                    # Vanilla Claude Code with no SDK. The model-backed passes
+                    # are skipped and the report says so; there is no heuristic
+                    # fallback, because a guess is worse than an absence here.
+                    logger.info("Memory doctor: no model client — model-backed "
+                                "passes will be skipped (contract C3)")
+                    client = None
+            dup = await doctor_duplication.run_pass(
+                memory_dir, client=client, model=model)
+            contra = await doctor_contradiction.run_pass(
+                memory_dir, data_dir, client=client, model=model, dry_run=dry_run)
+            return dup, contra
+
+        duplication, contradiction = asyncio.run(_run())
+        dead = doctor_deadweight.run_pass(memory_dir, data_dir)
+
+        report = doctor_report.render_report(
+            duplication, contradiction, dead, memory_dir=memory_dir)
+        doctor_report.assert_not_appliable(report)
+
+        summary = (
+            f"{duplication['coverage']['confirmed']} duplicate pair(s) confirmed "
+            f"of {duplication['shortlisted']} shortlisted, "
+            f"{len(contradiction['findings'])} contradiction(s), "
+            f"{_dead_total(dead)} dead-weight finding(s)"
+        )
+        if dry_run:
+            return PassResult("doctor", True, f"{summary} (dry run — no report written)")
+
+        dreams_dir.mkdir(parents=True, exist_ok=True)
+        path = dreams_dir / doctor_report.report_name()
+        path.write_text(report, encoding="utf-8")
+        return PassResult("doctor", True, f"{summary} → {path.name}")
+    except Exception as exc:
+        logger.exception("Doctor pass failed")
+        return PassResult("doctor", False, f"error: {exc}")
+
+
+def _dead_total(dead: dict) -> int:
+    return sum(len(dead.get(name) or [])
+               for name in ("never_retrieved", "retrieved_unused", "expensive"))
+
+
 # --- orchestration ----------------------------------------------------------
 
 def run_maintenance(*, force: bool = False, dry_run: bool = False) -> MaintenanceReport:
@@ -524,10 +672,38 @@ def run_maintenance(*, force: bool = False, dry_run: bool = False) -> Maintenanc
     report.passes.append(run_status(paths.diary_dir(), dry_run=dry_run))
     report.passes.append(run_utilisation_compact(data_dir, dry_run=dry_run))
     report.passes.append(run_utilisation_judge(data_dir, dry_run=dry_run))
-    # Last: it consumes what pass 2 produced, and it is the only pass that
-    # writes memory — so everything that reads memory has already run against
-    # the state the session started with.
+    # Last of the daily passes: it consumes what pass 2 produced, and it is the
+    # only one that writes memory — so every daily pass that *reads* memory has
+    # already run against the state the session started with. The doctor below
+    # is the exception, and deliberately so: it is weekly, it proposes rather
+    # than applies, and reading the post-triage corpus is the more useful thing
+    # for it to do. The cost is that a week in which triage wrote something makes
+    # the doctor re-hash and re-check every file triage touched, so the
+    # content-hash cache never reaches a completely steady state.
     report.passes.append(run_triage(script_dir, paths.dreams_dir(), dry_run=dry_run))
+
+    # The doctor is on its own weekly key. `--force` opens both gates; nothing
+    # else lets a daily run drag the weekly pass along with it.
+    if force or doctor_gate_open(state):
+        doctor_result = run_doctor(memory_dir, data_dir, paths.dreams_dir(),
+                                   dry_run=dry_run)
+        report.passes.append(doctor_result)
+        # Stamp only a run that actually ran. `run_doctor` catches every
+        # exception and returns ran=False, so an unwritable dreams/ or an
+        # import error used to buy a full week of silence with one log line —
+        # while the layer below is careful to *not* cache a failed file's hash
+        # precisely so the next run retries it.
+        if not dry_run and doctor_result.ran:
+            stamp_doctor(state)
+        elif not dry_run:
+            logger.warning(
+                "doctor pass did not run; leaving the weekly gate open so the "
+                "next maintenance run retries instead of waiting a week"
+            )
+    else:
+        report.passes.append(PassResult(
+            "doctor", False,
+            f"doctor gate closed (<{DOCTOR_GATE_HOURS // 24}d since last run)"))
 
     if not dry_run:
         stamp(state)
@@ -537,9 +713,11 @@ def run_maintenance(*, force: bool = False, dry_run: bool = False) -> Maintenanc
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Proactive memory maintenance (lint, dream, catalog, "
-                    "status, utilisation compaction, utilisation judge, triage)")
+                    "status, utilisation compaction, utilisation judge, triage, "
+                    "and the weekly memory doctor)")
     parser.add_argument("--force", action="store_true",
-                        help="Run even if the 24h gate is closed")
+                        help="Run even if the 24h gate is closed (also opens the "
+                             "doctor's weekly gate)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Report what each pass would do; write nothing")
     args = parser.parse_args()

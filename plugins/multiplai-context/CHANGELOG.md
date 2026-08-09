@@ -18,6 +18,86 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.37.0] - 2026-08-08
+
+### Added
+
+- **A weekly memory doctor that reads your whole corpus and tells you what is
+  wrong with it.** Triage judges one new item against one file, which means it
+  cannot see the failures that only exist across the corpus: the same fact
+  arriving five times over three months in slightly different words across three
+  files, or a note that quietly contradicts one written in May. Nobody was
+  watching for either. Now something is, once a week, unattended, and it writes
+  what it finds to `.multiplai/dreams/doctor-YYYY-MM-DD.md`.
+
+  Three sections, each finding numbered and citing `file:line` so you can check
+  it:
+
+  - **Duplication** — every pair of near-identical bullets, first shortlisted by
+    a plain text-similarity measure (no new dependency; the corpus is under
+    1 MB) and then confirmed by a model, which also drafts the merged wording.
+    Only confirmed pairs are reported.
+  - **Contradiction** — pairs of statements *within one file* that cannot both
+    be true, each with both quotes and a one-line explanation. A file you have
+    not edited since the last run costs nothing, and its earlier findings are
+    carried forward rather than dropped.
+  - **Dead weight** — sections nothing seems to use, split into three findings
+    that mean different things: never retrieved at all, retrieved but estimated
+    unused, and expensive per estimated use.
+
+- **The doctor never edits your memory, and there is no flag that changes
+  that.** Triage writes *additions*, which a receipt records and `git revert`
+  undoes cleanly. The doctor would be proposing *deletions and merges*, where a
+  wrong call destroys something no receipt can reconstruct. So it hands you
+  suggestions with the evidence attached and you decide. The report is also
+  built so that no existing tooling can pick it up: `dream --triage` refuses it
+  outright.
+
+### Notes on how much to trust it
+
+- **Dead weight is honest about being an estimate.** Every number names which
+  estimator produced it and shows its sample size. A section is only called
+  unused when *both* estimators independently saw it enough times and each put
+  its use at or below the threshold — a missing estimate is never read as "not
+  used", and the two are never averaged into one score. Anything below the
+  sample-size floor is not reported at all, and the floor is printed in the
+  report.
+
+  **That both-estimators rule covers the "unused" finding only.** The
+  "expensive per estimated use" list ranks from whichever estimator has data, so
+  a telemetry gap cannot make live memory look *unused* but can still shape that
+  list off one surviving estimator. Every row names its basis, and the report now
+  says this where you read it rather than only in the source.
+- **It will propose nothing for a while, and that is correct.** The utilisation
+  telemetry needs weeks to accumulate. Until it has, the dead-weight section
+  says so in place of ranking noise.
+- **A section that reads as a behavioural rule is never proposed for removal on
+  usage grounds.** Rules are retrieved rarely by construction, and they are
+  exactly the content whose absence you would not notice. They are listed
+  separately as withheld, with the reason.
+- **Cross-file contradictions are not looked for yet.** The report says so, so
+  that an empty contradiction section is not mistaken for a clean bill of
+  health.
+- **A failure never widens what you are shown.** A model call that times out or
+  comes back garbled contributes nothing at all, and the report tells you how
+  many did. With no model available the deterministic dead-weight pass still
+  runs and the other two say they were skipped. In the same spirit: a section
+  whose text cannot be read back out of the corpus at all is **withheld** rather
+  than proposed, and listed with that reason — an unscreened candidate is not a
+  pruning candidate.
+- **A partly-read file says so.** One contradiction call reads at most 60,000
+  characters of a file, and four files in a corpus this size are longer than
+  that — including the largest, of which about two thirds sits past the limit.
+  Those files are now named in the report, because "no contradictions found" in a
+  file that was only two-thirds read is a different statement from a clean one.
+- **A doctor run that fails leaves the weekly gate open**, so the next
+  maintenance run retries instead of going quiet for seven days on the strength
+  of one log line.
+- **Quoted text in the report cannot restructure the report.** The suggested
+  merge wording and the quoted lines are model output derived from your memory
+  files; they are now neutralised on the way out, so a stray code fence in a
+  memory file cannot break out of its bullet and rearrange everything below it.
+
 ## [0.36.0] - 2026-08-08
 
 ### Changed
