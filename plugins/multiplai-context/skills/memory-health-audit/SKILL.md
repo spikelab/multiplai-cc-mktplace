@@ -20,6 +20,7 @@ Full cross-source analysis of the memory system. Produces a dated assessment sna
 | Learnings | `.multiplai/learnings/*.md` | Extracted insights — types, trust levels, target files |
 | Memory corpus | `.multiplai/memory/*.md` | The actual memory files — structure, size, staleness |
 | Memory catalog | `$CLAUDE_PLUGIN_DATA/catalogs/memory.json` | Routing descriptions, intent_domains, anti_domains |
+| Utilisation | `$CLAUDE_PLUGIN_DATA/utilisation.jsonl` | Per-session injected-vs-estimated-used records (two estimators; see Phase 1.5) |
 | Previous assessments | `$CLAUDE_PLUGIN_DATA/memory-health/*.md` | Past audit snapshots for delta comparison |
 
 ## Workflow
@@ -110,13 +111,52 @@ Read ALL `.multiplai/memory/*.md` files and `$CLAUDE_PLUGIN_DATA/catalogs/memory
 - Catalog quality: which files have specific vs vague intent_domains
 - Files with no retrieval demand in logs (never loaded — dead weight or routing gap?)
 
+### Phase 1.5: Utilisation table (run directly, do NOT delegate)
+
+Retrieval frequency — everything Agent 1 returns — answers *what was loaded*.
+It cannot answer *what was used*, and a section loaded on every prompt and
+relevant on none of them scores best of all on retrieval count. The utilisation
+table is the counterweight. One deterministic command, small output, so run it
+in the main thread:
+
+```bash
+uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/utilisation_report.py"
+```
+
+Add `--json` when you need the raw numbers for the assessment file.
+
+**Report it verbatim, with its labels intact. These are not stylistic:**
+
+- **Every number is an ESTIMATE, from a model, and must be described that way**
+  wherever it appears in your output — the conversation, the assessment file,
+  any table you build from it. Say which estimator produced a number and show
+  its sample size.
+- **There are two estimators and they are never blended.** Self-report (the
+  session grading itself — biased upward, evidence required) and the offline
+  judge (independent, sampled, so absent for most sessions). If the report
+  marks a row `!` the two disagree past the margin: report the disagreement as
+  a finding. Do **not** average them, and do not invent a combined score.
+- **Do not rank or act on rows under "insufficient data".** They are there
+  precisely because their sample is too small to mean anything.
+- **"Never retrieved" is a routing finding, not a pruning finding.** A section
+  that never reached a prompt has produced no evidence about its value; it
+  belongs in Phase 4's "routing to broaden", not in a deletion list.
+- **Nothing here is a deletion.** The highest-cost-per-use rows are
+  *candidates* — a suggestion for a human, and never an instruction to remove
+  anything. This skill proposes; only `/multiplai-context:dream-remember`
+  writes to memory.
+
+If `utilisation.jsonl` does not exist yet, or every row lands under
+"insufficient data", say so plainly and skip the section. A table nobody can
+act on is worse than no table.
+
 ### Phase 2: Cross-Correlate
 
 After all agents return, correlate findings:
 
 1. **Overloaded files** — High retrieval demand + low signal:noise + many learnings targeting it = needs splitting
 2. **Underloaded files** — Never retrieved + fresh content = routing gap (domains too narrow)
-3. **Wasteful retrievals** — High retrieval demand but content rarely actionable = loaded too eagerly
+3. **Wasteful retrievals** — High retrieval demand but content rarely actionable = loaded too eagerly. The utilisation table is the evidence for this row: high `retrieved`, high `B/est.use`. Quote both estimators and the sample size; never assert it from retrieval count alone
 4. **Learning gaps** — Project with high diary activity but zero learnings = extraction not capturing
 5. **Stale but active** — File loaded frequently but not updated in 30+ days = content may be outdated
 6. **Correction clusters** — Multiple corrections targeting same file = systematic accuracy problem

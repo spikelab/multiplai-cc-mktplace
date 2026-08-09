@@ -18,6 +18,83 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.35.0] - 2026-08-08
+
+### Added
+
+- **You can now see which memory is earning its place — as an honest estimate,
+  never a measurement.** Retrieval counts were always available and always
+  misleading: a section injected on every prompt and relevant on none of them
+  looks maximally valuable counted that way. Nothing can observe *use*
+  directly, so this release estimates it two independent ways and shows both
+  side by side.
+  - **Self-report**, free. The end-of-session pass already reads your whole
+    transcript; it is now also handed the list of sections that were injected
+    and asked which it relied on — with a quote or a concrete reference as
+    evidence. A claim with no evidence is recorded as unsupported and never
+    counts. "None of them" is offered as a normal answer, because otherwise a
+    model finds a reason for everything.
+  - **An offline judge**, sampled. A new cheap-tier pass in the nightly
+    maintainer compares the injected list against a distilled transcript for a
+    handful of sessions per run (`utilisation_judge_sample`, default 5; `0`
+    turns it off). It is independent of the session's own reasoning, so where
+    the two estimators disagree, that disagreement is itself the signal.
+- **A ranked table, ordered by cost per estimated use.** Run
+  `scripts/utilisation_report.py` (add `--json` for a machine-readable form),
+  or read it inside `/multiplai-context:memory-health-audit`. The expensive
+  and seldom-used rows sort to the top, which is what makes a pruning
+  candidate obvious.
+- **Records accumulate in `<data_dir>/utilisation.jsonl`** — one record per
+  session, written atomically, with detail older than 90 days collapsing into
+  per-section running totals so the file cannot grow without bound. Totals
+  survive compaction exactly; only the per-session detail goes.
+
+### Notes on reading the numbers
+
+- **Everything on this surface is labelled *estimated*, everywhere, and there
+  is deliberately no single blended "utilisation score".** Two estimates with
+  opposite biases averaged into one number would be exactly the fabricated
+  precision this feature exists to avoid. Where they disagree by more than 35
+  points the row is marked, not reconciled.
+- **Rows with too few observations are not ranked at all.** They appear under
+  "insufficient data" with their sample size, rather than being sorted into a
+  position they have not earned. "Never retrieved" is kept as a separate list
+  again — a section that never reached a prompt tells you about routing, not
+  about value.
+- **Nothing is pruned, edited, or auto-applied by any of this.** The table is
+  evidence for you to act on; `/multiplai-context:dream-remember` is still the
+  only path that writes to memory.
+- **A blank is not a zero — on both estimators.** If either pass fails, times
+  out, or comes back without an answer, nothing is written, leaving that half
+  unestimated — so a bad night can never make your corpus read as dead weight.
+  Concretely: the judge writes no verdict rather than an empty one, and the
+  in-session self-report is skipped unless the whole transcript was read *and*
+  every chunk actually answered. That second condition matters more than it
+  sounds: the self-report rides on the end of a longer reply, so a truncated one
+  used to record "used none of them", which is what puts a section you rely on
+  at the top of a pruning list. A missing estimate now shows as `—`, and only a
+  section genuinely reported as unused shows a zero.
+
+  With no model client available, no estimate is recorded; what was injected is
+  still recorded, because that part needs no model.
+- **"Never retrieved" says when it does not know.** The list needs some history
+  behind it before "never" means anything — on a fresh install it is simply
+  everything you have. Below ten recorded sessions both the report and the
+  `--json` output now say so, and the JSON carries
+  `never_retrieved_sufficient: false` so anything reading it unattended cannot
+  mistake a thin log for evidence.
+- **Two sessions ending at once no longer lose each other's telemetry.** The log
+  is read-modify-written, and without a lock the later writer silently discarded
+  the earlier one's whole record. With parallel containers and extraction
+  draining at the next session start, that overlap is ordinary rather than rare;
+  measured before the fix, 40 simultaneous writers left 2 records.
+- **The judge's coverage report distinguishes an outage from nothing to judge.**
+  `kept_default` lumped "the model call failed" together with "this session has
+  no transcript any more", and since transcripts age out faster than the 90-day
+  retention window the second is a permanent, growing baseline — which buried the
+  first. The report now breaks the total into `unavailable`, `not_judgeable` and
+  `empty_verdicts`, and only `unavailable` warns.
+
 ## [0.34.0] - 2026-08-08
 
 ### Added
