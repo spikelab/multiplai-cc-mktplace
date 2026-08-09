@@ -251,9 +251,15 @@ class TestLongHorizonChat:
 
         # ---- Rebuilds actually happened ----
         assert harness.handoffs == N_SESSIONS - 1
-        # Two writer runs per session (band 1 + band 2/handoff)
-        assert len(harness.spawned) == N_SESSIONS * 2
-        assert {p["reason"] for p in harness.spawned} == {"band"}
+        # Three writer runs per session: band 1 at 110K, the `refresh`
+        # at 160K (50K of growth — this one used to be invisible, because
+        # `refresh` was gated behind the 200K handoff threshold), and
+        # band 2 at 210K.
+        assert len(harness.spawned) == N_SESSIONS * 3
+        # `band` for the two crossings, `refresh` for the mid-band growth
+        # step. `stale` never appears: the harness runs a whole session inside
+        # one wall-clock instant, so no session is ever old enough for it.
+        assert {p["reason"] for p in harness.spawned} == {"band", "refresh"}
 
         # ---- Goal-safety: no Stop was ever blocked ----
         for out in harness.stop_outputs:
@@ -341,8 +347,10 @@ class TestLongHorizonChat:
                 }) + "\n")
 
         assert total > 700_000, total
-        # Counters reset each cycle → every cycle re-checkpoints both bands.
-        assert len(harness.spawned) == 3 * 2
+        # Counters reset each cycle → every cycle re-checkpoints both
+        # bands, plus the mid-band `refresh` that now fires below the
+        # handoff threshold.
+        assert len(harness.spawned) == 3 * 3
         for out in harness.stop_outputs:
             assert '"decision"' not in out
 

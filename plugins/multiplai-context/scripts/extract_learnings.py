@@ -23,24 +23,53 @@ from multiplai_core.log_utils import setup_logging, log_event
 from lib import utilisation
 from lib.extraction import (
     DEFAULT_DISPOSITION,
+    clear_diary_bookmark,
     extract_session_signals,
+    load_diary_bookmark,
     load_target_charters,
+    save_diary_bookmark,
+    slice_key,
     write_diary_entries,
     append_learnings,
 )
 from lib.session_registry import record_disposition
-from lib.transcript_distiller import distill
+from lib.transcript_distiller import distill, iter_distilled_turns
 
 logger = setup_logging("extract_learnings")
 
 
-def _distill_transcript(transcript_path: str, raw_transcript: str) -> list[str]:
-    """Distill a transcript into token-bounded chunks before the LLM call.
+def _last_turn_ts(path: Path, since: datetime | None) -> datetime | None:
+    """The newest timestamp in the slice that was just distilled.
+
+    Deliberately the last turn READ, never ``now``. ``iter_distilled_turns``
+    keeps turns with ``ts >= since``, so bookmarking the last turn re-reads
+    exactly one boundary turn on the next pass. Bookmarking ``now`` instead
+    would skip anything written to the transcript between the read and the
+    write — and the safe direction here is duplicating a turn, never losing
+    one.
+    """
+    last: datetime | None = None
+    try:
+        for turn in iter_distilled_turns(path, since=since):
+            ts = turn.get("ts")
+            if ts is not None and (last is None or ts > last):
+                last = ts
+    except Exception:
+        logger.exception("Could not determine the last turn timestamp for %s", path)
+        return None
+    return last
+
+
+def _distill_transcript(
+    transcript_path: str, raw_transcript: str, since: datetime | None = None
+) -> list[str]:
+    """Distill the slice newer than *since* into token-bounded chunks.
 
     Prefers the on-disk JSONL path; falls back to raw JSONL piped on stdin
     (staged to a temp file, since the distiller reads from a path). Returns
-    an empty list when there is nothing to extract (missing/empty
-    transcript) — the caller then drops the marker instead of retrying.
+    an empty list when there is nothing to extract — a missing/empty
+    transcript, or nothing new since the bookmark — and the caller then drops
+    the marker instead of retrying.
     """
     if transcript_path:
         p = Path(transcript_path)
@@ -48,7 +77,7 @@ def _distill_transcript(transcript_path: str, raw_transcript: str) -> list[str]:
             logger.info("Transcript gone: %s — nothing to extract", transcript_path)
             return []
         try:
-            return distill(p)
+            return distill(p, since=since)
         except Exception:
             logger.exception("Distillation failed for %s", transcript_path)
             return []
@@ -61,7 +90,7 @@ def _distill_transcript(transcript_path: str, raw_transcript: str) -> list[str]:
                 tmp.write(raw_transcript)
                 tmp_path = Path(tmp.name)
             try:
-                return distill(tmp_path)
+                return distill(tmp_path, since=since)
             finally:
                 tmp_path.unlink(missing_ok=True)
         except Exception:
@@ -149,6 +178,9 @@ def _retire_checkpoint(
     if kept:
         logger.info("Kept checkpoint for %s: %s", session_id, kept)
     elif removed:
+        # Same edge, same reasoning: the session is finished with and its
+        # permanent record exists, so its reading bookmark is dead weight too.
+        clear_diary_bookmark(data_dir, session_id)
         log_event(
             "checkpoint", "retire",
             "retired checkpoint — superseded by the diary entry",
@@ -254,7 +286,7 @@ async def _refresh_now(cwd: str, session_id: str) -> None:
     try:
         from synthesize_now import synthesize
 
-        await synthesize(project_filter=project)
+        await synthesize(project_filter=project, session_id=session_id)
         logger.info("Refreshed now/%s.md", project)
         log_event(
             "now", "refresh",
@@ -303,7 +335,27 @@ async def extract() -> bool:
     # (non-JSON) stdin from a direct invocation.
     raw_transcript = _field("transcript") or (hook_input if not transcript_data else "")
 
-    chunks = _distill_transcript(transcript_path, raw_transcript)
+    # Read forward from where the last successful extraction stopped. A
+    # session that extracts twice (PreCompact, then SessionEnd) used to
+    # re-read its whole transcript the second time; now the second pass sees
+    # only what the first one could not.
+    since = load_diary_bookmark(paths.data_dir(), session_id)
+    chunks = _distill_transcript(transcript_path, raw_transcript, since)
+    this_slice = slice_key(session_id, since)
+    # Only the on-disk path bookmarks. The raw-stdin fallback stages a temp
+    # file that is deleted on the way out, so there is nothing stable for a
+    # bookmark to point into — that path keeps re-reading whatever it is
+    # handed, exactly as before.
+    last_ts = (
+        _last_turn_ts(Path(transcript_path), since)
+        if chunks and transcript_path and Path(transcript_path).exists()
+        else None
+    )
+    if since:
+        logger.info(
+            "Extracting the slice after %s for %s (%d chunk(s))",
+            since.isoformat(), session_id, len(chunks),
+        )
 
     # Before the model call, and independent of it: the retrieval half of the
     # utilisation record needs no LLM, so it survives a client that cannot be
@@ -449,8 +501,17 @@ async def extract() -> bool:
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     if units:
-        diary_path = write_diary_entries(units, diary_dir, session_id, cwd, timestamp)
+        diary_path = write_diary_entries(
+            units, diary_dir, session_id, cwd, timestamp, slice_id=this_slice
+        )
         if diary_path:
+            # The bookmark moves ONLY here — after the permanent record for
+            # this slice is on disk. Advancing it anywhere else (on a failed
+            # LLM call, on an empty result) would skip the slice for good, and
+            # re-reading a slice costs a distillation while losing one costs
+            # the record.
+            if last_ts is not None:
+                save_diary_bookmark(paths.data_dir(), session_id, last_ts)
             logger.info("Wrote diary entry to %s", diary_path)
             log_event(
                 "diary", "write",
@@ -470,7 +531,9 @@ async def extract() -> bool:
                 trigger=trigger,
             )
 
-    wrote = append_learnings(units, learnings_file, session_id, timestamp)
+    wrote = append_learnings(
+        units, learnings_file, session_id, timestamp, slice_id=this_slice
+    )
     if wrote:
         logger.info("Appended structured learnings to %s", learnings_file)
         n_learnings = sum(len(u.get("learnings") or []) for u in units)

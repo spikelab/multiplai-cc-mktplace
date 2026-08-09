@@ -128,6 +128,57 @@ def recover_stale_processing(processing_dir: Path, pending_dir: Path) -> None:
                 pass
 
 
+def claim_pending_markers(pending_dir: Path, processing_dir: Path):
+    """Dequeue every marker in *pending_dir*, yielding ``(path, payload)``.
+
+    **The one implementation of the dequeue**, used by this module's
+    extraction drain and by ``lib.checkpoint_drain``'s end-of-session
+    checkpoint drain. Both queues need the identical three steps and a second
+    copy would drift:
+
+    * atomic rename into *processing_dir*, so two drains racing hand each
+      marker to at most one of them;
+    * ``dest.touch()``, because ``os.rename`` preserves mtime and staleness
+      recovery measures age by mtime — without it a marker written on Friday
+      and drained on Monday looks stale the instant it is claimed, and a
+      concurrent recovery launches a duplicate child;
+    * a parse, discarding anything unreadable (it will never succeed).
+
+    Stale markers left by a dead child are recovered into *pending_dir* first,
+    so this pass picks them up.
+
+    The caller owns what happens next, including requeueing on a launch
+    failure — that decision differs per queue.
+    """
+    try:
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        processing_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+
+    recover_stale_processing(processing_dir, pending_dir)
+
+    for marker_file in list(pending_dir.glob("*.json")):
+        dest = processing_dir / marker_file.name
+        try:
+            os.rename(str(marker_file), str(dest))
+        except OSError:
+            continue
+        try:
+            dest.touch()
+        except OSError:
+            logger.warning("Could not refresh mtime on %s", dest.name)
+        try:
+            payload = json.loads(dest.read_text())
+            if not isinstance(payload, dict):
+                raise ValueError(dest.name)
+        except (json.JSONDecodeError, OSError, ValueError):
+            # Unparseable marker will never succeed — discard it.
+            dest.unlink(missing_ok=True)
+            continue
+        yield dest, payload
+
+
 def pending_count(data_dir: Path) -> int:
     """How many markers are waiting in ``pending_extractions/``.
 
@@ -186,40 +237,12 @@ def process_deferred_extractions(
 
     pending_dir = data_dir / "pending_extractions"
     processing_dir = data_dir / "processing_extractions"
-    pending_dir.mkdir(parents=True, exist_ok=True)
-    processing_dir.mkdir(parents=True, exist_ok=True)
-
-    # Retry anything a previous run launched but that never completed.
-    recover_stale_processing(processing_dir, pending_dir)
 
     processed = 0
     children: list[subprocess.Popen] = []
-    for marker_file in list(pending_dir.glob("*.json")):
-        dest = processing_dir / marker_file.name
-        try:
-            os.rename(str(marker_file), str(dest))
-        except OSError:
-            continue
-
-        # Staleness is measured from *launch*, not from when SessionEnd
-        # wrote the marker. ``os.rename`` preserves mtime, so without this
-        # refresh a marker written Friday and drained Monday looks hours
-        # stale the moment it lands in ``processing_extractions/`` — and a
-        # concurrent :func:`recover_stale_processing` (e.g. a SessionStart
-        # firing a minute after the host drain) would requeue it and launch
-        # a duplicate extraction while the first child was still running.
-        try:
-            dest.touch()
-        except OSError:
-            logger.warning("Could not refresh mtime on %s", dest.name)
-
-        try:
-            marker = json.loads(dest.read_text())
-        except (json.JSONDecodeError, OSError):
-            # Unparseable marker will never succeed — discard it.
-            dest.unlink(missing_ok=True)
-            continue
-
+    # The dequeue itself (rename, mtime refresh, stale recovery, parse) lives
+    # in claim_pending_markers — see its docstring for why it is shared.
+    for dest, marker in claim_pending_markers(pending_dir, processing_dir):
         # Pass the transcript PATH, not its contents: the child distills it
         # into token-bounded chunks before the LLM call. Piping a raw
         # multi-MB transcript here previously forced a single >200K-token

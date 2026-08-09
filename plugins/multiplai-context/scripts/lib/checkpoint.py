@@ -70,7 +70,14 @@ _DEFAULT_BANDS = (100_000, 200_000)
 _DEFAULT_HANDOFF = 200_000
 _DEFAULT_REFRESH = 25_000
 _DEFAULT_TTL_HOURS = 6.0
-_DEFAULT_TIMEOUT_S = 240
+# The writer is detached (start_new_session=True) and nobody waits on it, so a
+# generous ceiling costs nothing and a tight one costs the whole checkpoint.
+# 240s was measured sitting exactly on the boundary for a backlogged session
+# on 2026-08-08 — attempt 1 timed out at 240s, attempt 2 finished at 480s —
+# which turned a slow write into a coin flip that lost eight times running.
+# With the 30-minute cadence below this should never bind; it is the net, not
+# the fix.
+_DEFAULT_TIMEOUT_S = 600
 
 # Hard stop. 0 (the default) means "advisory only" — the handoff nudge asks
 # for a /clear and nothing enforces it. Set it and checkpoint_nudge.py stops
@@ -90,32 +97,46 @@ _DEFAULT_HARD_STOP = 0
 # ``consume_pending_marker``; conflating the two meanings would silently break
 # rebuild expiry.
 #
-# Defaults are chosen for write volume, not responsiveness. A 4-hour session
-# writes twice — once when it passes the minimum age with no checkpoint at all,
-# once three hours later — against 1–2 today. Extraction and interactive work
-# share one rate limit, and the July 6–7 failure cluster was a single 429 from
-# a large backfill, so the cadence stays well under one write per hour per
-# session.
+# Defaults are chosen for RECOVERABILITY, not for write volume. That is an
+# inversion of the original 3.0-hour choice, and the sentence it replaces
+# ("the cadence stays well under one write per hour per session") is no longer
+# true — 0.5 hours is deliberately about two writes per hour per session.
+#
+# What changed the trade-off, measured on 2026-08-08: at 3.0 hours the fleet
+# averaged roughly one write per session (28 writes across 21 sessions on
+# Aug 7), and the one session that fell behind could never catch up. The
+# writer distills only the segment newer than ``last_checkpoint_ts``, and that
+# field advanced only on success — so each failure left a LARGER segment for
+# the next attempt: 174,154 characters against 23,287 for a healthy write, a
+# model call sitting exactly on its timeout, and eight consecutive losses over
+# 18 hours. Writing every 30 minutes keeps each segment to 30 minutes of work,
+# so the backlog that made the call unfinishable never forms. Prevention, not
+# error handling.
+#
+# A 4-hour session now writes 8 small delta-merges rather than 2 large ones
+# (``TestWriteVolume`` pins the arithmetic). Each write is smaller in
+# proportion, because the segment is the dominant input; the total is roughly
+# flat rather than 4x. Measured, not assumed — see the PR that landed this.
 #
 # Two accepted burst shapes, deliberately without a global cap or jitter:
 #
-# - Thundering herd: after any break longer than stale_hours (overnight,
-#   weekend) every open tab is simultaneously stale, so the first Stop in each
-#   resumed tab spawns a detached writer — N tabs resuming together means N
-#   concurrent writers sharing the interactive rate limit. The single-flight
-#   guard (`writer_inflight`) is per-session only. Bounded by tab count at one
-#   write per tab per stale_hours, so the magnitude stays single-digit (the
-#   July 429 came from a hundreds-of-calls backfill, not this shape).
+# - Thundering herd: after any break longer than stale_hours every open tab is
+#   simultaneously stale, so the first Stop in each resumed tab spawns a
+#   detached writer — N tabs resuming together means N concurrent writers
+#   sharing the interactive rate limit. At 0.5 hours the qualifying break is a
+#   lunch break rather than an overnight one, so this shape is now routine
+#   instead of daily. It is still bounded the same way — one write per tab per
+#   stale_hours, single-flight (`writer_inflight`) per session — so the
+#   magnitude stays single-digit concurrent calls at any realistic tab count
+#   (the July 6–7 429 came from a hundreds-of-calls backfill, not this shape).
 #
 # - Writer-failure retries: a failed writer releases its marker without
-#   updating state (checkpoint_writer.py), so the next Stop refires. During an
-#   API outage this retry-every-Stop behaviour previously applied only to
-#   sessions past a token band; the stale trigger intentionally extends it to
-#   every session older than min_session_minutes (including the
-#   corrupt-last_checkpoint_ts path). Same retry pattern as the existing
-#   triggers, wider blast radius — still at most one in-flight writer per
-#   session.
-_DEFAULT_STALE_HOURS = 3.0
+#   updating state (checkpoint_writer.py), so the next Stop refires. Same
+#   retry pattern as before, now reached more often. The compounding is gone
+#   though: ``checkpoint_writer.py``'s degraded fallback writes the previous
+#   checkpoint plus the raw unsummarised slice and advances the bookmark, so a
+#   retry storm no longer hands each attempt a bigger segment than the last.
+_DEFAULT_STALE_HOURS = 0.5
 _DEFAULT_MIN_SESSION_MINUTES = 30
 
 # The 11 checkpoint fields (MiMo Code spec). The writer prompt emits these
@@ -380,20 +401,31 @@ def checkpoint_trigger(tokens: int, state: dict, cfg: CheckpointConfig) -> str |
     Two triggers:
       * ``band`` — *tokens* crossed a band the session hasn't checkpointed
         at yet (e.g. first time past 100K).
-      * ``refresh`` — the session is at/above the handoff threshold and has
-        grown ``refresh_tokens`` past the last checkpoint, so marathon
-        (goal-loop) sessions keep a current checkpoint even though nobody
-        is around to /clear.
+      * ``refresh`` — the session has grown ``refresh_tokens`` past its last
+        checkpoint, so a session doing real work keeps a current checkpoint
+        even though nobody is around to /clear.
+
+    ``refresh`` applies at **every** token level. It used to be gated behind
+    ``tokens >= cfg.handoff_tokens``, which left a session at 150K with no
+    token cadence at all — only the one-off 100K and 200K band crossings — so
+    50K tokens of work could sit between checkpoints. ``handoff_tokens`` keeps
+    its other job (governing the nudge) and no longer governs this one.
+
+    The cadence still requires a previous checkpoint to measure growth
+    *from*. Without one, ``last_checkpoint_tokens`` is 0 and every session
+    past ``refresh_tokens`` would fire on its first Stop; the band trigger and
+    ``staleness_trigger`` own the first write instead. (``reset_session_counters``
+    zeroes the field after a rebuild for the same reason: the new physical
+    window checkpoints from scratch.)
     """
     if not cfg.enabled:
         return None
     idx = band_index(tokens, cfg.bands)
     if idx > int(state.get("last_band_idx") or 0):
         return "band"
-    if tokens >= cfg.handoff_tokens:
-        last_tokens = int(state.get("last_checkpoint_tokens") or 0)
-        if tokens - last_tokens >= cfg.refresh_tokens:
-            return "refresh"
+    last_tokens = int(state.get("last_checkpoint_tokens") or 0)
+    if last_tokens > 0 and tokens - last_tokens >= cfg.refresh_tokens:
+        return "refresh"
     return None
 
 
@@ -516,6 +548,73 @@ def release_writer(data_dir: Path, session_id: str) -> None:
     (session_dir(data_dir, session_id) / "writing.marker").unlink(missing_ok=True)
 
 
+def spawn_writer(payload: dict) -> bool:
+    """Launch the detached ``checkpoint_writer.py`` with *payload* on stdin.
+
+    Lives here rather than in ``session_stop.py`` because ``session_end.py``
+    needs the identical spawn on ``/clear`` and a second copy would drift.
+    Detached (``start_new_session=True``) and never awaited: the caller is a
+    hook with a seconds-long budget, the child takes minutes.
+
+    **The child only outlives its parent while the container does.** That is
+    why ``session_end.py`` spawns for ``reason`` in {clear, resume} and writes
+    a queue marker for every other reason: the session container runs under
+    ``docker run --rm``, so on a real exit PID 1 goes and the detached child
+    goes with it.
+    """
+    import subprocess  # local: hooks that never spawn shouldn't pay the import
+
+    from multiplai_core.paths import get_paths
+
+    from lib.runtime import uv_run_argv
+
+    script = get_paths().scripts_dir() / "checkpoint_writer.py"
+    if not script.exists():
+        logger.warning("checkpoint_writer.py missing at %s", script)
+        return False
+    try:
+        proc = subprocess.Popen(
+            uv_run_argv(script),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        if proc.stdin is not None:
+            proc.stdin.write(json.dumps(payload).encode("utf-8"))
+            proc.stdin.close()
+        return True
+    except Exception:
+        logger.exception("Failed to launch checkpoint writer")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Degraded-write bookkeeping
+# ---------------------------------------------------------------------------
+#
+# A checkpoint write that fails is not an event anyone sees: the writer is
+# detached, its stderr goes to /dev/null, and its log line reaches a file
+# nobody tails. Eight consecutive failures over 18 hours reached no one on
+# 2026-08-08, and the component's entire job is not losing work. The counter
+# below is what turns the second failure into a sentence in the user's
+# session.
+
+CONSECUTIVE_FAILURE_KEY = "consecutive_failures"
+
+# Two, not one: a single failure is a retryable blip (the next Stop refires),
+# two in a row is a pattern the user should hear about.
+DEGRADED_ALERT_AFTER = 2
+
+
+def consecutive_failures(state: dict) -> int:
+    """How many checkpoint writes have failed in a row for this session."""
+    try:
+        return max(0, int(state.get(CONSECUTIVE_FAILURE_KEY) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # Pending-handoff markers (rebuild linkage)
 # ---------------------------------------------------------------------------
@@ -539,20 +638,69 @@ def _project_key(cwd: str) -> str:
         project = ""
     if not project:
         project = Path(cwd).name if cwd else "unknown"
-    return "".join(c if c.isalnum() or c in "-_" else "-" for c in project) or "unknown"
+    return _sanitize_key(project) or "unknown"
+
+
+def _sanitize_key(raw: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "-" for c in raw)
+
+
+def _hostname_key() -> str:
+    """The current container/machine name, sanitized for use in a filename.
+
+    Empty when it cannot be read — callers then fall back to the legacy
+    project-only marker name rather than inventing a discriminator.
+    """
+    try:
+        from lib.session_registry import _hostname  # type: ignore
+
+        return _sanitize_key((_hostname() or "").strip())
+    except Exception:
+        return ""
+
+
+def marker_name(cwd: str, hostname: str | None = None) -> str:
+    """Filename for the pending marker of *cwd*'s project on this host.
+
+    Keyed by project **and** hostname. Project alone was the bug: two windows
+    open on the same project share one marker file and the last writer wins,
+    so on 2026-08-08 a second DolceBot window crossing its token band
+    overwrote the pointer of the window that was about to be ``/clear``-ed,
+    and the cleared window was rebuilt from the other one's checkpoint.
+
+    ``hostname`` is the discriminator because it is the one the registry
+    already records (``session_registry._hostname`` → ``$HOSTNAME``, the
+    container name in kit containers) and because ``/clear`` keeps the same
+    container — verified in the field: sessions ``24c0a766`` and ``2e29e3cb``
+    are the pre- and post-``/clear`` halves of one tab and share hostname
+    ``claude-work-04221854``. A window in a *different* container therefore
+    cannot clobber this one's pointer, and the window that was cleared still
+    finds its own.
+
+    Falls back to the legacy ``<project>.json`` when the hostname is unknown.
+    """
+    host = _sanitize_key(hostname) if hostname is not None else _hostname_key()
+    key = _project_key(cwd)
+    return f"{key}__{host}.json" if host else f"{key}.json"
 
 
 def write_pending_marker(
     data_dir: Path, cwd: str, session_id: str, tokens: int
 ) -> Path:
-    """Record that *session_id* is handoff-ready; keyed by project."""
+    """Record that *session_id* has a restorable checkpoint; keyed per window.
+
+    Written whenever a checkpoint exists — the handoff threshold governs the
+    *nudge*, not this. A session that ended at 143K tokens used to leave
+    nothing restorable purely because 143K < 200K.
+    """
     pdir = _pending_dir(data_dir)
     pdir.mkdir(parents=True, exist_ok=True)
-    marker = pdir / f"{_project_key(cwd)}.json"
+    marker = pdir / marker_name(cwd)
     payload = {
         "session_id": session_id,
         "cwd": cwd,
         "tokens": tokens,
+        "hostname": _hostname_key(),
         "checkpoint_path": str(checkpoint_file(data_dir, session_id)),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -578,8 +726,17 @@ def consume_pending_marker(
     id is unchanged but the context genuinely restarted, and injecting the
     checkpoint there is exactly the automatic rebuild.
     Returns the marker payload or None.
+
+    Looks for this window's marker (``<project>__<hostname>.json``) first and
+    falls back to the legacy project-only name, so a marker written by an
+    older version — or on a host where the name cannot be read — is still
+    claimable for its ``ttl_hours``.
     """
-    marker = _pending_dir(data_dir) / f"{_project_key(cwd)}.json"
+    pdir = _pending_dir(data_dir)
+    marker = pdir / marker_name(cwd)
+    if not marker.exists():
+        legacy = pdir / f"{_project_key(cwd)}.json"
+        marker = legacy if legacy != marker and legacy.exists() else marker
     if not marker.exists():
         return None
 

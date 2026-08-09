@@ -15,11 +15,13 @@ Criterion 12 has three parts, and the third is the one with teeth:
   reusing it would have been a one-word change that silently broke rebuild
   expiry. `TestTtlHoursUntouched` pins that separation.
 
-On cost: the plan's stop-and-ask gate says to stop if the defaults would
-plausibly exceed a few writes per hour per session, because extraction shares
-one rate limit with interactive work. At 3 hours stale / 30 minutes minimum
-age, a 4-hour session writes twice. `TestWriteVolume` asserts that arithmetic
-rather than leaving it in a comment.
+On cost: the default moved from 3 hours to 0.5 on 2026-08-09, which inverts
+what this file used to assert. Three hours kept write volume low and let a
+session's unwritten segment grow until the writer could not finish it —
+prevention beats the retry, so the cadence is now deliberately about two
+writes per hour per session. At 0.5 hours stale / 30 minutes minimum age a
+4-hour session writes eight small delta-merges. `TestWriteVolume` asserts
+that arithmetic rather than leaving it in a comment.
 """
 
 import json
@@ -106,7 +108,7 @@ class TestStalenessTrigger:
         make_registry_entry(tmp_path, age=timedelta(hours=4))
 
         assert cp.staleness_trigger(
-            tmp_path, "s1", state_with_checkpoint(timedelta(hours=1)), CFG
+            tmp_path, "s1", state_with_checkpoint(timedelta(minutes=12)), CFG
         ) is None
 
     def test_a_checkpoint_past_stale_hours_fires(self, tmp_path):
@@ -190,10 +192,14 @@ class TestDisabling:
 
 class TestConfig:
 
-    def test_the_defaults_are_conservative(self):
+    def test_the_defaults_favour_recoverability_over_write_volume(self):
+        """0.5, not 3.0 — deliberately about two writes an hour rather than
+        well under one. At 3.0 a session's unwritten segment reached 174,154
+        characters against a healthy 23,287, which is what made the model
+        call unfinishable and the failure self-sustaining."""
         cfg = cp.CheckpointConfig()
 
-        assert cfg.stale_hours == 3.0
+        assert cfg.stale_hours == 0.5
         assert cfg.min_session_minutes == 30
 
     def test_both_fields_have_their_own_env_knob(self, monkeypatch):
@@ -213,7 +219,7 @@ class TestConfig:
 
         cfg = cp.load_config()
 
-        assert cfg.stale_hours == 3.0
+        assert cfg.stale_hours == 0.5
         assert cfg.min_session_minutes == 30
 
     def test_a_negative_value_is_clamped_not_inverted(self, monkeypatch):
@@ -240,7 +246,7 @@ class TestTtlHoursUntouched:
 
         cfg = cp.load_config()
         assert cfg.ttl_hours == 1.0
-        assert cfg.stale_hours == 3.0
+        assert cfg.stale_hours == 0.5
 
     def test_marker_expiry_still_uses_ttl_hours(self, tmp_path):
         """The consumer that would have broken, exercised directly. 7h old
@@ -453,19 +459,21 @@ class TestWriteVolume:
                 state["last_checkpoint_ts"] = at.isoformat()
         return writes
 
-    def test_a_four_hour_session_writes_twice(self, tmp_path):
-        """The plan's stop-and-ask gate: more than a few writes per hour per
-        session and this would need discussing before merge. Two writes over
-        four hours is 0.5/hour."""
-        assert self._writes_over(tmp_path, hours=4) == 2
+    def test_a_four_hour_session_writes_eight_small_deltas(self, tmp_path):
+        """The point of the whole change, as arithmetic: eight 30-minute
+        slices instead of two multi-hour ones. Each write distills only the
+        segment since the last one, so eight writes is eight SMALL writes."""
+        assert self._writes_over(tmp_path, hours=4) == 8
 
-    def test_a_one_hour_session_writes_once(self, tmp_path):
-        assert self._writes_over(tmp_path, hours=1) == 1
+    def test_a_one_hour_session_writes_twice(self, tmp_path):
+        assert self._writes_over(tmp_path, hours=1) == 2
 
     def test_a_twenty_minute_session_writes_nothing(self, tmp_path):
         assert self._writes_over(tmp_path, hours=1 / 3) == 0
 
-    def test_an_aggressive_config_is_possible_but_not_the_default(self, tmp_path):
-        cfg = cp.CheckpointConfig(stale_hours=0.5, min_session_minutes=10)
+    def test_the_old_conservative_cadence_is_still_configurable(self, tmp_path):
+        """`checkpoint_stale_hours` still buys back the pre-0.33.0 volume for
+        anyone who wants it — only the default moved."""
+        cfg = cp.CheckpointConfig(stale_hours=3.0, min_session_minutes=30)
 
-        assert self._writes_over(tmp_path, hours=4, cfg=cfg) > 2
+        assert self._writes_over(tmp_path, hours=4, cfg=cfg) == 2

@@ -134,7 +134,13 @@ class TestWriteCheckpoint:
         assert payload is not None
         assert payload["session_id"] == "s1"
 
-    def test_below_handoff_no_marker(self, tmp_path, data_env, monkeypatch):
+    def test_a_marker_is_written_below_the_handoff_threshold(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        """The handoff threshold governs the /clear nudge, not whether a
+        checkpoint can be found again. Gating the marker on it meant a clean
+        143K-token session left a perfectly good checkpoint that nothing could
+        ever restore from."""
         now = datetime.now(timezone.utc)
         transcript = tmp_path / "t.jsonl"
         _write_transcript(transcript, [_turn("user", "work", now)])
@@ -143,11 +149,19 @@ class TestWriteCheckpoint:
         assert asyncio.run(
             checkpoint_writer.write_checkpoint(_payload("s1", transcript, tokens=110_000))
         )
-        assert cp.consume_pending_marker(
+        payload = cp.consume_pending_marker(
             data_env, "/work/proj", "other", cp.load_config()
-        ) is None
+        )
+        assert payload is not None
+        assert payload["session_id"] == "s1"
+        assert payload["tokens"] == 110_000
 
-    def test_model_failure_keeps_previous(self, tmp_path, data_env, monkeypatch):
+    def test_model_failure_keeps_previous_and_appends_the_raw_window(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        """A failed write no longer returns empty-handed: the previous
+        checkpoint survives verbatim as the prefix, and the window the model
+        could not summarise is appended raw rather than dropped."""
         cp.write_checkpoint_file(data_env, "s1", VALID_CHECKPOINT)
         now = datetime.now(timezone.utc)
         transcript = tmp_path / "t.jsonl"
@@ -159,7 +173,10 @@ class TestWriteCheckpoint:
         monkeypatch.setattr(checkpoint_writer, "run_agent", boom)
         ok = asyncio.run(checkpoint_writer.write_checkpoint(_payload("s1", transcript)))
         assert ok is False
-        assert cp.checkpoint_file(data_env, "s1").read_text() == VALID_CHECKPOINT
+        written = cp.checkpoint_file(data_env, "s1").read_text()
+        assert written.startswith(VALID_CHECKPOINT)
+        assert "## Unsummarised since" in written
+        assert cp.validate_checkpoint(written)
 
     def test_invalid_output_rejected(self, tmp_path, data_env, monkeypatch):
         now = datetime.now(timezone.utc)

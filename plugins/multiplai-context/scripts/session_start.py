@@ -715,6 +715,27 @@ def main() -> None:
     except Exception:
         logger.exception("Deferred extraction processing failed (non-fatal)")
 
+    # Same deal for end-of-session checkpoints queued by a SessionEnd whose
+    # container was exiting. The launcher's host-side drain normally gets
+    # there first, but it only exists inside the kit — on vanilla Claude Code
+    # this hook is the only consumer the queue has.
+    try:
+        from lib.checkpoint_drain import process_pending_checkpoints
+
+        written = process_pending_checkpoints(
+            data_dir, paths.scripts_dir() / "checkpoint_writer.py"
+        ).launched
+        if written:
+            logger.info("Launched %d queued end-of-session checkpoint(s)", written)
+            log_event(
+                "checkpoint", "drain",
+                f"launched {written} queued end-of-session checkpoint(s)",
+                session_id=session_id,
+                count=written,
+            )
+    except Exception:
+        logger.exception("Queued checkpoint processing failed (non-fatal)")
+
     # Refresh the fleet view (data/AGENTS.md). Runs
     # in-process rather than detached: it is a pure read of sessions/ +
     # checkpoints/ with no LLM call, so it costs a few file reads — far less

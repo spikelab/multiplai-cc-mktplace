@@ -136,6 +136,7 @@ def _extract_body_snippets(entries: list[dict], project: str) -> list[str]:
             for line in entry["content"].strip().split("\n")
             if line.strip()
             and not line.startswith("[")
+            and not line.startswith("<!--")
             and not line.startswith("Session started")
         ]
         if body_lines:
@@ -193,18 +194,41 @@ async def _summarize_project(client, project: str, entries: list[dict],
     return _extractive_summary(project, snippets)
 
 
+def _writer_hostname() -> str:
+    try:
+        from lib.session_registry import _hostname  # type: ignore
+
+        return (_hostname() or "").strip()
+    except Exception:
+        return ""
+
+
 def _write_summary(
     now_dir: Path,
     project: str,
     summary: str,
     entries: list[dict],
     project_path: str,
+    session_id: str = "",
 ) -> None:
-    """Atomically write a project summary to ``now_dir / {project}.md``."""
+    """Atomically write a project summary to ``now_dir / {project}.md``.
+
+    The header names the window that wrote it. There is one file per project
+    and several windows can be open on the same project, so last writer wins
+    — on 2026-08-08 a ``multiplai-docker`` window's summary was injected into
+    a pi-eval window's fresh session and read as its own prior work, with
+    nothing in the file to say otherwise. Attribution does not merge the
+    windows; it makes the contamination visible, which is what was missing.
+    """
     now_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     header_lines = [f"Generated: {timestamp}"]
+    if session_id:
+        header_lines.append(f"Written by session: {session_id}")
+    host = _writer_hostname()
+    if host:
+        header_lines.append(f"Written on host: {host}")
     source_names = [e["filepath"].name for e in entries if "filepath" in e]
     if source_names:
         header_lines.append("Source entries: " + ", ".join(source_names))
@@ -225,7 +249,8 @@ def _write_summary(
 
 
 async def synthesize(project_filter: str | None = None,
-                     model: str | None = None) -> int:
+                     model: str | None = None,
+                     session_id: str = "") -> int:
     """Scan diary, group by project, write per-project status summaries.
 
     When *project_filter* is given, only that project is (re)summarized — used
@@ -260,7 +285,9 @@ async def synthesize(project_filter: str | None = None,
             else:
                 snippets = _extract_body_snippets(entries, project)
                 summary = _extractive_summary(project, snippets)
-            _write_summary(now_dir, project, summary, entries, project_path)
+            _write_summary(
+                now_dir, project, summary, entries, project_path, session_id
+            )
         except Exception:
             logger.exception("Failed to summarize project %s", project)
             continue
