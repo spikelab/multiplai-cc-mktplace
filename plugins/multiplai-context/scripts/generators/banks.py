@@ -247,10 +247,25 @@ class BanksGenerator:
             fragment = _read_fragment(bank)
             adopted: list[dict] = []
             if fragment is not None:
+                # Deduplicated by ref: a fragment that lists the same file twice
+                # produced two entries for one ref, and `find_collisions` skips
+                # same-bank pairs so it was never reported — the router just saw
+                # two contradictory `Purpose:` blocks for one file. First wins,
+                # matching every other "the bank said it twice" rule here.
+                seen_refs: set[str] = set()
                 for entry in fragment:
                     kept = _adopt_fragment_entry(bank, entry, present)
-                    if kept is not None:
-                        adopted.append(kept)
+                    if kept is None:
+                        continue
+                    ref = str(kept.get("source") or "")
+                    if ref in seen_refs:
+                        errors.append(
+                            f"bank '{bank.name}': fragment lists {ref} more than "
+                            "once — keeping the first entry"
+                        )
+                        continue
+                    seen_refs.add(ref)
+                    adopted.append(kept)
             covered = {str(e.get("source")) for e in adopted}
             for path in files:
                 ref = bank.ref(path.name)

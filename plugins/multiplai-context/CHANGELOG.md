@@ -18,6 +18,14 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+<!-- MERGE ORDER: this entry is 0.38.0 and 0.37.0 belongs to the memory-doctor
+     branch, which is a SIBLING of this one rather than an ancestor. Both branch
+     off 0.36.0, so this file has no 0.37.0 section until the doctor branch lands.
+     Merge the doctor first and the history is continuous; merge this one first
+     and `main` ships with 0.37.0 missing. `check_changelog.py` cannot catch it —
+     it tests `old != new`, which is inequality only (and would also pass a
+     downgrade). Re-numbering this to 0.39.0 does not help: it moves the hole to
+     0.38.0 and makes it permanent. -->
 ## [0.38.0] - 2026-08-09
 
 ### Added

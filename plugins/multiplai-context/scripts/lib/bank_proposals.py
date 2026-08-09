@@ -59,7 +59,7 @@ from lib.bank_git import (
 )
 from lib.bank_policy import BankPolicy, check_item, load_policy
 from lib.banks import MemoryBank, banks_by_name
-from lib.memory_write_floor import target_bank
+from lib.memory_write_floor import is_safe_target, target_bank
 
 logger = logging.getLogger(__name__)
 
@@ -179,12 +179,23 @@ def plan_contributions(
     by_name = banks_by_name(banks)
     grouped: dict[str, list] = {}
     unknown: dict[str, list[str]] = {}
+    unsafe: dict[str, list[str]] = {}
     for item in items:
-        bank_name, filename = target_bank(getattr(item, "target", "") or "")
+        raw_target = getattr(item, "target", "") or ""
+        bank_name, filename = target_bank(raw_target)
         if bank_name not in by_name or not by_name[bank_name].is_shared:
-            unknown.setdefault(bank_name or "?", []).append(
-                getattr(item, "target", "") or "?"
-            )
+            unknown.setdefault(bank_name or "?", []).append(raw_target or "?")
+            continue
+        # The remainder after the bank name is about to become `bank.path /
+        # filename`, twice, in `submit`. `target_bank("team/../../CLAUDE.md")`
+        # returns ("team", "../../CLAUDE.md") — and the write floor refuses that
+        # target as `shared-bank-write`, which is precisely the reason code that
+        # routes it *here*. pathlib does not normalise `..` and gives an absolute
+        # path total override, so the unvalidated remainder was an arbitrary file
+        # write with model-authored markdown. `is_safe_target` was already in this
+        # module's import graph and never called.
+        if not is_safe_target(filename):
+            unsafe.setdefault(bank_name, []).append(raw_target or "?")
             continue
         grouped.setdefault(bank_name, []).append((item, filename))
 
@@ -238,6 +249,12 @@ def plan_contributions(
             "%d item(s) target bank '%s', which is not a subscribed shared bank: %s",
             len(targets), name, ", ".join(sorted(set(targets))),
         )
+    for name, targets in sorted(unsafe.items()):
+        logger.error(
+            "%d item(s) targeting bank '%s' name something that is not a bare "
+            "memory filename and were dropped: %s",
+            len(targets), name, ", ".join(sorted(set(targets))),
+        )
     return plans
 
 
@@ -277,9 +294,18 @@ def render_contribution_file(plan: ContributionPlan) -> str:
     if plan.blocked:
         lines += [f"## Blocked ({len(plan.blocked)})", ""]
         for c in plan.blocked:
+            # The title is NOT echoed. `check_item` scans the title, so a title is
+            # one of the places a credential or a no-go term can be — and echoing
+            # it here printed that value to stdout *and* wrote it into
+            # dreams/banks/…-contribution.md, i.e. the item was blocked and
+            # transcribed. `find_secrets` returns labels only and the reasons
+            # carry no values, which is what makes the reason line safe to print;
+            # the title had no such guarantee. The item is identified by where it
+            # was going and why it was refused, which is what the reader needs.
             lines.append(
-                f"- **{c.title or '(untitled)'}** → `{c.filename}` — "
-                + "; ".join(c.blocked)
+                f"- `{c.filename}`"
+                + (f" § {c.section}" if c.section else "")
+                + " — " + "; ".join(c.blocked)
             )
         lines += [
             "",
@@ -304,6 +330,11 @@ def submit(
     Returns a report dict; never raises. A failure at any step stops the
     sequence and leaves the bank checkout on its original branch where
     possible — a half-pushed contribution is worse than none.
+
+    Every filename is re-validated here even though :func:`plan_contributions`
+    already did. This is the function that turns a string into a path and writes
+    to it, and a plan can be constructed by hand or by a future caller; the check
+    belongs where the write is, not only where the plan was built.
     """
     report: dict = {
         "bank": plan.bank.name,
@@ -335,6 +366,11 @@ def submit(
     # apply would write and an apply cannot half-write.
     updates: dict[str, str] = {}
     for c in plan.contributions:
+        if not is_safe_target(c.filename):
+            report["errors"].append(
+                f"refusing to write {c.filename!r}: not a bare memory filename"
+            )
+            return report
         target = path / c.filename
         current = updates.get(c.filename)
         if current is None:

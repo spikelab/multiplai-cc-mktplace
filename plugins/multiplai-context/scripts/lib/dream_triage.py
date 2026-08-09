@@ -77,6 +77,7 @@ from lib.memory_write_floor import (
     floor_check,
     is_reserved_target,
     is_safe_target,
+    target_bank,
 )
 from lib.routing_validation import parse_proposal_entries
 
@@ -360,9 +361,19 @@ class Triage:
 
 
 def _group(items) -> dict[str, list[Item]]:
+    """Group items by the memory **filename** they will be written to.
+
+    Keyed on the resolved filename, not the raw target. ``personal/dev.md`` is a
+    spelling the write floor deliberately accepts — a model shown bank-qualified
+    refs will sometimes qualify the personal one too — but keying on the raw
+    string sent the applier looking for ``<memory>/personal/dev.md``, which does
+    not exist, so the item was silently dropped after the floor had said yes.
+    Two spellings of one file also grouped as two files.
+    """
     out: dict[str, list[Item]] = {}
     for item in items:
-        out.setdefault(item.target, []).append(item)
+        _bank, filename = target_bank(item.target)
+        out.setdefault(filename or item.target, []).append(item)
     return out
 
 

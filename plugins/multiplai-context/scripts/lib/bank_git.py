@@ -32,6 +32,7 @@ __all__ = [
     "DEFAULT_TIMEOUT",
     "GitResult",
     "current_branch",
+    "dirty_paths",
     "gh_available",
     "head_sha",
     "is_git_repo",
@@ -101,6 +102,34 @@ def head_sha(path: Path) -> str:
 def current_branch(path: Path) -> str:
     result = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=path, timeout=10)
     return result.output if result.ok else ""
+
+
+def dirty_paths(path: Path, *, timeout: int = DEFAULT_TIMEOUT) -> list[str]:
+    """Paths with uncommitted changes in *path*'s working tree, or ``[]``.
+
+    ``git status --porcelain``, parsed for the pathname only. Used before
+    deleting personal memory in favour of a bank: content that exists only as an
+    uncommitted local edit is not content the bank has, and no other subscriber
+    can see it.
+
+    Returns ``[]`` when git is unavailable or the command fails — that is the
+    same answer as "clean", so callers must check :func:`is_git_repo`
+    **separately** rather than treating an empty list as proof of a clean tree.
+    """
+    result = run_git(["status", "--porcelain"], cwd=path, timeout=timeout)
+    if not result.ok:
+        return []
+    out: list[str] = []
+    for line in result.output.splitlines():
+        if len(line) < 4:
+            continue
+        name = line[3:].strip()
+        # Rename/copy entries are "old -> new"; the destination is what matters.
+        if " -> " in name:
+            name = name.split(" -> ", 1)[1]
+        if name:
+            out.append(name)
+    return sorted(out)
 
 
 def pull_ff_only(path: Path, *, timeout: int = DEFAULT_TIMEOUT) -> GitResult:

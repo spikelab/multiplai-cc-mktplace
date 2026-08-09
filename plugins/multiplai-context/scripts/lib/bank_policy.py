@@ -218,12 +218,16 @@ def check_text(text: str, policy: BankPolicy) -> list[str]:
 def check_item(item, policy: BankPolicy) -> list[str]:
     """Blocking reasons for contributing *item* to *policy*'s bank.
 
-    Checks the item's own text and its title — a no-go term in a title is
-    exactly as public as one in the body once the PR is open.
+    Checks the item's text, title, section **and target filename** — every part
+    of it that ends up in the pull request, and therefore every part that is
+    exactly as public as the body once the PR is open. The filename was the gap:
+    ``team/salary-2026.md`` with a body of "Spike: 180000 EUR base" cleared every
+    no-go term, because nothing scanned the name of the file being written.
     """
     parts = [
         getattr(item, "text", "") or "",
         getattr(item, "title", "") or "",
         getattr(item, "section", "") or "",
+        getattr(item, "target", "") or "",
     ]
     return check_text("\n".join(parts), policy)

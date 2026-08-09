@@ -97,7 +97,26 @@ _SAFE_TARGET_RE = re.compile(r"^[A-Za-z0-9._-]+\.md$")
 # Mirrors ``multiplai_core.banks``'s own name rule. Kept as a literal here
 # rather than imported because it guards a *refusal*: this file must be able to
 # reject a target with nothing loaded but stdlib and a regex.
-_BANK_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+def _is_bank_name(name: str) -> bool:
+    """Is *name* a legal bank name? Delegates to ``multiplai_core.banks``.
+
+    This module used to re-declare core's ``_NAME_RE`` byte-identically, and the
+    correctness of the ``shared-bank-write`` refusal depended on the two staying
+    in step — a copy that only has to drift once. Core exports the predicate now,
+    so there is one definition.
+
+    Falls back to a local pattern only if the export is missing (an older core
+    resolved from the lockfile), because a hook must not fail to import.
+    """
+    try:
+        from multiplai_core.banks import is_bank_name
+
+        return is_bank_name(name)
+    except ImportError:  # pragma: no cover - older core
+        return bool(_BANK_NAME_FALLBACK_RE.match(name or ""))
+
+
+_BANK_NAME_FALLBACK_RE = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,63}\Z")
 
 # The only change verb that cannot destroy existing memory.
 ADDITIVE_CHANGES = frozenset({"add"})
@@ -158,7 +177,7 @@ def target_bank(target: str) -> tuple[str, str]:
     bank, filename = split_bank_ref(target or "")
     if "/" not in (target or ""):
         return PERSONAL_BANK, target or ""
-    if not _BANK_NAME_RE.match(bank):
+    if not _is_bank_name(bank):
         return "", target or ""
     return bank, filename
 

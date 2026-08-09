@@ -140,6 +140,64 @@ def expand_picks(
     Order matters: bundles widen the pick set first (a bundle sibling
     might itself declare co_retrieve companions), then co_retrieve
     pulls in companions for the widened set.
+
+    **Expansion never crosses a bank boundary.** Both mechanisms are driven by
+    fields a *bank committer* controls in that bank's own ``catalog.json``, so a
+    bank that declares ``"bundle": "identity"`` — squatting a bundle name the
+    personal corpus already uses — would have its file pulled into every prompt
+    that picked any personal member of that bundle, from then on. The content is
+    still fenced as untrusted, so this is persistence and amplification rather
+    than a fence break; but "the router picks bank content on relevance alone"
+    stops being true, and the lever is entirely bank-controlled.
+
+    Filtering afterwards rather than inside each expander keeps the rule in one
+    place and applies it to both mechanisms identically.
     """
-    after_bundles = expand_bundles(picks, catalog_entries, excluded=excluded)
-    return expand_co_retrieve(after_bundles, catalog_entries, excluded=excluded)
+    original = [p for p in picks if p]
+    # Materialised once: it is now walked three times, and a generator would be
+    # empty by the second pass.
+    entries = list(catalog_entries)
+    after_bundles = expand_bundles(original, entries, excluded=excluded)
+    expanded = expand_co_retrieve(after_bundles, entries, excluded=excluded)
+    return _same_bank_only(original, expanded, entries)
+
+
+def _bank_of_entry(entry: dict) -> str:
+    """The bank a catalog entry belongs to. Mirrors ``router_prompt._bank_of``."""
+    declared = str(entry.get("bank") or "").strip()
+    if declared:
+        return declared
+    ref = str(_entry_filename(entry) or "")
+    return ref.split("/", 1)[0] if "/" in ref else "personal"
+
+
+def _bank_of_pick(pick: str) -> str:
+    """The bank a pick names, from its ref prefix."""
+    text = str(pick or "")
+    return text.split("/", 1)[0] if "/" in text else "personal"
+
+
+def _same_bank_only(
+    original: list[str], expanded: list[str], catalog_entries: Iterable[dict]
+) -> list[str]:
+    """Drop expansion results whose bank no original pick belongs to.
+
+    Originally-picked entries are always kept — the router chose them, and this
+    function is about what *metadata* dragged in, not about what was picked.
+    """
+    picked_banks = {_bank_of_pick(p) for p in original}
+    banks_by_ref = {
+        _entry_filename(e): _bank_of_entry(e)
+        for e in catalog_entries
+        if _entry_filename(e)
+    }
+    originals = set(original)
+    kept: list[str] = []
+    for ref in expanded:
+        if ref in originals:
+            kept.append(ref)
+            continue
+        bank = banks_by_ref.get(ref) or _bank_of_pick(ref)
+        if bank in picked_banks:
+            kept.append(ref)
+    return kept

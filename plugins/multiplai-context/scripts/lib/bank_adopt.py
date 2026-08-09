@@ -49,8 +49,9 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from lib.bank_collisions import find_collisions
-from lib.bank_git import head_sha, is_git_repo, run_git, stage_commit
+from lib.bank_git import dirty_paths, head_sha, is_git_repo, run_git, stage_commit
 from lib.banks import MemoryBank, configured_banks, split_ref
+from lib.memory_write_floor import is_safe_target
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,14 @@ _TRIVIAL_RE = re.compile(r"^(?:[-*_=#>\s`|]*|\d+[.)])$")
 #: that has nothing to do with whether the content moved.
 _METADATA_RE = re.compile(r"^\*\*(?:last updated|source|status)\b", re.IGNORECASE)
 
+#: Leading list/quote markup, stripped before comparing. The same fact can be a
+#: bullet in one file and a bare line in another, and that is formatting rather
+#: than content — this check ignores formatting and does not attempt semantics.
+#: It matters more now that comparison is line **membership** rather than a
+#: substring search: with a substring test a leading "- " happened not to matter,
+#: because the personal line was found inside the bank's bulleted one.
+_LIST_MARKER_RE = re.compile(r"^(?:[-*+>]|\d+[.)])\s+")
+
 
 def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -93,7 +102,7 @@ def _significant_lines(text: str) -> list[str]:
             continue
         if _METADATA_RE.match(line):
             continue
-        out.append(line.lower())
+        out.append(_LIST_MARKER_RE.sub("", line).lower())
     return out
 
 
@@ -105,11 +114,30 @@ def content_present(personal_text: str, bank_texts: Sequence[str]) -> tuple[bool
     does **not** attempt any semantic equivalence. A paraphrase is a miss, and
     that is the intended strictness: this check is the only thing standing
     between "the PR is open" and "your copy is gone".
+
+    Two things this gets right only because they are stated as rules:
+
+    * **Line membership in a set, not a substring search.** ``line in haystack``
+      against the concatenated bank text passed whenever a personal line appeared
+      *anywhere inside* a bank line — so a bank could embed the line in a
+      sentence that negates it ("It is NOT true that the staging cluster lives in
+      eu-west-1 any more.") and the invariant would hold while the bank asserted
+      the opposite. The user's own ``contribute`` PR shows the bank owner the
+      exact lines to embed. Set membership makes the check mean what the
+      docstring says.
+    * **A file with nothing substantive to compare is never "present".** Every
+      line under 12 characters is skipped, so a file of short bullets has zero
+      significant lines and ``missing == []`` — which read as "the bank has all of
+      it" against an **empty** bank. Requiring at least one matched line turns
+      that from silent deletion into a skip.
     """
-    haystack = "\n".join(
+    haystack = {
         line for text in bank_texts for line in _significant_lines(text)
-    )
-    missing = [line for line in _significant_lines(personal_text) if line not in haystack]
+    }
+    personal_lines = _significant_lines(personal_text)
+    if not personal_lines:
+        return False, []
+    missing = [line for line in personal_lines if line not in haystack]
     return (not missing), missing
 
 
@@ -211,6 +239,24 @@ def finalize(
     bank has not merged yet is skipped with its missing lines named, and the
     others still proceed. Partial adoption is the normal state during review
     and must not be an error.
+
+    This function **deletes the user's memory**, so it refuses rather than
+    guesses on every input it cannot verify:
+
+    * **The bank must be a real git checkout.** It read ``bank.path.glob("*.md")``
+      and never checked the directory existed — only ``plan_adoption`` did, as a
+      printed warning ``cmd_adopt`` then ignored. Against a bank that had not been
+      cloned yet, or had been moved, ``bank_texts`` was ``[]``, and the receipt
+      still said "verified line-for-line against the bank's working tree".
+    * **Each filename must be a bare memory filename.** ``memory_dir / filename``
+      does not normalise ``..`` and pathlib gives an absolute path total override,
+      so ``--file ../victim.md`` and ``--file /etc/hosts`` both resolved outside
+      the memory dir and were then ``unlink()``ed.
+    * **The bank's working tree must be clean.** Reading working-tree files means
+      content that exists only as an uncommitted local edit counted as "the bank
+      has it" — so the personal copy was deleted against something no other
+      subscriber can see. (The opposite case is already safe: content missing from
+      a stale checkout produces ``missing`` and the file is skipped.)
     """
     report: dict = {
         "bank": bank.name,
@@ -227,8 +273,33 @@ def finalize(
         )
         return report
 
+    # Refusals that apply to the whole call, checked before anything is read.
+    # Each of these was a path to deleting memory against nothing.
+    if not is_git_repo(bank.path):
+        report["errors"].append(
+            f"bank '{bank.name}' at {bank.path} is not a git checkout — sync it "
+            "first. Nothing was deleted: an absent bank reads as 'the bank has "
+            "none of your lines', which is indistinguishable from 'the bank has "
+            "all of them' for a file with nothing substantive to compare."
+        )
+        return report
+    dirty = dirty_paths(bank.path)
+    if dirty:
+        report["errors"].append(
+            f"bank '{bank.name}' has uncommitted changes ({', '.join(dirty[:5])}) "
+            "— content that exists only as a local edit is not content the bank "
+            "has. Commit or stash them first. Nothing was deleted."
+        )
+        return report
+
     to_delete: list[str] = []
     for filename in filenames:
+        if not is_safe_target(filename):
+            report["skipped"].append(
+                {"file": filename,
+                 "why": "not a bare memory filename (no paths, no '..', must end .md)"}
+            )
+            continue
         personal = memory_dir / filename
         text = _read(personal)
         if text is None:
