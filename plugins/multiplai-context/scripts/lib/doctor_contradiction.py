@@ -13,6 +13,12 @@ share no subject at all, so most of the spend buys "no". Within-file is one call
 per file, is where the subject overlap actually is, and is content-hash-gated so
 an unchanged file costs nothing at all.
 
+The gate is what makes the sequential loop below the right shape. The **first**
+run pays one call per file — measured at roughly a minute each on the cheap tier
+against the real 29-file corpus, so the better part of an hour, which is fine
+for a detached weekly pass and would not be for a foreground one. Every run
+after that checks only what changed, which is typically one or two files.
+
 **Cross-file is out of scope for this phase, and the report says so.** That
 sentence is not politeness: without it, a reader sees a contradiction section
 with no cross-file findings and concludes there are none. Revisit once the
