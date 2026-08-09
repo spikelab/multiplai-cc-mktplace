@@ -48,7 +48,21 @@ __all__ = [
 #: Headings that would make an existing applier treat this file as actionable.
 #: ``dream --triage`` requires ``## Routing Warnings`` before it will apply
 #: anything, so its absence is what makes the refusal deterministic.
-FORBIDDEN_HEADINGS: tuple[str, ...] = ("## Routing Warnings", "## Updates for")
+#:
+#: The list had **already drifted** when it was written: ``dream`` also keys off
+#: ``## Conflict Resolutions`` (``_REGENERATED_SECTIONS``) and ``## Filtered
+#: Out``, and neither was here. Hardcoding a copy of another module's headings
+#: is the wrong shape, but importing ``dream`` from a library is worse, so the
+#: list stays here and ``test_forbidden_headings_covers_every_applier_heading``
+#: pins it against the real ones — a new applier heading fails that test rather
+#: than silently becoming writable into a report.
+FORBIDDEN_HEADINGS: tuple[str, ...] = (
+    "## Routing Warnings",
+    "## Updates for",
+    "## Conflict Resolutions",
+    "## Filtered Out",
+    "## Processed",
+)
 
 
 def report_name(day: Optional[date] = None) -> str:

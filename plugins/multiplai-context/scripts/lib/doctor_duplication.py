@@ -58,7 +58,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
-from multiplai_core.untrusted import fence, markdown_notice
+from multiplai_core.untrusted import defang, fence, markdown_notice
 
 logger = logging.getLogger(__name__)
 
@@ -636,6 +636,17 @@ async def run_pass(
     return result
 
 
+def _safe(text: str) -> str:
+    """One line of model-derived text, neutralised for the report body.
+
+    ``markdown_fences`` stays on (the default): the report is composed markdown,
+    so a quoted line containing a fence would otherwise reopen or close one and
+    restructure everything after it. Newlines are collapsed because every caller
+    puts the result inside a single ``-`` bullet.
+    """
+    return " ".join(defang(text or "").split())
+
+
 def render_section(result: Mapping, *, limit: int = 40) -> str:
     """The duplication section of the doctor report."""
     out: list[str] = ["## 1. Duplication", ""]
@@ -683,11 +694,17 @@ def render_section(result: Mapping, *, limit: int = 40) -> str:
                    f"↔ `{right['file']}:{right['line']}` "
                    f"(ratio {item['ratio']:.2f})")
         out.append("")
-        out.append(f"- **A** (`{left['file']}:{left['line']}`): {left['text'].strip()}")
-        out.append(f"- **B** (`{right['file']}:{right['line']}`): {right['text'].strip()}")
-        out.append(f"- **Why the model called it a duplicate:** {item['reason']}")
+        # Defanged on the way out. `reason` and `merged` are model output, and
+        # `merged` in particular is a line of attacker-influenceable text the
+        # human is invited to retype into memory. The model cannot *act* (no
+        # tools, fenced inputs) and the doctor applies nothing — but `defang`
+        # neutralises the fence markers and code fences that would otherwise let
+        # this text break out of its bullet and restructure the report below it.
+        out.append(f"- **A** (`{left['file']}:{left['line']}`): {_safe(left['text'])}")
+        out.append(f"- **B** (`{right['file']}:{right['line']}`): {_safe(right['text'])}")
+        out.append(f"- **Why the model called it a duplicate:** {_safe(item['reason'])}")
         out.append(f"- **Proposed merge (suggestion — nothing was applied):** "
-                   f"{item['merged']}")
+                   f"{_safe(item['merged'])}")
         out.append("")
     if len(confirmations) > limit:
         out.append(f"… {len(confirmations) - limit} more confirmed pair(s) omitted.")

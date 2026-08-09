@@ -63,7 +63,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
-from multiplai_core.untrusted import fence, markdown_notice
+from multiplai_core.untrusted import defang, fence, markdown_notice
 
 logger = logging.getLogger(__name__)
 
@@ -281,12 +281,25 @@ class Finding:
 
 
 def build_prompt(filename: str, text: str, *, char_budget: int = FILE_CHAR_BUDGET) -> str:
-    """The user half of one per-file call. The file content is fenced (C2)."""
+    """The user half of one per-file call. The file content is fenced (C2).
+
+    ``markdown_notice`` is emitted alongside the fence, with
+    ``injection_marker=True``: ``fence`` applies ``mark_injections`` here, so the
+    body can contain ``⟪INJECTION?⟫`` markers, and without the notice those
+    appear with nothing anywhere explaining what they are. The notice was
+    imported and never called, which also made this pass the exception to the
+    "every prompt fences with fence + markdown_notice" claim.
+    """
     fenced = fence(text, f"memory file {filename}", char_budget)
-    return USER.format(
-        filename=filename,
-        body="\n".join(fenced) if fenced else "(empty)",
+    notice = markdown_notice(
+        f"the contents of the memory file {filename}",
+        "Memory file content",
+        injection_marker=True,
     )
+    body = "\n".join(fenced) if fenced else "(empty)"
+    if notice:
+        body = f"{notice}\n\n{body}"
+    return USER.format(filename=filename, body=body)
 
 
 _BLOCK_RE = re.compile(r"<contradictions>(.*?)</contradictions>", re.DOTALL)
@@ -309,10 +322,23 @@ def _locate(quote: str, lines: Sequence[str]) -> Optional[int]:
     if len(needle) < 15:
         # Too short to be unambiguous; a five-word "quote" matches everywhere.
         return None
-    for lineno, line in enumerate(lines, 1):
-        if needle in _WS_RE.sub(" ", line).strip().lower():
-            return lineno
-    return None
+    hits = [
+        lineno for lineno, line in enumerate(lines, 1)
+        if needle in _WS_RE.sub(" ", line).strip().lower()
+    ]
+    if not hits:
+        return None
+    if len(hits) > 1:
+        # Every hit is a real occurrence, so the citation is never fabricated —
+        # but it points at the earliest copy regardless of which one the model
+        # read. That is live on this corpus (career-history.md has a pair at 0.87
+        # similarity), and a reader who opens the wrong line concludes the finding
+        # is wrong. Report the ambiguity rather than picking silently.
+        logger.info(
+            "Contradiction quote resolves to %d lines (%s); citing the first",
+            len(hits), ", ".join(str(h) for h in hits),
+        )
+    return hits[0]
 
 
 def parse_findings(raw: str, filename: str, text: str) -> list[Finding]:
@@ -421,6 +447,14 @@ async def run_pass(
 
     findings: list[dict] = []
     checked = skipped = failed = too_small = 0
+    # Files whose content exceeds one call's budget, and therefore whose check
+    # covered only the first FILE_CHAR_BUDGET characters. Carried into the result
+    # and rendered, because a truncated check that reads as a completed one is
+    # the same honesty failure this module's docstring builds a cross-file rule
+    # against — a reader sees a section with no findings and concludes there are
+    # none. On the real corpus this is 4 of 29 files, including 67% of the
+    # largest.
+    truncated: list[str] = []
     pending: list[tuple[str, str, str]] = []   # (filename, text, digest)
 
     for filename in sorted(texts):
@@ -441,6 +475,8 @@ async def run_pass(
             continue
         if client is None or dry_run:
             continue
+        if len(text) > FILE_CHAR_BUDGET:
+            truncated.append(filename)
         pending.append((filename, text, digest))
 
     if pending:
@@ -472,11 +508,24 @@ async def run_pass(
 
     findings.sort(key=lambda f: (f["file"], f["a"]["line"], f["b"]["line"]))
 
+    # Drop cache entries for files that are no longer in the corpus. Without
+    # this the state file grows by one entry per filename ever seen, each
+    # carrying that file's full finding texts, forever. (The report itself was
+    # never affected — the carry-forward loop iterates the live files.)
+    new_state = {k: v for k, v in new_state.items() if k in texts}
+
     if not dry_run and client is not None and new_state != state:
         try:
             save_state(state_path(data_dir), new_state)
         except OSError:
             logger.exception("Could not write the doctor state file")
+
+    if truncated:
+        logger.warning(
+            "Contradiction pass read only the first %d characters of %d file(s): "
+            "%s — the rest was not examined",
+            FILE_CHAR_BUDGET, len(truncated), ", ".join(sorted(truncated)),
+        )
 
     return {
         "files": len(texts),
@@ -487,6 +536,8 @@ async def run_pass(
         "findings": findings,
         "degraded": client is None,
         "cross_file": False,
+        "truncated": sorted(truncated),
+        "char_budget": FILE_CHAR_BUDGET,
     }
 
 
@@ -494,6 +545,17 @@ def _today() -> str:
     from datetime import date
 
     return date.today().isoformat()
+
+
+def _safe(text: str) -> str:
+    """One line of model-derived text, neutralised for the report body.
+
+    The report is composed markdown, so ``markdown_fences`` stays on: a quoted
+    line containing a fence would otherwise reopen or close one and restructure
+    everything after it. Newlines are collapsed for the same reason — every
+    caller of this puts the result inside a single ``-`` bullet.
+    """
+    return " ".join(defang(text or "").split())
 
 
 def render_section(result: Mapping, *, limit: int = 40) -> str:
@@ -525,6 +587,19 @@ def render_section(result: Mapping, *, limit: int = 40) -> str:
             f"unparseable reply) and contributed **nothing**. They were not "
             f"cached, so the next run retries them."
         )
+    truncated = list(result.get("truncated") or [])
+    if truncated:
+        budget = result.get("char_budget") or FILE_CHAR_BUDGET
+        out.append("")
+        out.append(
+            f"⚠️ **{len(truncated)} file(s) were only partly examined.** One call "
+            f"reads at most {budget:,} characters, and these are longer, so "
+            f"anything past that point was not looked at — a clean result for "
+            f"them means \"nothing found in the part that was read\":"
+        )
+        out.append("")
+        for name in truncated:
+            out.append(f"- `{name}`")
     out.append("")
 
     findings = list(result.get("findings") or [])
@@ -538,9 +613,15 @@ def render_section(result: Mapping, *, limit: int = 40) -> str:
         out.append(f"### C{number}. `{item['file']}:{a['line']}` "
                    f"vs `{item['file']}:{b['line']}`{stamp}")
         out.append("")
-        out.append(f"- **A** (`{item['file']}:{a['line']}`): {a['text']}")
-        out.append(f"- **B** (`{item['file']}:{b['line']}`): {b['text']}")
-        out.append(f"- **Why they conflict:** {item['why']}")
+        # `defang` on the way out. These three strings are model output derived
+        # from memory-file content, and the model cannot act on anything (no
+        # tools, fenced inputs) — but this report is a delivered artefact a human
+        # is invited to read and retype, and `defang` neutralises the fence
+        # markers and code fences that would otherwise let quoted text escape
+        # its bullet and restructure the surrounding markdown.
+        out.append(f"- **A** (`{item['file']}:{a['line']}`): {_safe(a['text'])}")
+        out.append(f"- **B** (`{item['file']}:{b['line']}`): {_safe(b['text'])}")
+        out.append(f"- **Why they conflict:** {_safe(item['why'])}")
         out.append("")
     if len(findings) > limit:
         out.append(f"… {len(findings) - limit} more finding(s) omitted.")

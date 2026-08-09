@@ -62,6 +62,12 @@ Nothing yet.
   used", and the two are never averaged into one score. Anything below the
   sample-size floor is not reported at all, and the floor is printed in the
   report.
+
+  **That both-estimators rule covers the "unused" finding only.** The
+  "expensive per estimated use" list ranks from whichever estimator has data, so
+  a telemetry gap cannot make live memory look *unused* but can still shape that
+  list off one surviving estimator. Every row names its basis, and the report now
+  says this where you read it rather than only in the source.
 - **It will propose nothing for a while, and that is correct.** The utilisation
   telemetry needs weeks to accumulate. Until it has, the dead-weight section
   says so in place of ranking noise.
@@ -75,7 +81,22 @@ Nothing yet.
 - **A failure never widens what you are shown.** A model call that times out or
   comes back garbled contributes nothing at all, and the report tells you how
   many did. With no model available the deterministic dead-weight pass still
-  runs and the other two say they were skipped.
+  runs and the other two say they were skipped. In the same spirit: a section
+  whose text cannot be read back out of the corpus at all is **withheld** rather
+  than proposed, and listed with that reason — an unscreened candidate is not a
+  pruning candidate.
+- **A partly-read file says so.** One contradiction call reads at most 60,000
+  characters of a file, and four files in a corpus this size are longer than
+  that — including the largest, of which about two thirds sits past the limit.
+  Those files are now named in the report, because "no contradictions found" in a
+  file that was only two-thirds read is a different statement from a clean one.
+- **A doctor run that fails leaves the weekly gate open**, so the next
+  maintenance run retries instead of going quiet for seven days on the strength
+  of one log line.
+- **Quoted text in the report cannot restructure the report.** The suggested
+  merge wording and the quoted lines are model output derived from your memory
+  files; they are now neutralised on the way out, so a stray code fence in a
+  memory file cannot break out of its bullet and rearrange everything below it.
 
 ## [0.36.0] - 2026-08-08
 

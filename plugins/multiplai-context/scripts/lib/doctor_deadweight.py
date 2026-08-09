@@ -109,16 +109,38 @@ _NORMATIVE_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: A **bare imperative** opening a bullet or a line: "Commit frequently…",
+#: "Bind to 0.0.0.0…", "Use `git -C <dir>` instead of cd." None of these carry
+#: any of the keywords above, and all three are real rules from this corpus — the
+#: characteristic failure of a keyword list is this direction, not the other one.
+#: Matched only at the start of a line or bullet, because mid-sentence these
+#: words are ordinary verbs ("we run the suite nightly" is a fact).
+_IMPERATIVE_RE = re.compile(
+    r"^[ \t]*(?:[-*+]|\d+\.|>)?[ \t]*(?:\*\*)?(?:"
+    r"use|run|bind|commit|keep|check|read|write|add|remove|delete|set|"
+    r"pass|call|prefer|treat|route|stage|start|stop|leave|ask|verify|"
+    r"ensure|make|put|name|declare|reach|hold|flag|report|state|cite"
+    r")\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 
 def looks_normative(text: str) -> bool:
     """True when *text* reads as behavioural guidance rather than a fact.
 
-    Deliberately generous. See rule 3 in the module docstring: a false positive
-    costs one unproposed pruning candidate; a false negative proposes deleting a
-    behavioural rule because nobody noticed it was one, and the cost of that is
-    a behaviour that quietly stops happening.
+    Deliberately generous, and generous in **two** ways: a keyword list *and* a
+    bare-imperative opener. See rule 3 in the module docstring — a false positive
+    costs one unproposed pruning candidate and is listed with its reason, while a
+    false negative proposes deleting a behavioural rule because nobody noticed it
+    was one, and the cost of that is a behaviour that quietly stops happening.
+
+    The keyword half alone missed every bare imperative, which is the *usual*
+    shape of a rule in this corpus: "Commit frequently throughout development.",
+    "Bind to 0.0.0.0, not 127.0.0.1.", "Use ``git -C <dir>`` instead of cd."
     """
-    return bool(_NORMATIVE_RE.search(text or ""))
+    if not text:
+        return False
+    return bool(_NORMATIVE_RE.search(text) or _IMPERATIVE_RE.search(text))
 
 
 def section_text(memory_dir: Path, key: str) -> str:
@@ -277,20 +299,43 @@ def find_dead_weight(
         )
         return result
 
-    def _protect(candidate: Candidate) -> bool:
+    def _protect(candidate: Candidate) -> tuple[bool, str]:
+        """``(protect?, reason)`` for one candidate.
+
+        **Fails closed.** ``section_text`` returns ``""`` when the file cannot be
+        read (``OSError``) or is empty, and returning ``False`` there skipped the
+        rule screen entirely — so a candidate nobody could screen was *proposed
+        for pruning*. That is the wrong direction: rule 3 and contract C4 both
+        say a failure must narrow what gets pruned, not widen it.
+
+        Worth stating precisely, because it is narrower than it looks: a stale
+        key whose *heading* was renamed does **not** reach this branch.
+        ``extract_section`` falls back to the whole file when no H2 matches, so
+        the rule is still found and screened — that fallback is doing real work
+        here. The uncoverable cases are an unreadable file and an empty one.
+        """
         text = section_text(memory_dir, candidate.key)
         if not text:
-            return False
-        return looks_normative(text)
+            return True, (
+                "this section could not be read back from the corpus (renamed "
+                "heading, moved content, or an unreadable file), so it could not "
+                "be screened for behavioural rules — an unscreened candidate is "
+                "withheld rather than proposed"
+            )
+        if looks_normative(text):
+            return True, (
+                "the section reads as behavioural guidance (normative "
+                "language); utilisation is the wrong instrument for a rule"
+            )
+        return False, ""
 
     def _emit(candidate: Candidate, bucket: list[Candidate]) -> None:
-        if _protect(candidate):
+        protect, reason = _protect(candidate)
+        if protect:
             result.protected.append(replace(
                 candidate,
                 protected=True,
-                protected_reason=(
-                    "the section reads as behavioural guidance (normative "
-                    "language); utilisation is the wrong instrument for a rule"),
+                protected_reason=reason,
             ))
             return
         bucket.append(candidate)
@@ -427,10 +472,18 @@ def render_section(result: Mapping, *, limit: int = 25) -> str:
         f"**Sample-size floor: {result.get('min_observations', util.MIN_OBSERVATIONS)} "
         f"estimator observations.** {result.get('insufficient', 0)} row(s) are below "
         f"it and were **not** considered — a section seen three times is not "
-        f"evidence. A section is only called unused when *both* estimators "
+        f"evidence. A section is only called **unused** when *both* estimators "
         f"independently observed it enough times and each estimated its use at "
         f"or below {result.get('threshold', UNUSED_RATE_THRESHOLD):.0%}; a missing "
         f"estimate is never read as zero."
+    )
+    out.append("")
+    out.append(
+        "That both-estimators rule covers the *unused* finding only. **Expensive "
+        "per estimated use** is ranked from whichever estimator has data — the "
+        "basis is named on every row — so a telemetry outage cannot make live "
+        "memory look unused, but it can still shape this list off one surviving "
+        "estimator. Check the named basis before acting on a row here."
     )
     out.append("")
 
@@ -446,7 +499,9 @@ def render_section(result: Mapping, *, limit: int = 25) -> str:
          "Injected enough times to count, and estimated used at or below the "
          "threshold on **both** estimators independently."),
         ("Expensive per estimated use", "expensive",
-         "Ranked by bytes per estimated use under each row's own named basis."),
+         "Ranked by bytes per estimated use under each row's own named basis. "
+         "One estimator with data is enough to rank a row here — unlike "
+         "\"retrieved, estimated unused\", which needs both."),
     )
     prefixes = {"never_retrieved": "N", "retrieved_unused": "U", "expensive": "E"}
     any_found = False

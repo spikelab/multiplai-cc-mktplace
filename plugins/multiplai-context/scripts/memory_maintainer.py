@@ -672,18 +672,34 @@ def run_maintenance(*, force: bool = False, dry_run: bool = False) -> Maintenanc
     report.passes.append(run_status(paths.diary_dir(), dry_run=dry_run))
     report.passes.append(run_utilisation_compact(data_dir, dry_run=dry_run))
     report.passes.append(run_utilisation_judge(data_dir, dry_run=dry_run))
-    # Last: it consumes what pass 2 produced, and it is the only pass that
-    # writes memory — so everything that reads memory has already run against
-    # the state the session started with.
+    # Last of the daily passes: it consumes what pass 2 produced, and it is the
+    # only one that writes memory — so every daily pass that *reads* memory has
+    # already run against the state the session started with. The doctor below
+    # is the exception, and deliberately so: it is weekly, it proposes rather
+    # than applies, and reading the post-triage corpus is the more useful thing
+    # for it to do. The cost is that a week in which triage wrote something makes
+    # the doctor re-hash and re-check every file triage touched, so the
+    # content-hash cache never reaches a completely steady state.
     report.passes.append(run_triage(script_dir, paths.dreams_dir(), dry_run=dry_run))
 
     # The doctor is on its own weekly key. `--force` opens both gates; nothing
     # else lets a daily run drag the weekly pass along with it.
     if force or doctor_gate_open(state):
-        report.passes.append(run_doctor(memory_dir, data_dir, paths.dreams_dir(),
-                                        dry_run=dry_run))
-        if not dry_run:
+        doctor_result = run_doctor(memory_dir, data_dir, paths.dreams_dir(),
+                                   dry_run=dry_run)
+        report.passes.append(doctor_result)
+        # Stamp only a run that actually ran. `run_doctor` catches every
+        # exception and returns ran=False, so an unwritable dreams/ or an
+        # import error used to buy a full week of silence with one log line —
+        # while the layer below is careful to *not* cache a failed file's hash
+        # precisely so the next run retries it.
+        if not dry_run and doctor_result.ran:
             stamp_doctor(state)
+        elif not dry_run:
+            logger.warning(
+                "doctor pass did not run; leaving the weekly gate open so the "
+                "next maintenance run retries instead of waiting a week"
+            )
     else:
         report.passes.append(PassResult(
             "doctor", False,
