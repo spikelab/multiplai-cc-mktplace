@@ -140,8 +140,14 @@ def _render_anchors(anchors: object) -> list[str]:
         if isinstance(anchor, str):
             name, gloss = anchor.strip(), ""
         elif isinstance(anchor, dict):
-            name = str(anchor.get("name") or "").strip()
-            gloss = str(anchor.get("gloss") or "").strip()
+            # isinstance, not str(): `str()` on a non-string field is exactly
+            # the stringification the docstring above promises against — it
+            # produced real prompt lines like "- ['a', 'b'] — list name" and
+            # "- Ok — {'nested': 'dict'}". Same check `validate_anchors` uses.
+            raw_name = anchor.get("name")
+            raw_gloss = anchor.get("gloss")
+            name = raw_name.strip() if isinstance(raw_name, str) else ""
+            gloss = raw_gloss.strip() if isinstance(raw_gloss, str) else ""
         else:
             continue
         if not name:

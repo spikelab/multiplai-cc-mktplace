@@ -59,6 +59,44 @@ ROUTER_MODEL_OPTION = "router_model"
 ROUTER_MODEL_ENV_VAR = option_var(ROUTER_MODEL_OPTION)
 DEFAULT_ROUTER_MODEL = "claude-haiku-4-5"
 
+# How long the llm router waits before giving up. A timeout injects **zero**
+# memory for that turn, so this ceiling is the single most consequential number
+# for anyone running `memory_router: llm` — and section anchors make each call
+# do more work (a longer catalog to read, a finer choice to make), which pushes
+# some prompts over it. It is configurable because the honest mitigation for
+# "some of my prompts time out" is "raise the ceiling", and that advice is
+# useless if it means editing this file.
+ROUTER_TIMEOUT_OPTION = "router_timeout_seconds"
+ROUTER_TIMEOUT_ENV_VAR = option_var(ROUTER_TIMEOUT_OPTION)
+DEFAULT_ROUTER_TIMEOUT_SECONDS = 25.0
+
+
+def resolve_router_timeout(raw: str | float | None = None) -> float:
+    """The llm router's timeout in seconds, from config or the default.
+
+    Fail-soft like ``resolve_strategy``: a non-numeric or non-positive value
+    logs and falls back rather than raising, because a typo in a plugin option
+    must not break a ``UserPromptSubmit`` hook.
+    """
+    value = raw if raw is not None else option(ROUTER_TIMEOUT_OPTION)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return DEFAULT_ROUTER_TIMEOUT_SECONDS
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Ignoring %s=%r — not a number; using %.1fs",
+            ROUTER_TIMEOUT_ENV_VAR, value, DEFAULT_ROUTER_TIMEOUT_SECONDS,
+        )
+        return DEFAULT_ROUTER_TIMEOUT_SECONDS
+    if seconds <= 0:
+        logger.warning(
+            "Ignoring %s=%r — must be positive; using %.1fs",
+            ROUTER_TIMEOUT_ENV_VAR, value, DEFAULT_ROUTER_TIMEOUT_SECONDS,
+        )
+        return DEFAULT_ROUTER_TIMEOUT_SECONDS
+    return seconds
+
 STRATEGY_TOKEN_OVERLAP = "token_overlap"
 STRATEGY_LLM = "llm"
 STRATEGY_EMBEDDINGS = "embeddings"
@@ -575,8 +613,14 @@ class LLMRouter:
 
     name = STRATEGY_LLM
 
-    def __init__(self, *, timeout_seconds: float = 25.0, model: str | None = None) -> None:
-        self._timeout_seconds = timeout_seconds
+    def __init__(
+        self, *, timeout_seconds: float | None = None, model: str | None = None
+    ) -> None:
+        self._timeout_seconds = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else resolve_router_timeout()
+        )
         self._model = (
             model
             or option(ROUTER_MODEL_OPTION)

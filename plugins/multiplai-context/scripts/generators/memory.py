@@ -10,12 +10,15 @@ co_retrieve_for) across regeneration via merge_entry() override.
 generated — see the note on ``_HAND_AUTHORED_FIELDS`` below.
 """
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from multiplai_core.paths import Paths
 from generators.base import GeneratorBase
 from lib.section_loader import h2_names
+
+logger = logging.getLogger(__name__)
 
 # Hand-authored fields preserved during merge. intent_domains and
 # anti_domains are emitted by the LLM on first generation but may be
@@ -227,12 +230,59 @@ class MemoryGenerator(GeneratorBase):
             # file if it is still readable; refusing to guess is what
             # keeps an unvalidated anchor out of the catalog.
             sections = self._sections_for_key(key)
-        anchors = self.validate_anchors(merged.get("section_anchors"), sections)
+        proposed = merged.get("section_anchors")
+        proposed_count = len(proposed) if isinstance(proposed, list) else 0
+        anchors = self.validate_anchors(proposed, sections)
         if anchors:
             merged["section_anchors"] = anchors
+            logger.info(
+                "SECTION_ANCHORS %s valid=%d/%d anchorable=%d",
+                key, len(anchors), proposed_count, len(sections),
+            )
         else:
             merged.pop("section_anchors", None)
+            if sections:
+                # This feature's failure mode *is* silence: no anchors means
+                # whole-file loads forever for this entry, with no error, no
+                # counter, and nothing the token_overlap router eval can see.
+                # A model swap, a truncated JSON reply, or an all-invented name
+                # list turns it off for one file and looks identical to working.
+                logger.warning(
+                    "SECTION_ANCHORS %s valid=0/%d — %d anchorable section(s) "
+                    "exist but no proposed anchor named one; this entry falls "
+                    "back to whole-file loads",
+                    key, proposed_count, len(sections),
+                )
         return merged
+
+    def entry_needs_regeneration(
+        self, key: str, source: Any, existing: dict | None
+    ) -> bool:
+        """True when an anchorable file's entry has no ``section_anchors`` yet.
+
+        Without this, the whole feature ships inert. ``section_anchors`` is new
+        in this version, the skip gate is content-hash-only, and every memory
+        file's hash is unchanged on upgrade — so a release headlined "injected
+        memory fell 68%" produces exactly zero anchors until each file is
+        individually edited. One regeneration pass per anchorable file, once,
+        is the cost; after that the hash gate governs as before.
+        """
+        if not isinstance(existing, dict):
+            return False
+        if existing.get("section_anchors"):
+            return False
+        try:
+            text = Path(source).read_text(encoding="utf-8")
+        except (OSError, TypeError):
+            return False
+        if not self.anchorable_sections(text):
+            return False
+        logger.info(
+            "SECTION_ANCHORS %s regenerating — anchorable but has no anchors "
+            "(this version derives them; the content hash cannot see that)",
+            key,
+        )
+        return True
 
     def _sections_for_key(self, key: str) -> list[str]:
         """Anchorable H2 names for ``key``, read from disk. ``[]`` on any failure."""

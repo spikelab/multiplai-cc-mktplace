@@ -49,7 +49,11 @@ from lib.memory_router import create_router
 from lib.plugin_skills import plugin_skill_owners, qualify
 from lib import reference_docs
 from lib.routing_logic import expand_picks
-from lib.section_loader import load_picked_content, parse_section_ref
+from lib.section_loader import (
+    load_picked_content,
+    parse_section_ref,
+    preamble as section_preamble,
+)
 from lib.transcript_helper import read_last_assistant_response
 from generators.base import CATALOG_SCHEMA_VERSION
 from generators.config import load_catalog_config
@@ -359,10 +363,32 @@ def _load_memory_content(memory_dir: Path, picks: list[str]) -> dict[str, str]:
     Returns ``{display_name: content}`` where ``display_name`` is the
     raw pick (e.g., ``"file.md#Section"``) so the assembled context
     shows which slice was loaded.
+
+    Two things happen here that cannot happen one pick at a time, because
+    both are properties of the *file* rather than of a pick:
+
+    * **A whole-file pick absorbs that file's section picks.** The router may
+      legitimately emit ``["git-policy.md", "git-policy.md#Commit Messages"]``
+      — several array entries per file are now the norm for anchored files.
+      Loading both injected the section twice and made the byte attribution
+      report more bytes than the file has, which matters because that
+      measurement is this feature's entire evidence base.
+    * **The file's pre-first-H2 preamble is prepended once.** No section slice
+      contains it (see ``section_loader.preamble``), so without this a section
+      pick silently returns less than the whole file would have — including
+      hard cross-file instructions like ``> **Load core-voice.md first.**``.
+      Once per *file*, not once per section: rule 10 licenses several picks
+      from one file, and repeating a preamble per slice would spend the saving
+      several times over.
     """
-    result: dict[str, str] = {}
+    # Group by file, preserving first-appearance order of both files and picks.
+    by_file: dict[str, list[str]] = {}
     for pick in picks:
         base, _ = parse_section_ref(pick)
+        by_file.setdefault(base, []).append(pick)
+
+    result: dict[str, str] = {}
+    for base, file_picks in by_file.items():
         path = memory_dir / base
         if not path.exists():
             logger.debug("Picked memory file missing: %s", path)
@@ -372,9 +398,25 @@ def _load_memory_content(memory_dir: Path, picks: list[str]) -> dict[str, str]:
         except OSError:
             logger.warning("Failed to read router-picked memory file: %s", path)
             continue
-        # load_picked_content returns (filename, content_or_section)
-        _, content = load_picked_content(pick, text)
-        result[pick] = content
+
+        whole = next((p for p in file_picks if parse_section_ref(p)[1] is None), None)
+        if whole is not None:
+            if len(file_picks) > 1:
+                logger.debug(
+                    "Memory pick %s covers %d section pick(s) of the same file — "
+                    "loading the file once",
+                    whole, len(file_picks) - 1,
+                )
+            result[whole] = text
+            continue
+
+        head = section_preamble(text)
+        for index, pick in enumerate(file_picks):
+            # load_picked_content returns (filename, content_or_section)
+            _, content = load_picked_content(pick, text)
+            if head and index == 0 and not content.startswith(head):
+                content = f"{head}\n{content}"
+            result[pick] = content
     return result
 
 

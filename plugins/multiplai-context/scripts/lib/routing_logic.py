@@ -22,16 +22,30 @@ encode that by accepting an ``excluded`` set the caller passes.
 Entry-key extraction follows the same precedence the router uses
 (``source`` → ``path`` → ``file``) for compatibility with all three
 catalog shapes.
+
+**A pick may carry a ``#Section`` fragment.** Catalog entries never do, so
+every comparison between a pick and a catalog key goes through
+``section_loader.parse_section_ref`` first. Without that, a pick of
+``core-voice.md#Sentence Mechanics`` matched no entry, and both expansions
+quietly stopped firing for exactly the large anchored files where loading a
+companion matters most — which is now the *default* shape of a pick.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 
+from .section_loader import parse_section_ref
+
 
 def _entry_filename(entry: dict) -> str:
     """Mirror ``memory_router._entry_filename`` so callers can use either."""
     return entry.get("source") or entry.get("path") or entry.get("file", "")
+
+
+def _base(pick: str) -> str:
+    """The bare filename a pick refers to, fragment stripped."""
+    return parse_section_ref(pick)[0]
 
 
 def expand_bundles(
@@ -52,35 +66,39 @@ def expand_bundles(
     """
     excluded = excluded or set()
     picks_list = [p for p in picks if p]
-    pick_set = set(picks_list)
+    # Keyed on the bare filename: a pick may be "f.md#Section", a catalog key
+    # never is, and "have we already got this file?" is a question about the
+    # file. Answering it on the raw pick re-added the same file whole.
+    picked_bases = {_base(p) for p in picks_list}
 
     by_filename: dict[str, dict] = {
         _entry_filename(e): e for e in catalog_entries if _entry_filename(e)
     }
 
     bundles_to_expand: set[str] = set()
-    for filename in picks_list:
-        entry = by_filename.get(filename)
+    for pick in picks_list:
+        entry = by_filename.get(_base(pick))
         if not entry:
             continue
         bundle = entry.get("bundle")
         if isinstance(bundle, str) and bundle.strip():
             bundles_to_expand.add(bundle.strip())
 
+    kept = [p for p in picks_list if _base(p) not in excluded]
     if not bundles_to_expand:
         # Filter excluded just in case the caller passed one through.
-        return [p for p in picks_list if p not in excluded]
+        return kept
 
     # Walk catalog in order, append bundle siblings not already picked.
-    expanded = [p for p in picks_list if p not in excluded]
+    expanded = list(kept)
     for entry in catalog_entries:
         filename = _entry_filename(entry)
-        if not filename or filename in pick_set or filename in excluded:
+        if not filename or filename in picked_bases or filename in excluded:
             continue
         bundle = entry.get("bundle")
         if isinstance(bundle, str) and bundle.strip() in bundles_to_expand:
             expanded.append(filename)
-            pick_set.add(filename)
+            picked_bases.add(filename)
     return expanded
 
 
@@ -103,15 +121,15 @@ def expand_co_retrieve(
     """
     excluded = excluded or set()
     picks_list = [p for p in picks if p]
-    pick_set = set(picks_list)
+    picked_bases = {_base(p) for p in picks_list}
 
     by_filename: dict[str, dict] = {
         _entry_filename(e): e for e in catalog_entries if _entry_filename(e)
     }
 
-    expanded = [p for p in picks_list if p not in excluded]
-    for filename in picks_list:
-        entry = by_filename.get(filename)
+    expanded = [p for p in picks_list if _base(p) not in excluded]
+    for pick in picks_list:
+        entry = by_filename.get(_base(pick))
         if not entry:
             continue
         companions = entry.get("co_retrieve_for") or []
@@ -121,11 +139,11 @@ def expand_co_retrieve(
             if not isinstance(companion, str):
                 continue
             companion = companion.strip()
-            if not companion or companion in pick_set or companion in excluded:
+            if not companion or companion in picked_bases or companion in excluded:
                 continue
             if companion in by_filename:
                 expanded.append(companion)
-                pick_set.add(companion)
+                picked_bases.add(companion)
     return expanded
 
 

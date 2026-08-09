@@ -41,8 +41,29 @@ Nothing yet.
   falls back to the whole file, which is what happens today, so no prompt can
   come out with less context than before.
 
+  Two things that follow from that promise and are worth knowing, because both
+  are behaviour you would otherwise have to discover:
+
+  - **Everything above your file's first `##` heading rides along with every
+    section pick.** That is where your `**Last Updated:**` stamp, the
+    `**Purpose:**` line, `Boundaries — route elsewhere:` routing notes, and
+    cross-file instructions like `> **Load core-voice.md first.**` live. It is
+    added once per file, not once per section, and it is why "a pick never
+    carries less than the whole file would have" is true rather than
+    aspirational.
+  - **`##` lines inside fenced code blocks are not sections.** A markdown
+    example pasted into a memory file used to cut the surrounding section in
+    half and add a phantom section name to the catalog. Memory files are exactly
+    where markdown examples get pasted.
+
   Files under either threshold get no anchors. That is deliberate, not a
   failure: a 4 KB file is already about one section's worth of context.
+
+  **On upgrade, anchors appear on the next catalog refresh** — you do not have
+  to touch your memory files or pass `--force`. Regeneration is normally gated
+  on a file's content hash, which an upgrade does not change; a memory file that
+  is anchorable but has no anchors yet is regenerated once regardless, then
+  falls back to the hash gate like everything else.
 
 - **`memory_lint` reports duplicate `##` section names across your memory
   files.** Your memory `CLAUDE.md` has always asked for these to be unique
@@ -51,6 +72,16 @@ Nothing yet.
   renames nothing — which of the two should change is a judgement about what the
   memory means. Findings appear in the maintainer's lint report and in
   `/multiplai-context:health` under `memory_validity.duplicate_h2`.
+
+  A name repeated **within one file** is reported too, as `duplicate-h2-in-file`.
+  A `#Name` pick for it loads every occurrence, so the slice is bigger and
+  vaguer than the name suggests — retitling one is the fix.
+
+- **`router_timeout_seconds`** — how long the `llm` router waits before giving
+  up, previously fixed at 25s in the source. Worth knowing about because a
+  timeout injects **no** memory for that turn, and section anchors give each
+  routing call a longer catalog to read and a finer choice to make. If you see
+  `LLMRouter timed out` in the logs, this is the knob.
 
 ### Changed
 

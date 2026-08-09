@@ -105,14 +105,20 @@ DEADLINE_RE = re.compile(
 # Lines that are structure, not facts.
 _SKIP_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|```|\||-{3,}\s*$|\*\*Last Updated)")
 
-_FENCE_RE = re.compile(r"^\s*```")
+_FENCE_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
 
-# Same shape as ``lib/section_loader._H2_RE``, kept local so this file stays a
-# runnable standalone script (it is invoked as ``python lib/memory_lint.py``,
-# where a sibling ``lib.*`` import does not resolve). Divergence here costs a
-# missing or spurious *warning* — the generator path, where a mismatched name
-# would silently degrade routing forever, imports the canonical parser instead.
-_H2_RE = re.compile(r"^##\s+(.+?)\s*$")
+# Same shapes as ``lib/section_loader._FENCE_RE`` / ``_H2_LINE_RE``, kept local
+# so this file stays a runnable standalone script (it is invoked as
+# ``python lib/memory_lint.py``, where a sibling ``lib.*`` import does not
+# resolve).
+#
+# These must stay in step, and the earlier note here — that divergence "costs a
+# missing or spurious *warning*" — had it backwards: the ``duplicate-h2`` checks
+# report on the very collisions the anchor generator can manufacture, so a
+# linter that parsed sections differently from the loader would be structurally
+# blind to exactly the cases it exists to catch. Horizontal whitespace only,
+# matching the loader, so a bare "##" line is not an H2.
+_H2_RE = re.compile(r"^##[ \t]+(.+?)[ \t]*$")
 
 # How old an `(as of ...)` with no `review by` gets before it is reported. Twelve
 # months is chosen to be uncontroversial: it is long enough that nobody is
@@ -245,12 +251,19 @@ def _h2_positions(text: str) -> list[tuple[str, int]]:
     comment, not a section, and would produce findings nobody can act on.
     """
     out: list[tuple[str, int]] = []
-    in_fence = False
+    fence: str | None = None
     for lineno, line in enumerate(text.splitlines(), 1):
-        if _FENCE_RE.match(line):
-            in_fence = not in_fence
+        fence_match = _FENCE_RE.match(line)
+        if fence_match:
+            # The fence character has to match to close, so a ``` block
+            # containing a ~~~ line stays open — same rule as the loader.
+            token = fence_match.group(1)[0]
+            if fence is None:
+                fence = token
+            elif token == fence:
+                fence = None
             continue
-        if in_fence:
+        if fence is not None:
             continue
         m = _H2_RE.match(line)
         if m:
@@ -269,21 +282,35 @@ def find_duplicate_h2(texts: dict[Path, str]) -> list[Finding]:
     memory *means*, and this module's standing rule is that it never
     edits the corpus.
 
-    A name repeated *within* one file is not reported here — that is one
-    addressable section as far as ``extract_section`` is concerned (it
-    returns the first match), not a cross-file routing ambiguity.
+    A name repeated *within* one file is reported too, as its own
+    ``duplicate-h2-in-file`` kind. That case used to be excluded on the
+    grounds that ``extract_section`` returns the first match, so the repeat
+    was "one addressable section" — but that reasoning had the consequence
+    backwards. The first match ended at the *next* H2, which for a repeated
+    name is the second occurrence of that same name, so the second body was
+    unreachable by any pick while the model glossed the name having read the
+    whole file. ``extract_section`` now returns every occurrence
+    concatenated, which stops the content loss; a repeated H2 is still a
+    section boundary nobody can address precisely, and retitling is the fix.
     """
     by_name: dict[str, list[tuple[Path, int, str]]] = {}
+    findings: list[Finding] = []
     for path in sorted(texts):
         seen_in_file: set[str] = set()
         for header, lineno in _h2_positions(texts[path]):
             key = header.lower()
             if key in seen_in_file:
+                findings.append(Finding(
+                    path=path, lineno=lineno, kind="duplicate-h2-in-file",
+                    fact_class="section", line=f"## {header}",
+                    detail=f"'{header}' is an H2 more than once in this file — "
+                           f"a '#{header}' pick loads every occurrence, so the "
+                           f"slice is larger and vaguer than it looks; retitle "
+                           f"one of them"))
                 continue
             seen_in_file.add(key)
             by_name.setdefault(key, []).append((path, lineno, header))
 
-    findings: list[Finding] = []
     for key, occurrences in sorted(by_name.items()):
         if len(occurrences) < 2:
             continue

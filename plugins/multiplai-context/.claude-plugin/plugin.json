@@ -180,6 +180,12 @@
       "description": "Model used by the 'llm' memory_router. Defaults to Haiku \u2014 routing is a cheap classification, so the smallest/fastest model keeps the per-prompt hook latency tolerable. Ignored under 'token_overlap'.",
       "default": "claude-haiku-4-5"
     },
+    "router_timeout_seconds": {
+      "type": "number",
+      "title": "Router Timeout (llm strategy)",
+      "description": "Seconds the 'llm' memory_router waits before giving up. A timeout injects NO memory for that turn, so raise this if you see 'LLMRouter timed out' warnings \u2014 section anchors make each call read a longer catalog and choose more finely, which pushes some prompts over the default. Ignored under 'token_overlap'.",
+      "default": 25
+    },
     "recommend_cooldown_turns": {
       "type": "number",
       "title": "Re-recommendation Cooldown (Turns)",
