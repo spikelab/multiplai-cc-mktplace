@@ -89,7 +89,7 @@ def _run_extract(tmp_path, transcript, *, units, session_id="s1", fail=False):
         seen.append(chunk)
         if fail:
             raise RuntimeError("model exploded")
-        return units, {"state": "active", "reason": ""}
+        return units, {"state": "active", "reason": ""}, []
 
     stdin = json.dumps({
         "session_id": session_id,
@@ -99,7 +99,7 @@ def _run_extract(tmp_path, transcript, *, units, session_id="s1", fail=False):
     with patch.object(el, "get_paths", lambda: _Paths(tmp_path)), \
          patch.object(el, "load_target_charters", lambda *a, **k: []), \
          patch.object(el, "create_client", AsyncMock(return_value=object())), \
-         patch.object(el, "extract_units_and_disposition", _fake_extract), \
+         patch.object(el, "extract_session_signals", _fake_extract), \
          patch.object(el, "_refresh_now", AsyncMock(return_value=None)), \
          patch.object(el.sys, "stdin",
                       type("S", (), {"read": staticmethod(lambda: stdin)})):
