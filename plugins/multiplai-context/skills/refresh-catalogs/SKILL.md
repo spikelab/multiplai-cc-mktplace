@@ -5,7 +5,7 @@ description: "Manually regenerate catalog indexes with support for --force, --dr
 
 # Refresh Catalogs
 
-Manually regenerate catalog indexes for memory, diary, skills, and resources. This skill invokes the catalog dispatcher (`generate_catalogs` via `"${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"`) to rebuild catalog files used by the context manager for fast routing.
+Manually regenerate catalog indexes for memory, shared memory banks, diary, skills, and resources. This skill invokes the catalog dispatcher (`generate_catalogs` via `"${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"`) to rebuild catalog files used by the context manager for fast routing.
 
 ## Usage
 
@@ -15,7 +15,7 @@ By default (no arguments), all enabled catalogs are regenerated using state-awar
 
 - **`--force`** — Force regeneration of all enabled catalogs, bypassing state-aware skipping. Ignores content hash state and regenerates regardless of whether sources have changed. Pass `--force` flag through to the dispatcher.
 - **`--dry-run`** — Preview mode. Reports what catalogs would be regenerated or skipped without writing any files, modifying `.generation-state.json`, or making LLM calls. Dry-run output shows which generators would run and which would be skipped. No side effects.
-- **`--only <generators>`** — Selectively regenerate specific catalogs. Provide a comma-separated list of generator names: `memory`, `diary`, `skills`, `resources`. Example: `--only memory,diary` runs only those two generators. **`--only` is an explicit override: a generator named here runs even if its `enable_*` config flag is off** (e.g. `--only resources` rebuilds the resources catalog while `enable_resources` stays `false`, so you can keep a fresh index without turning on injection). The only hard requirement that still applies is `resources_dir` — `--only resources` no-ops if no resources directory is configured.
+- **`--only <generators>`** — Selectively regenerate specific catalogs. Provide a comma-separated list of generator names: `memory`, `banks`, `diary`, `skills`, `resources`. Example: `--only memory,diary` runs only those two generators. **`--only` is an explicit override: a generator named here runs even if its `enable_*` config flag is off** (e.g. `--only resources` rebuilds the resources catalog while `enable_resources` stays `false`, so you can keep a fresh index without turning on injection). The only hard requirement that still applies is `resources_dir` — `--only resources` no-ops if no resources directory is configured.
 
 ### Combinations
 

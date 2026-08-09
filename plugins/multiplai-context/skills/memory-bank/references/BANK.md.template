@@ -1,0 +1,57 @@
+# <bank name> — memory bank
+
+One-paragraph statement of what this bank is for and who it serves. A
+subscriber reads this to decide whether a fact belongs here or in their own
+memory.
+
+## Owners
+
+- <name / github handle> — <what they decide>
+- <name / github handle>
+
+## Domains this bank owns
+
+List the subjects this bank is **authoritative** for. A subscriber's personal
+memory should not also carry these — that is the duplication the whole design
+exists to remove, and `/memory-bank adopt` is how they migrate.
+
+- <e.g. DolceEngine deployment and rollback procedure>
+- <e.g. the team's API conventions>
+
+## Domains this bank does NOT own
+
+- <e.g. anyone's personal tooling preferences>
+- <e.g. anything about a specific customer>
+
+## No-go — never contribute these
+
+Machine-enforced. Every item is checked against this list before a pull request
+is opened, and any hit blocks the contribution. Keep the entries short and
+literal: this is a keyword check, not a comprehension check, and the pull
+request review is what catches everything it cannot.
+
+- salary
+- compensation
+- bonus
+- equity grant
+- medical
+- diagnosis
+- therapy
+- bank account
+- credit card
+- passport
+- home address
+- date of birth
+- password
+- api key
+- access token
+
+## Review rules
+
+How a contribution gets merged. State the minimum honestly — one approving
+review from an owner is a real rule; "we all read everything" is not.
+
+- One approving review from an owner.
+- A contribution that adds a standing rule (not a fact) needs two.
+- Regenerate and commit `catalog.json` in the same PR as any content change,
+  so every subscriber routes this bank identically.

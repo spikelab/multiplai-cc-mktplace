@@ -77,6 +77,7 @@ from lib.memory_write_floor import (
     floor_check,
     is_reserved_target,
     is_safe_target,
+    target_bank,
 )
 from lib.routing_validation import parse_proposal_entries
 
@@ -101,6 +102,7 @@ __all__ = [
     "render_receipt",
     "render_summary",
     "rubric_verdict",
+    "shared_bank_items",
     "write_mode",
 ]
 
@@ -241,6 +243,10 @@ def reconciled_pair(item, verdict) -> tuple[str, str, bool]:
 # appears under.
 REASON_LABELS = {
     # The code floor. These are refusals, never judgements about content.
+    "shared-bank-write": (
+        "belongs to a shared memory bank — it leaves as a pull request, never "
+        "as a local write"
+    ),
     "unsafe-target": "target filename is not a plain memory filename",
     "symlinked-target": "target is a symlink, so the write would land elsewhere",
     "escapes-memory-dir": "target resolves outside the memory directory",
@@ -358,9 +364,19 @@ class Triage:
 
 
 def _group(items) -> dict[str, list[Item]]:
+    """Group items by the memory **filename** they will be written to.
+
+    Keyed on the resolved filename, not the raw target. ``personal/dev.md`` is a
+    spelling the write floor deliberately accepts — a model shown bank-qualified
+    refs will sometimes qualify the personal one too — but keying on the raw
+    string sent the applier looking for ``<memory>/personal/dev.md``, which does
+    not exist, so the item was silently dropped after the floor had said yes.
+    Two spellings of one file also grouped as two files.
+    """
     out: dict[str, list[Item]] = {}
     for item in items:
-        out.setdefault(item.target, []).append(item)
+        _bank, filename = target_bank(item.target)
+        out.setdefault(filename or item.target, []).append(item)
     return out
 
 
@@ -627,6 +643,25 @@ def _decide(item: Item, verdict, *, mode: str) -> tuple[str, list[str], str]:
     if refusal:
         return "review", reasons, judge_reason
     return "apply", [], judge_reason
+
+
+def shared_bank_items(triage: Triage) -> tuple[Item, ...]:
+    """Items the floor refused because they target a shared bank.
+
+    These are not rejections. They are the items that should leave as a pull
+    request on the bank (``lib/bank_proposals``), and they are read off the
+    same partition every other outcome is read off — so an item can be
+    *either* applied locally *or* proposed to a bank, never both, and never
+    neither by accident.
+
+    Read from ``review`` only. The floor puts a refused item there, whereas
+    ``dropped`` means the judge said something about the *content* — and a
+    dropped item must not become a pull request on somebody else's repo just
+    because it also happened to be bank-bound.
+    """
+    return tuple(
+        item for item in triage.review if "shared-bank-write" in item.reasons
+    )
 
 
 def auto_slice(items: list[Item]) -> str:

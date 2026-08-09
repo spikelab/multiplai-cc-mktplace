@@ -861,6 +861,105 @@ _PROPOSAL_SYSTEM = (
 )
 
 
+_BANK_ROUTING_RULES = (
+    "### Shared memory banks — routing rules\n"
+    "The files listed below live in a SHARED bank: a git repository other "
+    "people also read and write. Three rules, in order:\n"
+    "1. **Bias personal.** Route an entry to a shared bank ONLY when that "
+    "bank's declared domains actually own the subject. When in doubt, or when "
+    "a personal file also fits, choose the personal file.\n"
+    "2. **Never route anything personal there.** No names, no compensation, "
+    "no health, no finances, no household detail, no credential, nothing "
+    "about a specific individual. A shared bank is read by people who are not "
+    "the user.\n"
+    "3. **A shared-bank entry is a contribution, not a write.** It becomes a "
+    "pull request the bank's owners review. Write it so a stranger on that "
+    "team can act on it without the surrounding session.\n"
+    "Target a bank file by its full reference, e.g. "
+    "``## Updates for `teamname/dev.md` ``.\n"
+)
+
+
+def _bank_memory_context() -> str:
+    """The shared-bank half of the routing block, fenced as untrusted.
+
+    Only **headers and catalog metadata** are included — never file bodies.
+    Two reasons, both load-bearing: a bank can be large and this block is
+    repeated in every chunk of a run, and every byte of it is text somebody
+    else wrote. What is here is enough to route to a file and a section, which
+    is all this block is for.
+
+    The fence is required by ``docs/untrusted-content.md`` and by the threat
+    this whole feature introduces: a bank is a repo whose contents arrive on a
+    schedule, so a section header is an attacker-authored string reaching a
+    prompt. The drafter has no tools, and the write floor refuses a shared
+    target regardless of what the drafter decides — the fence is the first of
+    those three layers, not the only one.
+    """
+    from multiplai_core.untrusted import fence, markdown_notice
+
+    from lib.banks import shared_banks
+
+    banks = shared_banks()
+    if not banks:
+        return ""
+    catalog = _load_bank_catalog(get_paths().catalogs_dir())
+    body: list[str] = []
+    for bank in banks:
+        if not bank.path.exists():
+            continue
+        for path in sorted(bank.path.glob("*.md")):
+            if path.name.lower() in ("bank.md", "readme.md"):
+                continue
+            ref = bank.ref(path.name)
+            meta = catalog.get(ref, {})
+            lines = [f"### {ref}", f"SHARED BANK: {bank.name} (mode {bank.mode})"]
+            if meta.get("summary"):
+                lines.append(f"PURPOSE: {meta['summary']}")
+            if meta.get("intent_domains"):
+                lines.append("OWNS DOMAINS: " + "; ".join(meta["intent_domains"]))
+            if meta.get("anti_domains"):
+                lines.append("NOT HERE: " + "; ".join(meta["anti_domains"]))
+            try:
+                lines.append(f"SECTIONS:\n{_extract_headers(path.read_text())}")
+            except (OSError, UnicodeDecodeError):
+                continue
+            body.append("\n".join(lines))
+    if not body:
+        return ""
+    fenced = fence("\n\n".join(body), "shared memory banks — written by other people")
+    notice = markdown_notice(
+        "file names, section headers and catalog summaries copied out of shared "
+        "memory banks",
+        "A shared memory bank",
+        injection_marker=True,
+    )
+    return "\n".join([_BANK_ROUTING_RULES, notice, *fenced])
+
+
+def _load_bank_catalog(catalogs_dir: Path) -> dict[str, dict]:
+    """``{bank/file.md: {summary, intent_domains, anti_domains}}`` from banks.json."""
+    import json
+
+    catalog_file = catalogs_dir / "banks.json"
+    if not catalog_file.exists():
+        return {}
+    try:
+        data = json.loads(catalog_file.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+    out: dict[str, dict] = {}
+    for entry in data.get("entries", []) or []:
+        src = entry.get("source")
+        if src:
+            out[src] = {
+                "summary": entry.get("summary", ""),
+                "intent_domains": entry.get("intent_domains", []),
+                "anti_domains": entry.get("anti_domains", []),
+            }
+    return out
+
+
 def _memory_context(memory_contents: dict[str, str]) -> str:
     """Render the memory-domain block the drafting and critic passes both see.
 
@@ -868,6 +967,11 @@ def _memory_context(memory_contents: dict[str, str]) -> str:
     routing; the headers only pick the section WITHIN the chosen file. This block
     is byte-identical across every chunk of a run, so the shared prompt prefix
     stays cacheable — do not vary it per chunk.
+
+    Shared-bank files are appended after the personal ones, fenced (see
+    :func:`_bank_memory_context`). With no banks configured that call returns
+    an empty string and this block is byte-for-byte what it was before banks
+    existed — which also means no cache invalidation for anyone who has none.
     """
     catalog = _load_memory_catalog(get_paths().catalogs_dir())
     blocks = []
@@ -882,6 +986,9 @@ def _memory_context(memory_contents: dict[str, str]) -> str:
             lines.append("NOT HERE: " + "; ".join(meta["anti_domains"]))
         lines.append(f"SECTIONS:\n{_extract_headers(content)}")
         blocks.append("\n".join(lines))
+    banks_block = _bank_memory_context()
+    if banks_block:
+        blocks.append(banks_block)
     return "\n\n".join(blocks)
 
 

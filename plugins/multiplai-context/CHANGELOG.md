@@ -18,6 +18,96 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+<!-- MERGE ORDER: this entry is 0.38.0 and 0.37.0 belongs to the memory-doctor
+     branch, which is a SIBLING of this one rather than an ancestor. Both branch
+     off 0.36.0, so this file has no 0.37.0 section until the doctor branch lands.
+     Merge the doctor first and the history is continuous; merge this one first
+     and `main` ships with 0.37.0 missing. `check_changelog.py` cannot catch it —
+     it tests `old != new`, which is inequality only (and would also pass a
+     downgrade). Re-numbering this to 0.39.0 does not help: it moves the hole to
+     0.38.0 and makes it permanent. -->
+## [0.38.0] - 2026-08-09
+
+### Added
+
+- **Shared memory banks.** A *bank* is a git repository of memory files. Point
+  the plugin at one and its files route and inject exactly like your own — the
+  router picks a team file over a personal one on relevance alone, because
+  relevance is relevance. You declare banks in `memory-banks.yaml` at your
+  workspace's `.multiplai/` root:
+
+  ```yaml
+  memory_banks:
+    - name: dolcebot-team
+      remote: git@github.com:you/memory-bank.git
+      mode: propose        # ro = read only · propose = contribute by PR
+      sync: session-start
+  ```
+
+  **If you configure nothing, nothing changes.** No file, no banks, and every
+  path behaves exactly as it did in 0.36.0.
+
+- **You can always tell whose note you are reading.** Content from a shared
+  bank is injected under a heading naming the bank and its last-updated date,
+  and its body sits inside an `<untrusted-content>` fence. That fence is the
+  point, not decoration: a bank is memory *other people write*, arriving over
+  the network on a schedule, so it is reference material about how your team
+  works — never a standing instruction to your agent. If a bank contradicts
+  your own memory, Claude is told to say so rather than pick a side quietly.
+
+- **Contributions leave as a pull request, never as a write.** In every write
+  mode, including `auto`. An item the dream pipeline routes to a shared bank is
+  refused a local write by the same code floor that refuses path traversal, and
+  shows up in your review pile labelled *"belongs to a shared memory bank"*.
+  Turning it into a PR is a separate, explicit command:
+
+  ```
+  memory_bank.py contribute --proposal <dream proposal> --apply
+  ```
+
+  No model is involved in producing the contribution — the text in the pull
+  request is the text you read in the proposal, byte for byte.
+
+- **`BANK.md` and a leak check.** Each bank declares its owners, its review
+  rules, and its **no-go domains** (compensation, health, finances, credentials
+  — a sensible default list applies when a bank declares none). Anything
+  naming a no-go domain, or containing something shaped like an API key or
+  token, is blocked before a PR is opened and stays in your review pile. A
+  blocked item is not rejected memory; it is refused *sharing*.
+
+- **`/memory-bank` — list, sync, check, contribute, adopt.** `list` shows every
+  bank and its state; `sync` fast-forwards them (also run automatically and
+  detached at session start, TTL-gated — a bank you cannot reach is *stale*,
+  never a session-start error); `check` reports cross-bank collisions.
+
+- **`adopt` — the migration that stops you injecting the same fact twice.** The
+  rule banks are built on is that a fact lives in **exactly one** bank, so
+  joining one means moving your overlapping content into it and deleting your
+  local copy. `adopt` shows you which of your files the bank overlaps and why,
+  then deletes only files you name one by one — there is no adopt-everything.
+  **Nothing is deleted that is not already in the bank, line for line**: if the
+  contribution PR has not merged and pulled yet, the file is skipped and the
+  missing lines are named. Every adoption writes a receipt carrying the exact
+  `git revert` that undoes it.
+
+- **Cross-bank collision reports.** When two banks claim the same filename, the
+  same routing domains, or the same section heading, catalog generation says
+  so — in `bank-collisions.md` beside the catalogs — instead of letting both
+  copies reach a prompt. It reports; it never silently resolves.
+
+### Changed
+
+- **Two new settings:** `memory_banks_file` (where your bank declarations live,
+  if not the default) and `bank_sync_ttl_hours` (how often session start
+  fast-forwards a bank; default 6).
+
+- **Your workspace is found without the launcher telling it.** If neither
+  `workspace_dir` nor `WORKSPACE` is set, the plugin now walks up from the
+  project directory to the nearest `.multiplai/` folder. Previously that case
+  fell through to `~/.multiplai` and quietly wrote your memory outside the
+  workspace it was plainly sitting in. Explicit settings still win, so nothing
+  that works today changes. **Requires `multiplai-core` ≥ 0.14.0.**
+
 ## [0.37.0] - 2026-08-08
 
 ### Added

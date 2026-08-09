@@ -116,6 +116,29 @@ uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/
   hand. If the same kind of item keeps being dropped wrongly, that is a rubric
   or prompt bug worth reporting, not something to work around item by item.
 
+### Where shared-bank items go
+
+An item whose target names a **shared memory bank** (`teamname/dev.md`) is
+refused a local write by the floor, in **every mode including `auto`**, and
+appears under *"belongs to a shared memory bank — it leaves as a pull request,
+never as a local write"*. That is not a rejection of the content: it is the one
+item type that goes out rather than in.
+
+Turning those into a pull request is a separate, explicit command — the dream
+pipeline never does it:
+
+```bash
+uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/memory_bank.py" \
+  contribute --proposal <this proposal> --apply
+```
+
+Show the user the dry-run first (drop `--apply`). No model produces the
+contribution — the pull request contains the proposal's own text, byte for
+byte — and every item is checked against the bank's `BANK.md` no-go domains and
+scanned for credential shapes before the PR opens. See the `memory-bank` skill
+for the full flow, including `adopt`.
+
 ### Modes
 
 Set by the `memory_write_mode` plugin option:
