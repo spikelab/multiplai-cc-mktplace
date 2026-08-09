@@ -311,8 +311,25 @@ class TestLedgerCompatibility:
             "processed": {legacy_block_key(b.text): {"file": b.file} for b in blocks},
         }
         assert taxonomy_migrate(ledger, blocks) == len(blocks)
-        assert set(ledger["processed"]) == {b.key for b in blocks}
+        assert {b.key for b in blocks} <= set(ledger["processed"])
         assert ledger["version"] == LEDGER_VERSION
+        # The legacy key stays as an alias — see TestMigrationKeepsLegacyAliases
+        # for the staged-draft loss that popping it caused.
+        assert {legacy_block_key(b.text) for b in blocks} <= set(ledger["processed"])
+
+    def test_the_alias_and_the_new_key_share_one_entry(self):
+        """So `prune` removes both together and neither can go stale."""
+        blocks = parse_blocks("2026-08-06.md", LEGACY_LEARNINGS)
+        ledger = {
+            "version": 1,
+            "processed": {legacy_block_key(b.text): {"file": b.file} for b in blocks},
+        }
+        taxonomy_migrate(ledger, blocks)
+        for b in blocks:
+            assert (
+                ledger["processed"][b.key]
+                is ledger["processed"][legacy_block_key(b.text)]
+            )
 
     def test_migration_is_idempotent(self):
         blocks = parse_blocks("2026-08-06.md", LEGACY_LEARNINGS)
@@ -376,6 +393,255 @@ class TestLedgerCompatibility:
             line + "   " for line in LEGACY_LEARNINGS.splitlines()
         )
         assert block_key(LEGACY_LEARNINGS) == block_key(trailing_space)
+
+
+class TestMigrationKeepsLegacyAliases:
+    """Requirement: a crashed run straddling the upgrade loses nothing.
+
+    Staged-draft sidecars store **raw key strings** — a pre-upgrade run wrote
+    ``[b.key for b in chunk.blocks]``, which under a v1 ledger are legacy keys —
+    and ``dream._resume_staged_drafts`` tests raw membership rather than going
+    through ``lookup``. Popping the legacy key made that test fail, which
+    deleted the staged draft *while* ``unprocessed`` correctly still saw the
+    record as consumed. The drafted content was destroyed and the learning
+    stayed marked consolidated forever: precisely the "silent learning loss"
+    ``_enforce_ledger_coverage`` exists to prevent, and the same
+    crash-then-resume worked before version 2.
+    """
+
+    def _v1_ledger(self, blocks):
+        return {
+            "version": 1,
+            "processed": {
+                legacy_block_key(b.text): {"file": b.file, "proposal": "old.md"}
+                for b in blocks
+            },
+        }
+
+    def test_a_staged_draft_written_under_v1_keys_survives(self):
+        blocks = parse_blocks("2026-08-06.md", LEGACY_LEARNINGS)
+        ledger = self._v1_ledger(blocks)
+        # What the crashed pre-upgrade run persisted beside its draft: `b.key`
+        # as that version computed it, which is the raw-text hash.
+        staged_keys = [legacy_block_key(b.text) for b in blocks]
+
+        taxonomy_migrate(ledger, blocks)
+
+        processed = ledger["processed"]
+        # The exact membership test _resume_staged_drafts performs. False here
+        # means it unlinks the draft and its sidecar.
+        assert all(k in processed for k in staged_keys)
+
+    def test_the_record_is_still_consumed_under_the_new_key(self):
+        """Both halves have to hold, or the fix just moves the loss."""
+        blocks = parse_blocks("2026-08-06.md", LEGACY_LEARNINGS)
+        ledger = self._v1_ledger(blocks)
+        taxonomy_migrate(ledger, blocks)
+        assert unprocessed(blocks, ledger) == []
+
+    def test_prune_removes_the_alias_too(self, tmp_path):
+        """The alias must not outlive the record it aliases."""
+        import json
+
+        from lib.learnings_ledger import prune
+
+        blocks = parse_blocks("2026-08-06.md", LEGACY_LEARNINGS)
+        ledger = self._v1_ledger(blocks)
+        taxonomy_migrate(ledger, blocks)
+        path = tmp_path / "ledger.json"
+        path.write_text(json.dumps(ledger))
+
+        removed = prune(path, set())
+        assert removed == 2 * len(blocks)
+        assert load_json(path)["processed"] == {}
+
+    def test_migration_is_still_idempotent_with_aliases_present(self):
+        blocks = parse_blocks("2026-08-06.md", LEGACY_LEARNINGS)
+        ledger = self._v1_ledger(blocks)
+        assert taxonomy_migrate(ledger, blocks) == len(blocks)
+        assert taxonomy_migrate(ledger, blocks) == 0
+        before = dict(ledger["processed"])
+        taxonomy_migrate(ledger, blocks)
+        assert ledger["processed"] == before
+
+
+class TestLookup:
+    """New public function, one production call site, previously no test."""
+
+    def test_finds_an_entry_under_the_new_key(self):
+        from lib.learnings_ledger import lookup
+
+        [block] = parse_blocks("2026-08-06.md", LEGACY_LEARNINGS)[:1]
+        entry = {"file": block.file, "proposal": "p.md"}
+        assert lookup({block.key: entry}, block) is entry
+
+    def test_finds_an_entry_under_the_legacy_key(self):
+        """A ledger that has not migrated must not read as 'never consolidated'."""
+        from lib.learnings_ledger import lookup
+
+        [block] = parse_blocks("2026-08-06.md", LEGACY_LEARNINGS)[:1]
+        entry = {"file": block.file, "proposal": "p.md"}
+        assert lookup({legacy_block_key(block.text): entry}, block) is entry
+
+    def test_returns_none_when_absent(self):
+        from lib.learnings_ledger import lookup
+
+        [block] = parse_blocks("2026-08-06.md", LEGACY_LEARNINGS)[:1]
+        assert lookup({}, block) is None
+
+    def test_a_mixed_ledger_resolves_every_record(self):
+        """Some v1, some v2, one whose file is gone — all through one read."""
+        from lib.learnings_ledger import lookup
+
+        blocks = parse_blocks("2026-08-06.md", LEGACY_LEARNINGS)
+        processed = {"deadbeefdeadbeef": {"file": "gone.md"}}
+        for i, b in enumerate(blocks):
+            key = b.key if i % 2 == 0 else legacy_block_key(b.text)
+            processed[key] = {"file": b.file, "proposal": f"p{i}.md"}
+        for b in blocks:
+            assert lookup(processed, b) is not None
+        assert unprocessed(blocks, {"processed": processed}) == []
+
+
+def load_json(path):
+    import json
+
+    return json.loads(path.read_text())
+
+
+class TestProjectionCollisions:
+    """Requirement: two different learnings never share a key.
+
+    The optional legacy-type word was stripped after *both* regex arms, so a
+    new-form learning whose description happened to begin with one of six caps
+    words projected to the same string as the same learning without it — and the
+    second was silently treated as already consolidated.
+    """
+
+    @pytest.mark.parametrize(
+        "word",
+        ["OBSERVATION", "PREFERENCE", "CORRECTION", "PATTERN", "INTENTION"],
+    )
+    def test_a_description_opening_with_a_legacy_type_word_keeps_its_own_key(self, word):
+        with_word = (
+            "---\n## Session Learnings — 2026-08-06T10:00:00Z\n"
+            f"- **[EMPIRICAL/FACT]** {word} about the router. → Target: dev.md\n"
+        )
+        without = (
+            "---\n## Session Learnings — 2026-08-06T10:00:00Z\n"
+            "- **[EMPIRICAL/FACT]** about the router. → Target: dev.md\n"
+        )
+        assert block_key(with_word) != block_key(without)
+
+    def test_the_legacy_arm_still_strips_its_type_word(self):
+        """The strip is what makes the two renderings of one learning agree."""
+        legacy = (
+            "---\n## Session Learnings — 2026-08-06T10:00:00Z\n"
+            "- **[trust: verified]** CORRECTION the cache is per-session. "
+            "→ Target: dev.md — fix\n"
+        )
+        taxonomy_form = (
+            "---\n## Session Learnings — 2026-08-06T10:00:00Z\n"
+            "- **[CORRECTION/FACT]** the cache is per-session. "
+            "→ Target: dev.md — fix\n"
+        )
+        assert block_key(legacy) == block_key(taxonomy_form)
+
+
+class TestRenderInvarianceIsDrivenByTheRenderer:
+    """The PR's core invariant, asserted against the real writer.
+
+    Every other test in this file uses hand-written string fixtures, so an edit
+    to ``_format_learning_entry`` could break render-invariance without failing
+    anything.
+    """
+
+    @pytest.mark.parametrize(
+        "legacy_type,provenance,kind",
+        [
+            ("CORRECTION", "CORRECTION", "FACT"),
+            ("PREFERENCE", "DECLARATION", "FACT"),
+            ("INTENTION", "DECLARATION", "INTENTION"),
+            ("OBSERVATION", "INFERENCE", "FACT"),
+            ("RULE-PROPOSAL", None, "RULE"),
+        ],
+    )
+    def test_both_renderings_of_one_learning_hash_alike(
+        self, legacy_type, provenance, kind
+    ):
+        desc = "the router caches picks per session"
+        legacy = _format_learning_entry({
+            "trust": "verified", "type": legacy_type, "description": desc,
+            "target": "dev.md", "action": "note it",
+        })
+        new = _format_learning_entry({
+            "provenance": provenance, "kind": kind, "description": desc,
+            "target": "dev.md", "action": "note it",
+        })
+        wrap = "---\n## Session Learnings — 2026-08-06T10:00:00Z\n{}\n"
+        assert block_key(wrap.format(legacy)) == block_key(wrap.format(new))
+
+
+class TestRankingsHaveOneHome:
+    """Requirement: the ordering is not written down twice.
+
+    ``taxonomy`` used to say ranking "belongs to whatever makes that decision",
+    and then the drafting prompt shipped exactly this ordering as prose while a
+    downstream rubric was about to encode it in code. Two sources of truth that
+    can silently disagree is the failure this guards.
+    """
+
+    def test_both_rankings_cover_their_whole_value_set(self):
+        assert set(taxonomy.PROVENANCE_STRENGTH) == set(taxonomy.PROVENANCES)
+        assert set(taxonomy.KIND_BREADTH) == set(taxonomy.KINDS)
+
+    def test_weakest_and_broadest_win_a_merge(self):
+        assert taxonomy.weakest_provenance(["CORRECTION", "INFERENCE"]) == "INFERENCE"
+        assert taxonomy.weakest_provenance(["EMPIRICAL", "DECLARATION"]) == "EMPIRICAL"
+        assert taxonomy.broadest_kind(["FACT", "RULE"]) == "RULE"
+        assert taxonomy.broadest_kind(["FACT", "DECISION"]) == "DECISION"
+
+    def test_they_are_total_on_junk(self):
+        assert taxonomy.weakest_provenance([]) is None
+        assert taxonomy.weakest_provenance([None, "", "NOPE"]) is None
+        assert taxonomy.broadest_kind(["NOPE"]) is None
+
+    def test_the_drafting_prompt_renders_them_rather_than_restating_them(self):
+        import dream
+
+        prompt = dream._PROPOSAL_SYSTEM
+        assert "@PROVENANCE_STRENGTH@" not in prompt
+        assert "@KIND_BREADTH@" not in prompt
+        assert taxonomy.render_ranking(taxonomy.PROVENANCE_STRENGTH) in prompt
+        assert taxonomy.render_ranking(taxonomy.KIND_BREADTH) in prompt
+
+
+class TestParsePairKeepsBothHalves:
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            ("CORRECTION/RULE", ("CORRECTION", "RULE")),
+            ("CORRECTION/RULE extra words", ("CORRECTION", "RULE")),
+            ("CORRECTION/RULE (from the earlier session)", ("CORRECTION", "RULE")),
+            (" EMPIRICAL / FACT ", ("EMPIRICAL", "FACT")),
+            ("?/RULE", (None, "RULE")),
+            ("EMPIRICAL/?", ("EMPIRICAL", None)),
+            ("EMPIRICAL", ("EMPIRICAL", None)),
+            ("junk", (None, None)),
+            ("", (None, None)),
+            (None, (None, None)),
+        ],
+    )
+    def test_a_trailing_parenthetical_does_not_eat_the_kind(self, text, expected):
+        """The drafter is a model writing free text; a parenthetical is likely,
+        and the half it silently lost is the one carrying blast radius."""
+        assert taxonomy.parse_pair(text) == expected
+
+    def test_it_round_trips_format_pair(self):
+        for provenance in taxonomy.PROVENANCES:
+            for kind in taxonomy.KINDS:
+                rendered = taxonomy.format_pair(provenance, kind)
+                assert taxonomy.parse_pair(rendered) == (provenance, kind)
 
 
 # ---------------------------------------------------------------------------

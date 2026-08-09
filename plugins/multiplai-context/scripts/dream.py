@@ -53,7 +53,7 @@ from multiplai_core.config import load_yaml, save_yaml
 from multiplai_core.log_utils import setup_logging
 from generators.config import load_catalog_config
 from generators.dispatcher import generate_catalogs
-from lib import citation_repair, learnings_ledger
+from lib import citation_repair, learnings_ledger, taxonomy
 from lib.dream_processed import (
     PROCESSED_HEADING,
     Decision,
@@ -813,10 +813,9 @@ routing knowledge is in those blocks — apply these generic principles to them:
   `INTENTION` → `DECLARATION/INTENTION`, `RULE-PROPOSAL` → `?/RULE`,
   `OBSERVATION` and `PATTERN` → `INFERENCE/FACT`. Write `?` for a half you genuinely
   cannot read off the source — never guess one. When an entry merges learnings that
-  disagree, state the WEAKEST provenance (weakest to strongest: `INFERENCE`, `RESEARCH`,
-  `EMPIRICAL`, `DECLARATION`, `CORRECTION`) and the BROADEST kind (broadest to narrowest:
-  `RULE`, `INTENTION`, `DECISION`, `FACT`). Nothing acts on this line yet — it is
-  recorded so the pair stays traceable back to the session it came from.
+  disagree, state the WEAKEST provenance (weakest to strongest: @PROVENANCE_STRENGTH@)
+  and the BROADEST kind (broadest to narrowest: @KIND_BREADTH@). Nothing acts on this
+  line yet — it is recorded so the pair stays traceable back to the session it came from.
 - Each entry ends with a **Source:** line for provenance: the learnings filename and the
   line number(s) it was distilled from, so the origin is traceable on re-processing. The
   pending learnings are shown with `N: ` line-number prefixes — cite those exact numbers.
@@ -849,6 +848,16 @@ routing knowledge is in those blocks — apply these generic principles to them:
 - Keep proposed text concise — one-line bullets over paragraphs. Memory costs tokens.
 - Never invent changes not supported by the learnings.
 """
+
+# The two rankings are substituted rather than written out, so this prompt
+# cannot teach an ordering the code has moved on from. A sentinel rather than
+# str.format: the prompt is full of literal `{N}`-style placeholders the model
+# is meant to see.
+_PROPOSAL_SYSTEM = (
+    _PROPOSAL_SYSTEM
+    .replace("@PROVENANCE_STRENGTH@", taxonomy.render_ranking(taxonomy.PROVENANCE_STRENGTH))
+    .replace("@KIND_BREADTH@", taxonomy.render_ranking(taxonomy.KIND_BREADTH))
+)
 
 
 def _memory_context(memory_contents: dict[str, str]) -> str:
@@ -1522,14 +1531,19 @@ def _plan_run(
     blocks, files = _collect_blocks(learnings_dir)
     ledger_path = learnings_ledger.default_ledger_path()
     ledger = learnings_ledger.load(ledger_path)
+    stale_version = ledger.get("version") != learnings_ledger.LEDGER_VERSION
     moved = learnings_ledger.migrate(ledger, blocks)
     if moved:
         logger.info(
             "Migrated %d ledger key(s) to the format-invariant scheme%s",
             moved, "" if persist_migration else " (in memory — no lock held)",
         )
-        if persist_migration:
-            learnings_ledger.save(ledger_path, ledger)
+    # Persist on a version bump even when nothing moved. A v1 ledger holding no
+    # legacy records is already in the v2 scheme, but it kept `"version": 1` on
+    # disk forever — so the file could not answer "has this been migrated?",
+    # which is the first thing the next migration will need to ask.
+    if persist_migration and (moved or stale_version):
+        learnings_ledger.save(ledger_path, ledger)
     pending = learnings_ledger.unprocessed(blocks, ledger)
     throughput = dream_chunking.resolve_throughput(_calibrated_throughput())
     chunks = dream_chunking.plan_chunks(pending, timeout_s=CHUNK_TIMEOUT_S,

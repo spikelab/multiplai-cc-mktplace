@@ -49,8 +49,13 @@ from lib.taxonomy import normalize_kind, normalize_provenance
 # long as the pending backlog lives. A parser that knew only the old form would
 # not fail loudly — it would quietly stop seeing every new learning, which is
 # the worst available outcome for a detector whose whole job is noticing.
+# `[A-Z?-]+`, not `[A-Z?]+`: a hyphen in either half (`RULE-PROPOSAL/FACT`)
+# matched neither arm, so the line was dropped from the scan entirely rather
+# than parsed and judged. `learnings_ledger._LEARNING_MARKER_RE` already
+# accepted hyphens, and two parsers disagreeing about what a learning *is* is
+# how a detector goes quiet without failing.
 _MARKER = (
-    r"(?:\[(?P<provenance>[A-Z?]+)/(?P<kind>[A-Z?]+)\]\*\*\s+"
+    r"(?:\[(?P<provenance>[A-Z?][A-Z?-]*)/(?P<kind>[A-Z?][A-Z?-]*)\]\*\*\s+"
     r"|\[trust:\s*(?P<trust>\w+)\]\*\*\s+(?P<type>[A-Z-]+)\s+)"
 )
 LEARNING_LINE_RE = re.compile(
@@ -82,6 +87,13 @@ MIN_CONTENT_WORDS = 4
 # Structure, not facts.
 _SKIP_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|```|\||-{3,}\s*$|\*\*Last Updated)")
 
+#: Provenances that count as "the world was observed to be otherwise", and so
+#: may put an existing memory line up for supersession. The two-axis equivalent
+#: of the legacy `CORRECTION or trust: verified` rule — see
+#: :attr:`Learning.is_conflict_candidate` for why ``EMPIRICAL`` belongs here and
+#: ``RESEARCH`` does not.
+CONFLICT_PROVENANCES = frozenset({"CORRECTION", "EMPIRICAL"})
+
 
 @dataclass(frozen=True)
 class Learning:
@@ -95,21 +107,27 @@ class Learning:
 
     @property
     def is_conflict_candidate(self) -> bool:
-        """CORRECTIONs always; other types only when independently verified.
+        """CORRECTIONs always; other provenances only when directly observed.
 
-        A `trust: medium` OBSERVATION that happens to touch an existing line is
-        not evidence the line is wrong — it's an inference. Superseding on that
-        basis would let a weak guess overwrite a confirmed fact.
+        A weak inference that happens to touch an existing line is not evidence
+        the line is wrong. Superseding on that basis would let a guess overwrite
+        a confirmed fact.
 
-        A record written under the two-axis taxonomy carries no `trust` on its
-        line, so only the first arm applies to it: `provenance: CORRECTION`.
-        That is strictly narrower than the legacy rule, which is the safe
-        direction — this detector only ever *surfaces* a candidate for a human,
-        and reading the confidence half of the pair as a verification claim
-        would be inventing a policy that belongs downstream.
+        Under the legacy vocabulary the rule was `CORRECTION` **or**
+        `trust: verified`. The two-axis mapping of "verified" is
+        :data:`CONFLICT_PROVENANCES` — ``CORRECTION`` and ``EMPIRICAL`` — not
+        ``CORRECTION`` alone. Narrowing to ``CORRECTION`` looks like the safe
+        direction and is not: the extractor returns ``EMPIRICAL`` for roughly
+        five records in six, so `## Conflict Resolutions` would have gone from
+        firing on most verified learnings to firing on corrections only. This
+        detector exists to catch a stale memory line contradicted by a
+        *confirmed* fact, and ``EMPIRICAL`` — something observed in this
+        session — is the strongest evidence class the new vocabulary has.
+        ``RESEARCH``, ``DECLARATION`` and ``INFERENCE`` stay out: read
+        somewhere, asserted, or reasoned to, none of them observed here.
         """
         if self.provenance:
-            return self.provenance == "CORRECTION"
+            return self.provenance in CONFLICT_PROVENANCES
         return self.type == "CORRECTION" or self.trust == "verified"
 
     @property

@@ -62,11 +62,19 @@ _SEPARATOR_RE = re.compile(r"^-{3,}\s*$")
 # Both are stripped for hashing. What identifies a learning is what it SAYS —
 # its description, target and action — not how it was labelled, so relabelling
 # the same knowledge must not present it to the reviewer a second time.
+# The legacy type word is stripped only after the `trust:` arm, because it only
+# ever followed that arm. Applying it after both meant a *new*-form learning
+# whose description happened to begin with one of those six caps words —
+# "**[EMPIRICAL/FACT]** OBSERVATION about the router." — projected to the same
+# string as the same learning without it, so the two hashed identically and the
+# second was silently treated as already consolidated.
 _LEARNING_MARKER_RE = re.compile(
-    r"^(?P<bullet>-\s+)\*\*\["
-    r"(?:[A-Z?]+/[A-Z?]+|trust:\s*\w+)"
-    r"\]\*\*\s+"
+    r"^(?P<bullet>-\s+)\*\*\[(?:"
+    r"[A-Z?][A-Z?-]*/[A-Z?][A-Z?-]*\]\*\*\s+"
+    r"|"
+    r"trust:\s*\w+\]\*\*\s+"
     r"(?:(?:OBSERVATION|PREFERENCE|CORRECTION|PATTERN|RULE-PROPOSAL|INTENTION)\s+)?"
+    r")"
 )
 
 # 64 bits of key. The corpus is thousands of records, not billions, and a key
@@ -270,6 +278,21 @@ def migrate(ledger: dict, blocks: list[Block]) -> int:
 
     Idempotent, and safe to run against an already-migrated ledger: a block
     whose projection key is present is left alone.
+
+    **The legacy key is left in place as an alias, not popped.** Every
+    ``Block``-keyed read goes through :func:`lookup` and would be fine either
+    way, but staged-draft sidecars store *raw key strings* — a crashed run
+    wrote ``[b.key for b in chunk.blocks]``, which under a v1 ledger are legacy
+    keys — and ``dream._resume_staged_drafts`` tests raw membership. Popping
+    the legacy key made that test fail after an upgrade, which **deleted the
+    staged draft** while ``unprocessed`` correctly still saw the record as
+    consumed: the drafted content was destroyed and the learning stayed marked
+    consolidated forever. That is precisely the "silent learning loss" the
+    ledger-coverage check exists to prevent, and the same crash-then-resume
+    worked before version 2. :func:`prune` removes both keys when the record
+    leaves disk, so the alias costs one ledger line until then, and
+    ``unprocessed``'s docstring already promised this ("Old keys are left in
+    place rather than rewritten") — it was ``migrate`` that contradicted it.
     """
     processed = ledger.get("processed")
     if not isinstance(processed, dict):
@@ -280,7 +303,7 @@ def migrate(ledger: dict, blocks: list[Block]) -> int:
             continue
         if b.key in processed or b.legacy_key not in processed:
             continue
-        processed[b.key] = processed.pop(b.legacy_key)
+        processed[b.key] = processed[b.legacy_key]
         moved += 1
     ledger["version"] = LEDGER_VERSION
     return moved

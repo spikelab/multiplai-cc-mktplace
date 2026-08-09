@@ -77,8 +77,29 @@ Nothing yet.
   converted in place on the first run after the upgrade. Nothing you have
   already reviewed comes back.
 
-- **Nothing acts on the new labels yet.** Routing, injection and dream's own
-  triage behave exactly as before. This release only records the information.
+  Two details of that conversion, both of which cost a learning when they were
+  wrong. The old key is kept as an alias rather than replaced, because a run
+  that crashed mid-draft records raw key strings beside its staged draft — if
+  those stop resolving, the draft is discarded *and* the learning stays marked
+  consolidated, so its content is gone with nothing to show for it. And a
+  learning whose description happens to begin with a word from the old
+  vocabulary (`OBSERVATION`, `PATTERN`, …) now keeps its own identity; it used
+  to hash the same as the same learning without that word, so one of the two was
+  silently treated as already reviewed.
+
+- **One thing does read the new labels: conflict detection.** When a learning
+  contradicts a line already in memory, dream surfaces it under
+  `## Conflict Resolutions` for you to accept or reject. That used to fire on
+  any learning marked `trust: verified`; it now fires on provenance
+  `CORRECTION` or `EMPIRICAL` — the two that mean "the world was observed to be
+  otherwise". `RESEARCH`, `DECLARATION` and `INFERENCE` do not: read somewhere,
+  asserted, or reasoned to, none of them observed here. This is deliberately the
+  same set of learnings as before rather than a narrower one; `EMPIRICAL` is what
+  most of your verified learnings become, so leaving it out would have quietly
+  turned the feature off.
+
+  Routing and injection are unchanged, and dream's triage still does not read
+  the pair.
 
 ## [0.32.2] - 2026-08-07
 

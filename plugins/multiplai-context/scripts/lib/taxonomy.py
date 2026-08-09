@@ -68,9 +68,8 @@ from __future__ import annotations
 from typing import Mapping, Optional
 
 # --- The closed value sets --------------------------------------------------
-# Order is documentation, not policy: nothing here ranks confidence or blast
-# radius. Ranking is a judgement about what may be applied unreviewed, and it
-# belongs to whatever makes that decision — not to the vocabulary.
+# Declaration order here is documentation, not policy. The *rankings* are
+# below, and they are policy — see the note on them.
 
 PROVENANCES: tuple[str, ...] = (
     "RESEARCH",
@@ -81,6 +80,58 @@ PROVENANCES: tuple[str, ...] = (
 )
 
 KINDS: tuple[str, ...] = ("FACT", "RULE", "DECISION", "INTENTION")
+
+# --- The rankings -----------------------------------------------------------
+# This module used to say ranking "belongs to whatever makes that decision —
+# not to the vocabulary", and then the drafting prompt shipped exactly this
+# ordering as prose while a downstream rubric was about to encode it in code.
+# Two sources of truth that can silently disagree is worse than one ranking in
+# the wrong module, so the ordering lives here and every consumer renders or
+# derives from it. What is still *not* here is the consequence — which cells
+# may be applied unreviewed is a policy decision, and it stays with whatever
+# makes it.
+
+#: Weakest to strongest evidence. Weakest wins when merging: an entry drawn
+#: from several learnings is only as trustworthy as its softest source.
+PROVENANCE_STRENGTH: tuple[str, ...] = (
+    "INFERENCE",
+    "RESEARCH",
+    "EMPIRICAL",
+    "DECLARATION",
+    "CORRECTION",
+)
+
+#: Broadest to narrowest blast radius. Broadest wins when merging: an entry
+#: that contains a rule is a rule, whatever else it also contains.
+KIND_BREADTH: tuple[str, ...] = ("RULE", "INTENTION", "DECISION", "FACT")
+
+
+def _first_listed(values, order: tuple[str, ...]) -> Optional[str]:
+    """The earliest member of *order* present in *values*, or ``None``."""
+    present = {v for v in values if v}
+    for candidate in order:
+        if candidate in present:
+            return candidate
+    return None
+
+
+def weakest_provenance(values) -> Optional[str]:
+    """The softest provenance among *values* — what a merged entry inherits."""
+    return _first_listed(values, PROVENANCE_STRENGTH)
+
+
+def broadest_kind(values) -> Optional[str]:
+    """The widest-blast-radius kind among *values*."""
+    return _first_listed(values, KIND_BREADTH)
+
+
+def render_ranking(order: tuple[str, ...]) -> str:
+    """``"`A`, `B`, `C`"`` — one ranking, formatted for a prompt.
+
+    Prompts render this instead of restating the order, so a change to the
+    ranking cannot leave a prompt teaching the old one.
+    """
+    return ", ".join(f"`{value}`" for value in order)
 
 # What the extractor is told to answer when it genuinely cannot tell. Both
 # defaults route toward human review rather than away from it: an unclear
@@ -212,10 +263,18 @@ def parse_pair(text: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     half comes back as ``None`` rather than as the string that was written.
     Missing text, a missing slash, and a bare ``?`` all yield ``None`` for the
     half they concern.
+
+    Each half is read as its **first whitespace-delimited token**, because the
+    producer is a model writing a free-text line and a trailing parenthetical is
+    entirely plausible. ``"CORRECTION/RULE (from the earlier session)"`` used to
+    yield ``("CORRECTION", None)`` — the kind half silently lost, which is the
+    half that carries blast radius.
     """
     if not text:
         return None, None
     left, sep, right = text.strip().partition("/")
+    left = left.split()[0] if left.split() else ""
     if not sep:
         return normalize_provenance(left), None
+    right = right.split()[0] if right.split() else ""
     return normalize_provenance(left), normalize_kind(right)
