@@ -221,6 +221,7 @@ class TestExtractionRetiresCheckpoints:
             def diary_dir(self): return tmp_path / "diary"
             def catalogs_dir(self): return tmp_path / "catalogs"
             def data_dir(self): return tmp_path
+            def logs_dir(self): return tmp_path / "logs"
 
         calls = {"n": 0}
 
@@ -229,7 +230,7 @@ class TestExtractionRetiresCheckpoints:
             calls["n"] += 1
             if not llm_ok or i in fail_chunks:
                 raise RuntimeError("model unavailable")
-            return units, disposition
+            return units, disposition, []
 
         diary_file = tmp_path / "diary" / "2026-08-01.md"
 
@@ -249,7 +250,7 @@ class TestExtractionRetiresCheckpoints:
              patch.object(el, "load_target_charters", lambda *a, **k: []), \
              patch.object(el, "create_client", AsyncMock(return_value=object())), \
              patch.object(el, "_distill_transcript", lambda *a: chunks), \
-             patch.object(el, "extract_units_and_disposition", _fake_extract), \
+             patch.object(el, "extract_session_signals", _fake_extract), \
              patch.object(el, "write_diary_entries", _fake_diary), \
              patch.object(el, "append_learnings", lambda *a, **k: True), \
              patch.object(el, "record_disposition", lambda *a, **k: True), \

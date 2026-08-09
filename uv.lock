@@ -1015,7 +1015,7 @@ requires-dist = [
 [[package]]
 name = "multiplai-core"
 version = "0.13.0"
-source = { git = "https://github.com/spikelab/multiplai-core?branch=main#18ef40631b036140cad09c34fe2434128463f2d4" }
+source = { git = "https://github.com/spikelab/multiplai-core?branch=main#4d75bca2d578a142c58d9325882fc3cde9270ed0" }
 dependencies = [
     { name = "anthropic" },
     { name = "pyyaml" },

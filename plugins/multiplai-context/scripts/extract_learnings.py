@@ -20,9 +20,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.paths import get_paths
 from multiplai_core.model_client import create_client
 from multiplai_core.log_utils import setup_logging, log_event
+from lib import utilisation
 from lib.extraction import (
     DEFAULT_DISPOSITION,
-    extract_units_and_disposition,
+    extract_session_signals,
     load_target_charters,
     write_diary_entries,
     append_learnings,
@@ -155,6 +156,88 @@ def _retire_checkpoint(
         )
 
 
+def _record_injected(paths, session_id: str, transcript_path: str) -> list[str]:
+    """Persist this session's ``injected`` half and return its section keys.
+
+    Read back out of the ``inject`` events rather than written from the hook:
+    ``context_manager`` runs on **every prompt**, and a read-modify-write of an
+    accumulating file on that path buys latency on the one code path where
+    latency is visible. The activity log already holds exactly this data (P1's
+    ``sections_by_file``/``bytes_by_file``), it is written for free, and its
+    7-day retention comfortably outlives the gap between a session ending and
+    its deferred extraction draining.
+
+    Best-effort by construction: telemetry must never cost a diary entry.
+    """
+    if not session_id:
+        return []
+    try:
+        events = utilisation.inject_events_for_session(paths.logs_dir(), session_id)
+        injected = utilisation.injected_from_inject_events(events)
+        if not injected:
+            return []
+        utilisation.record_injections(
+            utilisation.utilisation_path(paths.data_dir()),
+            session_id[:8],
+            injected,
+            session_id=session_id,
+            transcript=transcript_path or "",
+        )
+        keys = []
+        for entry in injected:
+            key = utilisation.section_key(entry["file"], entry.get("section"))
+            if key not in keys:
+                keys.append(key)
+        logger.info(
+            "Recorded %d injection(s) across %d section(s) for utilisation",
+            len(injected), len(keys),
+        )
+        return keys
+    except Exception:
+        logger.exception("Could not record injected memory for utilisation (non-fatal)")
+        return []
+
+
+def _record_self_report(paths, session_id: str, claims: list[dict],
+                        injected_keys: list[str]) -> None:
+    """Persist estimator A's answer, filtered to what was actually injected.
+
+    Two filters, both fail-closed. A claim naming something the session never
+    had injected is dropped outright — the model does not get to invent an
+    observation. A claim with no evidence is *kept* but marked
+    ``supported: False``, so it counts in the denominator and never in the
+    numerator: over-reporting shows up as a low rate rather than disappearing.
+    """
+    if not session_id:
+        return
+    try:
+        allowed = set(injected_keys)
+        entries = [
+            claim for claim in claims
+            if utilisation.section_key(claim["file"], claim.get("section")) in allowed
+        ]
+        utilisation.record_self_report(
+            utilisation.utilisation_path(paths.data_dir()), session_id[:8], entries,
+        )
+        supported = sum(1 for e in entries if e.get("supported"))
+        logger.info(
+            "Self-reported utilisation: %d claim(s), %d with evidence, "
+            "out of %d injected section(s)",
+            len(entries), supported, len(injected_keys),
+        )
+        log_event(
+            "utilisation", "self-report",
+            f"session claimed {supported} of {len(injected_keys)} injected "
+            f"memory section(s) as used (estimated, self-reported)",
+            session_id=session_id,
+            claimed=len(entries),
+            supported=supported,
+            injected=len(injected_keys),
+        )
+    except Exception:
+        logger.exception("Could not record self-reported utilisation (non-fatal)")
+
+
 async def _refresh_now(cwd: str, session_id: str) -> None:
     """Re-summarize this session's project ``now`` file after a diary write.
 
@@ -222,8 +305,17 @@ async def extract() -> bool:
 
     chunks = _distill_transcript(transcript_path, raw_transcript)
 
+    # Before the model call, and independent of it: the retrieval half of the
+    # utilisation record needs no LLM, so it survives a client that cannot be
+    # created (contract C3 — P3 records no *estimate* without a model, but
+    # what was injected is a fact we already have).
+    injected_keys = _record_injected(paths, session_id, transcript_path)
+
     valid_targets = load_target_charters(memory_dir, paths.catalogs_dir())
     units: list[dict] = []
+    # Self-reported utilisation, unioned across chunks (unlike the disposition,
+    # which is a property of the closing exchange only). First evidence wins.
+    utilisation_claims: dict[tuple[str, str | None], dict] = {}
     # Disposition is session-level but extraction runs per chunk, so only the
     # FINAL chunk's answer counts — that is the one holding the closing
     # exchange, and the closing exchange is the entire signal. Earlier chunks
@@ -238,6 +330,12 @@ async def extract() -> bool:
     # With no chunks there was no LLM pass to fail, so the default `active`
     # is a fact, not a guess.
     final_chunk_ok = not chunks
+    # Whether the model was asked the utilisation question at all. An empty
+    # self-report is only meaningful as "none of them" if a chunk came back;
+    # writing `[]` after a total failure would fabricate an answer, and every
+    # injected section would read as estimated-unused.
+    chunks_ok = 0
+    utilisation_missing = 0
     if chunks:
         try:
             client = await create_client()
@@ -247,12 +345,29 @@ async def extract() -> bool:
             )
             for i, chunk in enumerate(chunks):
                 try:
-                    chunk_units, chunk_disposition = await extract_units_and_disposition(
+                    (
+                        chunk_units,
+                        chunk_disposition,
+                        chunk_utilisation,
+                    ) = await extract_session_signals(
                         chunk,
                         valid_targets=valid_targets,
                         client=client,
+                        injected_sections=injected_keys,
                     )
                     units.extend(chunk_units)
+                    # None means the reply carried no <utilisation> block at
+                    # all — most often a truncated response, since that block
+                    # is emitted last. Counted separately from an explicitly
+                    # empty one, which is a real "none of them".
+                    if chunk_utilisation is None:
+                        utilisation_missing += 1
+                    else:
+                        for claim in chunk_utilisation:
+                            utilisation_claims.setdefault(
+                                (claim["file"], claim.get("section")), claim,
+                            )
+                    chunks_ok += 1
                     if i == len(chunks) - 1:
                         disposition = chunk_disposition
                         final_chunk_ok = True
@@ -295,6 +410,30 @@ async def extract() -> bool:
                 "(missing registry entry or lock lost); label dropped",
                 state, session_id,
             )
+
+    # Recorded only when the whole transcript was actually read AND every chunk
+    # answered the utilisation question. Both conditions guard the same hazard:
+    # the denominator is *every* injected section, so a partial numerator is
+    # written as "observed, and mostly unused" rather than as "not estimated".
+    #
+    # `chunks_ok` alone was not enough. A 3-chunk session whose first two chunks
+    # failed recorded "used in the last third of the transcript" as the whole
+    # session's answer; and a chunk that succeeded but was truncated before its
+    # <utilisation> block contributed nothing while still counting toward the
+    # denominator. A null here is honest and costs one session's estimate; a
+    # false zero puts a live memory section top of the doctor's pruning list.
+    if injected_keys and chunks_ok == len(chunks) and not utilisation_missing:
+        _record_self_report(
+            paths, session_id, list(utilisation_claims.values()), injected_keys,
+        )
+    elif injected_keys and session_id:
+        logger.warning(
+            "Not recording self-reported utilisation for session %s: "
+            "%d/%d chunk(s) parsed, %d without a <utilisation> block. "
+            "Recording a partial answer against a full denominator would "
+            "read as 'injected and unused'.",
+            session_id[:8], chunks_ok, len(chunks), utilisation_missing,
+        )
 
     if not units:
         if llm_failed:

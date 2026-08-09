@@ -51,12 +51,20 @@ class TestVerdictPrompt:
         for marker in ("verdict: keep", "verdict: kill", "verdict: expand"):
             assert marker in EXTRACTION_PROMPT
 
-    def test_verdicts_are_high_trust_preferences(self):
+    def test_verdicts_are_high_trust_user_statements(self):
         """A verdict is the strongest preference signal there is — it's what
-        Spike did about a concrete output, not what he said he wanted."""
+        Spike did about a concrete output, not what he said he wanted.
+
+        Under the two-axis taxonomy that lands on `DECLARATION` (he said it
+        unprompted) or `CORRECTION` (it overturned what Claude just did), never
+        on `INFERENCE`. The kind is `RULE`: a verdict says what to do next time
+        and can only be revoked, not falsified.
+        """
         from lib.extraction import EXTRACTION_PROMPT
         section = EXTRACTION_PROMPT.split("## Verdict detection")[1]
-        assert "PREFERENCE" in section and "verified" in section
+        assert "DECLARATION" in section and "CORRECTION" in section
+        assert "kind: RULE" in section
+        assert "verified" in section
 
     def test_consent_is_explicitly_excluded(self):
         """Without this the extractor turns every "go ahead" into a style

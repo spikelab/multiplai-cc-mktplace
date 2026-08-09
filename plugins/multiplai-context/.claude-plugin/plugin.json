@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.32.2",
+  "version": "0.38.0",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",
@@ -180,6 +180,12 @@
       "description": "Model used by the 'llm' memory_router. Defaults to Haiku \u2014 routing is a cheap classification, so the smallest/fastest model keeps the per-prompt hook latency tolerable. Ignored under 'token_overlap'.",
       "default": "claude-haiku-4-5"
     },
+    "router_timeout_seconds": {
+      "type": "number",
+      "title": "Router Timeout (llm strategy)",
+      "description": "Seconds the 'llm' memory_router waits before giving up. A timeout injects NO memory for that turn, so raise this if you see 'LLMRouter timed out' warnings \u2014 section anchors make each call read a longer catalog and choose more finely, which pushes some prompts over the default. Ignored under 'token_overlap'.",
+      "default": 25
+    },
     "recommend_cooldown_turns": {
       "type": "number",
       "title": "Re-recommendation Cooldown (Turns)",
@@ -204,11 +210,35 @@
       "description": "Render a conflict-surfacing directive plus per-file last-updated stamps above every injected MEMORY block, making the model flag memory-vs-session disagreements to the user. Costs ~90 tokens per memory-carrying turn; turn off to save them.",
       "default": true
     },
+    "utilisation_judge_sample": {
+      "type": "number",
+      "title": "Utilisation Judge Sample Size",
+      "description": "How many recent sessions the nightly offline utilisation judge rules on per maintenance run. It is the independent check on the session's own (upward-biased) self-report of which injected memory it used; both numbers are reported side by side and always labelled estimates. 0 turns the judge off, leaving self-report as the only estimator.",
+      "default": 5
+    },
     "enable_dev_references": {
       "type": "boolean",
       "title": "Dev Reference Injection",
       "description": "Detect the project's stack from its manifests and inject pointers to the matching engineering-standards docs under $CLAUDE_CONFIG_DIR/reference/dev/ (paths and section index, not contents), once per session per project. Silently does nothing when that directory does not exist.",
       "default": true
+    },
+    "memory_write_mode": {
+      "type": "string",
+      "title": "Memory Write Mode",
+      "description": "How much of a dream proposal may be written to memory without you reading it. 'review' = nothing is applied automatically (the pre-0.36.0 behaviour). 'triage' (default) = a model judges each item and only items the provenance/kind rubric permits are applied, each one recorded in a receipt. 'auto' = also applies plain facts the rubric would have held back. Rules never apply automatically in any mode, and a model failure always falls back to leaving everything for you.",
+      "default": "triage"
+    },
+    "memory_banks_file": {
+      "type": "string",
+      "title": "Memory Banks File",
+      "description": "Path to the YAML file declaring shared memory banks. Defaults to memory-banks.yaml at your workspace's .multiplai/ root, beside project-map.yaml. Leave blank unless your banks are declared somewhere else.",
+      "default": ""
+    },
+    "bank_sync_ttl_hours": {
+      "type": "number",
+      "title": "Bank Sync Interval (hours)",
+      "description": "How long a shared bank's content stays fresh before a session start fast-forwards it again. The pull runs detached and a failure leaves the previous content in place, so a bank you cannot reach is stale, never broken.",
+      "default": 6
     }
   }
 }

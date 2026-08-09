@@ -311,7 +311,7 @@ class GeneratorBase:
             if self._should_skip(
                 key, current_hash, stored_hashes, force,
                 has_existing_entry=key in existing_by_key,
-            ):
+            ) and not self.entry_needs_regeneration(key, source, existing_by_key.get(key)):
                 batch.skipped += 1
                 batch.entries[key] = existing_by_key[key]
                 continue
@@ -385,6 +385,23 @@ class GeneratorBase:
             return False
         stored_hash = stored_hashes.get(key)
         return stored_hash is not None and stored_hash == current_hash
+
+    def entry_needs_regeneration(
+        self, key: str, source: Any, existing: dict | None
+    ) -> bool:
+        """Does an otherwise-skippable entry lack a field this version adds?
+
+        The content-hash gate answers "has the *source* changed?", which is the
+        wrong question when the *generator* has changed. A new catalog field
+        ships inert on upgrade: every source hash matches, every entry is
+        skipped, and the feature produces nothing until each file is
+        individually edited — so the user upgrades, observes no difference, and
+        reasonably concludes it is broken.
+
+        Subclasses override this to name the field they now require. Default is
+        ``False``, so no generator pays for a check it does not need.
+        """
+        return False
 
     async def _generate_entry(
         self, key: str, source: Any, existing_by_key: dict[str, dict]

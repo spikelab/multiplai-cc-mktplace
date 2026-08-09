@@ -333,6 +333,13 @@ def run_health_check() -> dict:
                 {"file": f.path.name, "line": f.lineno, "class": f.fact_class}
                 for f in lint_findings if f.kind == "unmarked"
             ],
+            # Corpus-wide H2 collisions. Reported here because they are
+            # what makes a `file.md#Section` router pick ambiguous, so
+            # they degrade retrieval rather than just tidiness.
+            "duplicate_h2": [
+                {"file": f.path.name, "line": f.lineno, "detail": f.detail}
+                for f in lint_findings if f.kind == "duplicate-h2"
+            ],
         }
     except Exception as exc:  # pragma: no cover - defensive
         report["memory_validity"] = {"error": str(exc)}

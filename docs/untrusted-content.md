@@ -73,6 +73,7 @@ convention that the kit ships).
 | Plugin | Skill | Untrusted channel |
 |---|---|---|
 | multiplai-context | `log-doctor` | Log lines — attacker-reachable via echoed responses, filenames, tracebacks |
+| | `dream-remember` | Proposed memory text and target-file content, sent to the triage judge (`scripts/lib/memory_judge.py`). Learnings are distilled from sessions that read web pages, repos, logs and documents, so the text arriving here has already passed through an attacker-reachable channel once. |
 | multiplai-research | `deep-research` | Fetched page text (`research_pipeline/untrusted.py`, a thin seam over core) |
 | | `extract-insights` | Source documents and transcripts |
 | multiplai-messaging | `gmail` | Message bodies, subjects, sender names |

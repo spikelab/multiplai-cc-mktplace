@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
+from lib import taxonomy
 from lib.runtime import lock_path
 
 logger = logging.getLogger(__name__)
@@ -147,7 +148,8 @@ invest most effort here. Plain prose; no escaping needed.
 </diary>
 <learning>
 trust: verified | high | medium
-type: OBSERVATION | PREFERENCE | CORRECTION | PATTERN | RULE-PROPOSAL | INTENTION
+provenance: RESEARCH | EMPIRICAL | CORRECTION | DECLARATION | INFERENCE
+kind: FACT | RULE | DECISION | INTENTION
 target: one valid memory file name from the list below, or unknown
 description: concise but complete (one sentence, single line)
 action: what to add/change in that file (one sentence, single line)
@@ -159,6 +161,44 @@ it entirely if the unit has none (diary-only units are valid).
 - trust: "verified" (confirmed via code/logs/tests) | "high" (strong \
 evidence) | "medium" (inference)
 - If the entire session is trivial, output exactly: <no-units/>
+
+## Provenance and kind — two separate questions
+
+`provenance` answers **where the knowledge came from**, which is what says how
+it could ever be checked again:
+
+- `RESEARCH` — read in an external source: docs, a web page, a paper, someone
+  else's repo. Re-checkable by re-reading that source.
+- `EMPIRICAL` — observed while doing the work. It broke, it was fixed, the test
+  went green. Re-checkable by running the thing again.
+- `CORRECTION` — the user said the assistant had it wrong.
+- `DECLARATION` — the user stated it unprompted, with no error to overwrite.
+- `INFERENCE` — the assistant concluded it and nobody confirmed it.
+
+`kind` answers **what sort of thing it is**, which is a different question:
+
+- `FACT` — can be true or false. "The router caps injection at 40 KB."
+- `RULE` — normative, so neither true nor false. "Always stage with a pathspec."
+- `DECISION` — a commitment in force until something overturns it. "We're going
+  with Postgres."
+- `INTENTION` — something to come back to later (see below).
+
+Three distinctions carry almost all of the difficulty:
+
+- **CORRECTION vs DECLARATION** — was there an error to overwrite? "No, the
+  default is Opus, not Sonnet" is a CORRECTION. "I prefer short commit
+  messages", said out of nowhere, is a DECLARATION.
+- **INFERENCE vs EMPIRICAL** — was it *observed* or *concluded*? Watching a
+  test fail and then pass after the fix is EMPIRICAL. Reasoning that the fix
+  probably also covers the sibling case, without running it, is INFERENCE.
+- **FACT vs RULE** — "the API always returns UTF-8" is a FACT (it could turn
+  out to be false). "Always decode API responses as UTF-8" is a RULE (it can
+  only be revoked).
+
+When provenance is genuinely unclear, answer `INFERENCE`. When kind is
+genuinely unclear, answer `RULE`. Both of those send the item to a human rather
+than past one — a wrong `EMPIRICAL` or a wrong `FACT` is far more expensive
+than an over-cautious label, so guessing upward is the costly mistake.
 
 ## Valid target files
 
@@ -175,15 +215,19 @@ learning into the closest broadly-named file.
 ## Correction detection
 
 When the user corrects Claude's output or assumption:
-- type: CORRECTION, trust: verified
+- provenance: CORRECTION, trust: verified
 Signals: "use X not Y", "no, that's wrong", "actually...", explicit contradictions.
 Corrections are highest priority — they prevent recurring mistakes.
+
+Pick the `kind` from what was corrected, not from the fact that it was a
+correction: a wrong value or claim is `FACT`, a correction about how to behave
+("don't ask before running read-only commands") is `RULE`.
 
 ## Intention detection (prospective memory)
 
 When the user states something to come back to LATER — a future check, a
 revisit, a "when X happens, do Y":
-- type: INTENTION, target: prospective.md
+- kind: INTENTION, provenance: DECLARATION, target: prospective.md
 Signals: "remind me to...", "revisit this in September", "check back after the
 release", "when the runtime updates, re-run X", "let's decide this next quarter".
 
@@ -204,7 +248,10 @@ belongs in the diary.
 
 When the user delivers an explicit verdict on something Claude produced —
 keeping it, killing it, or asking for more of it:
-- type: PREFERENCE, trust: verified, and BEGIN the description with
+- kind: RULE (a verdict is normative — it says what to do next time, and it can
+  only be revoked, never falsified), provenance: DECLARATION, or CORRECTION when
+  the verdict overturns something Claude had just done
+- trust: verified, and BEGIN the description with
   `verdict: keep` / `verdict: kill` / `verdict: expand` followed by ` — ` and
   what the verdict was about.
 Signals: "this is great, more like this", "never do that again", "drop the
@@ -240,6 +287,30 @@ error; leaving finished work labelled active costs nothing.
 Half-finished work the user did not comment on is `active`, not `parked`: \
 parked means they SAID they were setting it down.
 
+## Memory utilisation (which injected memory this session actually used)
+
+The user message lists the memory sections that were injected into this \
+session's context. AFTER the <disposition> block, emit exactly one:
+
+<utilisation>
+<used file="FILENAME" section="SECTION NAME">short quote from the session, or a \
+concrete statement of what it informed</used>
+</utilisation>
+
+- List ONLY sections the session demonstrably RELIED ON. Judge dependence, not \
+topical similarity: a section about the same subject the session touched was \
+not used unless the work actually leaned on what it said.
+- **"None of them" is a normal and expected answer.** Most injected memory goes \
+unused. Emit an empty <utilisation></utilisation> block and move on — do not \
+look for a reason to name one.
+- Every <used> MUST carry evidence in its body. A <used> with an empty body is \
+recorded as unsupported and does not count. If you cannot point at anything, \
+leave the section out.
+- Omit the `section` attribute when the listed entry has no section (the whole \
+file was injected). Copy `file` and `section` EXACTLY as listed.
+- Never name a file or section that is not in the injected list.
+- When the list is empty, emit an empty <utilisation></utilisation> block.
+
 ## Rules
 
 - diary is PRIMARY — learnings are a projection of it
@@ -252,14 +323,18 @@ parked means they SAID they were setting it down.
 EXTRACTION_USER = """\
 Today's date: {today}
 
+## Injected memory sections
+
+{injected_sections}
+
 ## Transcript
 
 {transcript}
 
 ## Output
 
-Output ONLY <unit> blocks (or <no-units/>), then one <disposition> block — \
-no markdown fences, no explanation.
+Output ONLY <unit> blocks (or <no-units/>), then one <disposition> block, then \
+one <utilisation> block — no markdown fences, no explanation.
 """
 
 # The two halves as one string, in the order the model sees them. Kept because
@@ -282,7 +357,18 @@ _UNIT_RE = re.compile(r"<unit>(.*?)</unit>", re.DOTALL)
 _TIMESTAMP_RE = re.compile(r"<timestamp>(.*?)</timestamp>", re.DOTALL)
 _DIARY_RE = re.compile(r"<diary>\n?(.*?)\n?</diary>", re.DOTALL)
 _LEARNING_RE = re.compile(r"<learning>(.*?)</learning>", re.DOTALL)
-_LEARNING_KEYS = frozenset({"trust", "type", "target", "description", "action"})
+# ``provenance`` and ``kind`` are the two-axis taxonomy (lib/taxonomy.py).
+#
+# ``type`` stays in the accepted set because 227 records on disk still use it
+# and nothing rewrites them — dropping it here would make every one of them
+# parse as unlabelled. ``trust`` also stays, but it is **deprecated**: it is a
+# confidence rating the extractor assigns by feel, with no link to where the
+# claim came from, and provenance now answers that question properly. It is
+# kept for one release rather than removed in the same change that adds two
+# fields, so the two can be evaluated separately.
+_LEARNING_KEYS = frozenset(
+    {"trust", "type", "provenance", "kind", "target", "description", "action"}
+)
 _NO_UNITS_MARKER = "<no-units/>"
 
 # --- Session disposition ----------------------------------------------------
@@ -337,12 +423,102 @@ def parse_disposition(raw: str) -> dict:
     return {"state": state, "reason": reason_match.group(1).strip() if reason_match else ""}
 
 
+# --- Memory utilisation (estimator A: self-report) --------------------------
+# The session grading its own session. Biased upward by construction, so the
+# ONE available brake is the evidence requirement: a claim with an empty body
+# is recorded `supported: False` and never counts toward use. See
+# lib/utilisation.py for how that flows into the aggregate, and the master
+# plan's decision 9 for why this number is always labelled an estimate.
+
+_UTILISATION_RE = re.compile(r"<utilisation>(.*?)</utilisation>", re.DOTALL)
+_USED_RE = re.compile(r"<used\b([^>]*)>(.*?)</used>", re.DOTALL)
+_ATTR_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
+
+# Shown when nothing was injected — an explicit statement beats a blank, which
+# the model would otherwise try to fill.
+NO_INJECTED_SECTIONS = "(none — no memory was injected into this session)"
+
+
+def render_injected_sections(keys: Sequence[str]) -> str:
+    """Render the injected-section list for the prompt, fenced as untrusted.
+
+    Section names come from memory files, which are themselves distilled from
+    transcripts that ingested web pages, repos and documents — so they are
+    externally-authored text and contract C2 applies (`docs/untrusted-content.md`).
+    """
+    if not keys:
+        return NO_INJECTED_SECTIONS
+    from multiplai_core.untrusted import fence
+
+    body = "\n".join(f"- {key}" for key in keys)
+    lines = fence(body, "memory catalog — injected section names")
+    return "\n".join(lines) if lines else NO_INJECTED_SECTIONS
+
+
+def parse_utilisation(raw: str) -> Optional[list[dict]]:
+    """Read the ``<utilisation>`` block into self-report entries.
+
+    Returns ``[{"file", "section", "evidence", "supported"}]``, or **``None``
+    when the response carried no ``<utilisation>`` block at all**. Never raises
+    and never fails extraction: this field is telemetry layered on a pass whose
+    real job is the diary, and a malformed block must not cost a session its
+    diary entry.
+
+    The ``None`` is the whole point, and it used to be ``[]``. "A blank is not a
+    zero" is this feature's headline invariant, and the judge half honours it by
+    raising ``JudgeParseError`` on a missing block — but this half, which runs on
+    **every** session, conflated the two. The distinction the old docstring
+    claimed ("the caller knows by whether it passed an injected list") does not
+    cover the case that matters: the caller gates on whether the model call
+    *succeeded*, and a truncated response is a success that parses. With
+    ``DEFAULT_MAX_TOKENS = 4096``, no override on this path, ``_parse_units``
+    deliberately salvaging a truncated reply, and ``<utilisation>`` emitted
+    **last** — after every diary unit — truncation is the ordinary failure, not
+    an exotic one. Recorded as ``[]`` it becomes "observed, and used nothing",
+    which ranks a genuinely-used section top of the pruning table with
+    ``zero_estimated_use: true``. That table is what the doctor pass reads to
+    propose deletions.
+
+    An explicitly empty block still returns ``[]`` — "I used none of them" is a
+    real answer and must stay distinguishable from never having answered.
+    """
+    blocks = _UTILISATION_RE.findall(raw or "")
+    if not blocks:
+        return None
+    out: list[dict] = []
+    seen: set[tuple[str, Optional[str]]] = set()
+    for attrs, body in _USED_RE.findall(blocks[-1]):
+        parsed = dict(_ATTR_RE.findall(attrs))
+        file = (parsed.get("file") or "").strip()
+        if not file:
+            continue
+        section = (parsed.get("section") or "").strip() or None
+        if (file, section) in seen:
+            continue
+        seen.add((file, section))
+        evidence = " ".join((body or "").split())
+        out.append({
+            "file": file,
+            "section": section,
+            "evidence": evidence,
+            "supported": bool(evidence),
+        })
+    return out
+
+
 def _parse_learning(block: str) -> Optional[dict]:
     """Parse one <learning> body of ``key: value`` lines.
 
     Unknown keys and lines without a colon are ignored (values are
     single-line by prompt contract). A learning without a description
     carries no signal — drop it.
+
+    ``provenance`` and ``kind`` are validated against their closed value sets.
+    An out-of-set value is **dropped, not coerced**: the record then says it
+    has no provenance, which is true, rather than claiming the nearest legal
+    label, which would be a fabricated statement about where the knowledge came
+    from. The description survives either way — the label is the doubtful part,
+    not the learning.
     """
     entry: dict = {}
     for line in block.strip().splitlines():
@@ -352,6 +528,21 @@ def _parse_learning(block: str) -> Optional[dict]:
         key = key.strip().lower()
         if key in _LEARNING_KEYS:
             entry[key] = value.strip()
+    for key, normalize in (
+        ("provenance", taxonomy.normalize_provenance),
+        ("kind", taxonomy.normalize_kind),
+    ):
+        if key not in entry:
+            continue
+        normalized = normalize(entry[key])
+        if normalized is None:
+            logger.warning(
+                "Learning %s=%r is not in the accepted set — dropped rather than "
+                "coerced; the record parses without it", key, entry[key],
+            )
+            del entry[key]
+        else:
+            entry[key] = normalized
     return entry if entry.get("description") else None
 
 
@@ -424,6 +615,40 @@ async def extract_units_and_disposition(
     several callers and a large test surface, and only the live extraction
     path cares how the session was left. The disposition rides along on the
     *same* model response — it costs no extra call.
+
+    See :func:`extract_session_signals` for the variant that also returns the
+    self-reported memory utilisation.
+    """
+    units, disposition, _ = await extract_session_signals(
+        text, valid_targets=valid_targets, client=client
+    )
+    return units, disposition
+
+
+async def extract_session_signals(
+    text: str,
+    *,
+    valid_targets: Sequence[Union[str, dict]],
+    client,
+    injected_sections: Optional[Sequence[str]] = None,
+) -> tuple[list[dict], dict, Optional[list[dict]]]:
+    """Units, disposition, and self-reported memory utilisation, in one call.
+
+    ``injected_sections`` is the list of ``file.md#Section`` keys this session
+    had injected. Passing it is what makes the utilisation answer meaningful;
+    passing nothing still asks the question (the prompt's static half cannot
+    vary — it is the cacheable prefix) but tells the model the list is empty,
+    so the honest answer is an empty block.
+
+    The third element is ``None`` when the reply carried no ``<utilisation>``
+    block — see :func:`parse_utilisation`. The caller must not record that as a
+    zero.
+
+    The utilisation answer rides on the *same* response as the diary and the
+    learnings, costing no extra call. That is deliberate, and so is the order
+    of precedence if it ever conflicts: the diary is this pass's primary
+    product, and a shorter diary is not a trade worth making for telemetry —
+    split this into its own call before letting that happen.
     """
     targets_block = (
         "\n".join(render_target_line(t) for t in valid_targets)
@@ -443,6 +668,8 @@ async def extract_units_and_disposition(
     prompt = (
         EXTRACTION_USER
         .replace("{today}", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        .replace("{injected_sections}",
+                 render_injected_sections(injected_sections or []))
         .replace("{transcript}", text)
     )
     # Parse failures are stochastic (a fresh sample of the same prompt
@@ -464,9 +691,13 @@ async def extract_units_and_disposition(
             logger.warning("extraction parse failed (attempt %d): %s", attempt + 1, e)
             continue
         # Parsed only after the units did: a missing or malformed
-        # disposition falls back to "active" rather than costing the
-        # session its diary entry.
-        return units, parse_disposition(response.content)
+        # disposition (or utilisation block) falls back to a safe default
+        # rather than costing the session its diary entry.
+        return (
+            units,
+            parse_disposition(response.content),
+            parse_utilisation(response.content),
+        )
     assert last_error is not None  # loop either returned or set last_error
     raise last_error
 
@@ -534,12 +765,35 @@ def write_diary_entries(
 
 
 def _format_learning_entry(learning: dict) -> str:
-    trust = learning.get("trust", "medium")
-    ltype = learning.get("type", "OBSERVATION")
+    """Render one learning as the line that lands in ``.multiplai/learnings/``.
+
+    Two forms, chosen by what the record actually carries:
+
+    - ``- **[CORRECTION/FACT]** <desc> → Target: <file> — <action>`` when the
+      record states a provenance or a kind of its own.
+    - the legacy ``- **[trust: verified]** CORRECTION <desc> → …`` when it has
+      only the old ``type``.
+
+    A legacy record is never reprinted in the new form. The mapping in
+    ``taxonomy.LEGACY_TYPE_MAP`` exists for *reading*, and printing its output
+    into a file would turn a conservative reading into a written-down claim
+    about origin that the record never made.
+
+    ``trust`` is dropped from the new line while staying in the record. Two
+    confidence-ish markers on one line is what made the old format ambiguous —
+    the reader could not tell whether ``trust: verified`` or ``CORRECTION``
+    was the load-bearing part.
+    """
     desc = (learning.get("description") or "").strip()
     target = (learning.get("target") or "").strip()
     action = (learning.get("action") or "").strip()
-    line = f"- **[trust: {trust}]** {ltype} {desc}"
+    if taxonomy.has_taxonomy(learning):
+        provenance, kind = taxonomy.pair(learning)
+        line = f"- **[{taxonomy.format_pair(provenance, kind)}]** {desc}"
+    else:
+        trust = learning.get("trust", "medium")
+        ltype = learning.get("type", "OBSERVATION")
+        line = f"- **[trust: {trust}]** {ltype} {desc}"
     if target:
         line += f" → Target: {target}"
         if action:

@@ -59,6 +59,44 @@ ROUTER_MODEL_OPTION = "router_model"
 ROUTER_MODEL_ENV_VAR = option_var(ROUTER_MODEL_OPTION)
 DEFAULT_ROUTER_MODEL = "claude-haiku-4-5"
 
+# How long the llm router waits before giving up. A timeout injects **zero**
+# memory for that turn, so this ceiling is the single most consequential number
+# for anyone running `memory_router: llm` — and section anchors make each call
+# do more work (a longer catalog to read, a finer choice to make), which pushes
+# some prompts over it. It is configurable because the honest mitigation for
+# "some of my prompts time out" is "raise the ceiling", and that advice is
+# useless if it means editing this file.
+ROUTER_TIMEOUT_OPTION = "router_timeout_seconds"
+ROUTER_TIMEOUT_ENV_VAR = option_var(ROUTER_TIMEOUT_OPTION)
+DEFAULT_ROUTER_TIMEOUT_SECONDS = 25.0
+
+
+def resolve_router_timeout(raw: str | float | None = None) -> float:
+    """The llm router's timeout in seconds, from config or the default.
+
+    Fail-soft like ``resolve_strategy``: a non-numeric or non-positive value
+    logs and falls back rather than raising, because a typo in a plugin option
+    must not break a ``UserPromptSubmit`` hook.
+    """
+    value = raw if raw is not None else option(ROUTER_TIMEOUT_OPTION)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return DEFAULT_ROUTER_TIMEOUT_SECONDS
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Ignoring %s=%r — not a number; using %.1fs",
+            ROUTER_TIMEOUT_ENV_VAR, value, DEFAULT_ROUTER_TIMEOUT_SECONDS,
+        )
+        return DEFAULT_ROUTER_TIMEOUT_SECONDS
+    if seconds <= 0:
+        logger.warning(
+            "Ignoring %s=%r — must be positive; using %.1fs",
+            ROUTER_TIMEOUT_ENV_VAR, value, DEFAULT_ROUTER_TIMEOUT_SECONDS,
+        )
+        return DEFAULT_ROUTER_TIMEOUT_SECONDS
+    return seconds
+
 STRATEGY_TOKEN_OVERLAP = "token_overlap"
 STRATEGY_LLM = "llm"
 STRATEGY_EMBEDDINGS = "embeddings"
@@ -564,24 +602,86 @@ def _parse_llm_multi_selection(
     return result
 
 
+class RouterCallFailed(Exception):
+    """The model call did not produce an answer — timeout, transport, or loop.
+
+    Exists so a *failure* cannot be mistaken for an *abstention*. Both used to
+    leave ``select_multi`` as an empty dict, and the context manager reads an
+    empty memory pick from a router that ran as a deliberate "nothing is
+    relevant" (``router_abstained``) — which suppresses its own recency net.
+    A timed-out prompt therefore got **no memory at all**, logged as one
+    WARNING and otherwise indistinguishable from a correct abstention.
+    """
+
+
 class LLMRouter:
     """Semantic router — one LLM call per prompt covering all corpora.
 
-    Failures (no client, query exception, malformed response, timeout)
-    log at WARNING and return empty picks so the context manager
-    falls back to the metadata ranking path rather than blocking the
-    hook.
+    **A failed call degrades to the token_overlap router, never to nothing.**
+    ``create_router`` already refuses to hand back an ``LLMRouter`` when no
+    model client exists, for the stated reason that it "would silently return
+    empty picks every prompt". A timeout produces exactly that outcome, so the
+    same guard belongs on the call path: no client and no answer are the same
+    failure, and both degrade to the offline ranking rather than to silence.
+
+    Genuine abstention is preserved and is *not* a failure: an empty prompt, an
+    empty corpus, or a model that ran and chose nothing all still return empty.
+    Only :class:`RouterCallFailed` triggers the degrade.
+
+    The fallback also changes what a good timeout is. When a timeout cost the
+    whole turn's memory you wanted the ceiling as high as the hook allowed;
+    once it merely costs you the offline ranking, a *shorter* ceiling is better
+    — you stop paying blocking latency for an answer you are about to discard.
     """
 
     name = STRATEGY_LLM
 
-    def __init__(self, *, timeout_seconds: float = 25.0, model: str | None = None) -> None:
-        self._timeout_seconds = timeout_seconds
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float | None = None,
+        model: str | None = None,
+        fallback: "TokenOverlapRouter | None" = None,
+    ) -> None:
+        self._timeout_seconds = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else resolve_router_timeout()
+        )
         self._model = (
             model
             or option(ROUTER_MODEL_OPTION)
             or DEFAULT_ROUTER_MODEL
         )
+        # Built here, not on demand: constructing it inside the failure path
+        # would put a second thing that can throw between the failure and the
+        # recovery from it.
+        self._fallback = fallback if fallback is not None else TokenOverlapRouter()
+
+    def _degrade(
+        self,
+        reason: str,
+        prompt: str,
+        last_response: str | None,
+        corpora: dict[str, list[dict]],
+        max_files_per_corpus: int,
+    ) -> dict[str, list[str]]:
+        """Answer with the offline router after a failed model call."""
+        logger.warning(
+            "LLMRouter %s; degrading to %s for this prompt",
+            reason, self._fallback.name,
+        )
+        try:
+            return self._fallback.select_multi(
+                prompt, last_response, corpora,
+                max_files_per_corpus=max_files_per_corpus,
+            )
+        except Exception:
+            # The offline router is pure Python over an in-memory catalog, so
+            # this should not happen — but the whole point of this path is that
+            # it runs when something already went wrong.
+            logger.exception("token_overlap fallback also failed")
+            return {ct: [] for ct in CORPUS_TYPES}
 
     def select_multi(
         self,
@@ -612,12 +712,18 @@ class LLMRouter:
             picks = asyncio.run(
                 self._select_async_multi(prompt, last_response, corpora, known_per_corpus)
             )
+        except RouterCallFailed as e:
+            return self._degrade(
+                str(e), prompt, last_response, corpora, max_files_per_corpus)
         except RuntimeError as e:
-            logger.warning("LLMRouter could not run event loop: %s", e)
-            return empty
-        except Exception:
-            logger.exception("LLMRouter call failed; falling back to no picks")
-            return empty
+            return self._degrade(
+                f"could not run event loop: {e}",
+                prompt, last_response, corpora, max_files_per_corpus)
+        except Exception as e:
+            logger.exception("LLMRouter call raised")
+            return self._degrade(
+                f"call raised {type(e).__name__}",
+                prompt, last_response, corpora, max_files_per_corpus)
 
         return {
             ct: picks.get(ct, [])[:max_files_per_corpus] for ct in CORPUS_TYPES
@@ -644,8 +750,14 @@ class LLMRouter:
                 timeout=self._timeout_seconds,
             )
         except asyncio.TimeoutError:
-            logger.warning("LLMRouter timed out after %.1fs", self._timeout_seconds)
-            return {ct: [] for ct in CORPUS_TYPES}
+            # Raise, don't return empty. An empty answer from a router that
+            # *ran* reads downstream as a deliberate abstention, and abstention
+            # suppresses the context manager's own recency net — so returning
+            # empty here is what turned a slow model into a prompt with no
+            # memory at all.
+            raise RouterCallFailed(
+                f"timed out after {self._timeout_seconds:.1f}s"
+            ) from None
         return _parse_llm_multi_selection(response.content, known_per_corpus)
 
 
@@ -709,7 +821,10 @@ def create_router(
                 client,
             )
             return TokenOverlapRouter(keep_ratio=kr)
-        return LLMRouter()
+        # The fallback carries the same keep_ratio as an explicitly-configured
+        # token_overlap router, so degrading mid-session lands on the routing
+        # the user actually configured rather than on module defaults.
+        return LLMRouter(fallback=TokenOverlapRouter(keep_ratio=kr))
     if effective == STRATEGY_EMBEDDINGS:
         raise NotImplementedError(
             "Embeddings router is reserved for a future port — set "

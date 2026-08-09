@@ -18,6 +18,617 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+<!-- MERGE ORDER: this entry is 0.38.0 and 0.37.0 belongs to the memory-doctor
+     branch, which is a SIBLING of this one rather than an ancestor. Both branch
+     off 0.36.0, so this file has no 0.37.0 section until the doctor branch lands.
+     Merge the doctor first and the history is continuous; merge this one first
+     and `main` ships with 0.37.0 missing. `check_changelog.py` cannot catch it —
+     it tests `old != new`, which is inequality only (and would also pass a
+     downgrade). Re-numbering this to 0.39.0 does not help: it moves the hole to
+     0.38.0 and makes it permanent. -->
+## [0.38.0] - 2026-08-09
+
+### Fixed
+
+- **A slow router no longer costs a prompt its memory.** With
+  `memory_router: llm`, a model call that timed out returned no picks — and a
+  router that *ran* and picked nothing is read downstream as a deliberate "no
+  memory is relevant", which suppresses the recency safety net. So a slow
+  machine produced prompts with **no memory injected at all**, recorded as one
+  warning in the log and otherwise indistinguishable from correct behaviour.
+  Measured on five real prompts replayed under load: five of five injected
+  nothing.
+
+  A failed call now answers with the `token_overlap` router instead — the same
+  degradation the plugin already applied when no model client was available at
+  all, for the same stated reason. The worst case is now the offline ranking
+  you would have had anyway, not silence. A model that genuinely runs and
+  chooses nothing still abstains; only failures degrade.
+
+  **Do not lower `router_timeout_seconds` to compensate.** It looks like you
+  should — a timeout now costs you only the offline ranking, so waiting for an
+  answer you are about to discard reads as pure latency. It was measured, on
+  the same five real prompts, and it does not work. Uncapped, those prompts
+  take a **median 27.4 s** (range 14.8–52.6 s), so there is no ceiling below
+  the median that buys anything: at 15 s, three fell back and the two that
+  finished returned no picks at all. The shipped 25 s default already sits just
+  under the median, which is the worst place for it — roughly half of all
+  prompts lose their routing and pay the full ceiling to do so.
+
+  The cost here is the Agent SDK's ~12 s per-call subprocess spawn, not the
+  model, so no timeout value fixes it. Until that cold start is gone,
+  `token_overlap` is the better setting on most machines.
+
+### Added
+
+- **Shared memory banks.** A *bank* is a git repository of memory files. Point
+  the plugin at one and its files route and inject exactly like your own — the
+  router picks a team file over a personal one on relevance alone, because
+  relevance is relevance. You declare banks in `memory-banks.yaml` at your
+  workspace's `.multiplai/` root:
+
+  ```yaml
+  memory_banks:
+    - name: dolcebot-team
+      remote: git@github.com:you/memory-bank.git
+      mode: propose        # ro = read only · propose = contribute by PR
+      sync: session-start
+  ```
+
+  **If you configure nothing, nothing changes.** No file, no banks, and every
+  path behaves exactly as it did in 0.36.0.
+
+- **You can always tell whose note you are reading.** Content from a shared
+  bank is injected under a heading naming the bank and its last-updated date,
+  and its body sits inside an `<untrusted-content>` fence. That fence is the
+  point, not decoration: a bank is memory *other people write*, arriving over
+  the network on a schedule, so it is reference material about how your team
+  works — never a standing instruction to your agent. If a bank contradicts
+  your own memory, Claude is told to say so rather than pick a side quietly.
+
+- **Contributions leave as a pull request, never as a write.** In every write
+  mode, including `auto`. An item the dream pipeline routes to a shared bank is
+  refused a local write by the same code floor that refuses path traversal, and
+  shows up in your review pile labelled *"belongs to a shared memory bank"*.
+  Turning it into a PR is a separate, explicit command:
+
+  ```
+  memory_bank.py contribute --proposal <dream proposal> --apply
+  ```
+
+  No model is involved in producing the contribution — the text in the pull
+  request is the text you read in the proposal, byte for byte.
+
+- **`BANK.md` and a leak check.** Each bank declares its owners, its review
+  rules, and its **no-go domains** (compensation, health, finances, credentials
+  — a sensible default list applies when a bank declares none). Anything
+  naming a no-go domain, or containing something shaped like an API key or
+  token, is blocked before a PR is opened and stays in your review pile. A
+  blocked item is not rejected memory; it is refused *sharing*.
+
+- **`/memory-bank` — list, sync, check, contribute, adopt.** `list` shows every
+  bank and its state; `sync` fast-forwards them (also run automatically and
+  detached at session start, TTL-gated — a bank you cannot reach is *stale*,
+  never a session-start error); `check` reports cross-bank collisions.
+
+- **`adopt` — the migration that stops you injecting the same fact twice.** The
+  rule banks are built on is that a fact lives in **exactly one** bank, so
+  joining one means moving your overlapping content into it and deleting your
+  local copy. `adopt` shows you which of your files the bank overlaps and why,
+  then deletes only files you name one by one — there is no adopt-everything.
+  **Nothing is deleted that is not already in the bank, line for line**: if the
+  contribution PR has not merged and pulled yet, the file is skipped and the
+  missing lines are named. Every adoption writes a receipt carrying the exact
+  `git revert` that undoes it.
+
+- **Cross-bank collision reports.** When two banks claim the same filename, the
+  same routing domains, or the same section heading, catalog generation says
+  so — in `bank-collisions.md` beside the catalogs — instead of letting both
+  copies reach a prompt. It reports; it never silently resolves.
+
+### Changed
+
+- **Two new settings:** `memory_banks_file` (where your bank declarations live,
+  if not the default) and `bank_sync_ttl_hours` (how often session start
+  fast-forwards a bank; default 6).
+
+- **Your workspace is found without the launcher telling it.** If neither
+  `workspace_dir` nor `WORKSPACE` is set, the plugin now walks up from the
+  project directory to the nearest `.multiplai/` folder. Previously that case
+  fell through to `~/.multiplai` and quietly wrote your memory outside the
+  workspace it was plainly sitting in. Explicit settings still win, so nothing
+  that works today changes. **Requires `multiplai-core` ≥ 0.14.0.**
+
+## [0.37.0] - 2026-08-08
+
+### Added
+
+- **A weekly memory doctor that reads your whole corpus and tells you what is
+  wrong with it.** Triage judges one new item against one file, which means it
+  cannot see the failures that only exist across the corpus: the same fact
+  arriving five times over three months in slightly different words across three
+  files, or a note that quietly contradicts one written in May. Nobody was
+  watching for either. Now something is, once a week, unattended, and it writes
+  what it finds to `.multiplai/dreams/doctor-YYYY-MM-DD.md`.
+
+  Three sections, each finding numbered and citing `file:line` so you can check
+  it:
+
+  - **Duplication** — every pair of near-identical bullets, first shortlisted by
+    a plain text-similarity measure (no new dependency; the corpus is under
+    1 MB) and then confirmed by a model, which also drafts the merged wording.
+    Only confirmed pairs are reported.
+  - **Contradiction** — pairs of statements *within one file* that cannot both
+    be true, each with both quotes and a one-line explanation. A file you have
+    not edited since the last run costs nothing, and its earlier findings are
+    carried forward rather than dropped.
+  - **Dead weight** — sections nothing seems to use, split into three findings
+    that mean different things: never retrieved at all, retrieved but estimated
+    unused, and expensive per estimated use.
+
+- **The doctor never edits your memory, and there is no flag that changes
+  that.** Triage writes *additions*, which a receipt records and `git revert`
+  undoes cleanly. The doctor would be proposing *deletions and merges*, where a
+  wrong call destroys something no receipt can reconstruct. So it hands you
+  suggestions with the evidence attached and you decide. The report is also
+  built so that no existing tooling can pick it up: `dream --triage` refuses it
+  outright.
+
+### Notes on how much to trust it
+
+- **Dead weight is honest about being an estimate.** Every number names which
+  estimator produced it and shows its sample size. A section is only called
+  unused when *both* estimators independently saw it enough times and each put
+  its use at or below the threshold — a missing estimate is never read as "not
+  used", and the two are never averaged into one score. Anything below the
+  sample-size floor is not reported at all, and the floor is printed in the
+  report.
+
+  **That both-estimators rule covers the "unused" finding only.** The
+  "expensive per estimated use" list ranks from whichever estimator has data, so
+  a telemetry gap cannot make live memory look *unused* but can still shape that
+  list off one surviving estimator. Every row names its basis, and the report now
+  says this where you read it rather than only in the source.
+- **It will propose nothing for a while, and that is correct.** The utilisation
+  telemetry needs weeks to accumulate. Until it has, the dead-weight section
+  says so in place of ranking noise.
+- **A section that reads as a behavioural rule is never proposed for removal on
+  usage grounds.** Rules are retrieved rarely by construction, and they are
+  exactly the content whose absence you would not notice. They are listed
+  separately as withheld, with the reason.
+- **Cross-file contradictions are not looked for yet.** The report says so, so
+  that an empty contradiction section is not mistaken for a clean bill of
+  health.
+- **A failure never widens what you are shown.** A model call that times out or
+  comes back garbled contributes nothing at all, and the report tells you how
+  many did. With no model available the deterministic dead-weight pass still
+  runs and the other two say they were skipped. In the same spirit: a section
+  whose text cannot be read back out of the corpus at all is **withheld** rather
+  than proposed, and listed with that reason — an unscreened candidate is not a
+  pruning candidate.
+- **A partly-read file says so.** One contradiction call reads at most 60,000
+  characters of a file, and four files in a corpus this size are longer than
+  that — including the largest, of which about two thirds sits past the limit.
+  Those files are now named in the report, because "no contradictions found" in a
+  file that was only two-thirds read is a different statement from a clean one.
+- **A doctor run that fails leaves the weekly gate open**, so the next
+  maintenance run retries instead of going quiet for seven days on the strength
+  of one log line.
+- **Quoted text in the report cannot restructure the report.** The suggested
+  merge wording and the quoted lines are model output derived from your memory
+  files; they are now neutralised on the way out, so a stray code fence in a
+  memory file cannot break out of its bullet and rearrange everything below it.
+
+## [0.36.0] - 2026-08-08
+
+### Changed
+
+- **Triage now judges what an item *says*, not what it looks like.** The old
+  classifier was eight regex-and-allowlist gates, and on the real 194-item
+  proposal it sent 120 items to you — **90 of them for one reason**: the text
+  contained a word like "always" or "never". That gate fires on "the API always
+  returns UTF-8", because the difference between a fact and an instruction is
+  semantic and a pattern match is not. It is gone, along with the 18-name
+  hand-maintained list of "files that are safe to write to", which went stale
+  and could not see any memory file added after it was written.
+
+  What replaces them is a separate model call whose only job is to find reasons
+  to escalate. It is never told it is grading another pass's output. Per item it
+  re-derives the provenance/kind labels, checks whether the cited source
+  actually supports the claim, and checks whether the target file already says
+  it — three questions no pattern could ever answer.
+
+- **What may be applied without you reading it is now a table you can read.**
+  Provenance sets confidence, kind sets blast radius, and only the intersection
+  applies:
+
+  | | fact | decision | rule |
+  |---|---|---|---|
+  | you corrected it / you stated it | apply | apply | **review** |
+  | observed while working / read in a source | apply, if the citation holds | review | **review** |
+  | Claude inferred it | review | review | **review** |
+
+  **A rule never applies automatically. Not in any mode, not even when you
+  yourself said it.** That is about blast radius, not trust: a wrong fact is one
+  you notice later; a wrong rule changes what you notice.
+
+  The model cannot move an item *up* this table. It can only escalate for
+  review, or drop. So talking the judge into approving a rule changes nothing.
+
+### Added
+
+- **`memory_write_mode`** — a new setting, defaulting to **`triage`**.
+  - `review` — nothing is ever applied automatically. This is exactly the old
+    behaviour, one word away.
+  - `triage` *(default)* — the judge runs and the table decides; everything else
+    waits for you.
+  - `auto` — also applies plain facts the table would have held back. Rules
+    still never apply.
+
+  The nightly maintenance pass now applies under `triage` and `auto`. **This is
+  a real change: until now nothing unattended ever wrote to your memory files.**
+  Every applied item is in a receipt, memory is a git repository, and the
+  receipt ends with the exact `git revert` command that undoes the whole batch.
+
+  **Read this before you upgrade, because the default turns it on.** With
+  `memory_write_mode: triage`, the whole chain — learnings → proposal → judge →
+  memory write → git commit — runs on the daily maintenance cadence with no
+  human present and without you invoking `/dream-remember` at all. The
+  maintenance pass can even generate the proposal it then triages, in one run.
+  Set `memory_write_mode: review` to keep the old behaviour exactly.
+
+  One related narrowing worth knowing: destination protection used to be a list
+  of 18 filenames that could never be written unattended. It is now two —
+  `CLAUDE.md` and `AGENTS.md` — because a filename is a poor proxy for "this
+  file holds behaviour". What protects `preferences.md`, `git-policy.md`,
+  `technical-pref.md` and the voice guides now is the classification: an item
+  whose **kind** is `RULE` is never applied unattended in any mode. That is a
+  better rule and a *model's* judgement rather than a filename match, so it is a
+  genuine trade rather than a straight improvement.
+
+- **A rejection log at `.multiplai/data/rejections.jsonl`.** When the judge
+  drops an item — usually because your memory already says it — the item is
+  written here in full: its text, its labels, its source citation and the
+  judge's own one-line reason. Dropping means "not promoted to memory", never
+  "deleted": the source learning is untouched and any drop can be read back and
+  overruled. The receipt shows every rejection while there are 25 or fewer, and
+  grouped counts above that.
+
+- **The receipt now has both an `Applied` and a `Rejected` section**, each item
+  carrying the labels it was judged under and the judge's reason.
+
+### Fixed
+
+- **A model failure can no longer widen what gets written.** A timed-out batch,
+  a rate limit, an unparseable reply, or no SDK at all now yields *zero*
+  verdicts — and with zero verdicts nothing is applied at all, which is
+  identical to `review` mode. The count of items that kept a conservative
+  default because their batch failed is printed and logged rather than passed
+  over in silence.
+
+- **Verdicts are cached, so re-runs are stable.** Triaging the same proposal
+  twice produces the same partition and costs nothing the second time, and a
+  killed run resumes instead of re-judging. The cache key covers everything the
+  judge was shown — including the citation the item carried, whether the routing
+  gate had flagged it, and the judge's own prompt — so a cache hit is always the
+  answer to the same question. It is not reused when any of those change.
+
+- **Two items numbered the same can no longer be applied on each other's
+  judgement.** A proposal that numbers two entries `### 3.` under one file is
+  now refused outright, with both labels named, rather than triaged: the number
+  is how an item is identified end to end, so two items sharing one would each
+  have been written on the other's verdict. Renumber them, or regenerate.
+
+- **A stricter reading of the judge's reply.** A verdict line for an item that
+  was not in the batch it answers is discarded, and a reply that answers twice
+  for one item is thrown away whole. This closes a route by which text inside a
+  learning could pose as a verdict for a *different* item — most cheaply as a
+  forged `drop`, which would have removed a legitimate learning from your queue.
+
+- **`--dry-run` really does write nothing.** It still calls the model (the
+  partition *is* the judge's answer, so a preview that skipped judging could only
+  report "nothing would apply"), but it no longer saves the verdict cache — so a
+  preview cannot leave behind something a later real run applies from. The help
+  text now says all of this, and no longer describes gates that were removed.
+
+- **An unsupported citation now holds back every fact it should.** The rule is
+  "a factual claim about the world needs a citation the judge could corroborate";
+  it was being applied to facts from research and observation but *skipped* for
+  the weakest class of all — a conclusion the model merely inferred. Under
+  `auto` that meant an uncited inference was applied while a cited fact was held.
+  Corrections and your own stated preferences remain exempt: neither is a claim
+  about an external source.
+
+- **Memory files are written atomically, and a failed write cannot lose a
+  receipt.** The write was truncate-then-write with no error handling, so a
+  failure on the second of two files left the first rewritten with no receipt,
+  no commit and nothing marked processed — the one state the receipt ordering is
+  designed to make impossible. A file that cannot be written is now reported like
+  any other refusal and its items stay pending.
+
+- **The write floor checks where the file actually is.** A symlink sitting in the
+  memory directory used to satisfy every filename check while sending the write
+  somewhere else entirely — including to `CLAUDE.md`. The resolved destination is
+  now checked too, and a symlink is refused outright. Also: a target with a
+  trailing newline is no longer a valid filename (Python's `$` matches before
+  one, so `"CLAUDE.md\n"` had been passing).
+
+- **The rejection log is capped at 5,000 records.** It holds every dropped
+  item's text verbatim and was designed to grow forever — and since
+  `/dream-remember` deletes the source learnings files, it was the one permanent
+  copy. It is not redacted, deliberately (a regex screen over free text fails
+  open while reading as protection); it is bounded, git-ignored, and documented
+  as holding what it holds.
+
+- **`.multiplai/memory/CLAUDE.md` (and `AGENTS.md`) can never be written
+  unattended**, whatever an item claims to be. Neither can a filename that tries
+  to escape the memory directory, an item that revises rather than appends, or
+  one that did not parse. These checks run *after* the model's verdict and can
+  only refuse it.
+
+
+## [0.35.0] - 2026-08-08
+
+### Added
+
+- **You can now see which memory is earning its place — as an honest estimate,
+  never a measurement.** Retrieval counts were always available and always
+  misleading: a section injected on every prompt and relevant on none of them
+  looks maximally valuable counted that way. Nothing can observe *use*
+  directly, so this release estimates it two independent ways and shows both
+  side by side.
+  - **Self-report**, free. The end-of-session pass already reads your whole
+    transcript; it is now also handed the list of sections that were injected
+    and asked which it relied on — with a quote or a concrete reference as
+    evidence. A claim with no evidence is recorded as unsupported and never
+    counts. "None of them" is offered as a normal answer, because otherwise a
+    model finds a reason for everything.
+  - **An offline judge**, sampled. A new cheap-tier pass in the nightly
+    maintainer compares the injected list against a distilled transcript for a
+    handful of sessions per run (`utilisation_judge_sample`, default 5; `0`
+    turns it off). It is independent of the session's own reasoning, so where
+    the two estimators disagree, that disagreement is itself the signal.
+- **A ranked table, ordered by cost per estimated use.** Run
+  `scripts/utilisation_report.py` (add `--json` for a machine-readable form),
+  or read it inside `/multiplai-context:memory-health-audit`. The expensive
+  and seldom-used rows sort to the top, which is what makes a pruning
+  candidate obvious.
+- **Records accumulate in `<data_dir>/utilisation.jsonl`** — one record per
+  session, written atomically, with detail older than 90 days collapsing into
+  per-section running totals so the file cannot grow without bound. Totals
+  survive compaction exactly; only the per-session detail goes.
+
+### Notes on reading the numbers
+
+- **Everything on this surface is labelled *estimated*, everywhere, and there
+  is deliberately no single blended "utilisation score".** Two estimates with
+  opposite biases averaged into one number would be exactly the fabricated
+  precision this feature exists to avoid. Where they disagree by more than 35
+  points the row is marked, not reconciled.
+- **Rows with too few observations are not ranked at all.** They appear under
+  "insufficient data" with their sample size, rather than being sorted into a
+  position they have not earned. "Never retrieved" is kept as a separate list
+  again — a section that never reached a prompt tells you about routing, not
+  about value.
+- **Nothing is pruned, edited, or auto-applied by any of this.** The table is
+  evidence for you to act on; `/multiplai-context:dream-remember` is still the
+  only path that writes to memory.
+- **A blank is not a zero — on both estimators.** If either pass fails, times
+  out, or comes back without an answer, nothing is written, leaving that half
+  unestimated — so a bad night can never make your corpus read as dead weight.
+  Concretely: the judge writes no verdict rather than an empty one, and the
+  in-session self-report is skipped unless the whole transcript was read *and*
+  every chunk actually answered. That second condition matters more than it
+  sounds: the self-report rides on the end of a longer reply, so a truncated one
+  used to record "used none of them", which is what puts a section you rely on
+  at the top of a pruning list. A missing estimate now shows as `—`, and only a
+  section genuinely reported as unused shows a zero.
+
+  With no model client available, no estimate is recorded; what was injected is
+  still recorded, because that part needs no model.
+- **"Never retrieved" says when it does not know.** The list needs some history
+  behind it before "never" means anything — on a fresh install it is simply
+  everything you have. Below ten recorded sessions both the report and the
+  `--json` output now say so, and the JSON carries
+  `never_retrieved_sufficient: false` so anything reading it unattended cannot
+  mistake a thin log for evidence.
+- **Two sessions ending at once no longer lose each other's telemetry.** The log
+  is read-modify-written, and without a lock the later writer silently discarded
+  the earlier one's whole record. With parallel containers and extraction
+  draining at the next session start, that overlap is ordinary rather than rare;
+  measured before the fix, 40 simultaneous writers left 2 records.
+- **The judge's coverage report distinguishes an outage from nothing to judge.**
+  `kept_default` lumped "the model call failed" together with "this session has
+  no transcript any more", and since transcripts age out faster than the 90-day
+  retention window the second is a permanent, growing baseline — which buried the
+  first. The report now breaks the total into `unavailable`, `not_judgeable` and
+  `empty_verdicts`, and only `unavailable` warns.
+
+- **A blank is not a zero.** If the judge pass fails or times out it writes no
+  verdict at all, leaving the session unjudged — so a bad night can never make
+  your whole corpus read as dead weight. With no model client available, no
+  estimate is recorded; what was injected is still recorded, because that part
+  needs no model.
+
+## [0.34.0] - 2026-08-08
+
+### Added
+
+- **Each learning now says where it came from, separately from what it is.**
+  Lines in `.multiplai/learnings/` open with a pair instead of a trust rating:
+
+  ```
+  - **[CORRECTION/RULE]** Stage with an explicit pathspec. → Target: dev.md — Add to the Git section.
+  ```
+
+  The first half is the **provenance** — `RESEARCH`, `EMPIRICAL`, `CORRECTION`,
+  `DECLARATION` or `INFERENCE` — which is where the knowledge came from and so
+  the only thing that says how it could be checked again. The second is the
+  **kind** — `FACT`, `RULE`, `DECISION` or `INTENTION` — which is what sort of
+  claim it is, and how far a wrong one reaches.
+
+  These used to be one `type` field answering both questions at once, which
+  meant a correction *about a fact* and a correction *about how Claude should
+  behave* wore the same label. They need opposite handling: the first is the
+  most trustworthy input in the system, the second is the one you most want to
+  read before it applies. `INFERENCE` in particular had no representation at
+  all — a conclusion Claude drew and nobody confirmed looked, one consolidation
+  later, exactly like a verified fact.
+
+  When the extractor genuinely cannot tell, it answers `INFERENCE` and `RULE` —
+  the cautious end of each axis, so unclear items land in front of you rather
+  than sliding past. README → *Learning lifecycle* has both tables with a
+  worked example each.
+
+- **Dream proposal items carry the pair.** Each `### N.` entry gains a
+  `**Provenance:** PROVENANCE/KIND` line naming what the entry was distilled
+  from, and the auto-apply receipt repeats it — so an item applied without
+  anyone reading it can still be traced back to the kind of evidence behind it.
+
+### Changed
+
+- **Learnings you already have are left exactly as they are.** Records captured
+  before this release keep their `**[trust: …]** TYPE` line and are read
+  through a fixed mapping rather than relabelled on disk. Nothing back-fills a
+  provenance onto an old note: guessing where a month-old line came from would
+  manufacture the very signal these labels exist to make trustworthy. Both
+  forms coexist in the same file for as long as your backlog does.
+
+- **`trust:` is deprecated.** It is still recorded and still accepted, but it no
+  longer appears on the rendered line — two confidence-ish markers on one line
+  is what made the old format ambiguous. Provenance answers the question `trust`
+  was reaching for, and with an actual source behind it.
+
+### Fixed
+
+- **Upgrading does not re-propose your whole consolidated backlog.** Dream
+  decides what is new by hashing each learnings record, and that hash used to
+  include the label markers — so changing the line format would have made every
+  pending record look brand new. Hashes are now computed from what a learning
+  *says* (its description, target and action), and existing ledger entries are
+  converted in place on the first run after the upgrade. Nothing you have
+  already reviewed comes back.
+
+  Two details of that conversion, both of which cost a learning when they were
+  wrong. The old key is kept as an alias rather than replaced, because a run
+  that crashed mid-draft records raw key strings beside its staged draft — if
+  those stop resolving, the draft is discarded *and* the learning stays marked
+  consolidated, so its content is gone with nothing to show for it. And a
+  learning whose description happens to begin with a word from the old
+  vocabulary (`OBSERVATION`, `PATTERN`, …) now keeps its own identity; it used
+  to hash the same as the same learning without that word, so one of the two was
+  silently treated as already reviewed.
+
+- **One thing does read the new labels: conflict detection.** When a learning
+  contradicts a line already in memory, dream surfaces it under
+  `## Conflict Resolutions` for you to accept or reject. That used to fire on
+  any learning marked `trust: verified`; it now fires on provenance
+  `CORRECTION` or `EMPIRICAL` — the two that mean "the world was observed to be
+  otherwise". `RESEARCH`, `DECLARATION` and `INFERENCE` do not: read somewhere,
+  asserted, or reasoned to, none of them observed here. This is deliberately the
+  same set of learnings as before rather than a narrower one; `EMPIRICAL` is what
+  most of your verified learnings become, so leaving it out would have quietly
+  turned the feature off.
+
+  Routing and injection are unchanged, and dream's triage still does not read
+  the pair.
+
+- **Nothing acts on the new labels yet.** Routing, injection and dream's own
+  triage behave exactly as before. This release only records the information.
+## [0.33.0] - 2026-08-08
+
+### Added
+
+- **Routing can now load one section of a memory file instead of the whole
+  file.** The machinery for `file.md#Section` picks has shipped since 1.2.0, but
+  the field that switches it on — `section_anchors` — was marked hand-authored,
+  so unless you wrote it yourself it was empty and every picked memory file was
+  injected whole. Catalog generation now writes it for you: each memory file of
+  at least 8 KB with at least three `##` sections gets one entry per section,
+  carrying the section name and a one-line description of what is in it. The
+  router reads those descriptions and asks for the sections it needs — naming
+  sections is now its **default** for an anchored file, with the whole file
+  reserved for when most of it is relevant. On a 180 KB file with 30 sections
+  that is roughly 6 KB in place of 180. Measured over 17 routing prompts against
+  a 921 KB corpus, injected memory fell 68% (814 KB → 260 KB).
+
+  Section names are extracted from your file in code and handed to the model as
+  a fixed list to describe — it never writes the name — so an anchor cannot
+  drift from the header it points at. If one is wrong anyway, the loader still
+  falls back to the whole file, which is what happens today, so no prompt can
+  come out with less context than before.
+
+  Two things that follow from that promise and are worth knowing, because both
+  are behaviour you would otherwise have to discover:
+
+  - **Everything above your file's first `##` heading rides along with every
+    section pick.** That is where your `**Last Updated:**` stamp, the
+    `**Purpose:**` line, `Boundaries — route elsewhere:` routing notes, and
+    cross-file instructions like `> **Load core-voice.md first.**` live. It is
+    added once per file, not once per section, and it is why "a pick never
+    carries less than the whole file would have" is true rather than
+    aspirational.
+  - **`##` lines inside fenced code blocks are not sections.** A markdown
+    example pasted into a memory file used to cut the surrounding section in
+    half and add a phantom section name to the catalog. Memory files are exactly
+    where markdown examples get pasted.
+
+  Files under either threshold get no anchors. That is deliberate, not a
+  failure: a 4 KB file is already about one section's worth of context.
+
+  **On upgrade, anchors appear on the next catalog refresh** — you do not have
+  to touch your memory files or pass `--force`. Regeneration is normally gated
+  on a file's content hash, which an upgrade does not change; a memory file that
+  is anchorable but has no anchors yet is regenerated once regardless, then
+  falls back to the hash gate like everything else.
+
+- **`memory_lint` reports duplicate `##` section names across your memory
+  files.** Your memory `CLAUDE.md` has always asked for these to be unique
+  corpus-wide; nothing checked. It matters now, because two files both offering
+  `## Overview` make a `#Overview` section pick ambiguous. Warn-only and it
+  renames nothing — which of the two should change is a judgement about what the
+  memory means. Findings appear in the maintainer's lint report and in
+  `/multiplai-context:health` under `memory_validity.duplicate_h2`.
+
+  A name repeated **within one file** is reported too, as `duplicate-h2-in-file`.
+  A `#Name` pick for it loads every occurrence, so the slice is bigger and
+  vaguer than the name suggests — retitling one is the fix.
+
+- **`router_timeout_seconds`** — how long the `llm` router waits before giving
+  up, previously fixed at 25s in the source. Worth knowing about because a
+  timeout injects **no** memory for that turn, and section anchors give each
+  routing call a longer catalog to read and a finer choice to make. If you see
+  `LLMRouter timed out` in the logs, this is the knob.
+
+### Changed
+
+- **`section_anchors` is regenerated rather than preserved across catalog
+  rebuilds.** It used to sit with the hand-authored fields, which meant the
+  first list ever written was frozen: rename or delete a section and the catalog
+  kept advertising the old name forever, silently, because a missed anchor just
+  loads the whole file. It is now derived from the file each time that file
+  changes. If you had hand-written anchors, they will be replaced on the next
+  regeneration of that file — any that name a real `##` header will come back
+  with a description attached. `sections`, `bundle` and `co_retrieve_for` are
+  untouched and still preserved.
+
+- **The injection log records which sections were sent, and what each file
+  cost.** `inject` events in `activity.jsonl` gain `sections_by_file` (an empty
+  list meaning the whole file) and `bytes_by_file`. Without them `files` alone
+  cannot tell you whether a large file cost you 180 KB or 6 KB this turn.
+  `files` and `files_by_corpus` are unchanged.
+
+### Known issue
+
+- **If you run `memory_router: llm`, routing calls got slower.** The catalog the
+  router reads roughly doubled (30 KB → 61 KB on a 29-file corpus) because every
+  section now carries a description, and the reply is longer too. Median routing
+  latency in our measurement went from 16 s to 22 s, with one 35-section file
+  reaching 84 s. The router's ceiling is **25 s**, and a call that hits it
+  injects **no memory at all** for that turn — the pre-existing failure mode,
+  now easier to reach. The default router (`token_overlap`) makes no model call
+  and is unaffected.
+
 ## [0.32.2] - 2026-08-07
 
 ### Fixed

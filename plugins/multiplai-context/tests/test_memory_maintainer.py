@@ -1,9 +1,16 @@
 """Tests for the proactive memory maintainer.
 
 Two things matter here and they pull in opposite directions. The maintainer
-must actually run unattended (or it's just another thing to remember), and it
-must never touch `.multiplai/memory/` (or an unattended bug rewrites the
-memory nobody was watching). Most of these tests are about the second.
+must actually run unattended (or it's just another thing to remember), and an
+unattended bug must not be able to rewrite memory nobody was watching. Most of
+these tests are about the second.
+
+Until 0.36.0 the second was absolute: no pass wrote `.multiplai/memory/` at
+all. Pass 7 (`run_triage`) trades that deliberately — see the maintainer's own
+module docstring for what was bought. What is asserted here now is the narrower
+property that survived: nothing running *in process* touches memory, and the
+one pass that can is gated on `memory_write_mode`, defaults off under `review`,
+and never reaches for `--auto`.
 """
 
 import subprocess
@@ -262,15 +269,89 @@ class TestActiveProject:
         assert mm.active_project(tmp_path / "absent") is None
 
 
+class TestTriagePass:
+    """Pass 7 — the one pass that can write `.multiplai/memory/`, and the
+    reason `TestNoPassWritesMemoryDirectly` below no longer says 'never'."""
+
+    def _spy(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(mm, "run_supervised",
+                            lambda cmd, **kw: calls.append(cmd) or
+                            subprocess.CompletedProcess(cmd, 0, "", ""))
+        return calls
+
+    def _waiting(self, tmp_path) -> Path:
+        dreams = tmp_path / "dreams"
+        dreams.mkdir(exist_ok=True)
+        proposal = dreams / "processed-learnings-2026-08-05.md"
+        proposal.write_text("# proposal\n", encoding="utf-8")
+        return dreams
+
+    def test_review_mode_turns_it_off_entirely(self, tmp_path, monkeypatch):
+        """One word of config restores the pre-0.36.0 behaviour exactly."""
+        calls = self._spy(monkeypatch)
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_WRITE_MODE", "review")
+        result = mm.run_triage(tmp_path, self._waiting(tmp_path))
+        assert not result.ran and "review" in result.detail
+        assert calls == []
+
+    def test_a_config_typo_also_turns_it_off(self, tmp_path, monkeypatch):
+        # A malformed value must not be able to *widen* what gets written.
+        calls = self._spy(monkeypatch)
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_WRITE_MODE", "atuo")
+        assert not mm.run_triage(tmp_path, self._waiting(tmp_path)).ran
+        assert calls == []
+
+    def test_it_is_skipped_when_nothing_is_waiting(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_MEMORY_WRITE_MODE", raising=False)
+        result = mm.run_triage(tmp_path, tmp_path / "dreams")
+        assert not result.ran and "no proposal" in result.detail
+        assert calls == []
+
+    def test_it_triages_the_waiting_proposal_by_default(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_MEMORY_WRITE_MODE", raising=False)
+        result = mm.run_triage(tmp_path, self._waiting(tmp_path))
+        assert result.ran and "triage mode" in result.detail
+        assert len(calls) == 1
+        assert "--triage" in calls[0]
+        assert "--proposal" in calls[0]
+        # Never `--auto`: that path applies a whole proposal on the drafting
+        # pass's own say-so, with no separate judge, no rubric and no floor.
+        assert "--auto" not in calls[0]
+
+    def test_a_dry_run_names_the_proposal_and_runs_nothing(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_MEMORY_WRITE_MODE", raising=False)
+        result = mm.run_triage(tmp_path, self._waiting(tmp_path), dry_run=True)
+        assert result.ran and "processed-learnings-2026-08-05.md" in result.detail
+        assert calls == []
+
+    def test_nonzero_exit_is_reported_not_raised(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_MEMORY_WRITE_MODE", raising=False)
+        monkeypatch.setattr(mm, "run_supervised",
+                            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "no"))
+        result = mm.run_triage(tmp_path, self._waiting(tmp_path))
+        assert not result.ran and "exit 1" in result.detail
+
+
 class TestMemoryIsNeverModified:
-    """Plan done-condition 4: the maintainer 'demonstrably does not modify
-    `.multiplai/memory/` itself'."""
+    """**The contract this class asserts changed in 0.36.0.** It used to be
+    "the maintainer never modifies `.multiplai/memory/`"; pass 7 trades that
+    deliberately (see the module docstring for what was bought). What survives,
+    and is asserted here, is the narrower and still load-bearing property: no
+    pass that runs *in process* touches memory, and the one pass that can is a
+    separate, gated subprocess with a receipt and a git revert behind it."""
 
     def _snapshot(self, d: Path) -> dict:
         return {p.name: (p.read_bytes(), p.stat().st_mtime)
                 for p in sorted(d.glob("*.md"))}
 
     def test_a_full_run_leaves_memory_byte_identical(self, tmp_path, monkeypatch):
+        """Every subprocess pass is stubbed, so what this pins is the
+        in-process half: lint, catalog staleness, `now/` and the utilisation
+        passes write nothing into the memory dir between them."""
         memory = tmp_path / "memory"
         memory.mkdir()
         # Content that trips the linter, so the pass with the most reason to
