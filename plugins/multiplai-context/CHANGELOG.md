@@ -18,6 +18,89 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.34.0] - 2026-08-08
+
+### Added
+
+- **Each learning now says where it came from, separately from what it is.**
+  Lines in `.multiplai/learnings/` open with a pair instead of a trust rating:
+
+  ```
+  - **[CORRECTION/RULE]** Stage with an explicit pathspec. → Target: dev.md — Add to the Git section.
+  ```
+
+  The first half is the **provenance** — `RESEARCH`, `EMPIRICAL`, `CORRECTION`,
+  `DECLARATION` or `INFERENCE` — which is where the knowledge came from and so
+  the only thing that says how it could be checked again. The second is the
+  **kind** — `FACT`, `RULE`, `DECISION` or `INTENTION` — which is what sort of
+  claim it is, and how far a wrong one reaches.
+
+  These used to be one `type` field answering both questions at once, which
+  meant a correction *about a fact* and a correction *about how Claude should
+  behave* wore the same label. They need opposite handling: the first is the
+  most trustworthy input in the system, the second is the one you most want to
+  read before it applies. `INFERENCE` in particular had no representation at
+  all — a conclusion Claude drew and nobody confirmed looked, one consolidation
+  later, exactly like a verified fact.
+
+  When the extractor genuinely cannot tell, it answers `INFERENCE` and `RULE` —
+  the cautious end of each axis, so unclear items land in front of you rather
+  than sliding past. README → *Learning lifecycle* has both tables with a
+  worked example each.
+
+- **Dream proposal items carry the pair.** Each `### N.` entry gains a
+  `**Provenance:** PROVENANCE/KIND` line naming what the entry was distilled
+  from, and the auto-apply receipt repeats it — so an item applied without
+  anyone reading it can still be traced back to the kind of evidence behind it.
+
+### Changed
+
+- **Learnings you already have are left exactly as they are.** Records captured
+  before this release keep their `**[trust: …]** TYPE` line and are read
+  through a fixed mapping rather than relabelled on disk. Nothing back-fills a
+  provenance onto an old note: guessing where a month-old line came from would
+  manufacture the very signal these labels exist to make trustworthy. Both
+  forms coexist in the same file for as long as your backlog does.
+
+- **`trust:` is deprecated.** It is still recorded and still accepted, but it no
+  longer appears on the rendered line — two confidence-ish markers on one line
+  is what made the old format ambiguous. Provenance answers the question `trust`
+  was reaching for, and with an actual source behind it.
+
+### Fixed
+
+- **Upgrading does not re-propose your whole consolidated backlog.** Dream
+  decides what is new by hashing each learnings record, and that hash used to
+  include the label markers — so changing the line format would have made every
+  pending record look brand new. Hashes are now computed from what a learning
+  *says* (its description, target and action), and existing ledger entries are
+  converted in place on the first run after the upgrade. Nothing you have
+  already reviewed comes back.
+
+  Two details of that conversion, both of which cost a learning when they were
+  wrong. The old key is kept as an alias rather than replaced, because a run
+  that crashed mid-draft records raw key strings beside its staged draft — if
+  those stop resolving, the draft is discarded *and* the learning stays marked
+  consolidated, so its content is gone with nothing to show for it. And a
+  learning whose description happens to begin with a word from the old
+  vocabulary (`OBSERVATION`, `PATTERN`, …) now keeps its own identity; it used
+  to hash the same as the same learning without that word, so one of the two was
+  silently treated as already reviewed.
+
+- **One thing does read the new labels: conflict detection.** When a learning
+  contradicts a line already in memory, dream surfaces it under
+  `## Conflict Resolutions` for you to accept or reject. That used to fire on
+  any learning marked `trust: verified`; it now fires on provenance
+  `CORRECTION` or `EMPIRICAL` — the two that mean "the world was observed to be
+  otherwise". `RESEARCH`, `DECLARATION` and `INFERENCE` do not: read somewhere,
+  asserted, or reasoned to, none of them observed here. This is deliberately the
+  same set of learnings as before rather than a narrower one; `EMPIRICAL` is what
+  most of your verified learnings become, so leaving it out would have quietly
+  turned the feature off.
+
+  Routing and injection are unchanged, and dream's triage still does not read
+  the pair.
+
 ## [0.33.0] - 2026-08-08
 
 ### Added

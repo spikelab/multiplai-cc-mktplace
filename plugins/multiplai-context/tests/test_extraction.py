@@ -125,6 +125,58 @@ class TestExtractionPrompt:
         assert "{transcript}" in EXTRACTION_PROMPT
 
 
+class TestPromptRequestsBothAxes:
+    """The prompt is where the taxonomy is actually decided.
+
+    Everything downstream can only carry what the extractor labelled, so the
+    closed value sets and the three hard distinctions have to be *in the
+    prompt* — not merely defined in the module that validates the answer.
+    """
+
+    def test_both_fields_are_requested_with_their_closed_sets(self):
+        from lib import taxonomy
+        from lib.extraction import EXTRACTION_PROMPT
+        spec = EXTRACTION_PROMPT.split("<learning>")[1].split("</learning>")[0]
+        assert "provenance:" in spec and "kind:" in spec
+        for value in taxonomy.PROVENANCES:
+            assert value in spec, f"provenance {value} missing from the record spec"
+        for value in taxonomy.KINDS:
+            assert value in spec, f"kind {value} missing from the record spec"
+
+    def test_the_single_axis_type_field_is_gone_from_the_spec(self):
+        """Asking for both `type` and the two axes would get all three, in
+        conflict. The key stays *accepted* on read; it is no longer requested."""
+        from lib.extraction import EXTRACTION_PROMPT
+        spec = EXTRACTION_PROMPT.split("<learning>")[1].split("</learning>")[0]
+        assert "type:" not in spec
+
+    def test_trust_is_still_requested(self):
+        """Deprecated, not removed: dropping it in the same change that adds two
+        fields would make both impossible to evaluate."""
+        from lib.extraction import EXTRACTION_PROMPT
+        spec = EXTRACTION_PROMPT.split("<learning>")[1].split("</learning>")[0]
+        assert "trust:" in spec
+
+    @pytest.mark.parametrize("distinction", [
+        "CORRECTION vs DECLARATION",
+        "INFERENCE vs EMPIRICAL",
+        "FACT vs RULE",
+    ])
+    def test_the_three_hard_distinctions_are_spelled_out(self, distinction):
+        """These three carry essentially all the classification difficulty, and
+        each is stated with a worked example rather than a definition."""
+        from lib.extraction import EXTRACTION_PROMPT
+        assert f"**{distinction}**" in EXTRACTION_PROMPT
+
+    def test_the_unclear_defaults_are_stated_with_their_cost(self):
+        """The asymmetry is deliberate — both defaults send an item to a human —
+        and the model is told so, otherwise it optimises for looking decisive."""
+        from lib.extraction import EXTRACTION_PROMPT
+        assert "unclear, answer `INFERENCE`" in EXTRACTION_PROMPT
+        assert "unclear, answer `RULE`" in EXTRACTION_PROMPT
+        assert "send the item to a human" in EXTRACTION_PROMPT
+
+
 # ---------------------------------------------------------------------------
 # extract_units
 # ---------------------------------------------------------------------------
@@ -402,6 +454,41 @@ class TestAppendLearnings:
         content = lf.read_text()
         assert "**[trust:" in content
         assert "→ Target:" in content
+
+    def test_a_taxonomy_learning_is_written_with_its_pair(self, tmp_path):
+        """End to end through the writer: what the extractor labelled is what
+        lands in the file a human reads."""
+        from lib.extraction import append_learnings
+        lf = tmp_path / "2026-08-08.md"
+        append_learnings(
+            [{"timestamp": "2026-08-08T09:00:00+00:00", "diary_entry": "Work.",
+              "learnings": [{
+                  "trust": "verified", "provenance": "CORRECTION", "kind": "RULE",
+                  "target": "dev.md", "description": "Stage with a pathspec.",
+                  "action": "Add to the git section.",
+              }]}],
+            lf, "s1", "2026-08-08T09:00:00+00:00",
+        )
+        content = lf.read_text()
+        assert "- **[CORRECTION/RULE]** Stage with a pathspec." in content
+        assert "**[trust:" not in content
+
+    def test_the_two_forms_coexist_in_one_file(self, tmp_path):
+        """They will, for as long as the pending backlog lives. Neither one
+        rewrites the other."""
+        from lib.extraction import append_learnings
+        lf = tmp_path / "2026-08-08.md"
+        append_learnings(
+            [{"timestamp": "2026-08-08T09:00:00+00:00", "diary_entry": "Work.",
+              "learnings": [
+                  {"trust": "high", "type": "OBSERVATION", "description": "Old shape."},
+                  {"provenance": "EMPIRICAL", "kind": "FACT", "description": "New shape."},
+              ]}],
+            lf, "s1", "2026-08-08T09:00:00+00:00",
+        )
+        content = lf.read_text()
+        assert "- **[trust: high]** OBSERVATION Old shape." in content
+        assert "- **[EMPIRICAL/FACT]** New shape." in content
 
 
 # ---------------------------------------------------------------------------

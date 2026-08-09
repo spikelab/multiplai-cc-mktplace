@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
+from lib import taxonomy
 from lib.runtime import lock_path
 
 logger = logging.getLogger(__name__)
@@ -147,7 +148,8 @@ invest most effort here. Plain prose; no escaping needed.
 </diary>
 <learning>
 trust: verified | high | medium
-type: OBSERVATION | PREFERENCE | CORRECTION | PATTERN | RULE-PROPOSAL | INTENTION
+provenance: RESEARCH | EMPIRICAL | CORRECTION | DECLARATION | INFERENCE
+kind: FACT | RULE | DECISION | INTENTION
 target: one valid memory file name from the list below, or unknown
 description: concise but complete (one sentence, single line)
 action: what to add/change in that file (one sentence, single line)
@@ -159,6 +161,44 @@ it entirely if the unit has none (diary-only units are valid).
 - trust: "verified" (confirmed via code/logs/tests) | "high" (strong \
 evidence) | "medium" (inference)
 - If the entire session is trivial, output exactly: <no-units/>
+
+## Provenance and kind — two separate questions
+
+`provenance` answers **where the knowledge came from**, which is what says how
+it could ever be checked again:
+
+- `RESEARCH` — read in an external source: docs, a web page, a paper, someone
+  else's repo. Re-checkable by re-reading that source.
+- `EMPIRICAL` — observed while doing the work. It broke, it was fixed, the test
+  went green. Re-checkable by running the thing again.
+- `CORRECTION` — the user said the assistant had it wrong.
+- `DECLARATION` — the user stated it unprompted, with no error to overwrite.
+- `INFERENCE` — the assistant concluded it and nobody confirmed it.
+
+`kind` answers **what sort of thing it is**, which is a different question:
+
+- `FACT` — can be true or false. "The router caps injection at 40 KB."
+- `RULE` — normative, so neither true nor false. "Always stage with a pathspec."
+- `DECISION` — a commitment in force until something overturns it. "We're going
+  with Postgres."
+- `INTENTION` — something to come back to later (see below).
+
+Three distinctions carry almost all of the difficulty:
+
+- **CORRECTION vs DECLARATION** — was there an error to overwrite? "No, the
+  default is Opus, not Sonnet" is a CORRECTION. "I prefer short commit
+  messages", said out of nowhere, is a DECLARATION.
+- **INFERENCE vs EMPIRICAL** — was it *observed* or *concluded*? Watching a
+  test fail and then pass after the fix is EMPIRICAL. Reasoning that the fix
+  probably also covers the sibling case, without running it, is INFERENCE.
+- **FACT vs RULE** — "the API always returns UTF-8" is a FACT (it could turn
+  out to be false). "Always decode API responses as UTF-8" is a RULE (it can
+  only be revoked).
+
+When provenance is genuinely unclear, answer `INFERENCE`. When kind is
+genuinely unclear, answer `RULE`. Both of those send the item to a human rather
+than past one — a wrong `EMPIRICAL` or a wrong `FACT` is far more expensive
+than an over-cautious label, so guessing upward is the costly mistake.
 
 ## Valid target files
 
@@ -175,15 +215,19 @@ learning into the closest broadly-named file.
 ## Correction detection
 
 When the user corrects Claude's output or assumption:
-- type: CORRECTION, trust: verified
+- provenance: CORRECTION, trust: verified
 Signals: "use X not Y", "no, that's wrong", "actually...", explicit contradictions.
 Corrections are highest priority — they prevent recurring mistakes.
+
+Pick the `kind` from what was corrected, not from the fact that it was a
+correction: a wrong value or claim is `FACT`, a correction about how to behave
+("don't ask before running read-only commands") is `RULE`.
 
 ## Intention detection (prospective memory)
 
 When the user states something to come back to LATER — a future check, a
 revisit, a "when X happens, do Y":
-- type: INTENTION, target: prospective.md
+- kind: INTENTION, provenance: DECLARATION, target: prospective.md
 Signals: "remind me to...", "revisit this in September", "check back after the
 release", "when the runtime updates, re-run X", "let's decide this next quarter".
 
@@ -204,7 +248,10 @@ belongs in the diary.
 
 When the user delivers an explicit verdict on something Claude produced —
 keeping it, killing it, or asking for more of it:
-- type: PREFERENCE, trust: verified, and BEGIN the description with
+- kind: RULE (a verdict is normative — it says what to do next time, and it can
+  only be revoked, never falsified), provenance: DECLARATION, or CORRECTION when
+  the verdict overturns something Claude had just done
+- trust: verified, and BEGIN the description with
   `verdict: keep` / `verdict: kill` / `verdict: expand` followed by ` — ` and
   what the verdict was about.
 Signals: "this is great, more like this", "never do that again", "drop the
@@ -282,7 +329,18 @@ _UNIT_RE = re.compile(r"<unit>(.*?)</unit>", re.DOTALL)
 _TIMESTAMP_RE = re.compile(r"<timestamp>(.*?)</timestamp>", re.DOTALL)
 _DIARY_RE = re.compile(r"<diary>\n?(.*?)\n?</diary>", re.DOTALL)
 _LEARNING_RE = re.compile(r"<learning>(.*?)</learning>", re.DOTALL)
-_LEARNING_KEYS = frozenset({"trust", "type", "target", "description", "action"})
+# ``provenance`` and ``kind`` are the two-axis taxonomy (lib/taxonomy.py).
+#
+# ``type`` stays in the accepted set because 227 records on disk still use it
+# and nothing rewrites them — dropping it here would make every one of them
+# parse as unlabelled. ``trust`` also stays, but it is **deprecated**: it is a
+# confidence rating the extractor assigns by feel, with no link to where the
+# claim came from, and provenance now answers that question properly. It is
+# kept for one release rather than removed in the same change that adds two
+# fields, so the two can be evaluated separately.
+_LEARNING_KEYS = frozenset(
+    {"trust", "type", "provenance", "kind", "target", "description", "action"}
+)
 _NO_UNITS_MARKER = "<no-units/>"
 
 # --- Session disposition ----------------------------------------------------
@@ -343,6 +401,13 @@ def _parse_learning(block: str) -> Optional[dict]:
     Unknown keys and lines without a colon are ignored (values are
     single-line by prompt contract). A learning without a description
     carries no signal — drop it.
+
+    ``provenance`` and ``kind`` are validated against their closed value sets.
+    An out-of-set value is **dropped, not coerced**: the record then says it
+    has no provenance, which is true, rather than claiming the nearest legal
+    label, which would be a fabricated statement about where the knowledge came
+    from. The description survives either way — the label is the doubtful part,
+    not the learning.
     """
     entry: dict = {}
     for line in block.strip().splitlines():
@@ -352,6 +417,21 @@ def _parse_learning(block: str) -> Optional[dict]:
         key = key.strip().lower()
         if key in _LEARNING_KEYS:
             entry[key] = value.strip()
+    for key, normalize in (
+        ("provenance", taxonomy.normalize_provenance),
+        ("kind", taxonomy.normalize_kind),
+    ):
+        if key not in entry:
+            continue
+        normalized = normalize(entry[key])
+        if normalized is None:
+            logger.warning(
+                "Learning %s=%r is not in the accepted set — dropped rather than "
+                "coerced; the record parses without it", key, entry[key],
+            )
+            del entry[key]
+        else:
+            entry[key] = normalized
     return entry if entry.get("description") else None
 
 
@@ -534,12 +614,35 @@ def write_diary_entries(
 
 
 def _format_learning_entry(learning: dict) -> str:
-    trust = learning.get("trust", "medium")
-    ltype = learning.get("type", "OBSERVATION")
+    """Render one learning as the line that lands in ``.multiplai/learnings/``.
+
+    Two forms, chosen by what the record actually carries:
+
+    - ``- **[CORRECTION/FACT]** <desc> → Target: <file> — <action>`` when the
+      record states a provenance or a kind of its own.
+    - the legacy ``- **[trust: verified]** CORRECTION <desc> → …`` when it has
+      only the old ``type``.
+
+    A legacy record is never reprinted in the new form. The mapping in
+    ``taxonomy.LEGACY_TYPE_MAP`` exists for *reading*, and printing its output
+    into a file would turn a conservative reading into a written-down claim
+    about origin that the record never made.
+
+    ``trust`` is dropped from the new line while staying in the record. Two
+    confidence-ish markers on one line is what made the old format ambiguous —
+    the reader could not tell whether ``trust: verified`` or ``CORRECTION``
+    was the load-bearing part.
+    """
     desc = (learning.get("description") or "").strip()
     target = (learning.get("target") or "").strip()
     action = (learning.get("action") or "").strip()
-    line = f"- **[trust: {trust}]** {ltype} {desc}"
+    if taxonomy.has_taxonomy(learning):
+        provenance, kind = taxonomy.pair(learning)
+        line = f"- **[{taxonomy.format_pair(provenance, kind)}]** {desc}"
+    else:
+        trust = learning.get("trust", "medium")
+        ltype = learning.get("type", "OBSERVATION")
+        line = f"- **[trust: {trust}]** {ltype} {desc}"
     if target:
         line += f" → Target: {target}"
         if action:

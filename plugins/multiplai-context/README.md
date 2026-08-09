@@ -1248,6 +1248,57 @@ disk correctly, which is why it works identically on vanilla Claude Code.
 > 15 minutes is treated the same way — that is what a container torn down
 > mid-extraction leaves behind, since the detached child dies with it.
 
+#### How a learning is labelled — provenance × kind
+
+Every learning captured from a session gets two labels, and they answer
+different questions. You see the pair at the front of each line in
+`.multiplai/learnings/`:
+
+```
+- **[CORRECTION/RULE]** Stage with an explicit pathspec. → Target: dev.md — Add to the Git section.
+```
+
+**Provenance — where the knowledge came from.** This is what tells you how the
+claim could ever be checked again.
+
+| | |
+|---|---|
+| `RESEARCH` | Read in an external source — docs, a web page, a paper. Re-check by re-reading it. |
+| `EMPIRICAL` | Observed while doing the work: it broke, it was fixed, the test went green. Re-check by running it again. |
+| `CORRECTION` | You told Claude it had something wrong. |
+| `DECLARATION` | You stated it unprompted, with no error to overwrite. |
+| `INFERENCE` | Claude concluded it and nobody confirmed it. |
+
+*Worked example:* watching a test fail and then pass after a fix is
+`EMPIRICAL`. Concluding from that the sibling case is also fixed, without
+running it, is `INFERENCE` — same session, same fix, different provenance.
+
+**Kind — what sort of thing it is.** This is what tells you how much damage a
+wrong one does.
+
+| | |
+|---|---|
+| `FACT` | Can be true or false, and decays. |
+| `RULE` | Normative, so neither — it gets revoked, not falsified. |
+| `DECISION` | A commitment in force until something overturns it. |
+| `INTENTION` | Something to come back to later (see [Prospective memory](#prospective-memory--intentions-that-fire-later)). |
+
+*Worked example:* "the API always returns UTF-8" is a `FACT` — it could turn
+out to be false. "Always decode API responses as UTF-8" is a `RULE` — it can
+only be revoked. The second one changes what Claude does everywhere, which is
+why the two are worth telling apart.
+
+When the extractor genuinely cannot tell, it answers `INFERENCE` and `RULE` —
+the cautious end of each axis, so an unclear item lands in front of you rather
+than sliding past. Learnings captured before this taxonomy existed keep their
+old `**[trust: …]** TYPE` line and are **not** relabelled: guessing where a
+month-old note came from would manufacture exactly the signal these labels
+exist to make trustworthy.
+
+Both labels ride through into the `**Provenance:**` line of each item in a
+dream proposal, so you can see what a proposed memory entry was distilled from
+while you review it. Nothing is currently *decided* by them.
+
 ### Session accounting
 
 *How each session's state is decided, and by whom.*

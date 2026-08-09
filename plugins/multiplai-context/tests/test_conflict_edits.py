@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from scripts.lib.conflict_edits import (Learning, conflict_section_for,
+from scripts.lib.conflict_edits import (CONFLICT_PROVENANCES, Learning,
+                                        conflict_section_for,
                                         detect_conflicts,
                                         find_contradicted_line, overlap,
                                         parse_learnings, render_section)
@@ -23,6 +24,12 @@ def learning_line(desc, *, trust="verified", ltype="CORRECTION",
                   target="dev.md", action="update it") -> str:
     return (f"- **[trust: {trust}]** {ltype} {desc} "
             f"→ Target: {target} — {action}")
+
+
+def taxonomy_line(desc, *, provenance="EMPIRICAL", kind="FACT",
+                  target="dev.md", action="update it") -> str:
+    """The form ``extraction._format_learning_entry`` writes today."""
+    return f"- **[{provenance}/{kind}]** {desc} → Target: {target} — {action}"
 
 
 class TestParsing:
@@ -57,6 +64,32 @@ class TestParsing:
         [l] = parse_learnings(line)
         assert l.target == "apple.md" and l.type == "RULE-PROPOSAL"
 
+    def test_parses_the_two_axis_form(self):
+        [l] = parse_learnings(taxonomy_line("Opus is the default model"))
+        assert l.provenance == "EMPIRICAL" and l.kind == "FACT"
+        assert l.description == "Opus is the default model"
+        assert l.target == "dev.md" and l.action == "update it"
+        assert l.trust == "" and l.type == ""
+
+    @pytest.mark.parametrize(
+        "provenance,kind",
+        [("RULE-PROPOSAL", "FACT"), ("EMPIRICAL", "RULE-ISH"), ("?", "RULE")],
+    )
+    def test_a_hyphenated_or_unknown_label_is_parsed_not_dropped(self, provenance, kind):
+        """``[A-Z?]+`` excluded ``-``, so the whole line vanished from the scan.
+
+        A detector that silently stops seeing a line is worse than one that
+        misjudges it, and ``learnings_ledger`` already accepted hyphens — two
+        parsers disagreeing about what a learning *is* is how this goes quiet.
+        """
+        parsed = parse_learnings(taxonomy_line("x y z q", provenance=provenance, kind=kind))
+        assert len(parsed) == 1
+        assert parsed[0].description == "x y z q"
+
+    def test_basis_names_the_pair_for_the_reviewer(self):
+        [l] = parse_learnings(taxonomy_line("x y z q", provenance="CORRECTION"))
+        assert l.basis == "CORRECTION/FACT"
+
 
 class TestCandidateSelection:
     def test_corrections_always_qualify(self):
@@ -71,6 +104,44 @@ class TestCandidateSelection:
         """An inference that touches an existing line is not evidence the line
         is wrong. Superseding on it lets a guess overwrite a confirmed fact."""
         assert not Learning(trust, "OBSERVATION", "d", "dev.md", "a").is_conflict_candidate
+
+    # --- the two-axis form: this is the decision, pinned ------------------
+    #
+    # The narrowing this PR could have shipped silently was "CORRECTION only",
+    # which would have taken `## Conflict Resolutions` from firing on most
+    # verified learnings to firing on almost none: the extractor returns
+    # EMPIRICAL for roughly five records in six. These tests exist so the rule
+    # is a decision rather than an accident of which arm the parser took.
+
+    @pytest.mark.parametrize("provenance", sorted(CONFLICT_PROVENANCES))
+    def test_observed_provenances_qualify(self, provenance):
+        [l] = parse_learnings(taxonomy_line("x y z q", provenance=provenance))
+        assert l.is_conflict_candidate, f"{provenance} should be a candidate"
+
+    @pytest.mark.parametrize("provenance", ["RESEARCH", "DECLARATION", "INFERENCE"])
+    def test_unobserved_provenances_do_not(self, provenance):
+        """Read somewhere, asserted, or reasoned to — none of them observed here."""
+        [l] = parse_learnings(taxonomy_line("x y z q", provenance=provenance))
+        assert not l.is_conflict_candidate
+
+    def test_the_two_forms_of_one_learning_agree(self):
+        """The same knowledge, relabelled, must not change whether it fires.
+
+        This is the equivalence the taxonomy migration is supposed to preserve,
+        and the one the review found broken: `trust: verified` OBSERVATION was
+        a candidate, and its EMPIRICAL/FACT rendering was not.
+        """
+        legacy = parse_learnings(
+            learning_line("the router caches picks per session", ltype="OBSERVATION")
+        )[0]
+        new = parse_learnings(
+            taxonomy_line("the router caches picks per session", provenance="EMPIRICAL")
+        )[0]
+        assert legacy.is_conflict_candidate == new.is_conflict_candidate is True
+
+    def test_an_unknown_provenance_does_not_qualify(self):
+        """Fail closed: an unreadable label is not evidence of anything."""
+        assert not Learning("", "", "d", "dev.md", "a", provenance="?", kind="FACT").is_conflict_candidate
 
 
 class TestOverlap:
