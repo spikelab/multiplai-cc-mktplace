@@ -117,6 +117,59 @@ Clusters triaged out, one line each with reason.
 Reply in the console with a 3-line summary and the report path. Do not paste
 the whole report into the console.
 
+## Hook timing — "what timed out, and where did the budget go?"
+
+When a hook times out, is slow, or the user asks what a hook costs, use
+`--hooks`. It pairs the `HOOK_ENTRY` / `HOOK_EXIT` lines every hook writes and
+prices each run against the ceiling in `hooks/hooks.json`.
+
+```bash
+uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/log_doctor.py" --hooks \
+  [--days N] [--json]
+```
+
+Scans the **last 7 days** unless `--days N` says otherwise. A kill is a
+point-in-time event: with no window, one kill three weeks ago is re-counted by
+every run until log rotation drops it.
+
+Exit code is **1 when a run was killed that was not expected to be**, so this is
+safe to gate on. `session_end` is excluded — the harness kills SessionEnd hooks
+within seconds by design, which is why that hook's real work is deferred to a
+drain. Its orphans are reported and labelled, never counted as failures.
+
+**Read the report in this order:**
+
+1. **`killed` > 0.** An ENTRY with no EXIT means the process died holding the
+   budget — the harness kills a hook at its timeout with SIGKILL, so it cannot
+   log its own death. This column *is* the timeout report; there will be no
+   error line anywhere else. The finding names the session id and timestamp:
+   take those to the session transcript to see which prompt lost its context.
+2. **`p95 %`** — p95 as a percentage of that hook's configured budget. Above
+   50% means the tail is one slow dependency away from a kill. A killed run
+   enters the sample at its ceiling (it has no duration of its own), so where
+   kills are present the finding says the number is a **lower bound**.
+3. **`startup p50`** — the cost from process start to the hook's first line:
+   interpreter start plus imports. A jump here is import cost, not the hook's
+   own work.
+
+   It does **not** cover `uv` dependency resolution. `uv run` resolves before
+   the interpreter exists, so a hook stalled there (the 12-68s PEP 723 failure
+   mode) never reaches the code that writes `HOOK_ENTRY` and leaves **no line
+   at all** — not a slow `startup p50`, an empty log. Zero lines for a session
+   you know had one is that symptom; check `uv` and the lockfile, not this
+   column.
+4. **Stage breakdown** — which phase of the hook actually spent the time
+   (`router`, `checkpoint`, `drain_extractions`, …). The findings call out any
+   stage that dominates its hook's p95.
+5. **`outcomes`** — for hooks that mostly decline to act (`checkpoint_nudge`),
+   the reason they declined. All-`disabled` on a hook the user believes is on
+   is a config finding, not a latency one.
+
+To verify the instrumentation itself is alive, probe it:
+`--probe-check --scenario hook-timing` (it requires both halves of the pair, for
+both `context_manager` and `checkpoint_nudge` — an ENTRY alone is what a killed
+hook leaves behind, and a hook that stopped firing writes neither).
+
 ## Injection forensics — "why did it inject that?"
 
 When the user questions a context injection (wrong files, irrelevant memory,

@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import setup_logging, log_event
+from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib import checkpoint as cp
 
 logger = setup_logging("session_stop")
@@ -274,35 +274,48 @@ def main() -> None:
     if not isinstance(hook_input, dict):
         hook_input = {}
 
-    if session_state:
-        session_state["last_stop"] = datetime.now(timezone.utc).isoformat()
-        # Atomic temp+rename (shared with context_manager / session_start) so a
-        # crash mid-write never leaves a half-written state file. session_state
-        # was read-merged above, so turn_index / recently_injected survive.
-        if not write_session_state(data_dir, session_state):
-            logger.debug("Could not update session_state.json")
+    setup_logging("session_stop", session_id=hook_input.get("session_id") or session_id)
 
-    # Hub session registry: a Stop means the turn finished — the session is
-    # idle and safe to adopt. Best-effort, never blocks the Stop.
-    try:
-        from lib import session_registry
+    with hook_run(
+        "session_stop", logger,
+        session_id=hook_input.get("session_id") or session_id,
+    ) as run:
+        if session_state:
+            session_state["last_stop"] = datetime.now(timezone.utc).isoformat()
+            # Atomic temp+rename (shared with context_manager / session_start) so
+            # a crash mid-write never leaves a half-written state file.
+            # session_state was read-merged above, so turn_index /
+            # recently_injected survive.
+            with run.stage("state"):
+                if not write_session_state(data_dir, session_state):
+                    logger.debug("Could not update session_state.json")
 
-        session_registry.record_event(data_dir, hook_input, "stop")
-    except Exception:
-        logger.warning("Session registry stop-event failed", exc_info=True)
+        # Hub session registry: a Stop means the turn finished — the session is
+        # idle and safe to adopt. Best-effort, never blocks the Stop.
+        with run.stage("registry"):
+            try:
+                from lib import session_registry
 
-    # Context checkpoint pass — advisory only, never blocks the Stop.
-    system_message: str | None = None
-    try:
-        system_message = _checkpoint_pass(hook_input, data_dir)
-    except Exception:
-        logger.exception("Checkpoint pass failed (non-fatal)")
+                session_registry.record_event(data_dir, hook_input, "stop")
+            except Exception:
+                logger.warning("Session registry stop-event failed", exc_info=True)
 
-    if system_message:
-        # NOTE: deliberately no "decision" key — this hook must never block.
-        print(json.dumps({"systemMessage": system_message}))
+        # Context checkpoint pass — advisory only, never blocks the Stop. This
+        # is the stage that can queue real work, so it is the one worth timing:
+        # Stop has a 15s ceiling and fires after every single turn.
+        system_message: str | None = None
+        with run.stage("checkpoint"):
+            try:
+                system_message = _checkpoint_pass(hook_input, data_dir)
+            except Exception:
+                logger.exception("Checkpoint pass failed (non-fatal)")
 
-    logger.info("Stop hook completed for session %s", session_id)
+        run.note(message="yes" if system_message else "no")
+        if system_message:
+            # NOTE: deliberately no "decision" key — this hook must never block.
+            print(json.dumps({"systemMessage": system_message}))
+
+        logger.info("Stop hook completed for session %s", session_id)
 
 
 if __name__ == "__main__":

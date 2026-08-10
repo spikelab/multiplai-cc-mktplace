@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.paths import get_paths
 from multiplai_core.config import load_yaml, save_yaml, read_session_state, write_session_state
-from multiplai_core.log_utils import setup_logging, log_event
+from multiplai_core.log_utils import hook_run, setup_logging, log_event
 
 # The drain itself lives in lib/ so the host-side ``drain_extractions.py``
 # entry point — which runs after the container has exited, when a marker was
@@ -607,6 +607,18 @@ def main() -> None:
     cwd = hook_input.get("cwd", "")
     setup_logging("session_start", session_id=hook_input.get("session_id") or "")
 
+    with hook_run(
+        "session_start", logger, session_id=hook_input.get("session_id") or "",
+    ) as run:
+        _start_pass(hook_input, cwd, run)
+
+
+def _start_pass(hook_input: dict, cwd: str, run) -> None:
+    """The hook body: register the session, inject state, run the gates.
+
+    Timed in stages because this hook does a dozen unrelated things behind one
+    60s ceiling — a slow one is invisible in a single total.
+    """
     paths = get_paths()
     data_dir = paths.plugin_data()
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -620,16 +632,18 @@ def main() -> None:
     # gone is collected on the very next launch instead of ageing out over a
     # week or a month. No roster — vanilla Claude Code — and this is an empty
     # set and the age windows are all there is, exactly as before.
-    try:
-        from lib import session_registry
+    with run.stage("registry"):
+        try:
+            from lib import session_registry
 
-        session_registry.gc_stale(data_dir, dead_sids=roster_dead_sids(data_dir))
-        session_registry.record_event(data_dir, hook_input, "start")
-    except Exception:
-        logger.warning("Session registry start-event failed", exc_info=True)
+            session_registry.gc_stale(data_dir, dead_sids=roster_dead_sids(data_dir))
+            session_registry.record_event(data_dir, hook_input, "start")
+        except Exception:
+            logger.warning("Session registry start-event failed", exc_info=True)
 
     # Log which model client is available
-    client_type = _log_client_selection()
+    with run.stage("client_select"):
+        client_type = _log_client_selection()
 
     # Warn the user once if neither the SDK nor an API key is present.
     if client_type.startswith("none"):
@@ -675,66 +689,73 @@ def main() -> None:
         logger.warning("Could not write session_state.json")
 
     # One-time per-project "now" snapshot injection (additionalContext).
-    _inject_project_state(paths.now_dir(), cwd)
+    with run.stage("project_state"):
+        _inject_project_state(paths.now_dir(), cwd)
 
     # Context-rebuild injection: if this project handed off at the context
     # ceiling, seed this window from its checkpoint. source="compact" is the
     # fully-automatic path (steered auto-compaction, same session id).
-    _inject_checkpoint_recovery(
-        data_dir, cwd, session_id, hook_input.get("source", "")
-    )
+    with run.stage("checkpoint_rebuild"):
+        _inject_checkpoint_recovery(
+            data_dir, cwd, session_id, hook_input.get("source", "")
+        )
 
     # Keep the qmd resources index fresh (no-op unless the qmd backend
     # is active). Detached + flock-guarded, so this never blocks the hook.
-    _launch_qmd_refresh(paths.scripts_dir(), cwd)
+    with run.stage("launch_qmd"):
+        _launch_qmd_refresh(paths.scripts_dir(), cwd)
 
     # Price the session-transcript corpus into the cost ledger (no-op unless
     # enable_costs is set). Detached + flock-guarded — never blocks the hook.
-    _launch_cost_collection(paths.scripts_dir())
+    with run.stage("launch_costs"):
+        _launch_cost_collection(paths.scripts_dir())
 
     # Fast-forward subscribed shared memory banks (no-op unless a bank is
     # configured). Detached + TTL-gated — a bank that will not pull is stale,
     # never a session-start failure.
-    _launch_bank_sync(paths.scripts_dir())
+    with run.stage("launch_banks"):
+        _launch_bank_sync(paths.scripts_dir())
 
     # Drain any deferred extraction markers left by previous session_end
     # hooks. SessionEnd is kill-within-seconds, so the heavy LLM
     # extraction is intentionally deferred here where the SessionStart
     # hook has more headroom.
     extract_script = paths.scripts_dir() / "extract_learnings.py"
-    try:
-        processed = process_deferred_extractions(data_dir, extract_script).launched
-        if processed:
-            logger.info("Launched %d deferred extraction(s)", processed)
-            log_event(
-                "extract", "launch",
-                f"launched {processed} deferred extraction(s) from prior session(s)",
-                session_id=session_id,
-                count=processed,
-            )
-    except Exception:
-        logger.exception("Deferred extraction processing failed (non-fatal)")
+    with run.stage("drain_extractions"):
+        try:
+            processed = process_deferred_extractions(data_dir, extract_script).launched
+            if processed:
+                logger.info("Launched %d deferred extraction(s)", processed)
+                log_event(
+                    "extract", "launch",
+                    f"launched {processed} deferred extraction(s) from prior session(s)",
+                    session_id=session_id,
+                    count=processed,
+                )
+        except Exception:
+            logger.exception("Deferred extraction processing failed (non-fatal)")
 
     # Same deal for end-of-session checkpoints queued by a SessionEnd whose
     # container was exiting. The launcher's host-side drain normally gets
     # there first, but it only exists inside the kit — on vanilla Claude Code
     # this hook is the only consumer the queue has.
-    try:
-        from lib.checkpoint_drain import process_pending_checkpoints
+    with run.stage("drain_checkpoints"):
+        try:
+            from lib.checkpoint_drain import process_pending_checkpoints
 
-        written = process_pending_checkpoints(
-            data_dir, paths.scripts_dir() / "checkpoint_writer.py"
-        ).launched
-        if written:
-            logger.info("Launched %d queued end-of-session checkpoint(s)", written)
-            log_event(
-                "checkpoint", "drain",
-                f"launched {written} queued end-of-session checkpoint(s)",
-                session_id=session_id,
-                count=written,
-            )
-    except Exception:
-        logger.exception("Queued checkpoint processing failed (non-fatal)")
+            written = process_pending_checkpoints(
+                data_dir, paths.scripts_dir() / "checkpoint_writer.py"
+            ).launched
+            if written:
+                logger.info("Launched %d queued end-of-session checkpoint(s)", written)
+                log_event(
+                    "checkpoint", "drain",
+                    f"launched {written} queued end-of-session checkpoint(s)",
+                    session_id=session_id,
+                    count=written,
+                )
+        except Exception:
+            logger.exception("Queued checkpoint processing failed (non-fatal)")
 
     # Collect the checkpoint store. Retirement is attempted once per session,
     # minutes after it ends, and refuses while a pending marker still points at
@@ -742,31 +763,33 @@ def main() -> None:
     # up by 2026-08-10 with none collected since Jul 7. This is the revisit.
     # In-process for the same reason as the fleet view: a few stats and the
     # occasional rmtree, far cheaper than a `uv run` cold start.
-    try:
-        from lib import checkpoint as cp
+    with run.stage("checkpoint_sweep"):
+        try:
+            from lib import checkpoint as cp
 
-        expired, collected = cp.sweep_checkpoints(data_dir, cp.load_config())
-        if collected:
-            log_event(
-                "checkpoint", "sweep",
-                f"collected {collected} superseded checkpoint(s) and "
-                f"{expired} expired marker(s)",
-                session_id=session_id,
-                collected=collected,
-                expired=expired,
-            )
-    except Exception:
-        logger.exception("Checkpoint sweep failed (non-fatal)")
+            expired, collected = cp.sweep_checkpoints(data_dir, cp.load_config())
+            if collected:
+                log_event(
+                    "checkpoint", "sweep",
+                    f"collected {collected} superseded checkpoint(s) and "
+                    f"{expired} expired marker(s)",
+                    session_id=session_id,
+                    collected=collected,
+                    expired=expired,
+                )
+        except Exception:
+            logger.exception("Checkpoint sweep failed (non-fatal)")
 
     # Refresh the fleet view (data/AGENTS.md). Runs
     # in-process rather than detached: it is a pure read of sessions/ +
     # checkpoints/ with no LLM call, so it costs a few file reads — far less
     # than the `uv run` cold start a subprocess would pay. Also the moment it
     # matters most, since this hook has just registered a new session.
-    try:
-        write_fleet_view(data_dir)
-    except Exception:
-        logger.warning("Fleet view refresh failed (non-fatal)", exc_info=True)
+    with run.stage("fleet_view"):
+        try:
+            write_fleet_view(data_dir)
+        except Exception:
+            logger.warning("Fleet view refresh failed (non-fatal)", exc_info=True)
 
     # Dream gate: emit a nudge when the 24h window has elapsed and
     # fresh learnings are waiting. The nudge is additionalContext only —
@@ -774,10 +797,12 @@ def main() -> None:
     # chooses.
     dream_state_file = paths.dream_state_file()
     learnings_dir = paths.learnings_dir
-    if (
-        _dream_gate_open(dream_state_file)
-        and _learnings_pending(learnings_dir, dream_state_file)
-    ):
+    with run.stage("dream_gate"):
+        dream_due = (
+            _dream_gate_open(dream_state_file)
+            and _learnings_pending(learnings_dir, dream_state_file)
+        )
+    if dream_due:
         logger.info("Dream gate open with pending learnings; emitting nudge")
         log_event(
             "nudge", "dream",
@@ -792,7 +817,9 @@ def main() -> None:
     # /multiplai-context:config-audit skill); a missing state file is
     # seeded inside the gate check (clock starts at install, no nudge).
     config_audit_state_file = dream_state_file.parent / "config_audit_state.yaml"
-    if _config_audit_gate_open(config_audit_state_file):
+    with run.stage("config_gate"):
+        config_audit_due = _config_audit_gate_open(config_audit_state_file)
+    if config_audit_due:
         logger.info("Config-audit gate open; emitting nudge")
         log_event(
             "nudge", "config_audit",
@@ -803,7 +830,8 @@ def main() -> None:
 
     # Prospective memory: intentions whose due date has arrived. No cadence
     # gate — the due date is the gate.
-    surfaced = _emit_prospective_nudge(memory_dir, data_dir)
+    with run.stage("prospective"):
+        surfaced = _emit_prospective_nudge(memory_dir, data_dir)
     if surfaced:
         logger.info("Prospective memory: %d intention(s) surfaced", surfaced)
         log_event(
@@ -815,11 +843,14 @@ def main() -> None:
     # Proactive memory maintenance. Detached and silent: it produces proposals
     # and derived files, nothing the user needs to see at session start, and
     # nothing it does may delay the session.
-    if _launch_maintainer(paths.scripts_dir(), data_dir):
+    with run.stage("launch_maintainer"):
+        maintainer_launched = _launch_maintainer(paths.scripts_dir(), data_dir)
+    if maintainer_launched:
         logger.info("Memory maintainer launched (detached)")
         log_event("maintenance", "memory_maintainer",
                   "proactive maintenance pass launched", session_id=session_id)
 
+    run.note(client=client_type, memory_files=len(memory_files))
     logger.info(
         "Session started: %s (%d memory files on disk; not injected — routed per-prompt)",
         session_id, len(memory_files),

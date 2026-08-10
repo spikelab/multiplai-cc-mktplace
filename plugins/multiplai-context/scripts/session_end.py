@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.config import read_session_state
 from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import setup_logging, log_event
+from multiplai_core.log_utils import hook_run, setup_logging, log_event
 
 logger = setup_logging("session_end")
 
@@ -182,34 +182,38 @@ def main() -> None:
     # first — printed the `session:--------` placeholder, so `grep session:<id>`
     # silently omitted it and correlating a queued checkpoint with its session
     # meant matching timestamps against the adjacent line (#184).
-    setup_logging(
-        "session_end",
-        session_id=(
-            hook_input.get("session_id") or session_state.get("session_id") or "unknown"
-        ),
+    session_id = (
+        hook_input.get("session_id") or session_state.get("session_id") or "unknown"
     )
+    setup_logging("session_end", session_id=session_id)
 
-    # Hub session registry: mark the session ended (adoptable / GC-able).
-    try:
-        from lib import session_registry
+    with hook_run("session_end", logger, session_id=session_id) as run:
+        reason = str(hook_input.get("reason") or "other").strip().lower() or "other"
+        run.note(reason=reason)
 
-        session_registry.record_event(paths.plugin_data(), hook_input, "end")
-    except Exception:
-        logger.warning("Session registry end-event failed", exc_info=True)
+        # Hub session registry: mark the session ended (adoptable / GC-able).
+        with run.stage("registry"):
+            try:
+                from lib import session_registry
 
-    # Save working state BEFORE queueing extraction: on ``/clear`` the tab
-    # keeps running and the sooner the writer starts the less of the tail it
-    # can miss.
-    reason = str(hook_input.get("reason") or "other").strip().lower() or "other"
-    try:
-        _checkpoint_on_end(paths.plugin_data(), hook_input, reason)
-    except Exception:
-        logger.exception("End-of-session checkpoint failed (non-fatal)")
+                session_registry.record_event(paths.plugin_data(), hook_input, "end")
+            except Exception:
+                logger.warning("Session registry end-event failed", exc_info=True)
 
-    try:
-        _save_deferred_marker(paths.plugin_data(), session_state, hook_input)
-    except Exception:
-        logger.exception("Failed to write deferred extraction marker")
+        # Save working state BEFORE queueing extraction: on ``/clear`` the tab
+        # keeps running and the sooner the writer starts the less of the tail it
+        # can miss.
+        with run.stage("checkpoint"):
+            try:
+                _checkpoint_on_end(paths.plugin_data(), hook_input, reason)
+            except Exception:
+                logger.exception("End-of-session checkpoint failed (non-fatal)")
+
+        with run.stage("marker"):
+            try:
+                _save_deferred_marker(paths.plugin_data(), session_state, hook_input)
+            except Exception:
+                logger.exception("Failed to write deferred extraction marker")
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import setup_logging, log_event
+from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib import checkpoint as cp
 
 logger = setup_logging("checkpoint_nudge")
@@ -160,28 +160,49 @@ def main() -> None:
     if not isinstance(hook_input, dict):
         return
 
-    cfg = cp.load_config()
-    if not cfg.enabled:
-        return
-
     session_id = hook_input.get("session_id") or ""
     setup_logging("checkpoint_nudge", session_id=session_id)
+    with hook_run("checkpoint_nudge", logger, session_id=session_id) as run:
+        _maybe_nudge(hook_input, session_id, run)
+
+
+def _maybe_nudge(hook_input: dict, session_id: str, run) -> None:
+    """Decide whether this prompt gets a handoff notice, and emit it if so.
+
+    Every early return records *why* on the EXIT line. This hook stays silent
+    on the overwhelming majority of prompts by design, so "it did nothing" is
+    the normal case — and without the reason, a hook that has gone genuinely
+    dead looks exactly the same as one that is working.
+    """
+    cfg = cp.load_config()
+    if not cfg.enabled:
+        run.note(outcome="disabled")
+        return
+
     transcript_path = hook_input.get("transcript_path") or ""
     if not session_id or not transcript_path:
+        run.note(outcome="no_session")
         return
     if cp.is_child_session(transcript_path):
+        run.note(outcome="child_session")
         return
 
     data_dir = get_paths().plugin_data()
     state = cp.load_state(data_dir, session_id)
-    tokens = cp.read_context_tokens(transcript_path, after_ts=state.get("rebuild_ts"))
+    with run.stage("read_tokens"):
+        tokens = cp.read_context_tokens(
+            transcript_path, after_ts=state.get("rebuild_ts")
+        )
+    run.note(tokens=tokens)
     if tokens < cfg.handoff_tokens:
+        run.note(outcome="under_threshold")
         return
 
     # Enforcement before advice: a blocked prompt is never also nudged, and
     # the block outranks auto mode (if compaction were going to save this
     # session it would have fired by now).
     if _hard_stop(data_dir, session_id, hook_input.get("prompt") or "", tokens, cfg):
+        run.note(outcome="hard_stop")
         return
 
     # Auto mode: steered auto-compaction + SessionStart(compact) re-injection
@@ -189,9 +210,11 @@ def main() -> None:
     # unless compaction is overdue (misconfigured/disabled).
     auto_trigger = cp.autocompact_trigger_tokens()
     if auto_trigger is not None and tokens < auto_trigger + cfg.refresh_tokens:
+        run.note(outcome="auto_compact_pending")
         return
 
     if not _cooldown_ok(data_dir, session_id, tokens, cfg.refresh_tokens):
+        run.note(outcome="cooldown")
         return
 
     has_checkpoint = cp.checkpoint_file(data_dir, session_id).exists()
@@ -220,6 +243,7 @@ def main() -> None:
         f"in-flight work because of this notice."
     )
     logger.info("Handoff nudge emitted at %d tokens for %s", tokens, session_id)
+    run.note(outcome="nudged")
 
 
 if __name__ == "__main__":
