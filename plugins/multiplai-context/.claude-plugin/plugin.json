@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.41.0",
+  "version": "0.42.0",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",
@@ -185,6 +185,12 @@
       "title": "Router Timeout (llm strategy)",
       "description": "Seconds the 'llm' memory_router waits before giving up. A timeout injects NO memory for that turn, so raise this if you see 'LLMRouter timed out' warnings \u2014 section anchors make each call read a longer catalog and choose more finely, which pushes some prompts over the default. Ignored under 'token_overlap'.",
       "default": 25
+    },
+    "router_thinking": {
+      "type": "boolean",
+      "title": "Router Extended Thinking",
+      "description": "Extended thinking on 'llm'/'llm_hybrid' router calls. Off by default, and that is what makes LLM routing fit the per-prompt hook budget: a cold routing call takes 18.4s with thinking on and 2.9s with it off, against a 30s budget. Set it to restore thinking. Needs multiplai-core >= 0.14.0 — against an older core the plugin warns, keeps thinking on, and keeps working.",
+      "default": false
     },
     "recommend_cooldown_turns": {
       "type": "number",

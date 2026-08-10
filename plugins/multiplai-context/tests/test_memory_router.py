@@ -248,10 +248,37 @@ class TestLLMRouter:
             picks = self._pick("prompt", self._catalog())
         assert picks == ["python.md"]
 
-    def test_malformed_response_returns_empty(self):
+    def test_malformed_response_degrades_to_token_overlap(self):
+        """A reply that isn't JSON is a failure, not an abstention.
+
+        This previously asserted ``== []`` and passed for the wrong reason: the
+        prompt it used ("prompt") matches nothing offline either, so a silent
+        empty and a working fallback were indistinguishable. The prompt here is
+        one token_overlap can answer, which is what makes the assertion mean
+        something.
+        """
         client = self._client("not even close to JSON")
         with patch("multiplai_core.model_client.create_client", client):
-            picks = self._pick("prompt", self._catalog())
+            picks = self._pick("help me debug python code", self._catalog())
+        assert picks == ["python.md"]
+
+    def test_non_object_json_degrades_to_token_overlap(self):
+        """A well-formed JSON *list* is still not an answer to the question."""
+        client = self._client('["python.md"]')
+        with patch("multiplai_core.model_client.create_client", client):
+            picks = self._pick("help me debug python code", self._catalog())
+        assert picks == ["python.md"]
+
+    def test_well_formed_empty_reply_is_a_real_abstention(self):
+        """The other half of the contract: empty-but-valid must stay empty.
+
+        Without this, "malformed degrades" could be implemented by degrading on
+        any empty result, which would destroy the abstention the LLM router is
+        actually better at than token_overlap.
+        """
+        client = self._client('{"memory": [], "skills": [], "resources": []}')
+        with patch("multiplai_core.model_client.create_client", client):
+            picks = self._pick("help me debug python code", self._catalog())
         assert picks == []
 
     def test_client_exception_degrades_to_token_overlap(self):
@@ -852,3 +879,255 @@ class TestLLMRouterMultiCorpus:
                 "prompt", None, self._corpora(), max_files_per_corpus=1
             )
         assert len(result["memory"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Thinking: the latency lever
+# ---------------------------------------------------------------------------
+
+
+class TestRouterThinking:
+    """`thinking={"type":"disabled"}` is what makes llm routing fit a hook.
+
+    Measured 2026-08-09: 18.4s -> 2.9s on a cold call. These tests pin the
+    default (off), the opt-out, and — the one that matters operationally — that
+    the keyword is *omitted* rather than passed as None when the resolved core
+    cannot accept it.
+    """
+
+    def _client(self, content='{"memory": [], "skills": [], "resources": []}'):
+        mock_response = MagicMock()
+        mock_response.content = content
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock(return_value=mock_response)
+
+        async def _fake_create_client(**kwargs):
+            return mock_client
+
+        return _fake_create_client, mock_client
+
+    def _corpora(self):
+        return {
+            "memory": [{"source": "python.md", "summary": "py",
+                        "intent_domains": ["python code"]}],
+            "skills": [],
+            "resources": [],
+        }
+
+    def test_resolve_defaults_to_disabled(self, monkeypatch):
+        import lib.memory_router as mr
+        monkeypatch.delenv(mr.ROUTER_THINKING_ENV_VAR, raising=False)
+        assert mr.resolve_router_thinking() == {"type": "disabled"}
+
+    @pytest.mark.parametrize("value", ["1", "true", "yes", "on", "enabled", "TRUE"])
+    def test_opt_back_in_returns_none(self, value):
+        """None means "send no thinking config", i.e. the model's own default."""
+        import lib.memory_router as mr
+        assert mr.resolve_router_thinking(value) is None
+
+    def test_unrecognised_value_stays_disabled(self):
+        import lib.memory_router as mr
+        assert mr.resolve_router_thinking("maybe") == {"type": "disabled"}
+
+    def test_thinking_forwarded_to_client_when_core_supports_it(self, monkeypatch):
+        import lib.memory_router as mr
+        monkeypatch.setattr(mr, "core_supports_thinking", lambda: True)
+        fake_create, mock_client = self._client()
+        with patch("multiplai_core.model_client.create_client", fake_create):
+            mr.LLMRouter().select_multi("debug python code", None, self._corpora())
+        assert mock_client.query.call_args.kwargs["thinking"] == {"type": "disabled"}
+
+    def test_keyword_omitted_entirely_when_core_too_old(self, monkeypatch):
+        """The failure this guards is subtle and was live for the whole window.
+
+        An older core rejects the *name* `thinking`, whatever its value. The
+        resulting TypeError is swallowed by _select_async_multi's `except
+        Exception` degrade path, so every prompt would quietly answer with
+        token_overlap while the log claimed the llm router was configured.
+        Passing `thinking=None` would not help — the keyword must not be sent.
+        """
+        import lib.memory_router as mr
+        monkeypatch.setattr(mr, "core_supports_thinking", lambda: False)
+        fake_create, mock_client = self._client()
+        with patch("multiplai_core.model_client.create_client", fake_create):
+            mr.LLMRouter().select_multi("debug python code", None, self._corpora())
+        assert "thinking" not in mock_client.query.call_args.kwargs
+
+    def test_opt_out_also_omits_the_keyword(self, monkeypatch):
+        import lib.memory_router as mr
+        monkeypatch.setattr(mr, "core_supports_thinking", lambda: True)
+        monkeypatch.setenv(mr.ROUTER_THINKING_ENV_VAR, "true")
+        fake_create, mock_client = self._client()
+        with patch("multiplai_core.model_client.create_client", fake_create):
+            mr.LLMRouter().select_multi("debug python code", None, self._corpora())
+        assert "thinking" not in mock_client.query.call_args.kwargs
+
+    def test_core_probe_agrees_with_the_resolved_signature(self):
+        """The probe reports the resolved core, not a hardcoded guess.
+
+        This tracks whichever core the lockfile resolves — it does not assert
+        that core is new enough, and cannot: both sides read the same signature.
+        What it catches is the probe drifting from reality (wrong module, wrong
+        attribute, exception swallowed into a wrong default), which would make
+        every other test in this class assert against a fiction.
+
+        The version requirement itself is not testable from inside this repo and
+        is enforced by the lockfile: `uv lock --upgrade-package multiplai-core`.
+        """
+        import inspect
+        import lib.memory_router as mr
+        from multiplai_core.model_client import ModelClient
+        expected = "thinking" in inspect.signature(ModelClient.query).parameters
+        mr._CORE_THINKING_SUPPORT = None  # bypass the per-process cache
+        try:
+            assert mr.core_supports_thinking() is expected
+        finally:
+            mr._CORE_THINKING_SUPPORT = None
+
+
+# ---------------------------------------------------------------------------
+# Hybrid: LLM picks, offline gates filter
+# ---------------------------------------------------------------------------
+
+
+class TestHybridRouter:
+    """The gates can only remove, so every test here is about what survives."""
+
+    def _client(self, content):
+        mock_response = MagicMock()
+        mock_response.content = content
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock(return_value=mock_response)
+
+        async def _fake_create_client(**kwargs):
+            return mock_client
+
+        return _fake_create_client
+
+    def _corpora(self):
+        return {
+            # Two distinct domain tokens, so a prompt naming both clears
+            # MIN_DOMAIN_MATCHES.
+            "memory": [
+                {"source": "python.md", "summary": "py patterns",
+                 "intent_domains": ["python code debugging"]},
+                {"source": "travel.md", "summary": "trips",
+                 "intent_domains": ["flight booking itinerary"]},
+            ],
+            "skills": [],
+            "resources": [],
+        }
+
+    def _pick(self, prompt, reply, last_response=None):
+        from lib.memory_router import HybridRouter
+        with patch("multiplai_core.model_client.create_client", self._client(reply)):
+            return HybridRouter().select_multi(
+                prompt, last_response, self._corpora()
+            )["memory"]
+
+    def test_pick_survives_when_it_clears_the_breadth_gate(self):
+        picks = self._pick(
+            "help me with python code debugging",
+            '{"memory": ["python.md"], "skills": [], "resources": []}',
+        )
+        assert picks == ["python.md"]
+
+    def test_pick_dropped_when_prompt_shares_no_domain_vocabulary(self):
+        """The over-inclusion this exists to fix: 170,940 bytes vs 93,001 on
+        turn-0 prompts. The LLM reaches for a file the prompt does not support."""
+        picks = self._pick(
+            "what time is dinner",
+            '{"memory": ["travel.md"], "skills": [], "resources": []}',
+        )
+        assert picks == []
+
+    def test_single_incidental_token_is_not_enough(self):
+        """MIN_DOMAIN_MATCHES is a breadth gate: one word cannot pull a file in."""
+        picks = self._pick(
+            "is python installed",
+            '{"memory": ["python.md"], "skills": [], "resources": []}',
+        )
+        assert picks == []
+
+    def test_gate_scores_against_last_response_too(self):
+        """Passing only the prompt would gate on less context than token_overlap
+        itself uses, dropping files the LLM picked *because* of the last turn."""
+        picks = self._pick(
+            "is that ok?",
+            '{"memory": ["python.md"], "skills": [], "resources": []}',
+            last_response="here is the python code debugging trace",
+        )
+        assert picks == ["python.md"]
+
+    def test_anti_domains_veto_is_honoured(self):
+        from lib.memory_router import HybridRouter
+        corpora = {
+            "memory": [{
+                "source": "python.md",
+                "summary": "py",
+                "intent_domains": ["python code debugging"],
+                "anti_domains": ["kubernetes cluster"],
+            }],
+            "skills": [],
+            "resources": [],
+        }
+        reply = '{"memory": ["python.md"], "skills": [], "resources": []}'
+        with patch("multiplai_core.model_client.create_client", self._client(reply)):
+            picks = HybridRouter().select_multi(
+                "python code debugging on my kubernetes cluster", None, corpora
+            )["memory"]
+        assert picks == []
+
+    def test_section_ref_is_gated_on_its_file(self):
+        """P1 picks look like "file.md#Section"; the eligible set is by filename."""
+        picks = self._pick(
+            "help me with python code debugging",
+            '{"memory": ["python.md#Debugging"], "skills": [], "resources": []}',
+        )
+        assert picks == ["python.md#Debugging"]
+
+    def test_abstention_passes_through_untouched(self):
+        picks = self._pick(
+            "help me with python code debugging",
+            '{"memory": [], "skills": [], "resources": []}',
+        )
+        assert picks == []
+
+    def test_exposes_diagnostics_so_routing_scores_keeps_logging(self):
+        """Switching strategy must not silently turn off the quality log that
+        the eval harness and /health both read."""
+        from lib.memory_router import HybridRouter
+        reply = '{"memory": ["travel.md"], "skills": [], "resources": []}'
+        with patch("multiplai_core.model_client.create_client", self._client(reply)):
+            router = HybridRouter()
+            router.select_multi("what time is dinner", None, self._corpora())
+        assert router.last_scores["memory"]["hybrid_dropped"] == ["travel.md"]
+        assert router.last_scores["memory"]["n_picked"] == 0
+
+    def test_registered_in_the_factory(self, monkeypatch):
+        import lib.memory_router as mr
+        monkeypatch.setattr(
+            "multiplai_core.model_client.detect_client_type", lambda: "agent-sdk"
+        )
+        router = mr.create_router("llm_hybrid")
+        assert isinstance(router, mr.HybridRouter)
+        assert router.name == "llm_hybrid"
+
+    def test_degrades_to_token_overlap_without_a_client(self, monkeypatch):
+        import lib.memory_router as mr
+        monkeypatch.setattr(
+            "multiplai_core.model_client.detect_client_type", lambda: "none"
+        )
+        router = mr.create_router("llm_hybrid")
+        assert isinstance(router, mr.TokenOverlapRouter)
+
+    def test_shares_one_gate_with_the_llm_fallback(self, monkeypatch):
+        """A degraded prompt must be gated the same way a normal one is —
+        otherwise keep_ratio means two different things in one session."""
+        monkeypatch.setattr(
+            "multiplai_core.model_client.detect_client_type", lambda: "agent-sdk"
+        )
+        import lib.memory_router as mr
+        router = mr.create_router("llm_hybrid", keep_ratio=0.42)
+        assert router._gate is router._llm._fallback
+        assert router._gate.keep_ratio == 0.42
