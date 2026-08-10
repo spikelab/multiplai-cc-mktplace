@@ -415,7 +415,17 @@ async def write_checkpoint(payload: dict) -> bool:
     # Unconditional: the handoff threshold governs the /clear nudge, not
     # whether a checkpoint is restorable. A session that ended at 143K tokens
     # used to leave a perfectly good checkpoint that nothing could ever find.
-    cp.write_pending_marker(data_dir, cwd, session_id, tokens)
+    #
+    # ``hostname`` comes from the payload because this process is not always
+    # the session's container: on the queued path the host drain runs it in a
+    # throwaway container whose $HOSTNAME is a random Docker id, and keying the
+    # marker to that orphaned it the moment it was written (#182). Absent —
+    # the in-container Stop path, where the two are the same — the key falls
+    # back to the registry and then to this process.
+    cp.write_pending_marker(
+        data_dir, cwd, session_id, tokens,
+        hostname=str(payload.get("hostname") or "") or None,
+    )
 
     logger.info(
         "Checkpoint %s for %s (%d tokens, reason=%s, handoff=%s)",

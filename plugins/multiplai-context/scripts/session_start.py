@@ -736,6 +736,28 @@ def main() -> None:
     except Exception:
         logger.exception("Queued checkpoint processing failed (non-fatal)")
 
+    # Collect the checkpoint store. Retirement is attempted once per session,
+    # minutes after it ends, and refuses while a pending marker still points at
+    # it — and nothing ever revisited a refusal, so 216 directories had piled
+    # up by 2026-08-10 with none collected since Jul 7. This is the revisit.
+    # In-process for the same reason as the fleet view: a few stats and the
+    # occasional rmtree, far cheaper than a `uv run` cold start.
+    try:
+        from lib import checkpoint as cp
+
+        expired, collected = cp.sweep_checkpoints(data_dir, cp.load_config())
+        if collected:
+            log_event(
+                "checkpoint", "sweep",
+                f"collected {collected} superseded checkpoint(s) and "
+                f"{expired} expired marker(s)",
+                session_id=session_id,
+                collected=collected,
+                expired=expired,
+            )
+    except Exception:
+        logger.exception("Checkpoint sweep failed (non-fatal)")
+
     # Refresh the fleet view (data/AGENTS.md). Runs
     # in-process rather than detached: it is a pure read of sessions/ +
     # checkpoints/ with no LLM call, so it costs a few file reads — far less

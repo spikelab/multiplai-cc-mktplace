@@ -514,10 +514,11 @@ Safety properties, by construction:
 | `checkpoint_handoff_tokens` | last band | Threshold where handoff advice + pending marker kick in (clamped to ≥ last band) |
 | `checkpoint_refresh_tokens` | `25000` | Above the handoff threshold, re-checkpoint every this many tokens of growth |
 | `checkpoint_hard_stop_tokens` | `0` (off) | Above this, refuse new prompts until the user hands off. `0` keeps the handoff advisory (clamped to ≥ handoff threshold) |
-| `checkpoint_stale_hours` | `3` | Age trigger: re-checkpoint when the last one is this old. `0` disables it, restoring size-only triggering |
+| `checkpoint_stale_hours` | `0.5` | Age trigger: re-checkpoint when the last one is this old. `0` disables it, restoring size-only triggering |
 | `checkpoint_min_session_minutes` | `30` | Minimum session age before the staleness trigger applies |
 | `checkpoint_ttl_hours` | `6` | Pending rebuild marker expiry (unrelated to `stale_hours`) |
-| `checkpoint_timeout_s` | `240` | Writer model-call timeout |
+| `checkpoint_gc_days` | `7` | Collect a session's checkpoint once nothing has touched it for this long. `0` keeps every checkpoint indefinitely |
+| `checkpoint_timeout_s` | `600` | Writer model-call timeout |
 | `checkpoint_model` | plugin default model | Model for the checkpoint writer |
 
 Defaults are tuned for a 1M-token window with the quality knee well below

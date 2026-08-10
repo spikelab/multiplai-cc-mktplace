@@ -339,3 +339,76 @@ class TestTheDrain:
 
         assert drain_extractions.main(["--data-dir", str(data_env)]) == 0
         assert any(c.endswith("checkpoint_writer.py") for c in drain_extractions_calls)
+
+
+# ---------------------------------------------------------------------------
+# The queued marker has to carry what the container knew (#182, #184)
+# ---------------------------------------------------------------------------
+
+class TestWhatTheQueuedMarkerCarries:
+    """This hook is the last code that runs inside the session's container.
+    Anything the host drain needs about *where the session lived* has to be
+    recorded here, because minutes later there is nothing left to ask."""
+
+    def test_the_queued_payload_carries_the_session_container(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        """Without it the drain keys the rebuild pointer to its own throwaway
+        container — a 12-hex Docker id no session will ever have, so the
+        pointer is orphaned the moment it is written (#182)."""
+        monkeypatch.setenv("HOSTNAME", "cc-p-09233636")
+        monkeypatch.setattr(cp, "spawn_writer", _SpawnRecorder())
+
+        _run_end(monkeypatch, tmp_path, reason="prompt_input_exit")
+
+        marker = json.loads((cpd.pending_dir(data_env) / "s1.json").read_text())
+        assert marker["hostname"] == "cc-p-09233636"
+
+    def test_the_pointer_the_drain_writes_lands_on_the_session_host(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        """End to end across the container boundary: queue inside the session's
+        container, write from a different one, claim back on the session's."""
+        monkeypatch.setenv("HOSTNAME", "cc-p-09233636")
+        monkeypatch.setattr(cp, "spawn_writer", _SpawnRecorder())
+        _run_end(monkeypatch, tmp_path, reason="prompt_input_exit")
+        queued = json.loads((cpd.pending_dir(data_env) / "s1.json").read_text())
+
+        monkeypatch.setenv("HOSTNAME", "ab5d84093a24")  # the drain container
+        cp.write_checkpoint_file(data_env, "s1", VALID_CHECKPOINT)
+        cp.write_pending_marker(
+            data_env, queued["cwd"], "s1", queued["tokens"],
+            hostname=queued["hostname"],
+        )
+
+        monkeypatch.setenv("HOSTNAME", "cc-p-09233636")
+        claimed = cp.consume_pending_marker(
+            data_env, "/work/proj", "s2", cp.load_config()
+        )
+        assert claimed is not None and claimed["session_id"] == "s1"
+
+    def test_the_session_id_is_bound_before_the_checkpoint_half_logs(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        """The bind used to happen inside the extraction half, which runs
+        second — so the checkpoint line printed `session:--------` and
+        `grep session:<id>` silently omitted half of what this hook did
+        (#184)."""
+        import logging
+
+        order: list[tuple[str, str]] = []
+
+        def _bind(name, **kwargs):
+            order.append(("bind", str(kwargs.get("session_id") or "")))
+            return logging.getLogger(name)
+
+        monkeypatch.setattr(session_end, "setup_logging", _bind)
+        monkeypatch.setattr(
+            cp, "spawn_writer",
+            lambda payload: order.append(("checkpoint", "")) or True,
+        )
+
+        _run_end(monkeypatch, tmp_path, reason="clear")
+
+        assert order[0] == ("bind", "s1")
+        assert ("checkpoint", "") in order

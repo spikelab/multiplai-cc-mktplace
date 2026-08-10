@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.39.0",
+  "version": "0.41.0",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",
@@ -239,6 +239,72 @@
       "title": "Bank Sync Interval (hours)",
       "description": "How long a shared bank's content stays fresh before a session start fast-forwards it again. The pull runs detached and a failure leaves the previous content in place, so a bank you cannot reach is stale, never broken.",
       "default": 6
+    },
+    "checkpoint_enabled": {
+      "type": "boolean",
+      "title": "Enable Checkpoints",
+      "description": "Master switch for the checkpoint system: periodic saves of a session's working state, the handoff nudge, and the /clear rebuild. Off means no writes, no nudges and no rebuild.",
+      "default": true
+    },
+    "checkpoint_tokens": {
+      "type": "string",
+      "title": "Checkpoint Bands",
+      "description": "Comma-separated absolute token counts at which a session checkpoints. Crossing a band spawns the detached writer once.",
+      "default": "100000,200000"
+    },
+    "checkpoint_handoff_tokens": {
+      "type": "number",
+      "title": "Handoff Threshold (Tokens)",
+      "description": "Where the /clear handoff advice starts. Clamped to at least the highest band, so a partial override cannot ask for a handoff below the last checkpoint. Defaults to the highest band.",
+      "default": 200000
+    },
+    "checkpoint_refresh_tokens": {
+      "type": "number",
+      "title": "Refresh Growth (Tokens)",
+      "description": "Re-checkpoint after this much context growth since the last write, so a long session's saved state never trails far behind.",
+      "default": 25000
+    },
+    "checkpoint_hard_stop_tokens": {
+      "type": "number",
+      "title": "Hard Stop (Tokens)",
+      "description": "Above this, new prompts are refused until you hand off. 0 keeps the handoff purely advisory, which is the default — a block is a behaviour to choose, because getting it wrong means a session that refuses to talk. Clamped to at least the handoff threshold.",
+      "default": 0
+    },
+    "checkpoint_stale_hours": {
+      "type": "number",
+      "title": "Staleness Trigger (Hours)",
+      "description": "Re-checkpoint when the last one is this old, regardless of token growth — this is what saves the tab you left open, which crosses no band. 0 disables it, restoring size-only triggering.",
+      "default": 0.5
+    },
+    "checkpoint_min_session_minutes": {
+      "type": "number",
+      "title": "Minimum Session Age (Minutes)",
+      "description": "How old a session must be before the staleness trigger applies, so a short session does not checkpoint just for existing.",
+      "default": 30
+    },
+    "checkpoint_ttl_hours": {
+      "type": "number",
+      "title": "Rebuild Marker TTL (Hours)",
+      "description": "How long a pending rebuild marker stays claimable — i.e. how long after a handoff a /clear still restores that session. Unrelated to checkpoint_stale_hours.",
+      "default": 6
+    },
+    "checkpoint_gc_days": {
+      "type": "number",
+      "title": "Checkpoint Retention (Days)",
+      "description": "Collect a session's saved working state once nothing has touched it for this long. A checkpoint holds intent, files touched and errors, so keeping them forever is a privacy surface as well as disk. 0 keeps every checkpoint indefinitely.",
+      "default": 7
+    },
+    "checkpoint_timeout_s": {
+      "type": "number",
+      "title": "Writer Timeout (Seconds)",
+      "description": "Model-call timeout for the checkpoint writer. The writer is detached and nothing waits on it, so a generous ceiling costs nothing while a tight one costs the whole checkpoint.",
+      "default": 600
+    },
+    "checkpoint_model": {
+      "type": "string",
+      "title": "Checkpoint Writer Model",
+      "description": "Model used by the checkpoint writer. Empty uses the plugin's default model.",
+      "default": ""
     }
   }
 }
