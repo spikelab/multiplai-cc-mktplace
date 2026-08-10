@@ -78,7 +78,6 @@ def _sync_checkpoint(hook_input: dict, data_dir) -> bool:
     if not cfg.enabled:
         return False
     session_id = hook_input.get("session_id") or ""
-    setup_logging("pre_compact", session_id=session_id)
     transcript_path = hook_input.get("transcript_path") or ""
     if not session_id or not transcript_path:
         return False
@@ -232,6 +231,11 @@ def main() -> None:
         or session_state.get("session_id")
         or "unknown"
     )
+    # Bind the session to the formatter *before* the ENTRY line, not partway
+    # through the body. Rebinding it later stamped ENTRY with `--------` and
+    # EXIT with the real id, so every run looked like an unmatched ENTRY plus a
+    # stray EXIT — two records, one of them a phantom kill.
+    setup_logging("pre_compact", session_id=session_id)
     with hook_run("pre_compact", logger, session_id=session_id) as run:
         _compact_pass(hook_input, session_state, data_dir, session_id, run)
 

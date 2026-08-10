@@ -1149,8 +1149,10 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
     if prompt and any(corpora.values()):
         try:
             router = create_router(keep_ratio=cfg.keep_ratio)
-            # The one stage that makes a network call, and the only one that
-            # can plausibly eat a 30s budget on its own.
+            # The likeliest single consumer of a 30s budget — an LLM call over
+            # the network. It is not the only one: the qmd retrieval below is a
+            # subprocess that has been measured at ~25s for 40 docs, and it is
+            # staged for exactly that reason.
             with run.stage("router"):
                 picks_by_corpus = router.select_multi(prompt, last_response, corpora)
             router_ran = True
@@ -1228,8 +1230,13 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
     )
     qmd_entries: dict[str, dict] = {}
     if qmd_active and prompt:
-        for entry in _qmd_resources_entries(cfg, prompt, cwd):
-            qmd_entries.setdefault(entry["path"], entry)
+        # Staged: this shells out to the qmd CLI, and qmd_retrieval.py:472
+        # records the measurement — 10 docs 5.9s, 40 docs 24.9s, most of this
+        # hook's 30s ceiling. Unstaged, a run killed here would show an ENTRY,
+        # no EXIT, and no attribution at all.
+        with run.stage("qmd"):
+            for entry in _qmd_resources_entries(cfg, prompt, cwd):
+                qmd_entries.setdefault(entry["path"], entry)
         picks_by_corpus["resources"] = list(qmd_entries)
 
     # Log per-file routing decisions (post-expansion) for health audit analytics.
@@ -1381,9 +1388,15 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
         # "nothing relevant" is the floor/continuation guard working,
         # not a failure — say which, with the top score as evidence.
         _skip_msg = "no context matched this prompt"
+        # Stable token for the EXIT line. Without it a skip's EXIT carries
+        # neither files= nor outcome=, so a reader cannot tell "routed and
+        # injected nothing" from "the note call was never reached" — the same
+        # ambiguity outcome= was added to checkpoint_nudge to remove.
+        _outcome = "no_match"
         if any(cooldown_suppressed.values()) and not router_abstained:
             _n = sum(len(v) for v in cooldown_suppressed.values())
             _nd = sum(len(v) for v in refloor_dropped.values())
+            _outcome = "cooldown"
             if _nd:
                 _skip_msg = (
                     f"top {_n} matched file(s) on cooldown; {_nd} weak "
@@ -1398,7 +1411,9 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
         elif router_abstained:
             _dm = (router_diag or {}).get("memory") or {}
             _ds = _dm.get("scored") or []
+            _outcome = "abstained"
             if _dm.get("continuation"):
+                _outcome = "continuation"
                 _skip_msg = "continuation prompt — context already in conversation, nothing injected"
             elif _ds:
                 _skip_msg = (
@@ -1413,6 +1428,7 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
         )
         if cooldown_active:
             _persist_turn_state(session_state, turn_index, recent, {}, cooldown)
+        run.note(outcome=_outcome, files=0, bytes=0)
         result = {"context": "", "memory_files": 0}
         _emit_result("", result)
         return
@@ -1447,7 +1463,11 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
     )
     # On the EXIT line so one grep answers "what did this turn cost, and what
     # did the user get for it" without joining two log lines.
-    run.note(bytes=len(session_context), files=sum(corpus_counts.values()))
+    run.note(
+        outcome="injected",
+        bytes=len(session_context),
+        files=sum(corpus_counts.values()),
+    )
 
     # Per-corpus file groups so the activity line says which files are
     # memory vs skills vs resources — a flat list loses that attribution.

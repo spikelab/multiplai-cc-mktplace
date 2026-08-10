@@ -642,7 +642,8 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
             logger.warning("Session registry start-event failed", exc_info=True)
 
     # Log which model client is available
-    client_type = _log_client_selection()
+    with run.stage("client_select"):
+        client_type = _log_client_selection()
 
     # Warn the user once if neither the SDK nor an API key is present.
     if client_type.startswith("none"):
@@ -796,10 +797,12 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     # chooses.
     dream_state_file = paths.dream_state_file()
     learnings_dir = paths.learnings_dir
-    if (
-        _dream_gate_open(dream_state_file)
-        and _learnings_pending(learnings_dir, dream_state_file)
-    ):
+    with run.stage("dream_gate"):
+        dream_due = (
+            _dream_gate_open(dream_state_file)
+            and _learnings_pending(learnings_dir, dream_state_file)
+        )
+    if dream_due:
         logger.info("Dream gate open with pending learnings; emitting nudge")
         log_event(
             "nudge", "dream",
@@ -814,7 +817,9 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     # /multiplai-context:config-audit skill); a missing state file is
     # seeded inside the gate check (clock starts at install, no nudge).
     config_audit_state_file = dream_state_file.parent / "config_audit_state.yaml"
-    if _config_audit_gate_open(config_audit_state_file):
+    with run.stage("config_gate"):
+        config_audit_due = _config_audit_gate_open(config_audit_state_file)
+    if config_audit_due:
         logger.info("Config-audit gate open; emitting nudge")
         log_event(
             "nudge", "config_audit",
@@ -825,7 +830,8 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
 
     # Prospective memory: intentions whose due date has arrived. No cadence
     # gate — the due date is the gate.
-    surfaced = _emit_prospective_nudge(memory_dir, data_dir)
+    with run.stage("prospective"):
+        surfaced = _emit_prospective_nudge(memory_dir, data_dir)
     if surfaced:
         logger.info("Prospective memory: %d intention(s) surfaced", surfaced)
         log_event(
@@ -837,7 +843,9 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     # Proactive memory maintenance. Detached and silent: it produces proposals
     # and derived files, nothing the user needs to see at session start, and
     # nothing it does may delay the session.
-    if _launch_maintainer(paths.scripts_dir(), data_dir):
+    with run.stage("launch_maintainer"):
+        maintainer_launched = _launch_maintainer(paths.scripts_dir(), data_dir)
+    if maintainer_launched:
         logger.info("Memory maintainer launched (detached)")
         log_event("maintenance", "memory_maintainer",
                   "proactive maintenance pass launched", session_id=session_id)

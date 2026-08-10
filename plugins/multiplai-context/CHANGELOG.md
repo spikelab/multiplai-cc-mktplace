@@ -38,18 +38,42 @@ Nothing yet.
   timeout (with the session id and timestamp of each), p50/p95/max duration,
   startup cost, and which stage inside the hook spent the time. Each hook's
   latency is priced against the ceiling declared in `hooks/hooks.json`, so
-  "p95 is 60% of budget" is a number rather than a hunch. Exits **1** when any
-  run was killed, so it can gate a check. Documented in the `log-doctor` skill.
+  "p95 is 60% of budget" is a number rather than a hunch. Documented in the
+  `log-doctor` skill.
+
+  Three things to know before you gate on it:
+
+  - It scans the **last 7 days** unless `--days N` says otherwise. A kill is a
+    point-in-time event; with no window one old kill is re-counted forever.
+  - It exits **1 when a run was killed that was not expected to be**.
+    `session_end` is excluded — the harness kills SessionEnd hooks within
+    seconds by design, which is why that hook defers its real work. Its orphans
+    are labelled in the report, not counted as failures.
+  - A killed run has no duration of its own, so it enters the latency sample at
+    its ceiling and the finding says the p95 is a **lower bound**. Left out, a
+    hook timing out on half its runs would show a p95 drawn only from the fast
+    half and read healthiest exactly when it is worst.
+
+  `--json` carries the same defanged text and untrusted-content notice as the
+  markdown report: hook names, stage names and outcomes all come from log text.
 
 - **`--probe-check --scenario hook-timing`** verifies the instrumentation is
-  alive. It requires both halves of the pair on purpose: a probe that accepted
-  `HOOK_ENTRY` alone would pass on exactly the failure this is meant to catch.
+  alive. It requires both halves of the pair, for both `context_manager` and
+  `checkpoint_nudge`, on purpose: a probe that accepted `HOOK_ENTRY` alone would
+  pass on exactly the failure this is meant to catch, and one that named a hook
+  without asserting on it would pass on a hook that stopped firing entirely.
+
+  What it cannot see: a hook killed *before* Python starts — during `uv`
+  dependency resolution or interpreter startup — writes no line at all, not even
+  the `ENTRY`. Zero lines for a session you know had one is that symptom, and
+  the `startup p50` column does not cover it.
 
 - **Hooks that mostly stay silent now say why.** `checkpoint_nudge` records an
   `outcome` (`disabled`, `under_threshold`, `cooldown`, `auto_compact_pending`,
-  `hard_stop`, `nudged`) and `pre_compact` records whether it queued. A hook
-  that has gone quietly dead and one that is working as designed used to look
-  identical in the logs.
+  `hard_stop`, `nudged`), `context_manager` records one on the inject-nothing
+  path too (`no_match`, `cooldown`, `abstained`, `continuation`, `injected`),
+  and `pre_compact` records whether it queued. A hook that has gone quietly
+  dead and one that is working as designed used to look identical in the logs.
 
 ## [0.42.0] - 2026-08-10
 

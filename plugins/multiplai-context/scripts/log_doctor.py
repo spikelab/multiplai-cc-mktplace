@@ -19,6 +19,7 @@ Understands the three formats present in the logs directory:
 
 import argparse
 import json
+import math
 import re
 import sys
 from dataclasses import dataclass, field
@@ -580,8 +581,8 @@ def render_injections_markdown(stats: dict, decisions: list,
 # Reads the HOOK_ENTRY / HOOK_EXIT pair that `multiplai_core.log_utils.hook_run`
 # writes around every hook body:
 #
-#   HOOK_ENTRY hook=context_manager startup_ms=310
-#   HOOK_EXIT  hook=context_manager status=ok ms=4712 startup_ms=310 \
+#   HOOK_ENTRY hook=context_manager pid=812 startup_ms=310 session=29a8c051
+#   HOOK_EXIT  hook=context_manager status=ok ms=4712 startup_ms=310 pid=812 \
 #              session=29a8c051 stages=transcript:12,catalogs:180,router:4400
 #
 # Two questions this answers and nothing else could:
@@ -602,6 +603,19 @@ HOOK_EXIT_RE = re.compile(r"HOOK_EXIT hook=(?P<hook>\S+)(?P<rest>.*)$")
 # worst case, and the observed failures were tail events.
 HOOK_BUDGET_WARN_RATIO = 0.5
 
+# Default scan window for --hooks. Without one, a single kill three weeks ago is
+# re-counted by every subsequent run until log rotation drops the file — so the
+# report can never tell "a hook died just now" from "a hook died once, ages ago",
+# and an exit-code gate stays latched forever.
+HOOK_DEFAULT_DAYS = 7
+
+# Hooks whose orphan ENTRY is the normal case, not a failure. session_end.py's
+# own docstring: "Claude Code kills SessionEnd hooks within a few seconds" —
+# that is precisely why deferred extraction exists. Every session that ends
+# therefore leaves an unmatched ENTRY, so counting those as kills would make the
+# exit-code gate permanently red and drown a real context_manager timeout.
+EXPECTED_ORPHAN_HOOKS = frozenset({"session_end"})
+
 
 def _kv(rest: str) -> dict:
     """Parse the ``k=v k=v`` tail of a HOOK_ENTRY/HOOK_EXIT line."""
@@ -611,6 +625,38 @@ def _kv(rest: str) -> dict:
             key, _, value = token.partition("=")
             out[key] = value
     return out
+
+
+def _num(kv: dict, key: str) -> float | None:
+    """Read a numeric field, tolerating a malformed one.
+
+    Log text is untrusted input (a forged line, or two hook processes
+    interleaving an append), and one bad token must not take down the whole
+    report — the caller wants the other 400 runs.
+    """
+    raw = kv.get(key)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def hook_component_names(plugin_root: Path | None = None) -> list:
+    """Component names of the hook scripts, from hooks.json.
+
+    Used to scope the log scan. Read rather than hardcoded, for the same reason
+    :func:`hook_timeouts` reads it: a hardcoded list goes stale the first time a
+    hook is added. Unlike that function this keeps hooks with no ``timeout``
+    key — they still write the pair, they just have no budget to compare it to.
+    """
+    root = plugin_root or Path(__file__).resolve().parent.parent
+    try:
+        raw = (root / "hooks" / "hooks.json").read_text()
+    except Exception:
+        return []
+    return sorted(set(re.findall(r"scripts/(\w+)\.py", raw)))
 
 
 @dataclass
@@ -647,23 +693,40 @@ def hook_timeouts(plugin_root: Path | None = None) -> dict:
                 timeout = hook.get("timeout")
                 if timeout is None:
                     continue
+                try:
+                    secs = float(timeout)
+                except (TypeError, ValueError):
+                    continue
+                # Keep a whole number whole: every doc, the CHANGELOG and the
+                # PR body quote "30s", and rendering the same budget as "30.0s"
+                # makes the report look like it read a different hooks.json.
+                value = int(secs) if secs.is_integer() else secs
                 for m in re.finditer(r"scripts/(\w+)\.py", hook.get("command", "")):
-                    out[m.group(1)] = float(timeout)
+                    out[m.group(1)] = value
     return out
 
 
 def load_hook_runs(logs_dir: Path, since: date | None = None) -> list:
-    """Pair HOOK_ENTRY with HOOK_EXIT across every component log.
+    """Pair HOOK_ENTRY with HOOK_EXIT across every hook's component log.
 
-    Pairing is per (hook, session) in file order, which is correct because one
-    process writes one pair and a hook's log is append-only. An ENTRY still
-    unmatched at end of scan is reported as killed — that is the signal, not an
-    error in the pairing.
+    Pairing is per (hook, session, pid) in file order. The pid is what makes it
+    correct under concurrency: several runs of the same hook append to one log,
+    and (hook, session) alone cannot say which ENTRY the EXIT belongs to. An
+    ENTRY still unmatched at end of scan is reported as killed — that is the
+    signal, not an error in the pairing.
+
+    Only the hook components' own logs are scanned. The pair can appear nowhere
+    else, and parse_file() reads each file whole, so scanning activity.jsonl and
+    every rotation of every unrelated subsystem is pure I/O.
     """
     runs: list[HookRunRecord] = []
     open_entries: dict[tuple, HookRunRecord] = {}
 
-    for subsystem, paths in sorted(discover(logs_dir).items()):
+    # Empty means hooks.json was unreadable; scan everything rather than
+    # silently reporting zero runs.
+    wanted = hook_component_names() or None
+
+    for subsystem, paths in sorted(discover(logs_dir, wanted).items()):
         for path in paths:
             m = FILENAME_RE.match(path.name)
             file_date = _parse_ts(m.group("date")) if m and m.group("date") else None
@@ -679,33 +742,44 @@ def load_hook_runs(logs_dir: Path, since: date | None = None) -> list:
                     rec = HookRunRecord(
                         hook=entry_m.group("hook"),
                         ts=e.ts,
-                        session=e.session,
-                        startup_ms=float(kv["startup_ms"]) if "startup_ms" in kv else None,
+                        # The line's own session= wins over the prefix: a hook
+                        # that binds its session id to the logger only partway
+                        # through still stamps the right one on the line, and
+                        # the prefix reads `--------`.
+                        session=_session_of(kv, e.session),
+                        startup_ms=_num(kv, "startup_ms"),
                         killed=True,   # until an EXIT says otherwise
                         file=path.name,
                     )
                     runs.append(rec)
-                    open_entries[(rec.hook, e.session)] = rec
+                    open_entries[(rec.hook, rec.session, kv.get("pid", ""))] = rec
                     continue
                 exit_m = HOOK_EXIT_RE.search(e.msg)
                 if not exit_m:
                     continue
                 kv = _kv(exit_m.group("rest"))
-                rec = open_entries.pop((exit_m.group("hook"), e.session), None)
+                session = _session_of(kv, e.session)
+                rec = open_entries.pop(
+                    (exit_m.group("hook"), session, kv.get("pid", "")), None
+                )
                 if rec is None:
                     # EXIT with no ENTRY: the ENTRY aged out of retention, or
                     # the scan window starts mid-run. Record it standalone so
                     # its timing still counts.
                     rec = HookRunRecord(
-                        hook=exit_m.group("hook"), ts=e.ts, session=e.session,
+                        hook=exit_m.group("hook"), ts=e.ts, session=session,
                         file=path.name,
                     )
                     runs.append(rec)
                 rec.killed = False
+                rec.session = session
                 rec.status = kv.pop("status", "")
-                rec.ms = float(kv.pop("ms")) if "ms" in kv else None
-                if "startup_ms" in kv:
-                    rec.startup_ms = float(kv.pop("startup_ms"))
+                rec.ms = _num(kv, "ms")
+                kv.pop("ms", None)
+                exit_startup = _num(kv, "startup_ms")
+                kv.pop("startup_ms", None)
+                if exit_startup is not None:
+                    rec.startup_ms = exit_startup
                 stages = kv.pop("stages", "")
                 for pair in stages.split(","):
                     stage_name, _, value = pair.partition(":")
@@ -716,28 +790,61 @@ def load_hook_runs(logs_dir: Path, since: date | None = None) -> list:
     return runs
 
 
+def _session_of(kv: dict, prefix_session: str) -> str:
+    """Prefer the line's own ``session=`` field over the formatter prefix.
+
+    hook_run() stamps ``session=`` on both lines precisely for the case where
+    setup_logging() was not given an id and the prefix renders ``--------``.
+    Dropping it would leave the kill report unable to name the session whose
+    transcript the reader needs.
+    """
+    own = kv.get("session", "")
+    if own and set(own) != {"-"}:
+        return own
+    return prefix_session
+
+
 def _pct(values: list, q: float) -> float | None:
-    """Nearest-rank percentile. No numpy in a hook-adjacent script."""
+    """Nearest-rank percentile. No numpy in a hook-adjacent script.
+
+    ``math.ceil``, not ``round(x + 0.5)``: Python rounds halves to even, so the
+    old form returned the maximum as p95 for exactly 20 samples (0.95*20+0.5 =
+    19.5 → 20) and the larger of two values as the median. ceil is the exact
+    definition of nearest-rank and needs no numpy either.
+    """
     if not values:
         return None
     ordered = sorted(values)
-    idx = min(len(ordered) - 1, max(0, int(round(q * len(ordered) + 0.5)) - 1))
+    idx = min(len(ordered) - 1, max(0, math.ceil(q * len(ordered)) - 1))
     return ordered[idx]
 
 
 def hook_stats(runs: list, timeouts: dict | None = None) -> dict:
-    """Aggregate per hook: volume, kills, latency percentiles, stage costs."""
+    """Aggregate per hook: volume, kills, latency percentiles, stage costs.
+
+    Killed runs record no duration — they never reached their EXIT line. Left
+    out of the latency sample they invert the headline metric: a hook timing out
+    on half its runs would show a p95 drawn only from the fast half, reading
+    healthiest exactly when it is worst. So a kill enters the sample at its
+    configured ceiling, which is a lower bound on what it actually spent
+    (``p95_is_lower_bound`` says when that happened). A kill with no known
+    budget contributes nothing, because there is no defensible number to use.
+    """
     timeouts = timeouts or {}
     per_hook: dict[str, dict] = {}
     for r in runs:
         h = per_hook.setdefault(r.hook, {
             "runs": 0, "killed": 0, "errors": 0, "ms": [], "startup": [],
-            "stages": {}, "outcomes": {}, "kill_sessions": [],
+            "stages": {}, "outcomes": {}, "kill_sessions": [], "floored": 0,
         })
         h["runs"] += 1
         if r.killed:
             h["killed"] += 1
             h["kill_sessions"].append((r.ts.isoformat() if r.ts else "?", r.session))
+            ceiling = timeouts.get(r.hook)
+            if ceiling:
+                h["ms"].append(float(ceiling) * 1000.0)
+                h["floored"] += 1
         if r.status == "error":
             h["errors"] += 1
         if r.ms is not None:
@@ -758,6 +865,8 @@ def hook_stats(runs: list, timeouts: dict | None = None) -> dict:
             "hook": hook,
             "runs": h["runs"],
             "killed": h["killed"],
+            "expected_orphan": hook in EXPECTED_ORPHAN_HOOKS,
+            "p95_is_lower_bound": bool(h["floored"]),
             "errors": h["errors"],
             "p50_ms": round(_pct(h["ms"], 0.50) or 0),
             "p95_ms": round(p95 or 0),
@@ -785,6 +894,12 @@ def hook_stats(runs: list, timeouts: dict | None = None) -> dict:
     return {
         "runs": len(runs),
         "killed": sum(r["killed"] for r in rows),
+        # What a caller can gate on: orphans from hooks the harness is
+        # documented to kill (see EXPECTED_ORPHAN_HOOKS) are routine teardown,
+        # not a regression.
+        "unexpected_killed": sum(
+            r["killed"] for r in rows if not r["expected_orphan"]
+        ),
         "hooks": rows,
     }
 
@@ -793,7 +908,14 @@ def hook_health_notes(stats: dict) -> list:
     """The findings a reader should act on, stated as sentences."""
     notes = []
     for row in stats["hooks"]:
-        if row["killed"]:
+        if row["killed"] and row["expected_orphan"]:
+            notes.append(
+                f"{row['hook']}: {row['killed']} run(s) entered and never "
+                f"exited — expected. The harness kills this hook within "
+                f"seconds by design, which is why its real work is deferred; "
+                f"these are not counted as failures."
+            )
+        elif row["killed"]:
             where = ", ".join(
                 f"{ts} ({sid})" for ts, sid in row["kill_sessions"]
             )
@@ -803,10 +925,14 @@ def hook_health_notes(stats: dict) -> list:
                 f"crashed hard. Last: {where}"
             )
         if row["p95_pct"] and row["p95_pct"] >= HOOK_BUDGET_WARN_RATIO * 100:
+            bound = (
+                " (a lower bound — killed runs counted at their ceiling)"
+                if row["p95_is_lower_bound"] else ""
+            )
             notes.append(
                 f"{row['hook']}: p95 is {row['p95_pct']}% of its "
-                f"{row['budget_s']}s budget ({row['p95_ms']}ms) — the tail is "
-                f"one slow dependency away from a kill."
+                f"{row['budget_s']}s budget ({row['p95_ms']}ms){bound} — the "
+                f"tail is one slow dependency away from a kill."
             )
         if row["errors"]:
             notes.append(
@@ -824,15 +950,47 @@ def hook_health_notes(stats: dict) -> list:
     return notes
 
 
+def hooks_json_payload(stats: dict, notes: list) -> dict:
+    """The --hooks --json payload, defanged like the markdown one.
+
+    Same reasoning as :func:`render_hooks_markdown`, and it has to be applied
+    here too: hook names, stage names, outcomes and note fields all come from
+    log *text*, and --json is read by the same agent holding the same tools.
+    Defanging only on the markdown path left the machine-readable path — the
+    one a script pipes somewhere else — carrying raw log content with no notice
+    attached.
+    """
+    def _row(r: dict) -> dict:
+        out = dict(r)
+        out["hook"] = defang(r["hook"], 40)
+        out["stages"] = [
+            {**s, "stage": defang(s["stage"], 40)} for s in r["stages"]
+        ]
+        out["outcomes"] = {defang(k, 40): v for k, v in r["outcomes"].items()}
+        out["kill_sessions"] = [
+            [ts, defang(sid, 40)] for ts, sid in r["kill_sessions"]
+        ]
+        return out
+
+    return {
+        **stats,
+        "notice": UNTRUSTED_NOTICE,
+        "hooks": [_row(r) for r in stats["hooks"]],
+        "notes": [defang(n, 400) for n in notes],
+    }
+
+
 def render_hooks_markdown(stats: dict, notes: list) -> str:
     # Hook and stage names reach here from log *text*. hook_run() sanitizes them
     # at write time, but nothing stops a forged line landing in a log file, and
     # this digest is read by an agent holding full tools — so defang on the way
     # out too, exactly like the injection report does.
     out = ["# Hook timing", "", UNTRUSTED_NOTICE, ""]
+    expected = stats["killed"] - stats["unexpected_killed"]
     out.append(
-        f"{stats['runs']} hook run(s) observed; **{stats['killed']} killed** "
-        f"(entered, never exited)."
+        f"{stats['runs']} hook run(s) observed; "
+        f"**{stats['unexpected_killed']} killed** (entered, never exited)"
+        + (f", plus {expected} expected orphan(s)." if expected else ".")
     )
     out.append("")
     out.append("| hook | runs | killed | err | p50 | p95 | max | startup p50 | budget | p95 % |")
@@ -896,6 +1054,12 @@ SCENARIOS = {
             # exactly the failure this instrumentation exists to catch.
             ("context_manager", "INFO", r"HOOK_ENTRY hook=context_manager"),
             ("context_manager", "INFO", r"HOOK_EXIT hook=context_manager status=ok"),
+            # checkpoint_nudge is listed in `subsystems`, so assert on it too —
+            # otherwise it can only fail this probe by logging an ERROR, and a
+            # nudge that stopped firing entirely (the failure its outcome=
+            # instrumentation exists to expose) would pass.
+            ("checkpoint_nudge", "INFO", r"HOOK_ENTRY hook=checkpoint_nudge"),
+            ("checkpoint_nudge", "INFO", r"HOOK_EXIT hook=checkpoint_nudge status=ok"),
         ],
     },
     "session-start": {
@@ -1224,7 +1388,10 @@ def main(argv: list | None = None) -> int:
     hooks = parser.add_argument_group("hook timing")
     hooks.add_argument(
         "--hooks", action="store_true",
-        help="per-hook latency, stage breakdown, and runs killed at their timeout",
+        help=(
+            "per-hook latency, stage breakdown, and runs killed at their "
+            f"timeout (last {HOOK_DEFAULT_DAYS} days unless --days says otherwise)"
+        ),
     )
     probe = parser.add_argument_group("probe mode")
     probe.add_argument(
@@ -1271,16 +1438,22 @@ def main(argv: list | None = None) -> int:
         return 2
 
     if args.hooks:
-        since = date.today() - timedelta(days=args.days) if args.days else None
+        # Unlike the other reports this one defaults to a window. A kill is a
+        # point-in-time event, and without a window every past kill is
+        # re-counted forever — see HOOK_DEFAULT_DAYS.
+        days = args.days if args.days else HOOK_DEFAULT_DAYS
+        since = date.today() - timedelta(days=days)
         runs = load_hook_runs(logs_dir, since=since)
         stats = hook_stats(runs, hook_timeouts())
+        stats["window_days"] = days
         notes = hook_health_notes(stats)
         if args.json:
-            print(json.dumps({**stats, "notes": notes}, indent=2, default=str))
+            print(json.dumps(hooks_json_payload(stats, notes), indent=2, default=str))
         else:
             print(render_hooks_markdown(stats, notes))
-        # A killed hook is a real failure the caller should be able to gate on.
-        return 1 if stats["killed"] else 0
+        # A killed hook is a real failure the caller should be able to gate on —
+        # but only one the harness is not documented to kill on purpose.
+        return 1 if stats["unexpected_killed"] else 0
 
     if args.injections:
         since = date.today() - timedelta(days=args.days) if args.days else None
