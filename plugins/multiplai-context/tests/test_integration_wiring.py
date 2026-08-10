@@ -211,14 +211,20 @@ class TestPluginJsonFullWiring:
         types or defaults and no UI could surface them.
         """
         declared = set(self.plugin.get("userConfig", {}))
+        # Both spellings, matching the forward test: a direct accessor call,
+        # and the bare key bound to a module constant that is then passed to
+        # one. `router_thinking` shipped read-but-undeclared through the
+        # constant form, so a regex that only knew the literal one would have
+        # let the same class straight back in.
         read = re.compile(
             r'option(?:_bool|_int|_float|_present|_var)?\(\s*"([a-z0-9_]+)"'
+            r'|_OPTION\s*=\s*"([a-z0-9_]+)"'
         )
         found: dict[str, str] = {}
         for src_dir in (SCRIPTS_DIR, SCRIPTS_DIR / "lib", SCRIPTS_DIR / "generators"):
             for py_file in sorted(src_dir.glob("*.py")):
-                for key in read.findall(py_file.read_text()):
-                    found.setdefault(key, py_file.name)
+                for literal, constant in read.findall(py_file.read_text()):
+                    found.setdefault(literal or constant, py_file.name)
 
         undeclared = {k: v for k, v in sorted(found.items()) if k not in declared}
         assert not undeclared, (

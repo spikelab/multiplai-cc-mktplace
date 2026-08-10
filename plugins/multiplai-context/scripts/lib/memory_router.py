@@ -70,6 +70,72 @@ ROUTER_TIMEOUT_OPTION = "router_timeout_seconds"
 ROUTER_TIMEOUT_ENV_VAR = option_var(ROUTER_TIMEOUT_OPTION)
 DEFAULT_ROUTER_TIMEOUT_SECONDS = 25.0
 
+# Extended thinking is OFF for routing, and this is the single change that makes
+# `memory_router: llm` viable inside a blocking hook.
+#
+# Measured 2026-08-09 (see INBOX/memory-work-2026/04-routing-latency/): a cold
+# no-tools SDK call takes 18.4s with thinking on and 2.9s with it disabled. The
+# cold-start story this file used to tell was wrong — spawning the CLI
+# subprocess is worth 4-6s, not the ~12s claimed above, and `effort` is inert on
+# this path. Thinking was the cost. Against a 30s hook kill, that was the
+# difference between a median 27.4s (10 of 22 prompts killed on 2026-08-09) and
+# fitting comfortably.
+#
+# Routing is a classification over a catalog the model can see in full. It is
+# exactly the shape of task that does not need deliberation, so this is not a
+# quality trade in the way it would be for extraction or synthesis. Set the
+# option to "1"/"true" to restore thinking if a future catalog makes routing a
+# harder judgement than it is today.
+ROUTER_THINKING_OPTION = "router_thinking"
+ROUTER_THINKING_ENV_VAR = option_var(ROUTER_THINKING_OPTION)
+THINKING_DISABLED = {"type": "disabled"}
+
+
+def core_supports_thinking() -> bool:
+    """True when the resolved ``multiplai-core`` accepts ``thinking`` on query.
+
+    The parameter landed in core 0.14.0. This plugin tracks core from ``main``
+    through the repo lockfile, so there is a window where this file wants the
+    argument and the resolved core has never heard of it — and the failure mode
+    is nasty: ``TypeError`` inside ``_select_async_multi``, caught by its
+    ``except Exception`` degrade path, silently answering every prompt with
+    ``token_overlap`` while the log says the llm router is configured.
+
+    Probing the signature turns that into one loud warning and a working (if
+    slower) router. Cached: this is called per prompt on a blocking hook path.
+    """
+    global _CORE_THINKING_SUPPORT
+    if _CORE_THINKING_SUPPORT is None:
+        try:
+            import inspect
+            from multiplai_core.model_client import ModelClient
+            _CORE_THINKING_SUPPORT = (
+                "thinking" in inspect.signature(ModelClient.query).parameters
+            )
+        except Exception:
+            # No core, no client, unreadable signature — the call path has its
+            # own guards for all three. Assume unsupported and stay quiet here.
+            _CORE_THINKING_SUPPORT = False
+    return _CORE_THINKING_SUPPORT
+
+
+_CORE_THINKING_SUPPORT: bool | None = None
+
+
+def resolve_router_thinking(raw: str | None = None) -> dict | None:
+    """Return the ``thinking`` config for router calls, or ``None`` to leave it
+    to the model's default.
+
+    Disabled unless the option explicitly asks for thinking back. ``None`` is
+    the "send nothing" signal that `multiplai_core` needs for old-SDK
+    tolerance, so this returns the dict for the *default* case and ``None`` for
+    the opt-out — the inverse of how the other options here read.
+    """
+    value = (raw if raw is not None else option(ROUTER_THINKING_OPTION)).strip().lower()
+    if value in ("1", "true", "yes", "on", "enabled"):
+        return None
+    return THINKING_DISABLED
+
 
 def resolve_router_timeout(raw: str | float | None = None) -> float:
     """The llm router's timeout in seconds, from config or the default.
@@ -99,29 +165,54 @@ def resolve_router_timeout(raw: str | float | None = None) -> float:
 
 STRATEGY_TOKEN_OVERLAP = "token_overlap"
 STRATEGY_LLM = "llm"
+STRATEGY_LLM_HYBRID = "llm_hybrid"
 STRATEGY_EMBEDDINGS = "embeddings"
 
 # token_overlap is the shipped default: instant, runs synchronously in
-# the UserPromptSubmit hook every prompt. llm routing is semantically
-# better (it can abstain — token_overlap's NONE accuracy is ~0% by
-# construction).
+# the UserPromptSubmit hook every prompt. It is the *conservative* default,
+# not the better router — see the quality numbers below.
 #
-# LATENCY CAVEAT (measured 2026-05-22, Haiku, memory+skills ~10k-token
-# prompt): llm via the Agent SDK is ~12s+/prompt — the cost is the SDK
-# spawning the `claude` CLI subprocess (cold-start) per call, not the
-# model. The first 12s/15s budget proved too tight (router timed out every
-# prompt → empty context), so the hook timeout is raised to 30s and the
-# router timeout to 25s (≈5s headroom for parse/log/inject under the hook
-# kill) to let calls complete while we evaluate routing QUALITY. These two
-# numbers are coupled: keep router timeout < hook timeout. This is a
-# stopgap: the real fix is to move
-# routing OUT of the blocking hook to an external always-running agent /
-# local routing service (no per-call cold-start), or a direct-API path
-# (needs an API key with credits). See the README "Router latency"
-# note. create_router() degrades an explicit llm choice to
-# token_overlap when no model client is available.
+# QUALITY (backtested 2026-08-10 on 300 real prompts from 21 days of
+# transcripts, both routers scored against a hindsight oracle; full method in
+# INBOX/memory-work-2026/04-routing-latency/):
+#
+#   arm            F1     NONE acc   files   bytes
+#   token_overlap  20.0   32.7       3.20    162,935
+#   llm            48.6   53.8       1.77    122,150
+#
+# The llm router wins 2.4x on F1 and injects fewer bytes. An earlier 17-case
+# golden eval said the opposite — token_overlap scored 100% — but that set is
+# phrased in the catalog's own vocabulary, which is precisely what token_overlap
+# matches on, so it could not discriminate. Do not re-derive a preference from
+# that eval; it is saturated.
+#
+# What token_overlap is actually good at is *stopping*: on session-opening
+# prompts it gets NONE right 76.9% of the time against the llm router's 51.3%,
+# and injects 93,001 bytes against 170,940. STRATEGY_LLM_HYBRID exists to take
+# both — see HybridRouter.
+#
+# LATENCY (measured 2026-08-09, corrected): the ~12s "SDK cold start" this
+# comment used to claim does not reproduce. Spawning the CLI subprocess is worth
+# 4-6s; the real cost was extended thinking, and `effort` is inert here.
+# thinking={"type":"disabled"} takes a cold call 18.4s -> 2.9s, which is why
+# ROUTER_THINKING_OPTION defaults to off. Before that fix the llm router ran at a
+# 27.4s median against a 30s hook kill and lost 10 of 22 prompts on 2026-08-09;
+# that — not routing quality — is why the shipped default was reverted to
+# token_overlap in multiplai-kit e2d12f2. An external routing daemon was
+# explored and rejected: the SDK's session_id does not isolate conversations, so
+# a warm long-lived process cannot serve concurrent sessions.
+#
+# The hook timeout (30s) and router timeout (25s) remain coupled: keep the
+# router's below the hook's, leaving headroom for parse/log/inject.
+# create_router() degrades an explicit llm choice to token_overlap when no model
+# client is available.
 DEFAULT_STRATEGY = STRATEGY_TOKEN_OVERLAP
-KNOWN_STRATEGIES = frozenset({STRATEGY_TOKEN_OVERLAP, STRATEGY_LLM, STRATEGY_EMBEDDINGS})
+KNOWN_STRATEGIES = frozenset({
+    STRATEGY_TOKEN_OVERLAP,
+    STRATEGY_LLM,
+    STRATEGY_LLM_HYBRID,
+    STRATEGY_EMBEDDINGS,
+})
 
 CORPUS_TYPES = ("memory", "skills", "resources")
 
@@ -434,6 +525,23 @@ class TokenOverlapRouter:
             }
         return result
 
+    def gate(
+        self,
+        text: str,
+        catalog_entries: list[dict],
+    ) -> tuple[list[tuple[float, str]], set[str]]:
+        """Public seam over the offline gates: ``(ranking, eligible)``.
+
+        ``eligible`` is "cleared the ``MIN_DOMAIN_MATCHES`` breadth gate and was
+        not vetoed by ``anti_domains``" — a vetoed entry never enters the
+        ranking, so the two mechanisms collapse into one set membership test.
+
+        Exists for :class:`HybridRouter`, which needs the gates without the
+        ranking policy: it is filtering somebody else's picks, not making its
+        own. Keep the private ``_scored_pairs`` for this class's own use.
+        """
+        return self._scored_pairs(text, catalog_entries)
+
     def _score_corpus(
         self,
         prompt: str,
@@ -569,6 +677,18 @@ def _parse_llm_multi_selection(
     to entries actually present in that corpus's known-name set.
     Section refs (``"file#Section"``) are validated by stripping the
     fragment before checking presence.
+
+    Raises:
+        RouterCallFailed: the reply was not a JSON object. This used to return
+            empty, which is the same bug :class:`RouterCallFailed` was created
+            to fix one layer up: downstream, an empty pick from a router that
+            *ran* means "nothing is relevant" and suppresses the context
+            manager's recency net. A model that replied with prose has not
+            decided that nothing is relevant — it has failed to answer, and the
+            honest response is to degrade to the offline ranking.
+
+            An empty but well-formed ``{"memory": [], ...}`` is still a genuine
+            abstention and still returns empty. Only malformed replies raise.
     """
     text = raw.strip()
     match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
@@ -577,12 +697,12 @@ def _parse_llm_multi_selection(
     try:
         parsed = json.loads(text)
     except (json.JSONDecodeError, ValueError):
-        logger.warning("LLM router returned non-JSON; ignoring")
-        return {ct: [] for ct in CORPUS_TYPES}
+        raise RouterCallFailed("returned non-JSON") from None
 
     if not isinstance(parsed, dict):
-        logger.warning("LLM router JSON is not an object; ignoring")
-        return {ct: [] for ct in CORPUS_TYPES}
+        raise RouterCallFailed(
+            f"returned JSON {type(parsed).__name__}, not an object"
+        )
 
     result: dict[str, list[str]] = {}
     for corpus_type in CORPUS_TYPES:
@@ -642,12 +762,28 @@ class LLMRouter:
         timeout_seconds: float | None = None,
         model: str | None = None,
         fallback: "TokenOverlapRouter | None" = None,
+        thinking: dict | None = None,
+        thinking_set: bool = False,
     ) -> None:
         self._timeout_seconds = (
             timeout_seconds
             if timeout_seconds is not None
             else resolve_router_timeout()
         )
+        # `None` is a meaningful value here (send no thinking config at all), so
+        # it cannot double as "caller did not specify". Hence the explicit flag
+        # rather than the `is not None` idiom used for the other arguments.
+        self._thinking = thinking if thinking_set else resolve_router_thinking()
+        if self._thinking is not None and not core_supports_thinking():
+            logger.warning(
+                "Resolved multiplai-core does not accept thinking= on "
+                "ModelClient.query (needs >= 0.14.0), so router calls keep "
+                "extended thinking on: expect ~18s per prompt against the %.0fs "
+                "ceiling instead of ~3s. Fix with `uv lock --upgrade-package "
+                "multiplai-core` at the repo root, then commit the lock.",
+                self._timeout_seconds,
+            )
+            self._thinking = None
         self._model = (
             model
             or option(ROUTER_MODEL_OPTION)
@@ -725,9 +861,17 @@ class LLMRouter:
                 f"call raised {type(e).__name__}",
                 prompt, last_response, corpora, max_files_per_corpus)
 
-        return {
+        capped = {
             ct: picks.get(ct, [])[:max_files_per_corpus] for ct in CORPUS_TYPES
         }
+        if not any(capped.values()):
+            # Make a genuine abstention legible. Three different states used to
+            # print the same `picked: memory=0` line downstream — abstained,
+            # replied unparseably, timed out — and telling them apart in the log
+            # was guesswork. The other two now degrade instead, so this line
+            # means the model ran, answered well-formed, and chose nothing.
+            logger.info("LLMRouter abstained: model ran and picked nothing")
+        return capped
 
     async def _select_async_multi(
         self,
@@ -740,13 +884,19 @@ class LLMRouter:
 
         client = await create_client(component="memory-router")
         user_msg = build_user_message(prompt, last_response, corpora)
+        query_kwargs: dict = dict(
+            system=SYSTEM_PROMPT + "\n\n" + FEW_SHOT_EXAMPLES,
+            messages=[{"role": "user", "content": user_msg}],
+            model=self._model,
+        )
+        # Omit the keyword entirely rather than passing None: an older core
+        # rejects the *name*, whatever the value. __init__ has already forced
+        # self._thinking to None when the resolved core cannot take it.
+        if self._thinking is not None:
+            query_kwargs["thinking"] = self._thinking
         try:
             response = await asyncio.wait_for(
-                client.query(
-                    system=SYSTEM_PROMPT + "\n\n" + FEW_SHOT_EXAMPLES,
-                    messages=[{"role": "user", "content": user_msg}],
-                    model=self._model,
-                ),
+                client.query(**query_kwargs),
                 timeout=self._timeout_seconds,
             )
         except asyncio.TimeoutError:
@@ -759,6 +909,127 @@ class LLMRouter:
                 f"timed out after {self._timeout_seconds:.1f}s"
             ) from None
         return _parse_llm_multi_selection(response.content, known_per_corpus)
+
+
+# ---------------------------------------------------------------------------
+# Hybrid router (LLM picks; the offline gates filter)
+# ---------------------------------------------------------------------------
+
+
+class HybridRouter:
+    """LLM picks the files; ``token_overlap``'s gates decide which survive.
+
+    **Why this exists.** Backtested on 300 real prompts (2026-08-10, see
+    ``INBOX/memory-work-2026/04-routing-latency/``), the two routers fail in
+    opposite directions. The LLM router is 2.4x better at *finding* the right
+    file (F1 48.6 vs 20.0) and worse at *stopping*: on session-opening prompts
+    it injects 170,940 bytes against token_overlap's 93,001, and gets NONE right
+    51.3% of the time against 76.9%. token_overlap's edge there is not its
+    scoring — it is two mechanisms the LLM never sees:
+
+    - the **breadth gate** (``MIN_DOMAIN_MATCHES``): a file needs >= 2 distinct
+      ``intent_domains`` tokens in the prompt, or one verbatim multi-word domain
+      phrase. One incidental word cannot pull a file in.
+    - the **``anti_domains`` veto**: an explicit hard-exclude, with the entry's
+      own positive vocabulary subtracted first.
+
+    Both are computed by ``TokenOverlapRouter._scored_pairs``, whose ``eligible``
+    set is exactly "cleared the breadth gate and was not vetoed" — a vetoed
+    entry never enters the ranking, so it can never be eligible. So the filter is
+    a set-membership test, not a reimplementation.
+
+    **What this trades.** The gates can only remove. Every drop is a recall risk:
+    a file the LLM was right about, phrased in vocabulary the catalog does not
+    carry, gets filtered. That is the exact case the LLM router was winning, so
+    this is a genuine bet and not a free improvement — which is why it ships as
+    an opt-in strategy rather than as a change to ``llm``, and why the drops are
+    logged rather than silent. Score it on the discriminating case set before
+    making it anybody's default.
+    """
+
+    name = "llm_hybrid"
+
+    def __init__(
+        self,
+        *,
+        llm: "LLMRouter | None" = None,
+        gate: "TokenOverlapRouter | None" = None,
+    ) -> None:
+        self._gate = gate if gate is not None else TokenOverlapRouter()
+        # The LLM router's own degrade path lands on the same gate instance, so a
+        # failed call yields plain token_overlap output — already gated, and not
+        # double-filtered by the code below (see select_multi).
+        self._llm = llm if llm is not None else LLMRouter(fallback=self._gate)
+        # Consumed by context_manager's ROUTING_SCORES line. Without it,
+        # switching to this strategy would silently turn off the routing-quality
+        # log the eval harness and /health both read.
+        self.last_scores: dict[str, dict] = {}
+
+    def select_multi(
+        self,
+        prompt: str,
+        last_response: str | None,
+        corpora: dict[str, list[dict]],
+        *,
+        max_files_per_corpus: int = 10,
+    ) -> dict[str, list[str]]:
+        picks = self._llm.select_multi(
+            prompt, last_response, corpora,
+            max_files_per_corpus=max_files_per_corpus,
+        )
+        # The gate scores against the same text the offline router would see.
+        # Passing only `prompt` here would gate on less context than
+        # token_overlap itself uses and drop files the LLM picked *because* of
+        # the previous turn.
+        gate_text = prompt if not last_response else f"{prompt}\n{last_response}"
+
+        self.last_scores = {}
+        result: dict[str, list[str]] = {}
+        dropped: dict[str, list[str]] = {}
+        for corpus_type in CORPUS_TYPES:
+            selected = picks.get(corpus_type, [])
+            if not selected:
+                result[corpus_type] = []
+                continue
+            entries = corpora.get(corpus_type) or []
+            scored, eligible = self._gate.gate(gate_text, entries)
+            kept, cut = [], []
+            for pick in selected:
+                # Section refs ("file.md#Section") are gated on their file: the
+                # eligible set is keyed by filename, and the catalog's
+                # intent_domains describe the whole file.
+                base = pick.split("#", 1)[0]
+                (kept if base in eligible else cut).append(pick)
+            result[corpus_type] = kept
+            if cut:
+                dropped[corpus_type] = cut
+
+            # Diagnostics in the shape context_manager already logs. The scores
+            # are the *gate's*, not the LLM's — the LLM produces no scores at
+            # all — so this line answers "why was this dropped", which is the
+            # only question the gate can be wrong about.
+            score_by_fn = {fn: s for s, fn in scored}
+            self.last_scores[corpus_type] = {
+                "scored": scored,
+                "picked_scored": [
+                    (score_by_fn.get(p.split("#", 1)[0], 0.0), p) for p in kept
+                ],
+                "n_eligible": len(eligible),
+                "top_eligible": next(
+                    (s for s, fn in scored if fn in eligible), None
+                ),
+                "cap": max_files_per_corpus,
+                "n_candidates": len(scored),
+                "n_picked": len(kept),
+                "capped": len(kept) >= max_files_per_corpus,
+                "hybrid_dropped": cut,
+            }
+
+        if dropped:
+            # Logged, not silent: this is the mechanism's whole risk surface, and
+            # a recall regression is invisible unless you can see what was cut.
+            logger.info("HYBRID_GATE dropped=%s", json.dumps(dropped, sort_keys=True))
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -805,7 +1076,7 @@ def create_router(
     effective = resolve_strategy(strategy)
     if effective == STRATEGY_TOKEN_OVERLAP:
         return TokenOverlapRouter(keep_ratio=kr)
-    if effective == STRATEGY_LLM:
+    if effective in (STRATEGY_LLM, STRATEGY_LLM_HYBRID):
         # Degrade to the offline router when no model client exists
         # (no Agent SDK host, no API key) — otherwise LLMRouter would
         # silently return empty picks every prompt.
@@ -816,15 +1087,22 @@ def create_router(
             client = "none"
         if client.startswith("none"):
             logger.warning(
-                "memory_router=llm but no model client available (%s); "
+                "memory_router=%s but no model client available (%s); "
                 "degrading to token_overlap for this session",
-                client,
+                effective, client,
             )
             return TokenOverlapRouter(keep_ratio=kr)
         # The fallback carries the same keep_ratio as an explicitly-configured
         # token_overlap router, so degrading mid-session lands on the routing
         # the user actually configured rather than on module defaults.
-        return LLMRouter(fallback=TokenOverlapRouter(keep_ratio=kr))
+        gate = TokenOverlapRouter(keep_ratio=kr)
+        llm = LLMRouter(fallback=gate)
+        if effective == STRATEGY_LLM_HYBRID:
+            # One gate instance, shared: the hybrid's filter and the LLM
+            # router's degrade path must agree on keep_ratio, or a degraded
+            # prompt would be gated differently from a normal one.
+            return HybridRouter(llm=llm, gate=gate)
+        return llm
     if effective == STRATEGY_EMBEDDINGS:
         raise NotImplementedError(
             "Embeddings router is reserved for a future port — set "

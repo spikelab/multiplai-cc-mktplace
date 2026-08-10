@@ -18,6 +18,60 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.42.0] - 2026-08-10
+
+### Added
+
+- **`memory_router: llm_hybrid`** — a third strategy. The LLM picks the files,
+  then the offline router's two gates decide which survive: the breadth gate
+  (a file needs ≥2 distinct `intent_domains` tokens in your prompt, or one
+  verbatim multi-word domain phrase) and the `anti_domains` veto.
+
+  Why you might want it: backtested on 300 real prompts, `llm` finds the right
+  file 2.4× more often than `token_overlap` (F1 48.6 vs 20.0) but does not know
+  when to stop — on the first prompt of a session it injects 170,940 bytes
+  against `token_overlap`'s 93,001, and correctly injects nothing only 51.3% of
+  the time against 76.9%. `llm_hybrid` is the attempt to have both.
+
+  It is **opt-in and unmeasured.** The gates can only remove, so every drop is a
+  recall risk — a file the LLM was right about, phrased in words your catalog
+  does not carry, gets filtered. Dropped picks are logged (`HYBRID_GATE`) rather
+  than discarded silently, and `ROUTING_SCORES` still reports scores, so you can
+  see what the gate cost you. Score it on a golden set before trusting it.
+
+- **`router_thinking` option** — extended thinking on router calls, default
+  **off**. This is the change that makes `memory_router: llm` usable at all: a
+  cold routing call takes 18.4 s with thinking on and 2.9 s with it off, against
+  a 30 s hook budget. Set it to `1`/`true` to restore thinking.
+
+  Needs `multiplai-core` ≥ 0.14.0. Against an older core the plugin logs a
+  warning, keeps thinking on, and still works — it does not crash and does not
+  silently stop routing.
+
+### Fixed
+
+- **A router reply that isn't JSON no longer reads as "nothing is relevant."**
+  It now degrades to the offline router, like every other failure on that path.
+  Before, a model that answered with prose produced an empty pick, which the
+  context manager treats as a deliberate abstention — and abstention suppresses
+  its own recency net, so those prompts got **no memory at all**, indistinguishable
+  in the log from correct behaviour. An empty but well-formed reply is still a
+  genuine abstention and still injects nothing.
+
+- **A genuine abstention now says so in the log** (`LLMRouter abstained`).
+  Three different outcomes previously printed the same `picked: memory=0` line —
+  abstained, replied unparseably, timed out — which made an `llm` router
+  regression invisible.
+
+### Changed
+
+- The latency notes in `memory_router.py` said the LLM router's cost was a ~12 s
+  SDK cold start. That does not reproduce: the subprocess spawn is worth 4–6 s,
+  `effort` is inert on this path, and extended thinking was the real cost. The
+  comment now carries the measured numbers and the backtest results, because the
+  old figure is what justified the previous default.
+
+
 ## [0.41.0] - 2026-08-10
 
 The rebuild pointer 0.39.0 started writing for every session was being filed
@@ -75,7 +129,6 @@ A checkpoint from a closed tab is still only claimable by a session in the same
 container. Under one-container-per-session that means a new tab will not find
 it; the pointer is now correct rather than nonsensical, which is a smaller
 claim than "closed tabs are restorable". Tracked separately.
-
 ## [0.39.0] - 2026-08-09
 
 ### Changed

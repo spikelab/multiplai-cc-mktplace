@@ -165,7 +165,7 @@ Most users only touch these:
 |--------|-----|
 | `workspace_dir` | Anchor for all state. Set it once; everything else defaults under it. |
 | `anthropic_api_key` | Only if you're not running inside Claude Code's Agent SDK (set as a fallback). |
-| `memory_router` | Leave `token_overlap` (fast, offline) unless you want LLM-based routing (`llm` = one Sonnet call per prompt). |
+| `memory_router` | `token_overlap` (offline, instant) is the safe default. `llm` picks better files — one Haiku call per prompt, ~2.9s — at the cost of blocking your prompt on it. |
 
 Optional, for power users:
 
@@ -200,8 +200,9 @@ over the anchor:
 | `catalog_model_diary` | _(inherits)_ | Optional model override for the diary catalog |
 | `catalog_ttl_hours` | `168` | Hours a generated catalog stays valid before the read path flags it stale (advisory warning only — never regenerates inline) |
 | `diary_catalog_days` | `7` | Days of diary history the diary catalog covers |
-| `memory_router` | `token_overlap` | Context selection strategy: `token_overlap` (offline, fast) or `llm` (one model call per prompt). See [Router latency](#router-latency) before choosing `llm`. |
+| `memory_router` | `token_overlap` | Context selection strategy: `token_overlap` (offline, instant), `llm` (one model call per prompt — 2.4× better at finding the right file, worse at injecting nothing), or `llm_hybrid` (`llm` picks, then `token_overlap`'s breadth gate and `anti_domains` veto filter the picks — opt-in and unmeasured; it can only remove files, so it trades recall for precision). See [Router latency](#router-latency) before choosing either LLM strategy. |
 | `router_model` | `claude-haiku-4-5` | Model for the `llm` router. Haiku by default — routing is cheap classification, so the smallest/fastest model keeps per-prompt latency down. Ignored under `token_overlap`. |
+| `router_thinking` | `false` | Extended thinking on router calls. Off by default and that is what makes LLM routing fit the hook budget: a cold call is 18.4 s with thinking on, 2.9 s with it off. Set `1`/`true` to restore it. Needs `multiplai-core` ≥ 0.14.0 — against an older core the plugin warns, keeps thinking on, and keeps working. |
 | `recommend_cooldown_turns` | `4` | After a file is injected, suppress re-injecting it for this many turns (it's already in the conversation). `0` disables. See [Re-recommendation cooldown](#re-recommendation-cooldown). |
 | `keep_ratio` | `0.30` | `token_overlap` relevance cutoff: keep a memory file only if it scores ≥ this fraction of the top match (0–1). Higher = stricter (fewer, more-relevant files, less 10-file cap saturation); lower admits more of the weaker tail. Ignored under `llm`. See [Routing relevance cutoff](#routing-relevance-cutoff). |
 | `memory_conflict_preamble` | `true` | Conflict-surfacing directive + per-file last-updated stamps above every injected MEMORY block, so the model flags memory-vs-session disagreements. ~90 tokens per memory-carrying turn; turn off to save them. |
@@ -210,20 +211,36 @@ over the anchor:
 
 #### Router latency
 
-The `llm` router runs one model call **inside the blocking
-`UserPromptSubmit` hook**, before Claude sees your prompt. Via the Agent
-SDK this measured **~7–10s/prompt** (Haiku, memory+skills) — the cost is
-the SDK spawning the `claude` CLI subprocess per call, not the model. The
-hook timeout is therefore raised to 15s (router timeout 12s) when `llm`
-is active. That is a real per-prompt latency cost; `token_overlap` (the
-default) is instant.
+The LLM strategies run one model call **inside the blocking
+`UserPromptSubmit` hook**, before Claude sees your prompt. The hook budget
+is 30s and the router gives up at 25s. `token_overlap` is instant.
 
-`llm` is currently best treated as a **routing-quality experiment**, not
-a steady-state config. The durable fix is to move routing out of the
-blocking hook — an always-running external routing agent / local service
-that holds a warm model connection (no per-call cold-start), or a
-direct-API path (needs an API key with credits, which bypasses the SDK
-subprocess). Until then, prefer `token_overlap` for daily use.
+**With `router_thinking` off (the default), a routing call is ~2.9s.** Turn
+thinking on and the same call takes ~18.4s, which is close enough to the
+ceiling that some prompts lose the race — and a killed hook injects no
+memory at all. This is the single knob that decides whether LLM routing is
+practical, so leave it off unless you have a reason.
+
+Two things this document previously got wrong, both corrected by measurement
+on 2026-08-09:
+
+- **It is not a cold start.** Spawning the `claude` CLI subprocess costs 4–6s,
+  not the ~12s once claimed here. Extended thinking was the rest.
+- **A warm external routing service does not fix it**, and is not worth
+  building: the Agent SDK's `session_id` does not isolate conversations, so one
+  long-lived process cannot serve concurrent sessions. That idea was explored
+  and rejected, not merely deferred.
+
+`effort` has no effect on this path.
+
+**On quality**, in case the latency framing above reads as "prefer
+`token_overlap`": backtested on 300 real prompts, `llm` beats `token_overlap`
+2.4× on F1 (48.6 vs 20.0) and injects fewer bytes overall. An older 17-case
+eval said the reverse; that set is phrased in the catalog's own vocabulary,
+which is what `token_overlap` matches on, so it could not tell them apart.
+Where `token_overlap` genuinely wins is knowing when to inject *nothing* —
+76.9% vs 51.3% on the first prompt of a session. `llm_hybrid` exists to take
+both, and has not been scored yet.
 
 ### Resources retrieval via qmd
 
