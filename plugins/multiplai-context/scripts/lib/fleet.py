@@ -62,6 +62,15 @@ logger = logging.getLogger(__name__)
 
 AGENTS_FILENAME = "AGENTS.md"
 
+# A one-line status-bar count written by ≤0.17.1 and retired by the digest.
+# 0.18.0 deleted a leftover on every render; 0.19.0 dropped the constant and
+# the unlink together, so on any workspace that ever ran ≤0.17.1 the file
+# survives forever while the changelog goes on promising it is collected
+# (#168). Restored here because the directory it sits in has since become a
+# read surface for host-side tooling, and a stale, unowned, plausibly-named
+# file there is exactly what a future reader picks up by accident.
+RETIRED_FLEET_FILENAME = "fleet.txt"
+
 # A session quiet for longer than this is "idle" rather than "working".
 # Half a day, because that is the span of one working session: a tab last
 # heard from this morning is plausibly still yours, one last heard from
@@ -1626,6 +1635,11 @@ def write_fleet_view(data_dir: Path, now: datetime | None = None) -> Path:
     # `/fleet-status` saw rather than blanked. See `carry_forward`.
     payload = fleet_json(fleet, now, existing=read_fleet_json(data_dir))
     atomic_write(data_dir / FLEET_JSON_FILENAME, payload)
+
+    try:
+        (data_dir / RETIRED_FLEET_FILENAME).unlink(missing_ok=True)
+    except OSError:  # pragma: no cover - a stale file is cosmetic, never fatal
+        pass
 
     logger.info(
         "Fleet: %d front(s), %d listed of %d session(s), %d collision(s) → %s",

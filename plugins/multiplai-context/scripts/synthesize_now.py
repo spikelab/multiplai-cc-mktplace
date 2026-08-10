@@ -12,6 +12,7 @@ an extractive summary when the LLM is unavailable.
 """
 
 import asyncio
+import json
 import os
 import re
 import sys
@@ -194,7 +195,29 @@ async def _summarize_project(client, project: str, entries: list[dict],
     return _extractive_summary(project, snippets)
 
 
-def _writer_hostname() -> str:
+def _writer_hostname(session_id: str = "") -> str:
+    """The host of the session this summary is *about*, not of this process.
+
+    The header exists to name the window whose work the file describes. When
+    the host drain runs this after the session's container has exited, this
+    process is a throwaway container whose ``$HOSTNAME`` is a random Docker id
+    — attribution that identifies nothing (#182). The registry records the
+    session's own hostname, so prefer it and fall back to the environment only
+    when there is no entry to read.
+    """
+    try:
+        from lib.session_registry import registry_dir  # type: ignore
+
+        if session_id and "/" not in session_id and session_id not in (".", ".."):
+            data_dir = get_paths().plugin_data()
+            entry = json.loads(
+                (registry_dir(data_dir) / f"{session_id}.json").read_text(encoding="utf-8")
+            )
+            recorded = str(entry.get("hostname") or "").strip()
+            if recorded:
+                return recorded
+    except Exception:
+        pass
     try:
         from lib.session_registry import _hostname  # type: ignore
 
@@ -226,7 +249,7 @@ def _write_summary(
     header_lines = [f"Generated: {timestamp}"]
     if session_id:
         header_lines.append(f"Written by session: {session_id}")
-    host = _writer_hostname()
+    host = _writer_hostname(session_id)
     if host:
         header_lines.append(f"Written on host: {host}")
     source_names = [e["filepath"].name for e in entries if "filepath" in e]

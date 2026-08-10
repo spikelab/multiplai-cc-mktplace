@@ -70,7 +70,6 @@ def _save_deferred_marker(
     # file this session's marker under the wrong id — clobbering the other
     # session's marker and losing this one's diary/learnings extraction.
     session_id = hook_input.get("session_id") or session_state.get("session_id") or "unknown"
-    setup_logging("session_end", session_id=session_id)
     marker = {
         "session_id": session_id,
         "transcript_path": hook_input.get("transcript_path", ""),
@@ -127,6 +126,11 @@ def _checkpoint_on_end(data_dir: Path, hook_input: dict, reason: str) -> str:
         # Forced: the band/refresh/stale triggers are a cadence question and
         # this is the last chance to write at all.
         "reason": f"session-end:{reason}",
+        # This hook runs inside the session's own container, so it is the last
+        # place that knows which one that was. The host drain writes the
+        # rebuild pointer from a throwaway container minutes later, and keying
+        # the pointer to *that* hostname orphaned it permanently (#182).
+        "hostname": cp.session_hostname(),
     }
 
     if reason in CONTAINER_SURVIVES_REASONS:
@@ -172,6 +176,18 @@ def main() -> None:
 
     paths = get_paths()
     session_state = read_session_state(paths.plugin_data()) or {}
+
+    # Bind the logger to the session id BEFORE anything logs. Binding it inside
+    # _save_deferred_marker meant the checkpoint half of this hook — which runs
+    # first — printed the `session:--------` placeholder, so `grep session:<id>`
+    # silently omitted it and correlating a queued checkpoint with its session
+    # meant matching timestamps against the adjacent line (#184).
+    setup_logging(
+        "session_end",
+        session_id=(
+            hook_input.get("session_id") or session_state.get("session_id") or "unknown"
+        ),
+    )
 
     # Hub session registry: mark the session ended (adoptable / GC-able).
     try:

@@ -197,6 +197,35 @@ class TestPluginJsonFullWiring:
                 f"{field_name.upper()}, and a lowercase read misses silently."
             )
 
+    def test_every_option_the_code_reads_is_declared(self):
+        """WHEN a module reads an option through the shared accessor
+        THEN plugin.json declares it.
+
+        The inverse of the test above, and the half that was missing. Walking
+        ``userConfig`` and checking the code reads each field says nothing
+        about a *read with no declaration behind it* — which is how the whole
+        ``checkpoint_*`` family (nine options, documented in the README, read
+        by ``lib/checkpoint.py``) stayed out of the manifest for eleven
+        releases (#153). They worked, because Claude Code exports whatever is
+        in ``pluginConfigs`` regardless of the schema. Nothing validated their
+        types or defaults and no UI could surface them.
+        """
+        declared = set(self.plugin.get("userConfig", {}))
+        read = re.compile(
+            r'option(?:_bool|_int|_float|_present|_var)?\(\s*"([a-z0-9_]+)"'
+        )
+        found: dict[str, str] = {}
+        for src_dir in (SCRIPTS_DIR, SCRIPTS_DIR / "lib", SCRIPTS_DIR / "generators"):
+            for py_file in sorted(src_dir.glob("*.py")):
+                for key in read.findall(py_file.read_text()):
+                    found.setdefault(key, py_file.name)
+
+        undeclared = {k: v for k, v in sorted(found.items()) if k not in declared}
+        assert not undeclared, (
+            "options read but not declared in plugin.json userConfig: "
+            + ", ".join(f"{k} ({v})" for k, v in undeclared.items())
+        )
+
     def test_hooks_scripts_all_exist_and_are_python(self):
         """WHEN every hook script path in hooks.json is checked
         THEN each exists and is a .py file."""

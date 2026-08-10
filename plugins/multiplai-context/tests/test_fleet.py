@@ -1187,6 +1187,30 @@ class TestFleetJsonIsWrittenOnEveryRender:
         assert payload["version"] == 1
         assert [a["session_id"] for a in payload["agents"]] == ["a"]
 
+    def test_a_leftover_fleet_txt_is_collected(self, tmp_path):
+        """`fleet.txt` is the one-line status count ≤0.17.1 wrote. 0.18.0
+        deleted a leftover on every render and 0.19.0 dropped the deletion
+        with the constant, so it survived forever on any workspace that ever
+        ran the old code while the changelog kept promising otherwise (#168).
+
+        It matters more now than it did then: this directory has become a read
+        surface for host-side tooling, and a stale, unowned, plausibly-named
+        file in it is what a future reader picks up by accident."""
+        make_session(tmp_path, "a", project="alpha")
+        (tmp_path / "fleet.txt").write_text("3 fronts · 2 need you · oldest 26m")
+
+        fleet.write_fleet_view(tmp_path, NOW)
+
+        assert not (tmp_path / "fleet.txt").exists()
+
+    def test_no_fleet_txt_is_not_an_error(self, tmp_path):
+        """Every workspace installed since 0.19.0 has never had one."""
+        make_session(tmp_path, "a", project="alpha")
+
+        fleet.write_fleet_view(tmp_path, NOW)
+
+        assert not (tmp_path / "fleet.txt").exists()
+
     def test_the_version_did_not_move(self):
         """`FLEET_JSON_VERSION` is bumped when a field changes meaning or
         disappears. `collected_at` is purely additive, and every existing field

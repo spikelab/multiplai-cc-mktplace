@@ -49,7 +49,7 @@ import logging
 import os
 import shutil
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from multiplai_core.plugin_options import option, option_float, option_int
@@ -150,6 +150,26 @@ _DEFAULT_HARD_STOP = 0
 _DEFAULT_STALE_HOURS = 0.5
 _DEFAULT_MIN_SESSION_MINUTES = 30
 
+# Collection floor for the checkpoint store. A session directory whose last
+# sign of life — newest file mtime, or its registry ``last_event`` — is older
+# than this is collected by ``sweep_checkpoints``.
+#
+# Retirement is attempted exactly once, minutes after a session ends, and
+# refuses while a pending marker still points at the session. Nothing ever
+# revisited a refusal, so a refusal was permanent: 216 directories (3.5 MB) had
+# accumulated by 2026-08-10, one per session since Jul 7, none ever collected.
+# The sweep is what revisits them.
+#
+# 7 days is far past every other clock in the system — extraction runs minutes
+# after the session ends, and a marker expires after ``ttl_hours`` (6) — so a
+# directory this old is not pinned by anything that is still going to happen.
+_DEFAULT_GC_DAYS = 7.0
+
+# Bound on one sweep, so a first run against a large backlog cannot turn a
+# SessionStart hook into a long filesystem walk. Whatever is left is collected
+# on the next start; the sweep logs when it stops early.
+_SWEEP_MAX_RETIRE = 500
+
 # The 11 checkpoint fields (MiMo Code spec). The writer prompt emits these
 # as H2 sections; validation requires a majority of them to be present.
 CHECKPOINT_SECTIONS = (
@@ -190,6 +210,9 @@ class CheckpointConfig:
     # ``hard_stop_tokens = 0`` disables the block entirely (the default),
     # leaving the handoff nudge advisory exactly as it was.
     hard_stop_tokens: int = _DEFAULT_HARD_STOP
+    # ``gc_days = 0`` disables checkpoint collection, keeping every session
+    # directory forever — which is what every version before this one did.
+    gc_days: float = _DEFAULT_GC_DAYS
 
 
 def load_config() -> CheckpointConfig:
@@ -249,6 +272,7 @@ def load_config() -> CheckpointConfig:
             0, option_int("checkpoint_min_session_minutes", _DEFAULT_MIN_SESSION_MINUTES)
         ),
         hard_stop_tokens=hard_stop,
+        gc_days=max(0.0, option_float("checkpoint_gc_days", _DEFAULT_GC_DAYS)),
     )
 
 
@@ -670,6 +694,16 @@ def _hostname_key() -> str:
         return ""
 
 
+def session_hostname() -> str:
+    """This process's container/machine name, sanitized for use as a key.
+
+    Public because ``session_end.py`` has to *record* it: that hook is the last
+    code that runs inside the session's own container, and the writer that
+    needs it may run minutes later somewhere else entirely (#182).
+    """
+    return _hostname_key()
+
+
 def marker_name(cwd: str, hostname: str | None = None) -> str:
     """Filename for the pending marker of *cwd*'s project on this host.
 
@@ -697,29 +731,103 @@ def marker_name(cwd: str, hostname: str | None = None) -> str:
     and it is not a general fix.
 
     Falls back to the legacy ``<project>.json`` when the hostname is unknown.
+
+    Prefer :func:`session_marker_name` wherever a session id is in hand: both
+    halves of this key are properties of the SESSION, and neither survives
+    being re-derived from the writing process (see that function).
     """
     host = _sanitize_key(hostname) if hostname is not None else _hostname_key()
     key = _project_key(cwd)
     return f"{key}__{host}.json" if host else f"{key}.json"
 
 
+def _registry_identity(data_dir: Path, session_id: str) -> dict:
+    """The session's own registry entry, or ``{}`` when there isn't one.
+
+    The hub registry (``lib/session_registry``) is the only place a session's
+    project and hostname are recorded *as the session's own*, rather than
+    re-derived from whichever process happens to be asking.
+    """
+    if not session_id or "/" in session_id or session_id in (".", ".."):
+        return {}
+    try:
+        from lib.session_registry import registry_dir  # type: ignore
+
+        raw = (registry_dir(data_dir) / f"{session_id}.json").read_text(encoding="utf-8")
+        entry = json.loads(raw)
+    except Exception:
+        return {}
+    return entry if isinstance(entry, dict) else {}
+
+
+def session_marker_name(
+    data_dir: Path, session_id: str, cwd: str, hostname: str | None = None
+) -> str:
+    """Marker filename for *session_id*, keyed by the session's OWN identity.
+
+    :func:`marker_name` derives both halves of the key from the calling
+    process — ``cwd`` for the project, ``$HOSTNAME`` for the container — and
+    each of those is wrong for a different caller:
+
+    * **Project (#183).** Claude Code's ``cwd`` follows shell navigation, so a
+      session rooted at the workspace that does some work inside a sub-repo
+      filed its marker under the SUB-REPO. A later ``/clear`` from the
+      workspace root looked under the workspace, missed, and fell back to the
+      legacy project-only marker — which on 2026-08-10 pointed at a different
+      session entirely. The registry pins ``project`` on the first hook that
+      sees the session and never moves it, so drift cannot move the pointer.
+    * **Hostname (#182).** The host drain runs ``checkpoint_writer.py`` in a
+      throwaway container after the session's own container has exited, so
+      ``$HOSTNAME`` there is a random Docker id no future session will ever
+      have. The marker was orphaned the moment it was written.
+
+    Resolution order, each falling through only when the previous is empty:
+    explicit *hostname* (the queued payload carries the session's own),
+    then the registry entry, then this process's environment.
+    """
+    project, host = _session_key_parts(data_dir, session_id, cwd, hostname)
+    return f"{project}__{host}.json" if host else f"{project}.json"
+
+
+def _session_key_parts(
+    data_dir: Path, session_id: str, cwd: str, hostname: str | None = None
+) -> tuple[str, str]:
+    """``(project, host)`` for :func:`session_marker_name`; ``host`` may be ""."""
+    entry = _registry_identity(data_dir, session_id)
+    project = _sanitize_key(str(entry.get("project") or "")) or _project_key(cwd)
+    host = _sanitize_key(hostname) if hostname else ""
+    host = host or _sanitize_key(str(entry.get("hostname") or "")) or _hostname_key()
+    return project, host
+
+
 def write_pending_marker(
-    data_dir: Path, cwd: str, session_id: str, tokens: int
+    data_dir: Path,
+    cwd: str,
+    session_id: str,
+    tokens: int,
+    *,
+    hostname: str | None = None,
 ) -> Path:
     """Record that *session_id* has a restorable checkpoint; keyed per window.
 
     Written whenever a checkpoint exists — the handoff threshold governs the
     *nudge*, not this. A session that ended at 143K tokens used to leave
     nothing restorable purely because 143K < 200K.
+
+    *hostname* is the container the session ITSELF ran in. Pass it whenever the
+    writer might not be that container — the host drain is exactly that case,
+    and left unset it keyed the marker to a throwaway container id (#182).
     """
     pdir = _pending_dir(data_dir)
     pdir.mkdir(parents=True, exist_ok=True)
-    marker = pdir / marker_name(cwd)
+    project, host = _session_key_parts(data_dir, session_id, cwd, hostname)
+    marker = pdir / (f"{project}__{host}.json" if host else f"{project}.json")
     payload = {
         "session_id": session_id,
         "cwd": cwd,
         "tokens": tokens,
-        "hostname": _hostname_key(),
+        "project": project,
+        "hostname": host,
         "checkpoint_path": str(checkpoint_file(data_dir, session_id)),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -750,11 +858,17 @@ def consume_pending_marker(
     falls back to the legacy project-only name, so a marker written by an
     older version — or on a host where the name cannot be read — is still
     claimable for its ``ttl_hours``.
+
+    The project half of the key comes from the claiming session's registry
+    entry rather than from live ``cwd``, matching what the write side records:
+    on the compaction path the session has been running for hours and its cwd
+    may have drifted into a sub-repo since the marker was written (#183).
     """
     pdir = _pending_dir(data_dir)
-    marker = pdir / marker_name(cwd)
+    project, host = _session_key_parts(data_dir, new_session_id, cwd)
+    marker = pdir / (f"{project}__{host}.json" if host else f"{project}.json")
     if not marker.exists():
-        legacy = pdir / f"{_project_key(cwd)}.json"
+        legacy = pdir / f"{project}.json"
         marker = legacy if legacy != marker and legacy.exists() else marker
     if not marker.exists():
         return None
@@ -909,6 +1023,132 @@ def retire_checkpoint(data_dir: Path, session_id: str) -> tuple[bool, str]:
         # keep the directory, report why.
         logger.warning("Could not retire checkpoint for %s: %s", session_id, e)
         return False, f"removal failed: {e}"
+
+
+def _marker_age_hours(marker: Path) -> float:
+    """Age of *marker* in hours, from ``created_at`` and falling back to mtime.
+
+    A marker whose payload cannot be parsed still has to age out — otherwise a
+    truncated write pins a checkpoint against retirement forever.
+    """
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+        created = datetime.fromisoformat(str(payload["created_at"]))
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+    except Exception:
+        try:
+            created = datetime.fromtimestamp(marker.stat().st_mtime, tz=timezone.utc)
+        except OSError:
+            return 0.0
+    return (datetime.now(timezone.utc) - created).total_seconds() / 3600
+
+
+def _last_activity(data_dir: Path, session_id: str, sdir: Path) -> datetime | None:
+    """Newest sign of life for *session_id*: its files, or its registry event.
+
+    The registry half is what keeps a live-but-quiet session's checkpoint: a
+    session writes its checkpoint once and then may go hours without another,
+    while every Stop and Notification restamps ``last_event``.
+    """
+    newest: float = 0.0
+    try:
+        for p in sdir.rglob("*"):
+            try:
+                newest = max(newest, p.stat().st_mtime)
+            except OSError:
+                continue
+        newest = max(newest, sdir.stat().st_mtime)
+    except OSError:
+        pass
+    latest = (
+        datetime.fromtimestamp(newest, tz=timezone.utc) if newest else None
+    )
+
+    entry = _registry_identity(data_dir, session_id)
+    raw = ((entry.get("last_event") or {}) if isinstance(entry, dict) else {}).get("ts")
+    if raw:
+        try:
+            ts = datetime.fromisoformat(str(raw))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            latest = ts if latest is None else max(latest, ts)
+        except (ValueError, TypeError):
+            pass
+    return latest
+
+
+def sweep_checkpoints(data_dir: Path, cfg: CheckpointConfig) -> tuple[int, int]:
+    """Expire dead pending markers, then collect the checkpoints they pinned.
+
+    Returns ``(markers_expired, checkpoints_retired)``. Never raises — this
+    runs inside SessionStart, where disk hygiene must never cost a session.
+
+    Retirement is attempted exactly once per session, minutes after it ends,
+    and :func:`retire_checkpoint` refuses while a pending marker still points
+    at it. Nothing ever revisited a refusal, so every refusal was permanent —
+    216 directories by 2026-08-10, none collected since Jul 7 (#181). Two
+    changes in 0.39.0 turned that from an edge case into the common one: the
+    marker is now written for *every* session with a checkpoint rather than
+    only those past ``handoff_tokens``, and host-keyed markers are only ever
+    removed by a claim from the same container, which for a closed tab never
+    comes.
+
+    This does NOT relax ``pending_marker_owner``. That guard is what stops a
+    walked-away handoff losing its rebuild, and it stays. The sweep only
+    removes markers the guard itself already considers dead — past
+    ``ttl_hours`` — and then re-offers the sessions they were pinning.
+    """
+    expired = retired = 0
+    try:
+        pdir = _pending_dir(data_dir)
+        for marker in sorted(pdir.glob("*.json")):
+            if _marker_age_hours(marker) > cfg.ttl_hours:
+                marker.unlink(missing_ok=True)
+                expired += 1
+        # Claim files are a half-second artefact of `consume_pending_marker`;
+        # one that outlives its TTL means the claiming process died mid-read.
+        for stray in sorted(pdir.glob("*.claimed-*")):
+            if _marker_age_hours(stray) > cfg.ttl_hours:
+                stray.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Pending-marker sweep failed (non-fatal)", exc_info=True)
+
+    if cfg.gc_days <= 0:
+        return expired, 0
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=cfg.gc_days)
+    try:
+        candidates = sorted(
+            d for d in checkpoints_root(data_dir).iterdir()
+            if d.is_dir() and d.name != "pending"
+        )
+    except OSError:
+        return expired, 0
+
+    for sdir in candidates:
+        if retired >= _SWEEP_MAX_RETIRE:
+            logger.info(
+                "Checkpoint sweep stopped at %d collections; %d directories "
+                "remain for the next run",
+                retired, len(candidates) - retired,
+            )
+            break
+        seen = _last_activity(data_dir, sdir.name, sdir)
+        if seen is None or seen > cutoff:
+            continue
+        removed, kept = retire_checkpoint(data_dir, sdir.name)
+        if removed:
+            retired += 1
+        elif kept:
+            logger.debug("Sweep kept checkpoint %s: %s", sdir.name, kept)
+
+    if expired or retired:
+        logger.info(
+            "Checkpoint sweep: %d expired marker(s), %d checkpoint(s) collected",
+            expired, retired,
+        )
+    return expired, retired
 
 
 # ---------------------------------------------------------------------------

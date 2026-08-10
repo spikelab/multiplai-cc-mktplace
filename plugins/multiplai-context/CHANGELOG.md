@@ -18,6 +18,64 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.41.0] - 2026-08-10
+
+The rebuild pointer 0.39.0 started writing for every session was being filed
+under the wrong name, in two independent ways, and nothing was ever collecting
+the checkpoints it pinned.
+
+### Fixed
+
+- **A checkpoint written after your tab closed can now be found again.** The
+  pointer's filename included the hostname of whatever process wrote it. For a
+  tab that is *closed* rather than `/clear`-ed, that writer is the host drain —
+  a throwaway container whose name (`ab5d84093a24`) no session will ever have —
+  so the pointer was orphaned the moment it was written. Since closing a tab is
+  the common case, the end-of-session checkpoint 0.39.0 added was reaching
+  almost nobody. The pointer is now keyed to the container the session itself
+  ran in.
+- **A session that worked inside a sub-project no longer files its pointer
+  under that sub-project.** Claude Code's working directory follows shell
+  navigation, so a session rooted at your workspace that spent an hour inside
+  `PROJECTS/something` recorded its rebuild pointer under `something`. A
+  `/clear` from the workspace root then looked under the workspace, missed, and
+  fell back to an older pointer — which on 2026-08-10 belonged to a completely
+  different session, silently rebuilding the wrong window. The project is now
+  pinned when the session starts and does not move.
+- **`Written on host:` in `now/<project>.md` names the session's machine, not
+  the drain's.** Same root cause; the header was attributing summaries to
+  containers that never ran anything.
+- **The end-of-session log line carries its session id.** `session_end.log`
+  printed `session:--------` for the checkpoint half of the hook, so
+  `grep session:<id>` silently omitted it.
+- **A leftover `fleet.txt` is deleted again.** The one-line status count was
+  retired in 0.18.0, which also deleted leftovers; 0.19.0 dropped the deletion
+  while the changelog kept promising it. Any workspace that ever ran ≤0.17.1
+  has been carrying the file since.
+
+### Added
+
+- **Checkpoints are collected.** A session's saved working state is deleted
+  once nothing has touched it for `checkpoint_gc_days` (default 7) — measured
+  from its files *and* its last session event, so a quiet-but-open tab keeps
+  its checkpoint. Expired rebuild pointers are cleared on the same pass.
+  Previously nothing was ever collected: 216 directories had accumulated on one
+  workspace, the oldest from Jul 7. Set `checkpoint_gc_days: 0` to keep
+  everything, as before. This deletes intent, files touched and errors from
+  past sessions — that is the point; it was never meant to be permanent.
+- **The `checkpoint_*` options appear in the plugin's settings.** All eleven
+  were documented and read by the code but declared nowhere, so nothing
+  validated their types or defaults and no settings UI could show them. Three
+  of the documented defaults were also stale (`checkpoint_stale_hours` is 0.5,
+  not 3; `checkpoint_timeout_s` is 600, not 240).
+
+### Known limitation
+
+A checkpoint from a closed tab is still only claimable by a session in the same
+container. Under one-container-per-session that means a new tab will not find
+it; the pointer is now correct rather than nonsensical, which is a smaller
+claim than "closed tabs are restorable". Tracked separately.
+
 ## [0.39.0] - 2026-08-09
 
 ### Changed
