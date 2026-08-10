@@ -15,11 +15,13 @@ Criterion 12 has three parts, and the third is the one with teeth:
   reusing it would have been a one-word change that silently broke rebuild
   expiry. `TestTtlHoursUntouched` pins that separation.
 
-On cost: the plan's stop-and-ask gate says to stop if the defaults would
-plausibly exceed a few writes per hour per session, because extraction shares
-one rate limit with interactive work. At 3 hours stale / 30 minutes minimum
-age, a 4-hour session writes twice. `TestWriteVolume` asserts that arithmetic
-rather than leaving it in a comment.
+On cost: the default moved from 3 hours to 0.5 on 2026-08-09, which inverts
+what this file used to assert. Three hours kept write volume low and let a
+session's unwritten segment grow until the writer could not finish it —
+prevention beats the retry, so the cadence is now deliberately about two
+writes per hour per session. At 0.5 hours stale / 30 minutes minimum age a
+4-hour session writes eight small delta-merges. `TestWriteVolume` asserts
+that arithmetic rather than leaving it in a comment.
 """
 
 import json
@@ -106,8 +108,27 @@ class TestStalenessTrigger:
         make_registry_entry(tmp_path, age=timedelta(hours=4))
 
         assert cp.staleness_trigger(
-            tmp_path, "s1", state_with_checkpoint(timedelta(hours=1)), CFG
+            tmp_path, "s1", state_with_checkpoint(timedelta(minutes=12)), CFG
         ) is None
+
+    def test_a_forty_minute_session_with_a_thirty_five_minute_old_save_fires(
+        self, tmp_path
+    ):
+        """The 30-minute cadence, at the boundary the plan names. Under the
+        old 3-hour default this session had nothing written for another two
+        and a half hours."""
+        make_registry_entry(tmp_path, age=timedelta(minutes=40))
+
+        assert cp.staleness_trigger(
+            tmp_path, "s1", state_with_checkpoint(timedelta(minutes=35)), CFG
+        ) == "stale"
+
+    def test_a_twenty_minute_session_still_writes_nothing(self, tmp_path):
+        """`min_session_minutes` is unchanged at 30, so short sessions are
+        untouched by the faster cadence."""
+        make_registry_entry(tmp_path, age=timedelta(minutes=20))
+
+        assert cp.staleness_trigger(tmp_path, "s1", {}, CFG) is None
 
     def test_a_checkpoint_past_stale_hours_fires(self, tmp_path):
         make_registry_entry(tmp_path, age=timedelta(hours=6))
@@ -190,10 +211,14 @@ class TestDisabling:
 
 class TestConfig:
 
-    def test_the_defaults_are_conservative(self):
+    def test_the_defaults_favour_recoverability_over_write_volume(self):
+        """0.5, not 3.0 — deliberately about two writes an hour rather than
+        well under one. At 3.0 a session's unwritten segment reached 174,154
+        characters against a healthy 23,287, which is what made the model
+        call unfinishable and the failure self-sustaining."""
         cfg = cp.CheckpointConfig()
 
-        assert cfg.stale_hours == 3.0
+        assert cfg.stale_hours == 0.5
         assert cfg.min_session_minutes == 30
 
     def test_both_fields_have_their_own_env_knob(self, monkeypatch):
@@ -213,7 +238,7 @@ class TestConfig:
 
         cfg = cp.load_config()
 
-        assert cfg.stale_hours == 3.0
+        assert cfg.stale_hours == 0.5
         assert cfg.min_session_minutes == 30
 
     def test_a_negative_value_is_clamped_not_inverted(self, monkeypatch):
@@ -240,7 +265,7 @@ class TestTtlHoursUntouched:
 
         cfg = cp.load_config()
         assert cfg.ttl_hours == 1.0
-        assert cfg.stale_hours == 3.0
+        assert cfg.stale_hours == 0.5
 
     def test_marker_expiry_still_uses_ttl_hours(self, tmp_path):
         """The consumer that would have broken, exercised directly. 7h old
@@ -453,19 +478,61 @@ class TestWriteVolume:
                 state["last_checkpoint_ts"] = at.isoformat()
         return writes
 
-    def test_a_four_hour_session_writes_twice(self, tmp_path):
-        """The plan's stop-and-ask gate: more than a few writes per hour per
-        session and this would need discussing before merge. Two writes over
-        four hours is 0.5/hour."""
-        assert self._writes_over(tmp_path, hours=4) == 2
+    def test_a_four_hour_session_writes_eight_small_deltas(self, tmp_path):
+        """The point of the whole change, as arithmetic: eight 30-minute
+        slices instead of two multi-hour ones. Each write distills only the
+        segment since the last one, so eight writes is eight SMALL writes."""
+        assert self._writes_over(tmp_path, hours=4) == 8
 
-    def test_a_one_hour_session_writes_once(self, tmp_path):
-        assert self._writes_over(tmp_path, hours=1) == 1
+    def test_a_one_hour_session_writes_twice(self, tmp_path):
+        assert self._writes_over(tmp_path, hours=1) == 2
 
     def test_a_twenty_minute_session_writes_nothing(self, tmp_path):
         assert self._writes_over(tmp_path, hours=1 / 3) == 0
 
-    def test_an_aggressive_config_is_possible_but_not_the_default(self, tmp_path):
-        cfg = cp.CheckpointConfig(stale_hours=0.5, min_session_minutes=10)
+    def test_the_old_conservative_cadence_is_still_configurable(self, tmp_path):
+        """`checkpoint_stale_hours` still buys back the pre-0.33.0 volume for
+        anyone who wants it — only the default moved."""
+        cfg = cp.CheckpointConfig(stale_hours=3.0, min_session_minutes=30)
 
-        assert self._writes_over(tmp_path, hours=4, cfg=cfg) > 2
+        assert self._writes_over(tmp_path, hours=4, cfg=cfg) == 2
+
+    def _token_writes_over(self, hours, tokens_per_hour, cfg=CFG, step_minutes=10):
+        """The OTHER cadence: replay token growth through `checkpoint_trigger`.
+
+        `_writes_over` above measures the staleness floor only. This measures
+        the `refresh` trigger, which since 0.39.0 applies at every token level
+        rather than only above `handoff_tokens`. Both reset the same state, so
+        a real session writes at max(this, that) — not the sum.
+        """
+        state: dict = {"last_band_idx": 99, "last_checkpoint_tokens": 1}
+        writes = 0
+        for minute in range(step_minutes, int(hours * 60) + 1, step_minutes):
+            tokens = 1 + int(tokens_per_hour * minute / 60)
+            if cp.checkpoint_trigger(tokens, state, cfg) == "refresh":
+                writes += 1
+                state["last_checkpoint_tokens"] = tokens
+        return writes
+
+    def test_token_growth_can_outpace_the_staleness_floor(self):
+        """Eight writes per four hours is a FLOOR, not a ceiling.
+
+        The cost-per-session figure quoted for the 0.5h cadence is derived from
+        `test_a_four_hour_session_writes_eight_small_deltas`, which exercises
+        only `staleness_trigger`. A session growing faster than `refresh_tokens`
+        (25K) per `stale_hours` writes on the token cadence instead. A goal loop
+        burning 150K tokens an hour writes ~6x/hour, so ~24 in four hours — 3x
+        the staleness figure, and the cost scales with it.
+        """
+        assert self._token_writes_over(hours=4, tokens_per_hour=150_000) == 24
+
+    def test_a_token_light_session_stays_on_the_staleness_floor(self):
+        """25K tokens an hour is under one refresh per hour, so staleness owns
+        the cadence and the eight-writes arithmetic is the real one."""
+        assert self._token_writes_over(hours=4, tokens_per_hour=25_000) == 4
+
+    def test_refresh_still_needs_a_previous_write_to_measure_from(self):
+        """Without one, `last_checkpoint_tokens` is 0 and every session past
+        25K would fire on its first Stop. The band and staleness triggers own
+        the first write."""
+        assert cp.checkpoint_trigger(120_000, {"last_band_idx": 99}, CFG) is None

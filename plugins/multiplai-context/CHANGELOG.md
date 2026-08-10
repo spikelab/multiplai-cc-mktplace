@@ -18,6 +18,50 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.39.0] - 2026-08-09
+
+### Changed
+
+- **Your working state is now saved about every 30 minutes instead of about
+  once a session.** Each save covers only the half-hour since the last one, so
+  it finishes in seconds. The old 3-hour cadence let a session's unwritten
+  backlog grow until the save could no longer finish at all — and because the
+  bookmark only moved on success, every failed attempt was handed a bigger
+  backlog than the one before it. On 2026-08-08 that cost eight consecutive
+  failed saves over 18 hours and a `/clear` that restored a different window's
+  work. Set `checkpoint_stale_hours` back to `3.0` for the old volume.
+- **Sessions between 100K and 200K tokens get a save cadence at all.** The
+  token-based refresh used to apply only above the 200K handoff threshold, so
+  a session sitting at 150K had nothing but the one-off band crossings. It now
+  applies at every level: grow 25K tokens past your last save and one is
+  written.
+- **A save that fails no longer leaves you with nothing.** The previous save is
+  kept verbatim and the window the model could not summarise is appended to it
+  raw — your turns and the tools that ran — under an `## Unsummarised since`
+  heading, rather than discarded. The save timeout also went from 4 to 10
+  minutes.
+- **Two failed saves in a row now tell you.** Previously they were a line in a
+  log file; the eight failures that caused the incident above reached nobody.
+- **The diary reads only what is new.** A session that extracts twice (once at
+  compaction, once at the end) used to re-read its whole transcript the second
+  time. It keeps appending, as before — nothing in the permanent record is
+  overwritten.
+
+### Fixed
+
+- **`/clear` saves your work before discarding it.** Nothing ran on that edge
+  at all, so everything since the last save went with the window. Closing a
+  tab queues the save instead, and it is written after the container exits.
+- **Any session with a save on disk can now be restored.** The restore pointer
+  was written only above 200K tokens and only after a successful save, so a
+  clean 143K-token session left a perfectly good save that nothing could find.
+- **Two windows open on the same project stop overwriting each other's restore
+  pointer.** The pointer is keyed by project *and* window, so `/clear` restores
+  the window you actually cleared — not whichever one saved last.
+- **`now/<project>.md` says which window wrote it.** One file per project and
+  several windows on it meant the last writer won silently; on 2026-08-08 a
+  freshly-cleared window read another window's summary as its own prior work.
+
 <!-- MERGE ORDER: this entry is 0.38.0 and 0.37.0 belongs to the memory-doctor
      branch, which is a SIBLING of this one rather than an ancestor. Both branch
      off 0.36.0, so this file has no 0.37.0 section until the doctor branch lands.

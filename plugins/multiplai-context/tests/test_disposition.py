@@ -549,7 +549,7 @@ class TestExtractLearningsWiring:
              patch.object(el, "load_target_charters", lambda *a, **k: []), \
              patch.object(el, "create_client", AsyncMock(return_value=object())), \
              patch.object(el, "_distill_transcript",
-                          lambda *a: [str(i) for i in range(len(chunk_results))]), \
+                          lambda *a: ([str(i) for i in range(len(chunk_results))], None)), \
              patch.object(el, "extract_session_signals", _fake_extract), \
              patch.object(el.sys, "stdin", type("S", (), {"read": staticmethod(lambda: stdin)})):
             return asyncio.run(el.extract())

@@ -180,8 +180,34 @@ class TestTrigger:
         assert cp.checkpoint_trigger(105_000, {}, self.CFG) == "band"
 
     def test_no_retrigger_same_band(self):
+        """Growth inside a band is not a band crossing. It can still be a
+        `refresh` (below), so this pins a session that has not yet grown a
+        refresh step."""
         state = {"last_band_idx": 1, "last_checkpoint_tokens": 105_000}
-        assert cp.checkpoint_trigger(150_000, state, self.CFG) is None
+        assert cp.checkpoint_trigger(120_000, state, self.CFG) is None
+
+    def test_refresh_fires_below_the_handoff_threshold(self):
+        """The gap this closes: `refresh` used to be gated behind
+        `tokens >= handoff_tokens`, so a session at 150K had no token cadence
+        at all — 45K of work could sit between checkpoints, with only the
+        one-off band crossings to catch it."""
+        state = {"last_band_idx": 1, "last_checkpoint_tokens": 105_000}
+        assert cp.checkpoint_trigger(150_000, state, self.CFG) == "refresh"
+
+    def test_refresh_fires_well_below_the_first_band(self):
+        """Criterion 2, at the token level the plan names: 60K, grown a full
+        refresh step since its last save."""
+        state = {"last_band_idx": 0, "last_checkpoint_tokens": 35_000}
+        assert cp.checkpoint_trigger(60_000, state, self.CFG) == "refresh"
+
+    def test_refresh_needs_a_previous_checkpoint_to_measure_from(self):
+        """With no save yet, `last_checkpoint_tokens` is 0 and every session
+        past `refresh_tokens` would fire on its first Stop. The band trigger
+        and `staleness_trigger` own the first write instead."""
+        assert cp.checkpoint_trigger(60_000, {}, self.CFG) is None
+        assert cp.checkpoint_trigger(
+            60_000, {"last_checkpoint_tokens": 0}, self.CFG
+        ) is None
 
     def test_second_band_crossing(self):
         state = {"last_band_idx": 1, "last_checkpoint_tokens": 105_000}

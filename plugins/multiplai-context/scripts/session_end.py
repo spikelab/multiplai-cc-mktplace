@@ -1,12 +1,31 @@
 """Session end hook for multiplai plugin.
 
-Saves a deferred extraction marker for the next SessionStart hook to
-pick up. Narrative diary entries are written by extract_learnings.py
-(runs deferred via the pending_extractions queue), not here.
+Two jobs, both of them a few milliseconds of work:
 
-Claude Code kills SessionEnd hooks within a few seconds, so learning
-extraction (which calls the model client) can't run here — it would
-be interrupted mid-LLM-call.
+1. Save a deferred *extraction* marker for a later drain to pick up.
+   Narrative diary entries are written by extract_learnings.py, not here —
+   Claude Code kills SessionEnd hooks within a few seconds, so an inline
+   LLM call would be interrupted mid-flight.
+2. Save the session's working state before it is discarded. Nothing used to
+   run on this edge at all, so ``/clear`` threw away everything since the
+   last checkpoint.
+
+Job 2 splits on ``reason``, and the split is not cosmetic:
+
+* ``clear`` / ``resume`` — **the container survives.** Verified in the field:
+  the pre- and post-``/clear`` halves of one tab (sessions ``24c0a766`` and
+  ``2e29e3cb``, one second apart) share hostname ``claude-work-04221854``. So
+  the detached ``checkpoint_writer.py`` outlives this hook and can take the
+  minutes it needs. Spawning costs milliseconds.
+* everything else (``logout``, ``prompt_input_exit``, ``other``, …) — **the
+  container is exiting.** It runs under ``docker run --rm``, so when PID 1
+  goes the detached child goes with it. Spawning here would look like it
+  worked and produce nothing. Queue a marker instead and let the host-side
+  drain (``drain_extractions.py``, run by the launcher after the container
+  exits) do the write.
+
+A missing ``reason`` is treated as ``"other"`` — the safe half of the split,
+because a queued marker survives either way and a killed spawn does not.
 """
 
 import json
@@ -22,6 +41,10 @@ from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import setup_logging, log_event
 
 logger = setup_logging("session_end")
+
+# Reasons for which the session container keeps running, so a detached child
+# survives this hook. Everything else must go through the queue.
+CONTAINER_SURVIVES_REASONS = frozenset({"clear", "resume"})
 
 
 def _save_deferred_marker(
@@ -67,6 +90,74 @@ def _save_deferred_marker(
     )
 
 
+def _checkpoint_on_end(data_dir: Path, hook_input: dict, reason: str) -> str:
+    """Save working state as the session ends. Returns what it did.
+
+    One of ``"spawned"`` (a detached writer is running), ``"queued"`` (a
+    marker is waiting for the host drain) or ``"skipped"`` (nothing to save,
+    or a writer is already in flight). Never raises — this is a hook.
+    """
+    from lib import checkpoint as cp
+
+    cfg = cp.load_config()
+    if not cfg.enabled:
+        return "skipped"
+
+    session_id = hook_input.get("session_id") or ""
+    transcript_path = hook_input.get("transcript_path") or ""
+    cwd = hook_input.get("cwd") or ""
+    if not session_id or not transcript_path:
+        return "skipped"
+    if cp.is_child_session(transcript_path):
+        return "skipped"
+
+    state = cp.load_state(data_dir, session_id)
+    tokens = cp.read_context_tokens(transcript_path, after_ts=state.get("rebuild_ts"))
+    if tokens <= 0:
+        # An unreadable tail is not evidence the session is empty, and the
+        # count is only bookkeeping here (bands and the rebuild banner), so
+        # fall back to whatever the last write recorded rather than declining.
+        tokens = int(state.get("last_checkpoint_tokens") or 0)
+
+    payload = {
+        "session_id": session_id,
+        "transcript_path": transcript_path,
+        "cwd": cwd,
+        "tokens": tokens,
+        # Forced: the band/refresh/stale triggers are a cadence question and
+        # this is the last chance to write at all.
+        "reason": f"session-end:{reason}",
+    }
+
+    if reason in CONTAINER_SURVIVES_REASONS:
+        if cp.writer_inflight(data_dir, session_id):
+            logger.info("Writer already in flight for %s; not spawning again", session_id)
+            return "skipped"
+        cp.claim_writer(data_dir, session_id)
+        if cp.spawn_writer(payload):
+            logger.info("Spawned end-of-session checkpoint writer (reason=%s)", reason)
+            log_event(
+                "checkpoint", "spawn",
+                f"checkpoint writer launched on session end ({reason})",
+                session_id=session_id, tokens=tokens, reason=reason,
+            )
+            return "spawned"
+        cp.release_writer(data_dir, session_id)
+        return "skipped"
+
+    from lib.checkpoint_drain import queue_pending_checkpoint
+
+    queue_pending_checkpoint(data_dir, payload)
+    logger.info("Queued end-of-session checkpoint (reason=%s)", reason)
+    log_event(
+        "checkpoint", "queue",
+        f"queued a checkpoint for the host drain ({reason}) — "
+        "the container is exiting, so a detached writer would be killed",
+        session_id=session_id, tokens=tokens, reason=reason,
+    )
+    return "queued"
+
+
 def main() -> None:
     try:
         raw_stdin = sys.stdin.read()
@@ -89,6 +180,15 @@ def main() -> None:
         session_registry.record_event(paths.plugin_data(), hook_input, "end")
     except Exception:
         logger.warning("Session registry end-event failed", exc_info=True)
+
+    # Save working state BEFORE queueing extraction: on ``/clear`` the tab
+    # keeps running and the sooner the writer starts the less of the tail it
+    # can miss.
+    reason = str(hook_input.get("reason") or "other").strip().lower() or "other"
+    try:
+        _checkpoint_on_end(paths.plugin_data(), hook_input, reason)
+    except Exception:
+        logger.exception("End-of-session checkpoint failed (non-fatal)")
 
     try:
         _save_deferred_marker(paths.plugin_data(), session_state, hook_input)

@@ -20,6 +20,116 @@ from lib.runtime import lock_path
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# The diary's bookmark
+# ---------------------------------------------------------------------------
+#
+# ``extract_learnings.py`` used to call ``distill(path)`` with no ``since``,
+# re-reading the whole transcript on every pass — an 11.8 MB file read in 10
+# chunks for a session that had already had 8 of them extracted. The checkpoint
+# writer solved the same problem years-of-commits ago with a bookmark, and the
+# reading half of that transfers directly.
+#
+# The WRITING half must not. The checkpoint folds each slice into one file it
+# overwrites; the diary appends each slice permanently, because the diary is
+# the record learnings project from and dream consolidates. Diffing two
+# checkpoints of one session 28 hours apart showed exactly what overwriting
+# costs: "11/21 done, block 13 reviewing" became "21/21 done" and four
+# learnings-grade findings simply vanished. So: same bookmark, opposite write
+# semantics.
+#
+# Stored apart from the checkpoint's ``last_checkpoint_ts`` on purpose. The two
+# run on different cadences (a save every 30 minutes, an extraction once or
+# twice a session) and sharing the field would make each one skip the other's
+# slices.
+
+def extraction_state_dir(data_dir: Path) -> Path:
+    return data_dir / "extraction_state"
+
+
+def bookmark_file(data_dir: Path, session_id: str) -> Path:
+    return extraction_state_dir(data_dir) / f"{session_id}.json"
+
+
+def load_diary_bookmark(data_dir: Path, session_id: str) -> Optional[datetime]:
+    """The timestamp the last successful extraction of *session_id* reached.
+
+    None when there is none, when it is unreadable, or when it is corrupt —
+    all three mean "read the transcript from the beginning", which costs a
+    re-read and never costs a slice.
+    """
+    if not session_id:
+        return None
+    try:
+        raw = bookmark_file(data_dir, session_id).read_text(encoding="utf-8")
+        value = json.loads(raw).get("last_extracted_ts")
+        if not value:
+            return None
+        ts = datetime.fromisoformat(str(value))
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def save_diary_bookmark(data_dir: Path, session_id: str, ts: datetime) -> bool:
+    """Advance *session_id*'s diary bookmark to *ts*. Returns whether it stuck.
+
+    Callers must only reach this after the diary entry is on disk — the same
+    discipline the checkpoint writer follows, and for the same reason: a
+    bookmark that moves past unwritten work deletes that work silently.
+    """
+    if not session_id:
+        return False
+    path = bookmark_file(data_dir, session_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps({"session_id": session_id,
+                        "last_extracted_ts": ts.isoformat()}, indent=2),
+            encoding="utf-8",
+        )
+        tmp.replace(path)
+        return True
+    except OSError:
+        logger.warning("Could not save diary bookmark for %s", session_id)
+        return False
+
+
+def clear_diary_bookmark(data_dir: Path, session_id: str) -> None:
+    """Drop the bookmark once the session is finished with (best-effort)."""
+    if not session_id:
+        return
+    try:
+        bookmark_file(data_dir, session_id).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def slice_key(session_id: str, through: Optional[datetime]) -> str:
+    """Identity of one extraction slice, for append-idempotency.
+
+    ``session_id`` alone was the dedup key, which is correct while a session
+    extracts exactly once and silently drops the second entry the moment it
+    extracts twice. Keying on the slice keeps the guard doing its real job —
+    a marker retried after a child died mid-write must not duplicate — while
+    letting a genuinely new slice through.
+
+    *through* is where the slice **ends** (the newest turn consumed), not where
+    it starts. That matters when ``save_diary_bookmark`` fails: the next pass
+    then re-reads from the same start, so a start-keyed slice would collide
+    with the marker the previous pass wrote and its genuinely-new turns would
+    be dropped as a duplicate. Keyed by the end, the second pass has read
+    further and so carries a different key. The retry case still dedups
+    correctly, because a retry reads a transcript that has stopped growing and
+    therefore lands on the same end timestamp.
+
+    ``None`` (no timestamp available — the raw-stdin path, which cannot
+    bookmark) falls back to a per-session key, i.e. the pre-slice behaviour.
+    """
+    return f"{session_id}:{through.isoformat() if through else 'start'}"
+
+
 def load_target_charters(memory_dir: Path, catalogs_dir: Optional[Path] = None) -> list[dict]:
     """Return the valid extraction targets with their routing charters.
 
@@ -702,12 +812,16 @@ async def extract_session_signals(
     raise last_error
 
 
+SLICE_MARKER = "<!-- slice: {key} -->"
+
+
 def write_diary_entries(
     units: list[dict],
     diary_dir: Path,
     session_id: str,
     cwd: str,
     timestamp: str,
+    slice_id: str = "",
 ) -> Optional[Path]:
     """Atomic append diary entries to per-day file ``diary/YYYY-MM-DD.md``.
 
@@ -716,10 +830,15 @@ def write_diary_entries(
         block. Day header ``# Diary — YYYY-MM-DD`` written on first touch.
       - ``fcntl.flock`` on a sibling lock file serialises concurrent
         SessionStart subprocesses writing the same day.
-      - Idempotent on ``session_id``: if ``## Session: <id>`` is already
-        in the file, this is a no-op and returns the existing path.
+      - Idempotent. With *slice_id*, on that slice: a session extracting a
+        second, later slice appends a second block, while a marker retried
+        after its child died mid-write still writes nothing twice. Without
+        one, on ``session_id``, exactly as before.
 
-    Returns the day file path on write (or existing-session no-op),
+    **Appends. Never replaces.** This file is the permanent record; the
+    checkpoint is the overwritten one. Do not merge the two semantics.
+
+    Returns the day file path on write (or an already-written no-op),
     or ``None`` if no units have diary content.
     """
     diary_units = [u for u in units if (u.get("diary_entry") or "").strip()]
@@ -741,8 +860,13 @@ def write_diary_entries(
     with open(lock_file, "w") as lock_fd:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         try:
-            if session_id and diary_file.exists():
-                if f"## Session: {session_id}" in diary_file.read_text():
+            marker = SLICE_MARKER.format(key=slice_id) if slice_id else ""
+            if diary_file.exists():
+                existing = diary_file.read_text()
+                if marker:
+                    if marker in existing:
+                        return diary_file
+                elif session_id and f"## Session: {session_id}" in existing:
                     return diary_file
 
             with open(diary_file, "a", encoding="utf-8") as f:
@@ -750,10 +874,14 @@ def write_diary_entries(
                     f.write(f"# Diary — {date_str}\n")
                 # Session boundary header: id, kickoff ts, cwd. Mirrors
                 # the structure synthesize_now and the diary catalog
-                # generator parse on.
+                # generator parse on. The slice marker rides BELOW it, as a
+                # comment, so the header's shape (and the regexes reading it)
+                # are untouched.
                 f.write(
                     f"\n## Session: {session_id} — {timestamp} — {cwd}\n\n"
                 )
+                if marker:
+                    f.write(f"{marker}\n\n")
                 for unit in diary_units:
                     unit_ts = unit.get("timestamp") or timestamp
                     entry = unit["diary_entry"].strip()
@@ -806,8 +934,14 @@ def append_learnings(
     learnings_file: Path,
     session_id: str,
     timestamp: str,
+    slice_id: str = "",
 ) -> bool:
-    """Atomic append learnings to per-day file with flock + Session: dedup.
+    """Atomic append learnings to per-day file with flock + dedup.
+
+    Dedup follows the diary's: on *slice_id* when given, on ``session_id``
+    otherwise. Without the slice key a session's second extraction pass would
+    match the first pass's ``Session:`` line and silently drop every learning
+    it found.
 
     Returns True if anything was written.
     """
@@ -817,8 +951,13 @@ def append_learnings(
     with open(lock_file, "w") as lock_fd:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         try:
-            if session_id and learnings_file.exists():
-                if f"Session: {session_id}" in learnings_file.read_text():
+            marker = f"Slice: {slice_id}" if slice_id else ""
+            if learnings_file.exists():
+                existing = learnings_file.read_text()
+                if marker:
+                    if marker in existing:
+                        return False
+                elif session_id and f"Session: {session_id}" in existing:
                     return False
 
             with open(learnings_file, "a") as f:
@@ -831,6 +970,8 @@ def append_learnings(
                     f.write(f"\n---\n## Session Learnings — {ts}\n")
                     if session_id:
                         f.write(f"Session: {session_id}\n")
+                    if marker:
+                        f.write(f"{marker}\n")
                     for learning in learnings:
                         if not isinstance(learning, dict):
                             continue

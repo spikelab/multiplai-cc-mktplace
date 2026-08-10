@@ -26,7 +26,6 @@ entirely.
 """
 
 import json
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,32 +36,88 @@ from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import setup_logging, log_event
 from lib import checkpoint as cp
-from lib.runtime import uv_run_argv
 
 logger = setup_logging("session_stop")
 
 
 def _spawn_writer(payload: dict) -> bool:
-    """Launch the detached checkpoint writer (never awaited)."""
-    script = get_paths().scripts_dir() / "checkpoint_writer.py"
-    if not script.exists():
-        logger.warning("checkpoint_writer.py missing at %s", script)
-        return False
+    """Launch the detached checkpoint writer (never awaited).
+
+    Thin alias over :func:`lib.checkpoint.spawn_writer`, which is where the
+    spawn moved so ``session_end.py`` can make the identical call on
+    ``/clear``. Kept as a name here because the tests patch it.
+    """
+    return cp.spawn_writer(payload)
+
+
+def _degraded_file(data_dir: Path, session_id: str) -> Path:
+    # Same reasoning as _nudge_file: the detached writer owns state.json, so
+    # this hook keeps its "have I already said this?" bookkeeping beside it,
+    # never inside it.
+    return cp.session_dir(data_dir, session_id) / "degraded.json"
+
+
+def _degraded_message(data_dir: Path, session_id: str, state: dict) -> str | None:
+    """Tell the user when checkpoint writes keep failing.
+
+    The failure that started this: eight consecutive writer timeouts over 18
+    hours, every one logged to a file nobody was tailing, and the first anyone
+    knew was a ``/clear`` that restored the wrong session. A component whose
+    job is not losing work must not fail silently.
+
+    Said once per new failure, not once per Stop — the count only moves when a
+    writer actually finishes badly.
+
+    The high-water mark below is reset the moment a write succeeds. Without
+    that reset it only ever ratchets up, so the *second* run of failures in a
+    session's life is silently swallowed (``already`` 2 >= ``failures`` 2) and
+    every later incident needs a strictly longer run than the last to be heard
+    — which is the alerting guarantee quietly disappearing over time.
+    """
+    failures = cp.consecutive_failures(state)
+    dfile = _degraded_file(data_dir, session_id)
+    if failures == 0:
+        # A write succeeded (the writer zeroes the counter only then). Drop the
+        # mark so the next run of failures starts from zero and is heard.
+        try:
+            dfile.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+    if failures < cp.DEGRADED_ALERT_AFTER:
+        return None
     try:
-        proc = subprocess.Popen(
-            uv_run_argv(script),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
+        already = int(json.loads(dfile.read_text()).get("failures") or 0)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError, AttributeError):
+        already = 0
+    if already >= failures:
+        return None
+    try:
+        dfile.parent.mkdir(parents=True, exist_ok=True)
+        dfile.write_text(json.dumps({"failures": failures}))
+    except OSError:
+        pass
+
+    log_event(
+        "checkpoint", "degraded",
+        f"{failures} consecutive checkpoint writes degraded — "
+        f"{state.get('last_failure', 'unknown cause')}",
+        session_id=session_id,
+        failures=failures,
+    )
+    kept = cp.checkpoint_file(data_dir, session_id).exists()
+    return (
+        f"[multiplai] The last {failures} checkpoint writes for this session "
+        f"failed ({state.get('last_failure', 'unknown cause')}). "
+        + (
+            "The checkpoint on disk is being kept up to date with the raw "
+            "unsummarised turns, so a /clear still restores something — but "
+            "it is degraded."
+            if kept
+            else "There is no checkpoint on disk for this session yet."
         )
-        if proc.stdin is not None:
-            proc.stdin.write(json.dumps(payload).encode("utf-8"))
-            proc.stdin.close()
-        return True
-    except Exception:
-        logger.exception("Failed to launch checkpoint writer")
-        return False
+        + " See checkpoint_writer.log under the plugin's log directory."
+    )
 
 
 def _nudge_file(data_dir: Path, session_id: str) -> Path:
@@ -148,6 +203,24 @@ def _checkpoint_pass(hook_input: dict, data_dir: Path) -> str | None:
                 tokens=tokens,
                 reason=reason,
             )
+
+    # Keep the rebuild pointer alive independently of whether *this* run's
+    # write succeeds. A checkpoint that exists but has no pointer is
+    # unreachable — that is how a clean 143K-token session left nothing
+    # restorable — and a stale checkpoint that restores beats a fresh one that
+    # does not exist.
+    if cp.checkpoint_file(data_dir, session_id).exists():
+        try:
+            cp.write_pending_marker(data_dir, cwd, session_id, tokens)
+        except OSError:
+            logger.warning("Could not refresh pending marker for %s", session_id)
+
+    degraded = _degraded_message(data_dir, session_id, state)
+    if degraded:
+        # Preferred over the handoff nudge when both are due: "your saves are
+        # failing" is the more urgent of the two, and the hook emits at most
+        # one systemMessage per Stop.
+        return degraded
 
     if tokens < cfg.handoff_tokens:
         return None

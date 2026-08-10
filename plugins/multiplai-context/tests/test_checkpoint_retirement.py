@@ -249,7 +249,7 @@ class TestExtractionRetiresCheckpoints:
         with patch.object(el, "get_paths", _Paths), \
              patch.object(el, "load_target_charters", lambda *a, **k: []), \
              patch.object(el, "create_client", AsyncMock(return_value=object())), \
-             patch.object(el, "_distill_transcript", lambda *a: chunks), \
+             patch.object(el, "_distill_transcript", lambda *a: (chunks, None)), \
              patch.object(el, "extract_session_signals", _fake_extract), \
              patch.object(el, "write_diary_entries", _fake_diary), \
              patch.object(el, "append_learnings", lambda *a, **k: True), \

@@ -67,6 +67,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import setup_logging, log_event
+from lib.checkpoint_drain import (
+    pending_checkpoint_count,
+    process_pending_checkpoints,
+)
 from lib.extraction_drain import (
     pending_count,
     process_deferred_extractions,
@@ -152,6 +156,43 @@ def main(argv: list[str] | None = None) -> int:
         pending_count(data_dir),
         processing_count(data_dir),
     )
+    # End-of-session checkpoints first. This is the work that could not be
+    # done inside the container at all — SessionEnd on a container-exiting
+    # reason can only queue a marker, because ``docker run --rm`` kills a
+    # detached child with PID 1 — and it is the smaller, faster job of the
+    # two, so it should not wait behind the diary extractions.
+    writer_script = scripts_dir / "checkpoint_writer.py"
+    queued = pending_checkpoint_count(data_dir)
+    if queued:
+        logger.info("Draining %d queued end-of-session checkpoint(s)", queued)
+    cp_result = process_pending_checkpoints(data_dir, writer_script, wait=args.wait)
+    if cp_result.launched:
+        log_event(
+            "checkpoint", "drain",
+            f"host drain launched {cp_result.launched} end-of-session checkpoint(s)",
+            count=cp_result.launched,
+        )
+    if cp_result.failed:
+        # This is the ONLY place an end-of-session checkpoint failure can be
+        # reported. The session that queued it has ended, so session_stop's
+        # degraded message will never fire for it again — and only ``--wait``
+        # gets here, because without it nobody is around to read an exit code.
+        logger.error(
+            "%d of %d checkpoint child(ren) exited nonzero",
+            cp_result.failed, cp_result.launched,
+        )
+        log_event(
+            "checkpoint", "drain-failed",
+            f"{cp_result.failed} of {cp_result.launched} end-of-session "
+            "checkpoint write(s) failed or degraded — see checkpoint_writer.log",
+            count=cp_result.failed,
+        )
+        print(
+            f"[drain] {cp_result.failed} of {cp_result.launched} "
+            "checkpoint child(ren) failed",
+            file=sys.stderr,
+        )
+
     result = process_deferred_extractions(data_dir, extract_script, wait=args.wait)
 
     if result.launched:
@@ -175,8 +216,13 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+    if cp_result.failed:
+        return 1
     if args.verbose:
-        print(f"[drain] {result.launched} extraction(s) launched from {data_dir}")
+        print(
+            f"[drain] {result.launched} extraction(s) launched and "
+            f"{cp_result.launched} checkpoint(s) written from {data_dir}"
+        )
     return 0
 
 
