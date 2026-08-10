@@ -118,6 +118,17 @@ _DEFAULT_HARD_STOP = 0
 # proportion, because the segment is the dominant input; the total is roughly
 # flat rather than 4x. Measured, not assumed — see the PR that landed this.
 #
+# That 8 is a STALENESS figure and therefore a floor, not a ceiling. The
+# ``refresh`` trigger below is no longer gated on ``handoff_tokens``, so a
+# session growing faster than ``refresh_tokens`` (25K) per ``stale_hours``
+# writes on the token cadence instead, and writes more often. The two do not
+# add up — a write resets ``last_checkpoint_ts`` and ``last_checkpoint_tokens``
+# together, so the rate is max(staleness, growth/refresh_tokens), not the sum —
+# but a goal loop burning 25K tokens every ten minutes writes ~6x/hour rather
+# than 2. ``TestWriteVolume.test_token_growth_can_outpace_the_staleness_floor``
+# pins that this is the shape, so the cost-per-session figure quoted for the
+# 0.5h cadence is the token-light case.
+#
 # Two accepted burst shapes, deliberately without a global cap or jitter:
 #
 # - Thundering herd: after any break longer than stale_hours every open tab is
@@ -676,6 +687,14 @@ def marker_name(cwd: str, hostname: str | None = None) -> str:
     ``claude-work-04221854``. A window in a *different* container therefore
     cannot clobber this one's pointer, and the window that was cleared still
     finds its own.
+
+    **This separates windows only where one window means one container** — the
+    kit, where each session gets its own OrbStack container. On vanilla Claude
+    Code ``$HOSTNAME`` is the machine, so every window on a project shares one
+    key and the clobbering described above is unchanged there. Fixing that
+    needs a per-window id the hook layer does not currently expose; keying on
+    hostname is strictly better than keying on project alone in both setups,
+    and it is not a general fix.
 
     Falls back to the legacy ``<project>.json`` when the hostname is unknown.
     """

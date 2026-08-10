@@ -67,11 +67,25 @@ def _degraded_message(data_dir: Path, session_id: str, state: dict) -> str | Non
 
     Said once per new failure, not once per Stop — the count only moves when a
     writer actually finishes badly.
+
+    The high-water mark below is reset the moment a write succeeds. Without
+    that reset it only ever ratchets up, so the *second* run of failures in a
+    session's life is silently swallowed (``already`` 2 >= ``failures`` 2) and
+    every later incident needs a strictly longer run than the last to be heard
+    — which is the alerting guarantee quietly disappearing over time.
     """
     failures = cp.consecutive_failures(state)
+    dfile = _degraded_file(data_dir, session_id)
+    if failures == 0:
+        # A write succeeded (the writer zeroes the counter only then). Drop the
+        # mark so the next run of failures starts from zero and is heard.
+        try:
+            dfile.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
     if failures < cp.DEGRADED_ALERT_AFTER:
         return None
-    dfile = _degraded_file(data_dir, session_id)
     try:
         already = int(json.loads(dfile.read_text()).get("failures") or 0)
     except (OSError, json.JSONDecodeError, ValueError, TypeError, AttributeError):

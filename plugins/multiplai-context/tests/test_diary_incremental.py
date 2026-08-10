@@ -150,6 +150,68 @@ class TestIncrementalReading:
         assert "first slice turn A" in joined and "first slice turn B" in joined
 
 
+class TestTheBookmarkComesFromTheSamePassAsTheChunks:
+    """One read, not two — for correctness before cost.
+
+    A separate re-read to find the newest timestamp runs at a LATER wall-clock
+    moment, so a turn appended in between is counted by the bookmark while
+    never appearing in the chunks the model was given. The slice is then
+    skipped forever. Reading it out of the same pass makes that impossible by
+    construction, and halves the I/O on a multi-MB transcript as a side effect.
+    """
+
+    def test_the_transcript_is_parsed_once(self, tmp_path, transcript):
+        from lib import transcript_distiller as td
+
+        reads: list = []
+        real = td.iter_distilled_turns
+
+        def counting(path, **kwargs):
+            reads.append(path)
+            return real(path, **kwargs)
+
+        with patch.object(td, "iter_distilled_turns", counting):
+            _run_extract(tmp_path, transcript, units=[_unit("pass one")])
+
+        assert len(reads) == 1
+
+    def test_a_turn_appended_mid_extraction_is_not_skipped(
+        self, tmp_path, transcript
+    ):
+        """The bookmark can only ever point at a turn that was in the chunks.
+
+        Simulates the race: the transcript grows immediately after distillation
+        but before the bookmark is written. The new turn must be left for the
+        next pass, not silently bookmarked past.
+        """
+        late = _turn("appended during the model call", 90)
+
+        original = ex.save_diary_bookmark
+
+        def grow_then_save(data_dir, session_id, ts):
+            _grow(transcript, [late])
+            return original(data_dir, session_id, ts)
+
+        import extract_learnings as el
+
+        with patch.object(el, "save_diary_bookmark", grow_then_save):
+            _run_extract(tmp_path, transcript, units=[_unit("pass one")])
+
+        assert ex.load_diary_bookmark(tmp_path, "s1") == BASE + timedelta(minutes=5)
+
+        _, second = _run_extract(tmp_path, transcript, units=[_unit("pass two")])
+        assert "appended during the model call" in "\n".join(second)
+
+    def test_distill_slice_returns_the_newest_timestamp_it_consumed(self, transcript):
+        from lib.transcript_distiller import distill, distill_slice
+
+        chunks, last_ts = distill_slice(transcript)
+
+        assert last_ts == BASE + timedelta(minutes=5)
+        # The bool-compatible wrapper still behaves exactly as before.
+        assert distill(transcript) == chunks
+
+
 class TestAppendOnly:
     """Criterion 4's second half: the second pass APPENDS."""
 
@@ -235,9 +297,51 @@ class TestBookmarkDiscipline:
 
 class TestSliceKey:
 
-    def test_the_key_names_the_session_and_the_slice_start(self):
+    def test_the_key_names_the_session_and_where_the_slice_ends(self):
         assert ex.slice_key("abc", None) == "abc:start"
         assert ex.slice_key("abc", BASE) == f"abc:{BASE.isoformat()}"
+
+    def test_a_failed_bookmark_save_does_not_cost_the_next_slice(self, tmp_path):
+        """Keyed by where the slice ENDS, not where it starts.
+
+        ``save_diary_bookmark`` can fail (a full disk, a read-only mount) and
+        its return value is advisory. The next pass then re-reads from the same
+        start — so a start-keyed slice would produce the identical key, match
+        the marker the first pass wrote, and drop every genuinely-new turn as a
+        duplicate. Ending the key at the last turn read makes the second pass
+        distinguishable, because it read further.
+        """
+        diary = tmp_path / "diary"
+        first = ex.slice_key("s1", BASE)
+        ex.write_diary_entries(
+            [_unit("pass one")], diary, "s1", "/work", BASE.isoformat(),
+            slice_id=first,
+        )
+
+        # The bookmark never stuck, so pass two starts from the same place —
+        # but reads two hours further.
+        second = ex.slice_key("s1", BASE + timedelta(hours=2))
+        ex.write_diary_entries(
+            [_unit("pass two")], diary, "s1", "/work", BASE.isoformat(),
+            slice_id=second,
+        )
+
+        text = next(diary.glob("*.md")).read_text()
+        assert "pass one" in text and "pass two" in text
+
+    def test_a_retry_of_the_same_slice_still_dedups(self, tmp_path):
+        """The guard's real job. A marker retried after its child died mid-write
+        re-reads a transcript that has stopped growing, so it lands on the same
+        end timestamp and writes nothing twice."""
+        diary = tmp_path / "diary"
+        key = ex.slice_key("s2", BASE + timedelta(hours=2))
+        for _ in range(2):
+            ex.write_diary_entries(
+                [_unit("exactly once")], diary, "s2", "/work", BASE.isoformat(),
+                slice_id=key,
+            )
+
+        assert next(diary.glob("*.md")).read_text().count("exactly once") == 1
 
     def test_write_diary_entries_without_a_slice_key_keeps_the_old_dedup(
         self, tmp_path

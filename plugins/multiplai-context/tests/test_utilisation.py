@@ -1133,7 +1133,7 @@ class TestExtractLearningsWiring:
         with patch.object(el, "get_paths", _Paths), \
              patch.object(el, "load_target_charters", lambda *a, **k: []), \
              patch.object(el, "create_client", AsyncMock(return_value=client)), \
-             patch.object(el, "_distill_transcript", lambda *a: ["chunk one"]), \
+             patch.object(el, "_distill_transcript", lambda *a: (["chunk one"], None)), \
              patch.object(el, "write_diary_entries", lambda *a, **k: None), \
              patch.object(el, "append_learnings", lambda *a, **k: True), \
              patch.object(el, "record_disposition", lambda *a, **k: True), \
@@ -1213,7 +1213,7 @@ class TestExtractLearningsWiring:
         with patch.object(el, "get_paths", _Paths), \
              patch.object(el, "load_target_charters", lambda *a, **k: []), \
              patch.object(el, "create_client", AsyncMock(return_value=object())), \
-             patch.object(el, "_distill_transcript", lambda *a: ["c"]), \
+             patch.object(el, "_distill_transcript", lambda *a: (["c"], None)), \
              patch.object(el, "extract_session_signals", fake), \
              patch.object(el.sys, "stdin",
                           type("S", (), {"read": staticmethod(lambda: stdin)})):
@@ -1249,7 +1249,7 @@ class TestExtractLearningsWiring:
              patch.object(el, "load_target_charters", lambda *a, **k: []), \
              patch.object(el, "create_client",
                           AsyncMock(side_effect=RuntimeError("no client"))), \
-             patch.object(el, "_distill_transcript", lambda *a: ["c"]), \
+             patch.object(el, "_distill_transcript", lambda *a: (["c"], None)), \
              patch.object(el.sys, "stdin",
                           type("S", (), {"read": staticmethod(lambda: stdin)})):
             asyncio.run(el.extract())

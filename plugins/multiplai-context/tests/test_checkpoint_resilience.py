@@ -475,6 +475,187 @@ class TestPointer:
         assert removed is False and "pending rebuild marker" in kept
 
 
+class TestTheAlertKeepsWorkingAfterARecovery:
+    """The high-water mark must reset, or the alert quietly dies.
+
+    ``_degraded_message`` suppresses when the mark it stored is >= the current
+    failure count. Nothing reset that mark on a successful write, so the
+    SECOND run of failures in a session's life (2 failures against a stored 2)
+    was silent, and every later incident needed a strictly longer run than the
+    last to be heard. The guarantee this PR advertises — two in a row tells you
+    — decayed to nothing over a long session.
+    """
+
+    def _fail_writes(self, tmp_path, data_env, monkeypatch, n, start=0):
+        cp.write_checkpoint_file(data_env, "s1", VALID_CHECKPOINT)
+        monkeypatch.setattr(checkpoint_writer, "run_agent", _timeout())
+        for i in range(n):
+            transcript = _write_transcript(
+                tmp_path / f"f{start + i}.jsonl", text=f"turn {start + i}"
+            )
+            asyncio.run(checkpoint_writer.write_checkpoint(_payload("s1", transcript)))
+
+    def _stop(self, monkeypatch, capsys, tmp_path, n=0):
+        payload = {
+            "session_id": "s1",
+            "transcript_path": str(_write_transcript(tmp_path / f"stop{n}.jsonl")),
+            "cwd": str(tmp_path / "proj"),
+        }
+        monkeypatch.setattr(session_stop, "_spawn_writer", lambda p: True)
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+        session_stop.main()
+        return capsys.readouterr().out
+
+    def test_a_second_run_of_failures_is_still_reported(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        self._fail_writes(tmp_path, data_env, monkeypatch, 2)
+        assert self._stop(monkeypatch, capsys, tmp_path, 1).strip() != ""
+
+        monkeypatch.setattr(checkpoint_writer, "run_agent", _good())
+        asyncio.run(checkpoint_writer.write_checkpoint(
+            _payload("s1", _write_transcript(tmp_path / "ok.jsonl", text="recovered"))
+        ))
+        # The success itself says nothing, and clears the mark on its way past.
+        assert self._stop(monkeypatch, capsys, tmp_path, 2).strip() == ""
+
+        self._fail_writes(tmp_path, data_env, monkeypatch, 2, start=10)
+
+        out = self._stop(monkeypatch, capsys, tmp_path, 3)
+        assert json.loads(out)["systemMessage"]
+
+    def test_the_mark_is_dropped_the_moment_a_write_succeeds(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        self._fail_writes(tmp_path, data_env, monkeypatch, 2)
+        self._stop(monkeypatch, capsys, tmp_path, 1)
+        assert session_stop._degraded_file(data_env, "s1").exists()
+
+        monkeypatch.setattr(checkpoint_writer, "run_agent", _good())
+        asyncio.run(checkpoint_writer.write_checkpoint(
+            _payload("s1", _write_transcript(tmp_path / "ok.jsonl", text="recovered"))
+        ))
+        self._stop(monkeypatch, capsys, tmp_path, 2)
+
+        assert not session_stop._degraded_file(data_env, "s1").exists()
+
+    def test_one_failure_does_not_clear_the_mark(
+        self, tmp_path, data_env, monkeypatch, capsys
+    ):
+        """Only a success resets. A single failure is mid-run, not recovery."""
+        self._fail_writes(tmp_path, data_env, monkeypatch, 2)
+        self._stop(monkeypatch, capsys, tmp_path, 1)
+        self._fail_writes(tmp_path, data_env, monkeypatch, 1, start=20)
+
+        self._stop(monkeypatch, capsys, tmp_path, 2)
+
+        assert session_stop._degraded_file(data_env, "s1").exists()
+
+
+# ---------------------------------------------------------------------------
+# A queued end-of-session failure has exactly one place left to be reported
+# ---------------------------------------------------------------------------
+
+class TestTheExitCodeCarriesTheOutcome:
+    """The session that queued the checkpoint has ended.
+
+    So ``session_stop``'s degraded message will never fire for it again, and
+    the waiting host drain is the only thing left that can notice. A writer
+    that always exited 0 made ``process_pending_checkpoints(wait=True).failed``
+    permanently zero — the report existed but was unreachable.
+    """
+
+    def _run_main(self, monkeypatch, payload):
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+        return checkpoint_writer.main()
+
+    def test_a_degraded_write_exits_nonzero(self, tmp_path, data_env, monkeypatch):
+        cp.write_checkpoint_file(data_env, "s1", VALID_CHECKPOINT)
+        monkeypatch.setattr(checkpoint_writer, "run_agent", _timeout())
+
+        code = self._run_main(
+            monkeypatch,
+            _payload("s1", _write_transcript(tmp_path / "t.jsonl")),
+        )
+
+        assert code == 1
+
+    def test_a_good_write_exits_zero(self, tmp_path, data_env, monkeypatch):
+        monkeypatch.setattr(checkpoint_writer, "run_agent", _good())
+
+        code = self._run_main(
+            monkeypatch,
+            _payload("s1", _write_transcript(tmp_path / "t.jsonl")),
+        )
+
+        assert code == 0
+
+    def test_nothing_new_to_write_is_not_a_failure(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        """``write_checkpoint`` returns False for an idle session too. The exit
+        code follows the failure COUNTER, not that bool, so an idle drain does
+        not cry wolf."""
+        monkeypatch.setattr(checkpoint_writer, "run_agent", _good())
+        empty = tmp_path / "empty.jsonl"
+        empty.write_text("")
+
+        code = self._run_main(monkeypatch, _payload("s1", empty))
+
+        assert code == 0
+
+    def test_the_marker_is_still_dropped_on_a_failing_run(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        """A non-zero exit must not resurrect the queue marker — the drain
+        reports the failure, it does not retry it."""
+        cp.write_checkpoint_file(data_env, "s1", VALID_CHECKPOINT)
+        monkeypatch.setattr(checkpoint_writer, "run_agent", _timeout())
+        marker = tmp_path / "marker.json"
+        marker.write_text("{}")
+        payload = _payload("s1", _write_transcript(tmp_path / "t.jsonl"))
+        payload["marker_path"] = str(marker)
+
+        assert self._run_main(monkeypatch, payload) == 1
+        assert not marker.exists()
+
+
+class TestDegradedSectionsDoNotAccumulateOnSuccess:
+
+    def test_a_section_the_model_copied_through_is_bounded(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        """The fold-and-drop instruction is a prompt rule now, but a model that
+        ignores it must not grow checkpoint.md without limit. Bounded, not
+        stripped: stripping would destroy the raw window in exactly the case
+        where the model did NOT fold it in."""
+        sections = "\n\n".join(
+            checkpoint_writer.build_degraded_section("", f"2026-08-0{i}T00:00:00Z")
+            for i in range(1, 7)
+        )
+        monkeypatch.setattr(
+            checkpoint_writer, "run_agent", _good(VALID_CHECKPOINT + "\n\n" + sections)
+        )
+
+        ok = asyncio.run(checkpoint_writer.write_checkpoint(
+            _payload("s1", _write_transcript(tmp_path / "t.jsonl"))
+        ))
+
+        assert ok is True
+        written = cp.checkpoint_file(data_env, "s1").read_text()
+        assert written.count(checkpoint_writer._DEGRADED_HEADING) == (
+            checkpoint_writer._MAX_DEGRADED_SECTIONS
+        )
+
+    def test_the_prompt_tells_the_model_to_drop_them(self):
+        """The instruction has to reach the model as a RULE. Living only inside
+        the checkpoint text made it data the model was free to copy."""
+        prompt = checkpoint_writer.build_writer_prompt(VALID_CHECKPOINT, "seg")
+
+        assert checkpoint_writer._DEGRADED_HEADING in prompt
+        assert "no such section" in prompt
+
+
 class TestTimeout:
 
     def test_the_writer_timeout_is_ten_minutes(self):

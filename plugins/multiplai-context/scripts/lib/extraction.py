@@ -106,7 +106,7 @@ def clear_diary_bookmark(data_dir: Path, session_id: str) -> None:
         pass
 
 
-def slice_key(session_id: str, since: Optional[datetime]) -> str:
+def slice_key(session_id: str, through: Optional[datetime]) -> str:
     """Identity of one extraction slice, for append-idempotency.
 
     ``session_id`` alone was the dedup key, which is correct while a session
@@ -114,8 +114,20 @@ def slice_key(session_id: str, since: Optional[datetime]) -> str:
     extracts twice. Keying on the slice keeps the guard doing its real job —
     a marker retried after a child died mid-write must not duplicate — while
     letting a genuinely new slice through.
+
+    *through* is where the slice **ends** (the newest turn consumed), not where
+    it starts. That matters when ``save_diary_bookmark`` fails: the next pass
+    then re-reads from the same start, so a start-keyed slice would collide
+    with the marker the previous pass wrote and its genuinely-new turns would
+    be dropped as a duplicate. Keyed by the end, the second pass has read
+    further and so carries a different key. The retry case still dedups
+    correctly, because a retry reads a transcript that has stopped growing and
+    therefore lands on the same end timestamp.
+
+    ``None`` (no timestamp available — the raw-stdin path, which cannot
+    bookmark) falls back to a per-session key, i.e. the pre-slice behaviour.
     """
-    return f"{session_id}:{since.isoformat() if since else 'start'}"
+    return f"{session_id}:{through.isoformat() if through else 'start'}"
 
 
 def load_target_charters(memory_dir: Path, catalogs_dir: Optional[Path] = None) -> list[dict]:

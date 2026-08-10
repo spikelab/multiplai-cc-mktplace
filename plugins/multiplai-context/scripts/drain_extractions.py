@@ -173,9 +173,19 @@ def main(argv: list[str] | None = None) -> int:
             count=cp_result.launched,
         )
     if cp_result.failed:
+        # This is the ONLY place an end-of-session checkpoint failure can be
+        # reported. The session that queued it has ended, so session_stop's
+        # degraded message will never fire for it again — and only ``--wait``
+        # gets here, because without it nobody is around to read an exit code.
         logger.error(
             "%d of %d checkpoint child(ren) exited nonzero",
             cp_result.failed, cp_result.launched,
+        )
+        log_event(
+            "checkpoint", "drain-failed",
+            f"{cp_result.failed} of {cp_result.launched} end-of-session "
+            "checkpoint write(s) failed or degraded — see checkpoint_writer.log",
+            count=cp_result.failed,
         )
         print(
             f"[drain] {cp_result.failed} of {cp_result.launched} "

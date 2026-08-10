@@ -195,25 +195,33 @@ def iter_distilled_turns(
         }
 
 
-def distill(
+def distill_slice(
     jsonl_path: Path,
     *,
     since: datetime | None = None,
     until: datetime | None = None,
     token_budget: int = DEFAULT_TOKEN_BUDGET,
-) -> list[str]:
-    """Distill a JSONL transcript into compact text chunks.
+) -> tuple[list[str], datetime | None]:
+    """Distill a transcript slice, returning ``(chunks, last_ts)``.
 
-    Returns a list of chunk strings; each chunk fits within token_budget.
-    A single turn that exceeds the budget is truncated.
+    ``last_ts`` is the newest timestamp **actually consumed into chunks** — the
+    bookmark a caller may safely resume from. Getting it from this pass rather
+    than a second one is the point: a separate re-read happens at a later
+    wall-clock moment, so any turn appended in between would be counted by the
+    bookmark while never appearing in *chunks*, and the slice would be lost.
+    It also halves the I/O on a multi-MB transcript.
+
+    Callers that do not bookmark should keep using :func:`distill`.
     """
     char_budget = token_budget * _CHARS_PER_TOKEN
     chunks: list[str] = []
     current_lines: list[str] = []
     current_chars = 0
+    last_ts: datetime | None = None
 
     for turn in iter_distilled_turns(jsonl_path, since=since, until=until):
-        ts_str = turn["ts"].isoformat() if turn["ts"] else "?"
+        ts = turn["ts"]
+        ts_str = ts.isoformat() if ts else "?"
         line = f"[{ts_str}] [{turn['project']}] {turn['role']}: {turn['text']}"
 
         # Truncate individual turns that are too long
@@ -227,11 +235,30 @@ def distill(
 
         current_lines.append(line)
         current_chars += len(line)
+        if ts is not None and (last_ts is None or ts > last_ts):
+            last_ts = ts
 
     if current_lines:
         chunks.append("\n\n".join(current_lines))
 
-    return chunks
+    return chunks, last_ts
+
+
+def distill(
+    jsonl_path: Path,
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    token_budget: int = DEFAULT_TOKEN_BUDGET,
+) -> list[str]:
+    """Distill a JSONL transcript into compact text chunks.
+
+    Returns a list of chunk strings; each chunk fits within token_budget.
+    A single turn that exceeds the budget is truncated.
+    """
+    return distill_slice(
+        jsonl_path, since=since, until=until, token_budget=token_budget
+    )[0]
 
 
 def estimate_tokens(jsonl_path: Path) -> int:

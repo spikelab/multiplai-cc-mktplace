@@ -496,3 +496,43 @@ class TestWriteVolume:
         cfg = cp.CheckpointConfig(stale_hours=3.0, min_session_minutes=30)
 
         assert self._writes_over(tmp_path, hours=4, cfg=cfg) == 2
+
+    def _token_writes_over(self, hours, tokens_per_hour, cfg=CFG, step_minutes=10):
+        """The OTHER cadence: replay token growth through `checkpoint_trigger`.
+
+        `_writes_over` above measures the staleness floor only. This measures
+        the `refresh` trigger, which since 0.39.0 applies at every token level
+        rather than only above `handoff_tokens`. Both reset the same state, so
+        a real session writes at max(this, that) — not the sum.
+        """
+        state: dict = {"last_band_idx": 99, "last_checkpoint_tokens": 1}
+        writes = 0
+        for minute in range(step_minutes, int(hours * 60) + 1, step_minutes):
+            tokens = 1 + int(tokens_per_hour * minute / 60)
+            if cp.checkpoint_trigger(tokens, state, cfg) == "refresh":
+                writes += 1
+                state["last_checkpoint_tokens"] = tokens
+        return writes
+
+    def test_token_growth_can_outpace_the_staleness_floor(self):
+        """Eight writes per four hours is a FLOOR, not a ceiling.
+
+        The cost-per-session figure quoted for the 0.5h cadence is derived from
+        `test_a_four_hour_session_writes_eight_small_deltas`, which exercises
+        only `staleness_trigger`. A session growing faster than `refresh_tokens`
+        (25K) per `stale_hours` writes on the token cadence instead. A goal loop
+        burning 150K tokens an hour writes ~6x/hour, so ~24 in four hours — 3x
+        the staleness figure, and the cost scales with it.
+        """
+        assert self._token_writes_over(hours=4, tokens_per_hour=150_000) == 24
+
+    def test_a_token_light_session_stays_on_the_staleness_floor(self):
+        """25K tokens an hour is under one refresh per hour, so staleness owns
+        the cadence and the eight-writes arithmetic is the real one."""
+        assert self._token_writes_over(hours=4, tokens_per_hour=25_000) == 4
+
+    def test_refresh_still_needs_a_previous_write_to_measure_from(self):
+        """Without one, `last_checkpoint_tokens` is 0 and every session past
+        25K would fire on its first Stop. The band and staleness triggers own
+        the first write."""
+        assert cp.checkpoint_trigger(120_000, {"last_band_idx": 99}, CFG) is None

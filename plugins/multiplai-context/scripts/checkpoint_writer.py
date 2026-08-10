@@ -95,11 +95,22 @@ Rules:
 --- END TRANSCRIPT SEGMENT ---
 """
 
+# Defined here rather than beside the rest of the degraded-write machinery
+# below because _MERGE_RULE_UPDATE names it: the instruction to fold these
+# sections in and drop them has to be a PROMPT rule the model is given, not a
+# sentence sitting inside the checkpoint text where it is merely data.
+_DEGRADED_HEADING = "## Unsummarised since"
+
 _MERGE_RULE_FRESH = "Build the checkpoint from the transcript segment alone."
 _MERGE_RULE_UPDATE = (
     "UPDATE the previous checkpoint in place with the new segment: carry "
     "forward still-true state, mark newly completed tasks [done], replace "
-    "stale 'Current work'/'Next action', never append duplicates."
+    "stale 'Current work'/'Next action', never append duplicates. "
+    "If the previous checkpoint contains one or more "
+    f"'{_DEGRADED_HEADING} <timestamp>' sections, those are raw turns from a "
+    "window an earlier write could not summarise: fold their content into the "
+    "numbered sections above and DO NOT reproduce the sections themselves. "
+    "Your output must contain no such section."
 )
 
 
@@ -155,7 +166,6 @@ def build_writer_prompt(previous_checkpoint: str, segment: str) -> str:
 # Degraded write — what gets kept when the model call cannot be made to work
 # --------------------------------------------------------------------------
 
-_DEGRADED_HEADING = "## Unsummarised since"
 # Bounded so a run of failures can't grow checkpoint.md without limit. The
 # tail is kept, not the head: the most recent work is the part a rebuild
 # needs.
@@ -365,6 +375,13 @@ async def write_checkpoint(payload: dict) -> bool:
             _record_failure(data_dir, session_id, state, failure)
             return False
         degraded = True
+    else:
+        # The prompt tells the model to fold any degraded sections in and emit
+        # none. If it copies them through anyway, bound the growth here rather
+        # than stripping them: stripping would destroy the raw window in the
+        # one case where the model did NOT fold it in, which is the failure
+        # this whole fallback exists to prevent.
+        text = _trim_degraded_sections(text)
 
     cp.write_checkpoint_file(data_dir, session_id, text)
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -421,18 +438,39 @@ async def write_checkpoint(payload: dict) -> bool:
     return not degraded
 
 
-def main() -> None:
+def main() -> int:
+    """Run one checkpoint write. Returns the process exit code.
+
+    **Non-zero means this write failed or degraded.** That matters only on the
+    queued path: ``lib.checkpoint_drain.process_pending_checkpoints(wait=True)``
+    is the one caller that waits, and it is the only place a failed
+    end-of-session checkpoint can still be reported — the session that queued
+    it has ended, so ``session_stop``'s degraded message will never run for it
+    again. A writer that always exited 0 made that report unreachable.
+
+    The counter is the signal rather than ``write_checkpoint``'s bool because
+    the bool is False for "nothing new to fold in" as well, and an idle session
+    is not a failure. ``consecutive_failures`` moves on exactly the two
+    outcomes that are.
+
+    Detached spawns (``cp.spawn_writer``) are never waited on, so the code is
+    ignored there.
+    """
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except (json.JSONDecodeError, ValueError):
         logger.warning("Unparseable checkpoint payload; exiting")
-        return
+        return 0
     if not isinstance(payload, dict):
-        return
+        return 0
 
     session_id = payload.get("session_id") or ""
     setup_logging("checkpoint_writer", session_id=session_id)
     data_dir = get_paths().plugin_data()
+    before = (
+        cp.consecutive_failures(cp.load_state(data_dir, session_id))
+        if session_id else 0
+    )
     try:
         asyncio.run(write_checkpoint(payload))
     finally:
@@ -454,13 +492,24 @@ def main() -> None:
             except OSError:
                 logger.warning("Could not remove checkpoint marker %s", marker_path)
 
+    after = (
+        cp.consecutive_failures(cp.load_state(data_dir, session_id))
+        if session_id else 0
+    )
+    return 1 if after > before else 0
+
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
+    except SystemExit:
+        raise
     except Exception:
         try:
-            logger.exception("checkpoint_writer failed; exiting cleanly")
+            logger.exception("checkpoint_writer crashed")
         except Exception:
             pass
-        sys.exit(0)
+        # A crash is a failed write, and the waiting drain is the only thing
+        # that reads this. Detached spawns never look, so this cannot break a
+        # hook.
+        sys.exit(1)

@@ -33,54 +33,44 @@ from lib.extraction import (
     append_learnings,
 )
 from lib.session_registry import record_disposition
-from lib.transcript_distiller import distill, iter_distilled_turns
+from lib.transcript_distiller import distill_slice
 
 logger = setup_logging("extract_learnings")
 
 
-def _last_turn_ts(path: Path, since: datetime | None) -> datetime | None:
-    """The newest timestamp in the slice that was just distilled.
-
-    Deliberately the last turn READ, never ``now``. ``iter_distilled_turns``
-    keeps turns with ``ts >= since``, so bookmarking the last turn re-reads
-    exactly one boundary turn on the next pass. Bookmarking ``now`` instead
-    would skip anything written to the transcript between the read and the
-    write — and the safe direction here is duplicating a turn, never losing
-    one.
-    """
-    last: datetime | None = None
-    try:
-        for turn in iter_distilled_turns(path, since=since):
-            ts = turn.get("ts")
-            if ts is not None and (last is None or ts > last):
-                last = ts
-    except Exception:
-        logger.exception("Could not determine the last turn timestamp for %s", path)
-        return None
-    return last
-
-
 def _distill_transcript(
     transcript_path: str, raw_transcript: str, since: datetime | None = None
-) -> list[str]:
-    """Distill the slice newer than *since* into token-bounded chunks.
+) -> tuple[list[str], datetime | None]:
+    """Distill the slice newer than *since*. Returns ``(chunks, last_ts)``.
 
     Prefers the on-disk JSONL path; falls back to raw JSONL piped on stdin
     (staged to a temp file, since the distiller reads from a path). Returns
-    an empty list when there is nothing to extract — a missing/empty
+    empty chunks when there is nothing to extract — a missing/empty
     transcript, or nothing new since the bookmark — and the caller then drops
     the marker instead of retrying.
+
+    ``last_ts`` is the newest timestamp *in the chunks themselves*, produced by
+    the same pass that built them, and it is the last turn READ rather than
+    ``now``. Both properties matter: ``now`` would skip anything appended
+    between the read and the bookmark write, and a second read pass would do
+    the same over a smaller window. ``iter_distilled_turns`` keeps turns with
+    ``ts >= since``, so resuming from it re-reads exactly one boundary turn —
+    the safe direction here is duplicating a turn, never losing one.
+
+    Only the on-disk path returns a ``last_ts``. The raw-stdin fallback stages
+    a temp file that is deleted on the way out, so there is nothing stable for
+    a bookmark to point into; that path keeps re-reading whatever it is handed.
     """
     if transcript_path:
         p = Path(transcript_path)
         if not p.exists():
             logger.info("Transcript gone: %s — nothing to extract", transcript_path)
-            return []
+            return [], None
         try:
-            return distill(p, since=since)
+            return distill_slice(p, since=since)
         except Exception:
             logger.exception("Distillation failed for %s", transcript_path)
-            return []
+            return [], None
 
     if raw_transcript.strip():
         try:
@@ -90,14 +80,14 @@ def _distill_transcript(
                 tmp.write(raw_transcript)
                 tmp_path = Path(tmp.name)
             try:
-                return distill(tmp_path, since=since)
+                return distill_slice(tmp_path, since=since)[0], None
             finally:
                 tmp_path.unlink(missing_ok=True)
         except Exception:
             logger.exception("Distillation of raw piped transcript failed")
-            return []
+            return [], None
 
-    return []
+    return [], None
 
 
 def _drop_marker(marker_path: str) -> None:
@@ -340,17 +330,14 @@ async def extract() -> bool:
     # re-read its whole transcript the second time; now the second pass sees
     # only what the first one could not.
     since = load_diary_bookmark(paths.data_dir(), session_id)
-    chunks = _distill_transcript(transcript_path, raw_transcript, since)
-    this_slice = slice_key(session_id, since)
-    # Only the on-disk path bookmarks. The raw-stdin fallback stages a temp
-    # file that is deleted on the way out, so there is nothing stable for a
-    # bookmark to point into — that path keeps re-reading whatever it is
-    # handed, exactly as before.
-    last_ts = (
-        _last_turn_ts(Path(transcript_path), since)
-        if chunks and transcript_path and Path(transcript_path).exists()
-        else None
-    )
+    # One pass produces both: the chunks and the newest timestamp inside them.
+    # A second read pass would run at a later wall-clock moment, so a turn
+    # appended in between would advance the bookmark past content that was
+    # never in *chunks* — the slice would be lost, silently and permanently.
+    chunks, last_ts = _distill_transcript(transcript_path, raw_transcript, since)
+    # Keyed by where the slice ENDS, so a bookmark that failed to save cannot
+    # make the next pass collide with this one's marker and lose its turns.
+    this_slice = slice_key(session_id, last_ts)
     if since:
         logger.info(
             "Extracting the slice after %s for %s (%d chunk(s))",
