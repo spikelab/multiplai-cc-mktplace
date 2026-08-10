@@ -52,7 +52,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import setup_logging, log_event
+from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib import checkpoint as cp
 from lib.runtime import uv_run_argv
 
@@ -224,6 +224,22 @@ def main() -> None:
     data_dir = paths.plugin_data()
     session_state = read_session_state(data_dir) or {}
 
+    # Prefer the hook input's session_id: the shared session_state.json may
+    # hold a different concurrent session's id, which would misattribute this
+    # marker (see session_end.py for the same fix).
+    session_id = (
+        hook_input.get("session_id")
+        or session_state.get("session_id")
+        or "unknown"
+    )
+    with hook_run("pre_compact", logger, session_id=session_id) as run:
+        _compact_pass(hook_input, session_state, data_dir, session_id, run)
+
+
+def _compact_pass(
+    hook_input: dict, session_state: dict, data_dir, session_id: str, run
+) -> None:
+    """Checkpoint, arm the rebuild, and queue extraction before compaction."""
     # Compaction summarizes the conversation, so any context the
     # UserPromptSubmit hook injected this session may no longer be
     # present verbatim. Clear the re-recommendation cooldown map so every
@@ -235,33 +251,30 @@ def main() -> None:
             logger.info("PreCompact: cleared re-recommendation cooldown map")
 
     # Fresh checkpoint BEFORE compaction — this is the state the
-    # SessionStart(source=compact) rebuild will inject. Never fatal.
-    try:
-        _sync_checkpoint(hook_input, data_dir)
-    except Exception:
-        logger.exception("PreCompact: checkpoint pass failed (non-fatal)")
+    # SessionStart(source=compact) rebuild will inject. Never fatal. This
+    # stage makes a model call, which is why this hook's ceiling is 300s and
+    # every other hook's is under 60.
+    with run.stage("checkpoint"):
+        try:
+            _sync_checkpoint(hook_input, data_dir)
+        except Exception:
+            logger.exception("PreCompact: checkpoint pass failed (non-fatal)")
 
     # Arm the post-compaction injection. Nothing is printed to stdout: this
     # hook's stdout reaches the summarizer as custom instructions, and this
     # plugin no longer has anything to say to it (see the module docstring).
-    try:
-        _mark_pending_rebuild(hook_input, data_dir)
-    except Exception:
-        logger.exception("PreCompact: rebuild-marker pass failed (non-fatal)")
+    with run.stage("rebuild_marker"):
+        try:
+            _mark_pending_rebuild(hook_input, data_dir)
+        except Exception:
+            logger.exception("PreCompact: rebuild-marker pass failed (non-fatal)")
 
     transcript_path = hook_input.get("transcript_path", "")
     if not transcript_path:
         logger.info("PreCompact: no transcript_path in payload — nothing to defer")
+        run.note(outcome="no_transcript")
         return
 
-    # Prefer the hook input's session_id: the shared session_state.json may
-    # hold a different concurrent session's id, which would misattribute this
-    # marker (see session_end.py for the same fix).
-    session_id = (
-        hook_input.get("session_id")
-        or session_state.get("session_id")
-        or "unknown"
-    )
     marker = {
         "session_id": session_id,
         "transcript_path": transcript_path,
@@ -286,8 +299,10 @@ def main() -> None:
             "context compacting — queued deferred extraction to preserve learnings",
             session_id=session_id,
         )
+        run.note(outcome="queued")
     except OSError:
         logger.exception("PreCompact: failed to write deferred extraction marker")
+        run.note(outcome="marker_failed")
 
 
 if __name__ == "__main__":

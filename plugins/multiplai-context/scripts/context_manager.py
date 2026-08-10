@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.paths import get_paths
 from multiplai_core.config import read_session_state, write_session_state
-from multiplai_core.log_utils import setup_logging, log_event
+from multiplai_core.log_utils import HookRun, hook_run, setup_logging, log_event
 from lib.banks import (
     SHARED_BANK_NOTICE,
     configured_banks,
@@ -1077,17 +1077,29 @@ def _emit_result(context: str, result: dict) -> None:
 
 def main() -> None:
     """Context manager main: read stdin, route context, write JSON to stdout."""
+    # Read stdin and name the session *before* opening hook_run, so the
+    # HOOK_ENTRY line identifies whose prompt is at stake. This hook has a 30s
+    # harness ceiling and a kill leaves nothing behind but that line.
+    try:
+        input_data = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        input_data = {}
+
+    session_id = (
+        input_data.get("session_id") if isinstance(input_data, dict) else None
+    )
+    setup_logging("context_manager", session_id=session_id or "")
+    with hook_run("context_manager", logger, session_id=session_id or "") as run:
+        _assemble_and_emit(input_data, run)
+
+
+def _assemble_and_emit(input_data: object, run: HookRun) -> None:
+    """The hook body: route every corpus, assemble the block, emit the payload."""
     paths = get_paths()
     memory_dir = paths.memory_dir()
     # The ordered banks for this workspace. With no `memory-banks.yaml` this is
     # exactly one bank at `memory_dir`, so every path below behaves as before.
     banks = configured_banks()
-
-    # Read hook input from stdin (Claude Code UserPromptSubmit shape)
-    try:
-        input_data = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError):
-        input_data = {}
 
     prompt = input_data.get("prompt", "") if isinstance(input_data, dict) else ""
     transcript_path = (
@@ -1096,7 +1108,6 @@ def main() -> None:
     session_id = (
         input_data.get("session_id") if isinstance(input_data, dict) else None
     )
-    setup_logging("context_manager", session_id=session_id or "")
 
     # Capture the working directory for the diary/now pipeline. UserPromptSubmit
     # reliably carries cwd, so this is the dependable place to record it;
@@ -1115,15 +1126,20 @@ def main() -> None:
 
     # Last-assistant-response disambiguation. Failure modes already
     # encoded in read_last_assistant_response (returns None on any error).
-    last_response = (
-        read_last_assistant_response(transcript_path) if prompt else None
-    )
+    # Staged separately from the catalogs: this one reads the session
+    # transcript, which grows without bound, so it is the stage that would
+    # show up first if transcript size ever became the cost.
+    with run.stage("transcript"):
+        last_response = (
+            read_last_assistant_response(transcript_path) if prompt else None
+        )
 
-    # Plugin-options-driven config (which corpora are enabled, paths, etc.)
-    cfg = load_catalog_config()
+    with run.stage("catalogs"):
+        # Plugin-options-driven config (which corpora are enabled, paths, etc.)
+        cfg = load_catalog_config()
 
-    # Load all enabled corpora
-    corpora = _load_corpora(cfg) if prompt else {"memory": [], "skills": [], "resources": []}
+        # Load all enabled corpora
+        corpora = _load_corpora(cfg) if prompt else {"memory": [], "skills": [], "resources": []}
 
     # Multi-corpus router pass
     picks_by_corpus: dict[str, list[str]] = {"memory": [], "skills": [], "resources": []}
@@ -1133,8 +1149,12 @@ def main() -> None:
     if prompt and any(corpora.values()):
         try:
             router = create_router(keep_ratio=cfg.keep_ratio)
-            picks_by_corpus = router.select_multi(prompt, last_response, corpora)
+            # The one stage that makes a network call, and the only one that
+            # can plausibly eat a 30s budget on its own.
+            with run.stage("router"):
+                picks_by_corpus = router.select_multi(prompt, last_response, corpora)
             router_ran = True
+            run.note(router=router.name)
             logger.info(
                 "Router %s picked: memory=%d skills=%d resources=%d",
                 router.name,
@@ -1300,22 +1320,25 @@ def main() -> None:
             except Exception:
                 logger.debug("Could not persist dev-reference state", exc_info=True)
 
-    # Load content per corpus
-    memory_content = _load_memory_content(
-        memory_dir, picks_by_corpus.get("memory") or [], banks
-    )
-    skills_content = _build_skills_recommendations(
-        cfg, picks_by_corpus.get("skills") or [], corpora.get("skills") or []
-    )
-    if qmd_active:
-        # Cooldown may have trimmed the picks; render only the survivors.
-        resources_content = {
-            path: _render_qmd_resource(qmd_entries[path])
-            for path in picks_by_corpus.get("resources") or []
-            if path in qmd_entries
-        }
-    else:
-        resources_content = _load_resources_content(cfg, picks_by_corpus.get("resources") or [])
+    # Load content per corpus. Timed as one stage: this is where the picked
+    # files are actually read off disk, so it is the stage that grows with the
+    # size of what was picked rather than with the size of the catalog.
+    with run.stage("content"):
+        memory_content = _load_memory_content(
+            memory_dir, picks_by_corpus.get("memory") or [], banks
+        )
+        skills_content = _build_skills_recommendations(
+            cfg, picks_by_corpus.get("skills") or [], corpora.get("skills") or []
+        )
+        if qmd_active:
+            # Cooldown may have trimmed the picks; render only the survivors.
+            resources_content = {
+                path: _render_qmd_resource(qmd_entries[path])
+                for path in picks_by_corpus.get("resources") or []
+                if path in qmd_entries
+            }
+        else:
+            resources_content = _load_resources_content(cfg, picks_by_corpus.get("resources") or [])
 
     # Memory fallback — a safety net for *failure*, not for abstention.
     # A successful router run that returns no memory picks is a
@@ -1422,6 +1445,9 @@ def main() -> None:
         corpus_counts["skills"],
         corpus_counts["resources"],
     )
+    # On the EXIT line so one grep answers "what did this turn cost, and what
+    # did the user get for it" without joining two log lines.
+    run.note(bytes=len(session_context), files=sum(corpus_counts.values()))
 
     # Per-corpus file groups so the activity line says which files are
     # memory vs skills vs resources — a flat list loses that attribution.

@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.paths import get_paths
-from multiplai_core.log_utils import setup_logging
+from multiplai_core.log_utils import hook_run, setup_logging
 
 logger = setup_logging("session_notification")
 
@@ -33,11 +33,16 @@ def main() -> None:
         hook_input = {}
     if not isinstance(hook_input, dict):
         hook_input = {}
-    setup_logging("session_notification", session_id=hook_input.get("session_id") or "")
+    session_id = hook_input.get("session_id") or ""
+    setup_logging("session_notification", session_id=session_id)
 
-    from lib import session_registry
+    with hook_run("session_notification", logger, session_id=session_id) as run:
+        from lib import session_registry
 
-    session_registry.record_event(get_paths().plugin_data(), hook_input, "notification")
+        with run.stage("record"):
+            session_registry.record_event(
+                get_paths().plugin_data(), hook_input, "notification"
+            )
 
 
 if __name__ == "__main__":

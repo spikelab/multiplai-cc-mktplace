@@ -117,6 +117,42 @@ Clusters triaged out, one line each with reason.
 Reply in the console with a 3-line summary and the report path. Do not paste
 the whole report into the console.
 
+## Hook timing — "what timed out, and where did the budget go?"
+
+When a hook times out, is slow, or the user asks what a hook costs, use
+`--hooks`. It pairs the `HOOK_ENTRY` / `HOOK_EXIT` lines every hook writes and
+prices each run against the ceiling in `hooks/hooks.json`.
+
+```bash
+uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/log_doctor.py" --hooks \
+  [--days N] [--json]
+```
+
+Exit code is **1 when any run was killed**, so this is safe to gate on.
+
+**Read the report in this order:**
+
+1. **`killed` > 0.** An ENTRY with no EXIT means the process died holding the
+   budget — the harness kills a hook at its timeout with SIGKILL, so it cannot
+   log its own death. This column *is* the timeout report; there will be no
+   error line anywhere else. The finding names the session id and timestamp:
+   take those to the session transcript to see which prompt lost its context.
+2. **`p95 %`** — p95 as a percentage of that hook's configured budget. Above
+   50% means the tail is one slow dependency away from a kill.
+3. **`startup p50`** — interpreter + import cost, before the hook body runs.
+   A jump here means dependency resolution, not the hook's own work (a PEP 723
+   block sneaking back in would show up here first).
+4. **Stage breakdown** — which phase of the hook actually spent the time
+   (`router`, `checkpoint`, `drain_extractions`, …). The findings call out any
+   stage that dominates its hook's p95.
+5. **`outcomes`** — for hooks that mostly decline to act (`checkpoint_nudge`),
+   the reason they declined. All-`disabled` on a hook the user believes is on
+   is a config finding, not a latency one.
+
+To verify the instrumentation itself is alive, probe it:
+`--probe-check --scenario hook-timing` (it requires both halves of the pair —
+an ENTRY alone is what a killed hook leaves behind).
+
 ## Injection forensics — "why did it inject that?"
 
 When the user questions a context injection (wrong files, irrelevant memory,

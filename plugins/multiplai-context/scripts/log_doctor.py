@@ -574,6 +574,309 @@ def render_injections_markdown(stats: dict, decisions: list,
 
 
 # ---------------------------------------------------------------------------
+# Hook timing — where did the budget go, and what died holding it?
+# ---------------------------------------------------------------------------
+#
+# Reads the HOOK_ENTRY / HOOK_EXIT pair that `multiplai_core.log_utils.hook_run`
+# writes around every hook body:
+#
+#   HOOK_ENTRY hook=context_manager startup_ms=310
+#   HOOK_EXIT  hook=context_manager status=ok ms=4712 startup_ms=310 \
+#              session=29a8c051 stages=transcript:12,catalogs:180,router:4400
+#
+# Two questions this answers and nothing else could:
+#
+# 1. **What was killed?** The harness SIGKILLs a hook at its configured
+#    timeout, so a killed run cannot log its own death. An ENTRY with no
+#    matching EXIT is the only evidence it ever ran. Before this existed, a
+#    UserPromptSubmit hook killed at 30s (2026-08-10) left the log completely
+#    empty for that session and the cause was never established.
+# 2. **How close is each hook to its ceiling?** The budget is in hooks.json,
+#    the spend is in the logs, and nothing joined them. `p95_pct` does.
+
+HOOK_ENTRY_RE = re.compile(r"HOOK_ENTRY hook=(?P<hook>\S+)(?P<rest>.*)$")
+HOOK_EXIT_RE = re.compile(r"HOOK_EXIT hook=(?P<hook>\S+)(?P<rest>.*)$")
+
+# Anything over this fraction of a hook's configured timeout is one bad day
+# away from being killed. 0.5 rather than 0.9 on purpose: p95 is not the
+# worst case, and the observed failures were tail events.
+HOOK_BUDGET_WARN_RATIO = 0.5
+
+
+def _kv(rest: str) -> dict:
+    """Parse the ``k=v k=v`` tail of a HOOK_ENTRY/HOOK_EXIT line."""
+    out = {}
+    for token in rest.split():
+        if "=" in token:
+            key, _, value = token.partition("=")
+            out[key] = value
+    return out
+
+
+@dataclass
+class HookRunRecord:
+    hook: str
+    ts: datetime | None
+    session: str = ""
+    status: str = ""
+    ms: float | None = None
+    startup_ms: float | None = None
+    stages: dict = field(default_factory=dict)
+    fields: dict = field(default_factory=dict)
+    killed: bool = False          # entered and never exited
+    file: str = ""
+
+
+def hook_timeouts(plugin_root: Path | None = None) -> dict:
+    """Map hook script name → its configured timeout in seconds, from hooks.json.
+
+    Read rather than restated: a hardcoded copy of these numbers would drift the
+    first time somebody widened a ceiling, and a budget report that quotes the
+    wrong budget is worse than none.
+    """
+    root = plugin_root or Path(__file__).resolve().parent.parent
+    path = root / "hooks" / "hooks.json"
+    out: dict[str, float] = {}
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return out
+    for groups in (data.get("hooks") or {}).values():
+        for group in groups:
+            for hook in group.get("hooks") or []:
+                timeout = hook.get("timeout")
+                if timeout is None:
+                    continue
+                for m in re.finditer(r"scripts/(\w+)\.py", hook.get("command", "")):
+                    out[m.group(1)] = float(timeout)
+    return out
+
+
+def load_hook_runs(logs_dir: Path, since: date | None = None) -> list:
+    """Pair HOOK_ENTRY with HOOK_EXIT across every component log.
+
+    Pairing is per (hook, session) in file order, which is correct because one
+    process writes one pair and a hook's log is append-only. An ENTRY still
+    unmatched at end of scan is reported as killed — that is the signal, not an
+    error in the pairing.
+    """
+    runs: list[HookRunRecord] = []
+    open_entries: dict[tuple, HookRunRecord] = {}
+
+    for subsystem, paths in sorted(discover(logs_dir).items()):
+        for path in paths:
+            m = FILENAME_RE.match(path.name)
+            file_date = _parse_ts(m.group("date")) if m and m.group("date") else None
+            entries, _ = parse_file(
+                path, subsystem, file_date.date() if file_date else None
+            )
+            for e in entries:
+                if since and e.ts and e.ts.date() < since:
+                    continue
+                entry_m = HOOK_ENTRY_RE.search(e.msg)
+                if entry_m:
+                    kv = _kv(entry_m.group("rest"))
+                    rec = HookRunRecord(
+                        hook=entry_m.group("hook"),
+                        ts=e.ts,
+                        session=e.session,
+                        startup_ms=float(kv["startup_ms"]) if "startup_ms" in kv else None,
+                        killed=True,   # until an EXIT says otherwise
+                        file=path.name,
+                    )
+                    runs.append(rec)
+                    open_entries[(rec.hook, e.session)] = rec
+                    continue
+                exit_m = HOOK_EXIT_RE.search(e.msg)
+                if not exit_m:
+                    continue
+                kv = _kv(exit_m.group("rest"))
+                rec = open_entries.pop((exit_m.group("hook"), e.session), None)
+                if rec is None:
+                    # EXIT with no ENTRY: the ENTRY aged out of retention, or
+                    # the scan window starts mid-run. Record it standalone so
+                    # its timing still counts.
+                    rec = HookRunRecord(
+                        hook=exit_m.group("hook"), ts=e.ts, session=e.session,
+                        file=path.name,
+                    )
+                    runs.append(rec)
+                rec.killed = False
+                rec.status = kv.pop("status", "")
+                rec.ms = float(kv.pop("ms")) if "ms" in kv else None
+                if "startup_ms" in kv:
+                    rec.startup_ms = float(kv.pop("startup_ms"))
+                stages = kv.pop("stages", "")
+                for pair in stages.split(","):
+                    stage_name, _, value = pair.partition(":")
+                    if stage_name and value.isdigit():
+                        rec.stages[stage_name] = float(value)
+                kv.pop("session", None)
+                rec.fields = kv
+    return runs
+
+
+def _pct(values: list, q: float) -> float | None:
+    """Nearest-rank percentile. No numpy in a hook-adjacent script."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    idx = min(len(ordered) - 1, max(0, int(round(q * len(ordered) + 0.5)) - 1))
+    return ordered[idx]
+
+
+def hook_stats(runs: list, timeouts: dict | None = None) -> dict:
+    """Aggregate per hook: volume, kills, latency percentiles, stage costs."""
+    timeouts = timeouts or {}
+    per_hook: dict[str, dict] = {}
+    for r in runs:
+        h = per_hook.setdefault(r.hook, {
+            "runs": 0, "killed": 0, "errors": 0, "ms": [], "startup": [],
+            "stages": {}, "outcomes": {}, "kill_sessions": [],
+        })
+        h["runs"] += 1
+        if r.killed:
+            h["killed"] += 1
+            h["kill_sessions"].append((r.ts.isoformat() if r.ts else "?", r.session))
+        if r.status == "error":
+            h["errors"] += 1
+        if r.ms is not None:
+            h["ms"].append(r.ms)
+        if r.startup_ms is not None:
+            h["startup"].append(r.startup_ms)
+        for stage, value in r.stages.items():
+            h["stages"].setdefault(stage, []).append(value)
+        outcome = r.fields.get("outcome")
+        if outcome:
+            h["outcomes"][outcome] = h["outcomes"].get(outcome, 0) + 1
+
+    rows = []
+    for hook, h in per_hook.items():
+        budget = timeouts.get(hook)
+        p95 = _pct(h["ms"], 0.95)
+        rows.append({
+            "hook": hook,
+            "runs": h["runs"],
+            "killed": h["killed"],
+            "errors": h["errors"],
+            "p50_ms": round(_pct(h["ms"], 0.50) or 0),
+            "p95_ms": round(p95 or 0),
+            "max_ms": round(max(h["ms"]) if h["ms"] else 0),
+            "startup_p50_ms": round(_pct(h["startup"], 0.50) or 0),
+            "budget_s": budget,
+            "p95_pct": (
+                round(100 * (p95 / 1000.0) / budget) if budget and p95 else None
+            ),
+            "stages": sorted(
+                (
+                    {
+                        "stage": name,
+                        "p50_ms": round(_pct(vals, 0.50) or 0),
+                        "max_ms": round(max(vals)),
+                    }
+                    for name, vals in h["stages"].items()
+                ),
+                key=lambda s: -s["max_ms"],
+            ),
+            "outcomes": h["outcomes"],
+            "kill_sessions": h["kill_sessions"][-5:],
+        })
+    rows.sort(key=lambda r: (-r["killed"], -(r["p95_pct"] or 0), -r["p95_ms"]))
+    return {
+        "runs": len(runs),
+        "killed": sum(r["killed"] for r in rows),
+        "hooks": rows,
+    }
+
+
+def hook_health_notes(stats: dict) -> list:
+    """The findings a reader should act on, stated as sentences."""
+    notes = []
+    for row in stats["hooks"]:
+        if row["killed"]:
+            where = ", ".join(
+                f"{ts} ({sid})" for ts, sid in row["kill_sessions"]
+            )
+            notes.append(
+                f"{row['hook']}: {row['killed']} run(s) entered and never "
+                f"exited — killed at the {row['budget_s'] or '?'}s ceiling or "
+                f"crashed hard. Last: {where}"
+            )
+        if row["p95_pct"] and row["p95_pct"] >= HOOK_BUDGET_WARN_RATIO * 100:
+            notes.append(
+                f"{row['hook']}: p95 is {row['p95_pct']}% of its "
+                f"{row['budget_s']}s budget ({row['p95_ms']}ms) — the tail is "
+                f"one slow dependency away from a kill."
+            )
+        if row["errors"]:
+            notes.append(
+                f"{row['hook']}: {row['errors']} run(s) exited status=error."
+            )
+        slowest = row["stages"][0] if row["stages"] else None
+        if slowest and row["p95_ms"] and slowest["max_ms"] > 0.6 * row["p95_ms"]:
+            notes.append(
+                f"{row['hook']}: stage '{slowest['stage']}' is the cost "
+                f"(max {slowest['max_ms']}ms of a {row['p95_ms']}ms p95)."
+            )
+    if not notes:
+        notes.append("No kills, no error exits, and every hook's p95 is "
+                     "comfortably inside its budget.")
+    return notes
+
+
+def render_hooks_markdown(stats: dict, notes: list) -> str:
+    # Hook and stage names reach here from log *text*. hook_run() sanitizes them
+    # at write time, but nothing stops a forged line landing in a log file, and
+    # this digest is read by an agent holding full tools — so defang on the way
+    # out too, exactly like the injection report does.
+    out = ["# Hook timing", "", UNTRUSTED_NOTICE, ""]
+    out.append(
+        f"{stats['runs']} hook run(s) observed; **{stats['killed']} killed** "
+        f"(entered, never exited)."
+    )
+    out.append("")
+    out.append("| hook | runs | killed | err | p50 | p95 | max | startup p50 | budget | p95 % |")
+    out.append("|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
+    for r in stats["hooks"]:
+        out.append(
+            f"| `{defang(r['hook'], 40)}` | {r['runs']} | {r['killed']} | {r['errors']} | "
+            f"{r['p50_ms']}ms | {r['p95_ms']}ms | {r['max_ms']}ms | "
+            f"{r['startup_p50_ms']}ms | "
+            f"{str(r['budget_s']) + 's' if r['budget_s'] else '—'} | "
+            f"{str(r['p95_pct']) + '%' if r['p95_pct'] is not None else '—'} |"
+        )
+    out.append("")
+    out.append("## Findings")
+    out.append("")
+    for note in notes:
+        out.append(f"- {defang(note, 400)}")
+    for r in stats["hooks"]:
+        if not r["stages"] and not r["outcomes"]:
+            continue
+        out.append("")
+        out.append(f"## `{defang(r['hook'], 40)}` breakdown")
+        out.append("")
+        if r["stages"]:
+            out.append("| stage | p50 | max |")
+            out.append("|---|--:|--:|")
+            for s in r["stages"]:
+                out.append(
+                    f"| {defang(s['stage'], 40)} | {s['p50_ms']}ms | "
+                    f"{s['max_ms']}ms |"
+                )
+        if r["outcomes"]:
+            out.append("")
+            out.append(
+                "outcomes: "
+                + ", ".join(
+                    f"`{defang(k, 40)}` ×{v}"
+                    for k, v in sorted(r["outcomes"].items(), key=lambda kv: -kv[1])
+                )
+            )
+    return "\n".join(out) + "\n"
+
+
+# ---------------------------------------------------------------------------
 # Probe mode — exercise a functionality, then assert its logs appeared
 # ---------------------------------------------------------------------------
 
@@ -581,6 +884,20 @@ def render_injections_markdown(stats: dict, decisions: list,
 # regex). Patterns are grounded in observed log output; ERROR/CRITICAL entries
 # from the involved subsystems fail the probe unless --allow-errors is given.
 SCENARIOS = {
+    "hook-timing": {
+        "trigger": (
+            "Submit any prompt in a session (UserPromptSubmit fires the "
+            "context manager and the checkpoint nudge)."
+        ),
+        "subsystems": ["context_manager", "checkpoint_nudge"],
+        "expect": [
+            # Both halves, deliberately. An ENTRY on its own is what a killed
+            # hook leaves, so a probe that only checked for ENTRY would pass on
+            # exactly the failure this instrumentation exists to catch.
+            ("context_manager", "INFO", r"HOOK_ENTRY hook=context_manager"),
+            ("context_manager", "INFO", r"HOOK_EXIT hook=context_manager status=ok"),
+        ],
+    },
     "session-start": {
         "trigger": "Start a new Claude Code session (e.g. `claude -p 'say hi'` from the workspace root).",
         "subsystems": ["session_start", "activity"],
@@ -904,6 +1221,11 @@ def main(argv: list | None = None) -> int:
         "--trace", type=int, nargs="?", const=10, default=0,
         help="show the last N full decision traces (default 10 when given)",
     )
+    hooks = parser.add_argument_group("hook timing")
+    hooks.add_argument(
+        "--hooks", action="store_true",
+        help="per-hook latency, stage breakdown, and runs killed at their timeout",
+    )
     probe = parser.add_argument_group("probe mode")
     probe.add_argument(
         "--probe-start", action="store_true",
@@ -947,6 +1269,18 @@ def main(argv: list | None = None) -> int:
     if not logs_dir.is_dir():
         print(f"logs directory not found: {logs_dir}", file=sys.stderr)
         return 2
+
+    if args.hooks:
+        since = date.today() - timedelta(days=args.days) if args.days else None
+        runs = load_hook_runs(logs_dir, since=since)
+        stats = hook_stats(runs, hook_timeouts())
+        notes = hook_health_notes(stats)
+        if args.json:
+            print(json.dumps({**stats, "notes": notes}, indent=2, default=str))
+        else:
+            print(render_hooks_markdown(stats, notes))
+        # A killed hook is a real failure the caller should be able to gate on.
+        return 1 if stats["killed"] else 0
 
     if args.injections:
         since = date.today() - timedelta(days=args.days) if args.days else None
