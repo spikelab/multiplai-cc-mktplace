@@ -18,6 +18,34 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.46.0] - 2026-08-11
+
+### Added
+
+- `/dream-remember` now **decides the post-triage remainder itself** instead of
+  handing it back as a review queue. A new resolve pass works one target file at
+  a time: it rejects corpus duplicates, merges within-batch repeats into a single
+  entry, settles contradictions on source date and specificity, and verifies
+  checkable claims against the actual source before writing them. You are asked
+  only about genuine policy calls — batched into one question per file, not one
+  per item. On a 583-item backlog this was the difference between a walk that
+  gets abandoned partway and one that finishes.
+- `dream_prescreen.py` — scores each pending item against **every line in the
+  corpus**, including the always-loaded `CLAUDE.md` files. The triage judge only
+  checks an item's own target file, so it never caught the two commonest
+  duplicate shapes: content that already exists in a *different* memory file,
+  and rules that restate an always-loaded `CLAUDE.md` (the drafter never sees
+  those, so it re-proposed them on every run — 12 of 17 rejections in one
+  measured file were exactly this). Output flags likely duplicates as leads to
+  verify, never as verdicts.
+
+### Changed
+
+- Step 3 no longer opens with "review the file and tell me `all`/`none`/numbers".
+  The normal ending is a report of what was applied, merged, and rejected, with
+  the reasoning. The decision-list prompt remains for an explicit
+  `/dream-remember review`, or for the specific items that need a policy call.
+
 ## [0.45.0] - 2026-08-11
 
 ### Changed

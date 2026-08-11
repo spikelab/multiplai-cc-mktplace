@@ -187,6 +187,80 @@ because triage failed.
 
 ---
 
+## Step 1c: Resolve — decide the rest yourself, file by file
+
+Triage hands back everything its rubric could not clear. **That remainder is not
+a review queue.** Most of it is decidable from evidence you can go and get; only
+a few items need the user. Working through it item-by-item in chat is the
+failure mode Step 1b exists to prevent, and stopping at Step 1b just moves the
+same walk one step later.
+
+So: take the remainder **one target file at a time**, and for each file run the
+loop below before you write anything. Silence is the goal — a file that
+resolves cleanly gets applied and reported, not asked about.
+
+### 1. Pre-screen the whole corpus, not just the target file
+
+The triage judge checks an item against *its own target file*. That misses the
+two most common duplicate shapes: an item that already exists in a **different**
+memory file, and an item that restates a rule already in an **always-loaded
+`CLAUDE.md`** (the global one, the workspace one, or `memory/CLAUDE.md`). The
+drafter never sees those files, so it re-proposes them indefinitely.
+
+```bash
+uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/dream_prescreen.py" <target-file.md>
+```
+
+It prints each pending item with its two nearest lines anywhere in the corpus
+and a similarity score, flagging likely-existing ones. Treat a high score as a
+**lead to verify**, never a verdict: open both lines and decide.
+
+### 2. Resolve what the evidence settles — and go get the evidence
+
+Four cases, in the order they usually appear:
+
+- **Corpus duplicate** → reject, naming the file and line that already says it.
+- **Within-batch duplicates** → merge into one entry rather than applying three
+  near-identical bullets. Large batches routinely carry the same finding three
+  or four times from different sessions; merging is the single biggest
+  reduction available.
+- **Contradiction between two items** → prefer the later source date, then the
+  more specific claim. If one supersedes the other, apply the survivor and say
+  which it replaced.
+- **A checkable claim** → **check it.** If an item asserts something about code,
+  a transcript, a config, or an API, read the source, grep the transcript, or
+  load the relevant reference skill before writing it into memory. Items arrive
+  carrying a confident `verdict=apply` and are still wrong: one measured batch
+  contained a claim describing a bug that had already been fixed, which the
+  source's own docstring named as fixed. Writing it would have installed a
+  false fact that later sessions would act on.
+
+Record a merged or narrowed item as **`edited`**, not `applied` — the status
+must reflect that the text diverged from the proposal.
+
+### 3. Escalate only what evidence cannot settle
+
+Ask the user about an item only when it is a genuine **policy or preference**
+call: which of two workable conventions they want, whether a rule they have to
+live with should exist, a factual conflict you cannot resolve without
+information only they have. Batch those into one question at the end of the
+file, not one question per item.
+
+Everything else — duplicates, merges, contradictions with a clear winner,
+verifiable facts — you decide. If you are unsure whether an item qualifies,
+apply it and say in the report that you did and why; a wrong additive line is
+one `git revert` away, while a stalled review costs the whole backlog.
+
+### 4. Report per file, then move on
+
+After each file: counts by status (applied / edited / rejected), the reasoning
+for every rejection and every merge, and any item you escalated. Then record the
+decisions and continue to the next file without waiting for approval, unless you
+raised a question.
+
+---
+
 ## Step 2: Scan the Backlog (only if generating fresh without dream.py)
 
 If `dream.py` is unavailable and you need to generate manually:
@@ -220,7 +294,21 @@ Then tell the user:
   warnings, surface them to the user NOW, next to the affected item numbers — each
   warning names its item as `` `file` #N (title) ``. If the section is missing
   entirely, say so: the gate didn't run, so misroutes/duplicates were not checked.
-- **"Review the file and tell me: `all` / `none` / numbers like `1,3,5` or `1-12,16-20` / or `modify`"**
+**By the time you reach this step, Step 1c should have emptied the proposal.**
+The normal ending is a report, not a question: what you applied, what you merged
+and why, what you rejected and against which existing line, plus any questions
+you batched. Do not re-present resolved items for approval — the receipt and the
+git history are the review surface.
+
+Ask for a decision list only in the two cases where Step 1c legitimately cannot
+finish:
+
+- the user asked to review everything (`/dream-remember review`), or
+- items remain that are genuine policy calls — then ask about **those items
+  only**, quoting them inline, never the whole proposal.
+
+In the first case: **"Review the file and tell me: `all` / `none` / numbers like
+`1,3,5` or `1-12,16-20` / or `modify`"**.
 
 Do NOT dump the full proposal into chat. Tell the user where the file is so they can open it.
 
