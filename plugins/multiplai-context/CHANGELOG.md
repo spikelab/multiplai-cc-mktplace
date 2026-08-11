@@ -18,6 +18,77 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.46.0] - 2026-08-11
+
+### Added
+
+- `/dream-remember` now **decides the post-triage remainder itself** instead of
+  handing it back as a review queue. A new resolve pass works one target file at
+  a time: it rejects corpus duplicates, merges within-batch repeats into a single
+  entry, settles contradictions on source date and specificity, and verifies
+  checkable claims against the actual source before writing them. You are asked
+  only about genuine policy calls — batched into one question per file, not one
+  per item. On a 583-item backlog this was the difference between a walk that
+  gets abandoned partway and one that finishes.
+
+  **What the resolve pass may never apply, whatever it decides:** `kind: RULE`
+  items under any provenance (including a correction from you, and including
+  every item with no `**Provenance:**` pair, which reads as `INFERENCE`/`RULE`),
+  `[RULE-PROPOSAL]` items, and anything targeting a `CLAUDE.md`/`AGENTS.md` or
+  revising an existing line. Those still come to you. The resolve pass writes
+  with the editor rather than through `dream.py`, so the in-code floor that
+  refuses them does not run on its writes — the restriction has to hold by
+  instruction, and it is now stated where the decision is made. The pass is
+  skipped entirely under `memory_write_mode: review` and `/dream-remember
+  review`, which mean nothing is applied without you.
+
+  The `## Routing Warnings` gate is also read **before** anything is applied,
+  not after. It moved to the start of the resolve pass; Step 3 now reports what
+  it held and what was done about each warning.
+- `dream_prescreen.py` — shows the reviewer which pending items look like they
+  already exist somewhere in the corpus: every memory file, the **always-loaded
+  `CLAUDE.md` files** (the global one under `$CLAUDE_CONFIG_DIR`, the workspace
+  one), and the **shared memory banks**. The drafter is shown none of those, so
+  it re-proposed their rules on every run.
+
+  It prints **one line per lead** — score, item, and the corpus location to
+  open — because it runs inside the review whose context window it exists to
+  protect. Measured on the real 602-item backlog against a 4,922-line corpus:
+  31 KB of leads, 2.6s. Printing every item with its body and neighbours,
+  which is what `--verbose` still does, costs 412 KB (~103k tokens). An item
+  whose insert text does not parse is reported `UNSCREENABLE`, never as a
+  clean 0.00.
+
+  It screens on symmetric Jaccard over content words (`lib.conflict_edits`),
+  the measure that module already calibrates, rather than a new one. That was
+  chosen by measurement, not taste: scoring the 602 items against memory after
+  consolidation (they are in there) and against memory one commit before (they
+  are not) separates 316 true from 25 false at threshold 0.35, where a
+  containment measure separates 523 from 417.
+
+### Changed
+
+- **The routing gate's dedup half now screens the always-loaded `CLAUDE.md`
+  files and the shared memory banks**, not just the memory files. A proposed
+  line that restates one of those is flagged in `## Routing Warnings` as
+  *"already present in an ALWAYS-LOADED file"* at draft time. Those files are
+  dedup evidence only — they never join the H2 section registry, so an ordinary
+  heading in a `CLAUDE.md` cannot become a phantom misroute. Gate runtime on the
+  602-item proposal is unchanged at 0.1s (the per-file n-gram index is now
+  cached instead of being rebuilt once per entry).
+- Step 3 no longer opens with "review the file and tell me `all`/`none`/numbers".
+  The normal ending is a report of what was applied, merged, and rejected, with
+  the reasoning. The decision-list prompt remains for an explicit
+  `/dream-remember review`, for the item classes the resolve pass may not apply,
+  and for the specific items that need a policy call.
+
+### Fixed
+
+- Picking "the" pending proposal is now one implementation, in
+  `lib.dream_processed.latest_pending_proposal`, and it selects by **mtime**.
+  Lexical order picks the *oldest* same-day proposal, because a re-run's `-2`
+  suffix sorts before the base name (`-` is 0x2D, `.` is 0x2E).
+
 ## [0.45.0] - 2026-08-11
 
 ### Changed

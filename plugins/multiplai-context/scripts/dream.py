@@ -59,6 +59,7 @@ from lib.dream_processed import (
     PROCESSED_HEADING,
     Decision,
     has_pending_items,
+    latest_pending_proposal as _latest_pending_proposal,
     mark_many_processed,
     mark_processed,
 )
@@ -1297,11 +1298,30 @@ def _with_routing_warnings(proposal: str, memory_contents: dict[str, str]) -> st
     Fail-open + loud: a crash in the gate must never lose a generated proposal —
     log the failure and return the proposal unvalidated. Never rewrites entries;
     the human reviewing via dream-remember stays the gate.
+
+    The dedup half additionally screens against the always-loaded ``CLAUDE.md``
+    files and the shared memory banks (``lib.memory_corpus``). The drafter is
+    shown neither, so rules living there were re-proposed on every run; those
+    files are evidence only and never join the section registry.
     """
     try:
         from lib.routing_validation import validate_proposal, render_warnings_section
 
-        warnings = validate_proposal(proposal, memory_contents)
+        try:
+            from lib import memory_corpus
+            dedup_extra = memory_corpus.extra_contents(get_paths())
+            if dedup_extra:
+                logger.info(
+                    "Dedup corpus extended with %d always-loaded/bank file(s): %s",
+                    len(dedup_extra), ", ".join(sorted(dedup_extra)),
+                )
+        except Exception:
+            # A missing CLAUDE.md or a malformed bank config must narrow the
+            # evidence, never lose the proposal.
+            logger.exception("Could not read the always-loaded corpus — dedup runs on memory files only")
+            dedup_extra = {}
+
+        warnings = validate_proposal(proposal, memory_contents, dedup_extra=dedup_extra)
         if warnings:
             logger.warning(
                 "Routing validation flagged %d issue(s):\n%s",
@@ -2215,19 +2235,11 @@ async def dream_auto() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _latest_pending_proposal(dreams_dir: Path) -> Path | None:
-    """Newest pending proposal in the dreams root, by mtime.
-
-    Root only — ``applied/``, ``rejected/`` and ``superseded/`` hold decided
-    proposals. By mtime and not by name: a same-day re-run writes ``-2``,
-    ``-3``… which is newer but sorts *before* the base name.
-    """
-    if not dreams_dir.exists():
-        return None
-    candidates = [p for p in dreams_dir.glob("processed-learnings-*.md") if p.is_file()]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+# ``_latest_pending_proposal`` is imported from ``lib.dream_processed`` at the
+# top of this module. The rule — newest by **mtime**, root only — lives there so
+# every tool that picks "the" proposal (triage here, the reviewer's pre-screen)
+# resolves the same file; a same-day ``-2`` re-run sorts *before* the base name,
+# so lexical order picks the oldest.
 
 
 # ---------------------------------------------------------------------------
