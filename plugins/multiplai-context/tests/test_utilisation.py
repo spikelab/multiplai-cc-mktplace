@@ -623,8 +623,10 @@ class TestDiaryOutputIsNotDegraded:
         # answer is "not estimated" rather than "estimated at zero".
         assert claims is None
 
-    def test_the_legacy_two_value_entry_point_still_works(self):
-        from lib.extraction import extract_units_and_disposition
+    def test_the_units_only_entry_point_rides_the_same_call(self):
+        """extract_units delegates to extract_session_signals — one model
+        response serves both shapes (the two-value middle layer is gone)."""
+        from lib.extraction import extract_units
 
         client = MagicMock()
 
@@ -632,10 +634,9 @@ class TestDiaryOutputIsNotDegraded:
             return MagicMock(content=self.RESPONSE)
 
         client.query = query
-        units, disposition = asyncio.run(extract_units_and_disposition(
+        units = asyncio.run(extract_units(
             "transcript", valid_targets=["dev.md"], client=client))
         assert len(units) == 2
-        assert disposition["state"] == "done"
 
 
 # --- prompt shape -----------------------------------------------------------

@@ -96,9 +96,9 @@ class LongChatHarness:
         self.stop_outputs: list[str] = []
         self.spawned: list[dict] = []
         self._run_agent = run_agent
-        # Route _spawn_writer to a synchronous in-process writer run, like the
+        # Route cp.spawn_writer to a synchronous in-process writer run, like the
         # detached subprocess but deterministic for the test.
-        monkeypatch.setattr(session_stop, "_spawn_writer", self._sync_writer)
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", self._sync_writer)
 
     # -- simulated detached writer ------------------------------------------
     def _sync_writer(self, payload):

@@ -741,41 +741,30 @@ def session_hostname() -> str:
     return _hostname_key()
 
 
-def marker_name(cwd: str, hostname: str | None = None) -> str:
-    """Filename for the pending marker of *cwd*'s project on this host.
+def _marker_path(pdir: Path, project: str, host: str) -> Path:
+    """The pending-marker file for a ``(project, host)`` key.
+
+    **The one statement of the marker naming rule** — it used to be written
+    three times (two public name builders plus inline f-strings in the
+    write/consume paths), which is exactly how naming rules drift apart.
 
     Keyed by project **and** hostname. Project alone was the bug: two windows
     open on the same project share one marker file and the last writer wins,
     so on 2026-08-08 a second DolceBot window crossing its token band
     overwrote the pointer of the window that was about to be ``/clear``-ed,
     and the cleared window was rebuilt from the other one's checkpoint.
+    ``hostname`` is the discriminator because the registry already records it
+    (``$HOSTNAME``, the container name in kit containers) and because
+    ``/clear`` keeps the same container. It separates windows only where one
+    window means one container — on vanilla Claude Code ``$HOSTNAME`` is the
+    machine, so every window on a project still shares one key; keying on
+    hostname is strictly better than project alone in both setups, not a
+    general fix.
 
-    ``hostname`` is the discriminator because it is the one the registry
-    already records (``session_registry._hostname`` → ``$HOSTNAME``, the
-    container name in kit containers) and because ``/clear`` keeps the same
-    container — verified in the field: sessions ``24c0a766`` and ``2e29e3cb``
-    are the pre- and post-``/clear`` halves of one tab and share hostname
-    ``claude-work-04221854``. A window in a *different* container therefore
-    cannot clobber this one's pointer, and the window that was cleared still
-    finds its own.
-
-    **This separates windows only where one window means one container** — the
-    kit, where each session gets its own OrbStack container. On vanilla Claude
-    Code ``$HOSTNAME`` is the machine, so every window on a project shares one
-    key and the clobbering described above is unchanged there. Fixing that
-    needs a per-window id the hook layer does not currently expose; keying on
-    hostname is strictly better than keying on project alone in both setups,
-    and it is not a general fix.
-
-    Falls back to the legacy ``<project>.json`` when the hostname is unknown.
-
-    Prefer :func:`session_marker_name` wherever a session id is in hand: both
-    halves of this key are properties of the SESSION, and neither survives
-    being re-derived from the writing process (see that function).
+    An empty *host* falls back to the legacy ``<project>.json`` name, so a
+    marker written where the hostname cannot be read is still claimable.
     """
-    host = _sanitize_key(hostname) if hostname is not None else _hostname_key()
-    key = _project_key(cwd)
-    return f"{key}__{host}.json" if host else f"{key}.json"
+    return pdir / (f"{project}__{host}.json" if host else f"{project}.json")
 
 
 def _registry_identity(data_dir: Path, session_id: str) -> dict:
@@ -797,14 +786,14 @@ def _registry_identity(data_dir: Path, session_id: str) -> dict:
     return entry if isinstance(entry, dict) else {}
 
 
-def session_marker_name(
+def _session_key_parts(
     data_dir: Path, session_id: str, cwd: str, hostname: str | None = None
-) -> str:
-    """Marker filename for *session_id*, keyed by the session's OWN identity.
+) -> tuple[str, str]:
+    """``(project, host)`` marker key for *session_id*; ``host`` may be "".
 
-    :func:`marker_name` derives both halves of the key from the calling
-    process — ``cwd`` for the project, ``$HOSTNAME`` for the container — and
-    each of those is wrong for a different caller:
+    Keyed by the session's OWN identity, never re-derived from the calling
+    process — each half of a process-derived key is wrong for a different
+    caller:
 
     * **Project (#183).** Claude Code's ``cwd`` follows shell navigation, so a
       session rooted at the workspace that does some work inside a sub-repo
@@ -822,14 +811,6 @@ def session_marker_name(
     explicit *hostname* (the queued payload carries the session's own),
     then the registry entry, then this process's environment.
     """
-    project, host = _session_key_parts(data_dir, session_id, cwd, hostname)
-    return f"{project}__{host}.json" if host else f"{project}.json"
-
-
-def _session_key_parts(
-    data_dir: Path, session_id: str, cwd: str, hostname: str | None = None
-) -> tuple[str, str]:
-    """``(project, host)`` for :func:`session_marker_name`; ``host`` may be ""."""
     entry = _registry_identity(data_dir, session_id)
     project = _sanitize_key(str(entry.get("project") or "")) or _project_key(cwd)
     host = _sanitize_key(hostname) if hostname else ""
@@ -858,7 +839,7 @@ def write_pending_marker(
     pdir = _pending_dir(data_dir)
     pdir.mkdir(parents=True, exist_ok=True)
     project, host = _session_key_parts(data_dir, session_id, cwd, hostname)
-    marker = pdir / (f"{project}__{host}.json" if host else f"{project}.json")
+    marker = _marker_path(pdir, project, host)
     payload = {
         "session_id": session_id,
         "cwd": cwd,
@@ -903,9 +884,9 @@ def consume_pending_marker(
     """
     pdir = _pending_dir(data_dir)
     project, host = _session_key_parts(data_dir, new_session_id, cwd)
-    marker = pdir / (f"{project}__{host}.json" if host else f"{project}.json")
+    marker = _marker_path(pdir, project, host)
     if not marker.exists():
-        legacy = pdir / f"{project}.json"
+        legacy = _marker_path(pdir, project, "")
         marker = legacy if legacy != marker and legacy.exists() else marker
     if not marker.exists():
         return None

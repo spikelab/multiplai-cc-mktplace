@@ -298,13 +298,6 @@ class TestImportsResolve:
         assert hasattr(mod, "_rank_memory_files"), \
             "context_manager must expose _rank_memory_files"
 
-    def test_context_manager_exposes_read_memory(self):
-        """WHEN context_manager is imported
-        THEN it exposes _read_memory_files."""
-        mod = _import_context_manager()
-        assert hasattr(mod, "_read_memory_files"), \
-            "context_manager must expose _read_memory_files"
-
     def test_context_manager_exposes_read_top(self):
         """WHEN context_manager is imported
         THEN it exposes _read_top_memory_files."""
@@ -375,7 +368,6 @@ class TestNoFunctionalChange:
             "RankedFile",
             "_iter_markdown_files",
             "_rank_memory_files",
-            "_read_memory_files",
             "_read_top_memory_files",
         ]
         for name in expected_names:
@@ -397,15 +389,15 @@ class TestNoFunctionalChange:
         assert isinstance(ranked, list)
         assert len(ranked) == 2
 
-    def test_read_memory_files_still_works(self, tmp_path):
-        """WHEN context_manager._read_memory_files is called
+    def test_read_top_memory_files_returns_contents(self, tmp_path):
+        """WHEN context_manager._read_top_memory_files is called
         THEN it returns a dict of filename->content."""
         mem_dir = tmp_path / "memory"
         mem_dir.mkdir()
         (mem_dir / "me.md").write_text("# About Me\nI am a developer.")
 
         mod = _import_context_manager()
-        result = mod._read_memory_files(mem_dir)
+        result = mod._read_top_memory_files(mem_dir)
         assert isinstance(result, dict)
         assert "me.md" in result
         assert "About Me" in result["me.md"]
@@ -424,22 +416,22 @@ class TestNoFunctionalChange:
         assert len(result) <= 3
 
     def test_empty_memory_dir_returns_empty_dict(self, tmp_path):
-        """WHEN _read_memory_files is called on empty dir
+        """WHEN _read_top_memory_files is called on empty dir
         THEN it returns empty dict."""
         mem_dir = tmp_path / "empty_memory"
         mem_dir.mkdir()
 
         mod = _import_context_manager()
-        result = mod._read_memory_files(mem_dir)
+        result = mod._read_top_memory_files(mem_dir)
         assert result == {}
 
     def test_missing_memory_dir_returns_empty_dict(self, tmp_path):
-        """WHEN _read_memory_files is called on nonexistent dir
+        """WHEN _read_top_memory_files is called on nonexistent dir
         THEN it returns empty dict without raising."""
         nonexistent = tmp_path / "does_not_exist"
 
         mod = _import_context_manager()
-        result = mod._read_memory_files(nonexistent)
+        result = mod._read_top_memory_files(nonexistent)
         assert result == {}
 
     def test_main_entrypoint_guard_present(self):

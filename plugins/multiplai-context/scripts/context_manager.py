@@ -130,21 +130,6 @@ def _rank_memory_files(memory_dir: Path) -> list[RankedFile]:
     return ranked
 
 
-def _read_memory_files(memory_dir: Path) -> dict[str, str]:
-    """Read all markdown memory files from *memory_dir*.
-
-    Returns a dict mapping filename to content.  Missing or unreadable
-    files are silently skipped.
-    """
-    result: dict[str, str] = {}
-    for f in _iter_markdown_files(memory_dir):
-        try:
-            result[f.name] = f.read_text()
-        except Exception:
-            logger.warning("Failed to read memory file: %s", f)
-    return result
-
-
 def _read_top_memory_files(
     memory_dir: Path,
     *,

@@ -81,14 +81,14 @@ def _run_stop(monkeypatch, capsys, payload):
 class TestSessionStopCheckpoint:
     def test_below_band_no_spawn(self, tmp_path, data_env, monkeypatch, capsys):
         rec = _SpawnRecorder()
-        monkeypatch.setattr(session_stop, "_spawn_writer", rec)
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", rec)
         out = _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 60_000))
         assert rec.payloads == []
         assert out.strip() == ""
 
     def test_band_crossing_spawns_writer(self, tmp_path, data_env, monkeypatch, capsys):
         rec = _SpawnRecorder()
-        monkeypatch.setattr(session_stop, "_spawn_writer", rec)
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", rec)
         _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 110_000))
         assert len(rec.payloads) == 1
         assert rec.payloads[0]["reason"] == "band"
@@ -98,14 +98,14 @@ class TestSessionStopCheckpoint:
 
     def test_inflight_writer_not_respawned(self, tmp_path, data_env, monkeypatch, capsys):
         rec = _SpawnRecorder()
-        monkeypatch.setattr(session_stop, "_spawn_writer", rec)
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", rec)
         cp.claim_writer(data_env, "sess-1")
         _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 110_000))
         assert rec.payloads == []
 
     def test_handoff_emits_system_message_only(self, tmp_path, data_env, monkeypatch, capsys):
         rec = _SpawnRecorder()
-        monkeypatch.setattr(session_stop, "_spawn_writer", rec)
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", rec)
         out = _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 210_000))
         frame = json.loads(out)
         assert "systemMessage" in frame
@@ -114,7 +114,7 @@ class TestSessionStopCheckpoint:
         assert "decision" not in frame
 
     def test_handoff_nudge_cooldown(self, tmp_path, data_env, monkeypatch, capsys):
-        monkeypatch.setattr(session_stop, "_spawn_writer", _SpawnRecorder())
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", _SpawnRecorder())
         out1 = _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 210_000))
         assert "systemMessage" in out1
         # Marginal growth below refresh step → silent
@@ -126,7 +126,7 @@ class TestSessionStopCheckpoint:
 
     def test_child_session_ignored(self, tmp_path, data_env, monkeypatch, capsys):
         rec = _SpawnRecorder()
-        monkeypatch.setattr(session_stop, "_spawn_writer", rec)
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", rec)
         sub = tmp_path / "subagents"
         sub.mkdir()
         payload = {
@@ -141,7 +141,7 @@ class TestSessionStopCheckpoint:
     def test_disabled_config_noop(self, tmp_path, data_env, monkeypatch, capsys):
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_ENABLED", "false")
         rec = _SpawnRecorder()
-        monkeypatch.setattr(session_stop, "_spawn_writer", rec)
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", rec)
         out = _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 210_000))
         assert rec.payloads == []
         assert out.strip() == ""
@@ -152,7 +152,7 @@ class TestSessionStopCheckpoint:
         assert "decision" not in capsys.readouterr().out
 
     def test_spawn_failure_releases_marker(self, tmp_path, data_env, monkeypatch, capsys):
-        monkeypatch.setattr(session_stop, "_spawn_writer", lambda p: False)
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", lambda p: False)
         _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 110_000))
         assert cp.writer_inflight(data_env, "sess-1") is False
 
@@ -317,7 +317,7 @@ class TestAutoModeNudgeSuppression:
     def test_stop_hook_silent_in_auto_mode(self, tmp_path, data_env, monkeypatch, capsys):
         monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
         monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")  # trigger 207K
-        monkeypatch.setattr(session_stop, "_spawn_writer", _SpawnRecorder())
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", _SpawnRecorder())
         out = _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 210_000))
         assert out.strip() == ""  # compaction imminent — no nag
 
@@ -326,7 +326,7 @@ class TestAutoModeNudgeSuppression:
     ):
         monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
         monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
-        monkeypatch.setattr(session_stop, "_spawn_writer", _SpawnRecorder())
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", _SpawnRecorder())
         out = _run_stop(monkeypatch, capsys, _stop_payload(tmp_path, 240_000))
         frame = json.loads(out)
         assert "auto-compaction" in frame["systemMessage"]

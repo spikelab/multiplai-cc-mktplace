@@ -42,16 +42,6 @@ from lib.hook_input import read_hook_input
 logger = setup_logging("session_stop")
 
 
-def _spawn_writer(payload: dict) -> bool:
-    """Launch the detached checkpoint writer (never awaited).
-
-    Thin alias over :func:`lib.checkpoint.spawn_writer`, which is where the
-    spawn moved so ``session_end.py`` can make the identical call on
-    ``/clear``. Kept as a name here because the tests patch it.
-    """
-    return cp.spawn_writer(payload)
-
-
 def _degraded_file(data_dir: Path, session_id: str) -> Path:
     # Same reasoning as _nudge_file: the detached writer owns state.json, so
     # this hook keeps its "have I already said this?" bookkeeping beside it,
@@ -182,7 +172,9 @@ def _checkpoint_pass(hook_input: dict, data_dir: Path) -> str | None:
 
     if reason and not cp.writer_inflight(data_dir, session_id):
         cp.claim_writer(data_dir, session_id)
-        spawned = _spawn_writer(
+        # cp.spawn_writer directly — the spawn lives in lib.checkpoint so
+        # session_end.py makes the identical call on /clear.
+        spawned = cp.spawn_writer(
             {
                 "session_id": session_id,
                 "transcript_path": transcript_path,

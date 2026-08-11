@@ -542,18 +542,6 @@ class TokenOverlapRouter:
         """
         return self._scored_pairs(text, catalog_entries)
 
-    def _score_corpus(
-        self,
-        prompt: str,
-        catalog_entries: list[dict],
-        *,
-        max_files: int,
-    ) -> list[str]:
-        # Pure rank+cap by contract — the eligibility set is ignored
-        # here; only select_multi's policy path gates on it.
-        scored, _ = self._scored_pairs(prompt, catalog_entries)
-        return [filename for _, filename in scored[:max_files]]
-
     def _scored_pairs(
         self,
         prompt: str,

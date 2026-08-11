@@ -83,31 +83,48 @@ def _log_client_selection() -> str:
     return client_type
 
 
+def _last_run_from(state_file: Path) -> datetime | None:
+    """The aware ``last_run`` timestamp in *state_file*, or None.
+
+    The one implementation of "load YAML → read last_run → parse" that four
+    gates used to restate separately. None means "no usable record" —
+    missing file, unreadable YAML, absent or garbage timestamp — which every
+    caller treats as gate-open (first run or recovery): the failure mode of
+    an extra pass is small, of a wedged gate is a job that silently never
+    runs again.
+    """
+    try:
+        state = load_yaml(state_file) or {}
+    except Exception:
+        logger.warning("Could not read state %s; treating as no record", state_file)
+        return None
+    last_run = state.get("last_run")
+    if not last_run:
+        return None
+    try:
+        last_dt = datetime.fromisoformat(str(last_run))
+    except (ValueError, TypeError):
+        return None
+    return last_dt if last_dt.tzinfo else last_dt.replace(tzinfo=timezone.utc)
+
+
+def _gate_open(state_file: Path, delta: timedelta) -> bool:
+    """True when *state_file*'s ``last_run`` is missing/unusable or older
+    than *delta* — the shared shape of every last-run gate here."""
+    last_dt = _last_run_from(state_file)
+    if last_dt is None:
+        return True
+    return datetime.now(timezone.utc) - last_dt >= delta
+
+
 def _dream_gate_open(dream_state_file: Path) -> bool:
     """Return True when >=24h have passed since the last dream run.
 
     Missing state or an unparseable timestamp is treated as gate-open
-    (first run or recovery). Any YAML parse failure is swallowed — a
-    corrupt state file shouldn't block session start; the user can
-    recover by running ``/multiplai-context:dream`` manually.
+    (first run or recovery) — the user can always recover by running
+    ``/multiplai-context:dream`` manually.
     """
-    try:
-        state = load_yaml(dream_state_file) or {}
-    except Exception:
-        logger.warning("Could not read dream state %s; treating gate as open", dream_state_file)
-        return True
-
-    last_run = state.get("last_run")
-    if not last_run:
-        return True
-
-    try:
-        last_dt = datetime.fromisoformat(last_run)
-    except (ValueError, TypeError):
-        return True
-    if last_dt.tzinfo is None:
-        last_dt = last_dt.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - last_dt >= timedelta(hours=_DREAM_GATE_HOURS)
+    return _gate_open(dream_state_file, timedelta(hours=_DREAM_GATE_HOURS))
 
 
 def _config_audit_gate_open(config_audit_state_file: Path) -> bool:
@@ -147,27 +164,8 @@ def _config_audit_gate_open(config_audit_state_file: Path) -> bool:
             )
         return False
 
-    try:
-        state = load_yaml(config_audit_state_file) or {}
-    except Exception:
-        logger.warning(
-            "Could not read config-audit state %s; treating gate as open",
-            config_audit_state_file,
-        )
-        return True
-
-    last_run = state.get("last_run")
-    if not last_run:
-        return True
-
-    try:
-        last_dt = datetime.fromisoformat(last_run)
-    except (ValueError, TypeError):
-        return True
-    if last_dt.tzinfo is None:
-        last_dt = last_dt.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - last_dt >= timedelta(
-        days=_CONFIG_AUDIT_GATE_DAYS
+    return _gate_open(
+        config_audit_state_file, timedelta(days=_CONFIG_AUDIT_GATE_DAYS)
     )
 
 
@@ -194,21 +192,9 @@ def _learnings_pending(learnings_dir: Path, dream_state_file: Path) -> bool:
     if not mtimes:
         return False
 
-    try:
-        state = load_yaml(dream_state_file) or {}
-    except Exception:
+    last_dt = _last_run_from(dream_state_file)
+    if last_dt is None:
         return True
-
-    last_run = state.get("last_run")
-    if not last_run:
-        return True
-
-    try:
-        last_dt = datetime.fromisoformat(last_run)
-    except (ValueError, TypeError):
-        return True
-    if last_dt.tzinfo is None:
-        last_dt = last_dt.replace(tzinfo=timezone.utc)
 
     newest = datetime.fromtimestamp(max(mtimes), tz=timezone.utc)
     return newest > last_dt
@@ -270,6 +256,24 @@ def _inject_project_state(now_dir: Path, cwd: str) -> bool:
         return False
 
 
+def _spawn_detached(script: Path, *args: str) -> None:
+    """Launch *script* detached under the plugin's uv project, fire-and-forget.
+
+    The one spawn shape all four session-start children share: detached
+    (``start_new_session`` — a SessionStart hook is kill-within-seconds and
+    these children take minutes), all three stdio streams closed off (they
+    are unattended; a child that blocks on stdin or fills a pipe would hang
+    invisibly). Callers own their gating and their logging.
+    """
+    subprocess.Popen(
+        uv_run_argv(script, *args),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
 def _launch_qmd_refresh(scripts_dir: Path, cwd: str) -> bool:
     """Fire the incremental qmd index refresh, detached, when the qmd
     resources backend is active.
@@ -295,12 +299,7 @@ def _launch_qmd_refresh(scripts_dir: Path, cwd: str) -> bool:
         if not script.exists():
             return False
         workspace = cwd or str(Path(cfg.resources_dir).expanduser().parent)
-        subprocess.Popen(
-            uv_run_argv(script, workspace),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        _spawn_detached(script, workspace)
         logger.info("Launched detached qmd refresh (workspace=%s)", workspace)
         return True
     except Exception:
@@ -330,12 +329,7 @@ def _launch_cost_collection(scripts_dir: Path) -> bool:
         script = scripts_dir / "collect_costs.py"
         if not script.exists():
             return False
-        subprocess.Popen(
-            uv_run_argv(script),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        _spawn_detached(script)
         logger.info("Launched detached cost collection")
         return True
     except Exception:
@@ -352,26 +346,9 @@ def _maintainer_gate_open(maintainer_state_file: Path) -> bool:
     drag all of that into the hook process. The gate is a timestamp comparison
     — cheap to state twice, and the child re-checks authoritatively anyway, so
     a disagreement costs at most one no-op child.
-
-    Fail-open on missing/corrupt state, matching the maintainer: the failure
-    mode of an extra pass is a few cents, of a wedged gate is maintenance that
-    silently never runs again.
     """
-    try:
-        state = load_yaml(maintainer_state_file) or {}
-    except Exception:
-        return True
-    last_run = state.get("last_run")
-    if not last_run:
-        return True
-    try:
-        last_dt = datetime.fromisoformat(str(last_run))
-    except (TypeError, ValueError):
-        return True
-    if last_dt.tzinfo is None:
-        last_dt = last_dt.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - last_dt >= timedelta(
-        hours=_MAINTAINER_GATE_HOURS
+    return _gate_open(
+        maintainer_state_file, timedelta(hours=_MAINTAINER_GATE_HOURS)
     )
 
 
@@ -393,13 +370,7 @@ def _launch_bank_sync(scripts_dir: Path) -> bool:
         script = scripts_dir / "memory_bank.py"
         if not script.exists():
             return False
-        subprocess.Popen(
-            uv_run_argv(script, "sync", "--quiet"),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        _spawn_detached(script, "sync", "--quiet")
         logger.info("Launched detached memory-bank sync")
         return True
     except Exception:
@@ -428,13 +399,7 @@ def _launch_maintainer(scripts_dir: Path, data_dir: Path) -> bool:
         script = scripts_dir / "memory_maintainer.py"
         if not script.exists():
             return False
-        subprocess.Popen(
-            uv_run_argv(script),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        _spawn_detached(script)
         return True
     except Exception:
         logger.warning("Could not launch memory maintainer", exc_info=True)
