@@ -9,11 +9,14 @@ Runs the Dream analysis pipeline: reads all pending learnings from `.multiplai/l
 distills them into a structured proposal (a two-pass generate-then-critic flow), and writes
 it to `.multiplai/dreams/processed-learnings-YYYY-MM-DD.md`.
 
-The proposal sorts every learning into one of three dispositions:
+The proposal sorts every learning into one of two dispositions:
 - **Memory updates** — generalized, reusable lessons, grouped by target memory file.
-- **Action Items** — change-requests to the toolchain itself (code/config/structure);
-  `/multiplai-context:dream-remember` writes approved ones to `PLANS/dream-actions-{date}.md`.
-- **Filtered Out** — one-off events / diary material, with a reason.
+- **Filtered Out** — one-off events / diary material, and change-requests to the toolchain
+  itself (code/config/structure), each with a reason. Toolchain change-requests are dropped
+  rather than filed: a change worth making gets made.
+
+Memory updates are numbered `1..N` continuously across every target file, so a reviewer can
+say "skip 14" without naming the file it sits under.
 
 Three deterministic sections wrap the model's own output. Each is pure code, and
 each fails open — a missing section means that gate did not run, which is itself

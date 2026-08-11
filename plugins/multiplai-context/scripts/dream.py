@@ -636,33 +636,34 @@ You are a memory consolidation analyst for a personal Claude Code memory system.
 
 ## The one thing to understand
 
-Every learning has exactly ONE of three dispositions. Choosing correctly IS the job:
+Every learning has exactly ONE of two dispositions. Choosing correctly IS the job:
 
-- DIARY (already recorded elsewhere) — WHAT HAPPENED: facts, events, decisions, fixes, in
-  chronological order. Never duplicate it → these get FILTERED OUT.
-- MEMORY (what you mostly write to) — GENERALIZED, REUSABLE KNOWLEDGE: guidance that changes
-  how a FUTURE, DIFFERENT task is done.
-- ACTION ITEM — a concrete change the TOOLCHAIN ITSELF should make to its own code, config,
-  or structure (the memory/dream/plugin system, file layout, scripts). This is engineering
-  work, NOT knowledge to remember. It goes in its own section and does NOT become memory.
+- MEMORY (what you write to) — GENERALIZED, REUSABLE KNOWLEDGE: guidance that changes how a
+  FUTURE, DIFFERENT task is done.
+- FILTERED OUT — everything else, each under a bold reason heading. Two kinds dominate:
+  - DIARY (already recorded elsewhere) — WHAT HAPPENED: facts, events, decisions, fixes, in
+    chronological order. Never duplicate it.
+  - **Toolchain change-request** — a concrete change the TOOLCHAIN ITSELF should make to its
+    own code, config, or structure (the memory/dream/plugin system, file layout, scripts).
+    That is engineering work, not knowledge to remember. It is not tracked anywhere: a change
+    worth making gets made. Filter it out with that reason so the reviewer still sees it.
 
 Your job is NOT to log this session. It is to DISTILL the pending learnings: most are diary
-(drop), some are reusable knowledge (memory), a few are change-requests to the system (action
-items). A learning that only says "X happened" / "we decided Y" / "fixed Z" is diary — drop
-it unless it contains a general lesson you can lift out.
+(drop), some are reusable knowledge (memory). A learning that only says "X happened" / "we
+decided Y" / "fixed Z" is diary — drop it unless it contains a general lesson you can lift out.
 
-The MEMORY-vs-ACTION-ITEM cut: if a learning says the system *should be changed* ("split these
-files", "delete this orphan", "this script should also check X"), the change is an ACTION ITEM.
-Then ask whether it ALSO carries a general principle that outlives the change — one that would
-guide a DIFFERENT future situation after this task is done and forgotten:
+The MEMORY-vs-CHANGE-REQUEST cut: if a learning says the system *should be changed* ("split
+these files", "delete this orphan", "this script should also check X"), the change itself is
+never memory. Then ask whether it ALSO carries a general principle that outlives the change —
+one that would guide a DIFFERENT future situation after this task is done and forgotten:
 - NO — pure cleanup with no transferable rule (e.g. "delete this stale orphan file", "remove
-  this dead catalog reference") -> Action Item only, no memory.
+  this dead catalog reference") -> filter out, write nothing.
 - YES — e.g. "before making ANY repo public, scrub+rotate secrets and strip employer content"
   (useful for the next repo), or "split memory files by retrieval domain, not topic affinity"
-  (a design heuristic for the next file) -> BOTH: the principle as a memory entry AND the
-  concrete change as an action item.
+  (a design heuristic for the next file) -> keep the PRINCIPLE as a memory entry; the concrete
+  change is still filtered out.
 Memory is for knowledge that informs work, not a backlog of refactors — but a durable principle
-earns its memory place even when it also spawns a task.
+earns its memory place even when the change that revealed it is dropped.
 
 ## Generalization transform (apply to every candidate)
 
@@ -678,7 +679,8 @@ Strip the point-in-time scaffolding, keep the transferable rule:
 ## Litmus gate (decide keep vs filter)
 
 For each candidate ask, in order:
-1. "Does this ask the toolchain to change its own code/config/structure?" -> ACTION ITEM.
+1. "Does this ask the toolchain to change its own code/config/structure?" -> FILTER OUT under
+   **Toolchain change-request** (unless step 2 also finds a durable principle in it).
 2. "Facing a DIFFERENT but similar situation in the future, does this change what I'd do?"
    - YES, and it reads as transferable guidance -> KEEP (generalized) as memory.
    - It only records that something happened / was decided / was fixed -> FILTER OUT.
@@ -713,24 +715,23 @@ KEEP: "Always `git fetch` before checking ahead/behind counts or assuming sync w
 remote — local tracking refs go stale."
 (Dropped the multiplai-plugin framing; the lesson is general.)
 
-RAW: "Memory files covering multiple domains (career facts + career strategy) degrade
-routing precision — split memory files by retrieval domain, not topic affinity."
-ACTION ITEM only: "Delete the stale `.multiplai/memory/memory-catalog.json` orphan (the live
-catalog is `.multiplai/data/catalogs/memory.json`)."
-(Pure cleanup — no rule that outlives the deletion, so NO memory entry.)
+RAW: "Delete the stale `.multiplai/memory/memory-catalog.json` orphan (the live catalog is
+`.multiplai/data/catalogs/memory.json`)."
+FILTERED OUT under **Toolchain change-request**, no memory entry.
+(Pure cleanup — no rule that outlives the deletion.)
 
 RAW: "Mixed-domain memory files (career facts + career strategy) degrade routing precision —
 split memory files by retrieval domain, not topic affinity."
-BOTH — ACTION ITEM: "Split career-history vs career-strategy by retrieval domain." PLUS MEMORY
-(design heuristic, guides the next file too): "Split memory files by retrieval domain, not
-topic affinity — mixed-domain files degrade routing precision."
+MEMORY (design heuristic, guides the next file too): "Split memory files by retrieval domain,
+not topic affinity — mixed-domain files degrade routing precision."
+(The concrete "split career-history vs career-strategy" is a change-request and is filtered
+out; the heuristic behind it is what survives.)
 
 RAW: "Decision: scrub gho_ token from kit history + rotate before going public; remove
 scalestack skill (employer content)."
-BOTH — ACTION ITEMS: "Scrub gho_ token from kit history and rotate it"; "Remove scalestack
-skill from the public kit". PLUS MEMORY (general principle, outlives these one-time tasks):
-"Before making any repo public, scrub secrets from git history AND rotate them, and strip
-employer-specific content."
+MEMORY (general principle, outlives these one-time tasks): "Before making any repo public,
+scrub secrets from git history AND rotate them, and strip employer-specific content."
+(The two specific tasks are change-requests — filtered out.)
 
 ## Output format
 
@@ -750,17 +751,6 @@ Generated by Dream. Review with `/multiplai-context:dream-remember` to apply.
 **Provenance:** {PROVENANCE}/{KIND}
 > Exact text to insert (generalized, concise, ideally "When X, do Y")
 
-**Source:** {learnings_file}:{line-number(s)}
-
----
-
-## Action Items ({N} items)
-
-Changes the toolchain itself should make — NOT memory. Approved ones get written to PLANS/.
-
-### A{N}. {short imperative title}
-**What:** concrete change to make (file/script/config + the change), one or two lines.
-**Why:** the problem it fixes.
 **Source:** {learnings_file}:{line-number(s)}
 
 ---
@@ -839,13 +829,18 @@ routing knowledge is in those blocks — apply these generic principles to them:
 - Filter out: diary/event-only entries, finished-task residue, already-applied facts,
   one-time fixes with no general pattern, entries with no clear target file. List each
   dropped item on its own single line under its reason heading — one line, never more.
-- Route to Action Items any learning that calls for the toolchain to change its own
-  code/config/file-structure (A{N} numbering, **Source:** line, same provenance rules). Do NOT
-  mirror it as a memory entry UNLESS it also carries a general principle that outlives the
-  change (one that would guide a different future situation) — then keep BOTH: the principle as
-  memory, the concrete change as the action item. If the principle is just the action restated,
-  action only.
-- Omit the Action Items section entirely if there are none.
+- DROP — into Filtered Out, under the reason heading **Toolchain change-request** — any
+  learning that calls for the toolchain to change its own code/config/file-structure ("split
+  these files", "delete this orphan", "this script should also check X"). It is not memory and
+  it is not tracked anywhere: a change worth making gets made, and one that isn't doesn't need
+  a record. Keep it out of memory even so — a change-request filed as guidance tells a future
+  session to do work that may already be done.
+  The ONE exception: if it also carries a general principle that outlives the change (one that
+  would guide a different future situation), keep that principle as a memory entry. If the
+  principle is just the change restated, drop it and write nothing.
+- Number entries from 1 within your own output and do not worry about collisions with other
+  chunks. You are one of several parallel drafters and cannot see the others' counts; the merge
+  step assigns the final `1..N` sequence across the whole proposal.
 - Keep proposed text concise — one-line bullets over paragraphs. Memory costs tokens.
 - Never invent changes not supported by the learnings.
 """
@@ -1368,12 +1363,13 @@ DO keep durable reference facts — how a system is configured, stable identifie
 instance/secret names, ports), standing preferences. Those are not events; they inform future
 work. The target is records of things that HAPPENED or were DECIDED at a point in time.
 
-### 3. Reroute mis-filed action items
+### 3. Drop mis-filed toolchain change-requests
 
 If a memory '### N.' entry is really a change-request to the TOOLCHAIN's own code / config /
 file-structure ("split these files", "delete this orphan", "this script should also check X"),
-the change belongs in '## Action Items' — emit `TO-ACTION`. Do not move general knowledge
-that merely mentions the system.
+it is not memory — emit `DROP <file>#<n> toolchain change-request`. There is no destination
+file for these; a change worth making gets made. Do not drop general knowledge that merely
+mentions the system.
 
 ### 4. Fix catch-all mis-routing
 
@@ -1400,14 +1396,13 @@ two entries, not one.
 
 REPLACE <file>#<n> <new text for the entry>
 MOVE <file>#<n> -> <other.md>
-TO-ACTION <file>#<n>
 DROP <file>#<n> <reason>
 MERGE <file>#<n> <- <file>#<m>
 NOOP
 
 `<file>` is the target file named in the `## Updates for \\`file\\`` heading; `<n>` is the
-entry's `### N.` number within that file. For an action item use `ACTIONS` as `<file>` and
-its `A{N}` number as `<n>`.
+entry's `### N.` number. Numbers run continuously across the whole proposal, so `<n>` is
+unique on its own — but still name the file it appears under.
 
 ## Hard rules
 

@@ -128,9 +128,15 @@ def _parse_line(line: str) -> Directive | None:
         )
     m = _TO_ACTION_RE.match(line)
     if m:
+        # TO-ACTION is retired: there is no Action Items section to move an entry
+        # into any more. It is still *parsed* because the critic is a model, not a
+        # parser — it emitted this shape for months and a stray one must not create
+        # a section the reviewer is told cannot exist. Its meaning ("this is a
+        # toolchain change-request, not memory") is exactly DROP's, so it becomes
+        # one, carrying the reason the Filtered Out section needs.
         return Directive(
-            "TO-ACTION", m.group("file"), int(m.group("index")),
-            m.group("arg").strip() or None,
+            "DROP", m.group("file"), int(m.group("index")),
+            m.group("arg").strip() or "toolchain change-request",
         )
     m = _DROP_RE.match(line)
     if m:
@@ -528,23 +534,36 @@ def _append_to_actions(lines: list[str], block: list[str]) -> list[str]:
 
 
 def _renumber_all(lines: list[str]) -> list[str]:
-    """Renumber updates ``1..k`` per target file and actions ``A1..Ak``.
+    """Renumber updates ``1..N`` across the whole proposal, actions ``A1..Ak``.
 
-    Necessary after any DROP/MOVE/TO-ACTION: the reference the reviewer and the
-    hub resolve is ``(kind, target, index)``, and holes in the numbering make
-    two entries fight over one index the moment anything else is inserted.
+    Necessary after any DROP/MOVE/MERGE: the reference the reviewer and the hub
+    resolve is ``(kind, target, index)``, and holes in the numbering make two
+    entries fight over one index the moment anything else is inserted.
+
+    Updates share ONE counter across every ``## Updates for`` section, matching
+    what ``proposal_merge.merge_drafts`` produced before the critic ran. This
+    runs after every applied directive, so a per-section counter here would
+    silently restore per-file numbering on any proposal the critic touched —
+    i.e. on almost all of them. Actions keep their own ``A``-counter; there is
+    only ever one Action Items section, so the distinction does not arise.
     """
     out = list(lines)
+    update_n = 0
     for section in _sections(out):
-        pattern = _ENTRY_RE if section.kind == "update" else _ACTION_ENTRY_RE
         if section.kind == "other":
             continue
+        pattern = _ENTRY_RE if section.kind == "update" else _ACTION_ENTRY_RE
         prefix = "" if section.kind == "update" else "A"
-        n = 0
+        action_n = 0
         for i in range(section.head + 1, section.end):
             m = pattern.match(out[i])
             if m:
-                n += 1
+                if section.kind == "update":
+                    update_n += 1
+                    n = update_n
+                else:
+                    action_n += 1
+                    n = action_n
                 out[i] = f"### {prefix}{n}.{m.group('rest')}"
     return out
 

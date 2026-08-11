@@ -210,20 +210,22 @@ Items`). If a `## Processed` section exists, tell the user: "N item(s) already p
 Then tell the user:
 
 - The source file path and date
-- A one-line summary: e.g. "17 proposed updates across 5 files, plus 3 action items, from 8 learnings files"
-- If the proposal has a `## Action Items` section, mention the count — these are NOT memory;
-  approved ones get written to `PLANS/dream-actions-{date}.md` (handled in Step 4b).
+- A one-line summary: e.g. "17 proposed updates across 5 files, from 8 learnings files"
+- Entry numbers run `1..N` across the whole proposal, not per file — so `#14` names one entry
+  and the user never has to say the filename to refer to it.
+- Only a proposal generated before 2026-08-11 has a `## Action Items` section; if you see one,
+  see Step 4b.
 - **Check the `## Routing Warnings` section** (appended by dream.py's deterministic
   validation gate). If it says `(none)`, say "routing validation clean". If it lists
   warnings, surface them to the user NOW, next to the affected item numbers — each
   warning names its item as `` `file` #N (title) ``. If the section is missing
   entirely, say so: the gate didn't run, so misroutes/duplicates were not checked.
-- **"Review the file and tell me: `all` / `none` / numbers like `1,3,5` or `1-12,16-20` / `A1,A3` for action items / or `modify`"**
+- **"Review the file and tell me: `all` / `none` / numbers like `1,3,5` or `1-12,16-20` / or `modify`"**
 
 Do NOT dump the full proposal into chat. Tell the user where the file is so they can open it.
 
-Memory updates are numbered `N`; action items are numbered `A{N}`. The user can approve each
-set independently (e.g. `all` for memory, `A1,A2` for action items).
+Updates are numbered `1..N` across the whole proposal, not restarting per file. So a bare
+number is unambiguous — take `skip 14` at face value and never ask which file it means.
 
 ---
 
@@ -325,38 +327,20 @@ and answered one at a time (above). Only the recording is batched.
 
 ---
 
-## Step 4b: Write Approved Action Items to PLANS/
+## Step 4b: Legacy action items
 
-If the proposal has a `## Action Items` section, handle the user's approved `A{N}` items
-(`all`, an explicit `A1,A3` list, or `none`). Action items are NOT memory — they are work
-the toolchain should do, and must survive the Step 5 learnings cleanup, so they go to a
-tracked file.
+**Current proposals have no `## Action Items` section.** Dream stopped generating one: a
+change-request to the toolchain is not memory, and filing it as a task produced a directory
+of stale to-dos nobody worked from. Such learnings are now dropped into `## Filtered Out`
+under **Toolchain change-request**, and the reviewer sees them there.
 
-**Where `PLANS/` lives:** resolve it against the workspace root — the path in
-`$CLAUDE_CONFIG_DIR/.workspace` (with `CLAUDE_CONFIG_DIR` defaulting to the standard
-Claude config dir) — NOT the session cwd. If no workspace is configured (vanilla
-install), ask the user where to put action items before writing anything; suggest
-`~/.multiplai/PLANS/`. Never create a bare `PLANS/` directory wherever the session
-happens to be.
+Skip this step entirely unless you are re-reviewing a **proposal generated before
+2026-08-11**, which may still carry the section. There is no file to write in either case —
+`PLANS/` no longer exists. If an archived proposal does have action items, summarise them to
+the user and let them decide what to do; a change worth making gets made now, not filed.
 
-For each approved action item, append to `{workspace}/PLANS/dream-actions-{YYYY-MM-DD}.md`
-(create it if absent, today's date). Each entry as an unchecked task:
-
-```
-## Dream action items — {date}
-
-- [ ] {short imperative title}
-  - What: {concrete change}
-  - Why: {problem it fixes}
-  - Source: {learnings_file}:{line-number(s)}
-```
-
-If the file already exists for today, append new items under the same heading (don't
-duplicate the heading). Report the path and count to the user. Skip this step if there are no
-action items or the user approved `none`.
-
-Then **record every decided action item** (approved *and* rejected) in **one** call, same
-JSON shape as Step 4 with `"kind":"action"` and no `file`:
+Then, for a legacy proposal only, **record every decided action item** (approved *and*
+rejected) in **one** call, same JSON shape as Step 4 with `"kind":"action"` and no `file`:
 
 ```bash
 uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --mark-processed \
@@ -474,7 +458,6 @@ Print a brief summary:
 ✓ Applied N updates across M files
   - technical-pref.md: N updates
   - preferences.md: N updates
-✓ Wrote N action items to PLANS/dream-actions-{date}.md
 ✓ Collected N learnings files (M kept — reason)
 ✓ Archived proposal to .multiplai/dreams/applied/
 ⊘ Skipped N updates (items #X, #Y — not approved)

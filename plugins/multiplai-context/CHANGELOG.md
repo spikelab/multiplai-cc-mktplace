@@ -18,6 +18,52 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.45.0] - 2026-08-11
+
+### Changed
+
+- **Dream proposal entries are numbered `1..N` across the whole file.** They used
+  to restart at `1` under every `## Updates for` heading, so `#1` named as many
+  entries as you had target files and you had to say the filename out loud to
+  refer to one. Now a bare number identifies exactly one entry, and
+  `/multiplai-context:dream-remember` takes `skip 14` at face value.
+
+  This holds after the critic runs, not just at merge time. `_renumber_all` in
+  `lib/proposal_edits.py` re-sequences entries after every applied directive, so
+  a counter that reset per section there would have quietly restored per-file
+  numbering on any proposal the critic touched — nearly all of them.
+
+  Proposals generated before this version keep their old per-file numbering.
+  They are **not** renumbered on upgrade — a number is the identity the review
+  hub records decisions against, so rewriting it would move receipts that may
+  already be queued against an in-flight proposal.
+
+### Removed
+
+- **Action items are gone.** Dream no longer emits an `## Action Items` section,
+  and `/multiplai-context:dream-remember` no longer writes
+  `PLANS/dream-actions-{date}.md`. In practice that file was a directory of
+  stale to-dos nobody worked from: a change worth making gets made, and one that
+  isn't doesn't need a record.
+
+  The **disposition survives** — a learning that asks the toolchain to change its
+  own code, config, or file structure still never becomes memory. It is now
+  dropped into `## Filtered Out` under **Toolchain change-request**, so the
+  reviewer still sees it and still sees why. The one carve-out is unchanged: if
+  such a learning also carries a general principle that outlives the change, the
+  principle is kept as a memory entry.
+
+  Reviewing an archived proposal that predates this version still works — the
+  `A{N}` parsing and the `--kind action` decision path are retained for exactly
+  that. There is simply no file to write.
+
+  A `TO-ACTION` directive from the critic is now parsed as a `DROP` carrying the
+  reason `toolchain change-request`. The critic is a model rather than a parser
+  and emitted that shape for months; left alive it would have built an
+  `## Action Items` section into a fresh proposal, which the review skill now
+  says cannot exist. The dropped entry still appears in `## Filtered Out` with
+  its source citation inline, so nothing loses provenance.
+
 ## [0.44.0] - 2026-08-11
 
 Fixes from the 2026-08-10 hooks code review — every finding verified

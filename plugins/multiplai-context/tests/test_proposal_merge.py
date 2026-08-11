@@ -11,6 +11,8 @@ parsing behaviour rather than by importing ``dream.py``: the two must agree, and
 restating the contract here is what catches a drift in either direction.
 """
 
+import re
+
 from lib.proposal_merge import (
     count_entries,
     count_entries_in,
@@ -163,19 +165,35 @@ class TestNoLoss:
 
 
 class TestRenumbering:
-    def test_updates_restart_at_one_per_target_file(self):
+    def test_updates_number_continuously_across_target_files(self):
+        """One counter for the whole proposal — '#14' must name exactly one entry.
+
+        Files are emitted in sorted order, so claude-code-tools.md takes 1 and
+        dev.md continues from there rather than restarting.
+        """
         merged = merge_drafts([DRAFT_A, DRAFT_B])
-        dev = split_by_file(merged)["dev.md"]
-        assert [l for l in dev.splitlines() if l.startswith("### ")] == [
-            "### 1. Clean clone before open-sourcing",
-            "### 2. Atomic writes for state files",
-            "### 3. Worktrees by default",
+        by_file = split_by_file(merged)
+        assert [l for l in by_file["claude-code-tools.md"].splitlines()
+                if l.startswith("### ")] == [
+            "### 1. Hook output protocol",
+        ]
+        assert [l for l in by_file["dev.md"].splitlines()
+                if l.startswith("### ")] == [
+            "### 2. Clean clone before open-sourcing",
+            "### 3. Atomic writes for state files",
+            "### 4. Worktrees by default",
         ]
 
-    def test_a_second_file_also_starts_at_one(self):
+    def test_no_update_number_is_reused_across_the_document(self):
+        """The property that matters, independent of sort order."""
         merged = merge_drafts([DRAFT_A, DRAFT_B])
-        other = split_by_file(merged)["claude-code-tools.md"]
-        assert "### 1. Hook output protocol" in other
+        numbers = [
+            int(m.group(1))
+            for m in (re.match(r"^### (\d+)\.", l) for l in merged.splitlines())
+            if m
+        ]
+        assert len(set(numbers)) == len(numbers), "an update number was reused"
+        assert sorted(numbers) == list(range(1, len(numbers) + 1))
 
     def test_action_items_merge_and_renumber(self):
         merged = merge_drafts([DRAFT_A, DRAFT_B])
