@@ -178,7 +178,7 @@ See `references/opportunity-solution-tree.md`. Stub means: outcome at top, top 3
 
 8. **Tensions section is high-value. Do not skip it to save time.** If you found no tensions, say "No cross-customer tensions surfaced in this sample" explicitly — silence is ambiguous.
 
-9. **Output goes to `./INBOX/` if it exists, else the current directory** (or wherever the user specifies). In a curated workspace with `RESOURCES/` and `ARTIFACTS/`, write only to `INBOX/` and let the user promote.
+9. **Output goes to `./INBOX/` if it exists, else the current directory** (or wherever the user specifies). In a curated workspace with `RESOURCES/` and `PLANS/`, write only to `INBOX/` and let the user promote.
 
 10. **If the input is thin, say so.** "Three transcripts is not enough to call any of these clusters high-confidence" is the honest output when warranted.
 
