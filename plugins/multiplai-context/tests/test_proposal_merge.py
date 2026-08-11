@@ -11,6 +11,8 @@ parsing behaviour rather than by importing ``dream.py``: the two must agree, and
 restating the contract here is what catches a drift in either direction.
 """
 
+import re
+
 from lib.proposal_merge import (
     count_entries,
     count_entries_in,
@@ -186,11 +188,12 @@ class TestRenumbering:
         """The property that matters, independent of sort order."""
         merged = merge_drafts([DRAFT_A, DRAFT_B])
         numbers = [
-            int(l.split(".")[0].removeprefix("### "))
-            for l in merged.splitlines()
-            if l.startswith("### ") and l.removeprefix("### ")[0].isdigit()
+            int(m.group(1))
+            for m in (re.match(r"^### (\d+)\.", l) for l in merged.splitlines())
+            if m
         ]
-        assert numbers == list(range(1, len(numbers) + 1))
+        assert len(set(numbers)) == len(numbers), "an update number was reused"
+        assert sorted(numbers) == list(range(1, len(numbers) + 1))
 
     def test_action_items_merge_and_renumber(self):
         merged = merge_drafts([DRAFT_A, DRAFT_B])

@@ -9,7 +9,7 @@ Runs the Dream analysis pipeline: reads all pending learnings from `.multiplai/l
 distills them into a structured proposal (a two-pass generate-then-critic flow), and writes
 it to `.multiplai/dreams/processed-learnings-YYYY-MM-DD.md`.
 
-The proposal sorts every learning into one of three dispositions:
+The proposal sorts every learning into one of two dispositions:
 - **Memory updates** — generalized, reusable lessons, grouped by target memory file.
 - **Filtered Out** — one-off events / diary material, and change-requests to the toolchain
   itself (code/config/structure), each with a reason. Toolchain change-requests are dropped

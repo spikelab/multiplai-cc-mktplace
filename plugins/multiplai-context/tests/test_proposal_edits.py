@@ -13,6 +13,8 @@ Three invariants, in order of how much damage breaking them does:
    produces exactly the sorted list's document.
 """
 
+import re
+
 from lib.proposal_edits import Directive, apply_directives, parse_directives
 
 PROPOSAL = """\
@@ -103,9 +105,21 @@ class TestParseDirectives:
         (d,), _ = parse_directives("MOVE dev.md#1 -> python.md")
         assert (d.op, d.target_file, d.index, d.arg) == ("MOVE", "dev.md", 1, "python.md")
 
-    def test_to_action(self):
+    def test_to_action_is_parsed_as_a_drop(self):
+        """TO-ACTION is retired but still parsed — the critic is a model.
+
+        There is no Action Items section to move an entry into any more, so a
+        stray TO-ACTION must not conjure one. Its meaning is DROP's, and it
+        carries a default reason so the Filtered Out bullet still says why.
+        """
         (d,), _ = parse_directives("TO-ACTION dev.md#3")
-        assert (d.op, d.target_file, d.index, d.arg) == ("TO-ACTION", "dev.md", 3, None)
+        assert (d.op, d.target_file, d.index, d.arg) == (
+            "DROP", "dev.md", 3, "toolchain change-request",
+        )
+
+    def test_to_action_keeps_an_explicit_reason(self):
+        (d,), _ = parse_directives("TO-ACTION dev.md#3 the pipeline is untestable")
+        assert (d.op, d.arg) == ("DROP", "the pipeline is untestable")
 
     def test_drop_carries_its_reason(self):
         (d,), _ = parse_directives("DROP dev.md#2 past event, no durable rule")
@@ -270,6 +284,24 @@ class TestDrop:
         assert "> Simulate a clean clone before publishing a repo." in new
         assert "**Source:** 2026-07-27.md:12" in new
 
+    def test_renumbering_does_not_restart_under_the_second_target_file(self):
+        """The critic must not undo the global numbering the merge produced.
+
+        ``_renumber_all`` runs after every applied directive. A per-section
+        counter here would silently restore per-file numbering on any proposal
+        the critic touched — which is nearly all of them — while
+        ``proposal_merge`` still looked correct in isolation. That is exactly
+        the gap that let per-file numbering survive the first attempt at this.
+        """
+        new, _, _ = apply_directives(PROPOSAL, [Directive("DROP", "dev.md", 2, "x")])
+        numbers = [int(m.group(1))
+                   for m in (re.match(r"^### (\d+)\.", l) for l in new.splitlines())
+                   if m]
+        # 3 entries left under dev.md, 1 under python.md — continuous, no reuse.
+        assert numbers == [1, 2, 3, 4]
+        python_section = new.split("## Updates for `python.md`")[1]
+        assert "### 4." in python_section
+
 
 class TestMerge:
     def test_keeps_both_source_lines(self):
@@ -393,6 +425,16 @@ class TestRefusalsAndNoOps:
         new, applied, refused = apply_directives(PROPOSAL, parsed)
         assert rejected == ["Everything else looks clean."]
         assert len(applied) == 3 and refused == []
-        # One entry dropped (its Source goes with it); every other Source survives.
+        # Two entries leave the update sections: the explicit DROP, and the
+        # TO-ACTION that is now also a drop. Neither vanishes — each leaves a
+        # Filtered Out bullet carrying its citation inline.
         assert "**Source:** 2026-07-27.md:40" not in new
-        assert set(sources(PROPOSAL)) - set(sources(new)) == {"**Source:** 2026-07-27.md:40"}
+        assert set(sources(PROPOSAL)) - set(sources(new)) == {
+            "**Source:** 2026-07-27.md:40",
+            "**Source:** 2026-07-27.md:55",
+        }
+        assert "(Source: 2026-07-27.md:40)" in new
+        assert "(Source: 2026-07-27.md:55)" in new
+        # The fixture is a legacy proposal and carries one action item already.
+        # The point is that TO-ACTION no longer ADDS to that section.
+        assert new.count("### A") == PROPOSAL.count("### A") == 1

@@ -28,6 +28,11 @@ Nothing yet.
   refer to one. Now a bare number identifies exactly one entry, and
   `/multiplai-context:dream-remember` takes `skip 14` at face value.
 
+  This holds after the critic runs, not just at merge time. `_renumber_all` in
+  `lib/proposal_edits.py` re-sequences entries after every applied directive, so
+  a counter that reset per section there would have quietly restored per-file
+  numbering on any proposal the critic touched — nearly all of them.
+
   Proposals generated before this version keep their old per-file numbering.
   They are **not** renumbered on upgrade — a number is the identity the review
   hub records decisions against, so rewriting it would move receipts that may
@@ -51,6 +56,13 @@ Nothing yet.
   Reviewing an archived proposal that predates this version still works — the
   `A{N}` parsing and the `--kind action` decision path are retained for exactly
   that. There is simply no file to write.
+
+  A `TO-ACTION` directive from the critic is now parsed as a `DROP` carrying the
+  reason `toolchain change-request`. The critic is a model rather than a parser
+  and emitted that shape for months; left alive it would have built an
+  `## Action Items` section into a fresh proposal, which the review skill now
+  says cannot exist. The dropped entry still appears in `## Filtered Out` with
+  its source citation inline, so nothing loses provenance.
 
 ## [0.44.0] - 2026-08-11
 

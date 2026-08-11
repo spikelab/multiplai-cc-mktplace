@@ -549,7 +549,7 @@ All commands are namespaced under `/multiplai-context:`.
 | Command | What it does |
 |---------|--------------|
 | `/multiplai-context:setup` | Onboarding interviewer — populates memory files from starter templates. |
-| `/multiplai-context:dream` | Generate a consolidation **proposal** from the pending learnings backlog into `.multiplai/dreams/` — generalized lessons grouped by memory file, plus an Action Items section and a Filtered Out section. Does not modify anything. |
+| `/multiplai-context:dream` | Generate a consolidation **proposal** from the pending learnings backlog into `.multiplai/dreams/` — generalized lessons grouped by memory file and numbered `1..N` across the whole file, plus a Filtered Out section carrying everything dropped and why. Does not modify anything. |
 | `/multiplai-context:dream-remember` | Review the proposal (generating one if needed), approve/reject memory edits by number, apply approved edits, clean up processed learnings. |
 | `/multiplai-context:health` | **Is it broken?** Mechanical infrastructure check (deterministic script): active model client, directories present, memory-file freshness by mtime, diary/learnings/dream counts. Fast, cheap, run anytime. |
 | `/multiplai-context:memory-health-audit` | **Is it good?** Analytical effectiveness audit — cross-correlates retrieval logs, diary, learnings, and memory structure to find what's useful, what's wasted, and what to restructure. Slower; run ~monthly. |
