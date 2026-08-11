@@ -1006,7 +1006,36 @@ def pending_marker_owner(data_dir: Path, session_id: str) -> Path | None:
     return None
 
 
-def retire_checkpoint(data_dir: Path, session_id: str) -> tuple[bool, str]:
+def pending_marker_owners(data_dir: Path) -> dict[str, str]:
+    """``{session_id: marker filename}`` for every pending marker, one scan.
+
+    The bulk form of :func:`pending_marker_owner`, for callers about to ask
+    the question once per session directory: the sweep used to re-read and
+    re-parse every marker for every candidate — O(sessions × markers) JSON
+    parses inside a SessionStart hook (P9).
+    """
+    owners: dict[str, str] = {}
+    try:
+        markers = sorted(_pending_dir(data_dir).glob("*.json"))
+    except OSError:
+        return owners
+    for marker in markers:
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(payload, dict):
+            sid = str(payload.get("session_id") or "")
+            if sid and sid not in owners:
+                owners[sid] = marker.name
+    return owners
+
+
+def retire_checkpoint(
+    data_dir: Path,
+    session_id: str,
+    pending_owners: dict[str, str] | None = None,
+) -> tuple[bool, str]:
     """Delete ``checkpoints/<session_id>/`` now that the diary supersedes it.
 
     Returns ``(removed, reason_kept)``, which distinguishes the three outcomes
@@ -1017,6 +1046,9 @@ def retire_checkpoint(data_dir: Path, session_id: str) -> tuple[bool, str]:
       sessions never cross a token band, so they never had a checkpoint.
     * ``(False, "<reason>")`` — deliberately kept. A checkpoint that survives
       always says why.
+
+    *pending_owners* (from :func:`pending_marker_owners`) lets a bulk caller
+    pre-load the marker scan once; ``None`` keeps the per-call scan.
 
     Never raises. Failing to collect a checkpoint costs disk; failing an
     extraction costs the session's diary entry, and this runs inside that
@@ -1033,9 +1065,13 @@ def retire_checkpoint(data_dir: Path, session_id: str) -> tuple[bool, str]:
             # would race its atomic rename, and the writer would recreate a
             # half-populated directory on the way out anyway.
             return False, "writer in flight"
-        marker = pending_marker_owner(data_dir, session_id)
-        if marker is not None:
-            return False, f"pending rebuild marker {marker.name}"
+        if pending_owners is None:
+            marker = pending_marker_owner(data_dir, session_id)
+            marker_name = marker.name if marker is not None else None
+        else:
+            marker_name = pending_owners.get(session_id)
+        if marker_name is not None:
+            return False, f"pending rebuild marker {marker_name}"
 
         # TOCTOU, accepted: between the two guards above and the rmtree below
         # a concurrent Stop hook could still claim the writer or write a
@@ -1163,18 +1199,27 @@ def sweep_checkpoints(data_dir: Path, cfg: CheckpointConfig) -> tuple[int, int]:
     except OSError:
         return expired, 0
 
-    for sdir in candidates:
+    # One marker scan for the whole sweep (P9): retire_checkpoint's own
+    # per-session scan is O(sessions × markers) JSON parses from inside a
+    # SessionStart hook. Snapshot semantics are fine here — every candidate
+    # is at least gc_days old, so a marker appearing mid-sweep belongs to a
+    # session this pass would not collect anyway.
+    owners = pending_marker_owners(data_dir)
+    for index, sdir in enumerate(candidates):
         if retired >= _SWEEP_MAX_RETIRE:
+            # Count what the loop has not LOOKED AT yet (P14) — the old
+            # ``len(candidates) - retired`` mixed up collections with
+            # positions and overstated the backlog.
             logger.info(
                 "Checkpoint sweep stopped at %d collections; %d directories "
                 "remain for the next run",
-                retired, len(candidates) - retired,
+                retired, len(candidates) - index,
             )
             break
         seen = _last_activity(data_dir, sdir.name, sdir)
         if seen is None or seen > cutoff:
             continue
-        removed, kept = retire_checkpoint(data_dir, sdir.name)
+        removed, kept = retire_checkpoint(data_dir, sdir.name, pending_owners=owners)
         if removed:
             retired += 1
         elif kept:

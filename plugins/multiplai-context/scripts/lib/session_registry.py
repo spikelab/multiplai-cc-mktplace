@@ -446,7 +446,7 @@ def _pending_extraction_sids(data_dir: Path) -> set[str]:
 
 
 def _sweep_orphans(rdir: Path, cutoff: datetime) -> int:
-    """Remove ``.adopt``/``.lock`` files whose ``.json`` entry is gone.
+    """Remove ``.adopt``/``.lock``/``.tmp-*`` files whose entry is gone.
 
     Left behind when GC ran without the entry flock (fail-open) or a hub
     crashed between marker and entry. Age-gated by mtime (older than the
@@ -456,14 +456,21 @@ def _sweep_orphans(rdir: Path, cutoff: datetime) -> int:
     means a writer is inside its critical section, so skip and let the
     next GC retry; after acquiring, the ``.json`` absence is re-checked
     under the lock before unlinking.
+
+    ``.tmp-*`` files are :func:`lib.fsio.atomic_write` staging files
+    orphaned by a SIGKILL between mkstemp and rename (P10) — and a
+    container kill IS the normal session end here, so they accumulate.
+    They belong to no entry, so they get only the age gate.
     """
     removed = 0
     for orphan in [
         *rdir.glob("*.adopt"),
         *rdir.glob("*.lock"),
+        *rdir.glob(".tmp-*"),
     ]:
         try:
-            if orphan.with_suffix(".json").exists():
+            is_tmp = orphan.name.startswith(".tmp-")
+            if not is_tmp and orphan.with_suffix(".json").exists():
                 continue
             mtime = datetime.fromtimestamp(orphan.stat().st_mtime, tz=timezone.utc)
             if mtime >= cutoff:

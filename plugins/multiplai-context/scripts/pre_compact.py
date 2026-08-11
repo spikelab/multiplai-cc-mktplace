@@ -264,10 +264,22 @@ def _compact_pass(
     # present verbatim. Clear the re-recommendation cooldown map so every
     # file becomes eligible again — otherwise a file injected just before
     # compaction would stay suppressed for X turns despite being gone.
+    # The DEV REFERENCES announcement map goes with it (P13): its block was
+    # compacted away too, and a surviving entry suppresses re-announcement
+    # for the rest of the session (see reference_docs.clear_announcements).
+    from lib import reference_docs
+
+    cleared = False
     if session_state.get("recently_injected"):
         session_state["recently_injected"] = {}
-        if write_session_state(data_dir, session_state):
-            logger.info("PreCompact: cleared re-recommendation cooldown map")
+        cleared = True
+    if reference_docs.clear_announcements(session_state):
+        cleared = True
+    if cleared and write_session_state(data_dir, session_state):
+        logger.info(
+            "PreCompact: cleared re-recommendation cooldown and "
+            "dev-reference announcement maps"
+        )
 
     # Fresh checkpoint BEFORE compaction — this is the state the
     # SessionStart(source=compact) rebuild will inject. Never fatal. This

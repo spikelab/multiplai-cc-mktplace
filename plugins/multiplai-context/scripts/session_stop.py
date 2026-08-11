@@ -36,6 +36,7 @@ from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib import checkpoint as cp
+from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
 
 logger = setup_logging("session_stop")
@@ -94,8 +95,8 @@ def _degraded_message(data_dir: Path, session_id: str, state: dict) -> str | Non
     if already >= failures:
         return None
     try:
-        dfile.parent.mkdir(parents=True, exist_ok=True)
-        dfile.write_text(json.dumps({"failures": failures}))
+        # Atomic (P11): a torn write here would re-alert on every Stop.
+        atomic_write_json(dfile, {"failures": failures})
     except OSError:
         pass
 
@@ -137,8 +138,8 @@ def _should_nudge(data_dir: Path, session_id: str, tokens: int, cfg) -> bool:
     if last and tokens - last < cfg.refresh_tokens:
         return False
     try:
-        nfile.parent.mkdir(parents=True, exist_ok=True)
-        nfile.write_text(json.dumps({"tokens": tokens}))
+        # Atomic (P11), like its peers beside it in the session dir.
+        atomic_write_json(nfile, {"tokens": tokens})
     except OSError:
         pass
     return True
