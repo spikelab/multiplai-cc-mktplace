@@ -18,6 +18,79 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.44.0] - 2026-08-11
+
+Fixes from the 2026-08-10 hooks code review — every finding verified
+against source before changing anything. Nothing here adds a feature; all
+of it makes the hooks fail less, fail loudly, or clean up after themselves.
+
+### Fixed
+
+- **A killed PreCompact can no longer block checkpointing for ten minutes.**
+  The synchronous pre-compaction writer used to be granted 600s inside a
+  300s hook: the harness kill skipped the marker release, and until the
+  marker aged out no new checkpoint writer would spawn — right after
+  compaction, when context grows fastest. The wait is now clamped under the
+  hook budget, and the writer runs under process-group supervision, so a
+  timeout actually stops the work instead of orphaning it.
+
+- **A slow checkpoint or extraction child is no longer double-launched.**
+  The drain's stale window (900s) sat inside a child's legitimate worst
+  case (600s x 2 attempts), so a slow-but-alive writer could be declared
+  dead, requeued, and run twice against the same state — paying the model
+  cost twice. The window is now derived from the real worst case (1800s),
+  and the checkpoint drain also defers to a writer that is visibly
+  mid-write.
+
+- **A stalled memory router degrades instead of costing the prompt its
+  memory.** The llm router's timeout now covers client creation (the CLI
+  spawn), so a stall there falls back to the offline ranking rather than
+  running silently into the hook kill with no memory and no log line.
+
+- **Subagent sessions no longer leak into your records.** All seven hooks
+  now skip SDK child sessions uniformly. The gap that mattered: a
+  SessionEnd firing for a subagent transcript queued a full LLM extraction
+  of it into your diary. Routing, registry stamps, and session-start spawns
+  are guarded too.
+
+- **The uv-missing warning can no longer steer compaction.** The warning
+  used to reach PreCompact's stdout, which is appended to the compaction
+  prompt as instructions; it is now stderr-only there. And before declaring
+  uv missing, hooks check `~/.local/bin/uv` (uv's default install dir), so
+  a PATH-less login shell no longer disables every hook on a machine where
+  uv is installed.
+
+- **Routing quality on real conversations.** The "last assistant response"
+  used for disambiguation now skips subagent replies and is capped at 2000
+  chars, so a giant previous turn cannot out-vote a short prompt. Both
+  transcript tail readers retry with a wider window when one oversized
+  tool-result line swallows the tail — previously that read as "empty
+  session" and silently skipped a checkpoint pass.
+
+- **State files that must not tear are written atomically** (nudge
+  cooldowns, the `!keepgoing` override watermark, degraded-writer alerts),
+  dead checkpoint markers quarantine under `failed_checkpoints/` instead of
+  masquerading as failed extractions, orphaned atomic-write temp files are
+  swept, and DEV REFERENCES re-announce after a compaction removes them.
+
+### Changed
+
+- **Hook output is now only `hookSpecificOutput.additionalContext`.** The
+  legacy duplicate top-level `context` / `*_files` keys are gone; they had
+  no consumer left and doubled hook stdout on every prompt at large
+  injections. If you scripted against them, read `additionalContext`.
+
+- The seven byte-identical uv-guard preambles in `hooks.json` are one
+  shared `hooks/run.sh`; timeouts and the once-per-24h warning behaviour
+  are unchanged.
+
+### Removed
+
+- Dead internal API (no external callers): `checkpoint.marker_name`,
+  `checkpoint.session_marker_name`, `TokenOverlapRouter._score_corpus`,
+  `extraction.extract_units_and_disposition`,
+  `context_manager._read_memory_files`, `session_stop._spawn_writer`.
+
 ## [0.43.0] - 2026-08-10
 
 ### Added
