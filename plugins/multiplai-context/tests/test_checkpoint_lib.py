@@ -148,6 +148,20 @@ class TestReadContextTokens:
         _write_transcript(t, [_assistant_record(input_tokens=9_000)])
         assert cp.read_context_tokens(t, after_ts="not-a-date") == 9_000
 
+    def test_oversized_tail_line_widens_the_window(self, tmp_path):
+        """P8: one giant tool-result line swallowing the tail window must not
+        read as 0 tokens — that skips the whole checkpoint pass for the turn.
+        The scan retries with a doubled window and finds the usage record."""
+        t = tmp_path / "t.jsonl"
+        records = [
+            _assistant_record(input_tokens=42_000, cache_read=8_000),
+            # A single line larger than _TAIL_BYTES, holding no usage record.
+            {"type": "user", "message": {"role": "user",
+                                         "content": "y" * (cp._TAIL_BYTES + 10_000)}},
+        ]
+        _write_transcript(t, records)
+        assert cp.read_context_tokens(t) == 50_000
+
 
 class TestChildSessionGuard:
     def test_env_guard(self, monkeypatch):

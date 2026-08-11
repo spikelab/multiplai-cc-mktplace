@@ -71,6 +71,10 @@ logger = setup_logging("context_manager")
 # Catalog types supported by _read_catalog_or_scan()
 _KNOWN_CATALOG_TYPES = frozenset({"memory", "banks", "diary", "skills", "resources"})
 
+# Cap on the last-assistant-response text handed to the router — see the
+# truncation site in _assemble_and_emit for why (P7).
+_LAST_RESPONSE_MAX_CHARS = 2000
+
 # Once-per-session warning deduplication (Decision 8).
 # Keyed by full catalog file path to correctly dedup across
 # different data directories.
@@ -1058,22 +1062,23 @@ def _persist_turn_state(
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def _emit_result(context: str, result: dict) -> None:
+def _emit_result(context: str) -> None:
     """Write the hook result to stdout in the shape Claude Code actually reads.
 
     UserPromptSubmit only injects context from ``hookSpecificOutput.
     additionalContext`` (or plain stdout text) — a bare ``{"context": ...}``
-    key is silently ignored, which made routed memory a no-op. We emit
-    ``additionalContext`` for Claude Code AND keep the legacy ``context`` /
-    ``*_files`` keys (extra keys are ignored by the harness) so existing
-    consumers and tests still read the same fields.
+    key is silently ignored, which once made routed memory a no-op. The
+    legacy top-level ``context`` / ``*_files`` keys that used to ride along
+    for old consumers are gone (P3): grep found tests as their only readers,
+    and at 40KB injections the duplicate context doubled hook stdout on
+    every prompt.
     """
-    payload = dict(result)
-    payload["hookSpecificOutput"] = {
-        "hookEventName": "UserPromptSubmit",
-        "additionalContext": context,
-    }
-    print(json.dumps(payload))
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": context,
+        }
+    }))
 
 
 def main() -> None:
@@ -1090,7 +1095,7 @@ def main() -> None:
     from lib.checkpoint import is_child_session
 
     if is_child_session(input_data.get("transcript_path") or ""):
-        _emit_result("", {"context": "", "memory_files": 0})
+        _emit_result("")
         return
 
     session_id = (
@@ -1141,6 +1146,14 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
         last_response = (
             read_last_assistant_response(transcript_path) if prompt else None
         )
+    # Bound the disambiguation text (P7). token_overlap's domain score is an
+    # UNNORMALIZED sum of matched IDF weights, so a 64KB previous turn can
+    # out-vote a ten-word prompt and route the turn on what was just said
+    # rather than what was just asked; the same text also rides verbatim
+    # into the LLM router's prompt. 2000 chars keeps the disambiguation
+    # signal (the head states what the turn was about) without the weight.
+    if last_response and len(last_response) > _LAST_RESPONSE_MAX_CHARS:
+        last_response = last_response[:_LAST_RESPONSE_MAX_CHARS]
 
     with run.stage("catalogs"):
         # Plugin-options-driven config (which corpora are enabled, paths, etc.)
@@ -1437,8 +1450,7 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
         if cooldown_active:
             _persist_turn_state(session_state, turn_index, recent, {}, cooldown)
         run.note(outcome=_outcome, files=0, bytes=0)
-        result = {"context": "", "memory_files": 0}
-        _emit_result("", result)
+        _emit_result("")
         return
 
     parts: list[str] = []
@@ -1534,16 +1546,7 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
             cooldown,
         )
 
-    result = {
-        "context": session_context,
-        # Backward-compat: older consumers read memory_files
-        "memory_files": corpus_counts["memory"],
-        "skills_files": corpus_counts["skills"],
-        "resources_files": corpus_counts["resources"],
-        "corpus_counts": corpus_counts,
-        "dev_references": bool(dev_refs),
-    }
-    _emit_result(session_context, result)
+    _emit_result(session_context)
 
 
 if __name__ == "__main__":
@@ -1556,11 +1559,5 @@ if __name__ == "__main__":
             logger.exception("context_manager hook failed; emitting empty context")
         except Exception:
             pass
-        _emit_result("", {
-            "context": "",
-            "memory_files": 0,
-            "skills_files": 0,
-            "resources_files": 0,
-            "corpus_counts": {"memory": 0, "skills": 0, "resources": 0},
-        })
+        _emit_result("")
         sys.exit(0)

@@ -23,11 +23,9 @@ SCRIPT = PLUGIN_ROOT / "scripts" / "context_manager.py"
 def _assert_safe_fallback(stdout: bytes):
     """Parse stdout and check it matches the empty-context JSON shape."""
     payload = json.loads(stdout.decode("utf-8"))
-    assert payload["context"] == ""
-    assert payload["memory_files"] == 0
-    assert payload["skills_files"] == 0
-    assert payload["resources_files"] == 0
-    assert payload["corpus_counts"] == {"memory": 0, "skills": 0, "resources": 0}
+    hso = payload["hookSpecificOutput"]
+    assert hso["hookEventName"] == "UserPromptSubmit"
+    assert hso["additionalContext"] == ""
 
 
 def test_main_emits_safe_fallback_on_unhandled_exception(tmp_path):
@@ -43,7 +41,6 @@ def test_main_emits_safe_fallback_on_unhandled_exception(tmp_path):
         f"    raise RuntimeError('synthetic test failure')\n"
         f"context_manager.main = _boom\n"
         f"# Re-execute the guarded entry-point block.\n"
-        f"import json\n"
         f"try:\n"
         f"    context_manager.main()\n"
         f"except Exception:\n"
@@ -51,13 +48,7 @@ def test_main_emits_safe_fallback_on_unhandled_exception(tmp_path):
         f"        context_manager.logger.exception('test path')\n"
         f"    except Exception:\n"
         f"        pass\n"
-        f"    print(json.dumps({{\n"
-        f"        'context': '',\n"
-        f"        'memory_files': 0,\n"
-        f"        'skills_files': 0,\n"
-        f"        'resources_files': 0,\n"
-        f"        'corpus_counts': {{'memory': 0, 'skills': 0, 'resources': 0}},\n"
-        f"    }}))\n"
+        f"    context_manager._emit_result('')\n"
         f"    sys.exit(0)\n"
     )
     proc = subprocess.run(
@@ -76,8 +67,9 @@ def test_entry_point_guard_present_in_source():
     """Belt-and-braces: ensure the guard block isn't removed by refactors."""
     src = SCRIPT.read_text()
     assert 'if __name__ == "__main__":' in src
-    # The guard must catch a broad Exception, log, emit JSON, and exit 0.
+    # The guard must catch a broad Exception, log, emit the safe empty
+    # payload, and exit 0.
     assert "try:\n        main()" in src
     assert "except Exception:" in src
-    assert '"corpus_counts"' in src
+    assert '_emit_result("")' in src
     assert "sys.exit(0)" in src

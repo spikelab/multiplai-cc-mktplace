@@ -5,7 +5,7 @@ covering:
 
 - Multi-corpus output structure (=== MEMORY ===, === SKILLS ===,
   === RESOURCES === sections in the assembled context)
-- corpus_counts in the JSON output
+- hookSpecificOutput.additionalContext as the single output channel
 - Bundle expansion
 - Section-level loading via "file.md#Section" picks
 - Single-corpus (memory-only) backward compat
@@ -21,6 +21,8 @@ from conftest import (
     CONTEXT_MANAGER,
     PLUGIN_ROOT,
     SCRIPTS_DIR,
+    corpus_files,
+    hook_context,
     run_context_hook as _run_hook,
     write_catalog as _write_catalog,
 )
@@ -36,8 +38,8 @@ from generators.base import CATALOG_SCHEMA_VERSION
 
 
 class TestMultiCorpusOutput:
-    def test_output_has_corpus_counts(self, env_setup):
-        """JSON output includes corpus_counts dict and per-corpus _files keys."""
+    def test_output_has_only_hook_specific_output(self, env_setup):
+        """JSON output carries hookSpecificOutput and nothing else (P3)."""
         # Memory file with matching intent
         (env_setup["memory_dir"] / "voice.md").write_text("# Voice\nstyle notes")
         _write_catalog(
@@ -47,11 +49,11 @@ class TestMultiCorpusOutput:
         )
 
         out = _run_hook(env_setup, prompt="help me with writing voice")
-        assert "corpus_counts" in out
-        assert set(out["corpus_counts"].keys()) == {"memory", "skills", "resources"}
-        assert "memory_files" in out
-        assert "skills_files" in out
-        assert "resources_files" in out
+        # The payload's single channel: hookSpecificOutput.additionalContext.
+        # The legacy top-level context / *_files keys are gone (P3).
+        assert set(out) == {"hookSpecificOutput"}
+        assert out["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+        assert corpus_files(out, "MEMORY") == ["voice.md"]
 
     def test_memory_section_header_in_context(self, env_setup):
         (env_setup["memory_dir"] / "writing.md").write_text("# Writing guide")
@@ -62,9 +64,9 @@ class TestMultiCorpusOutput:
         )
 
         out = _run_hook(env_setup, prompt="help me write a blog post")
-        assert "=== MEMORY ===" in out["context"]
-        assert "## writing.md" in out["context"]
-        assert "Writing guide" in out["context"]
+        assert "=== MEMORY ===" in hook_context(out)
+        assert "## writing.md" in hook_context(out)
+        assert "Writing guide" in hook_context(out)
 
     def test_injects_via_hook_specific_output(self, env_setup):
         # Claude Code only injects UserPromptSubmit context from
@@ -82,7 +84,7 @@ class TestMultiCorpusOutput:
         assert hso is not None, "must emit hookSpecificOutput"
         assert hso["hookEventName"] == "UserPromptSubmit"
         # The injected context must equal the assembled corpus, not be empty.
-        assert hso["additionalContext"] == out["context"]
+        assert hso["additionalContext"] == hook_context(out)
         assert "Writing guide" in hso["additionalContext"]
 
     def test_skills_corpus_loaded_when_enabled(self, env_setup):
@@ -112,13 +114,13 @@ class TestMultiCorpusOutput:
             prompt="writing a blog post",
             extra_env={"CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS": "true"},
         )
-        assert "=== SKILLS ===" in out["context"]
+        assert "=== SKILLS ===" in hook_context(out)
         # Recommendation: catalog summary + invocation hint, not the body.
-        assert "Drafts and edits blog posts" in out["context"]
-        assert "/writing" in out["context"]
-        assert "Writing skill body" not in out["context"]
-        assert out["skills_files"] >= 1
-        assert out["corpus_counts"]["skills"] >= 1
+        assert "Drafts and edits blog posts" in hook_context(out)
+        assert "/writing" in hook_context(out)
+        assert "Writing skill body" not in hook_context(out)
+        assert len(corpus_files(out, "SKILLS")) >= 1
+        assert len(corpus_files(out, "SKILLS")) >= 1
 
     def test_resources_corpus_loaded_when_enabled(self, env_setup):
         (env_setup["memory_dir"] / "tech.md").write_text("# Tech prefs")
@@ -142,9 +144,9 @@ class TestMultiCorpusOutput:
                 # resources_dir already set in _run_hook
             },
         )
-        assert "=== RESOURCES ===" in out["context"]
-        assert "Voice AI research" in out["context"]
-        assert out["resources_files"] >= 1
+        assert "=== RESOURCES ===" in hook_context(out)
+        assert "Voice AI research" in hook_context(out)
+        assert len(corpus_files(out, "RESOURCES")) >= 1
 
     def test_skills_disabled_means_no_skills_section(self, env_setup):
         """Without enable_skills, skills corpus is silently empty even if catalog exists."""
@@ -163,8 +165,8 @@ class TestMultiCorpusOutput:
 
         # NO enable_skills env var set
         out = _run_hook(env_setup, prompt="writing a blog post")
-        assert "=== SKILLS ===" not in out["context"]
-        assert out["skills_files"] == 0
+        assert "=== SKILLS ===" not in hook_context(out)
+        assert len(corpus_files(out, "SKILLS")) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +198,8 @@ class TestBundleExpansion:
 
         out = _run_hook(env_setup, prompt="help with writing voice")
         # voice.md picked by intent, style.md pulled in by bundle
-        assert "## voice.md" in out["context"]
-        assert "## style.md" in out["context"]
+        assert "## voice.md" in hook_context(out)
+        assert "## style.md" in hook_context(out)
 
 
 # ---------------------------------------------------------------------------
@@ -217,8 +219,8 @@ class TestSectionLoading:
 
         out = _run_hook(env_setup, prompt="software architecture decisions")
         # Whole file loaded
-        assert "Arch text." in out["context"]
-        assert "Decision text." in out["context"]
+        assert "Arch text." in hook_context(out)
+        assert "Decision text." in hook_context(out)
 
 
 # ---------------------------------------------------------------------------
@@ -237,10 +239,10 @@ class TestBackwardCompat:
         )
 
         out = _run_hook(env_setup, prompt="something about my personal context")
-        assert out["memory_files"] >= 1
-        assert out["skills_files"] == 0
-        assert out["resources_files"] == 0
-        assert "## me.md" in out["context"]
+        assert len(corpus_files(out, "MEMORY")) >= 1
+        assert len(corpus_files(out, "SKILLS")) == 0
+        assert len(corpus_files(out, "RESOURCES")) == 0
+        assert "## me.md" in hook_context(out)
 
     def test_no_catalog_falls_back_to_metadata_ranking(self, env_setup):
         """No catalog at all → fallback to top-N memory file scan."""
@@ -248,7 +250,7 @@ class TestBackwardCompat:
 
         out = _run_hook(env_setup, prompt="any prompt at all")
         # Memory fallback path loaded the file
-        assert "fallback.md" in out["context"] or out["memory_files"] >= 1
+        assert "fallback.md" in hook_context(out) or len(corpus_files(out, "MEMORY")) >= 1
 
     def test_stale_schema_falls_back_gracefully(self, env_setup):
         """Old schema_version → invalidate, fall back to scan."""
@@ -261,9 +263,8 @@ class TestBackwardCompat:
 
         out = _run_hook(env_setup, prompt="any prompt")
         # Should not crash; should fall back to scan
-        assert "context" in out
         # The non-existent old.md is NOT loaded; fallback scan finds fallback.md
-        assert "old.md" not in out.get("context", "")
+        assert "old.md" not in hook_context(out)
 
 
 class TestAbstentionVsFallback:
@@ -289,8 +290,8 @@ class TestAbstentionVsFallback:
         )
 
         out = _run_hook(env_setup, prompt="completely unrelated zebra giraffe")
-        assert out["memory_files"] == 0
-        assert out["context"] == ""
+        assert len(corpus_files(out, "MEMORY")) == 0
+        assert hook_context(out) == ""
 
     def test_continuation_prompt_injects_nothing(self, env_setup):
         """A bare go-ahead ("yes") abstains — no recency dump."""
@@ -303,8 +304,8 @@ class TestAbstentionVsFallback:
         )
 
         out = _run_hook(env_setup, prompt="yes")
-        assert out["memory_files"] == 0
-        assert out["context"] == ""
+        assert len(corpus_files(out, "MEMORY")) == 0
+        assert hook_context(out) == ""
 
     def test_genuine_drift_still_uses_recency_safety_net(self, env_setup):
         """Router picks a file that isn't on disk → net still fires.
@@ -322,8 +323,8 @@ class TestAbstentionVsFallback:
         )
 
         out = _run_hook(env_setup, prompt="software architecture decisions")
-        assert out["memory_files"] >= 1
-        assert "real.md" in out["context"]
+        assert len(corpus_files(out, "MEMORY")) >= 1
+        assert "real.md" in hook_context(out)
 
 
 class TestRoutingScoresEmission:
@@ -368,7 +369,7 @@ class TestRoutingScoresEmission:
         # The contract: picked has exactly n_picked rows (the injected
         # set), never the cap/candidate-pool count.
         assert len(rec["picked"]) == rec["n_picked"]
-        assert rec["n_picked"] == out["memory_files"]
+        assert rec["n_picked"] == len(corpus_files(out, "MEMORY"))
         assert rec["n_picked"] < rec["n_candidates"]
         # Floor = lowest injected score, sorted desc → last row.
         scores = [s for _, s in rec["picked"]]
@@ -432,7 +433,7 @@ class TestRoutingScoresEmission:
                 "MULTIPLAI_LOG_LEVEL": "INFO",
             },
         )
-        assert out["skills_files"] >= 1
+        assert len(corpus_files(out, "SKILLS")) >= 1
         logs = list(env_setup["data_dir"].rglob("context_manager.log"))
         assert logs, "context_manager.log not written"
         line = next(
@@ -594,9 +595,9 @@ class TestRoutingScoreHint:
 class TestEmptyEverything:
     def test_empty_memory_dir_empty_prompt_no_crash(self, env_setup):
         out = _run_hook(env_setup, prompt="")
-        # Empty prompt → router skipped, fallback may still pick up nothing
-        assert "context" in out
-        assert "memory_files" in out
+        # Empty prompt → router skipped, fallback may still pick up nothing;
+        # the JSON contract (hookSpecificOutput) holds regardless.
+        assert "hookSpecificOutput" in out
 
 
 # ---------------------------------------------------------------------------
@@ -621,32 +622,32 @@ class TestRecommendationCooldown:
         self._one_memory_file(env_setup)
         env = {"CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS": "4"}
         first = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
-        assert first["memory_files"] == 1
-        assert "python.md" in first["context"]
+        assert len(corpus_files(first, "MEMORY")) == 1
+        assert "python.md" in hook_context(first)
         second = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
-        assert second["memory_files"] == 0
-        assert "python.md" not in second["context"]
+        assert len(corpus_files(second, "MEMORY")) == 0
+        assert "python.md" not in hook_context(second)
 
     def test_cooldown_expires_after_window(self, env_setup):
         self._one_memory_file(env_setup)
         env = {"CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS": "1"}
         # turn 1: injected
-        assert _run_hook(env_setup, prompt="debugging python async code",
-                         extra_env=env)["memory_files"] == 1
+        assert corpus_files(_run_hook(env_setup, prompt="debugging python async code",
+                            extra_env=env), "MEMORY") == ["python.md"]
         # turn 2: within window (2-1=1 <= 1) → suppressed
-        assert _run_hook(env_setup, prompt="debugging python async code",
-                         extra_env=env)["memory_files"] == 0
+        assert corpus_files(_run_hook(env_setup, prompt="debugging python async code",
+                            extra_env=env), "MEMORY") == []
         # turn 3: window passed (3-1=2 > 1) → re-injected
-        assert _run_hook(env_setup, prompt="debugging python async code",
-                         extra_env=env)["memory_files"] == 1
+        assert corpus_files(_run_hook(env_setup, prompt="debugging python async code",
+                            extra_env=env), "MEMORY") == ["python.md"]
 
     def test_cooldown_zero_disables(self, env_setup):
         self._one_memory_file(env_setup)
         env = {"CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS": "0"}
         a = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
         b = _run_hook(env_setup, prompt="debugging python async code", extra_env=env)
-        assert a["memory_files"] == 1
-        assert b["memory_files"] == 1  # no cooldown → re-injected every turn
+        assert len(corpus_files(a, "MEMORY")) == 1
+        assert len(corpus_files(b, "MEMORY")) == 1  # no cooldown → re-injected every turn
 
     def test_turn_state_persisted_to_session_state(self, env_setup):
         self._one_memory_file(env_setup)
@@ -687,8 +688,8 @@ class TestRecommendationCooldown:
             env_setup, prompt="debugging async concurrency event loop",
             extra_env=env,
         )
-        assert first["memory_files"] == 1
-        assert "strong.md" in first["context"]
+        assert len(corpus_files(first, "MEMORY")) == 1
+        assert "strong.md" in hook_context(first)
         # Turn 2: both match; strong is on cooldown. weak.md clears the
         # absolute MIN_SIGNAL floor (~2.9) but sits at ~36% of the
         # suppressed top score (~8.0) — the old pipeline injected it
@@ -698,9 +699,9 @@ class TestRecommendationCooldown:
             prompt="debugging python async concurrency event loop tooling",
             extra_env=env,
         )
-        assert second["memory_files"] == 0
-        assert "weak.md" not in second["context"]
-        assert second["context"] == ""
+        assert len(corpus_files(second, "MEMORY")) == 0
+        assert "weak.md" not in hook_context(second)
+        assert hook_context(second) == ""
         logs = list(env_setup["data_dir"].rglob("context_manager.log"))
         assert logs and any(
             "COOLDOWN_REFLOOR" in ln and "weak.md" in ln
@@ -728,8 +729,8 @@ class TestRecommendationCooldown:
             prompt="debugging python async concurrency event loop tooling",
             extra_env={"CLAUDE_PLUGIN_OPTION_RECOMMEND_COOLDOWN_TURNS": "4"},
         )
-        assert out["memory_files"] == 2
-        assert "weak.md" in out["context"]
+        assert len(corpus_files(out, "MEMORY")) == 2
+        assert "weak.md" in hook_context(out)
 
     def test_precompact_clears_cooldown_map(self, env_setup):
         """PreCompact resets recently_injected so post-compaction every
@@ -830,7 +831,7 @@ class TestTtlStalenessE2E:
         )
         # Still used (fail-open): the JSON output is the last stdout line.
         out = json.loads(result.stdout.strip().splitlines()[-1])
-        assert out["corpus_counts"]["memory"] >= 0
+        assert len(corpus_files(out, "MEMORY")) >= 0
 
     def test_generous_ttl_does_not_warn(self, env_setup):
         """WHEN the default (generous) TTL applies THEN no staleness warning.

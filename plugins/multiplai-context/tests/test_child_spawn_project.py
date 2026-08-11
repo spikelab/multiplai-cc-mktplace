@@ -169,7 +169,7 @@ class TestTimeoutKillsTheWholeTree:
             pid = 4242
             returncode = 0
 
-            def communicate(self, timeout=None):
+            def communicate(self, input=None, timeout=None):
                 return "out", "err"
 
         monkeypatch.setattr(
@@ -187,7 +187,7 @@ class TestTimeoutKillsTheWholeTree:
             pid = 4242
             returncode = -9
 
-            def communicate(self, timeout=None):
+            def communicate(self, input=None, timeout=None):
                 waits.append(timeout)
                 if len(waits) == 1:
                     raise subprocess.TimeoutExpired(["child"], timeout)

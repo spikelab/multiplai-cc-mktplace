@@ -29,7 +29,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from conftest import run_context_hook as _run_hook, write_catalog as _write_catalog
+from conftest import hook_context, run_context_hook as _run_hook, write_catalog as _write_catalog
 
 PLUGIN_ROOT = Path(__file__).parent.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
@@ -242,8 +242,8 @@ class TestInjectLogging:
         )
 
         out = _run_hook(env_setup, prompt="software architecture decisions")
-        assert "Alpha content." in out["context"]
-        assert "Gamma content." in out["context"]
+        assert "Alpha content." in hook_context(out)
+        assert "Gamma content." in hook_context(out)
 
         event = _inject_events(env_setup)[-1]
         # Empty list == whole file. A file with nothing loaded has no key.

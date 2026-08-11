@@ -1009,10 +1009,31 @@ class HybridRouter:
         dropped: dict[str, list[str]] = {}
         for corpus_type in CORPUS_TYPES:
             selected = picks.get(corpus_type, [])
-            if not selected:
-                result[corpus_type] = []
-                continue
             entries = corpora.get(corpus_type) or []
+            if not selected:
+                # Still populate the diagnostics from the gate (P12): the
+                # ROUTING_SCORES line — parsed by /health and the eval
+                # harness — must distinguish "the LLM picked nothing here"
+                # (candidates scored, none injected) from "corpus empty"
+                # (no candidates at all). Skipping the entry made both look
+                # identical downstream.
+                scored, eligible = (
+                    self._gate.gate(gate_text, entries) if entries else ([], set())
+                )
+                result[corpus_type] = []
+                self.last_scores[corpus_type] = {
+                    "scored": scored,
+                    "picked_scored": [],
+                    "n_eligible": len(eligible),
+                    "top_eligible": next(
+                        (s for s, fn in scored if fn in eligible), None
+                    ),
+                    "cap": max_files_per_corpus,
+                    "n_candidates": len(scored),
+                    "n_picked": 0,
+                    "capped": False,
+                }
+                continue
             scored, eligible = self._gate.gate(gate_text, entries)
             kept, cut = [], []
             for pick in selected:

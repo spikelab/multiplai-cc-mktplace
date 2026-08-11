@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import run_context_hook
+from conftest import corpus_files, hook_context, run_context_hook
 
 # The sandbox layout (env_setup fixture) and subprocess runner live in
 # conftest.py; only the qmd-specific env shaping stays here.
@@ -77,33 +77,33 @@ class TestQmdBackendE2E:
         bin_dir = _fake_qmd(env_setup["tmp_path"], QMD_RESULTS)
         out = _run_hook(env_setup, prompt="which water filter should I buy?",
                         qmd_bin_dir=bin_dir)
-        ctx = out["context"]
+        ctx = hook_context(out)
         assert "=== RESOURCES ===" in ctx
         assert f"{env_setup['resources_dir']}/water/filters.md" in ctx
         assert "Reverse osmosis vs carbon." in ctx
         assert "Read the full file" in ctx
-        assert out["resources_files"] == 2
+        assert len(corpus_files(out, "RESOURCES")) == 2
 
     def test_weak_scores_filtered(self, env_setup):
         weak = [dict(QMD_RESULTS[0], score=0.05)]
         bin_dir = _fake_qmd(env_setup["tmp_path"], weak)
         out = _run_hook(env_setup, prompt="which water filter should I buy?",
                         qmd_bin_dir=bin_dir)
-        assert out.get("resources_files", 0) == 0
+        assert corpus_files(out, "RESOURCES") == []
 
     def test_fail_open_when_qmd_missing(self, env_setup):
         (env_setup["memory_dir"] / "notes.md").write_text("# Notes\nsome memory")
         out = _run_hook(env_setup, prompt="which water filter should I buy?",
                         qmd_bin_dir=None)
         # No crash; resources empty, memory fallback still works.
-        assert out.get("resources_files", 0) == 0
-        assert out["memory_files"] >= 1
+        assert corpus_files(out, "RESOURCES") == []
+        assert len(corpus_files(out, "MEMORY")) >= 1
 
     def test_fail_open_when_qmd_errors(self, env_setup):
         bin_dir = _fake_qmd(env_setup["tmp_path"], [], exit_code=3)
         out = _run_hook(env_setup, prompt="which water filter should I buy?",
                         qmd_bin_dir=bin_dir)
-        assert out.get("resources_files", 0) == 0
+        assert corpus_files(out, "RESOURCES") == []
 
     def test_resources_catalog_not_loaded_under_qmd(self, env_setup):
         """A resources catalog on disk must be ignored when the backend is qmd."""
@@ -118,8 +118,8 @@ class TestQmdBackendE2E:
         bin_dir = _fake_qmd(env_setup["tmp_path"], QMD_RESULTS)
         out = _run_hook(env_setup, prompt="which water filter should I buy?",
                         qmd_bin_dir=bin_dir)
-        assert "catalog-doc.md" not in out["context"]
-        assert "water/filters.md" in out["context"]
+        assert "catalog-doc.md" not in hook_context(out)
+        assert "water/filters.md" in hook_context(out)
 
     def test_catalog_backend_untouched_by_default(self, env_setup):
         """resources_retrieval unset → catalog path (no qmd invocation)."""
@@ -130,7 +130,7 @@ class TestQmdBackendE2E:
             extra_env={"CLAUDE_PLUGIN_OPTION_RESOURCES_RETRIEVAL": "catalog"},
         )
         # No resources catalog on disk → no resources under the catalog path.
-        assert out.get("resources_files", 0) == 0
+        assert corpus_files(out, "RESOURCES") == []
 
 
 # ---------------------------------------------------------------------------

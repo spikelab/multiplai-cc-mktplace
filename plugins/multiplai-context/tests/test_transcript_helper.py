@@ -117,6 +117,33 @@ class TestReadLastAssistantResponse:
         )
         assert read_last_assistant_response(path) == "Recovered"
 
+    def test_sidechain_records_skipped(self, tmp_path):
+        """P6: after a subagent turn, the newest assistant record is the
+        SUBAGENT's reply — routing the user's next prompt on it would route
+        on a different conversation. Mirror checkpoint.py's isSidechain skip."""
+        from lib.transcript_helper import read_last_assistant_response
+        path = tmp_path / "t.jsonl"
+        _write_jsonl(path, [
+            {"role": "assistant", "content": "main-chain answer"},
+            {"role": "assistant", "content": "subagent chatter",
+             "isSidechain": True},
+        ])
+        assert read_last_assistant_response(path) == "main-chain answer"
+
+    def test_oversized_tail_line_widens_the_window(self, tmp_path):
+        """P8: one giant tool-result line swallowing the 64KB tail must not
+        read as "no assistant turn" — the scan doubles the window and finds
+        the response behind it."""
+        from lib import transcript_helper
+        from lib.transcript_helper import read_last_assistant_response
+        path = tmp_path / "t.jsonl"
+        _write_jsonl(path, [
+            {"role": "assistant", "content": "behind the blob"},
+            {"role": "user",
+             "content": "z" * (transcript_helper._TAIL_BYTES + 10_000)},
+        ])
+        assert read_last_assistant_response(path) == "behind the blob"
+
     def test_handles_large_file_via_tail_read(self, tmp_path):
         """File larger than tail buffer still finds the most recent turn."""
         from lib.transcript_helper import read_last_assistant_response

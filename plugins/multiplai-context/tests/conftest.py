@@ -238,6 +238,36 @@ def run_context_hook(
     return json.loads(out[-1])
 
 
+def hook_context(out: dict) -> str:
+    """The injected context from a context_manager hook payload.
+
+    The hook emits only ``hookSpecificOutput.additionalContext`` (the legacy
+    top-level ``context`` / ``*_files`` keys are gone — P3); tests read the
+    context through this one seam.
+    """
+    return out["hookSpecificOutput"]["additionalContext"]
+
+
+def corpus_files(out: dict, label: str) -> list[str]:
+    """Filenames rendered under the ``=== <label> ===`` block, in order.
+
+    Parses the rendered context — the only place the per-corpus counts
+    still exist now that the payload carries no ``*_files`` keys. Only
+    valid for test fixtures whose file contents carry no ``## `` lines of
+    their own (every block entry is rendered as ``## <name>``).
+    """
+    lines = hook_context(out).splitlines()
+    files: list[str] = []
+    inside = False
+    for line in lines:
+        if line.startswith("=== "):
+            inside = line.strip() == f"=== {label} ==="
+            continue
+        if inside and line.startswith("## "):
+            files.append(line[3:].strip())
+    return files
+
+
 @pytest.fixture
 def plugin_root():
     return PLUGIN_ROOT

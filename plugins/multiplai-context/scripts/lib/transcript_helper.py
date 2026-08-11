@@ -26,14 +26,26 @@ logger = logging.getLogger(__name__)
 # instantly. Most transcripts have <16KB final turns.
 _TAIL_BYTES = 65_536
 
+# When the tail window yields nothing (one oversized tool-result line can
+# swallow the whole window without containing a single complete assistant
+# record), retry with a doubled window rather than giving up: 64KB → 128KB
+# → 256KB, then stop (P8).
+_MAX_WINDOW_DOUBLINGS = 2
+
 
 def read_last_assistant_response(transcript_path: Path | str | None) -> str | None:
     """Return plain text of the most recent assistant turn, or ``None``.
 
-    Reads only the tail of the file to keep the hook fast. Walks the
-    parsed records from the end, picks the first ``role: assistant``
-    record, and extracts text content (handling both string and
+    Reads only the tail of the file to keep the hook fast, doubling the
+    window a couple of times when it holds no assistant record at all.
+    Walks the parsed records from the end, picks the first ``role:
+    assistant`` record, and extracts text content (handling both string and
     structured-block content shapes used by the SDK).
+
+    Sidechain (subagent) records are skipped: after any subagent turn the
+    most recent assistant record is the *subagent's* reply, which describes
+    a different conversation and would misroute the user's next prompt (P6
+    — mirrors the same skip in ``checkpoint.read_context_tokens``).
 
     Returns ``None`` on any failure — missing file, unreadable, no
     assistant turn yet, malformed JSONL. Callers must treat ``None``
@@ -47,9 +59,27 @@ def read_last_assistant_response(transcript_path: Path | str | None) -> str | No
 
     try:
         size = path.stat().st_size
+    except OSError as e:
+        logger.debug("Could not stat transcript %s: %s", path, e)
+        return None
+
+    window = _TAIL_BYTES
+    for _ in range(_MAX_WINDOW_DOUBLINGS + 1):
+        text = _scan_tail(path, size, window)
+        if text is not None:
+            return text
+        if window >= size:
+            return None  # the whole file was scanned — nothing to find
+        window *= 2
+    return None
+
+
+def _scan_tail(path: Path, size: int, window: int) -> str | None:
+    """One pass over the last *window* bytes; ``None`` when nothing usable."""
+    try:
         with path.open("rb") as f:
-            if size > _TAIL_BYTES:
-                f.seek(size - _TAIL_BYTES)
+            if size > window:
+                f.seek(size - window)
                 # Drop the (likely partial) first line.
                 f.readline()
             tail = f.read().decode("utf-8", errors="replace")
@@ -66,6 +96,8 @@ def read_last_assistant_response(transcript_path: Path | str | None) -> str | No
             record = json.loads(line)
         except (json.JSONDecodeError, ValueError):
             continue
+        if isinstance(record, dict) and record.get("isSidechain"):
+            continue  # a subagent's turn, not this conversation's (P6)
         text = _extract_assistant_text(record)
         if text is not None:
             return text

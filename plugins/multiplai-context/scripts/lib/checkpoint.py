@@ -63,6 +63,12 @@ logger = logging.getLogger("multiplai.checkpoint")
 # always within the final few hundred KB.
 _TAIL_BYTES = 512_000
 
+# When the tail window holds no complete usage record at all (one oversized
+# tool-result line can swallow it), retry with a doubled window before
+# answering 0: 512KB → 1MB → 2MB, then stop. A spurious 0 makes
+# session_stop skip the whole checkpoint pass for that turn (P8).
+_MAX_WINDOW_DOUBLINGS = 2
+
 # A writing.marker older than this is considered orphaned (writer crashed).
 _WRITER_STALE_S = 600
 
@@ -345,15 +351,17 @@ def read_context_tokens(
     (fresh enough) usage records — callers treat 0 as "no action".
     Sidechain (subagent) records are skipped — their usage describes a
     different context window.
+
+    A window that holds no usage record *at all* is retried with a doubled
+    window (up to ``_MAX_WINDOW_DOUBLINGS``) before answering 0 — one
+    oversized tool-result line at the tail must not read as "empty
+    session". A window that reaches a determinate answer (a usage record,
+    or the ``after_ts`` cutoff) is never retried: scanning further back
+    can only find *older* records.
     """
     path = Path(transcript_path)
     try:
         size = path.stat().st_size
-        with path.open("rb") as f:
-            if size > _TAIL_BYTES:
-                f.seek(size - _TAIL_BYTES)
-                f.readline()  # discard the partial first line
-            tail = f.read().decode("utf-8", errors="replace")
     except OSError:
         return 0
 
@@ -365,6 +373,35 @@ def read_context_tokens(
                 cutoff = cutoff.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
             cutoff = None
+
+    window = _TAIL_BYTES
+    for _ in range(_MAX_WINDOW_DOUBLINGS + 1):
+        tokens = _scan_usage_tail(path, size, window, cutoff)
+        if tokens is not None:
+            return tokens
+        if window >= size:
+            return 0  # whole file scanned — genuinely no usage records
+        window *= 2
+    return 0
+
+
+def _scan_usage_tail(
+    path: Path, size: int, window: int, cutoff: datetime | None
+) -> int | None:
+    """One pass over the last *window* bytes for the newest usage record.
+
+    Returns a token count on a determinate answer (including 0 at the
+    ``cutoff``), or ``None`` when the window held no decidable record —
+    the caller's signal to widen and retry.
+    """
+    try:
+        with path.open("rb") as f:
+            if size > window:
+                f.seek(size - window)
+                f.readline()  # discard the partial first line
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return 0
 
     for line in reversed(tail.splitlines()):
         line = line.strip()
@@ -398,7 +435,7 @@ def read_context_tokens(
             + (usage.get("cache_read_input_tokens") or 0)
             + (usage.get("cache_creation_input_tokens") or 0)
         )
-    return 0
+    return None
 
 
 def is_child_session(transcript_path: str | Path | None = None) -> bool:
