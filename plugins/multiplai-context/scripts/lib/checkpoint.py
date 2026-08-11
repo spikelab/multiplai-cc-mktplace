@@ -63,6 +63,12 @@ logger = logging.getLogger("multiplai.checkpoint")
 # always within the final few hundred KB.
 _TAIL_BYTES = 512_000
 
+# When the tail window holds no complete usage record at all (one oversized
+# tool-result line can swallow it), retry with a doubled window before
+# answering 0: 512KB → 1MB → 2MB, then stop. A spurious 0 makes
+# session_stop skip the whole checkpoint pass for that turn (P8).
+_MAX_WINDOW_DOUBLINGS = 2
+
 # A writing.marker older than this is considered orphaned (writer crashed).
 _WRITER_STALE_S = 600
 
@@ -345,15 +351,17 @@ def read_context_tokens(
     (fresh enough) usage records — callers treat 0 as "no action".
     Sidechain (subagent) records are skipped — their usage describes a
     different context window.
+
+    A window that holds no usage record *at all* is retried with a doubled
+    window (up to ``_MAX_WINDOW_DOUBLINGS``) before answering 0 — one
+    oversized tool-result line at the tail must not read as "empty
+    session". A window that reaches a determinate answer (a usage record,
+    or the ``after_ts`` cutoff) is never retried: scanning further back
+    can only find *older* records.
     """
     path = Path(transcript_path)
     try:
         size = path.stat().st_size
-        with path.open("rb") as f:
-            if size > _TAIL_BYTES:
-                f.seek(size - _TAIL_BYTES)
-                f.readline()  # discard the partial first line
-            tail = f.read().decode("utf-8", errors="replace")
     except OSError:
         return 0
 
@@ -365,6 +373,35 @@ def read_context_tokens(
                 cutoff = cutoff.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
             cutoff = None
+
+    window = _TAIL_BYTES
+    for _ in range(_MAX_WINDOW_DOUBLINGS + 1):
+        tokens = _scan_usage_tail(path, size, window, cutoff)
+        if tokens is not None:
+            return tokens
+        if window >= size:
+            return 0  # whole file scanned — genuinely no usage records
+        window *= 2
+    return 0
+
+
+def _scan_usage_tail(
+    path: Path, size: int, window: int, cutoff: datetime | None
+) -> int | None:
+    """One pass over the last *window* bytes for the newest usage record.
+
+    Returns a token count on a determinate answer (including 0 at the
+    ``cutoff``), or ``None`` when the window held no decidable record —
+    the caller's signal to widen and retry.
+    """
+    try:
+        with path.open("rb") as f:
+            if size > window:
+                f.seek(size - window)
+                f.readline()  # discard the partial first line
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return 0
 
     for line in reversed(tail.splitlines()):
         line = line.strip()
@@ -398,7 +435,7 @@ def read_context_tokens(
             + (usage.get("cache_read_input_tokens") or 0)
             + (usage.get("cache_creation_input_tokens") or 0)
         )
-    return 0
+    return None
 
 
 def is_child_session(transcript_path: str | Path | None = None) -> bool:
@@ -704,41 +741,30 @@ def session_hostname() -> str:
     return _hostname_key()
 
 
-def marker_name(cwd: str, hostname: str | None = None) -> str:
-    """Filename for the pending marker of *cwd*'s project on this host.
+def _marker_path(pdir: Path, project: str, host: str) -> Path:
+    """The pending-marker file for a ``(project, host)`` key.
+
+    **The one statement of the marker naming rule** — it used to be written
+    three times (two public name builders plus inline f-strings in the
+    write/consume paths), which is exactly how naming rules drift apart.
 
     Keyed by project **and** hostname. Project alone was the bug: two windows
     open on the same project share one marker file and the last writer wins,
     so on 2026-08-08 a second DolceBot window crossing its token band
     overwrote the pointer of the window that was about to be ``/clear``-ed,
     and the cleared window was rebuilt from the other one's checkpoint.
+    ``hostname`` is the discriminator because the registry already records it
+    (``$HOSTNAME``, the container name in kit containers) and because
+    ``/clear`` keeps the same container. It separates windows only where one
+    window means one container — on vanilla Claude Code ``$HOSTNAME`` is the
+    machine, so every window on a project still shares one key; keying on
+    hostname is strictly better than project alone in both setups, not a
+    general fix.
 
-    ``hostname`` is the discriminator because it is the one the registry
-    already records (``session_registry._hostname`` → ``$HOSTNAME``, the
-    container name in kit containers) and because ``/clear`` keeps the same
-    container — verified in the field: sessions ``24c0a766`` and ``2e29e3cb``
-    are the pre- and post-``/clear`` halves of one tab and share hostname
-    ``claude-work-04221854``. A window in a *different* container therefore
-    cannot clobber this one's pointer, and the window that was cleared still
-    finds its own.
-
-    **This separates windows only where one window means one container** — the
-    kit, where each session gets its own OrbStack container. On vanilla Claude
-    Code ``$HOSTNAME`` is the machine, so every window on a project shares one
-    key and the clobbering described above is unchanged there. Fixing that
-    needs a per-window id the hook layer does not currently expose; keying on
-    hostname is strictly better than keying on project alone in both setups,
-    and it is not a general fix.
-
-    Falls back to the legacy ``<project>.json`` when the hostname is unknown.
-
-    Prefer :func:`session_marker_name` wherever a session id is in hand: both
-    halves of this key are properties of the SESSION, and neither survives
-    being re-derived from the writing process (see that function).
+    An empty *host* falls back to the legacy ``<project>.json`` name, so a
+    marker written where the hostname cannot be read is still claimable.
     """
-    host = _sanitize_key(hostname) if hostname is not None else _hostname_key()
-    key = _project_key(cwd)
-    return f"{key}__{host}.json" if host else f"{key}.json"
+    return pdir / (f"{project}__{host}.json" if host else f"{project}.json")
 
 
 def _registry_identity(data_dir: Path, session_id: str) -> dict:
@@ -760,14 +786,14 @@ def _registry_identity(data_dir: Path, session_id: str) -> dict:
     return entry if isinstance(entry, dict) else {}
 
 
-def session_marker_name(
+def _session_key_parts(
     data_dir: Path, session_id: str, cwd: str, hostname: str | None = None
-) -> str:
-    """Marker filename for *session_id*, keyed by the session's OWN identity.
+) -> tuple[str, str]:
+    """``(project, host)`` marker key for *session_id*; ``host`` may be "".
 
-    :func:`marker_name` derives both halves of the key from the calling
-    process — ``cwd`` for the project, ``$HOSTNAME`` for the container — and
-    each of those is wrong for a different caller:
+    Keyed by the session's OWN identity, never re-derived from the calling
+    process — each half of a process-derived key is wrong for a different
+    caller:
 
     * **Project (#183).** Claude Code's ``cwd`` follows shell navigation, so a
       session rooted at the workspace that does some work inside a sub-repo
@@ -785,14 +811,6 @@ def session_marker_name(
     explicit *hostname* (the queued payload carries the session's own),
     then the registry entry, then this process's environment.
     """
-    project, host = _session_key_parts(data_dir, session_id, cwd, hostname)
-    return f"{project}__{host}.json" if host else f"{project}.json"
-
-
-def _session_key_parts(
-    data_dir: Path, session_id: str, cwd: str, hostname: str | None = None
-) -> tuple[str, str]:
-    """``(project, host)`` for :func:`session_marker_name`; ``host`` may be ""."""
     entry = _registry_identity(data_dir, session_id)
     project = _sanitize_key(str(entry.get("project") or "")) or _project_key(cwd)
     host = _sanitize_key(hostname) if hostname else ""
@@ -821,7 +839,7 @@ def write_pending_marker(
     pdir = _pending_dir(data_dir)
     pdir.mkdir(parents=True, exist_ok=True)
     project, host = _session_key_parts(data_dir, session_id, cwd, hostname)
-    marker = pdir / (f"{project}__{host}.json" if host else f"{project}.json")
+    marker = _marker_path(pdir, project, host)
     payload = {
         "session_id": session_id,
         "cwd": cwd,
@@ -866,9 +884,9 @@ def consume_pending_marker(
     """
     pdir = _pending_dir(data_dir)
     project, host = _session_key_parts(data_dir, new_session_id, cwd)
-    marker = pdir / (f"{project}__{host}.json" if host else f"{project}.json")
+    marker = _marker_path(pdir, project, host)
     if not marker.exists():
-        legacy = pdir / f"{project}.json"
+        legacy = _marker_path(pdir, project, "")
         marker = legacy if legacy != marker and legacy.exists() else marker
     if not marker.exists():
         return None
@@ -969,7 +987,36 @@ def pending_marker_owner(data_dir: Path, session_id: str) -> Path | None:
     return None
 
 
-def retire_checkpoint(data_dir: Path, session_id: str) -> tuple[bool, str]:
+def pending_marker_owners(data_dir: Path) -> dict[str, str]:
+    """``{session_id: marker filename}`` for every pending marker, one scan.
+
+    The bulk form of :func:`pending_marker_owner`, for callers about to ask
+    the question once per session directory: the sweep used to re-read and
+    re-parse every marker for every candidate — O(sessions × markers) JSON
+    parses inside a SessionStart hook (P9).
+    """
+    owners: dict[str, str] = {}
+    try:
+        markers = sorted(_pending_dir(data_dir).glob("*.json"))
+    except OSError:
+        return owners
+    for marker in markers:
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(payload, dict):
+            sid = str(payload.get("session_id") or "")
+            if sid and sid not in owners:
+                owners[sid] = marker.name
+    return owners
+
+
+def retire_checkpoint(
+    data_dir: Path,
+    session_id: str,
+    pending_owners: dict[str, str] | None = None,
+) -> tuple[bool, str]:
     """Delete ``checkpoints/<session_id>/`` now that the diary supersedes it.
 
     Returns ``(removed, reason_kept)``, which distinguishes the three outcomes
@@ -980,6 +1027,9 @@ def retire_checkpoint(data_dir: Path, session_id: str) -> tuple[bool, str]:
       sessions never cross a token band, so they never had a checkpoint.
     * ``(False, "<reason>")`` — deliberately kept. A checkpoint that survives
       always says why.
+
+    *pending_owners* (from :func:`pending_marker_owners`) lets a bulk caller
+    pre-load the marker scan once; ``None`` keeps the per-call scan.
 
     Never raises. Failing to collect a checkpoint costs disk; failing an
     extraction costs the session's diary entry, and this runs inside that
@@ -996,9 +1046,13 @@ def retire_checkpoint(data_dir: Path, session_id: str) -> tuple[bool, str]:
             # would race its atomic rename, and the writer would recreate a
             # half-populated directory on the way out anyway.
             return False, "writer in flight"
-        marker = pending_marker_owner(data_dir, session_id)
-        if marker is not None:
-            return False, f"pending rebuild marker {marker.name}"
+        if pending_owners is None:
+            marker = pending_marker_owner(data_dir, session_id)
+            marker_name = marker.name if marker is not None else None
+        else:
+            marker_name = pending_owners.get(session_id)
+        if marker_name is not None:
+            return False, f"pending rebuild marker {marker_name}"
 
         # TOCTOU, accepted: between the two guards above and the rmtree below
         # a concurrent Stop hook could still claim the writer or write a
@@ -1126,18 +1180,27 @@ def sweep_checkpoints(data_dir: Path, cfg: CheckpointConfig) -> tuple[int, int]:
     except OSError:
         return expired, 0
 
-    for sdir in candidates:
+    # One marker scan for the whole sweep (P9): retire_checkpoint's own
+    # per-session scan is O(sessions × markers) JSON parses from inside a
+    # SessionStart hook. Snapshot semantics are fine here — every candidate
+    # is at least gc_days old, so a marker appearing mid-sweep belongs to a
+    # session this pass would not collect anyway.
+    owners = pending_marker_owners(data_dir)
+    for index, sdir in enumerate(candidates):
         if retired >= _SWEEP_MAX_RETIRE:
+            # Count what the loop has not LOOKED AT yet (P14) — the old
+            # ``len(candidates) - retired`` mixed up collections with
+            # positions and overstated the backlog.
             logger.info(
                 "Checkpoint sweep stopped at %d collections; %d directories "
                 "remain for the next run",
-                retired, len(candidates) - retired,
+                retired, len(candidates) - index,
             )
             break
         seen = _last_activity(data_dir, sdir.name, sdir)
         if seen is None or seen > cutoff:
             continue
-        removed, kept = retire_checkpoint(data_dir, sdir.name)
+        removed, kept = retire_checkpoint(data_dir, sdir.name, pending_owners=owners)
         if removed:
             retired += 1
         elif kept:

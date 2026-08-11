@@ -145,9 +145,10 @@ class TestExtractionPath:
     """Criterion 8, end to end through the LLM call."""
 
     def _extract(self, content):
-        return asyncio.run(extraction.extract_units_and_disposition(
+        units, disposition, _ = asyncio.run(extraction.extract_session_signals(
             "t", valid_targets=[], client=_client(content),
         ))
+        return units, disposition
 
     def test_a_session_ending_in_were_done_is_done(self):
         _, d = self._extract(_response(disposition=("done", "user said we're done")))
@@ -195,7 +196,7 @@ class TestExtractionPath:
 
     def test_it_costs_no_extra_model_call(self):
         client = _client(_response(disposition=("done", "x")))
-        asyncio.run(extraction.extract_units_and_disposition(
+        asyncio.run(extraction.extract_session_signals(
             "t", valid_targets=[], client=client,
         ))
 

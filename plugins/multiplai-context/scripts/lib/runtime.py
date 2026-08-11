@@ -89,15 +89,21 @@ def _kill_group(proc: subprocess.Popen) -> None:
 
 
 def run_supervised(
-    argv: Sequence[str], *, timeout: float, text: bool = True
+    argv: Sequence[str], *, timeout: float, text: bool = True,
+    input: str | bytes | None = None,
 ) -> subprocess.CompletedProcess:
     """Run *argv* to completion, killing its whole process tree on timeout.
 
     A drop-in replacement for ``subprocess.run(argv, capture_output=True,
-    text=text, timeout=timeout)``: same ``CompletedProcess`` on success, same
-    ``subprocess.TimeoutExpired`` (carrying whatever output was captured) when
-    the deadline passes. The difference is what a timeout *does* — see this
-    module's docstring under "Supervising".
+    text=text, timeout=timeout, input=input)``: same ``CompletedProcess`` on
+    success, same ``subprocess.TimeoutExpired`` (carrying whatever output was
+    captured) when the deadline passes. The difference is what a timeout
+    *does* — see this module's docstring under "Supervising".
+
+    ``input`` (matching *text*: ``str`` when text, ``bytes`` otherwise) is
+    piped to the child's stdin and its stdin is closed after — the shape
+    ``pre_compact.py`` needs to hand the checkpoint writer its payload while
+    keeping the process-group kill semantics.
 
     ``start_new_session=True`` makes the child a session and process-group
     leader, so its own descendants inherit that group and one ``killpg`` reaches
@@ -108,12 +114,13 @@ def run_supervised(
     proc = subprocess.Popen(
         list(argv),
         start_new_session=True,
+        stdin=subprocess.PIPE if input is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=text,
     )
     try:
-        out, err = proc.communicate(timeout=timeout)
+        out, err = proc.communicate(input=input, timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_group(proc)
         # Second communicate() with no deadline: the pipes are closed by the

@@ -340,3 +340,16 @@ def record_announced(state: dict, project_dir: Path, turn_index: int) -> None:
         announced = {}
     announced[str(project_dir)] = max(0, turn_index)
     state[_STATE_KEY] = announced
+
+
+def clear_announcements(state: dict) -> bool:
+    """Drop the announcement map from `state`; True when something was dropped.
+
+    For pre_compact's post-compaction reset (P13): compaction removes the
+    injected DEV REFERENCES block from the context, and a surviving
+    announcement entry — with `should_announce`'s once-per-session reading
+    of `turn_index <= 0` — would suppress re-announcement for the rest of
+    the session. Dropping the key makes every project "never announced"
+    again, which is the truth of the fresh window.
+    """
+    return state.pop(_STATE_KEY, None) is not None

@@ -704,35 +704,13 @@ async def extract_units(
     Raises on LLM failure — caller decides whether to continue with
     correction-only output.
 
-    See :func:`extract_units_and_disposition` for the variant that also
-    returns how the session was left.
+    See :func:`extract_session_signals` for the full-signal variant (units
+    plus disposition plus utilisation, one call).
     """
-    units, _ = await extract_units_and_disposition(
+    units, _, _ = await extract_session_signals(
         text, valid_targets=valid_targets, client=client
     )
     return units
-
-
-async def extract_units_and_disposition(
-    text: str,
-    *,
-    valid_targets: Sequence[Union[str, dict]],
-    client,
-) -> tuple[list[dict], dict]:
-    """:func:`extract_units`, plus the session-level disposition block.
-
-    Two functions rather than one changed signature: ``extract_units`` has
-    several callers and a large test surface, and only the live extraction
-    path cares how the session was left. The disposition rides along on the
-    *same* model response — it costs no extra call.
-
-    See :func:`extract_session_signals` for the variant that also returns the
-    self-reported memory utilisation.
-    """
-    units, disposition, _ = await extract_session_signals(
-        text, valid_targets=valid_targets, client=client
-    )
-    return units, disposition
 
 
 async def extract_session_signals(

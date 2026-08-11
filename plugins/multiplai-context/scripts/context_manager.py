@@ -52,6 +52,7 @@ from lib.banks import (
 )
 from lib.banks import resolve_ref as resolve_bank_ref
 from lib.banks import split_ref as split_bank_pick
+from lib.hook_input import read_hook_input
 from lib.memory_router import create_router
 from lib.plugin_skills import plugin_skill_owners, qualify
 from lib import reference_docs
@@ -69,6 +70,10 @@ logger = setup_logging("context_manager")
 
 # Catalog types supported by _read_catalog_or_scan()
 _KNOWN_CATALOG_TYPES = frozenset({"memory", "banks", "diary", "skills", "resources"})
+
+# Cap on the last-assistant-response text handed to the router — see the
+# truncation site in _assemble_and_emit for why (P7).
+_LAST_RESPONSE_MAX_CHARS = 2000
 
 # Once-per-session warning deduplication (Decision 8).
 # Keyed by full catalog file path to correctly dedup across
@@ -123,21 +128,6 @@ def _rank_memory_files(memory_dir: Path) -> list[RankedFile]:
 
     ranked.sort(key=lambda r: r.score, reverse=True)
     return ranked
-
-
-def _read_memory_files(memory_dir: Path) -> dict[str, str]:
-    """Read all markdown memory files from *memory_dir*.
-
-    Returns a dict mapping filename to content.  Missing or unreadable
-    files are silently skipped.
-    """
-    result: dict[str, str] = {}
-    for f in _iter_markdown_files(memory_dir):
-        try:
-            result[f.name] = f.read_text()
-        except Exception:
-            logger.warning("Failed to read memory file: %s", f)
-    return result
 
 
 def _read_top_memory_files(
@@ -1057,22 +1047,23 @@ def _persist_turn_state(
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def _emit_result(context: str, result: dict) -> None:
+def _emit_result(context: str) -> None:
     """Write the hook result to stdout in the shape Claude Code actually reads.
 
     UserPromptSubmit only injects context from ``hookSpecificOutput.
     additionalContext`` (or plain stdout text) — a bare ``{"context": ...}``
-    key is silently ignored, which made routed memory a no-op. We emit
-    ``additionalContext`` for Claude Code AND keep the legacy ``context`` /
-    ``*_files`` keys (extra keys are ignored by the harness) so existing
-    consumers and tests still read the same fields.
+    key is silently ignored, which once made routed memory a no-op. The
+    legacy top-level ``context`` / ``*_files`` keys that used to ride along
+    for old consumers are gone (P3): grep found tests as their only readers,
+    and at 40KB injections the duplicate context doubled hook stdout on
+    every prompt.
     """
-    payload = dict(result)
-    payload["hookSpecificOutput"] = {
-        "hookEventName": "UserPromptSubmit",
-        "additionalContext": context,
-    }
-    print(json.dumps(payload))
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": context,
+        }
+    }))
 
 
 def main() -> None:
@@ -1080,10 +1071,17 @@ def main() -> None:
     # Read stdin and name the session *before* opening hook_run, so the
     # HOOK_ENTRY line identifies whose prompt is at stake. This hook has a 30s
     # harness ceiling and a kill leaves nothing behind but that line.
-    try:
-        input_data = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError):
-        input_data = {}
+    input_data = read_hook_input()
+
+    # A subagent / nested hook session gets no routed memory: a per-prompt
+    # router call inside every SDK child would multiply cost and latency for
+    # context the child was deliberately spawned without (M7). Still emit the
+    # safe empty payload — this hook's contract is JSON on stdout, always.
+    from lib.checkpoint import is_child_session
+
+    if is_child_session(input_data.get("transcript_path") or ""):
+        _emit_result("")
+        return
 
     session_id = (
         input_data.get("session_id") if isinstance(input_data, dict) else None
@@ -1133,6 +1131,14 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
         last_response = (
             read_last_assistant_response(transcript_path) if prompt else None
         )
+    # Bound the disambiguation text (P7). token_overlap's domain score is an
+    # UNNORMALIZED sum of matched IDF weights, so a 64KB previous turn can
+    # out-vote a ten-word prompt and route the turn on what was just said
+    # rather than what was just asked; the same text also rides verbatim
+    # into the LLM router's prompt. 2000 chars keeps the disambiguation
+    # signal (the head states what the turn was about) without the weight.
+    if last_response and len(last_response) > _LAST_RESPONSE_MAX_CHARS:
+        last_response = last_response[:_LAST_RESPONSE_MAX_CHARS]
 
     with run.stage("catalogs"):
         # Plugin-options-driven config (which corpora are enabled, paths, etc.)
@@ -1429,8 +1435,7 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
         if cooldown_active:
             _persist_turn_state(session_state, turn_index, recent, {}, cooldown)
         run.note(outcome=_outcome, files=0, bytes=0)
-        result = {"context": "", "memory_files": 0}
-        _emit_result("", result)
+        _emit_result("")
         return
 
     parts: list[str] = []
@@ -1526,16 +1531,7 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
             cooldown,
         )
 
-    result = {
-        "context": session_context,
-        # Backward-compat: older consumers read memory_files
-        "memory_files": corpus_counts["memory"],
-        "skills_files": corpus_counts["skills"],
-        "resources_files": corpus_counts["resources"],
-        "corpus_counts": corpus_counts,
-        "dev_references": bool(dev_refs),
-    }
-    _emit_result(session_context, result)
+    _emit_result(session_context)
 
 
 if __name__ == "__main__":
@@ -1548,11 +1544,5 @@ if __name__ == "__main__":
             logger.exception("context_manager hook failed; emitting empty context")
         except Exception:
             pass
-        _emit_result("", {
-            "context": "",
-            "memory_files": 0,
-            "skills_files": 0,
-            "resources_files": 0,
-            "corpus_counts": {"memory": 0, "skills": 0, "resources": 0},
-        })
+        _emit_result("")
         sys.exit(0)

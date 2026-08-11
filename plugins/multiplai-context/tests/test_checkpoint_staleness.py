@@ -343,7 +343,7 @@ class TestCheckpointPassExecuted:
         monkeypatch.delenv("_HOOK_CHILD_SESSION", raising=False)
         payloads = []
         monkeypatch.setattr(
-            session_stop, "_spawn_writer", lambda p: payloads.append(p) or True
+            session_stop.cp, "spawn_writer", lambda p: payloads.append(p) or True
         )
         session_stop._checkpoint_pass(
             {

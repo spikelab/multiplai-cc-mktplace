@@ -38,6 +38,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib import checkpoint as cp
+from lib.fsio import atomic_write_json
+from lib.hook_input import read_hook_input
 
 logger = setup_logging("checkpoint_nudge")
 
@@ -72,9 +74,10 @@ def _read_state(cfile: Path) -> dict:
 
 
 def _write_state(cfile: Path, payload: dict) -> None:
+    # Atomic (P11): this file also carries the hard-stop override watermark,
+    # and a truncated bare write_text would silently drop a live !keepgoing.
     try:
-        cfile.parent.mkdir(parents=True, exist_ok=True)
-        cfile.write_text(json.dumps(payload))
+        atomic_write_json(cfile, payload)
     except OSError:
         pass
 
@@ -153,12 +156,7 @@ def _hard_stop(
 
 
 def main() -> None:
-    try:
-        hook_input = json.loads(sys.stdin.read() or "{}")
-    except Exception:
-        hook_input = {}
-    if not isinstance(hook_input, dict):
-        return
+    hook_input = read_hook_input()
 
     session_id = hook_input.get("session_id") or ""
     setup_logging("checkpoint_nudge", session_id=session_id)

@@ -28,6 +28,7 @@ import pytest
 from conftest import import_script
 from lib import checkpoint as cp
 from lib import checkpoint_drain as cpd
+from lib import extraction_drain
 
 session_end = import_script("session_end_checkpoint", "session_end.py")
 
@@ -230,7 +231,7 @@ class TestTheDrain:
             def wait(self):
                 return 0
 
-        monkeypatch.setattr(cpd.subprocess, "Popen", _Popen)
+        monkeypatch.setattr(extraction_drain.subprocess, "Popen", _Popen)
         cpd.queue_pending_checkpoint(data_env, {
             "session_id": "s1", "transcript_path": "/t.jsonl",
             "cwd": "/work/proj", "tokens": 120_000,
@@ -294,13 +295,71 @@ class TestTheDrain:
         assert "os.rename(str(marker_file), str(dest))" not in source
         assert callable(extraction_drain.claim_pending_markers)
 
+    def test_exhausted_checkpoint_markers_quarantine_under_their_own_name(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        """M12: a dead CHECKPOINT marker must land in failed_checkpoints/,
+        not failed_extractions/ — the shared recovery helper used to derive
+        the extraction queue's name for both."""
+        import os
+        import time
+
+        from lib import extraction_drain
+
+        procdir = cpd.processing_dir(data_env)
+        procdir.mkdir(parents=True, exist_ok=True)
+        m = procdir / "s1.json"
+        m.write_text(json.dumps({
+            "session_id": "s1", "attempts": extraction_drain.MAX_ATTEMPTS,
+        }))
+        old = time.time() - extraction_drain.STALE_SECONDS - 60
+        os.utime(m, (old, old))
+        writer = tmp_path / "checkpoint_writer.py"
+        writer.write_text("# stub\n")
+        monkeypatch.setattr(
+            extraction_drain.subprocess, "Popen",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("no launch")),
+        )
+
+        cpd.process_pending_checkpoints(data_env, writer)
+
+        assert (data_env / "failed_checkpoints" / "s1.json").exists()
+        assert not (data_env / "failed_extractions").exists()
+
+    def test_an_inflight_writer_defers_the_drain_launch(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        """M4 regression: a fresh writing.marker means a live writer owns this
+        session's state.json — the drain must requeue, not launch a duplicate."""
+        launched = []
+        monkeypatch.setattr(
+            extraction_drain.subprocess, "Popen",
+            lambda *a, **k: launched.append(1) or (_ for _ in ()).throw(
+                AssertionError("must not launch past an in-flight writer")
+            ),
+        )
+        cpd.queue_pending_checkpoint(data_env, {
+            "session_id": "s1", "transcript_path": "/t.jsonl", "cwd": "/w",
+            "tokens": 1, "reason": "session-end:other",
+        })
+        cp.claim_writer(data_env, "s1")  # fresh marker: writer mid-write
+        writer = tmp_path / "checkpoint_writer.py"
+        writer.write_text("# stub\n")
+
+        result = cpd.process_pending_checkpoints(data_env, writer)
+
+        assert result.launched == 0
+        assert launched == []
+        # Back in pending for a later drain, not lost and not in processing.
+        assert cpd.pending_checkpoint_count(data_env) == 1
+
     def test_a_launch_failure_requeues_rather_than_losing_the_save(
         self, tmp_path, data_env, monkeypatch
     ):
         def _boom(*a, **k):
             raise OSError("no fork for you")
 
-        monkeypatch.setattr(cpd.subprocess, "Popen", _boom)
+        monkeypatch.setattr(extraction_drain.subprocess, "Popen", _boom)
         cpd.queue_pending_checkpoint(data_env, {
             "session_id": "s1", "transcript_path": "/t.jsonl", "cwd": "/w",
             "tokens": 1, "reason": "session-end:other",
@@ -331,7 +390,7 @@ class TestTheDrain:
             def close(self):
                 pass
 
-        monkeypatch.setattr(cpd.subprocess, "Popen", _Popen)
+        monkeypatch.setattr(extraction_drain.subprocess, "Popen", _Popen)
         cpd.queue_pending_checkpoint(data_env, {
             "session_id": "s1", "transcript_path": "/t.jsonl", "cwd": "/w",
             "tokens": 1, "reason": "session-end:other",

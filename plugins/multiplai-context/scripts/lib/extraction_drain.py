@@ -41,11 +41,22 @@ from lib.runtime import uv_run_argv
 
 logger = logging.getLogger(__name__)
 
-# Retry policy for markers left in ``processing_extractions/``. A detached
-# extraction child should finish well within the stale window; markers older
+# Retry policy for markers left in ``processing_extractions/`` (and, via
+# ``lib.checkpoint_drain``, in ``processing_checkpoints/``). Markers older
 # than this with no completion are assumed orphaned and requeued, capped at
 # MAX_ATTEMPTS before being quarantined.
-STALE_SECONDS = 900
+#
+# Derived from the slowest legitimate child, not from a hunch: the checkpoint
+# child runs ``run_agent(timeout_s=cfg.timeout_s (600), max_attempts=2)`` with
+# the timeout applied per attempt plus retry backoff, so a slow-but-alive
+# writer can legitimately run past 1200s; the extraction child has no
+# wall-clock bound at all (one LLM call per transcript chunk). The previous
+# 900s window sat *inside* that range, so a live child could be declared
+# stale, its marker requeued, and a duplicate launched against the same
+# state.json — paying the model cost twice. 1800s clears the checkpoint
+# worst case with margin; a genuinely dead marker waiting half an hour for
+# recovery costs nothing.
+STALE_SECONDS = 1800
 MAX_ATTEMPTS = 3
 
 
@@ -62,19 +73,29 @@ class DrainResult(NamedTuple):
     failed: int
 
 
-def recover_stale_processing(processing_dir: Path, pending_dir: Path) -> None:
+def recover_stale_processing(
+    processing_dir: Path, pending_dir: Path, failed_dir: Path | None = None
+) -> None:
     """Requeue (or fail) markers stuck in ``processing_extractions/``.
 
     A detached extraction child deletes its own marker on success. If the
     child died (venv re-exec failure, crash, no model client) the marker
     lingers here. Markers older than the stale window are requeued for
-    retry, capped at ``MAX_ATTEMPTS`` before being moved to
-    ``failed_extractions/`` so a permanently-bad transcript can't loop
-    forever and stays visible for debugging.
+    retry, capped at ``MAX_ATTEMPTS`` before being moved to *failed_dir*
+    so a permanently-bad transcript can't loop forever and stays visible
+    for debugging.
+
+    *failed_dir* must be passed per queue (M12): this helper serves the
+    checkpoint queue too, and the old derived default filed dead
+    *checkpoint* markers under ``failed_extractions/`` — indistinguishable
+    from failed extractions to log-doctor and to anyone debugging.
+    Defaults to ``failed_extractions/`` beside the queue for compatibility
+    with extraction-queue callers.
     """
     if not processing_dir.exists():
         return
-    failed_dir = processing_dir.parent / "failed_extractions"
+    if failed_dir is None:
+        failed_dir = processing_dir.parent / "failed_extractions"
     now = time.time()
     for m in list(processing_dir.glob("*.json")):
         try:
@@ -128,7 +149,9 @@ def recover_stale_processing(processing_dir: Path, pending_dir: Path) -> None:
                 pass
 
 
-def claim_pending_markers(pending_dir: Path, processing_dir: Path):
+def claim_pending_markers(
+    pending_dir: Path, processing_dir: Path, failed_dir: Path | None = None
+):
     """Dequeue every marker in *pending_dir*, yielding ``(path, payload)``.
 
     **The one implementation of the dequeue**, used by this module's
@@ -145,7 +168,8 @@ def claim_pending_markers(pending_dir: Path, processing_dir: Path):
     * a parse, discarding anything unreadable (it will never succeed).
 
     Stale markers left by a dead child are recovered into *pending_dir* first,
-    so this pass picks them up.
+    so this pass picks them up. *failed_dir* is where recovery quarantines a
+    marker that exhausted its retries — pass the right one per queue (M12).
 
     The caller owns what happens next, including requeueing on a launch
     failure — that decision differs per queue.
@@ -156,7 +180,7 @@ def claim_pending_markers(pending_dir: Path, processing_dir: Path):
     except OSError:
         return
 
-    recover_stale_processing(processing_dir, pending_dir)
+    recover_stale_processing(processing_dir, pending_dir, failed_dir)
 
     for marker_file in list(pending_dir.glob("*.json")):
         dest = processing_dir / marker_file.name
@@ -211,6 +235,102 @@ def processing_count(data_dir: Path) -> int:
         return 0
 
 
+def _launch_queue(
+    pending_dir: Path,
+    processing_dir: Path,
+    script: Path,
+    *,
+    failed_dir: Path,
+    build_payload,
+    should_skip=None,
+    wait: bool = False,
+) -> DrainResult:
+    """The launch loop both queues share: claim, spawn, pipe, account.
+
+    This used to exist twice — here and in ``lib.checkpoint_drain`` —
+    duplicated verbatim, which is how the checkpoint copy quietly kept the
+    wrong ``failed_dir`` (M12). One implementation, two parameterizations:
+
+    * *build_payload(dest, marker)* → the dict piped to the child's stdin.
+    * *should_skip(marker)* → a reason string to requeue the marker without
+      launching (or ``None``); the checkpoint queue uses it to defer to an
+      in-flight writer.
+    * *failed_dir* — where stale recovery quarantines exhausted markers,
+      named per queue.
+
+    With *wait*, block until every launched child exits and let its stderr
+    through to this process's stderr. Hooks never do this — they must return
+    in seconds — but a human running the drain by hand needs to see whether
+    the children actually worked.
+    """
+    if not script.exists():
+        return DrainResult(0, 0)
+
+    launched = 0
+    children: list[subprocess.Popen] = []
+    # The dequeue itself (rename, mtime refresh, stale recovery, parse) lives
+    # in claim_pending_markers — see its docstring for why it is shared.
+    for dest, marker in claim_pending_markers(pending_dir, processing_dir, failed_dir):
+        if should_skip is not None:
+            reason = should_skip(marker)
+            if reason:
+                logger.info("%s; requeueing %s", reason, dest.name)
+                try:
+                    os.replace(str(dest), str(pending_dir / dest.name))
+                except OSError:
+                    logger.exception("Could not requeue skipped marker %s", dest.name)
+                continue
+        payload = build_payload(dest, marker)
+
+        try:
+            proc = subprocess.Popen(
+                uv_run_argv(script),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=None if wait else subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception:
+            logger.exception("Failed to launch drain child for %s", dest.name)
+            # Launch failed — return the marker to the queue so a later
+            # drain retries it instead of losing the session.
+            try:
+                os.replace(str(dest), str(pending_dir / dest.name))
+            except OSError:
+                logger.exception("Could not requeue marker after launch failure")
+            continue
+
+        # From here a child EXISTS, so a failure must NOT requeue: the
+        # marker in *processing_dir* now belongs to that child, and
+        # requeueing it would let a second drain launch a duplicate.
+        # A broken pipe means the child died before reading its payload
+        # (e.g. ``uv`` present but interpreter bootstrap failed) — the
+        # marker stays put for :func:`recover_stale_processing` to retry.
+        try:
+            if proc.stdin is not None:
+                proc.stdin.write(json.dumps(payload).encode("utf-8"))
+                proc.stdin.close()
+        except OSError:
+            logger.warning(
+                "Drain child for %s died before reading its payload; "
+                "leaving marker for stale recovery", dest.name,
+            )
+        children.append(proc)
+        launched += 1
+
+    failed = 0
+    if wait:
+        for proc in children:
+            try:
+                if proc.wait() != 0:
+                    failed += 1
+            except Exception:
+                logger.exception("Waiting on drain child failed")
+                failed += 1
+
+    return DrainResult(launched, failed)
+
+
 def process_deferred_extractions(
     data_dir: Path, extract_script: Path, *, wait: bool = False
 ) -> DrainResult:
@@ -225,29 +345,14 @@ def process_deferred_extractions(
     only) how many children exited nonzero.
 
     Atomic rename guarantees at-most-once dequeue if two drains race.
-
-    With *wait*, block until every launched child exits and let its stderr
-    through to this process's stderr. Hooks never do this — they must return
-    in seconds — but a human running the drain by hand needs to see whether
-    extraction actually worked, which is the whole point of the by-hand
-    auth proof.
     """
-    if not extract_script.exists():
-        return DrainResult(0, 0)
 
-    pending_dir = data_dir / "pending_extractions"
-    processing_dir = data_dir / "processing_extractions"
-
-    processed = 0
-    children: list[subprocess.Popen] = []
-    # The dequeue itself (rename, mtime refresh, stale recovery, parse) lives
-    # in claim_pending_markers — see its docstring for why it is shared.
-    for dest, marker in claim_pending_markers(pending_dir, processing_dir):
+    def build_payload(dest: Path, marker: dict) -> dict:
         # Pass the transcript PATH, not its contents: the child distills it
         # into token-bounded chunks before the LLM call. Piping a raw
         # multi-MB transcript here previously forced a single >200K-token
         # request that tripped the long-context billing gate (429).
-        payload: dict = {
+        return {
             "session_id": marker.get("session_id", ""),
             "cwd": marker.get("cwd", ""),
             "transcript_path": marker.get("transcript_path", ""),
@@ -260,50 +365,11 @@ def process_deferred_extractions(
             "marker_path": str(dest),
         }
 
-        try:
-            proc = subprocess.Popen(
-                uv_run_argv(extract_script),
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=None if wait else subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except Exception:
-            logger.exception("Failed to launch deferred extraction subprocess")
-            # Launch failed — return the marker to the queue so a later
-            # drain retries it instead of losing the session.
-            try:
-                os.replace(str(dest), str(pending_dir / dest.name))
-            except OSError:
-                logger.exception("Could not requeue marker after launch failure")
-            continue
-
-        # From here a child EXISTS, so a failure must NOT requeue: the
-        # marker in ``processing_extractions/`` now belongs to that child,
-        # and requeueing it would let a second drain launch a duplicate.
-        # A broken pipe means the child died before reading its payload
-        # (e.g. ``uv`` present but interpreter bootstrap failed) — the
-        # marker stays put for :func:`recover_stale_processing` to retry.
-        try:
-            if proc.stdin is not None:
-                proc.stdin.write(json.dumps(payload).encode("utf-8"))
-                proc.stdin.close()
-        except OSError:
-            logger.warning(
-                "Extraction child for %s died before reading its payload; "
-                "leaving marker for stale recovery", dest.name,
-            )
-        children.append(proc)
-        processed += 1
-
-    failed = 0
-    if wait:
-        for proc in children:
-            try:
-                if proc.wait() != 0:
-                    failed += 1
-            except Exception:
-                logger.exception("Waiting on extraction child failed")
-                failed += 1
-
-    return DrainResult(processed, failed)
+    return _launch_queue(
+        data_dir / "pending_extractions",
+        data_dir / "processing_extractions",
+        extract_script,
+        failed_dir=data_dir / "failed_extractions",
+        build_payload=build_payload,
+        wait=wait,
+    )

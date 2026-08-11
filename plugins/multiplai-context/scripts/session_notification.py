@@ -10,7 +10,6 @@ Deliberately does nothing else — no LLM calls, no state migration. With
 no hub installed the registry file is simply never read.
 """
 
-import json
 import sys
 from pathlib import Path
 
@@ -18,21 +17,21 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import hook_run, setup_logging
+from lib.hook_input import read_hook_input
 
 logger = setup_logging("session_notification")
 
 
 def main() -> None:
-    try:
-        raw_stdin = sys.stdin.read()
-    except OSError:
-        raw_stdin = ""
-    try:
-        hook_input = json.loads(raw_stdin or "{}")
-    except (json.JSONDecodeError, ValueError):
-        hook_input = {}
-    if not isinstance(hook_input, dict):
-        hook_input = {}
+    hook_input = read_hook_input()
+
+    # A subagent / nested hook session must not stamp the user's session
+    # registry — its "waiting for input" is not the user's (M7).
+    from lib.checkpoint import is_child_session
+
+    if is_child_session(hook_input.get("transcript_path") or ""):
+        return
+
     session_id = hook_input.get("session_id") or ""
     setup_logging("session_notification", session_id=session_id)
 

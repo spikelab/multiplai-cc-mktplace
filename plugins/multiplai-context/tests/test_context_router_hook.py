@@ -92,10 +92,10 @@ class TestContextRouterPathResolution:
         _reset_cache()
         paths = Paths.resolve()
 
-        # Import _read_memory_files from the context router
-        from context_manager import _read_memory_files
+        # Import the ranked reader from the context router
+        from context_manager import _read_top_memory_files
 
-        result = _read_memory_files(paths.memory_dir())
+        result = _read_top_memory_files(paths.memory_dir())
         assert "me.md" in result
         assert "technical-pref.md" in result
         assert "preferences.md" in result
@@ -325,9 +325,9 @@ class TestMissingMemoryFiles:
         """WHEN the context-router runs but the memory directory doesn't exist
         THEN it returns empty results without raising an exception."""
         nonexistent = tmp_path / "does-not-exist"
-        from context_manager import _read_memory_files
+        from context_manager import _read_top_memory_files
 
-        result = _read_memory_files(nonexistent)
+        result = _read_top_memory_files(nonexistent)
         assert result == {}, "Missing memory dir should return empty dict"
 
     def test_partial_memory_files(self, tmp_path):
@@ -338,9 +338,9 @@ class TestMissingMemoryFiles:
             # technical-pref.md is missing
             # preferences.md is missing
         })
-        from context_manager import _read_memory_files
+        from context_manager import _read_top_memory_files
 
-        result = _read_memory_files(mem_dir)
+        result = _read_top_memory_files(mem_dir)
         assert "me.md" in result, "Existing file should be read"
         assert len(result) == 1, "Only existing files should be returned"
 
@@ -355,10 +355,10 @@ class TestMissingMemoryFiles:
         corrupt = mem_dir / "corrupt.md"
         corrupt.chmod(0o000)
 
-        from context_manager import _read_memory_files
+        from context_manager import _read_top_memory_files
 
         try:
-            result = _read_memory_files(mem_dir)
+            result = _read_top_memory_files(mem_dir)
             # Should have read me.md and skipped corrupt.md
             assert "me.md" in result
             # corrupt.md should be skipped, not cause an error
@@ -370,9 +370,9 @@ class TestMissingMemoryFiles:
         THEN the context router returns empty results."""
         mem_dir = _make_memory_dir(tmp_path)  # empty
 
-        from context_manager import _read_memory_files
+        from context_manager import _read_top_memory_files
 
-        result = _read_memory_files(mem_dir)
+        result = _read_top_memory_files(mem_dir)
         assert result == {}, "Empty memory dir should return empty dict"
 
 
@@ -426,9 +426,9 @@ class TestTimeoutCompliance:
         _reset_cache()
 
         start = time.monotonic()
-        from context_manager import _read_memory_files, _rank_memory_files
+        from context_manager import _rank_memory_files, _read_top_memory_files
         _rank_memory_files(mem_dir)
-        _read_memory_files(mem_dir)
+        _read_top_memory_files(mem_dir)
         elapsed = time.monotonic() - start
 
         assert elapsed < 1.0, \
@@ -642,9 +642,9 @@ class TestEdgeCases:
         (mem_dir / "config.json").write_text("{}")
         (mem_dir / ".DS_Store").write_bytes(b"\x00\x00")
 
-        from context_manager import _read_memory_files
+        from context_manager import _read_top_memory_files
 
-        result = _read_memory_files(mem_dir)
+        result = _read_top_memory_files(mem_dir)
         assert "me.md" in result
         assert "notes.txt" not in result
         assert "config.json" not in result
@@ -658,9 +658,9 @@ class TestEdgeCases:
             "empty.md": "",
         })
 
-        from context_manager import _read_memory_files
+        from context_manager import _read_top_memory_files
 
-        result = _read_memory_files(mem_dir)
+        result = _read_top_memory_files(mem_dir)
         # Should not crash. Whether empty file is included or skipped is OK.
         assert "me.md" in result
 
@@ -673,9 +673,9 @@ class TestEdgeCases:
         link_dir = tmp_path / "link-memory"
         link_dir.symlink_to(real_dir)
 
-        from context_manager import _read_memory_files
+        from context_manager import _read_top_memory_files
 
-        result = _read_memory_files(link_dir)
+        result = _read_top_memory_files(link_dir)
         assert "me.md" in result
         assert "Real content" in result["me.md"]
 
@@ -688,11 +688,12 @@ class TestEdgeCases:
             "normal.md": "# Normal\nSmall file.",
         })
 
-        from context_manager import _read_memory_files
+        from context_manager import _read_top_memory_files
 
-        result = _read_memory_files(mem_dir)
-        # Should not crash
-        assert "normal.md" in result
+        result = _read_top_memory_files(mem_dir)
+        # Should not crash. The ranked reader stops at its byte budget after
+        # the oversized top pick, so only presence of SOME content is pinned.
+        assert result
 
 
 # ===========================================================================

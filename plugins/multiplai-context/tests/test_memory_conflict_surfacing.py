@@ -31,7 +31,7 @@ from datetime import datetime
 import pytest
 
 import context_manager
-from conftest import run_context_hook as _run_hook, write_catalog as _write_catalog
+from conftest import hook_context, run_context_hook as _run_hook, write_catalog as _write_catalog
 
 # Stable fragments of the preamble asserted below — if the wording is
 # rephrased, update these sentinels together with the constant.
@@ -56,7 +56,7 @@ class TestConflictPreambleRendering:
         )
 
         out = _run_hook(env_setup, prompt="help me write a blog post")
-        ctx = out["context"]
+        ctx = hook_context(out)
         assert "=== MEMORY ===" in ctx
         assert PREAMBLE_SENTINEL in ctx
         assert STAMP_SENTINEL in ctx
@@ -71,7 +71,7 @@ class TestConflictPreambleRendering:
         # No memory.json catalog → router never runs → recency fallback fires.
 
         out = _run_hook(env_setup, prompt="tell me something")
-        ctx = out["context"]
+        ctx = hook_context(out)
         assert "## me.md" in ctx
         assert PREAMBLE_SENTINEL in ctx
         assert STAMP_SENTINEL in ctx
@@ -100,7 +100,7 @@ class TestConflictPreambleRendering:
             prompt="writing a blog post",
             extra_env={"CLAUDE_PLUGIN_OPTION_ENABLE_SKILLS": "true"},
         )
-        ctx = out["context"]
+        ctx = hook_context(out)
         assert "=== SKILLS ===" in ctx
         assert "=== MEMORY ===" not in ctx
         assert PREAMBLE_SENTINEL not in ctx
@@ -114,7 +114,7 @@ class TestConflictPreambleRendering:
             prompt="tell me something",
             extra_env={"CLAUDE_PLUGIN_OPTION_MEMORY_CONFLICT_PREAMBLE": "false"},
         )
-        ctx = out["context"]
+        ctx = hook_context(out)
         assert "## me.md" in ctx
         assert PREAMBLE_SENTINEL not in ctx
         assert STAMP_SENTINEL not in ctx

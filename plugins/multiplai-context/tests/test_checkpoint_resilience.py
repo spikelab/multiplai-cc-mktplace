@@ -254,7 +254,7 @@ class TestDegradedIsSurfaced:
             ),
             "cwd": str(tmp_path / "proj"),
         }
-        monkeypatch.setattr(session_stop, "_spawn_writer", lambda p: True)
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", lambda p: True)
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
         session_stop.main()
         return capsys.readouterr().out
@@ -331,7 +331,7 @@ class TestPointer:
             ),
             "cwd": str(tmp_path / "proj"),
         }
-        monkeypatch.setattr(session_stop, "_spawn_writer", lambda p: True)
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", lambda p: True)
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
         session_stop.main()
         capsys.readouterr()
@@ -366,7 +366,7 @@ class TestPointer:
             ),
             "cwd": str(tmp_path / "proj"),
         }
-        monkeypatch.setattr(session_stop, "_spawn_writer", lambda p: False)
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", lambda p: False)
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
         session_stop.main()
         capsys.readouterr()
@@ -501,7 +501,7 @@ class TestTheAlertKeepsWorkingAfterARecovery:
             "transcript_path": str(_write_transcript(tmp_path / f"stop{n}.jsonl")),
             "cwd": str(tmp_path / "proj"),
         }
-        monkeypatch.setattr(session_stop, "_spawn_writer", lambda p: True)
+        monkeypatch.setattr(session_stop.cp, "spawn_writer", lambda p: True)
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
         session_stop.main()
         return capsys.readouterr().out

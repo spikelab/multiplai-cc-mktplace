@@ -214,7 +214,7 @@ class TestHookIntegration:
     def _injected(out: dict) -> str:
         """The text Claude Code actually receives, wherever the hook put it."""
         hook_specific = out.get("hookSpecificOutput") or {}
-        return hook_specific.get("additionalContext") or out.get("context") or ""
+        return hook_specific.get("additionalContext") or ""
 
     def test_hook_emits_the_block_for_a_detected_project(self, tmp_path):
         docs = tmp_path / "claude-config" / "reference" / "dev"
@@ -228,7 +228,6 @@ class TestHookIntegration:
         (project / "manage.py").write_text("")
 
         out = self._run_hook(tmp_path, "add an endpoint", project)
-        assert out.get("dev_references") is True
         injected = self._injected(out)
         assert "=== DEV REFERENCES ===" in injected
         assert "django-drf-best-practices.md" in injected
@@ -238,5 +237,4 @@ class TestHookIntegration:
         project.mkdir()
         (project / "pyproject.toml").write_text('[project]\nname = "site"\n')
         out = self._run_hook(tmp_path, "add an endpoint", project)
-        assert out.get("dev_references") is not True
         assert "DEV REFERENCES" not in self._injected(out)

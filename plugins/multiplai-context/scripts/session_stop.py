@@ -36,18 +36,10 @@ from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib import checkpoint as cp
+from lib.fsio import atomic_write_json
+from lib.hook_input import read_hook_input
 
 logger = setup_logging("session_stop")
-
-
-def _spawn_writer(payload: dict) -> bool:
-    """Launch the detached checkpoint writer (never awaited).
-
-    Thin alias over :func:`lib.checkpoint.spawn_writer`, which is where the
-    spawn moved so ``session_end.py`` can make the identical call on
-    ``/clear``. Kept as a name here because the tests patch it.
-    """
-    return cp.spawn_writer(payload)
 
 
 def _degraded_file(data_dir: Path, session_id: str) -> Path:
@@ -93,8 +85,8 @@ def _degraded_message(data_dir: Path, session_id: str, state: dict) -> str | Non
     if already >= failures:
         return None
     try:
-        dfile.parent.mkdir(parents=True, exist_ok=True)
-        dfile.write_text(json.dumps({"failures": failures}))
+        # Atomic (P11): a torn write here would re-alert on every Stop.
+        atomic_write_json(dfile, {"failures": failures})
     except OSError:
         pass
 
@@ -136,8 +128,8 @@ def _should_nudge(data_dir: Path, session_id: str, tokens: int, cfg) -> bool:
     if last and tokens - last < cfg.refresh_tokens:
         return False
     try:
-        nfile.parent.mkdir(parents=True, exist_ok=True)
-        nfile.write_text(json.dumps({"tokens": tokens}))
+        # Atomic (P11), like its peers beside it in the session dir.
+        atomic_write_json(nfile, {"tokens": tokens})
     except OSError:
         pass
     return True
@@ -180,7 +172,9 @@ def _checkpoint_pass(hook_input: dict, data_dir: Path) -> str | None:
 
     if reason and not cp.writer_inflight(data_dir, session_id):
         cp.claim_writer(data_dir, session_id)
-        spawned = _spawn_writer(
+        # cp.spawn_writer directly — the spawn lives in lib.checkpoint so
+        # session_end.py makes the identical call on /clear.
+        spawned = cp.spawn_writer(
             {
                 "session_id": session_id,
                 "transcript_path": transcript_path,
@@ -257,22 +251,21 @@ def _checkpoint_pass(hook_input: dict, data_dir: Path) -> str | None:
 
 
 def main() -> None:
+    # Read the hook payload (transcript path, session id, cwd) — needed for
+    # the checkpoint pass. Read defensively; garbage means "skip checkpoint".
+    hook_input = read_hook_input()
+
+    # When another Stop hook blocked the stop, the harness re-runs the chain
+    # with stop_hook_active set. This hook already did its passes on the first
+    # run, and a systemMessage from the second is discarded anyway (P4).
+    if hook_input.get("stop_hook_active"):
+        return
+
     paths = get_paths()
     data_dir = paths.plugin_data()
 
     session_state = read_session_state(data_dir) or {}
     session_id = session_state.get("session_id", "unknown")
-
-    # Read the hook payload (transcript path, session id, cwd) — needed for
-    # the checkpoint pass. Read defensively; garbage means "skip checkpoint".
-    hook_input: dict = {}
-    if not sys.stdin.isatty():
-        try:
-            hook_input = json.loads(sys.stdin.read() or "{}")
-        except Exception:
-            hook_input = {}
-    if not isinstance(hook_input, dict):
-        hook_input = {}
 
     setup_logging("session_stop", session_id=hook_input.get("session_id") or session_id)
 
