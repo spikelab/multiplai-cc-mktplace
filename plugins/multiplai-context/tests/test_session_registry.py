@@ -524,12 +524,17 @@ class TestHookWiring:
         )
 
     def test_notification_hook_has_uv_guard_and_timeout(self):
+        from conftest import HOOKS_JSON
+
         hook = next(
             h for h in self._hooks() if h["event"] == "Notification"
         )
-        assert "command -v uv" in hook["command"], (
-            "Notification hook must carry the uv-guard wrapper like its siblings"
+        # The uv guard lives in the shared hooks/run.sh launcher now; the
+        # command must route through it like its siblings.
+        assert 'sh "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh"' in hook["command"], (
+            "Notification hook must route through the shared run.sh launcher"
         )
+        assert "command -v uv" in (HOOKS_JSON.parent / "run.sh").read_text()
         assert isinstance(hook["timeout"], int) and hook["timeout"] >= 5
 
     def test_notification_script_exists_and_uses_workspace_deps(self):

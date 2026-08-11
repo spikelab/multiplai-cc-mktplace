@@ -1,10 +1,13 @@
-"""Tripwire tests for the uv guard wrapping every hook command (C1).
+"""Tripwire tests for the shared hook launcher ``hooks/run.sh`` (C1, P1, P2).
 
 Claude Code does not bundle uv. Without the guard, a missing uv makes every
-hook spawn-fail silently and the plugin just "doesn't work". The guard must:
-exit 0 (never break the session), emit one clear install pointer on stdout
-(surfaced as hook context) and stderr, and rate-limit repeats via a marker
-file. Verified by actually running each hooks.json command with uv masked
+hook spawn-fail silently and the plugin just "doesn't work". The guard —
+now factored into one ``hooks/run.sh`` instead of seven byte-identical
+inline preambles — must: exit 0 (never break the session), emit one clear
+install pointer, rate-limit repeats via a marker file, fall back to uv's
+default install dir when PATH lacks it (P2), and keep the PreCompact hook's
+stdout empty (its stdout feeds the compaction summarizer as instructions —
+P1). Verified by actually running each hooks.json command with uv masked
 off PATH.
 """
 from __future__ import annotations
@@ -16,6 +19,8 @@ from pathlib import Path
 import pytest
 
 from conftest import HOOKS_JSON, parse_hooks
+
+RUN_SH = HOOKS_JSON.parent / "run.sh"
 
 
 def _masked_env(tmp_path: Path) -> dict[str, str]:
@@ -47,24 +52,40 @@ def _run(command: str, env: dict[str, str]):
 
 
 class TestUvGuard:
-    def test_every_hook_command_is_guarded(self):
+    def test_every_hook_command_routes_through_run_sh(self):
+        assert RUN_SH.is_file(), "hooks/run.sh must ship with the plugin"
         for hook in parse_hooks():
-            assert "command -v uv" in hook["command"], (
-                f"{hook['event']} command missing the uv guard: {hook['command']}"
-            )
-            # Member-dir --project: "${CLAUDE_PLUGIN_ROOT}/scripts" exists both
-            # in-repo (resolves via the workspace root) and on an installed
-            # copy (resolves standalone). The old ../.. workspace-root form
-            # does not exist on installs.
-            assert 'exec uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts"' in hook["command"]
+            # Invoked via `sh` so nothing depends on an executable bit
+            # surviving the marketplace install.
+            assert hook["command"].startswith(
+                'sh "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh" '
+            ), f"{hook['event']} command must invoke run.sh: {hook['command']}"
+
+    def test_run_sh_carries_the_guard_and_the_member_project(self):
+        src = RUN_SH.read_text()
+        assert "command -v uv" in src, "run.sh lost the uv guard"
+        # Member-dir --project: "${CLAUDE_PLUGIN_ROOT}/scripts" exists both
+        # in-repo (resolves via the workspace root) and on an installed
+        # copy (resolves standalone). The old ../.. workspace-root form
+        # does not exist on installs.
+        assert 'exec uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts"' in src
+        assert "/../.." not in src
 
     @pytest.mark.parametrize("hook", parse_hooks(), ids=lambda h: f"{h['event']}:{h['script']}")
     def test_missing_uv_warns_once_and_exits_zero(self, hook, tmp_path):
         env = _masked_env(tmp_path)
         res = _run(hook["command"], env)
         assert res.returncode == 0, res.stderr
-        assert "uv not found" in res.stdout
-        assert "docs.astral.sh/uv" in res.stdout
+        if hook["script"].endswith("pre_compact.py"):
+            # P1: PreCompact stdout reaches the compaction summarizer as
+            # custom instructions — the warning must be stderr-only.
+            assert res.stdout == "", (
+                "pre_compact's uv warning leaked to stdout, where the "
+                "compaction summarizer reads it as instructions"
+            )
+        else:
+            assert "uv not found" in res.stdout
+            assert "docs.astral.sh/uv" in res.stdout
         assert "uv not found" in res.stderr
 
     def test_warning_is_rate_limited_by_marker(self, tmp_path):
@@ -117,3 +138,21 @@ class TestUvGuard:
         assert res.returncode == 0
         assert "UV_CALLED run --project" in res.stdout
         assert "uv not found" not in res.stdout
+
+    def test_uv_off_path_but_in_default_install_dir_is_found(self, tmp_path):
+        """P2: a non-login sh often lacks ~/.local/bin on PATH — uv's default
+        install dir. That must read as "uv present", not as seven dead hooks."""
+        env = _masked_env(tmp_path)
+        local_bin = Path(env["HOME"]) / ".local" / "bin"
+        local_bin.mkdir(parents=True)
+        fake_uv = local_bin / "uv"
+        fake_uv.write_text("#!/bin/sh\necho UV_CALLED \"$@\"\nexit 0\n")
+        fake_uv.chmod(0o755)
+        res = _run(parse_hooks()[0]["command"], env)
+        assert res.returncode == 0
+        assert "UV_CALLED run --project" in res.stdout
+        assert "uv not found" not in res.stdout
+        assert "uv not found" not in res.stderr
+        assert not list(
+            Path(env["CLAUDE_CONFIG_DIR"]).glob(".multiplai-context-uv-warned*")
+        ), "the fallback path must not leave a warned marker"

@@ -312,28 +312,35 @@ class TestAfterFieldAndBootstrapFallback:
 
     def test_all_hook_commands_use_uv_run(self):
         """WHEN any hook command is inspected
-        THEN it execs the script via `uv run --project` (rather than
-        `python`), wrapped in the sh-level uv guard that turns a missing uv
-        into one clear message instead of a silent spawn failure (C1 —
-        see test_uv_guard.py for behavior)."""
+        THEN it routes through hooks/run.sh, which execs the script via
+        `uv run --project` (rather than `python`) behind the sh-level uv
+        guard that turns a missing uv into one clear message instead of a
+        silent spawn failure (C1 — see test_uv_guard.py for behavior)."""
         parsed = json.loads(HOOKS_JSON.read_text())
+        run_sh = HOOKS_JSON.parent / "run.sh"
+        assert run_sh.is_file(), "hooks/run.sh must ship with the plugin"
+        launcher = run_sh.read_text()
+        assert "command -v uv" in launcher, \
+            "run.sh must carry the uv guard"
+        # --project must point at the scripts/ member dir, NOT at
+        # "${CLAUDE_PLUGIN_ROOT}/../..". An installed plugin is a
+        # copy of the plugin subtree only — there is no workspace
+        # root two levels up, so the ../.. form worked in this repo
+        # and broke every hook on a real install. scripts/ exists
+        # in both layouts: in-repo uv walks up to the workspace;
+        # installed, it resolves standalone via the member-local
+        # [tool.uv.sources].
+        assert 'exec uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts"' in launcher, \
+            "run.sh must exec via 'uv run --project \"$CLAUDE_PLUGIN_ROOT/scripts\"'"
+        assert "/../.." not in launcher, \
+            "run.sh points above the plugin root — that path does not " \
+            "exist on an installed copy"
         for event, groups in parsed["hooks"].items():
             for group in groups:
                 for entry in group["hooks"]:
                     cmd = entry["command"]
-                    assert cmd.startswith("sh -c 'command -v uv "), \
-                        f"{event} command must start with the uv guard, got: {cmd}"
-                    # --project must point at the scripts/ member dir, NOT at
-                    # "${CLAUDE_PLUGIN_ROOT}/../..". An installed plugin is a
-                    # copy of the plugin subtree only — there is no workspace
-                    # root two levels up, so the ../.. form worked in this repo
-                    # and broke every hook on a real install. scripts/ exists
-                    # in both layouts: in-repo uv walks up to the workspace;
-                    # installed, it resolves standalone via the member-local
-                    # [tool.uv.sources].
-                    assert 'exec uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts"' in cmd, \
-                        f"{event} command must exec via 'uv run --project " \
-                        f"\"$CLAUDE_PLUGIN_ROOT/scripts\"', got: {cmd}"
+                    assert cmd.startswith('sh "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh" '), \
+                        f"{event} command must invoke run.sh via sh, got: {cmd}"
                     assert "/../.." not in cmd, \
                         f"{event} command points above the plugin root — that " \
                         f"path does not exist on an installed copy: {cmd}"
