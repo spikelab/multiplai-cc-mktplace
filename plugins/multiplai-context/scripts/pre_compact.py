@@ -54,12 +54,22 @@ from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib import checkpoint as cp
-from lib.runtime import uv_run_argv
+from lib.runtime import run_supervised, uv_run_argv
 
 logger = setup_logging("pre_compact")
 
 # Poll step while waiting for an already-in-flight band writer to finish.
 _INFLIGHT_POLL_S = 2.0
+
+# Ceiling for the synchronous writer wait, tied to the 300s PreCompact
+# timeout in hooks/hooks.json. The harness kills this hook at 300s, and the
+# ``finally: cp.release_writer(...)`` below must run before that kill — a
+# killed hook leaves the writing.marker in place, and for _WRITER_STALE_S
+# (~10 minutes) after compaction no Stop hook will spawn a new writer, right
+# when context grows fastest. 270 leaves margin for interpreter startup and
+# the other passes. cfg.timeout_s (default 600) is sized for the *detached*
+# writer nobody waits on; here it must be clamped under the hook budget.
+_HOOK_BUDGET_S = 270
 
 
 def _sync_checkpoint(hook_input: dict, data_dir) -> bool:
@@ -89,7 +99,7 @@ def _sync_checkpoint(hook_input: dict, data_dir) -> bool:
     if tokens <= 0:
         return False
 
-    deadline = time.monotonic() + cfg.timeout_s
+    deadline = time.monotonic() + min(cfg.timeout_s, _HOOK_BUDGET_S)
 
     # A band writer may already be mid-flight — let it finish (its result
     # is at most one turn stale) rather than racing it.
@@ -122,11 +132,13 @@ def _sync_checkpoint(hook_input: dict, data_dir) -> bool:
     try:
         # Synchronous on purpose: compaction is imminent and this state is
         # about to be summarized away. The writer releases the marker itself.
-        proc = subprocess.run(
+        # run_supervised, not subprocess.run: the child is a `uv run` wrapper
+        # whose real writer spawns CLI subprocesses, and a plain timeout kills
+        # only the wrapper — the work carries on unsupervised while `finally`
+        # releases its marker (see lib/runtime.py, "Supervising").
+        proc = run_supervised(
             uv_run_argv(script),
-            input=payload.encode("utf-8"),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            input=payload,
             timeout=max(5.0, deadline - time.monotonic()),
         )
         if proc.returncode != 0:

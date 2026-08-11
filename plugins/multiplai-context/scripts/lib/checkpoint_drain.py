@@ -25,6 +25,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from lib import checkpoint as cp
 from lib.extraction_drain import DrainResult, claim_pending_markers
 from lib.runtime import uv_run_argv
 
@@ -90,6 +91,26 @@ def process_pending_checkpoints(
     launched = 0
     children: list[subprocess.Popen] = []
     for dest, payload in claim_pending_markers(pdir, procdir):
+        # Single-flight against a live writer. writing.marker is a liveness
+        # signal with its own staleness window (checkpoint._WRITER_STALE_S):
+        # a fresh one means a writer spawned by a hook is mid-write for this
+        # session right now, and launching a second child here would have
+        # both racing the same state.json / checkpoint.md. Requeue the
+        # marker; a later drain picks it up once the writer finishes or its
+        # marker goes stale.
+        session_id = str(payload.get("session_id") or "")
+        if session_id and cp.writer_inflight(data_dir, session_id):
+            logger.info(
+                "Writer in flight for %s; requeueing its end-of-session marker",
+                session_id,
+            )
+            try:
+                os.replace(str(dest), str(pdir / dest.name))
+            except OSError:
+                logger.exception(
+                    "Could not requeue marker %s past in-flight writer", dest.name
+                )
+            continue
         payload["marker_path"] = str(dest)
 
         try:

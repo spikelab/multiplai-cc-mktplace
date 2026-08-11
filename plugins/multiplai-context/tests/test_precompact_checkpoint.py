@@ -59,13 +59,13 @@ class TestSyncCheckpoint:
         calls = []
 
         def fake_run(cmd, **kwargs):
-            calls.append(json.loads(kwargs["input"].decode("utf-8")))
+            calls.append(json.loads(kwargs["input"]))
 
             class R:
                 returncode = 0
             return R()
 
-        monkeypatch.setattr(pre_compact.subprocess, "run", fake_run)
+        monkeypatch.setattr(pre_compact, "run_supervised", fake_run)
         pre_compact._sync_checkpoint(_hook_input(tmp_path, 90_000), data_env)
         assert len(calls) == 1
         assert calls[0]["reason"] == "precompact"
@@ -76,7 +76,7 @@ class TestSyncCheckpoint:
     def test_skips_child_sessions(self, tmp_path, data_env, monkeypatch):
         calls = []
         monkeypatch.setattr(
-            pre_compact.subprocess, "run", lambda *a, **k: calls.append(1)
+            pre_compact, "run_supervised", lambda *a, **k: calls.append(1)
         )
         sub = tmp_path / "subagents"
         sub.mkdir()
@@ -92,7 +92,7 @@ class TestSyncCheckpoint:
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_CHECKPOINT_ENABLED", "false")
         calls = []
         monkeypatch.setattr(
-            pre_compact.subprocess, "run", lambda *a, **k: calls.append(1)
+            pre_compact, "run_supervised", lambda *a, **k: calls.append(1)
         )
         pre_compact._sync_checkpoint(_hook_input(tmp_path, 90_000), data_env)
         assert calls == []
@@ -101,7 +101,7 @@ class TestSyncCheckpoint:
         """Right after a rebuild the tail usage is stale — don't re-checkpoint."""
         calls = []
         monkeypatch.setattr(
-            pre_compact.subprocess, "run", lambda *a, **k: calls.append(1)
+            pre_compact, "run_supervised", lambda *a, **k: calls.append(1)
         )
         hook_input = _hook_input(tmp_path, 90_000)
         cp.reset_session_counters(data_env, "sess-pc")  # stamps rebuild_ts=now
@@ -120,15 +120,34 @@ class TestSyncCheckpoint:
         def fake_run(cmd, **kwargs):
             raise sp.TimeoutExpired(cmd, 1)
 
-        monkeypatch.setattr(pre_compact.subprocess, "run", fake_run)
+        monkeypatch.setattr(pre_compact, "run_supervised", fake_run)
         pre_compact._sync_checkpoint(_hook_input(tmp_path, 90_000), data_env)
         assert cp.writer_inflight(data_env, "sess-pc") is False
+
+    def test_writer_deadline_is_clamped_to_the_hook_budget(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        """cfg.timeout_s (600 default) must never outlive the 300s PreCompact
+        hook ceiling — the harness kill would skip ``finally: release_writer``
+        and the surviving marker blocks new writers for ~10 minutes."""
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["timeout"] = kwargs["timeout"]
+
+            class R:
+                returncode = 0
+            return R()
+
+        monkeypatch.setattr(pre_compact, "run_supervised", fake_run)
+        pre_compact._sync_checkpoint(_hook_input(tmp_path, 90_000), data_env)
+        assert seen["timeout"] <= pre_compact._HOOK_BUDGET_S
 
     def test_waits_for_inflight_band_writer(self, tmp_path, data_env, monkeypatch):
         """An in-flight band writer is awaited, not raced with a second run."""
         calls = []
         monkeypatch.setattr(
-            pre_compact.subprocess, "run", lambda *a, **k: calls.append(1)
+            pre_compact, "run_supervised", lambda *a, **k: calls.append(1)
         )
         monkeypatch.setattr(pre_compact, "_INFLIGHT_POLL_S", 0.01)
         marker = cp.claim_writer(data_env, "sess-pc")
@@ -267,14 +286,14 @@ class TestSummarizerIsLeftAlone:
         self, tmp_path, data_env, monkeypatch, capsys
     ):
         self._write_valid_checkpoint(data_env)
-        monkeypatch.setattr(pre_compact.subprocess, "run", lambda *a, **k: _WriterOk())
+        monkeypatch.setattr(pre_compact, "run_supervised", lambda *a, **k: _WriterOk())
         out = self._run_main(_hook_input(tmp_path, 90_000), monkeypatch, capsys)
         assert out == ""
 
     def test_stdout_empty_without_checkpoint(
         self, tmp_path, data_env, monkeypatch, capsys
     ):
-        monkeypatch.setattr(pre_compact.subprocess, "run", lambda *a, **k: _WriterOk())
+        monkeypatch.setattr(pre_compact, "run_supervised", lambda *a, **k: _WriterOk())
         out = self._run_main(_hook_input(tmp_path, 90_000), monkeypatch, capsys)
         assert out == ""
 
@@ -289,7 +308,7 @@ class TestSummarizerIsLeftAlone:
 class TestSyncCheckpointResult:
     def test_returns_true_on_success(self, tmp_path, data_env, monkeypatch):
         monkeypatch.setattr(
-            pre_compact.subprocess, "run", lambda *a, **k: _WriterOk()
+            pre_compact, "run_supervised", lambda *a, **k: _WriterOk()
         )
         assert (
             pre_compact._sync_checkpoint(_hook_input(tmp_path, 90_000), data_env)
@@ -321,7 +340,7 @@ class TestSyncCheckpointResult:
             returncode = 1
 
         monkeypatch.setattr(
-            pre_compact.subprocess, "run", lambda *a, **k: _WriterFail()
+            pre_compact, "run_supervised", lambda *a, **k: _WriterFail()
         )
         assert (
             pre_compact._sync_checkpoint(_hook_input(tmp_path, 90_000), data_env)

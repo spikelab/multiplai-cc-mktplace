@@ -41,11 +41,22 @@ from lib.runtime import uv_run_argv
 
 logger = logging.getLogger(__name__)
 
-# Retry policy for markers left in ``processing_extractions/``. A detached
-# extraction child should finish well within the stale window; markers older
+# Retry policy for markers left in ``processing_extractions/`` (and, via
+# ``lib.checkpoint_drain``, in ``processing_checkpoints/``). Markers older
 # than this with no completion are assumed orphaned and requeued, capped at
 # MAX_ATTEMPTS before being quarantined.
-STALE_SECONDS = 900
+#
+# Derived from the slowest legitimate child, not from a hunch: the checkpoint
+# child runs ``run_agent(timeout_s=cfg.timeout_s (600), max_attempts=2)`` with
+# the timeout applied per attempt plus retry backoff, so a slow-but-alive
+# writer can legitimately run past 1200s; the extraction child has no
+# wall-clock bound at all (one LLM call per transcript chunk). The previous
+# 900s window sat *inside* that range, so a live child could be declared
+# stale, its marker requeued, and a duplicate launched against the same
+# state.json — paying the model cost twice. 1800s clears the checkpoint
+# worst case with margin; a genuinely dead marker waiting half an hour for
+# recovery costs nothing.
+STALE_SECONDS = 1800
 MAX_ATTEMPTS = 3
 
 
