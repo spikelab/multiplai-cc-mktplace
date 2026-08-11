@@ -160,21 +160,36 @@ class ConflictEdit:
         )
 
 
-def _content_words(text: str) -> set[str]:
-    """Lowercased alphanumeric words, minus stopwords and markdown noise."""
+def content_words(text: str) -> set[str]:
+    """Lowercased alphanumeric words, minus stopwords and markdown noise.
+
+    Public because a caller screening one text against thousands of lines must
+    be able to tokenize once and reuse the set — see :func:`overlap_sets`.
+    Re-deriving it per comparison is quadratic and was measured in minutes.
+    """
     text = re.sub(r"`[^`]*`", " ", text)          # code spans: often identical boilerplate
     text = re.sub(r"\*+|_+|→|—", " ", text)
     words = re.findall(r"[a-z0-9][a-z0-9.\-/]*", text.lower())
     return {w.strip(".-/") for w in words if w not in STOPWORDS and len(w) > 2}
 
 
-def overlap(a: str, b: str) -> float:
-    """Jaccard overlap of content words. 0.0 when either side is too thin."""
-    wa, wb = _content_words(a), _content_words(b)
+def overlap_sets(wa: set[str], wb: set[str]) -> float:
+    """Jaccard overlap of two content-word sets. 0.0 when either is too thin.
+
+    Symmetric on purpose. A containment measure (``|a ∩ b| / |a|``) only finds
+    an item *inside* a line, so a verbose restatement of a short existing rule —
+    the normal shape of a dream item — scores far below any usable threshold
+    while the terse form of the same rule scores 1.00.
+    """
     if len(wa) < MIN_CONTENT_WORDS or len(wb) < MIN_CONTENT_WORDS:
         return 0.0
     union = wa | wb
     return len(wa & wb) / len(union) if union else 0.0
+
+
+def overlap(a: str, b: str) -> float:
+    """Jaccard overlap of content words. 0.0 when either side is too thin."""
+    return overlap_sets(content_words(a), content_words(b))
 
 
 def parse_learnings(text: str) -> list[Learning]:

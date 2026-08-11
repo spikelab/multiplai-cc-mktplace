@@ -18,6 +18,7 @@ proposal. Callers wrap it fail-open + loud: a crash here must never lose a
 generated proposal.
 """
 
+import functools
 import logging
 import re
 from pathlib import Path
@@ -191,8 +192,15 @@ def _ngrams(tokens: list[str], n: int = NGRAM_SIZE) -> set[tuple[str, ...]]:
     return {tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)}
 
 
+@functools.lru_cache(maxsize=64)
 def _file_gram_index(content: str, n: int = NGRAM_SIZE) -> dict[tuple[str, ...], int]:
-    """Map each n-gram in *content* to the 1-indexed line where it starts."""
+    """Map each n-gram in *content* to the 1-indexed line where it starts.
+
+    Cached on the content itself: :func:`validate_proposal` calls this once per
+    corpus file **per proposal entry**, so a 583-entry proposal re-indexed the
+    same files 583 times. Python memoizes a ``str``'s hash after the first
+    lookup, so the key is cheap; the values are dicts nothing mutates.
+    """
     index: dict[tuple[str, ...], int] = {}
     tokens: list[str] = []
     token_lines: list[int] = []
@@ -238,18 +246,31 @@ def find_duplicate_content(
 # Validation
 # ---------------------------------------------------------------------------
 
-def validate_proposal(proposal: str, memory_contents: dict[str, str]) -> list[str]:
+def validate_proposal(
+    proposal: str,
+    memory_contents: dict[str, str],
+    *,
+    dedup_extra: dict[str, str] | None = None,
+) -> list[str]:
     """Run both deterministic checks; return human-readable warning lines.
 
     ``memory_contents`` is ``{filename: content}`` for all memory files (the
     same mapping dream already loads). An empty list means the proposal is
     clean under both checks.
+
+    ``dedup_extra`` is ``{label: content}`` for corpus that is **dedup evidence
+    only** — the always-loaded ``CLAUDE.md`` files and the shared memory banks
+    (see :mod:`lib.memory_corpus`). It is deliberately kept out of the section
+    registry: an H2 in a ``CLAUDE.md`` is not a memory section, so registering
+    it would turn every ordinary heading name into a phantom misroute.
     """
     registry: dict[str, list[str]] = {}
     for name, content in memory_contents.items():
         for match in _H2_RE.finditer(content):
             registry.setdefault(match.group(1), []).append(name)
 
+    dedup_extra = dedup_extra or {}
+    dedup_contents = {**memory_contents, **dedup_extra}
     warnings: list[str] = []
     for entry in parse_proposal_entries(proposal):
         label = f"`{entry['target']}` #{entry['number']} ({entry['title']})"
@@ -275,10 +296,15 @@ def validate_proposal(proposal: str, memory_contents: dict[str, str]) -> list[st
         # An update/replace entry legitimately overlaps the old text in its
         # own target file — only cross-file hits are signal for those.
         revises_target = entry["change"] in ("update", "replace")
-        for name, line, overlap in find_duplicate_content(entry["text"], memory_contents):
+        for name, line, overlap in find_duplicate_content(entry["text"], dedup_contents):
             if revises_target and name == entry["target"]:
                 continue
-            where = "target file" if name == entry["target"] else "ANOTHER file"
+            if name == entry["target"]:
+                where = "target file"
+            elif name in dedup_extra:
+                where = "an ALWAYS-LOADED file"
+            else:
+                where = "ANOTHER file"
             warnings.append(
                 f"{label}: proposed text already present in {where} "
                 f"`{name}:{line}` ({overlap:.0%} n-gram overlap) — apply only if "
@@ -297,7 +323,12 @@ def render_warnings_section(warnings: list[str]) -> str:
     return f"\n\n---\n\n## Routing Warnings\n\n{body}\n"
 
 
-def append_routing_warnings(proposal: str, memory_contents: dict[str, str]) -> str:
+def append_routing_warnings(
+    proposal: str,
+    memory_contents: dict[str, str],
+    *,
+    dedup_extra: dict[str, str] | None = None,
+) -> str:
     """Validate *proposal* and append its ``## Routing Warnings`` section."""
-    warnings = validate_proposal(proposal, memory_contents)
+    warnings = validate_proposal(proposal, memory_contents, dedup_extra=dedup_extra)
     return proposal.rstrip() + render_warnings_section(warnings)

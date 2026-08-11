@@ -303,6 +303,23 @@ def mark_many_processed(
     return marked, len(decisions) - marked
 
 
+def latest_pending_proposal(dreams_dir: Path) -> Path | None:
+    """Newest pending proposal in the dreams **root**, by mtime.
+
+    Root only — ``applied/``, ``rejected/`` and ``superseded/`` hold decided
+    proposals. By mtime and not by name: a same-day re-run writes ``-2``,
+    ``-3``… which is newer but sorts *before* the base name, because ``-``
+    (0x2D) sorts before ``.`` (0x2E). Every tool that picks a proposal for the
+    user must agree on which one that is, so they all call this.
+    """
+    if not dreams_dir.exists():
+        return None
+    candidates = [p for p in dreams_dir.glob("processed-learnings-*.md") if p.is_file()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
 def has_pending_items(text: str) -> bool:
     """True if any update/action item is still outside ``## Processed`` — the
     archive backstop: a proposal must be fully processed before it is archived."""

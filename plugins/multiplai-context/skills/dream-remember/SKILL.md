@@ -177,8 +177,9 @@ Report to the user, in this order:
 1. the applied count and the receipt path — **tell them to skim it**;
 2. the dropped count and the rejection-log path, if anything was dropped;
 3. any `NOT APPLIED` lines (a file whose applier result was unsafe — those items
-   are still pending and will appear in Step 3);
-4. then move to Step 3 with what remains.
+   are still pending and go to Step 1c);
+4. then move to **Step 1c** with what remains. Step 3 is where you *report*; it
+   is not the next step.
 
 Use `--triage --dry-run` to see the partition without writing anything
 (`--dry-run` is only valid with `--triage`). If triage exits non-zero, or the
@@ -199,22 +200,68 @@ So: take the remainder **one target file at a time**, and for each file run the
 loop below before you write anything. Silence is the goal — a file that
 resolves cleanly gets applied and reported, not asked about.
 
-### 1. Pre-screen the whole corpus, not just the target file
+### Skip this whole step when the user asked to be asked
 
-The triage judge checks an item against *its own target file*. That misses the
-two most common duplicate shapes: an item that already exists in a **different**
-memory file, and an item that restates a rule already in an **always-loaded
-`CLAUDE.md`** (the global one, the workspace one, or `memory/CLAUDE.md`). The
-drafter never sees those files, so it re-proposes them indefinitely.
+**In `memory_write_mode: review`, do not run Step 1c at all — go to Step 3.**
+That mode means "nothing is judged, nothing is applied"; triage applied nothing,
+so the remainder is the *entire* proposal, and resolving it here would apply
+everything the one setting that exists to keep a human in the loop said not to.
+Same for an explicit `/dream-remember review`.
+
+### What Step 1c may never decide — check this before anything else
+
+Step 1c writes with the `Edit` tool, so **neither the triage rubric nor the
+in-code floor runs on what it applies**. Those two are what stop a rule from
+entering memory unasked, so the boundary has to be honoured here by reading, not
+by mechanism. Three item classes leave Step 1c undecided and go to Step 3 as
+questions, however obvious they look:
+
+1. **`kind: RULE`, under any provenance** — including a correction from the
+   user, and including every item with no `**Provenance:**` pair at all (an
+   absent pair reads as `INFERENCE`/`RULE`). Step 1b states the reason: a wrong
+   fact is one you notice later, a wrong rule changes what you notice. Every
+   such item is in the remainder *by design* — the rubric refused it — so
+   "triage left it for me" is never evidence that it may be applied.
+2. **`[RULE-PROPOSAL]` items** — presented and answered one at a time, per
+   Step 4. Batching is mechanics, never consent.
+3. **Anything targeting a `CLAUDE.md` or `AGENTS.md`**, or revising rather than
+   appending a line. The floor refuses these in code; do not route around it.
+
+**Rejecting** an item in these classes is still yours to do — a duplicate is a
+duplicate whatever its kind. The restriction is on *writing*, not on deciding
+that nothing should be written.
+
+### 1. Read the routing warnings, then pre-screen the corpus
+
+**`## Routing Warnings` is a gate on applying, and Step 1c is where applying
+happens** — so read that section now, not in Step 3. Handle each warning as
+Step 4 specifies (reroute to the owning file, rename a colliding section, skip a
+text already present). An item named in a warning is never applied silently: fix
+it as the warning says, or leave it for Step 3. If the section is missing
+entirely the gate did not run — say so and treat every item as unscreened.
+
+The gate's dedup half already covers the two commonest duplicate shapes,
+including content that lives in a **different** memory file, in an
+**always-loaded `CLAUDE.md`** (global, workspace, or `memory/`), or in a shared
+bank. What it cannot catch is a *rephrasing* below its n-gram threshold, which
+is what the pre-screen is for:
 
 ```bash
 uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" \
-  "${CLAUDE_PLUGIN_ROOT}/scripts/dream_prescreen.py" <target-file.md>
+  "${CLAUDE_PLUGIN_ROOT}/scripts/dream_prescreen.py" --all \
+  --proposal <exact-proposal-path>
 ```
 
-It prints each pending item with its two nearest lines anywhere in the corpus
-and a similarity score, flagging likely-existing ones. Treat a high score as a
-**lead to verify**, never a verdict: open both lines and decide.
+**Always pass `--proposal` with the exact path you recorded in Step 1** — the
+default picks the newest proposal by mtime, which is a *different file* from
+the one you are reviewing whenever a same-day re-run has written a `-2`.
+`--all` screens every target in one process; pass a single `<target-file.md>`
+instead to narrow it.
+
+It prints only the items it flags, each with its two nearest corpus lines and a
+similarity score. Treat a flag as a **lead to verify**, never a verdict: open
+both lines and decide. Items reported `UNSCREENABLE` were not checked at all —
+their insert text did not parse — so read those yourself.
 
 ### 2. Resolve what the evidence settles — and go get the evidence
 
@@ -241,16 +288,19 @@ must reflect that the text diverged from the proposal.
 
 ### 3. Escalate only what evidence cannot settle
 
-Ask the user about an item only when it is a genuine **policy or preference**
-call: which of two workable conventions they want, whether a rule they have to
-live with should exist, a factual conflict you cannot resolve without
-information only they have. Batch those into one question at the end of the
-file, not one question per item.
+Escalate two kinds of item: the three classes listed above that Step 1c may
+never apply, and genuine **policy or preference** calls — which of two workable
+conventions the user wants, whether a rule they have to live with should exist,
+a factual conflict you cannot resolve without information only they have. Batch
+the policy calls into one question at the end of the file; `[RULE-PROPOSAL]`
+items are still asked one at a time.
 
 Everything else — duplicates, merges, contradictions with a clear winner,
-verifiable facts — you decide. If you are unsure whether an item qualifies,
-apply it and say in the report that you did and why; a wrong additive line is
-one `git revert` away, while a stalled review costs the whole backlog.
+verifiable facts — you decide. If you are unsure whether an *additive*
+`FACT`-or-`DECISION` item qualifies, apply it and say in the report that you did
+and why; a wrong additive line is one `git revert` away, while a stalled review
+costs the whole backlog. **That latitude does not extend to the three classes
+above** — there, unsure means ask.
 
 ### 4. Report per file, then move on
 
@@ -289,23 +339,34 @@ Then tell the user:
   and the user never has to say the filename to refer to it.
 - Only a proposal generated before 2026-08-11 has a `## Action Items` section; if you see one,
   see Step 4b.
-- **Check the `## Routing Warnings` section** (appended by dream.py's deterministic
-  validation gate). If it says `(none)`, say "routing validation clean". If it lists
-  warnings, surface them to the user NOW, next to the affected item numbers — each
-  warning names its item as `` `file` #N (title) ``. If the section is missing
-  entirely, say so: the gate didn't run, so misroutes/duplicates were not checked.
-**By the time you reach this step, Step 1c should have emptied the proposal.**
-The normal ending is a report, not a question: what you applied, what you merged
-and why, what you rejected and against which existing line, plus any questions
-you batched. Do not re-present resolved items for approval — the receipt and the
-git history are the review surface.
+- **Report the `## Routing Warnings` section** (appended by dream.py's deterministic
+  validation gate). You already read and acted on it in Step 1c — here you say what
+  it held and what you did about each one, next to the affected item numbers; each
+  warning names its item as `` `file` #N (title) ``. If it said `(none)`, say
+  "routing validation clean". If the section was missing entirely, say so: the gate
+  didn't run, so misroutes/duplicates were not checked. **In `review` mode Step 1c
+  is skipped, so this is the first read** — surface the warnings to the user now.
 
-Ask for a decision list only in the two cases where Step 1c legitimately cannot
+**By the time you reach this step, Step 1c should have emptied the proposal** of
+everything it was allowed to decide. The normal ending is a report plus a short
+question list: what you applied, what you merged and why, what you rejected and
+against which existing line, then the items Step 1c was not allowed to settle.
+Do not re-present resolved items for approval — the receipt and the git history
+are the review surface.
+
+Ask for a decision list in the three cases where Step 1c legitimately cannot
 finish:
 
-- the user asked to review everything (`/dream-remember review`), or
-- items remain that are genuine policy calls — then ask about **those items
-  only**, quoting them inline, never the whole proposal.
+- the user asked to review everything (`/dream-remember review`, or
+  `memory_write_mode: review`) — then Step 1c did not run and this is the whole
+  proposal;
+- items Step 1c may never apply: `kind: RULE` under any provenance,
+  `[RULE-PROPOSAL]` items, and anything targeting a `CLAUDE.md`/`AGENTS.md` or
+  revising an existing line;
+- items that are genuine policy calls.
+
+In the last two cases ask about **those items only**, quoting them inline, never
+the whole proposal — and ask about `[RULE-PROPOSAL]` items one at a time.
 
 In the first case: **"Review the file and tell me: `all` / `none` / numbers like
 `1,3,5` or `1-12,16-20` / or `modify`"**.
@@ -347,8 +408,9 @@ RULE-PROPOSAL items are resolved, apply remaining standard items as approved.
 
 ### Routing Warnings gate (before applying anything)
 
-Never silently apply an item that appears in `## Routing Warnings`. For each flagged
-item the user approved:
+**This gate binds Step 1c too** — "before applying anything" means every write to
+memory, whoever decided it. Never silently apply an item that appears in
+`## Routing Warnings`. For each flagged item:
 
 - **"section … does not exist in target but does in `X`"** → propose applying to `X`
   instead (section names are unique across memory files — the section's owner file is
@@ -357,7 +419,10 @@ item the user approved:
   the section or reroute to `X`; applying as-is would break the unique-section invariant.
 - **"proposed text already present in … `file:line`"** → read that location; if it's the
   same insight, skip the item (or merge into the existing entry) and tell the user.
-  Apply as new text only if the user confirms it's an intentional update.
+  Apply as new text only if the user confirms it's an intentional update. `file` may
+  name an **always-loaded** `CLAUDE.md` or a shared bank, not only a memory file —
+  those are screened too, and a rule already in an always-loaded file is the single
+  most re-proposed shape there is.
 
 Unflagged items proceed normally.
 
