@@ -162,9 +162,12 @@ def merge_drafts(drafts: Sequence[str]) -> str:
     - Preamble: the first draft's, unchanged (it carries the title and the
       ``Sources:`` line dream's readers expect).
     - Updates: grouped by target file, files sorted, drafts in input order
-      within a file, entries renumbered ``1..k`` **per file** — which is the
-      numbering the ``(update, target, index)`` reference in
-      ``lib/dream_processed.py`` and the GUI hub both resolve against.
+      within a file, entries renumbered ``1..N`` **across the whole proposal** —
+      one running counter, not one per file. A reviewer says "skip 14" and means
+      one entry; per-file numbering made them say the filename too. The
+      ``(update, target, index)`` reference in ``lib/dream_processed.py`` and the
+      GUI hub both still resolve, because a globally-unique index keeps the pair
+      unique — it just no longer restarts at 1 under each heading.
     - Action items: merged into one section, renumbered ``A1..Ak``.
     - Filtered Out: bodies concatenated in draft order. Deliberately **not**
       deduplicated — a repeated line costs a reader a second, a wrongly-dropped
@@ -207,12 +210,17 @@ def merge_drafts(drafts: Sequence[str]) -> str:
                 extras.append((heading, body))
 
     parts: list[str] = []
+    # One counter for the whole document. It must not reset per file: the
+    # number is how a reviewer names an entry out loud, and a number that only
+    # identifies an entry once you also say the filename is not an identifier.
+    entry_number = 0
     for name in sorted(per_file):
         block_lines = [f"## Updates for `{name}`"]
         if file_intro.get(name):
             block_lines += ["", *file_intro[name]]
-        for i, entry in enumerate(per_file[name], start=1):
-            block_lines += ["", *_renumber(entry, i)]
+        for entry in per_file[name]:
+            entry_number += 1
+            block_lines += ["", *_renumber(entry, entry_number)]
         parts.append("\n".join(block_lines))
 
     if actions:

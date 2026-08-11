@@ -29,11 +29,10 @@ doesn't. Native Windows (without WSL) isn't supported.
 3. **Per session** — diary entries and a learnings backlog are captured
    in the background; nothing blocks your session.
 4. **Consolidation** — `/multiplai-context:dream-remember` distills the backlog
-   into a proposal with three dispositions: generalized lessons → your **memory
-   files**; change-requests to the toolchain itself → **action items** written
-   to `PLANS/dream-actions-{date}.md`; everything else (one-off events, things
-   the diary already records) → **filtered out**. You approve before anything
-   is written.
+   into a proposal with two dispositions: generalized lessons → your **memory
+   files**; everything else — one-off events, things the diary already records,
+   and change-requests to the toolchain itself — → **filtered out**, with the
+   reason. You approve before anything is written.
 5. **Unattended upkeep** — a [proactive maintainer](#proactive-maintenance)
    runs detached at most once a day (lint, dream proposal, catalog, `now/`),
    and [prospective memory](#prospective-memory--intentions-that-fire-later)
@@ -48,7 +47,7 @@ doesn't. Native Windows (without WSL) isn't supported.
   Stop / SessionEnd: diary written, learnings queued
               ↓
   /multiplai-context:dream-remember: backlog distilled →
-       memory updated · action items → PLANS/ · rest filtered
+              memory updated · rest filtered, with reasons
 ```
 
 ## Installation
@@ -551,7 +550,7 @@ All commands are namespaced under `/multiplai-context:`.
 |---------|--------------|
 | `/multiplai-context:setup` | Onboarding interviewer — populates memory files from starter templates. |
 | `/multiplai-context:dream` | Generate a consolidation **proposal** from the pending learnings backlog into `.multiplai/dreams/` — generalized lessons grouped by memory file, plus an Action Items section and a Filtered Out section. Does not modify anything. |
-| `/multiplai-context:dream-remember` | Review the proposal (generating one if needed), approve/reject memory edits and action items, apply approved edits, write approved action items to `PLANS/dream-actions-{date}.md`, clean up processed learnings. |
+| `/multiplai-context:dream-remember` | Review the proposal (generating one if needed), approve/reject memory edits by number, apply approved edits, clean up processed learnings. |
 | `/multiplai-context:health` | **Is it broken?** Mechanical infrastructure check (deterministic script): active model client, directories present, memory-file freshness by mtime, diary/learnings/dream counts. Fast, cheap, run anytime. |
 | `/multiplai-context:memory-health-audit` | **Is it good?** Analytical effectiveness audit — cross-correlates retrieval logs, diary, learnings, and memory structure to find what's useful, what's wasted, and what to restructure. Slower; run ~monthly. |
 | `/multiplai-context:log-doctor` | **Why is it failing?** Analyzes the runtime logs across subsystems (context_manager, extract_learnings, backfill, dream, lifecycle hooks) to surface failures, anomalies, and degradation, verifies root causes against source, and produces a fix-recommendation report. Can focus on one subsystem or actively probe a functionality to confirm its logs appear. Log text is **untrusted input** — quoted lines arrive inside `untrusted-content` fences, control/bidi characters stripped and instruction-shaped spans marked `⟪INJECTION?⟫`; see [`docs/untrusted-content.md`](../../docs/untrusted-content.md). |
