@@ -26,7 +26,6 @@ install) this hook seeds it with ``last_run: now`` instead of nudging, so
 the 60-day clock starts at install.
 """
 
-import json
 import subprocess
 import sys
 import uuid
@@ -45,6 +44,7 @@ from multiplai_core.log_utils import hook_run, setup_logging, log_event
 # the same code. Two copies of a marker-move loop is how one of them quietly
 # stops matching the other.
 from lib.extraction_drain import process_deferred_extractions
+from lib.hook_input import read_hook_input
 from lib.runtime import uv_run_argv
 from lib.fleet import roster_dead_sids, write_fleet_view
 
@@ -180,8 +180,18 @@ def _learnings_pending(learnings_dir: Path, dream_state_file: Path) -> bool:
     """
     if not learnings_dir.exists():
         return False
-    files = [f for f in learnings_dir.glob("*.md") if f.stat().st_size > 0]
-    if not files:
+    # Per-file stat guard: a learnings file can vanish between the glob and
+    # the stat (a concurrent dream-remember cleanup), and one OSError must
+    # not kill the whole gate (M6).
+    mtimes: list[float] = []
+    for f in learnings_dir.glob("*.md"):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        if st.st_size > 0:
+            mtimes.append(st.st_mtime)
+    if not mtimes:
         return False
 
     try:
@@ -200,9 +210,7 @@ def _learnings_pending(learnings_dir: Path, dream_state_file: Path) -> bool:
     if last_dt.tzinfo is None:
         last_dt = last_dt.replace(tzinfo=timezone.utc)
 
-    newest = max(
-        datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc) for f in files
-    )
+    newest = datetime.fromtimestamp(max(mtimes), tz=timezone.utc)
     return newest > last_dt
 
 
@@ -594,16 +602,16 @@ def main() -> None:
     # SessionStart hook input carries the session cwd; we use it to pick the
     # project's now-snapshot to inject. Read defensively — a missing/garbage
     # payload just means "no project state".
-    try:
-        raw_stdin = sys.stdin.read()
-    except OSError:
-        raw_stdin = ""
-    try:
-        hook_input = json.loads(raw_stdin or "{}")
-    except (json.JSONDecodeError, ValueError):
-        hook_input = {}
-    if not isinstance(hook_input, dict):
-        hook_input = {}
+    hook_input = read_hook_input()
+
+    # A subagent / nested hook session must not run any of this: it would
+    # register itself in the fleet, launch four detached children and drain
+    # the extraction queues on every SDK child spawn (M7).
+    from lib.checkpoint import is_child_session
+
+    if is_child_session(hook_input.get("transcript_path") or ""):
+        return
+
     cwd = hook_input.get("cwd", "")
     setup_logging("session_start", session_id=hook_input.get("session_id") or "")
 
@@ -641,9 +649,16 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
         except Exception:
             logger.warning("Session registry start-event failed", exc_info=True)
 
-    # Log which model client is available
+    # Log which model client is available. Try-wrapped like the registry and
+    # fleet stages: HookRun.stage never suppresses exceptions by contract, and
+    # an unwrapped raise here would skip everything below — including both
+    # drains, silently accumulating deferred diary/learnings markers (M6).
     with run.stage("client_select"):
-        client_type = _log_client_selection()
+        try:
+            client_type = _log_client_selection()
+        except Exception:
+            logger.exception("Client detection failed; continuing as unknown")
+            client_type = "unknown"
 
     # Warn the user once if neither the SDK nor an API key is present.
     if client_type.startswith("none"):
@@ -798,10 +813,14 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     dream_state_file = paths.dream_state_file()
     learnings_dir = paths.learnings_dir
     with run.stage("dream_gate"):
-        dream_due = (
-            _dream_gate_open(dream_state_file)
-            and _learnings_pending(learnings_dir, dream_state_file)
-        )
+        try:
+            dream_due = (
+                _dream_gate_open(dream_state_file)
+                and _learnings_pending(learnings_dir, dream_state_file)
+            )
+        except Exception:
+            logger.exception("Dream gate check failed; no nudge this session")
+            dream_due = False
     if dream_due:
         logger.info("Dream gate open with pending learnings; emitting nudge")
         log_event(

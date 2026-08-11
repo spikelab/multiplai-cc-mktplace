@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.config import read_session_state
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import hook_run, setup_logging, log_event
+from lib.hook_input import read_hook_input
 
 logger = setup_logging("session_end")
 
@@ -163,19 +164,22 @@ def _checkpoint_on_end(data_dir: Path, hook_input: dict, reason: str) -> str:
 
 
 def main() -> None:
-    try:
-        raw_stdin = sys.stdin.read()
-    except OSError:
-        raw_stdin = ""
-    try:
-        hook_input = json.loads(raw_stdin or "{}")
-    except (json.JSONDecodeError, ValueError):
-        hook_input = {}
-    if not isinstance(hook_input, dict):
-        hook_input = {}
+    hook_input = read_hook_input()
 
-    paths = get_paths()
-    session_state = read_session_state(paths.plugin_data()) or {}
+    # Setup inside a guard (M11): a raise in get_paths/read_session_state used
+    # to escape to __main__, which exits 0 — silently skipping the deferred
+    # marker and losing the session's diary/learnings. get_paths failing is
+    # unrecoverable (nowhere to write a marker); a bad session_state is not.
+    try:
+        paths = get_paths()
+    except Exception:
+        logger.exception("session_end: paths resolution failed; nothing saved")
+        return
+    try:
+        session_state = read_session_state(paths.plugin_data()) or {}
+    except Exception:
+        logger.exception("session_end: session_state unreadable; continuing without it")
+        session_state = {}
 
     # Bind the logger to the session id BEFORE anything logs. Binding it inside
     # _save_deferred_marker meant the checkpoint half of this hook — which runs
@@ -211,7 +215,16 @@ def main() -> None:
 
         with run.stage("marker"):
             try:
-                _save_deferred_marker(paths.plugin_data(), session_state, hook_input)
+                from lib import checkpoint as cp
+
+                # A subagent / nested-hook session must not queue an extraction:
+                # its transcript would be LLM-extracted into the user's diary as
+                # if it were the user's own session (M7). The checkpoint half
+                # above already carries this guard.
+                if cp.is_child_session(hook_input.get("transcript_path") or ""):
+                    logger.info("Child session — no deferred extraction marker")
+                else:
+                    _save_deferred_marker(paths.plugin_data(), session_state, hook_input)
             except Exception:
                 logger.exception("Failed to write deferred extraction marker")
 

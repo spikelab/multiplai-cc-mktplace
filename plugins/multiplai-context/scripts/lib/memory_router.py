@@ -846,7 +846,7 @@ class LLMRouter:
 
         try:
             picks = asyncio.run(
-                self._select_async_multi(prompt, last_response, corpora, known_per_corpus)
+                self._bounded_select_multi(prompt, last_response, corpora, known_per_corpus)
             )
         except RouterCallFailed as e:
             return self._degrade(
@@ -873,6 +873,38 @@ class LLMRouter:
             logger.info("LLMRouter abstained: model ran and picked nothing")
         return capped
 
+    async def _bounded_select_multi(
+        self,
+        prompt: str,
+        last_response: str | None,
+        corpora: dict[str, list[dict]],
+        known_per_corpus: dict[str, set[str]],
+    ) -> dict[str, list[str]]:
+        """:meth:`_select_async_multi` under the timeout, timeout as failure.
+
+        The budget covers the WHOLE call, ``create_client`` included: client
+        creation spawns the CLI subprocess (measured 4-6s, unbounded when it
+        stalls), and with the timeout only around ``client.query`` a stalled
+        spawn ran until the 30s harness kill — no :class:`RouterCallFailed`,
+        no ``_degrade()``, no token_overlap fallback, no log line, and a
+        prompt with no memory at all (M5).
+
+        A timeout raises rather than returning empty: an empty answer from a
+        router that *ran* reads downstream as a deliberate abstention, and
+        abstention suppresses the context manager's own recency net.
+        """
+        try:
+            return await asyncio.wait_for(
+                self._select_async_multi(
+                    prompt, last_response, corpora, known_per_corpus
+                ),
+                timeout=self._timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            raise RouterCallFailed(
+                f"timed out after {self._timeout_seconds:.1f}s"
+            ) from None
+
     async def _select_async_multi(
         self,
         prompt: str,
@@ -894,20 +926,9 @@ class LLMRouter:
         # self._thinking to None when the resolved core cannot take it.
         if self._thinking is not None:
             query_kwargs["thinking"] = self._thinking
-        try:
-            response = await asyncio.wait_for(
-                client.query(**query_kwargs),
-                timeout=self._timeout_seconds,
-            )
-        except asyncio.TimeoutError:
-            # Raise, don't return empty. An empty answer from a router that
-            # *ran* reads downstream as a deliberate abstention, and abstention
-            # suppresses the context manager's own recency net — so returning
-            # empty here is what turned a slow model into a prompt with no
-            # memory at all.
-            raise RouterCallFailed(
-                f"timed out after {self._timeout_seconds:.1f}s"
-            ) from None
+        # No inner wait_for: _bounded_select_multi owns the one deadline, so
+        # client creation and the query share a single budget.
+        response = await client.query(**query_kwargs)
         return _parse_llm_multi_selection(response.content, known_per_corpus)
 
 

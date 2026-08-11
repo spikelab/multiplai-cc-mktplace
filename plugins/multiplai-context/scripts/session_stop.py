@@ -36,6 +36,7 @@ from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib import checkpoint as cp
+from lib.hook_input import read_hook_input
 
 logger = setup_logging("session_stop")
 
@@ -257,22 +258,21 @@ def _checkpoint_pass(hook_input: dict, data_dir: Path) -> str | None:
 
 
 def main() -> None:
+    # Read the hook payload (transcript path, session id, cwd) — needed for
+    # the checkpoint pass. Read defensively; garbage means "skip checkpoint".
+    hook_input = read_hook_input()
+
+    # When another Stop hook blocked the stop, the harness re-runs the chain
+    # with stop_hook_active set. This hook already did its passes on the first
+    # run, and a systemMessage from the second is discarded anyway (P4).
+    if hook_input.get("stop_hook_active"):
+        return
+
     paths = get_paths()
     data_dir = paths.plugin_data()
 
     session_state = read_session_state(data_dir) or {}
     session_id = session_state.get("session_id", "unknown")
-
-    # Read the hook payload (transcript path, session id, cwd) — needed for
-    # the checkpoint pass. Read defensively; garbage means "skip checkpoint".
-    hook_input: dict = {}
-    if not sys.stdin.isatty():
-        try:
-            hook_input = json.loads(sys.stdin.read() or "{}")
-        except Exception:
-            hook_input = {}
-    if not isinstance(hook_input, dict):
-        hook_input = {}
 
     setup_logging("session_stop", session_id=hook_input.get("session_id") or session_id)
 

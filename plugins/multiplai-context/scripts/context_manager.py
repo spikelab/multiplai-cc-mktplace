@@ -52,6 +52,7 @@ from lib.banks import (
 )
 from lib.banks import resolve_ref as resolve_bank_ref
 from lib.banks import split_ref as split_bank_pick
+from lib.hook_input import read_hook_input
 from lib.memory_router import create_router
 from lib.plugin_skills import plugin_skill_owners, qualify
 from lib import reference_docs
@@ -1080,10 +1081,17 @@ def main() -> None:
     # Read stdin and name the session *before* opening hook_run, so the
     # HOOK_ENTRY line identifies whose prompt is at stake. This hook has a 30s
     # harness ceiling and a kill leaves nothing behind but that line.
-    try:
-        input_data = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError):
-        input_data = {}
+    input_data = read_hook_input()
+
+    # A subagent / nested hook session gets no routed memory: a per-prompt
+    # router call inside every SDK child would multiply cost and latency for
+    # context the child was deliberately spawned without (M7). Still emit the
+    # safe empty payload — this hook's contract is JSON on stdout, always.
+    from lib.checkpoint import is_child_session
+
+    if is_child_session(input_data.get("transcript_path") or ""):
+        _emit_result("", {"context": "", "memory_files": 0})
+        return
 
     session_id = (
         input_data.get("session_id") if isinstance(input_data, dict) else None

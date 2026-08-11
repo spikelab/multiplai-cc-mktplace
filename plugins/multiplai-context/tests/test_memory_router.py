@@ -360,12 +360,33 @@ class TestLLMRouterDegradesRatherThanSilencing:
         router = LLMRouter(timeout_seconds=0.01)
         with patch("multiplai_core.model_client.create_client", _slow_client):
             with pytest.raises(RouterCallFailed):
-                asyncio.run(router._select_async_multi(
+                asyncio.run(router._bounded_select_multi(
                     "prompt", None,
                     {"memory": self._catalog(), "skills": [], "resources": []},
                     {"memory": {"python.md", "writing.md"},
                      "skills": set(), "resources": set()},
                 ))
+
+    def test_stalled_client_creation_is_also_bounded(self):
+        """M5: the budget covers create_client, not only the query.
+
+        Client creation spawns the CLI subprocess; when THAT stalled, the old
+        inner wait_for never started counting, so the hook ran to the 30s
+        harness kill — no RouterCallFailed, no degrade, no fallback."""
+        from lib.memory_router import LLMRouter, RouterCallFailed
+
+        async def _stalled_create(**kwargs):
+            await asyncio.sleep(5)
+
+        router = LLMRouter(timeout_seconds=0.01)
+        with patch("multiplai_core.model_client.create_client", _stalled_create), \
+                pytest.raises(RouterCallFailed):
+            asyncio.run(router._bounded_select_multi(
+                "prompt", None,
+                {"memory": self._catalog(), "skills": [], "resources": []},
+                {"memory": {"python.md", "writing.md"},
+                 "skills": set(), "resources": set()},
+            ))
 
     def test_model_that_ran_and_chose_nothing_still_abstains(self):
         """Abstention is preserved — the fallback must not fire on a real answer."""
