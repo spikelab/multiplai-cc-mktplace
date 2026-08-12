@@ -29,9 +29,16 @@ Nothing yet.
   the whole file was left unapplied. 18 of 29 memory files in the reporting
   workspace carry that line, including every high-traffic one, and a real run
   cleared 48 items and applied 0. The date is now restamped in code after the
-  check passes, and the applier is told to reproduce the file verbatim. The
-  check itself is unchanged: an applier that edits the stamp anyway is still
-  refused.
+  check passes, and the applier is told to leave the stamp alone. The check
+  itself is unchanged: an applier that edits the stamp anyway is still refused.
+- **A `**Last Updated:**` written as an example inside a memory file is no
+  longer restamped.** Only the file's own header — the first one, the one
+  freshness reads — is touched. Files documenting the marker (there is at least
+  one) had their sample dates silently moved to today.
+- **`/dream --auto` writes memory files atomically**, the way `--triage`
+  already did. It deletes the source learnings once every target has applied,
+  so a write interrupted half-way was the one loss with nothing left to retry
+  from.
 
 ### Added
 
@@ -50,13 +57,25 @@ Nothing yet.
   as separate bullets. Entries aimed at the same file are now clustered, one
   warning per cluster (`#3, #9, #21 are near-duplicates of each other`), so a
   batch restating one rule twenty times reads as one merge rather than 190
-  pairwise warnings.
+  pairwise warnings. Every item in a cluster is held for review, not just the
+  first one named.
+- **`dream_prescreen.py` now runs both halves of that screen**, so a review-time
+  re-run re-detects items restating *each other* and not only items restating
+  the corpus. It previously ran the corpus half alone.
 
-Both are **warnings, not filters** — nothing is dropped without you. Recall on
-the reworded kind is roughly half (the measure ignores text inside backticks),
-so a clean gate still is not a certificate; `dream_prescreen.py` re-runs the
-same screen at review time, which is what you want anyway once the corpus has
-moved under a long triage.
+Both are **warnings, not filters** — nothing is dropped without you. Warnings
+name which kind of file they hit: an always-loaded `CLAUDE.md`, a shared bank,
+another memory file, or the target itself. Recall on the reworded kind is
+roughly half (the measure ignores text inside backticks), so a clean gate still
+is not a certificate; `dream_prescreen.py` re-runs the same screen at review
+time, which is what you want anyway once the corpus has moved under a long
+triage.
+
+Headings, table rows and anything inside a fenced code block are not treated as
+corpus lines, so a warning never points at a code sample. Past the first 40
+near-duplicate warnings the quoted line is dropped from the warning text (the
+location and score stay, and every flagged item still gets its own line) — the
+section is read inside the review whose context window it exists to protect.
 
 ## [0.46.0] - 2026-08-11
 

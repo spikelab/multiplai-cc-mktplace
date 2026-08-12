@@ -1937,11 +1937,18 @@ _APPLIER_SYSTEM = (
     "You apply an approved set of memory updates to a memory file. Make ONLY the "
     "changes the proposal specifies (add / update / replace at the named sections). "
     "Match the file's existing style and formatting exactly. Do not generalize, "
-    "re-judge, invent, or add anything not in the proposal. Reproduce every existing "
-    "line verbatim, including any 'Last Updated' line — its date is refreshed in code "
-    "after your result is checked, not by you. Return the full updated file content "
-    "and nothing else."
+    "re-judge, invent, or add anything not in the proposal. Every line the proposal "
+    "does not name is reproduced verbatim — in particular the 'Last Updated' line, "
+    "which you never touch: its date is refreshed in code after your result is "
+    "checked, not by you. Return the full updated file content and nothing else."
 )
+# The narrow constraint is the point. "Reproduce every existing line verbatim"
+# contradicts "update / replace at the named sections" two clauses earlier, and
+# the applier has to resolve the conflict itself: the safe reading is to append,
+# which leaves the stale line beside the new one — the "three phrasings of one
+# fact" accumulation `lib.conflict_edits` exists to prevent. `--triage` is
+# unaffected either way (`_is_additive_result` refuses a changed line in code),
+# but `--auto` has no additive check, so there the prompt *is* the constraint.
 
 
 def _split_proposal_by_file(proposal: str) -> dict[str, str]:
@@ -2073,7 +2080,7 @@ _LAST_UPDATED_RE = re.compile(
 
 
 def _refresh_last_updated(content: str, today: str) -> str:
-    """Restamp every ``**Last Updated:** YYYY-MM-DD`` line to *today*.
+    """Restamp the file's ``**Last Updated:** YYYY-MM-DD`` header to *today*.
 
     The applier used to be told to do this, and it obeyed — which made
     :func:`_is_additive_result` reject the whole file, because refreshing the
@@ -2090,8 +2097,16 @@ def _refresh_last_updated(content: str, today: str) -> str:
 
     Files with no stamp are returned unchanged — this never adds one, because
     which files carry a stamp is the catalog's business, not the applier's.
+
+    **The first match only.** A memory file has one header stamp, at the top;
+    ``context_manager._memory_freshness_date`` reads exactly that, taking the
+    first match in the first 2048 characters. Any later occurrence is prose or a
+    sample — ``multiplai.md`` documents this very marker twice — and the regex
+    is ``MULTILINE`` with no fenced-block tracking, so a documented example
+    written at column 0 inside a ``` block would otherwise be silently restamped
+    to today.
     """
-    return _LAST_UPDATED_RE.sub(lambda m: m.group("label") + today, content)
+    return _LAST_UPDATED_RE.sub(lambda m: m.group("label") + today, content, count=1)
 
 
 async def _apply_proposal_to_file(client, memory_file: Path, proposal_section: str) -> str | None:
@@ -2207,7 +2222,10 @@ async def dream_auto() -> None:
             failed_count = 0
             for (filename, memory_file, _), updated_content in zip(targets, results):
                 if updated_content:
-                    memory_file.write_text(_refresh_last_updated(updated_content, today))
+                    # Atomic, like the triage path: the learnings this came from
+                    # are unlinked below, so a half-written file here is the one
+                    # loss with no source left to retry from.
+                    _atomic_write(memory_file, _refresh_last_updated(updated_content, today))
                     updated_count += 1
                     logger.info("Applied updates to %s", filename)
                 else:

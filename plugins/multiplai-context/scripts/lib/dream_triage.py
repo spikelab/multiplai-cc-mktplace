@@ -106,9 +106,19 @@ __all__ = [
     "write_mode",
 ]
 
-# `- \`file.md\` #3 (title): …` — the label routing_validation renders per
-# warning. We only need the (file, number) pair to match warnings to items.
-_WARNING_LABEL_RE = re.compile(r"^-\s+`(?P<target>[^`]+)`\s+#(?P<number>\d+)\b")
+# The two label shapes `routing_validation` renders:
+#   - `file.md` #3 (title): …                       one item
+#   - `file.md` #1, #2, #3 are near-duplicates …    one cluster, N items
+#
+# Every number in the *leading run* is captured. With only the first, a cluster
+# left every member but one unflagged — so the duplicates auto-applied while the
+# item that was not a duplicate was the one held for review. The run stops at the
+# first token that is not `#N`, so a `#12` inside an entry title or a quoted
+# corpus line further along the warning is never read as an item label.
+_WARNING_LABEL_RE = re.compile(
+    r"^-\s+`(?P<target>[^`]+)`\s+#(?P<number>\d+)(?P<more>(?:,\s*#\d+)*)\b"
+)
+_WARNING_NUMBER_RE = re.compile(r"#(\d+)")
 
 
 # --- the write modes --------------------------------------------------------
@@ -445,7 +455,10 @@ def flagged_by_routing(proposal: str) -> set[tuple[str, int]]:
             continue
         m = _WARNING_LABEL_RE.match(line)
         if m:
-            flagged.add((m.group("target"), int(m.group("number"))))
+            target = m.group("target")
+            flagged.add((target, int(m.group("number"))))
+            for extra in _WARNING_NUMBER_RE.findall(m.group("more") or ""):
+                flagged.add((target, int(extra)))
     return flagged
 
 

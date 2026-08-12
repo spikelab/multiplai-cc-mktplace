@@ -474,6 +474,28 @@ class TestLastUpdatedStamp:
         assert "refresh its date" not in mod._APPLIER_SYSTEM
         assert "Last Updated" in mod._APPLIER_SYSTEM  # told to reproduce it verbatim
 
+    def test_the_verbatim_rule_does_not_forbid_update_and_replace(self, dream):
+        """"Reproduce every existing line verbatim" contradicts "update /
+        replace at the named sections" in the same paragraph, and `--auto` has
+        no additive check to catch the applier resolving that by appending —
+        which leaves the stale line beside the new one."""
+        mod, _ = dream
+        assert "Reproduce every existing line verbatim" not in mod._APPLIER_SYSTEM
+        assert "update / replace at the named sections" in mod._APPLIER_SYSTEM
+        assert "does not name is reproduced verbatim" in mod._APPLIER_SYSTEM
+
+    def test_only_the_first_stamp_is_restamped(self, dream):
+        """One header per file, read by `context_manager` from the top. A later
+        occurrence is prose or a fenced sample — `multiplai.md` documents this
+        very marker — and the regex has no fence tracking."""
+        mod, _ = dream
+        text = ("# Memory\n\n**Last Updated:** 2020-01-01\n\n## How it works\n\n"
+                "```\n**Last Updated:** 2019-05-05\n```\n")
+        out = mod._refresh_last_updated(text, "2026-08-12")
+        assert "**Last Updated:** 2026-08-12" in out
+        assert "2019-05-05" in out, "a documented example was restamped"
+        assert len(out.splitlines()) == len(text.splitlines())
+
     def test_the_date_is_replaced_and_nothing_else_is(self, dream):
         mod, _ = dream
         out = mod._refresh_last_updated(STAMPED_MEMORY, "2026-08-12")
@@ -506,15 +528,20 @@ class TestLastUpdatedStamp:
         async def _apply(_client, _path, _slice):
             return applied_text
 
+        # Both sides of the UTC-midnight boundary. dream_triage stamps with its
+        # own `datetime.now(timezone.utc)`, so a date read *after* the run can be
+        # the day after the one written, and the run would fail for no reason.
+        before = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         with patch.object(mod, "create_client",
                           new=AsyncMock(return_value=_client_returning(GOOD_VERDICTS))), \
                 patch.object(mod, "_apply_proposal_to_file", new=_apply):
             asyncio.run(mod.dream_triage(str(proposal), dry_run=False))
+        after = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         written = (memory_dir / "dolcebot.md").read_text()
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         assert "VM logs are specified" in written
-        assert f"**Last Updated:** {today}" in written
+        assert (f"**Last Updated:** {before}" in written
+                or f"**Last Updated:** {after}" in written)
         assert "2020-01-01" not in written
 
     def test_an_applier_that_edits_the_date_itself_is_still_refused(self, dream):

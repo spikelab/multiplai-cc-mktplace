@@ -39,13 +39,18 @@ and does not stem, so measured recall is roughly half (see
 its say-so; who holds the pen does not change.
 """
 
-import functools
 import logging
 import re
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 
 from lib import taxonomy
-from lib.conflict_edits import MIN_OVERLAP, content_words, overlap_sets
+from lib.conflict_edits import (
+    MIN_OVERLAP,
+    content_words,
+    overlap_sets,
+    screenable_lines,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +59,19 @@ NGRAM_SIZE = 8
 # before we call the insert "already present" there. 0.5 tolerates light
 # rephrasing while ignoring incidental shared phrases.
 DUPLICATE_RATIO = 0.5
+
+# Near-duplicate warnings quote the corpus line they matched — that is what
+# makes a lead actionable without opening the file. Past this many, the quote is
+# dropped and the warning keeps its label, location and score. `dream_prescreen`
+# carries the measurement this bound exists for: printing every item with its
+# body and neighbours cost 411,614 bytes (~103k tokens) on the 602-item backlog,
+# inside the very review whose context window it was meant to protect.
+#
+# The count of warnings is deliberately *not* capped, only their size.
+# `dream_triage.flagged_by_routing` reads this section to decide which items may
+# be written unreviewed, so dropping a warning would silently widen what
+# auto-applies — the opposite of what a cap is for.
+NEAR_DUPLICATE_QUOTES = 40
 
 _H2_RE = re.compile(r"^## +(.+?)\s*$", re.MULTILINE)
 _ENTRY_RE = re.compile(r"^### +(?P<num>A?\d+)\.\s*(?P<title>.*)$")
@@ -214,14 +232,12 @@ def _ngrams(tokens: list[str], n: int = NGRAM_SIZE) -> set[tuple[str, ...]]:
     return {tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)}
 
 
-@functools.lru_cache(maxsize=64)
 def _file_gram_index(content: str, n: int = NGRAM_SIZE) -> dict[tuple[str, ...], int]:
     """Map each n-gram in *content* to the 1-indexed line where it starts.
 
-    Cached on the content itself: :func:`validate_proposal` calls this once per
-    corpus file **per proposal entry**, so a 583-entry proposal re-indexed the
-    same files 583 times. Python memoizes a ``str``'s hash after the first
-    lookup, so the key is cheap; the values are dicts nothing mutates.
+    Built once per corpus file per :func:`validate_proposal` call — see
+    :func:`_corpus_gram_index` for why that is done by the caller rather than by
+    a cache on this function.
     """
     index: dict[tuple[str, ...], int] = {}
     tokens: list[str] = []
@@ -237,6 +253,45 @@ def _file_gram_index(content: str, n: int = NGRAM_SIZE) -> dict[tuple[str, ...],
     return index
 
 
+def _corpus_gram_index(
+    contents: dict[str, str],
+) -> dict[str, dict[tuple[str, ...], int]]:
+    """N-gram index per corpus file, built once for a whole proposal.
+
+    This used to be an ``lru_cache(maxsize=64)`` on :func:`_file_gram_index`,
+    keyed by file content. That is the wrong shape for this access pattern and
+    fails at a cliff rather than degrading: every entry is scored against every
+    file in a fixed cycle, so an LRU smaller than the corpus evicts each entry
+    before the next pass reaches it and the hit rate goes to *zero*. The corpus
+    is no longer bounded either — :func:`lib.memory_corpus.bank_paths` globs
+    every ``*.md`` in every subscribed bank — so one shared bank could cross 64
+    files and take a run from seconds to minutes. Building both indexes once per
+    call has no cliff to sit near, and drops the whole corpus when the call
+    returns instead of pinning it in a module-level cache.
+    """
+    return {name: _file_gram_index(content) for name, content in contents.items()}
+
+
+def _duplicate_hits(
+    grams: set[tuple[str, ...]],
+    index: dict[str, dict[tuple[str, ...], int]],
+    ratio: float,
+) -> list[tuple[str, int, float]]:
+    """The :func:`find_duplicate_content` scan against a prebuilt index."""
+    if not grams:
+        return []
+    hits: list[tuple[str, int, float]] = []
+    for name, file_index in index.items():
+        shared = grams & file_index.keys()
+        if not shared:
+            continue
+        overlap = len(shared) / len(grams)
+        if overlap >= ratio:
+            hits.append((name, min(file_index[g] for g in shared), overlap))
+    hits.sort(key=lambda h: h[2], reverse=True)
+    return hits
+
+
 def find_duplicate_content(
     text: str,
     memory_contents: dict[str, str],
@@ -250,45 +305,58 @@ def find_duplicate_content(
     descending. Texts too short to form a single n-gram return no hits —
     short one-liners produce too many false positives to gate on.
     """
-    grams = _ngrams(_tokenize(text))
-    if not grams:
-        return []
-    hits: list[tuple[str, int, float]] = []
-    for name, content in memory_contents.items():
-        index = _file_gram_index(content)
-        shared = grams & index.keys()
-        overlap = len(shared) / len(grams)
-        if overlap >= ratio:
-            hits.append((name, min(index[g] for g in shared), overlap))
-    hits.sort(key=lambda h: h[2], reverse=True)
-    return hits
+    return _duplicate_hits(
+        _ngrams(_tokenize(text)), _corpus_gram_index(memory_contents), ratio
+    )
 
 
 # ---------------------------------------------------------------------------
 # Near-duplicate detection (reworded restatements the n-gram check misses)
 # ---------------------------------------------------------------------------
 
-# Corpus lines shorter than this carry too little to score: a heading or a
-# one-word bullet matches everything a bit and nothing usefully. Same constant,
-# same reasoning, as `dream_prescreen.MIN_LINE_LEN`.
-MIN_LINE_LEN = 40
 
+def _corpus_word_lines(
+    contents: dict[str, str],
+) -> dict[str, list[tuple[int, str, frozenset[str]]]]:
+    """Screenable lines per corpus file, built once for a whole proposal.
 
-@functools.lru_cache(maxsize=64)
-def _file_word_lines(content: str) -> tuple[tuple[int, str, frozenset[str]], ...]:
-    """``(lineno, text, content_words)`` for each substantive line of *content*.
+    Which lines are screenable, and how they are tokenized, is
+    :func:`lib.conflict_edits.screenable_lines` — the same function
+    ``dream_prescreen`` calls at review time. One constant, one filter, one
+    tokenizer: a run that is clean under the gate and dirty under the lens (or
+    the reverse) is the failure :mod:`lib.memory_corpus` exists to prevent, and
+    a second copy of the screen here would reintroduce it one level down.
 
-    Cached on the content itself for the same reason as :func:`_file_gram_index`:
-    :func:`validate_proposal` scores every entry against every corpus line, and
-    re-tokenizing the corpus per entry is what made the naive version quadratic
-    in minutes rather than seconds.
+    Built per call rather than memoized, for the reason given in
+    :func:`_corpus_gram_index`.
     """
-    out = []
-    for lineno, line in enumerate(content.splitlines(), start=1):
-        stripped = line.strip()
-        if len(stripped) > MIN_LINE_LEN:
-            out.append((lineno, stripped, frozenset(content_words(stripped))))
-    return tuple(out)
+    return {name: screenable_lines(content) for name, content in contents.items()}
+
+
+def _best_near_duplicate(
+    words: AbstractSet[str],
+    index: dict[str, list[tuple[int, str, frozenset[str]]]],
+    threshold: float,
+) -> tuple[str, int, str, float] | None:
+    """The :func:`find_near_duplicate_line` scan against a prebuilt index."""
+    if not words:
+        return None
+    n_words = len(words)
+    best: tuple[str, int, str, float] | None = None
+    for name, lines in index.items():
+        for lineno, line, line_words in lines:
+            # Jaccard is bounded above by the size ratio of the two sets, so a
+            # line that cannot reach the threshold on length alone is skipped
+            # before the intersection is computed. Pure speed, no effect on the
+            # result — most corpus lines are far shorter than a proposal item.
+            n_line = len(line_words)
+            lo, hi = (n_words, n_line) if n_words < n_line else (n_line, n_words)
+            if hi == 0 or lo < threshold * hi:
+                continue
+            score = overlap_sets(words, line_words)
+            if score >= threshold and (best is None or score > best[3]):
+                best = (name, lineno, line, score)
+    return best
 
 
 def find_near_duplicate_line(
@@ -306,6 +374,11 @@ def find_near_duplicate_line(
     Jaccard over content words, at that module's own calibrated threshold, so
     this introduces no third tokenizer and no third number to tune.
 
+    Because one global best is returned, a caller that wants some file left out
+    must leave it out of *contents* — filtering the result afterwards discards
+    the entry's coverage of every other file. :func:`validate_proposal` does
+    exactly that; see the note there.
+
     **Recall is partial and the misses are systematic.** ``content_words``
     strips code spans and does not stem, so a real duplicate pair measured on
     this workspace — "Never scatter worktrees inside project directories …"
@@ -317,23 +390,9 @@ def find_near_duplicate_line(
     ``conflict_edits`` for supersede edits, which is a calibration question, not
     a tweak. Treat a clean result as "no cheap hit", never as "no duplicate".
     """
-    words = content_words(text)
-    if not words:
-        return None
-    best: tuple[str, int, str, float] | None = None
-    for name, content in contents.items():
-        for lineno, line, line_words in _file_word_lines(content):
-            # Jaccard is bounded above by the size ratio of the two sets, so a
-            # line that cannot reach the threshold on length alone is skipped
-            # before the intersection is computed. Pure speed, no effect on the
-            # result — most corpus lines are far shorter than a proposal item.
-            lo, hi = sorted((len(words), len(line_words)))
-            if hi == 0 or lo / hi < threshold:
-                continue
-            score = overlap_sets(words, set(line_words))
-            if score >= threshold and (best is None or score > best[3]):
-                best = (name, lineno, line, score)
-    return best
+    return _best_near_duplicate(
+        content_words(text), _corpus_word_lines(contents), threshold
+    )
 
 
 def find_batch_near_duplicate_groups(
@@ -358,11 +417,11 @@ def find_batch_near_duplicate_groups(
     ``[(entries, max_overlap)]``, each cluster in entry order, clusters ordered
     by their first entry.
     """
-    by_target: dict[str, list[tuple[dict, set[str]]]] = {}
+    by_target: dict[str, list[tuple[dict, frozenset[str]]]] = {}
     for entry in entries:
         words = content_words(entry.get("text") or "")
         if words:
-            by_target.setdefault(entry["target"], []).append((entry, words))
+            by_target.setdefault(entry["target"], []).append((entry, frozenset(words)))
 
     groups: list[tuple[list[dict], float]] = []
     for members in by_target.values():
@@ -380,8 +439,19 @@ def find_batch_near_duplicate_groups(
 
         scored_pairs: list[tuple[int, float]] = []
         for i, (_, words_a) in enumerate(members):
+            n_a = len(words_a)
             for j in range(i + 1, len(members)):
-                score = overlap_sets(words_a, members[j][1])
+                words_b = members[j][1]
+                # The same size-ratio bound the corpus scan uses, and it earns
+                # more here: that scan is linear in corpus lines, this one is
+                # quadratic in entries aimed at one file. 600 items on a single
+                # target is ~180,000 pairs, and most are rejected by two lengths
+                # rather than an intersection.
+                n_b = len(words_b)
+                lo, hi = (n_a, n_b) if n_a < n_b else (n_b, n_a)
+                if hi == 0 or lo < threshold * hi:
+                    continue
+                score = overlap_sets(words_a, words_b)
                 if score >= threshold:
                     ri, rj = _find(i), _find(j)
                     if ri != rj:
@@ -432,7 +502,14 @@ def validate_proposal(
 
     dedup_extra = dedup_extra or {}
     dedup_contents = {**memory_contents, **dedup_extra}
+    # Both indexes are built once here, not once per entry: a 600-entry proposal
+    # scores every entry against every corpus file, and re-deriving either index
+    # inside that loop is what made the naive version quadratic in minutes.
+    gram_index = _corpus_gram_index(dedup_contents)
+    word_index = _corpus_word_lines(dedup_contents)
+
     warnings: list[str] = []
+    quoted = abbreviated = 0
     entries = parse_proposal_entries(proposal)
     for entry in entries:
         label = f"`{entry['target']}` #{entry['number']} ({entry['title']})"
@@ -459,7 +536,9 @@ def validate_proposal(
         # own target file — only cross-file hits are signal for those.
         revises_target = entry["change"] in ("update", "replace")
         verbatim_hits = set()
-        for name, line, overlap in find_duplicate_content(entry["text"], dedup_contents):
+        for name, line, overlap in _duplicate_hits(
+            _ngrams(_tokenize(entry["text"])), gram_index, DUPLICATE_RATIO
+        ):
             if revises_target and name == entry["target"]:
                 continue
             verbatim_hits.add(name)
@@ -469,19 +548,42 @@ def validate_proposal(
                 f"this is an intentional update of that entry."
             )
 
-        # Same question, reworded-tolerant. Reported only when the n-gram check
-        # did not already name that file for this entry: two warnings about one
-        # location is review cost, and this check exists to remove review cost.
-        near = find_near_duplicate_line(entry["text"], dedup_contents)
+        # Same question, reworded-tolerant, over the corpus **minus** the files a
+        # warning from would be noise: one the n-gram check already named for
+        # this entry (two warnings about one location is review cost, and this
+        # check exists to remove review cost), and — for an update/replace — the
+        # entry's own target, which it legitimately overlaps.
+        #
+        # Excluded from the *search*, not from the result. `_best_near_duplicate`
+        # returns one global best, so dropping it afterwards when it landed in an
+        # exempt file threw away the entry's coverage of every other file: an
+        # `update` entry scores highest against the very line it revises, so it
+        # got no cross-file near-duplicate check at all — including against the
+        # always-loaded `CLAUDE.md`s, which is the 12-of-17 case this exists for.
+        suppressed = set(verbatim_hits)
+        if revises_target:
+            suppressed.add(entry["target"])
+        near = _best_near_duplicate(
+            content_words(entry["text"]),
+            {k: v for k, v in word_index.items() if k not in suppressed},
+            MIN_OVERLAP,
+        )
         if near:
             name, line, line_text, score = near
-            if name not in verbatim_hits and not (revises_target and name == entry["target"]):
+            head = (
+                f"{label}: near-duplicate of an existing line in "
+                f"{_where(name, entry, dedup_extra)} `{name}:{line}` "
+                f"({score:.0%} word overlap)"
+            )
+            if quoted < NEAR_DUPLICATE_QUOTES:
+                quoted += 1
                 warnings.append(
-                    f"{label}: near-duplicate of an existing line in "
-                    f"{_where(name, entry, dedup_extra)} `{name}:{line}` "
-                    f"({score:.0%} word overlap) — \"{line_text[:120]}\". "
-                    f"Read both lines: if it restates that line, merge or drop it."
+                    f"{head} — \"{line_text[:120]}\". Read both lines: if it "
+                    f"restates that line, merge or drop it."
                 )
+            else:
+                abbreviated += 1
+                warnings.append(f"{head} — open both lines; quote omitted, see below.")
 
     for cluster, score in find_batch_near_duplicate_groups(entries):
         numbers = ", ".join(f"#{e['number']}" for e in cluster)
@@ -490,15 +592,34 @@ def validate_proposal(
             f"(up to {score:.0%} word overlap; first is \"{cluster[0]['title']}\") — "
             f"merge into one entry rather than applying each."
         )
+
+    if abbreviated:
+        # Stated, never silent: a bound the reader cannot see reads as "the gate
+        # found nothing more to say".
+        warnings.append(
+            f"{abbreviated} near-duplicate warning(s) above carry no quote — only "
+            f"the first {NEAR_DUPLICATE_QUOTES} do, so this section stays readable "
+            f"inside the review it is read in. Nothing was dropped: every flagged "
+            f"item still has its own line above. For the quotes and their "
+            f"neighbours, run `dream_prescreen.py --all --verbose`."
+        )
     return warnings
 
 
 def _where(name: str, entry: dict, dedup_extra: dict[str, str]) -> str:
-    """Name the kind of file a hit landed in, for the warning line."""
+    """Name the kind of file a hit landed in, for the warning line.
+
+    A shared-bank label is ``bank/file.md`` and an always-loaded one is
+    ``CLAUDE.md (global)`` / ``CLAUDE.md (workspace)``, so the ``/`` tells them
+    apart without threading a second mapping through. Worth telling apart: the
+    reviewer's instructions treat a rule already in an always-loaded file as the
+    most re-proposed shape there is and drop it, where a bank hit is a routing
+    and contribution question.
+    """
     if name == entry["target"]:
         return "target file"
     if name in dedup_extra:
-        return "an ALWAYS-LOADED file"
+        return "a SHARED BANK file" if "/" in name else "an ALWAYS-LOADED file"
     return "ANOTHER file"
 
 

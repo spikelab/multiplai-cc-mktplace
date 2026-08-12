@@ -651,6 +651,46 @@ class TestRoutingWarnings:
         extended = PROPOSAL + "\n## Action Items\n\n- `dolcebot.md` #1 (not a warning)\n"
         assert flagged_by_routing(extended) == {("dolcebot.md", 2)}
 
+    def test_every_member_of_a_batch_cluster_is_flagged(self):
+        """A cluster warning names N items on one line. Reading only the first
+        left the duplicates unflagged and auto-applying, and held the one item
+        that was *not* a duplicate — exactly backwards."""
+        section = (
+            "## Routing Warnings\n\n"
+            "- `dolcebot.md` #3, #9, #21 are near-duplicates of each other "
+            "(up to 61% word overlap; first is \"VM logs\") — merge into one entry.\n"
+        )
+        assert flagged_by_routing(section) == {
+            ("dolcebot.md", 3), ("dolcebot.md", 9), ("dolcebot.md", 21)}
+
+    def test_a_number_past_the_leading_run_is_not_an_item_label(self):
+        """Only the run of `#N` immediately after the filename is read. A `#12`
+        in an entry title — or in the corpus line a near-duplicate warning
+        quotes — is prose, and flagging item 12 off it would hold an unrelated
+        item on evidence about another one."""
+        section = (
+            "## Routing Warnings\n\n"
+            "- `dolcebot.md` #4 (rename step #12 of the runbook): near-duplicate "
+            "of an existing line in `python.md:7` — \"see #99 for the rationale\".\n"
+        )
+        assert flagged_by_routing(section) == {("dolcebot.md", 4)}
+
+    def test_parses_a_cluster_the_renderer_actually_writes(self):
+        """The same end-to-end coupling as above, for the cluster shape."""
+        rule = ("Worktrees for a project live under the shared worktrees "
+                "directory, never scattered inside project folders.")
+        restated = ("Never scatter worktrees inside project directories; each "
+                    "worktree lives under the shared worktrees directory.")
+        entry = "# Proposal\n\n## Updates for `dolcebot.md`\n\n" + "".join(
+            f"### {n}. Entry {n}\n**Section:** DolceEngine\n**Change:** add\n> {t}\n\n"
+            for n, t in ((1, rule), (2, restated))
+        )
+        warnings = validate_proposal(entry, {"dolcebot.md": "## DolceEngine\n"})
+        assert any("near-duplicates of each other" in w for w in warnings)
+        rendered = entry + render_warnings_section(warnings)
+        assert flagged_by_routing(rendered) == {
+            ("dolcebot.md", 1), ("dolcebot.md", 2)}
+
 
 class TestRoutingSectionPresence:
     def test_present_when_the_gate_ran(self):

@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "SYSTEM",
+    "ROUTING_FLAG_EVIDENCE",
     "CITATIONS",
     "VERDICTS",
     "Verdict",
@@ -184,12 +185,32 @@ Rules:
   human. That is a safe outcome, not a reason to guess at a format.
 """
 
+# What `routing_flagged` is told to mean, rendered by `render_batch`. A module
+# constant rather than a literal inline, so it can be folded into the cache key
+# below: the flag is set by three unrelated checks now, and a verdict reached
+# when the text named only one of them must not replay once it names all three.
+ROUTING_FLAG_EVIDENCE = (
+    "- **Routing gate flagged this item.** One of: the section it names may not "
+    "exist in this file; the subject may belong in another one; or the text may "
+    "restate a line that already exists — in another memory file, in an "
+    "always-loaded `CLAUDE.md`, in a shared bank, or in another item of this "
+    "same batch. Which one it is, is in the proposal's `## Routing Warnings`. "
+    "This is evidence for you to weigh, not a verdict."
+)
+
 # Folded into every cache key. Derived, not hand-maintained: `CACHE_VERSION` is
 # a constant somebody has to remember to bump, and the case where forgetting
 # costs most is exactly the case where the prompt was edited to close a judge
 # loophole — the `apply` verdicts that loophole produced would otherwise replay
 # silently, forever, at zero cost.
-_SYSTEM_DIGEST = hashlib.sha256(SYSTEM.encode("utf-8")).hexdigest()[:16]
+#
+# `ROUTING_FLAG_EVIDENCE` is folded in for the same reason one level down. It is
+# not part of `SYSTEM`, but it is the only text that tells the judge what the
+# flag *means*, so editing it changes what a flagged item was judged against
+# just as surely as editing the system prompt does.
+_SYSTEM_DIGEST = hashlib.sha256(
+    (SYSTEM + "\n" + ROUTING_FLAG_EVIDENCE).encode("utf-8")
+).hexdigest()[:16]
 
 
 @dataclass(frozen=True)
@@ -335,11 +356,7 @@ def render_batch(items: Sequence, target_texts: Mapping[str, str]) -> str:
         out.append(f"- **Extractor's labels (a claim to check, not an answer):** {pair}")
         out.append(f"- **Citation given:** {getattr(item, 'source', '') or '(none)'}")
         if getattr(item, "routing_flagged", False):
-            out.append(
-                "- **Routing gate flagged this item** — the section it names may not "
-                "exist in this file, or the subject may belong in another one. This is "
-                "evidence for you to weigh, not a verdict."
-            )
+            out.append(ROUTING_FLAG_EVIDENCE)
         out.append("")
         out.append("**Text it would append:**")
         out.append("")

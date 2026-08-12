@@ -248,10 +248,12 @@ items in the batch that restate **each other** (`#3, #9, #21 are
 near-duplicates of each other`); those are one merge, not three applies.
 
 Its recall on the reworded kind is roughly half — a clean gate is not a
-certificate — so re-screen with the same measure whenever the corpus has moved
-under you, which it does constantly: every item you apply in Step 1c becomes
-corpus for the items after it, and the gate scored them all against the file as
-it was at draft time.
+certificate — so re-screen whenever the corpus has moved under you, which it
+does constantly: every item you apply in Step 1c becomes corpus for the items
+after it, and the gate scored them all against the file as it was at draft time.
+`dream_prescreen.py` runs both of the gate's passes — each item against the
+corpus, and the items against each other — so a re-run re-detects the batch
+clusters too, on the corpus as it stands now.
 
 ```bash
 uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" \
@@ -426,10 +428,12 @@ memory, whoever decided it. Never silently apply an item that appears in
   the section or reroute to `X`; applying as-is would break the unique-section invariant.
 - **"proposed text already present in … `file:line`"** → read that location; if it's the
   same insight, skip the item (or merge into the existing entry) and tell the user.
-  Apply as new text only if the user confirms it's an intentional update. `file` may
-  name an **always-loaded** `CLAUDE.md` or a shared bank, not only a memory file —
-  those are screened too, and a rule already in an always-loaded file is the single
-  most re-proposed shape there is.
+  Apply as new text only if the user confirms it's an intentional update. The warning
+  names which kind of file it hit, and the kinds are handled differently: **an
+  ALWAYS-LOADED file** (a `CLAUDE.md`) means drop it — a rule already in one of those
+  is the single most re-proposed shape there is; **a SHARED BANK file** means the
+  rule is already the team's, so it is a routing question (target the bank, or drop
+  the personal copy), not an automatic drop.
 - **"near-duplicate of an existing line in … `file:line`"** → the same handling, one
   step weaker: the warning quotes the line, so open it and decide. A restatement gets
   merged into the existing entry or dropped; a genuinely new claim that merely shares

@@ -35,6 +35,7 @@ detector it isn't; deciding which of the two it is stays with the reviewer.
 from __future__ import annotations
 
 import re
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import date
 
@@ -84,8 +85,20 @@ MIN_OVERLAP = 0.35
 # anything — two three-word lines sharing two words score 0.66 by accident.
 MIN_CONTENT_WORDS = 4
 
-# Structure, not facts.
-_SKIP_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|```|\||-{3,}\s*$|\*\*Last Updated)")
+# Structure, not facts. Public because three scans ask the same question of a
+# memory file and must answer it the same way: this module's supersede matcher,
+# the draft-time routing gate (`lib.routing_validation`) and the review-time
+# lens (`dream_prescreen`). `lib.memory_lint` keeps its own copy deliberately —
+# it runs as a standalone script where a sibling `lib.*` import does not
+# resolve, and its module comment says so.
+SKIP_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|```|\||-{3,}\s*$|\*\*Last Updated)")
+_SKIP_LINE_RE = SKIP_LINE_RE  # the name this module used before it was shared
+
+_FENCE_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+
+# Corpus lines shorter than this carry too little to score: a heading or a
+# one-word bullet matches everything a bit and nothing usefully.
+MIN_LINE_LEN = 40
 
 #: Provenances that count as "the world was observed to be otherwise", and so
 #: may put an existing memory line up for supersession. The two-axis equivalent
@@ -173,18 +186,61 @@ def content_words(text: str) -> set[str]:
     return {w.strip(".-/") for w in words if w not in STOPWORDS and len(w) > 2}
 
 
-def overlap_sets(wa: set[str], wb: set[str]) -> float:
+def overlap_sets(wa: AbstractSet[str], wb: AbstractSet[str]) -> float:
     """Jaccard overlap of two content-word sets. 0.0 when either is too thin.
 
     Symmetric on purpose. A containment measure (``|a ∩ b| / |a|``) only finds
     an item *inside* a line, so a verbose restatement of a short existing rule —
     the normal shape of a dream item — scores far below any usable threshold
     while the terse form of the same rule scores 1.00.
+
+    Takes any ``Set``, not ``set``. It only needs ``len``, ``&`` and ``|``, all
+    of which ``frozenset`` supports — and a caller that tokenized the corpus
+    once into frozensets (:func:`screenable_lines`) must not have to copy one
+    into a fresh ``set`` per comparison to satisfy an annotation.
     """
     if len(wa) < MIN_CONTENT_WORDS or len(wb) < MIN_CONTENT_WORDS:
         return 0.0
     union = wa | wb
     return len(wa & wb) / len(union) if union else 0.0
+
+
+def screenable_lines(text: str) -> list[tuple[int, str, frozenset[str]]]:
+    """``(lineno, stripped_text, content_words)`` for each line worth scoring.
+
+    One implementation for every "does this already exist in the corpus" scan:
+    the draft-time gate and the review-time lens. :mod:`lib.memory_corpus` states
+    why the two must screen the same *files*; they must screen the same *lines*
+    for the same reason, and a second copy of the filter is how they stop
+    agreeing.
+
+    Three exclusions, all structure rather than claims:
+
+    * whatever :data:`SKIP_LINE_RE` already calls structure — headings, table
+      rows, horizontal rules, the ``**Last Updated`` stamp;
+    * everything inside a fenced code block. :func:`content_words` strips
+      *inline* code spans for this reason already; a fenced block is the same
+      content one level up, and the corpus now includes the global ``CLAUDE.md``
+      (30,673 bytes on the measured machine), which is dense with bash and
+      config samples. A near-duplicate warning that points a reviewer at a line
+      of shell is a lead they cannot act on;
+    * lines of :data:`MIN_LINE_LEN` characters or fewer.
+
+    Words come back as ``frozenset`` so a caller may tokenize the corpus once
+    and reuse the sets across thousands of comparisons without copying them.
+    """
+    out: list[tuple[int, str, frozenset[str]]] = []
+    in_fence = False
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence or SKIP_LINE_RE.match(line):
+            continue
+        stripped = line.strip()
+        if len(stripped) > MIN_LINE_LEN:
+            out.append((lineno, stripped, frozenset(content_words(stripped))))
+    return out
 
 
 def overlap(a: str, b: str) -> float:
