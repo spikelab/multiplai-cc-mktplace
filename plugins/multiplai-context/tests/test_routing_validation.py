@@ -20,9 +20,12 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from lib.routing_validation import (  # noqa: E402
+    NEAR_DUPLICATE_QUOTES,
     append_routing_warnings,
     build_section_registry,
+    find_batch_near_duplicate_groups,
     find_duplicate_content,
+    find_near_duplicate_line,
     parse_proposal_entries,
     render_warnings_section,
     validate_proposal,
@@ -213,6 +216,259 @@ class TestDuplicateDetection:
             _memory_contents(),
         )
         assert hits == []
+
+
+# A rule stated one way in memory, and the same rule stated another way in a
+# proposal item. They share no 8-gram, so the n-gram check is blind to the pair
+# — this is the shape issue #195 measured, and what the word-overlap check is
+# for.
+_EXISTING_RULE = (
+    "Worktrees for a project must live under the shared worktrees directory, "
+    "never scattered inside project folders."
+)
+_RESTATEMENT = (
+    "Never scatter worktrees inside project directories; every worktree lives "
+    "under the shared worktrees directory."
+)
+
+
+def _memory_with_rule():
+    contents = _memory_contents()
+    contents["git-policy.md"] += f"\n## Worktree Location\n\n- {_EXISTING_RULE}\n"
+    return contents
+
+
+def _multi_entry_proposal(target: str, *texts: str, change: str = "add") -> str:
+    out = ["# Dream proposal", "", f"## Updates for `{target}`", ""]
+    for number, text in enumerate(texts, start=1):
+        out += [
+            f"### {number}. Entry {number}",
+            "**Section:** Worktree Location",
+            f"**Change:** {change}",
+            f"> {text}",
+            "",
+        ]
+    return "\n".join(out)
+
+
+class TestNearDuplicateDetection:
+    """Issue #195: the drafter is shown headers only, so it re-proposes rules
+    that already exist. The n-gram check catches near-verbatim; this catches
+    the restatement."""
+
+    def test_reworded_restatement_is_flagged(self):
+        warnings = validate_proposal(
+            _proposal("git-policy.md", "Worktree Location", _RESTATEMENT),
+            _memory_with_rule(),
+        )
+        near = [w for w in warnings if "near-duplicate" in w]
+        assert len(near) == 1
+        assert "git-policy.md:" in near[0]
+        assert "target file" in near[0]
+
+    def test_the_ngram_check_alone_would_have_missed_it(self):
+        # Guards the premise: if this ever starts hitting, the new check is
+        # measuring nothing the old one didn't.
+        assert find_duplicate_content(_RESTATEMENT, _memory_with_rule()) == []
+
+    def test_restatement_of_an_always_loaded_file_is_flagged(self):
+        # The 12-of-17 case: items restating a rule that is already in an
+        # always-loaded CLAUDE.md, which the drafter never sees at all.
+        warnings = validate_proposal(
+            _proposal("git-policy.md", "Worktree Location", _RESTATEMENT),
+            _memory_contents(),
+            dedup_extra={"CLAUDE.md": f"# Global\n\n- {_EXISTING_RULE}\n"},
+        )
+        near = [w for w in warnings if "near-duplicate" in w]
+        assert len(near) == 1
+        assert "ALWAYS-LOADED" in near[0]
+
+    def test_a_verbatim_duplicate_is_reported_once(self):
+        # Both checks fire on the same file; the reviewer gets one warning.
+        warnings = validate_proposal(
+            _proposal("python.md", "Packaging", _DUP_TEXT), _memory_contents()
+        )
+        assert len([w for w in warnings if "already present" in w]) == 1
+        assert [w for w in warnings if "near-duplicate of an existing line" in w] == []
+
+    def test_fresh_text_is_clean(self):
+        warnings = validate_proposal(
+            _proposal(
+                "python.md", "Packaging",
+                "Pin the interpreter version in the member pyproject so a fresh "
+                "checkout resolves the same wheel set every time.",
+            ),
+            _memory_with_rule(),
+        )
+        assert [w for w in warnings if "near-duplicate" in w] == []
+
+    def test_update_entry_exempt_in_its_own_target(self):
+        for change in ("update", "replace"):
+            warnings = validate_proposal(
+                _proposal("git-policy.md", "Worktree Location", _RESTATEMENT,
+                          change=change),
+                _memory_with_rule(),
+            )
+            assert [w for w in warnings if "near-duplicate" in w] == [], change
+
+    def test_an_update_is_still_screened_against_every_other_file(self):
+        """The exempt file is left out of the *search*, not stripped from the
+        result. One global best hit is returned, so an `update` — which scores
+        highest against the very line it revises — used to come back with that
+        hit, have it discarded, and get no cross-file check at all. That is the
+        12-of-17 always-loaded case the check exists for."""
+        for change in ("update", "replace"):
+            warnings = validate_proposal(
+                _proposal("git-policy.md", "Worktree Location", _RESTATEMENT,
+                          change=change),
+                _memory_with_rule(),  # the target ALSO holds the rule
+                dedup_extra={"CLAUDE.md (global)": f"# Global\n\n- {_EXISTING_RULE}\n"},
+            )
+            near = [w for w in warnings if "near-duplicate" in w]
+            assert len(near) == 1, change
+            assert "CLAUDE.md (global)" in near[0], change
+
+    def test_a_file_the_ngram_check_named_is_skipped_not_the_whole_scan(self):
+        """Same shape, other suppression: a verbatim hit in file A must not
+        cost the entry its near-duplicate coverage of file B."""
+        contents = _memory_contents()
+        contents["git-policy.md"] += f"\n## Worktree Location\n\n- {_EXISTING_RULE}\n"
+        warnings = validate_proposal(
+            _proposal("dev.md", "Worktree Location",
+                      f"{_DUP_TEXT} {_RESTATEMENT}"),
+            contents,
+        )
+        assert any("already present" in w and "git-policy.md" in w for w in warnings)
+        # git-policy.md is suppressed for the near-dup pass by the verbatim hit,
+        # and there is no second file holding the rule, so the near-dup pass
+        # finds nothing — but it ran over the rest of the corpus.
+        assert all("near-duplicate" not in w or "git-policy.md" not in w
+                   for w in warnings)
+
+    def test_short_text_never_flagged(self):
+        assert find_near_duplicate_line("use uv", _memory_with_rule()) is None
+
+    def test_a_line_inside_a_fenced_block_is_not_a_candidate(self):
+        """The corpus includes the global `CLAUDE.md`, which is dense with bash
+        and config samples. A near-duplicate warning pointing at a line of shell
+        is a lead the reviewer cannot act on."""
+        fenced = {
+            "dev.md": "# Dev\n\n## Tooling\n\n```bash\n"
+                      f"# {_EXISTING_RULE}\n```\n"
+        }
+        assert find_near_duplicate_line(_RESTATEMENT, fenced) is None
+
+    def test_a_heading_is_not_a_candidate(self):
+        heading = {"dev.md": f"# Dev\n\n### {_EXISTING_RULE}\n"}
+        assert find_near_duplicate_line(_RESTATEMENT, heading) is None
+
+    def test_a_shared_bank_hit_is_not_called_always_loaded(self):
+        """`dedup_extra` carries both kinds and the reviewer handles them
+        differently: a rule already in an always-loaded file is dropped, a rule
+        already in a bank is a routing question."""
+        warnings = validate_proposal(
+            _proposal("git-policy.md", "Worktree Location", _RESTATEMENT),
+            _memory_contents(),
+            dedup_extra={"teambank/git.md": f"# Bank\n\n- {_EXISTING_RULE}\n"},
+        )
+        near = [w for w in warnings if "near-duplicate" in w]
+        assert len(near) == 1
+        assert "SHARED BANK" in near[0]
+        assert "ALWAYS-LOADED" not in near[0]
+
+
+class TestWarningSectionSize:
+    """`dream_prescreen.report` was cut down after printing every item cost a
+    measured 411,614 bytes inside the review it exists to protect. This section
+    is read in the same place and had no equivalent bound."""
+
+    @staticmethod
+    def _many(n: int):
+        texts = [f"{_RESTATEMENT} Case {i} of the same policy." for i in range(n)]
+        corpus = {"git-policy.md": "# Git\n\n## Worktree Location\n\n" + "\n".join(
+            f"- {_EXISTING_RULE} Case {i}." for i in range(n))}
+        return validate_proposal(
+            _multi_entry_proposal("git-policy.md", *texts), corpus)
+
+    def test_only_the_first_n_warnings_carry_a_quote(self):
+        warnings = self._many(NEAR_DUPLICATE_QUOTES + 15)
+        near = [w for w in warnings if "near-duplicate of an existing line" in w]
+        assert len(near) == NEAR_DUPLICATE_QUOTES + 15
+        assert sum("Read both lines" in w for w in near) == NEAR_DUPLICATE_QUOTES
+
+    def test_the_bound_is_stated_not_silent(self):
+        warnings = self._many(NEAR_DUPLICATE_QUOTES + 15)
+        assert any("carry no quote" in w for w in warnings)
+
+    def test_no_item_loses_its_warning_line(self):
+        """The count is deliberately uncapped. `flagged_by_routing` derives the
+        apply gate from these lines, so dropping one would widen what
+        auto-applies unreviewed — the opposite of what a cap is for."""
+        n = NEAR_DUPLICATE_QUOTES + 15
+        warnings = self._many(n)
+        labelled = {w.split(":")[0] for w in warnings
+                    if "near-duplicate of an existing line" in w}
+        assert len(labelled) == n
+
+    def test_a_clean_run_says_nothing_about_the_bound(self):
+        warnings = validate_proposal(
+            _proposal("python.md", "Packaging", "Something entirely unrelated to "
+                      "worktrees, about wheel resolution in a fresh checkout."),
+            _memory_contents(),
+        )
+        assert not any("carry no quote" in w for w in warnings)
+
+
+class TestBatchNearDuplicates:
+    """Secondary finding in #195: two items sourced from different dates said
+    the same thing and survived both merge passes."""
+
+    def test_two_items_restating_each_other_are_grouped(self):
+        warnings = validate_proposal(
+            _multi_entry_proposal("git-policy.md", _EXISTING_RULE, _RESTATEMENT),
+            _memory_contents(),
+        )
+        groups = [w for w in warnings if "near-duplicates of each other" in w]
+        assert len(groups) == 1
+        assert "#1" in groups[0] and "#2" in groups[0]
+
+    def test_distinct_items_are_not_grouped(self):
+        warnings = validate_proposal(
+            _multi_entry_proposal(
+                "git-policy.md",
+                _EXISTING_RULE,
+                "Squash merges rewrite the commit hash, so a branch merged that "
+                "way cannot be fast-forwarded afterwards.",
+            ),
+            _memory_contents(),
+        )
+        assert [w for w in warnings if "near-duplicates of each other" in w] == []
+
+    def test_grouping_is_per_target_file(self):
+        # Same text in two different files is a routing question, not a merge
+        # question — the cross-file dedup check already owns that.
+        proposal = (
+            _multi_entry_proposal("git-policy.md", _EXISTING_RULE)
+            + "\n"
+            + _multi_entry_proposal("python.md", _RESTATEMENT)
+        )
+        assert find_batch_near_duplicate_groups(parse_proposal_entries(proposal)) == []
+
+    def test_n_restatements_produce_one_warning_not_n_squared(self):
+        """The output has to stay readable: a proposal restating one rule 20
+        times has 190 duplicate pairs and must still yield one warning."""
+        texts = [_EXISTING_RULE, _RESTATEMENT] * 10
+        groups = find_batch_near_duplicate_groups(parse_proposal_entries(
+            _multi_entry_proposal("git-policy.md", *texts)
+        ))
+        assert len(groups) == 1
+        assert len(groups[0][0]) == 20
+
+    def test_a_cluster_reports_its_strongest_overlap(self):
+        groups = find_batch_near_duplicate_groups(parse_proposal_entries(
+            _multi_entry_proposal("git-policy.md", _EXISTING_RULE, _RESTATEMENT)
+        ))
+        assert 0.35 <= groups[0][1] <= 1.0
 
 
 class TestAppendRoutingWarnings:

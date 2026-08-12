@@ -189,3 +189,31 @@ class TestDreamAutoCommit:
         assert _git_log_count(memory_dir) == initial_commits, (
             "dream() must not create an empty commit when nothing changed"
         )
+
+
+class TestDreamAutoWritesAtomically:
+    """`_atomic_write` exists because `write_text` is truncate-then-write and
+    the file it truncates is the user's long-term memory. `dream_auto` unlinks
+    the source learnings once every target applied, so a half-written file here
+    is the one loss with nothing left to retry from. The atomic path was added
+    for the triage writer; this call site was left on `write_text`."""
+
+    def test_the_memory_file_goes_through_atomic_write(self, dream_env):
+        memory_dir: Path = dream_env["memory_dir"]
+        written: list[str] = []
+
+        with patch("generators.dispatcher.generate_catalogs", new=AsyncMock(return_value=[])), \
+             patch("multiplai_core.model_client.create_client",
+                   new=AsyncMock(return_value=_mocked_client_context())):
+            mod = _load_dream_module("dream_atomic")
+            real = mod._atomic_write
+
+            def _record(path, content):
+                written.append(Path(path).name)
+                real(path, content)
+
+            with patch.object(mod, "_atomic_write", new=_record):
+                asyncio.run(mod.dream_auto())
+
+        assert written == ["technical-pref.md"]
+        assert "Auto-updated by dream." in (memory_dir / "technical-pref.md").read_text()

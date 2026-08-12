@@ -2,18 +2,30 @@
 """Show the reviewer which pending items already exist somewhere in the corpus.
 
 This is a **lens, not a gate.** The gate is ``lib.routing_validation``, which
-runs at draft time and writes ``## Routing Warnings`` into the proposal; its
-dedup half also screens the always-loaded ``CLAUDE.md`` files and the shared
-memory banks (``lib.memory_corpus``), so a near-verbatim restatement of one of
-those is caught before the reviewer ever sees the proposal.
+runs at draft time and writes ``## Routing Warnings`` into the proposal; it
+screens the personal memory files, the always-loaded ``CLAUDE.md`` files and
+the shared memory banks (``lib.memory_corpus``), for near-verbatim restatements
+(8-gram) *and*, since 0.47.0, for reworded ones at line level — the same
+measure this script uses.
 
-What is left for review time is the *near* miss: an item that restates an
-existing line in different words, below the gate's n-gram threshold. That is a
-line-level question, so this uses the line-level measure that already exists —
-``lib.conflict_edits.overlap``, symmetric Jaccard over content words, with that
-module's own calibrated threshold. No third tokenizer, no third threshold, and
-the parsing is ``routing_validation.parse_proposal_entries``, so a heading this
-script accepts is exactly one the rest of the pipeline accepts.
+So the overlap with the gate is now deliberate, and what is left for review
+time is what the gate could not know: the corpus has changed since the proposal
+was drafted (a long backlog is triaged over days, and each applied item becomes
+new corpus), the threshold wants moving for one pass, or the reviewer wants the
+bodies and neighbouring lines rather than one warning line. Same measure either
+way — ``lib.conflict_edits.overlap``, symmetric Jaccard over content words, at
+that module's own calibrated threshold, over the lines
+``lib.conflict_edits.screenable_lines`` admits. No third tokenizer, no third
+threshold, no second line filter, and the parsing is
+``routing_validation.parse_proposal_entries``, so a heading this script accepts
+is exactly one the rest of the pipeline accepts.
+
+**Both halves of the gate's measure, not just one.** Each pending item is scored
+against the corpus *and* against the other pending items — the second is
+``routing_validation.find_batch_near_duplicate_groups``, the same clustering the
+gate runs at draft time. Without it "re-screen with the same measure" was only
+half true, and intra-proposal duplicates could never be re-detected as the
+review applied items one at a time.
 
 A hit is a **lead to verify** by opening both lines — never a verdict. So is a
 miss: ``content_words`` strips code spans (they are identical boilerplate across
@@ -36,14 +48,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lib import memory_corpus  # noqa: E402
-from lib.conflict_edits import MIN_OVERLAP, content_words, overlap_sets  # noqa: E402
+from lib.conflict_edits import (  # noqa: E402
+    MIN_OVERLAP,
+    content_words,
+    overlap_sets,
+    screenable_lines,
+)
 from lib.dream_processed import latest_pending_proposal  # noqa: E402
-from lib.routing_validation import parse_proposal_entries  # noqa: E402
+from lib.routing_validation import (  # noqa: E402
+    find_batch_near_duplicate_groups,
+    parse_proposal_entries,
+)
 from multiplai_core.paths import get_paths  # noqa: E402
-
-# Corpus lines shorter than this carry too little to score: a heading or a
-# one-word bullet matches everything a bit and nothing usefully.
-MIN_LINE_LEN = 40
 
 # Why symmetric Jaccard and not a containment measure, measured rather than
 # assumed. The real 602-item backlog was scored twice: against memory *after*
@@ -63,15 +79,18 @@ MIN_LINE_LEN = 40
 NEIGHBOURS = 2
 
 
-def corpus_lines(paths) -> list[tuple[str, int, str, set[str]]]:
+def corpus_lines(paths) -> list[tuple[str, int, str, frozenset[str]]]:
     """Every substantive corpus line, as ``(label, lineno, text, words)``.
 
     The corpus is the personal memory files **plus** everything
     :mod:`lib.memory_corpus` adds — the always-loaded ``CLAUDE.md`` files and
     the shared banks. Same files the draft-time gate screens against.
 
-    Content words are computed here, once per line, because every entry is
-    scored against every line.
+    Which lines count, and how they are tokenized, is
+    :func:`lib.conflict_edits.screenable_lines` — the same function the gate
+    calls, so "same measure" is a shared implementation rather than two copies
+    of one constant. Content words are computed once per line, because every
+    entry is scored against every line.
     """
     memory_dir = Path(paths.memory_dir)
     labelled: list[tuple[str, Path]] = [
@@ -80,12 +99,10 @@ def corpus_lines(paths) -> list[tuple[str, int, str, set[str]]]:
     labelled += memory_corpus.claude_md_paths(paths)
     labelled += memory_corpus.bank_paths(paths)
 
-    out: list[tuple[str, int, str, set[str]]] = []
+    out: list[tuple[str, int, str, frozenset[str]]] = []
     for label, text in memory_corpus.read_files(labelled).items():
-        for lineno, line in enumerate(text.splitlines(), 1):
-            stripped = line.strip()
-            if len(stripped) > MIN_LINE_LEN:
-                out.append((label, lineno, stripped, content_words(stripped)))
+        out += [(label, lineno, line, words)
+                for lineno, line, words in screenable_lines(text)]
     return out
 
 
@@ -102,7 +119,7 @@ def pending_items(proposal_text: str, target: str | None) -> list[dict]:
     return [e for e in entries if e["target"] == target]
 
 
-def screen(entry: dict, lines: list[tuple[str, int, str, set[str]]], threshold: float) -> dict:
+def screen(entry: dict, lines: list[tuple[str, int, str, frozenset[str]]], threshold: float) -> dict:
     """Score one entry against every corpus line.
 
     Returns ``{"scored": [(score, label, lineno, text)], "flagged": bool,
@@ -163,6 +180,26 @@ def report(entries: list[dict], lines, threshold: float, verbose: bool) -> tuple
             for score, name, no, text in result["scored"]:
                 print(f"      [{score:.2f}] {name}:{no}  {text[:150]}")
     return flagged, unscreenable
+
+
+def report_batch_groups(entries: list[dict], threshold: float) -> int:
+    """Print pending items that restate **each other**; return the cluster count.
+
+    The gate runs this same pass at draft time, and until now this script did
+    not — so "re-screen with the same measure" was only true of the item-vs-corpus
+    half. It matters most at review time for the same reason the corpus half
+    does: items are applied one at a time, and two pending items saying one
+    thing are one merge, not two applies.
+    """
+    groups = find_batch_near_duplicate_groups(entries, threshold=threshold)
+    if not groups:
+        return 0
+    print("\nPending items that restate each other (merge, don't apply each):")
+    for cluster, score in groups:
+        numbers = ", ".join(f"#{e['number']}" for e in cluster)
+        print(f"  [{score:.2f}] {cluster[0]['target']} {numbers}"
+              f"  — {cluster[0]['title'][:70]}")
+    return len(groups)
 
 
 def main() -> int:
@@ -231,10 +268,12 @@ def main() -> int:
         print(f"  corpus: {', '.join(labels)}")
 
     flagged, unscreenable = report(entries, lines, args.threshold, args.verbose)
+    groups = report_batch_groups(entries, args.threshold)
 
     print(
         f"\n{len(entries)} pending item(s); {flagged} flagged at threshold "
-        f"{args.threshold}; {unscreenable} unscreenable."
+        f"{args.threshold}; {unscreenable} unscreenable; {groups} group(s) of "
+        f"items restating each other."
     )
     if not args.verbose:
         print("Only flagged and unscreenable items are shown — pass --verbose for all.")

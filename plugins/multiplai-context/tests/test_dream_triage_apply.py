@@ -10,6 +10,7 @@ ran and a full auto-apply except the `has_routing_section` refusal.
 import asyncio
 import importlib.util
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -457,3 +458,109 @@ class TestRejectionLog:
         from lib import rejections
         assert rejections.read(
             rejections.default_path(mod.get_paths().data_dir())) == []
+
+
+STAMPED_MEMORY = "# DolceBot\n\n**Last Updated:** 2020-01-01\n\n## DolceEngine\n\n- a\n"
+
+
+class TestLastUpdatedStamp:
+    """Issue #189: the applier was told to refresh the date, `_is_additive_result`
+    counts a changed line as a lost one, so triage could not write to any file
+    carrying the stamp — 18 of 29 in the reporting workspace. The date is now
+    restamped in code, after the check."""
+
+    def test_the_applier_is_no_longer_told_to_touch_the_date(self, dream):
+        mod, _ = dream
+        assert "refresh its date" not in mod._APPLIER_SYSTEM
+        assert "Last Updated" in mod._APPLIER_SYSTEM  # told to reproduce it verbatim
+
+    def test_the_verbatim_rule_does_not_forbid_update_and_replace(self, dream):
+        """"Reproduce every existing line verbatim" contradicts "update /
+        replace at the named sections" in the same paragraph, and `--auto` has
+        no additive check to catch the applier resolving that by appending —
+        which leaves the stale line beside the new one."""
+        mod, _ = dream
+        assert "Reproduce every existing line verbatim" not in mod._APPLIER_SYSTEM
+        assert "update / replace at the named sections" in mod._APPLIER_SYSTEM
+        assert "does not name is reproduced verbatim" in mod._APPLIER_SYSTEM
+
+    def test_only_the_first_stamp_is_restamped(self, dream):
+        """One header per file, read by `context_manager` from the top. A later
+        occurrence is prose or a fenced sample — `multiplai.md` documents this
+        very marker — and the regex has no fence tracking."""
+        mod, _ = dream
+        text = ("# Memory\n\n**Last Updated:** 2020-01-01\n\n## How it works\n\n"
+                "```\n**Last Updated:** 2019-05-05\n```\n")
+        out = mod._refresh_last_updated(text, "2026-08-12")
+        assert "**Last Updated:** 2026-08-12" in out
+        assert "2019-05-05" in out, "a documented example was restamped"
+        assert len(out.splitlines()) == len(text.splitlines())
+
+    def test_the_date_is_replaced_and_nothing_else_is(self, dream):
+        mod, _ = dream
+        out = mod._refresh_last_updated(STAMPED_MEMORY, "2026-08-12")
+        assert "**Last Updated:** 2026-08-12" in out
+        assert "2020-01-01" not in out
+        assert out.splitlines()[0] == "# DolceBot"
+        assert len(out.splitlines()) == len(STAMPED_MEMORY.splitlines())
+
+    def test_trailing_text_on_the_stamp_line_survives(self, dream):
+        mod, _ = dream
+        out = mod._refresh_last_updated(
+            "**Last Updated:** 2020-01-01 (by hand)\n", "2026-08-12")
+        assert out == "**Last Updated:** 2026-08-12 (by hand)\n"
+
+    def test_a_file_without_a_stamp_is_untouched(self, dream):
+        mod, _ = dream
+        assert mod._refresh_last_updated(MEMORY, "2026-08-12") == MEMORY
+
+    def test_a_stamped_file_now_applies_and_is_restamped(self, dream):
+        """The end-to-end regression: an applier that reproduces the stamp
+        verbatim clears the additive check, the file is written, and the date
+        it carries afterwards is today's."""
+        mod, memory_dir = dream
+        (memory_dir / "dolcebot.md").write_text(STAMPED_MEMORY)
+        proposal = _proposal_file(memory_dir)
+
+        applied_text = STAMPED_MEMORY.replace(
+            "- a\n", "- a\n- VM logs are specified and unimplemented.\n")
+
+        async def _apply(_client, _path, _slice):
+            return applied_text
+
+        # Both sides of the UTC-midnight boundary. dream_triage stamps with its
+        # own `datetime.now(timezone.utc)`, so a date read *after* the run can be
+        # the day after the one written, and the run would fail for no reason.
+        before = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with patch.object(mod, "create_client",
+                          new=AsyncMock(return_value=_client_returning(GOOD_VERDICTS))), \
+                patch.object(mod, "_apply_proposal_to_file", new=_apply):
+            asyncio.run(mod.dream_triage(str(proposal), dry_run=False))
+        after = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        written = (memory_dir / "dolcebot.md").read_text()
+        assert "VM logs are specified" in written
+        assert (f"**Last Updated:** {before}" in written
+                or f"**Last Updated:** {after}" in written)
+        assert "2020-01-01" not in written
+
+    def test_an_applier_that_edits_the_date_itself_is_still_refused(self, dream):
+        """The check was not weakened to make the above pass: a model that
+        rewrites the stamp anyway still fails, because it altered a line."""
+        mod, memory_dir = dream
+        (memory_dir / "dolcebot.md").write_text(STAMPED_MEMORY)
+        proposal = _proposal_file(memory_dir)
+
+        disobedient = STAMPED_MEMORY.replace(
+            "**Last Updated:** 2020-01-01", "**Last Updated:** 2026-08-12"
+        ).replace("- a\n", "- a\n- VM logs are specified and unimplemented.\n")
+
+        async def _apply(_client, _path, _slice):
+            return disobedient
+
+        with patch.object(mod, "create_client",
+                          new=AsyncMock(return_value=_client_returning(GOOD_VERDICTS))), \
+                patch.object(mod, "_apply_proposal_to_file", new=_apply):
+            asyncio.run(mod.dream_triage(str(proposal), dry_run=False))
+
+        assert (memory_dir / "dolcebot.md").read_text() == STAMPED_MEMORY
