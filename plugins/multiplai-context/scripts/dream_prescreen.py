@@ -2,18 +2,21 @@
 """Show the reviewer which pending items already exist somewhere in the corpus.
 
 This is a **lens, not a gate.** The gate is ``lib.routing_validation``, which
-runs at draft time and writes ``## Routing Warnings`` into the proposal; its
-dedup half also screens the always-loaded ``CLAUDE.md`` files and the shared
-memory banks (``lib.memory_corpus``), so a near-verbatim restatement of one of
-those is caught before the reviewer ever sees the proposal.
+runs at draft time and writes ``## Routing Warnings`` into the proposal; it
+screens the personal memory files, the always-loaded ``CLAUDE.md`` files and
+the shared memory banks (``lib.memory_corpus``), for near-verbatim restatements
+(8-gram) *and*, since 0.47.0, for reworded ones at line level — the same
+measure this script uses.
 
-What is left for review time is the *near* miss: an item that restates an
-existing line in different words, below the gate's n-gram threshold. That is a
-line-level question, so this uses the line-level measure that already exists —
-``lib.conflict_edits.overlap``, symmetric Jaccard over content words, with that
-module's own calibrated threshold. No third tokenizer, no third threshold, and
-the parsing is ``routing_validation.parse_proposal_entries``, so a heading this
-script accepts is exactly one the rest of the pipeline accepts.
+So the overlap with the gate is now deliberate, and what is left for review
+time is what the gate could not know: the corpus has changed since the proposal
+was drafted (a long backlog is triaged over days, and each applied item becomes
+new corpus), the threshold wants moving for one pass, or the reviewer wants the
+bodies and neighbouring lines rather than one warning line. Same measure either
+way — ``lib.conflict_edits.overlap``, symmetric Jaccard over content words, at
+that module's own calibrated threshold. No third tokenizer, no third threshold,
+and the parsing is ``routing_validation.parse_proposal_entries``, so a heading
+this script accepts is exactly one the rest of the pipeline accepts.
 
 A hit is a **lead to verify** by opening both lines — never a verdict. So is a
 miss: ``content_words`` strips code spans (they are identical boilerplate across

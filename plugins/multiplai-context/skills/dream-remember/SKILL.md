@@ -240,11 +240,18 @@ text already present). An item named in a warning is never applied silently: fix
 it as the warning says, or leave it for Step 3. If the section is missing
 entirely the gate did not run — say so and treat every item as unscreened.
 
-The gate's dedup half already covers the two commonest duplicate shapes,
-including content that lives in a **different** memory file, in an
-**always-loaded `CLAUDE.md`** (global, workspace, or `memory/`), or in a shared
-bank. What it cannot catch is a *rephrasing* below its n-gram threshold, which
-is what the pre-screen is for:
+The gate's dedup half covers duplicates against a **different** memory file,
+the **target file itself**, an **always-loaded `CLAUDE.md`** (global,
+workspace, or `memory/`), and shared banks — near-verbatim (`already present in
+…`) and reworded (`near-duplicate of an existing line in …`). It also groups
+items in the batch that restate **each other** (`#3, #9, #21 are
+near-duplicates of each other`); those are one merge, not three applies.
+
+Its recall on the reworded kind is roughly half — a clean gate is not a
+certificate — so re-screen with the same measure whenever the corpus has moved
+under you, which it does constantly: every item you apply in Step 1c becomes
+corpus for the items after it, and the gate scored them all against the file as
+it was at draft time.
 
 ```bash
 uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" \
@@ -423,6 +430,13 @@ memory, whoever decided it. Never silently apply an item that appears in
   name an **always-loaded** `CLAUDE.md` or a shared bank, not only a memory file —
   those are screened too, and a rule already in an always-loaded file is the single
   most re-proposed shape there is.
+- **"near-duplicate of an existing line in … `file:line`"** → the same handling, one
+  step weaker: the warning quotes the line, so open it and decide. A restatement gets
+  merged into the existing entry or dropped; a genuinely new claim that merely shares
+  vocabulary gets applied, and you say which it was.
+- **"`file` #3, #9, #21 are near-duplicates of each other"** → these are one item, not
+  three. Merge them into a single entry — keeping the most specific wording and the
+  earliest source — and record the others as merged, not applied.
 
 Unflagged items proceed normally.
 

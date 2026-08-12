@@ -1937,8 +1937,10 @@ _APPLIER_SYSTEM = (
     "You apply an approved set of memory updates to a memory file. Make ONLY the "
     "changes the proposal specifies (add / update / replace at the named sections). "
     "Match the file's existing style and formatting exactly. Do not generalize, "
-    "re-judge, invent, or add anything not in the proposal. If a 'Last Updated' line "
-    "exists, refresh its date. Return the full updated file content and nothing else."
+    "re-judge, invent, or add anything not in the proposal. Reproduce every existing "
+    "line verbatim, including any 'Last Updated' line — its date is refreshed in code "
+    "after your result is checked, not by you. Return the full updated file content "
+    "and nothing else."
 )
 
 
@@ -2065,6 +2067,33 @@ def _is_additive_result(current: str, new: str, proposed_texts: Sequence[str]) -
     return None
 
 
+_LAST_UPDATED_RE = re.compile(
+    r"^(?P<label>\*\*Last Updated:\*\*[ \t]*)\d{4}-\d{2}-\d{2}", re.MULTILINE | re.IGNORECASE
+)
+
+
+def _refresh_last_updated(content: str, today: str) -> str:
+    """Restamp every ``**Last Updated:** YYYY-MM-DD`` line to *today*.
+
+    The applier used to be told to do this, and it obeyed — which made
+    :func:`_is_additive_result` reject the whole file, because refreshing the
+    date deletes the old line and the multiset check counts that as a lost
+    line. 18 of 29 memory files in the reporting workspace carry the stamp, so
+    triage could not write to any of them (issue #189).
+
+    Doing it in code after the check is what resolves the contradiction: the
+    model reproduces the file verbatim (checkable), and the one edit that is
+    not additive is deterministic and made by the caller. Only the date is
+    replaced, so anything else on the line survives; the substitution is
+    line-count preserving, which is why it is safe to run after the check
+    rather than before.
+
+    Files with no stamp are returned unchanged — this never adds one, because
+    which files carry a stamp is the catalog's business, not the applier's.
+    """
+    return _LAST_UPDATED_RE.sub(lambda m: m.group("label") + today, content)
+
+
 async def _apply_proposal_to_file(client, memory_file: Path, proposal_section: str) -> str | None:
     """Apply one file's slice of the proposal. Returns validated new content,
     or None if the call failed or the result looks unsafe to write."""
@@ -2178,7 +2207,7 @@ async def dream_auto() -> None:
             failed_count = 0
             for (filename, memory_file, _), updated_content in zip(targets, results):
                 if updated_content:
-                    memory_file.write_text(updated_content)
+                    memory_file.write_text(_refresh_last_updated(updated_content, today))
                     updated_count += 1
                     logger.info("Applied updates to %s", filename)
                 else:
@@ -2638,7 +2667,14 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
             logger.error("triage: %s not applied — %s", filename, not_additive)
             continue
         try:
-            _atomic_write(memory_file, updated_content)
+            # Restamp in code, after the additive check has passed on the
+            # applier's verbatim result — see `_refresh_last_updated`.
+            _atomic_write(
+                memory_file,
+                _refresh_last_updated(
+                    updated_content, datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                ),
+            )
         except OSError as exc:
             # The receipt is written after this loop, and its guarantee is that a
             # crash between the two leaves items pending WITH a receipt rather
