@@ -18,8 +18,6 @@ marketplace.
 |-------|--------------|
 | `buildme` | Full bootstrap conductor — from idea to working code via interview, research, spec generation, and autonomous TDD implementation (deterministic Python pipeline). |
 | `plan` | Author self-contained, executable implementation plans with verifiable "Done means" criteria — hand the file to a fresh session, a goal runner, or buildme. |
-| `code-review` | Thorough code-quality review for any codebase, PR, or snippet. |
-| `security-review` | Deep security audit — vulnerabilities, security posture, supply-chain risks. |
 | `deepen` | Find deepening opportunities — collapse shallow modules into deep ones; idiom packs for Python, Swift, TypeScript, React. |
 | `codebase-walkthrough` | Interactive walkthrough of any codebase — Markdown doc plus self-contained HTML with step-through navigation. |
 | `learn-stack` | Generate an interactive framework learning guide from any codebase. |
