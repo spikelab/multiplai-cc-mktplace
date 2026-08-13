@@ -16,6 +16,18 @@ release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-08-13
+
+### Removed
+
+- **The `code-review` and `security-review` skills.** Claude Code ships
+  built-ins under the same slash names, so both collided with them; typing
+  `/code-review` or `/security-review` now resolves to exactly one skill —
+  the built-in. The six language review checklists from
+  `code-review/references/` live on in multiplai-kit under
+  `dotfiles/reference/review/`. The two `security-review` references
+  (`owasp-checklist.md`, `language-security.md`) are retired with the skill.
+
 ## [0.12.0] - 2026-08-06
 
 ### Fixed

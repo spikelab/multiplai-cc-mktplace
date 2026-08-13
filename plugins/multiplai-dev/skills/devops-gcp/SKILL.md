@@ -300,7 +300,8 @@ Stop and confirm with the user before:
 - Not a credential broker — the user sets up SAs and keys; the skill knows
   the conventions and the operational moves.
 - Not a security auditor — for that, load `gcp-iam-security.md` and run
-  through it deliberately, or invoke the `security-review` skill.
+  through it deliberately, or invoke Claude Code's built-in `/security-review`
+  skill.
 
 ---
 
