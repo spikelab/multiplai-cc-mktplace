@@ -16,7 +16,23 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **Extended thinking is now off at every mechanical model call**, not just
+  the memory router's: diary/learnings extraction, the checkpoint writer, the
+  memory doctor's duplication and contradiction passes, the offline
+  utilisation judge, per-project `now/` summaries, and catalog generation.
+  These calls are parse/classify/summarise work over input the model sees in
+  full; a cold no-tools call drops 18.4 s → 2.9 s with thinking disabled
+  (measured 2026-08-09), so the background pipelines stop paying ~15 s of
+  latency per call for deliberation they never needed. Each subsystem has its
+  own opt-back option — `extraction_thinking`, `checkpoint_thinking`,
+  `doctor_thinking` (shared by both doctor passes), `utilisation_thinking`,
+  `now_thinking`, `catalog_thinking` — with the same contract as
+  `router_thinking`: default off, set `1`/`true` to restore the SDK default.
+  Needs `multiplai-core` ≥ 0.14.0; against an older core the plugin warns
+  once, keeps thinking on, and keeps working. Dream proposal generation keeps
+  extended thinking on by design.
 
 ## [0.47.0] - 2026-08-12
 
