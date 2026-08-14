@@ -18,7 +18,21 @@ dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **Deep research's mechanical nodes no longer pay extended-thinking latency.**
+  The Agent SDK enables extended thinking by default on every call, which costs
+  ~15s per call (18.4s → 2.9s measured 2026-08-09 on a cold no-tools call) and
+  buys nothing on formatting/parsing work. The `search`, `triage_relevance`,
+  `extract` and `verify` nodes — the high-volume per-source work — now pass
+  `thinking={"type": "disabled"}`; the reasoning nodes (`plan`, `diverge`,
+  `challenge`, `reassess`, `synthesize`, `adversarial`, `quality_check`) keep
+  the SDK default. Per node or skill-wide opt-back from `multiplai.conf`,
+  beside the existing `MODEL=`/`EFFORT=` keys: `[deep-research.search]
+  THINKING=on` or `[deep-research] THINKING=on` (see the skill's "Tuning"
+  section). On a core older than 0.14.0 the knob is dropped with a single
+  warning naming the fix — behavior degrades to today's (thinking on), never
+  to an error.
 
 ## [0.6.5] - 2026-08-06
 

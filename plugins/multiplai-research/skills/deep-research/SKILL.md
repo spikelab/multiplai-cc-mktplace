@@ -210,21 +210,25 @@ automatically by `uv run --directory`:
 - `multiplai-core`, `httpx`, `trafilatura`, `tavily-python`, `exa-py`, `pydantic`, `python-dotenv`, `claude-agent-sdk`
 - optional `[browser]` extra: `playwright` (JS-rendered fetch fallback; run `playwright install chromium` after installing)
 
-## Tuning model and effort (multiplai.conf)
+## Tuning model, effort and thinking (multiplai.conf)
 
-Per-node model tier and reasoning effort are both settable from
-`multiplai.conf` — no code edit:
+Per-node model tier, reasoning effort and extended thinking are all settable
+from `multiplai.conf` — no code edit:
 
 ```ini
 [deep-research]            # whole pipeline
 MODEL=opus
 EFFORT=medium
+THINKING=on                # restore extended thinking everywhere
 
 [deep-research.parse]      # MODEL= for the high-volume parse nodes
 MODEL=sonnet
 
 [deep-research.extract]    # one node
 EFFORT=low
+
+[deep-research.search]     # one node
+THINKING=on
 ```
 
 `[deep-research.<node>]` beats `[deep-research]` beats the code default. Nodes:
@@ -232,6 +236,13 @@ EFFORT=low
 `verify`, `reassess`, `synthesize`, `adversarial`, `quality_check`. `--model` /
 `--effort` on the CLI override every node uniformly. The `MULTIPLAI_MODEL` /
 `MULTIPLAI_EFFORT` ceilings cap all of the above.
+
+`THINKING` controls extended thinking, which is on by default in the Agent SDK
+and adds ~15s of latency per call. The mechanical nodes — `search`,
+`triage_relevance`, `extract`, `verify` — run with thinking disabled by
+default; the reasoning nodes keep the SDK default. `THINKING=on` (or `1`,
+`true`, `yes`, `enabled`) restores the SDK default for that node or skill-wide;
+any other value disables thinking for that node.
 
 ## Architecture
 
