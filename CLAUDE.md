@@ -23,7 +23,7 @@ docs/                              contracts that bind across plugins
 scripts/                           repo-level gates + their tests
 ```
 
-Seven plugins. **Do not state a skill count from memory** — the number has
+Eight plugins. **Do not state a skill count from memory** — the number has
 already drifted once in a neighbouring repo. Derive it:
 
 ```bash
@@ -113,8 +113,8 @@ must agree:
 Steps 1 and 2 are enforced: the **`changelog-gate`** CI job fails a pull
 request that changes a plugin without both. Step 3 is by hand at release time.
 
-The root [`CHANGELOG.md`](CHANGELOG.md) is an **index only** — seven
-independent release lines interleaved in one file would say less than seven
+The root [`CHANGELOG.md`](CHANGELOG.md) is an **index only** — eight
+independent release lines interleaved in one file would say less than eight
 files each saying one thing. Do not add entries to it.
 
 **The gate's escape hatch.** Docs-only changes (only `README.md` and/or

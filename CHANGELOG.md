@@ -2,13 +2,14 @@
 
 This repository has **no release line of its own**. Every plugin here is
 versioned and released independently, so the notes live next to the plugin.
-Seven independent release lines interleaved in one file would tell you less
-than seven files each telling one story.
+Eight independent release lines interleaved in one file would tell you less
+than eight files each telling one story.
 
 Find the plugin you are installing or updating and read its changelog.
 
 | Plugin | Version | Notes |
 |--------|---------|-------|
+| [`multiplai-apple`](plugins/multiplai-apple) | 0.1.0 | [CHANGELOG](plugins/multiplai-apple/CHANGELOG.md) |
 | [`multiplai-context`](plugins/multiplai-context) | 0.8.1 | [CHANGELOG](plugins/multiplai-context/CHANGELOG.md) |
 | [`multiplai-dev`](plugins/multiplai-dev) | 0.5.1 | [CHANGELOG](plugins/multiplai-dev/CHANGELOG.md) |
 | [`multiplai-media`](plugins/multiplai-media) | 0.1.7 | [CHANGELOG](plugins/multiplai-media/CHANGELOG.md) |

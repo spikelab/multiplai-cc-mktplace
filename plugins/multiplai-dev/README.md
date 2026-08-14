@@ -24,7 +24,6 @@ marketplace.
 | `e2e-test` | End-to-end testing for web apps — frontend (browser-based) and backend (API) modes. |
 | `think` | Critical-thinking toolkit — audit for assumptions, biases, premature convergence; quick, focused, and deep modes. |
 | `devops-gcp` | Working operator's knowledge of GCP — Cloud Run, Cloud SQL, IAM, Terraform, logging/monitoring. |
-| `swift-build` | Build, test, and manage iOS/macOS projects from any environment; handles the container→host SSH bridge. |
 | `skill-creator` | Guide for creating (or updating) effective skills. |
 | `propose-skill` | Analyze session patterns and propose new skills for recurring workflows. |
 | `analyze-context-router` | Analyze memory-retrieval logs for routing accuracy, false negatives, and token efficiency. |
@@ -41,8 +40,6 @@ marketplace.
 
 Runs on vanilla Claude Code, any OS, with these exceptions:
 
-- `swift-build` — macOS only (Swift/Xcode toolchain); from the multiplai-kit
-  container it needs the container→host SSH bridge.
 - `devops-gcp` — the knowledge pack works anywhere; real operations need your
   `gcloud` auth.
 - `e2e-test` — frontend mode needs `agent-browser` (npm); backend mode is plain HTTP.

@@ -16,6 +16,17 @@ release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-14
+
+### Removed
+
+- **The `swift-build` skill moved to the new `multiplai-apple` plugin**,
+  unchanged. It is mac-only capability — the Swift/Xcode toolchain, and from
+  the multiplai-kit container the opt-in host SSH bridge — and multiplai-dev
+  is a cross-platform pack, so the mac-only skill now ships as an explicit
+  add-on. If you use `swift-build`, run
+  `/plugin install multiplai-apple@multiplai` to keep it.
+
 ## [0.13.0] - 2026-08-13
 
 ### Removed

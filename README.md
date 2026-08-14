@@ -2,7 +2,7 @@
 
 > Your agent's model of you should be something you edited, not something that accreted while you weren't looking.
 
-Multiplai gives Claude Code **persistent, inspectable memory** — plus six
+Multiplai gives Claude Code **persistent, inspectable memory** — plus seven
 themed skill packs on top.
 
 - **Memory that's yours.** Everything gets captured; nothing becomes memory
@@ -56,7 +56,7 @@ the five repos fit together — is mapped in the
 
 ## Plugins
 
-Seven plugin packs, 40+ skills. Each plugin is versioned and released on its
+Eight plugin packs, 40+ skills. Each plugin is versioned and released on its
 own, and each carries its own release notes — see
 [`CHANGELOG.md`](CHANGELOG.md) for the index.
 
@@ -69,6 +69,7 @@ own, and each carries its own release notes — see
 | [`multiplai-dev`](plugins/multiplai-dev) | Developer pack: spec-driven builds (buildme), code/security review, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring. |
 | [`multiplai-media`](plugins/multiplai-media) | Transcription, YouTube transcripts, screen-recording demo videos, diagrams, host-browser automation. |
 | [`multiplai-messaging`](plugins/multiplai-messaging) | Messaging pack: read/search/post Slack as yourself, and search/read/draft Gmail (never sends). |
+| [`multiplai-apple`](plugins/multiplai-apple) | Apple development pack: build, test, and drive iOS/macOS projects (swift-build). macOS-only add-on — not part of the default install. |
 
 ## Compatibility matrix
 
@@ -92,7 +93,7 @@ contract](docs/degradation-contract.md)).
 | | codebase-walkthrough, learn-stack, skill-creator, plan | ✅ | |
 | | analyze-context-router, propose-skill | ✅ | Operate on multiplai-context — install it first. |
 | | devops-gcp | 🔑 | Knowledge pack; real operations need your `gcloud` auth. |
-| | swift-build | 🍎 | Swift/Xcode toolchain is macOS-only. From the kit container: 🌉. |
+| multiplai-apple | swift-build | 🍎 | Swift/Xcode toolchain is macOS-only. From the kit container: 🌉. Explicit add-on pack — install it only if you build Apple software. |
 | multiplai-media | youtube-transcript | ✅ | Subtitle path works anywhere. Audio-transcription fallback: 🍎 (Apple-Silicon mlx-whisper) or 🌉. |
 | | excalidraw | ✅ | |
 | | transcribe | 🍎 | mlx-whisper needs Apple Silicon macOS. From the kit container: 🌉. Plain Linux: use whisper.cpp / faster-whisper instead. |
@@ -140,7 +141,8 @@ Details on the passes themselves in the
 │   ├── multiplai-research/
 │   ├── multiplai-dev/
 │   ├── multiplai-media/
-│   └── multiplai-messaging/
+│   ├── multiplai-messaging/
+│   └── multiplai-apple/
 ├── docs/                         # cross-cutting contracts (degradation, untrusted content)
 ├── scripts/                      # repo-level checks: lint_skills.py, scan_skills.py,
 │                                 # check_changelog.py — plus tests/ for all three
