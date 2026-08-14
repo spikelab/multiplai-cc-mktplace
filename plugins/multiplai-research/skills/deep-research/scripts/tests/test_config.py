@@ -8,10 +8,13 @@ from research_pipeline.__main__ import build_parser
 from research_pipeline.config import (
     DEFAULT_MODEL,
     _node_effort,
+    _node_thinking,
     conf_effort,
+    conf_thinking,
     PARSE_MODEL,
     PRESETS,
     ResearchConfig,
+    THINKING_DISABLED,
 )
 
 
@@ -129,3 +132,94 @@ def test_cli_effort_still_overrides_every_node(tmp_path, monkeypatch):
     args = parser.parse_args(["--query", "q", "--output", str(tmp_path), "--effort", "low"])
     config = ResearchConfig.from_cli_args(args)
     assert set(config.efforts.values()) == {"low"}
+
+
+# --- Per-node extended thinking --------------------------------------------
+
+
+class TestThinkingTiers:
+    def test_default_thinking_map_exact(self, tmp_path, monkeypatch):
+        """Mechanical nodes disable thinking; reasoning nodes keep the SDK
+        default. The map is asserted exactly so a node added without a
+        deliberate thinking decision fails here."""
+        _write_conf(tmp_path, monkeypatch, "")  # isolate from any real conf
+        config = _mk_config(tmp_path)
+        assert config.thinkings == {
+            "plan": None,
+            "diverge": None,
+            "challenge": None,
+            "search": {"type": "disabled"},
+            "triage_relevance": {"type": "disabled"},
+            "extract": {"type": "disabled"},
+            "verify": {"type": "disabled"},
+            "reassess": None,
+            "synthesize": None,
+            "adversarial": None,
+            "quality_check": None,
+        }
+
+    def test_thinkings_and_models_cover_same_nodes(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "")
+        config = _mk_config(tmp_path)
+        assert set(config.thinkings) == set(config.models)
+
+    def test_disabled_nodes_get_independent_dicts(self, tmp_path, monkeypatch):
+        """A caller mutating one node's dict must not affect another's."""
+        _write_conf(tmp_path, monkeypatch, "")
+        config = _mk_config(tmp_path)
+        assert config.thinkings["search"] is not config.thinkings["extract"]
+        assert config.thinkings["search"] is not THINKING_DISABLED
+
+
+class TestConfThinking:
+    """The efforts map got its conf half in conf_effort; conf_thinking is the
+    same mechanic for the thinking axis."""
+
+    def test_absent_conf_keeps_the_code_default(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "")
+        assert conf_thinking("deep-research.search", THINKING_DISABLED) == THINKING_DISABLED
+        assert conf_thinking("deep-research.plan", None) is None
+
+    def test_truthy_value_restores_the_sdk_default(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "[deep-research.search]\nTHINKING=on\n")
+        assert conf_thinking("deep-research.search", THINKING_DISABLED) is None
+
+    def test_non_truthy_value_disables_thinking(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "[deep-research.plan]\nTHINKING=off\n")
+        assert conf_thinking("deep-research.plan", None) == THINKING_DISABLED
+
+    def test_blank_value_is_treated_as_unset(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "[deep-research.search]\nTHINKING=\n")
+        assert conf_thinking("deep-research.search", THINKING_DISABLED) == THINKING_DISABLED
+
+    def test_returned_default_is_a_copy(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "")
+        got = conf_thinking("deep-research.search", THINKING_DISABLED)
+        assert got == THINKING_DISABLED
+        assert got is not THINKING_DISABLED
+
+
+class TestNodeThinkingPrecedence:
+    def test_node_section_beats_skill_wide_section(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch,
+                    "[deep-research]\nTHINKING=on\n[deep-research.search]\nTHINKING=off\n")
+        assert _node_thinking("search", THINKING_DISABLED) == THINKING_DISABLED
+        assert _node_thinking("extract", THINKING_DISABLED) is None
+
+    def test_skill_wide_section_beats_the_code_default(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "[deep-research]\nTHINKING=on\n")
+        assert _node_thinking("search", THINKING_DISABLED) is None
+
+    def test_nothing_configured_keeps_every_code_default(self, tmp_path, monkeypatch):
+        _write_conf(tmp_path, monkeypatch, "")
+        assert _node_thinking("search", THINKING_DISABLED) == THINKING_DISABLED
+        assert _node_thinking("plan", None) is None
+
+
+def test_config_thinkings_pick_up_the_conf(tmp_path, monkeypatch):
+    """End-to-end: the conf override flips a node in the map the nodes read."""
+    _write_conf(tmp_path, monkeypatch, "[deep-research.search]\nTHINKING=on\n")
+    config = ResearchConfig(query="q", output_dir=tmp_path,
+                            preset=PRESETS["quick"], date="2026-07-20")
+    assert config.thinkings["search"] is None
+    assert config.thinkings["extract"] == {"type": "disabled"}  # untouched default

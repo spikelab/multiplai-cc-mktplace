@@ -255,8 +255,11 @@ _core_thinking_support: bool | None = None
 def _core_supports_thinking() -> bool:
     global _core_thinking_support
     if _core_thinking_support is None:
-        _core_thinking_support = (
-            "thinking" in inspect.signature(run_agent).parameters
+        # The question is "will passing thinking= raise TypeError", so a
+        # **kwargs-taking callable (test fakes included) counts as support.
+        params = inspect.signature(run_agent).parameters
+        _core_thinking_support = "thinking" in params or any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
         )
         if not _core_thinking_support:
             log.warning(

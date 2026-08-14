@@ -568,3 +568,100 @@ class TestToolUniverseDrift:
         dupes = {t for t in sdk_module._TOOL_UNIVERSE
                  if sdk_module._TOOL_UNIVERSE.count(t) > 1}
         assert not dupes, dupes
+
+
+class TestThinkingParameter:
+    """thinking= reaches run_agent only when set, and is dropped (with one
+    warning) when the resolved core's run_agent cannot accept it."""
+
+    def _patch_run_agent(self, monkeypatch: pytest.MonkeyPatch) -> dict:
+        from types import SimpleNamespace
+
+        captured: dict = {}
+
+        async def fake_run_agent(prompt, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                text="[]",
+                usage=SimpleNamespace(
+                    input_tokens=1, output_tokens=1,
+                    cache_creation_tokens=0, cache_read_tokens=0, cost_usd=0.0,
+                ),
+            )
+
+        monkeypatch.setattr(sdk_module, "run_agent", fake_run_agent)
+        # The support probe caches its answer against whatever run_agent it
+        # first saw — reset so each test probes its own fake.
+        monkeypatch.setattr(sdk_module, "_core_thinking_support", None)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_not_forwarded_when_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """thinking=None (the default) must not put the key in the kwargs at
+        all — an old core must never even see it."""
+        captured = self._patch_run_agent(monkeypatch)
+        await llm_call("p")
+        assert "thinking" not in captured
+
+    @pytest.mark.asyncio
+    async def test_forwarded_when_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured = self._patch_run_agent(monkeypatch)
+        await llm_call("p", thinking={"type": "disabled"})
+        assert captured["thinking"] == {"type": "disabled"}
+
+    @pytest.mark.asyncio
+    async def test_structured_forwards_to_llm_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict = {}
+
+        async def fake_llm_call(prompt, **kwargs):  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            return '{"name": "x", "count": 1}'
+
+        monkeypatch.setattr(sdk_module, "llm_call", fake_llm_call)
+        await llm_call_structured("p", Thing, thinking={"type": "disabled"})
+        assert captured["thinking"] == {"type": "disabled"}
+
+    @pytest.mark.asyncio
+    async def test_dropped_on_old_core_with_one_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An old core (no thinking=, no **kwargs) gets the kwarg dropped —
+        a single warning naming the fix, never a TypeError."""
+        from types import SimpleNamespace
+
+        captured: dict = {}
+
+        async def old_core_run_agent(
+            prompt, *, system_prompt=None, allowed_tools=None,
+            disallowed_tools=None, max_turns=1, max_attempts=2, model=None,
+            effort=None, timeout_s=600.0, label="", component="",
+        ):
+            captured.update(
+                system_prompt=system_prompt, max_turns=max_turns, label=label
+            )
+            return SimpleNamespace(
+                text="ok",
+                usage=SimpleNamespace(
+                    input_tokens=1, output_tokens=1,
+                    cache_creation_tokens=0, cache_read_tokens=0, cost_usd=0.0,
+                ),
+            )
+
+        monkeypatch.setattr(sdk_module, "run_agent", old_core_run_agent)
+        monkeypatch.setattr(sdk_module, "_core_thinking_support", None)
+
+        with caplog.at_level(logging.WARNING, logger="research_pipeline.sdk"):
+            assert await llm_call("p", thinking={"type": "disabled"}) == "ok"
+            assert await llm_call("p", thinking={"type": "disabled"}) == "ok"
+
+        warnings = [
+            r for r in caplog.records
+            if "uv lock --upgrade-package multiplai-core" in r.getMessage()
+        ]
+        assert len(warnings) == 1  # probe is cached: warn once, not per call
