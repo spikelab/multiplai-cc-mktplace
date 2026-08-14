@@ -43,6 +43,7 @@ from typing import Protocol, runtime_checkable
 from multiplai_core.plugin_options import option, option_var
 
 from lib.router_prompt import SYSTEM_PROMPT, FEW_SHOT_EXAMPLES, build_user_message
+from lib.thinking import THINKING_DISABLED, probe_core_thinking, resolve_thinking_option
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,6 @@ DEFAULT_ROUTER_TIMEOUT_SECONDS = 25.0
 # harder judgement than it is today.
 ROUTER_THINKING_OPTION = "router_thinking"
 ROUTER_THINKING_ENV_VAR = option_var(ROUTER_THINKING_OPTION)
-THINKING_DISABLED = {"type": "disabled"}
 
 
 def core_supports_thinking() -> bool:
@@ -103,19 +103,13 @@ def core_supports_thinking() -> bool:
 
     Probing the signature turns that into one loud warning and a working (if
     slower) router. Cached: this is called per prompt on a blocking hook path.
+    The probe itself now lives in ``lib/thinking.py`` (this pattern shipped
+    here first and every mechanical call site adopted it); the cache stays
+    module-local so this function's contract is unchanged.
     """
     global _CORE_THINKING_SUPPORT
     if _CORE_THINKING_SUPPORT is None:
-        try:
-            import inspect
-            from multiplai_core.model_client import ModelClient
-            _CORE_THINKING_SUPPORT = (
-                "thinking" in inspect.signature(ModelClient.query).parameters
-            )
-        except Exception:
-            # No core, no client, unreadable signature — the call path has its
-            # own guards for all three. Assume unsupported and stay quiet here.
-            _CORE_THINKING_SUPPORT = False
+        _CORE_THINKING_SUPPORT = probe_core_thinking()
     return _CORE_THINKING_SUPPORT
 
 
@@ -129,12 +123,11 @@ def resolve_router_thinking(raw: str | None = None) -> dict | None:
     Disabled unless the option explicitly asks for thinking back. ``None`` is
     the "send nothing" signal that `multiplai_core` needs for old-SDK
     tolerance, so this returns the dict for the *default* case and ``None`` for
-    the opt-out — the inverse of how the other options here read.
+    the opt-out — the inverse of how the other options here read. The shared
+    implementation is ``lib/thinking.py``; this wrapper pins the router's
+    option name and public name.
     """
-    value = (raw if raw is not None else option(ROUTER_THINKING_OPTION)).strip().lower()
-    if value in ("1", "true", "yes", "on", "enabled"):
-        return None
-    return THINKING_DISABLED
+    return resolve_thinking_option(ROUTER_THINKING_OPTION, raw)
 
 
 def resolve_router_timeout(raw: str | float | None = None) -> float:

@@ -192,6 +192,42 @@
       "description": "Extended thinking on 'llm'/'llm_hybrid' router calls. Off by default, and that is what makes LLM routing fit the per-prompt hook budget: a cold routing call takes 18.4s with thinking on and 2.9s with it off, against a 30s budget. Set it to restore thinking. Needs multiplai-core >= 0.14.0 — against an older core the plugin warns, keeps thinking on, and keeps working.",
       "default": false
     },
+    "extraction_thinking": {
+      "type": "boolean",
+      "title": "Extraction Extended Thinking",
+      "description": "Extended thinking on the diary/learnings extraction call. Off by default: extraction is structured parsing over a distilled transcript, and a cold call drops 18.4s -> 2.9s with thinking off (measured 2026-08-09). Set it to restore thinking. Needs multiplai-core >= 0.14.0 — against an older core the plugin warns once, keeps thinking on, and keeps working.",
+      "default": false
+    },
+    "checkpoint_thinking": {
+      "type": "boolean",
+      "title": "Checkpoint Writer Extended Thinking",
+      "description": "Extended thinking on the checkpoint writer's model call. Off by default: folding a transcript segment into a fixed six-section document is mechanical summarisation. Set it to restore thinking. Needs multiplai-core >= 0.14.0 — against an older core the plugin warns once, keeps thinking on, and keeps working.",
+      "default": false
+    },
+    "doctor_thinking": {
+      "type": "boolean",
+      "title": "Memory Doctor Extended Thinking",
+      "description": "Extended thinking on the memory doctor's model calls (duplication stage 2 and the contradiction pass share this switch). Off by default: both are verdict extraction over text the model sees in full. Set it to restore thinking. Needs multiplai-core >= 0.14.0 — against an older core the plugin warns once, keeps thinking on, and keeps working.",
+      "default": false
+    },
+    "utilisation_thinking": {
+      "type": "boolean",
+      "title": "Utilisation Judge Extended Thinking",
+      "description": "Extended thinking on the offline utilisation judge's calls. Off by default: judging is per-section verdict extraction from a distilled transcript. Set it to restore thinking. Needs multiplai-core >= 0.14.0 — against an older core the plugin warns once, keeps thinking on, and keeps working.",
+      "default": false
+    },
+    "now_thinking": {
+      "type": "boolean",
+      "title": "Now-Summary Extended Thinking",
+      "description": "Extended thinking on the per-project now/ status summary calls. Off by default: a 3-5 bullet status summary over diary snippets is mechanical. Set it to restore thinking. Needs multiplai-core >= 0.14.0 — against an older core the plugin warns once, keeps thinking on, and keeps working.",
+      "default": false
+    },
+    "catalog_thinking": {
+      "type": "boolean",
+      "title": "Catalog Generator Extended Thinking",
+      "description": "Extended thinking on catalog-generation calls (memory, skills, resources, diary generators). Off by default: producing structured JSON catalog entries is mechanical. Set it to restore thinking. Needs multiplai-core >= 0.14.0 — against an older core the plugin warns once, keeps thinking on, and keeps working.",
+      "default": false
+    },
     "recommend_cooldown_turns": {
       "type": "number",
       "title": "Re-recommendation Cooldown (Turns)",
