@@ -16,7 +16,7 @@
 #      synchronously from the lock and exit with uv's status. One-time
 #      preparation with a generous timeout — the right place for the
 #      full first resolution in CI or scripted installs.
-#   3. Cold start on an installed copy (scripts/.venv missing): a first
+#   3. Cold start (the venv uv run will use does not exist yet): a first
 #      `uv run` would do the full dependency resolution inline — including
 #      a git clone of multiplai-core — and the hook timeouts (60s
 #      SessionStart, 30s/10s UserPromptSubmit) can kill it mid-flight,
@@ -64,38 +64,48 @@ if [ -n "$UV" ]; then
     fi
 
     # --- cold start: detach the first environment build ------------------
-    # Only an installed copy needs this. In the dev repo checkout the
-    # workspace root two levels up owns the environment (scripts/.venv
-    # never exists there), so the pre-warm must not trigger.
+    # Two shapes run these hooks (verified against Claude Code 2.1.226):
+    #   * plugin-subtree copy — a GitHub-marketplace install (hooks run
+    #     from plugins/cache/<mp>/<plugin>/<ver>/, no repo above) or a
+    #     sideloaded export. uv resolves the scripts/ member standalone
+    #     and puts the venv at scripts/.venv.
+    #   * full-repo checkout — a directory-source marketplace (hooks run
+    #     from the source dir itself) or the dev repo. ../../uv.lock
+    #     exists, uv resolves the workspace root, and the venv lives at
+    #     ../../.venv.
+    # "Cold" means the venv uv run will actually use does not exist yet.
+    if [ -f "${CLAUDE_PLUGIN_ROOT}/../../uv.lock" ]; then
+        venv="${CLAUDE_PLUGIN_ROOT}/../../.venv"
+    else
+        venv="$sdir/.venv"
+    fi
     warm="$sdir/.warmup"
     build_in_flight=""
-    if [ ! -f "${CLAUDE_PLUGIN_ROOT}/../../uv.lock" ]; then
-        # A marker much older than any plausible build means the builder
-        # died (network drop, reboot). Clear it so this fire retries —
-        # and at most one retry per 15 minutes.
-        if [ -d "$warm" ] && [ -n "$(find "$warm" -maxdepth 0 -mmin +15 2>/dev/null)" ]; then
-            rmdir "$warm" 2>/dev/null
-        fi
-        if [ -d "$warm" ]; then
+    # A marker much older than any plausible build means the builder
+    # died (network drop, reboot). Clear it so this fire retries —
+    # and at most one retry per 15 minutes.
+    if [ -d "$warm" ] && [ -n "$(find "$warm" -maxdepth 0 -mmin +15 2>/dev/null)" ]; then
+        rmdir "$warm" 2>/dev/null
+    fi
+    if [ -d "$warm" ]; then
+        build_in_flight=1
+    elif [ ! -d "$venv" ]; then
+        if mkdir "$warm" 2>/dev/null; then
+            # Winner of the atomic mkdir: build detached. All fds are
+            # detached from the hook's pipes (Claude Code would wait on
+            # them); diagnostics go to .warmup.log. On success the
+            # marker is removed; on failure it stays and rate-limits
+            # the retry to the staleness window above.
+            (
+                "$UV" sync --project "$sdir" >"$sdir/.warmup.log" 2>&1 \
+                    && rmdir "$warm"
+            ) </dev/null >/dev/null 2>&1 &
             build_in_flight=1
-        elif [ ! -d "$sdir/.venv" ]; then
-            if mkdir "$warm" 2>/dev/null; then
-                # Winner of the atomic mkdir: build detached. All fds are
-                # detached from the hook's pipes (Claude Code would wait on
-                # them); diagnostics go to .warmup.log. On success the
-                # marker is removed; on failure it stays and rate-limits
-                # the retry to the staleness window above.
-                (
-                    "$UV" sync --project "$sdir" >"$sdir/.warmup.log" 2>&1 \
-                        && rmdir "$warm"
-                ) </dev/null >/dev/null 2>&1 &
-                build_in_flight=1
-            elif [ -d "$warm" ]; then
-                build_in_flight=1  # a concurrent hook won the mkdir race
-            fi
-            # mkdir failed with no marker present (e.g. unwritable plugin
-            # dir): fall through to `uv run`, which names the real error.
+        elif [ -d "$warm" ]; then
+            build_in_flight=1  # a concurrent hook won the mkdir race
         fi
+        # mkdir failed with no marker present (e.g. unwritable plugin
+        # dir): fall through to `uv run`, which names the real error.
     fi
     if [ -n "$build_in_flight" ]; then
         case "$script" in

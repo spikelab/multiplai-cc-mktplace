@@ -180,7 +180,14 @@ echo "UV_CALLED $@"
 if [ "$1" = "sync" ]; then
     [ -n "$UV_SYNC_HANG" ] && sleep "$UV_SYNC_HANG"
     [ -n "$UV_SYNC_FAIL" ] && exit 7
-    mkdir -p "$3/.venv"
+    # Emulate uv's workspace discovery: with a workspace root above the
+    # member ($3 = the scripts/ dir), the venv lands at that root;
+    # standalone, it lands at <member>/.venv.
+    if [ -f "$3/../../../uv.lock" ]; then
+        mkdir -p "$3/../../../.venv"
+    else
+        mkdir -p "$3/.venv"
+    fi
 fi
 exit 0
 """
@@ -304,14 +311,32 @@ class TestColdStartPrewarm:
             "a marker older than any plausible build means the builder died — retry"
         )
 
-    def test_dev_checkout_skips_prewarm(self, tmp_path):
+    def test_repo_checkout_with_root_venv_skips_prewarm(self, tmp_path):
         env, root, uv_log = _prewarm_env(tmp_path)
-        # A workspace root two levels up owns the environment in the dev
-        # repo; scripts/.venv never exists there and uv run is already fast.
+        # A repo checkout (directory-source marketplace, or the dev repo):
+        # the workspace root two levels up owns the environment. With its
+        # .venv present, hooks are already fast — no pre-warm.
         (root.parent.parent / "uv.lock").write_text("")
+        (root.parent.parent / ".venv").mkdir()
         res = _run(_cmd("context_manager.py"), env)
         assert "UV_CALLED run --project" in res.stdout
         assert _sync_calls(uv_log) == 0
+
+    def test_fresh_repo_checkout_prewarms_the_workspace_root(self, tmp_path):
+        env, root, uv_log = _prewarm_env(tmp_path)
+        # A fresh clone added as a directory-source marketplace: workspace
+        # root exists but its .venv does not — the first uv run would do
+        # the full workspace resolution inline. Must pre-warm like any
+        # other cold start, with the build landing at the workspace root.
+        (root.parent.parent / "uv.lock").write_text("")
+        res = _run(_cmd("context_manager.py"), env)
+        assert res.returncode == 0
+        assert "building" in res.stdout
+        root_venv = root.parent.parent / ".venv"
+        warm = root / "scripts" / ".warmup"
+        assert _wait_for(lambda: root_venv.is_dir() and not warm.exists())
+        res2 = _run(_cmd("context_manager.py"), env)
+        assert "UV_CALLED run --project" in res2.stdout
 
     def test_existing_venv_execs_normally(self, tmp_path):
         env, root, uv_log = _prewarm_env(tmp_path)
