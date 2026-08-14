@@ -20,6 +20,23 @@ dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.2.2] - 2026-08-14
+
+### Added
+
+- **`host-browser` now carries its own "when to reach for it" guidance.** A new
+  section at the top of the SKILL.md states the trigger and the entry paths:
+  a `WebFetch` 403 is not a dead end and must not be retried verbatim — it is
+  the signal to switch to the real browser (or drop the URL and say so); the
+  quick read-only path (`ab open <url>` then `ab snapshot -i`, with a settle
+  delay for heavy SPAs); and the two block classes — behavioral/
+  invisible-captcha walls, which genuine fingerprint + human pacing usually
+  passes, vs policy walls, which realism does not defeat (change inputs
+  rather than fight them). This routing used to live in multiplai-kit's
+  always-loaded `dotfiles/CLAUDE.md`; it moved here so a skill that drives
+  the real logged-in host Chrome is advertised only where the media pack is
+  actually installed.
+
 ## [0.2.1] - 2026-08-04
 
 ### Fixed

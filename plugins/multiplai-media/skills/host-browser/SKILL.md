@@ -14,6 +14,30 @@ single biggest anti-bot win: `navigator.webdriver` stays `false`, the UA /
 plugins / `languages` / profile cookies are all genuine, and there's no
 "controlled by automated software" infobar.
 
+## When to reach for this skill
+
+- **A `WebFetch` 403 is not a dead end — and must not be retried verbatim. It
+  is the trigger to switch to this skill.** A bare 403 (or 429) is a bot wall,
+  and re-fetching the same URL never clears it; either switch to the real
+  browser or drop the URL and say so. Same for pages that come back empty or
+  skeletal because they are client-rendered: `WebFetch` cannot run the JS, a
+  real browser can. (A 404 means fix the URL; a 303 means re-fetch the
+  redirect target — neither is a job for this skill.)
+- **Quick path for read-only fetches** — when the task is just *reading* a
+  bot-walled or JS-rendered page, no login or form work: `ab open <url>` then
+  `ab snapshot -i`. Heavy SPAs need a settle delay: `ab open <url>; sleep 5;
+  ab snapshot`. For anything interactive, logged-in, or stealth-sensitive, use
+  the full flow below instead (connect first, arrive with `hb goto`).
+- **Recognize two block classes** before fighting a wall:
+  **behavioral/invisible-captcha** walls (a genuine fingerprint + human pacing
+  usually passes — that is this skill's whole design) vs **policy** walls
+  (disposable-email blocks, DataDome-class device checks) which realism does
+  NOT defeat — change inputs rather than fight them. For DataDome-class *risk
+  scoring* short of a hard block, the sanctioned flow below (`hb warmup` /
+  `hb dd` / `hb solve-wait`) applies; a rendered challenge is always the
+  human's to solve. Details: `references/antidetection.md` and the Ethics
+  section.
+
 ## Prerequisites (this skill targets the container→host bridge)
 
 This skill does not ship a browser. It drives Chrome on a **macOS host** through
