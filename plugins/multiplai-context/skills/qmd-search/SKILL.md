@@ -11,6 +11,34 @@ multiplai-context performs when `resources_retrieval=qmd` — use it for
 deeper digging, different phrasings, or when the automatic injection
 missed a document you expect to exist.
 
+## Step 0 — is a resources index set up at all?
+
+A fresh install has neither piece this skill needs: the **qmd CLI**
+(https://github.com/tobi/qmd) and an **indexed resources directory**
+(the `resources_dir` plugin option). Check before running anything:
+
+1. **Options.** If `resources_dir` is unset — no
+   `CLAUDE_PLUGIN_OPTION_RESOURCES_DIR` env var and no
+   `pluginConfigs` → `multiplai-context@<marketplace>` → `options` →
+   `resources_dir` in the user's `settings.json` — there is no knowledge
+   base configured.
+2. **Binary** (for `local` mode, the default):
+   `command -v qmd || test -x ~/.bun/bin/qmd`.
+
+If either is missing, do **not** run qmd commands, show an error, or
+improvise infrastructure the user doesn't have. Answer plainly, naming
+what is missing and the fix, e.g.:
+
+> Resources search isn't set up yet. It needs (1) the qmd CLI —
+> install from https://github.com/tobi/qmd — and (2) a resources
+> directory to index: set the `resources_dir` plugin option (and
+> `enable_resources`), then index it with qmd (`qmd collection add …`,
+> see the qmd docs). Until then I can search your files directly with
+> grep — want that instead?
+
+Then, if the user wants it, do the grep search yourself. Never present
+the missing index as an error — it is simply not configured.
+
 ## Resolve the configuration first
 
 The plugin options (in `settings.json` → `pluginConfigs` →

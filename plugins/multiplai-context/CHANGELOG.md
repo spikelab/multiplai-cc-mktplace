@@ -18,6 +18,46 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.48.0] - 2026-08-14
+
+Standalone (vanilla Claude Code) hardening: this release is about the
+plugin working properly with no kit, no `CLAUDE_CONFIG_DIR`, and no
+options configured.
+
+### Fixed
+
+- **First session start can no longer be killed mid-install.** On a fresh
+  install the first hook fire must build the plugin's Python environment
+  (a full `uv` resolution, including cloning `multiplai-core`) — and the
+  hook timeouts (60s SessionStart, 30s/10s per-prompt) could kill that
+  build mid-flight, leaving a half-built environment and silent hooks.
+  The first fire now starts the build **in the background**, tells you in
+  one line that hooks go live on the next prompt (~1 min), and gets out
+  of the way. Concurrent hooks on a cold start share one build; a failed
+  build retries at most every 15 minutes and logs to
+  `scripts/.warmup.log`.
+- **`autoCompactEnabled: false` is now respected on vanilla installs.**
+  The checkpoint nudges read the user-level `settings.json` to tell
+  disabled auto-compaction from steered auto-compaction, but only looked
+  at `$CLAUDE_CONFIG_DIR` — which vanilla Claude Code never sets — so the
+  disable was invisible everywhere but kit installs. Every
+  `CLAUDE_CONFIG_DIR` read now falls back to `~/.claude`, through one
+  shared resolver.
+- **`/multiplai-context:qmd-search` degrades honestly when qmd isn't set
+  up.** With no qmd CLI or no `resources_dir` configured, the skill now
+  answers "resources search isn't set up" — naming the two missing pieces
+  and the fix — and offers a plain grep search instead, rather than
+  running commands that cannot work.
+
+### Added
+
+- **A `Setup` hook: pre-warm with `claude --init-only`.** Claude Code's
+  Setup event (`--init-only`, or `--init`/`--maintenance` in `-p` mode)
+  now builds the plugin environment synchronously — the right entry point
+  for CI and scripted installs. `/multiplai-context:setup` also warms the
+  environment as its step 0, so onboarding never races the background
+  build.
+
 ## [0.48.0] - 2026-08-15
 
 ### Changed
