@@ -1108,3 +1108,40 @@ class TestAnAmbiguousQuoteStillCitesARealLine:
 
     def test_an_empty_quote_resolves_to_nothing(self):
         assert dc._locate("", ["anything at all here"]) is None
+
+
+class TestDoctorThinking:
+    """Both doctor passes are mechanical verdict extraction: their model
+    calls carry the thinking config resolved from the shared
+    ``doctor_thinking`` option (default: disabled — see lib/thinking.py)."""
+
+    @pytest.fixture(autouse=True)
+    def _default_thinking(self, monkeypatch):
+        import lib.thinking as th
+        from multiplai_core.plugin_options import option_var
+
+        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: True)
+        monkeypatch.delenv(option_var(th.DOCTOR_THINKING_OPTION), raising=False)
+
+    def test_duplication_stage_two_call_carries_thinking(self, memory):
+        (memory / "alpha.md").write_text(
+            "# Alpha\n\n- Cloud Run rolling deploys health-check the new "
+            "revision first, then shift traffic on success.\n", encoding="utf-8")
+        (memory / "beta.md").write_text(
+            "# Beta\n\n- Cloud Run rolling deploys health-check the new "
+            "revision first, then shift traffic on success too.\n", encoding="utf-8")
+        pairs = dd.shortlist(dd.split_dir(memory))
+        assert pairs, "fixture must shortlist"
+        client = StubClient("")
+        _run(dd.confirm_pairs(client, pairs, model="haiku"))
+        assert client.calls
+        assert client.calls[0]["thinking"] == {"type": "disabled"}
+
+    def test_contradiction_call_carries_thinking(self, memory, data):
+        (memory / "notes.md").write_text(
+            "# Notes\n\n- " + "a note about postgres. " * 40 + "\n",
+            encoding="utf-8")
+        client = StubClient("<contradictions></contradictions>")
+        _run(dc.run_pass(memory, data, client=client, model="haiku"))
+        assert client.calls
+        assert client.calls[0]["thinking"] == {"type": "disabled"}

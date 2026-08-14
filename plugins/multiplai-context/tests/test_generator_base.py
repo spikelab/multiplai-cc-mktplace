@@ -1616,3 +1616,28 @@ class TestEdgeCases:
         # State must always be valid JSON (atomic write guarantee)
         data = json.loads(state_file.read_text())
         assert isinstance(data, dict)
+
+
+class TestCatalogThinking:
+    """Catalog generation is mechanical structured-JSON work: _call_llm
+    carries the thinking config resolved from ``catalog_thinking``
+    (default: disabled — see lib/thinking.py)."""
+
+    def test_call_llm_receives_thinking_disabled_by_default(
+        self, tmp_path, monkeypatch
+    ):
+        import lib.thinking as th
+        from multiplai_core.plugin_options import option_var
+
+        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: True)
+        monkeypatch.delenv(option_var(th.CATALOG_THINKING_OPTION), raising=False)
+
+        gen, _catalogs_dir = _make_test_generator(
+            tmp_path, sources={"a.md": "content a"}
+        )
+        asyncio.run(gen.run())
+
+        assert gen._model_client.query.called
+        assert gen._model_client.query.call_args.kwargs["thinking"] == {
+            "type": "disabled"
+        }

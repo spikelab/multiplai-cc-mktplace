@@ -1343,3 +1343,30 @@ class TestSectionKeys:
     def test_round_trip(self, file, section, key):
         assert util.section_key(file, section) == key
         assert util.split_key(key) == (file, section or None)
+
+
+class TestJudgeThinking:
+    """The judge call is mechanical verdict extraction: it carries the
+    thinking config resolved from ``utilisation_thinking`` (default:
+    disabled — see lib/thinking.py)."""
+
+    def test_judge_call_receives_thinking_disabled_by_default(self, monkeypatch):
+        import lib.thinking as th
+        from multiplai_core.plugin_options import option_var
+
+        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: True)
+        monkeypatch.delenv(option_var(th.UTILISATION_THINKING_OPTION), raising=False)
+        monkeypatch.setattr(judge, "distilled_transcript", lambda *a, **k: "text")
+
+        captured = {}
+
+        async def query(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(content="<verdicts></verdicts>")
+
+        client = MagicMock()
+        client.query = query
+        record = _session("s1", [_inject("dev.md", "Testing", 100)],
+                          transcript="/transcripts/s1.jsonl")
+        asyncio.run(judge.judge_one_detailed(client, record, model="m"))
+        assert captured["thinking"] == {"type": "disabled"}

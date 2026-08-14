@@ -234,3 +234,31 @@ class TestPromptShape:
         capped = checkpoint_writer._cap_segment(huge)
         assert len(capped) < 300_000
         assert "elided for length" in capped
+
+
+class TestCheckpointThinking:
+    """The checkpoint write is mechanical summarisation: run_agent carries
+    the thinking config resolved from ``checkpoint_thinking`` (default:
+    disabled — see lib/thinking.py, RUN_AGENT target)."""
+
+    def test_run_agent_receives_thinking_disabled_by_default(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        import lib.thinking as th
+        from multiplai_core.plugin_options import option_var
+
+        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: True)
+        monkeypatch.delenv(option_var(th.CHECKPOINT_THINKING_OPTION), raising=False)
+
+        now = datetime.now(timezone.utc)
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(
+            transcript, [_turn("user", "please build the widget", now)]
+        )
+        captured = []
+        monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent(captured))
+
+        ok = asyncio.run(checkpoint_writer.write_checkpoint(_payload("s1", transcript)))
+
+        assert ok is True
+        assert captured[0]["kwargs"]["thinking"] == {"type": "disabled"}
