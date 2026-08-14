@@ -25,7 +25,6 @@ import argparse
 import asyncio
 import fcntl
 import json
-import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -41,6 +40,7 @@ from lib.extraction import (
     write_diary_entries,
     append_learnings,
 )
+from lib.fsio import claude_config_dir
 from lib.transcript_distiller import distill, estimate_tokens
 
 logger = setup_logging("backfill")
@@ -331,8 +331,7 @@ async def backfill(
     diary_dir = paths.diary_dir()
     valid_targets = load_target_charters(memory_dir, paths.catalogs_dir())
 
-    claude_config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
-    all_transcripts = _find_transcripts(claude_config_dir)
+    all_transcripts = _find_transcripts(claude_config_dir())
 
     # Filter by window using the session's full [first, last] extent so a long
     # session that started before `since` but continued into the window is not

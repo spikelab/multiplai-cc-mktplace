@@ -19,16 +19,16 @@ invocation hint).
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
+
+from lib.fsio import claude_config_dir
 
 
 def default_plugins_dir(configured: str | None = None) -> Path:
     """Resolve the plugins directory, honouring an explicit config value."""
     if configured:
         return Path(configured).expanduser()
-    base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-    return Path(base).expanduser() / "plugins"
+    return claude_config_dir() / "plugins"
 
 
 def plugin_skills(plugins_dir: str | Path | None = None) -> dict[str, tuple[Path, str]]:

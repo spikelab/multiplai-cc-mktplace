@@ -24,10 +24,11 @@ report long-dead jobs as running. Staleness comes from the file's own clock.
 
 import json
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from lib.fsio import claude_config_dir
 
 logger = logging.getLogger(__name__)
 
@@ -65,18 +66,14 @@ class BackgroundJob:
 
 
 def config_dir() -> Path | None:
-    """The Claude Code config directory, or ``None`` when unset.
+    """The Claude Code config directory, or ``None`` when it doesn't exist.
 
-    Vanilla Claude Code sets ``CLAUDE_CONFIG_DIR`` only when it has been
-    overridden, so fall back to ``~/.claude`` — the documented default — before
-    giving up.
+    ``lib.fsio.claude_config_dir`` resolves ``$CLAUDE_CONFIG_DIR`` with the
+    documented ``~/.claude`` fallback; this wrapper additionally requires the
+    directory to exist, because every consumer here reads files out of it.
     """
-    raw = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
-    if raw:
-        path = Path(raw).expanduser()
-        return path if path.is_dir() else None
-    default = Path.home() / ".claude"
-    return default if default.is_dir() else None
+    path = claude_config_dir()
+    return path if path.is_dir() else None
 
 
 def _mtime(path: Path) -> datetime | None:

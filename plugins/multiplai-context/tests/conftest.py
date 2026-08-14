@@ -62,6 +62,16 @@ for _key in list(os.environ):
         del os.environ[_key]
 os.environ["WORKSPACE"] = _ISOLATED_WORKSPACE
 
+# Pin CLAUDE_CONFIG_DIR to an isolated (empty) dir rather than leaving it
+# unset: every config-dir read falls back to the *real* ``~/.claude`` when
+# the var is absent (lib.fsio.claude_config_dir), so an unset var would let
+# tests read the developer's actual settings.json / CLAUDE.md — the exact
+# nondeterminism the scrub above exists to prevent. Tests that exercise the
+# fallback itself delenv this and point HOME at a tmp dir.
+_ISOLATED_CONFIG_DIR = os.path.join(_ISOLATED_WORKSPACE, "claude-config")
+os.makedirs(_ISOLATED_CONFIG_DIR, exist_ok=True)
+os.environ["CLAUDE_CONFIG_DIR"] = _ISOLATED_CONFIG_DIR
+
 PLUGIN_ROOT = Path(__file__).parent.parent
 REPO_ROOT = PLUGIN_ROOT.parent.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
@@ -71,7 +81,10 @@ PLUGIN_JSON = PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
 MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 
 # Maps Claude Code hook event names to the plugin script each invokes.
+# "Setup" runs no script: run.sh --warm builds the scripts/ environment
+# synchronously (claude --init-only / --init / --maintenance in -p mode).
 EXPECTED_HOOK_SCRIPTS = {
+    "Setup": ["--warm"],
     "SessionStart": ["scripts/session_start.py"],
     "UserPromptSubmit": ["scripts/context_manager.py", "scripts/checkpoint_nudge.py"],
     "Notification": ["scripts/session_notification.py"],
@@ -110,7 +123,9 @@ def parse_hooks():
             for entry in group.get("hooks", []):
                 command = entry.get("command", "")
                 m = re.search(r"\$\{CLAUDE_PLUGIN_ROOT\}/(\S+?\.py)", command)
-                script = m.group(1) if m else ""
+                # Non-script hooks (run.sh --warm) carry the mode flag in
+                # the script slot; consumers guard with .is_file()/.py.
+                script = m.group(1) if m else ("--warm" if "--warm" in command else "")
                 out.append({
                     "event": event,
                     "script": script,
@@ -299,6 +314,7 @@ def _isolate_env(monkeypatch):
     for key in list(os.environ):
         if _is_ambient_key(key):
             monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", _ISOLATED_CONFIG_DIR)
 
 
 @pytest.fixture
@@ -306,6 +322,7 @@ def clean_env(monkeypatch):
     for key in list(os.environ):
         if _is_ambient_key(key):
             monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", _ISOLATED_CONFIG_DIR)
 
 
 @pytest.fixture

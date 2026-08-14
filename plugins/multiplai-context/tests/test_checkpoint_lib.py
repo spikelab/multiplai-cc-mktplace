@@ -387,6 +387,22 @@ class TestAutoCompactSteering:
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
         assert cp.autocompact_trigger_tokens() is None
 
+    def test_settings_autocompact_false_wins_via_home_fallback(self, monkeypatch, tmp_path):
+        """Vanilla Claude Code never sets CLAUDE_CONFIG_DIR: the user-level
+        settings file is ~/.claude/settings.json and the disable must still
+        be seen there (the old code returned False whenever the var was
+        unset, missing the disable on every vanilla install)."""
+        monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
+        monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        cfg = tmp_path / ".claude"
+        cfg.mkdir()
+        (cfg / "settings.json").write_text(
+            json.dumps({"autoCompactEnabled": False})
+        )
+        assert cp.autocompact_trigger_tokens() is None
+
     def test_settings_autocompact_true_is_not_a_disable(self, monkeypatch, tmp_path):
         monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "250000")
         monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90")

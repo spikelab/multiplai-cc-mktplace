@@ -318,9 +318,12 @@ class TestHooksJsonWiring:
         )
 
     def test_hook_scripts_exist(self):
-        """All hook script paths in hooks.json must point to existing files."""
+        """All hook script paths in hooks.json must point to existing files.
+        (run.sh mode flags like --warm name no script file.)"""
         data = _load_hooks_json()
         for hook in data["hooks"]:
+            if not hook["script"].endswith(".py"):
+                continue
             script_path = PLUGIN_DIR / hook["script"]
             assert script_path.exists(), (
                 f"hooks.json references {hook['script']} but file does not exist"
@@ -1120,15 +1123,15 @@ class TestErrorResilience:
 # ===========================================================================
 
 class TestHookEventTypeCompleteness:
-    """The plugin must register hooks for exactly six lifecycle events."""
+    """The plugin must register exactly six lifecycle events plus Setup."""
 
-    def test_six_distinct_event_types(self):
-        """hooks.json must have exactly six distinct event types."""
+    def test_seven_distinct_event_types(self):
+        """hooks.json must have exactly seven distinct event types."""
         data = _load_hooks_json()
         event_types = {h["event"] for h in data["hooks"]}
         expected = {
-            "SessionStart", "UserPromptSubmit", "Notification", "Stop",
-            "SessionEnd", "PreCompact",
+            "Setup", "SessionStart", "UserPromptSubmit", "Notification",
+            "Stop", "SessionEnd", "PreCompact",
         }
         assert event_types == expected, (
             f"Expected exactly {expected}, got {event_types}"

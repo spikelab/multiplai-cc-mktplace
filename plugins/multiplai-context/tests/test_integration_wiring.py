@@ -234,13 +234,14 @@ class TestPluginJsonFullWiring:
 
     def test_hooks_scripts_all_exist_and_are_python(self):
         """WHEN every hook script path in hooks.json is checked
-        THEN each exists and is a .py file."""
+        THEN each exists and is a .py file. (The Setup hook runs run.sh in
+        --warm mode and names no script — nothing to check on disk.)"""
         for hook in self.hooks["hooks"]:
+            if not hook["script"].endswith(".py"):
+                continue
             script_path = PLUGIN_ROOT / hook["script"]
             assert script_path.is_file(), \
                 f"Hook script missing: {hook['script']}"
-            assert script_path.suffix == ".py", \
-                f"Hook script is not Python: {hook['script']}"
 
     def test_hooks_have_timeout_values(self):
         """WHEN each hook entry in hooks.json is inspected
@@ -330,11 +331,16 @@ class TestAfterFieldAndBootstrapFallback:
         # in both layouts: in-repo uv walks up to the workspace;
         # installed, it resolves standalone via the member-local
         # [tool.uv.sources].
-        assert 'exec uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts"' in launcher, \
-            "run.sh must exec via 'uv run --project \"$CLAUDE_PLUGIN_ROOT/scripts\"'"
-        assert "/../.." not in launcher, \
-            "run.sh points above the plugin root — that path does not " \
-            "exist on an installed copy"
+        assert 'sdir="${CLAUDE_PLUGIN_ROOT}/scripts"' in launcher, \
+            "run.sh must anchor --project at the scripts/ member dir"
+        assert 'run --project "$sdir"' in launcher, \
+            "run.sh must run via 'uv run --project <scripts member dir>'"
+        # ../.. may appear only in the read-only dev-checkout probe
+        # ([ -f .../../../uv.lock ]), never as a --project value — an
+        # installed copy has no workspace root above the plugin.
+        assert '--project "${CLAUDE_PLUGIN_ROOT}/../..' not in launcher, \
+            "run.sh resolves the project above the plugin root — that " \
+            "path does not exist on an installed copy"
         for event, groups in parsed["hooks"].items():
             for group in groups:
                 for entry in group["hooks"]:
@@ -1203,8 +1209,10 @@ class TestPluginValidationReadiness:
             if not path.is_file():
                 missing.append(f"skill file: {skill['file']}")
 
-        # Hook scripts
+        # Hook scripts (run.sh mode flags like --warm name no file)
         for hook in hooks.get("hooks", []):
+            if not hook["script"].endswith(".py"):
+                continue
             path = PLUGIN_ROOT / hook["script"]
             if not path.is_file():
                 missing.append(f"hook script: {hook['script']}")
@@ -1258,14 +1266,15 @@ class TestPluginValidationReadiness:
         assert actual == expected, \
             f"Skill mismatch. Extra: {actual - expected}, Missing: {expected - actual}"
 
-    def test_six_distinct_hook_events(self):
+    def test_seven_distinct_hook_events(self):
         """WHEN hooks.json events are collected
-        THEN there are exactly 6 distinct event types."""
+        THEN there are exactly 7 distinct event types (six lifecycle
+        events plus Setup, the synchronous environment warm-up)."""
         hooks = _load_hooks_json()
         event_types = {h["event"] for h in hooks["hooks"]}
         expected = {
-            "SessionStart", "UserPromptSubmit", "Notification", "Stop",
-            "SessionEnd", "PreCompact",
+            "Setup", "SessionStart", "UserPromptSubmit", "Notification",
+            "Stop", "SessionEnd", "PreCompact",
         }
         assert event_types == expected, \
             f"Expected exactly {expected}, got {event_types}"

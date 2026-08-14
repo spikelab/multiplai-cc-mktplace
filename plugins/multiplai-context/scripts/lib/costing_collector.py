@@ -49,7 +49,7 @@ from multiplai_core.costing import (
     session_msg_index,
 )
 
-from lib.fsio import atomic_write
+from lib.fsio import atomic_write, claude_config_dir
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ _COMMAND_IGNORE = {"model", "goal", "clear", "cost", "config", "login", "logout"
 
 
 def default_config_dir() -> Path:
-    return Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
+    return claude_config_dir()
 
 
 def find_transcripts(config_dir: Path) -> list[Path]:

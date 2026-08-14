@@ -7,7 +7,6 @@ installed Claude Code plugins (themed skill packs).
 Design Decision 10: Gated on enable_skills config flag (default: false).
 """
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -74,11 +73,7 @@ class SkillsGenerator(GeneratorBase):
         would drift, and the copy that drifts is the one that teaches the
         model a name that does not exist.
         """
-        plugins_dir = self._config.plugins_dir or os.path.join(
-            os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")),
-            "plugins",
-        )
-        found = plugin_skills(Path(plugins_dir).expanduser())
+        found = plugin_skills(self._config.plugins_dir or None)
         return {name: path for name, (path, _plugin) in found.items()}
 
     def build_prompt(self, source: Path) -> str:

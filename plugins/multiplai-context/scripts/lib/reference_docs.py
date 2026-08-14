@@ -27,10 +27,11 @@ and the degradation contract requires the plugin work without it.
 from __future__ import annotations
 
 import json
-import os
 import re
 import tomllib
 from pathlib import Path
+
+from lib.fsio import claude_config_dir
 
 # Manifest filename → stack key. The key vocabulary is deliberately the same
 # one buildme's `_DEFAULT_REFERENCE_DOCS` uses (multiplai-dev's
@@ -80,8 +81,7 @@ _STATE_KEY = "dev_references"
 
 def reference_dir() -> Path:
     """`$CLAUDE_CONFIG_DIR/reference/dev`, expanded. May not exist."""
-    base = Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
-    return base / "reference" / "dev"
+    return claude_config_dir() / "reference" / "dev"
 
 
 def _requirement_name(spec: str) -> str:

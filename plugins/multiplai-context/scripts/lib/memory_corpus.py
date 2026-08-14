@@ -30,6 +30,8 @@ import logging
 import os
 from pathlib import Path
 
+from lib.fsio import claude_config_dir
+
 logger = logging.getLogger(__name__)
 
 # Read cap per file. The corpus is prose; nothing legitimate here is larger,
@@ -68,7 +70,7 @@ def claude_md_paths(paths) -> list[tuple[str, Path]]:
     returning it again would put one file in the corpus twice under two labels
     and emit two warnings for one hit.
     """
-    config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
+    config_dir = claude_config_dir()
     memory_dir = Path(paths.memory_dir)
     root = workspace_root(paths)
 
