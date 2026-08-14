@@ -65,6 +65,8 @@ from typing import Mapping, Optional, Sequence
 
 from multiplai_core.untrusted import defang, fence, markdown_notice
 
+from lib.thinking import DOCTOR_THINKING_OPTION, resolve_thinking
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -396,12 +398,19 @@ async def check_file(
     hash, so the next run tries again.
     """
     try:
-        response = await client.query(
+        # Mechanical verdict extraction: extended thinking off by default
+        # (lib/thinking.py; option shared with the duplication pass). The
+        # keyword is omitted when the opt-back or an old core resolves to None.
+        thinking = resolve_thinking(DOCTOR_THINKING_OPTION)
+        query_kwargs: dict = dict(
             system=SYSTEM,
             messages=[{"role": "user", "content": build_prompt(filename, text)}],
             model=model,
             timeout_s=timeout_s,
         )
+        if thinking is not None:
+            query_kwargs["thinking"] = thinking
+        response = await client.query(**query_kwargs)
         return parse_findings(response.content, filename, text)
     except Exception:
         logger.exception(

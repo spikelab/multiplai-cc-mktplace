@@ -45,6 +45,7 @@ from multiplai_core.log_utils import setup_logging, log_event
 from multiplai_core.model_client import DEFAULT_MODEL
 from multiplai_core.paths import get_paths
 from lib import checkpoint as cp
+from lib.thinking import CHECKPOINT_THINKING_OPTION, RUN_AGENT, resolve_thinking
 from lib.transcript_distiller import distill
 
 logger = setup_logging("checkpoint_writer")
@@ -336,8 +337,12 @@ async def write_checkpoint(payload: dict) -> bool:
     text = ""
     failure = ""
     try:
-        result = await run_agent(
-            prompt,
+        # Mechanical fold-the-segment-in summarisation: extended thinking off
+        # by default (lib/thinking.py). Resolved once per run — retries live
+        # inside run_agent (max_attempts) — and the keyword is omitted when
+        # the opt-back or an old core resolves to None.
+        thinking = resolve_thinking(CHECKPOINT_THINKING_OPTION, target=RUN_AGENT)
+        agent_kwargs: dict = dict(
             system_prompt=_WRITER_SYSTEM_PROMPT,
             model=cfg.model or DEFAULT_MODEL,
             timeout_s=float(cfg.timeout_s),
@@ -348,6 +353,9 @@ async def write_checkpoint(payload: dict) -> bool:
             # is why the cadence could never be costed before now.
             component="checkpoint",
         )
+        if thinking is not None:
+            agent_kwargs["thinking"] = thinking
+        result = await run_agent(prompt, **agent_kwargs)
     except Exception as e:
         logger.error("Checkpoint model call failed for %s: %s", session_id, e)
         failure = f"model call failed: {e}"

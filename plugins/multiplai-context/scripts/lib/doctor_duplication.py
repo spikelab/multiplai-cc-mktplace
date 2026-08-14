@@ -60,6 +60,8 @@ from typing import Iterable, Mapping, Sequence
 
 from multiplai_core.untrusted import defang, fence, markdown_notice
 
+from lib.thinking import DOCTOR_THINKING_OPTION, resolve_thinking
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -566,14 +568,21 @@ async def confirm_pairs(
     failed_batches = 0
     unconfirmed = 0
     judged = 0
+    # Mechanical verdict extraction: extended thinking off by default
+    # (lib/thinking.py). Resolved once per run, not per batch; the keyword
+    # is omitted when the opt-back or an old core resolves to None.
+    thinking = resolve_thinking(DOCTOR_THINKING_OPTION)
     for batch in _batches(list(pairs), max(1, batch_size)):
         try:
-            response = await client.query(
+            query_kwargs: dict = dict(
                 system=CONFIRM_SYSTEM,
                 messages=[{"role": "user", "content": render_batch(batch)}],
                 model=model,
                 timeout_s=timeout_s,
             )
+            if thinking is not None:
+                query_kwargs["thinking"] = thinking
+            response = await client.query(**query_kwargs)
             result = parse_confirmations(response.content, batch)
             confirmations.extend(result.confirmations)
             judged += len(result.answered)

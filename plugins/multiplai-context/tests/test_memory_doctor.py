@@ -53,8 +53,10 @@ class StubClient:
         self.replies = list(replies)
         self.calls = []
 
-    async def query(self, *, system, messages, model, timeout_s=None):
-        self.calls.append({"system": system, "user": messages[0]["content"]})
+    async def query(self, *, system, messages, model, timeout_s=None,
+                    thinking=None):
+        self.calls.append({"system": system, "user": messages[0]["content"],
+                           "thinking": thinking})
         return Reply(self.replies.pop(0) if self.replies else "")
 
 
@@ -405,7 +407,8 @@ class TestContradictionGate:
         class Slow:
             """Answers out of order on purpose."""
 
-            async def query(self, *, system, messages, model, timeout_s=None):
+            async def query(self, *, system, messages, model, timeout_s=None,
+                            thinking=None):
                 user = messages[0]["content"]
                 name = next(n for n in lines if f"In {n} the gate" in user)
                 a, b, delay = lines[name]

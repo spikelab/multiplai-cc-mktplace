@@ -16,6 +16,7 @@ from typing import Optional, Sequence, Union
 
 from lib import taxonomy
 from lib.runtime import lock_path
+from lib.thinking import EXTRACTION_THINKING_OPTION, resolve_thinking
 
 logger = logging.getLogger(__name__)
 
@@ -763,15 +764,23 @@ async def extract_session_signals(
     # Parse failures are stochastic (a fresh sample of the same prompt
     # usually parses), so retry once with the identical prompt rather
     # than surfacing the first bad roll to the caller.
+    #
+    # Mechanical structured extraction: extended thinking off by default
+    # (lib/thinking.py). Resolved once per run, not per retry; the keyword
+    # is omitted when the opt-back or an old core resolves to None.
+    thinking = resolve_thinking(EXTRACTION_THINKING_OPTION)
+    query_kwargs: dict = dict(
+        system=system,
+        messages=[{
+            "role": "user",
+            "content": prompt,
+        }],
+    )
+    if thinking is not None:
+        query_kwargs["thinking"] = thinking
     last_error: Optional[ExtractionParseError] = None
     for attempt in range(2):
-        response = await client.query(
-            system=system,
-            messages=[{
-                "role": "user",
-                "content": prompt,
-            }],
-        )
+        response = await client.query(**query_kwargs)
         try:
             units = _parse_units(response.content)
         except ExtractionParseError as e:
