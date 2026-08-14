@@ -94,11 +94,13 @@ class ClaudeAgentFetcher:
         *,
         model: str | None = None,
         effort: str | None = None,
+        thinking: dict | None = None,
         request_timeout: float = DEFAULT_FETCH_TIMEOUT_S,
         batch_timeout: float = DEFAULT_BATCH_TIMEOUT_S,
     ):
         self.model = model
         self.effort = effort
+        self.thinking = thinking
         self.request_timeout = request_timeout
         self.batch_timeout = batch_timeout
 
@@ -183,6 +185,7 @@ class ClaudeAgentFetcher:
                 prompt,
                 model=self.model,
                 effort=self.effort,
+                thinking=self.thinking,
                 allowed_tools=["WebFetch"],
                 max_turns=3,
                 max_attempts=1,

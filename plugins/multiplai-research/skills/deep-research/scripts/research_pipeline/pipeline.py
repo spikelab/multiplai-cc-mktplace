@@ -193,6 +193,7 @@ async def run_pipeline(config: ResearchConfig, *, reset_usage: bool = True) -> i
             allow_paid_fallback=config.allow_paid_fallback,
             model=config.models.get("search"),
             effort=config.efforts.get("search"),
+            thinking=config.thinkings.get("search"),
         )
     except RuntimeError as e:
         print(f"Search router setup failed: {e}", file=sys.stderr)

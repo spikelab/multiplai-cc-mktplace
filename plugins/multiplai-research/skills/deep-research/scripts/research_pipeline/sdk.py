@@ -15,6 +15,7 @@ validation, and the pipeline's LLMCallError taxonomy.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import threading
@@ -244,6 +245,28 @@ def reset_sdk_concurrency_stats() -> None:
         _sdk_peak_calls = 0
 
 
+# One-time probe: does the resolved multiplai-core's run_agent() accept
+# thinking=? (Added in core 0.14.0.) On an older core the kwarg is dropped
+# with a single warning instead of a TypeError, so an installed plugin that
+# resolved an old core degrades to today's behavior (thinking on).
+_core_thinking_support: bool | None = None
+
+
+def _core_supports_thinking() -> bool:
+    global _core_thinking_support
+    if _core_thinking_support is None:
+        _core_thinking_support = (
+            "thinking" in inspect.signature(run_agent).parameters
+        )
+        if not _core_thinking_support:
+            log.warning(
+                "multiplai-core's run_agent() does not accept thinking=; "
+                "extended thinking stays on for all calls. Fix: "
+                "uv lock --upgrade-package multiplai-core"
+            )
+    return _core_thinking_support
+
+
 class LLMCallError(Exception):
     """Raised when an LLM call fails beyond retry."""
 
@@ -261,6 +284,7 @@ async def llm_call(
     *,
     model: str | None = None,
     effort: str | None = None,
+    thinking: dict | None = None,
     max_turns: int = 1,
     max_attempts: int = 2,
     system_prompt: str | None = None,
@@ -278,6 +302,9 @@ async def llm_call(
     bypassPermissions.
 
     Args:
+        thinking: Extended-thinking config forwarded to run_agent, e.g.
+            {"type": "disabled"}. None (default) keeps the SDK default and
+            does not forward the kwarg, so an old core is never handed it.
         max_attempts: Transient-error retries at the run_agent level (default 2:
             one retry). Callers with their own failover — the search router's
             provider chain, the fetcher's per-source error handling — pass 1.
@@ -302,6 +329,13 @@ async def llm_call(
         into.cache_read_tokens = result.usage.cache_read_tokens
         into.cost_usd = result.usage.cost_usd
 
+    # Forward thinking= only when set AND the resolved core accepts it —
+    # never handing the kwarg to an old core keeps this a warning, not a
+    # TypeError.
+    thinking_kwargs: dict = {}
+    if thinking is not None and _core_supports_thinking():
+        thinking_kwargs["thinking"] = thinking
+
     call_usage = LLMCallUsage(num_calls=1)
     call_start = time.monotonic()
     async with _get_semaphore():
@@ -320,6 +354,7 @@ async def llm_call(
                 timeout_s=call_timeout,
                 label=label,
                 component="deep-research",
+                **thinking_kwargs,
             )
             call_ok = True
             _capture_usage(call_usage, result)
@@ -357,6 +392,7 @@ async def llm_call_structured(
     *,
     model: str | None = None,
     effort: str | None = None,
+    thinking: dict | None = None,
     max_retries: int = 1,
     system_prompt: str | None = None,
     allowed_tools: list[str] | None = None,
@@ -378,6 +414,7 @@ async def llm_call_structured(
             current_prompt,
             model=model,
             effort=effort,
+            thinking=thinking,
             system_prompt=system_prompt,
             allowed_tools=allowed_tools,
             max_turns=3 if allowed_tools else 1,

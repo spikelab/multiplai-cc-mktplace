@@ -579,9 +579,16 @@ After getting search results, format them as a JSON array. Each result should ha
 
 Return up to {max_results} results. Return ONLY the JSON array in a fenced code block, no other text."""
 
-    def __init__(self, *, model: str | None = None, effort: str | None = None):
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        effort: str | None = None,
+        thinking: dict | None = None,
+    ):
         self.model = model
         self.effort = effort
+        self.thinking = thinking
 
     async def search(self, query: str, max_results: int = 10) -> list[SearchResult]:
         try:
@@ -593,6 +600,7 @@ Return up to {max_results} results. Return ONLY the JSON array in a fenced code 
                 self.SEARCH_PROMPT.format(query=query, max_results=max_results),
                 model=self.model,
                 effort=self.effort,
+                thinking=self.thinking,
                 allowed_tools=["WebSearch"],
                 max_turns=3,
                 max_attempts=1,
@@ -883,14 +891,16 @@ def build_default_router(
     allow_paid_fallback: bool = False,
     model: str | None = None,
     effort: str | None = None,
+    thinking: dict | None = None,
 ) -> SearchRouter:
     """Build a SearchRouter with available providers.
 
     When prefer_claude_tools=True, includes ClaudeAgentSearchProvider as the
     primary (no API key needed — uses Claude Max subscription). External API
     providers are included if their keys are set, as fallback. ``model``/
-    ``effort`` pin the Claude Agent search calls (mechanical formatting work —
-    the pipeline passes its parse-tier model).
+    ``effort``/``thinking`` pin the Claude Agent search calls (mechanical
+    formatting work — the pipeline passes its parse-tier model with thinking
+    disabled).
 
     When allow_paid_fallback=False (default), the router raises
     PaidFallbackError instead of silently falling back to paid APIs when
@@ -901,7 +911,7 @@ def build_default_router(
     # Claude Agent — primary when preferred (no API key needed)
     if prefer_claude_tools:
         try:
-            providers.append(ClaudeAgentSearchProvider(model=model, effort=effort))  # type: ignore[arg-type]
+            providers.append(ClaudeAgentSearchProvider(model=model, effort=effort, thinking=thinking))  # type: ignore[arg-type]
             log.info("Claude Agent search provider enabled (default)")
         except Exception as e:  # noqa: BLE001
             log.warning("Could not init ClaudeAgentSearchProvider: %s", e)

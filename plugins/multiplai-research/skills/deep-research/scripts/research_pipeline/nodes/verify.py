@@ -57,6 +57,7 @@ async def verify_verdicts(
         VerifyVerdicts,
         model=config.models.get("verify"),
         effort=config.efforts.get("verify"),
+        thinking=config.thinkings.get("verify"),
         label="verify:verdicts",
     )
 

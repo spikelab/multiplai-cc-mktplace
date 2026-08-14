@@ -52,6 +52,41 @@ def _node_effort(node: str, default: str | None) -> str | None:
     return conf_effort(f"deep-research.{node}", conf_effort("deep-research", default))
 
 
+# Extended thinking is ON by default in the Agent SDK, and effort does not
+# remove its latency: a cold no-tools call measured 18.4s → 2.9s with
+# thinking={"type": "disabled"} (2026-08-09). Mechanical parse/search nodes
+# disable it below; reasoning nodes keep the SDK default (None).
+THINKING_DISABLED: dict = {"type": "disabled"}
+
+# Truthy conf values that restore the SDK default (thinking back on).
+_THINKING_ON_VALUES = ("1", "true", "yes", "on", "enabled")
+
+
+def conf_thinking(task: str, default: dict | None = None) -> dict | None:
+    """``THINKING=`` for *task* from multiplai.conf.
+
+    The efforts map got its conf half in ``conf_effort``; this is the same
+    mechanic for the thinking axis. A truthy value (``THINKING=on``) restores
+    the SDK default (returns ``None``); any other non-blank value disables
+    thinking. Returns *default* when the conf says nothing, so every per-node
+    default below is unchanged unless someone opts in.
+    """
+    section = (load_multiplai_conf().get("_sections", {}) or {}).get(task) or {}
+    requested = (section.get("THINKING") or "").strip().lower()
+    if not requested:
+        # Fresh copy per node — callers must never share one mutable dict.
+        return dict(default) if default else default
+    if requested in _THINKING_ON_VALUES:
+        return None
+    return dict(THINKING_DISABLED)
+
+
+def _node_thinking(node: str, default: dict | None) -> dict | None:
+    """Per-node thinking: the node's own conf section wins over the skill-wide
+    one, which wins over the code default."""
+    return conf_thinking(f"deep-research.{node}", conf_thinking("deep-research", default))
+
+
 @dataclass
 class PresetConfig:
     name: Preset
@@ -190,6 +225,30 @@ class ResearchConfig:
                 ("synthesize", None),
                 ("adversarial", None),
                 ("quality_check", "medium"),
+            )
+        }
+    )
+
+    # Per-node extended thinking: mechanical parse/search work runs with
+    # thinking disabled (the SDK default costs ~15s per call and buys nothing
+    # on formatting/parsing); reasoning nodes keep the SDK default (None).
+    # Conf-overridable per node or skill-wide, mirroring EFFORT:
+    # [deep-research.search] THINKING=on / [deep-research] THINKING=on.
+    thinkings: dict[str, dict | None] = field(
+        default_factory=lambda: {
+            node: _node_thinking(node, default)
+            for node, default in (
+                ("plan", None),
+                ("diverge", None),
+                ("challenge", None),
+                ("search", THINKING_DISABLED),
+                ("triage_relevance", THINKING_DISABLED),
+                ("extract", THINKING_DISABLED),
+                ("verify", THINKING_DISABLED),
+                ("reassess", None),
+                ("synthesize", None),
+                ("adversarial", None),
+                ("quality_check", None),
             )
         }
     )
