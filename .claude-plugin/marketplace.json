@@ -4,7 +4,7 @@
     "name": "Spike",
     "email": "fsm@spikelab.org"
   },
-  "description": "Multiplai — memory you approve, logs you can read, for Claude Code. Seven plugin packs: the memory/context engine plus dev, writing, research, PM, media, and messaging skills.",
+  "description": "Multiplai — memory you approve, logs you can read, for Claude Code. Eight plugin packs: the memory/context engine plus dev, writing, research, PM, media, messaging, and Apple-development skills.",
   "plugins": [
     {
       "name": "multiplai-context",
@@ -94,7 +94,7 @@
       "name": "multiplai-dev",
       "source": "./plugins/multiplai-dev",
       "description": "Developer skill pack: spec-driven builds, executable plan authoring, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring.",
-      "version": "0.13.0",
+      "version": "0.14.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -150,6 +150,27 @@
         "chat",
         "email",
         "inbox"
+      ]
+    },
+    {
+      "name": "multiplai-apple",
+      "source": "./plugins/multiplai-apple",
+      "description": "Apple development pack: build, test, and drive iOS/macOS projects (swift-build). macOS only; from the multiplai-kit container it needs the opt-in container→host SSH bridge. Not part of the default install.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Spike",
+        "email": "fsm@spikelab.org"
+      },
+      "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "repository": "https://github.com/spikelab/multiplai-cc-mktplace",
+      "license": "MIT",
+      "keywords": [
+        "swift",
+        "xcode",
+        "ios",
+        "macos",
+        "simulator",
+        "xcuitest"
       ]
     }
   ]

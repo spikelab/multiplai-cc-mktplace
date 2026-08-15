@@ -1,9 +1,12 @@
 ---
 name: swift-build
 description: |
-  Build, test, and manage iOS/macOS projects from any environment.
-  Handles the SSH bridge when running inside a Docker container —
-  Claude calls the script, reads structured output, never touches SSH directly.
+  Build, test, and manage iOS/macOS projects. Requires macOS — it drives the
+  Swift/Xcode toolchain (xcodebuild, xcrun/simctl), which exists only there.
+  Runs the toolchain directly on a Mac; from a Docker container with a
+  configured host bridge it routes the same commands to a macOS host over SSH.
+  Not usable on Linux. Claude calls the script, reads structured output,
+  never touches SSH directly.
 when_to_use: 'Triggers: swift build, swift test, run tests (Swift project context), simulator, xcodebuild'
 model: opus
 effort: medium
@@ -12,7 +15,14 @@ disable-model-invocation: false
 
 # Swift Build Skill
 
-Build and test Swift/iOS/macOS projects transparently, whether running on macOS directly or inside a Docker container that SSHes to a macOS host.
+Build and test Swift/iOS/macOS projects.
+
+**macOS is required.** Everything here drives the Swift/Xcode toolchain — `xcodebuild`, `xcrun`/`simctl`, the iOS SDKs — and Apple ships it for macOS only. There is no Linux port and no fallback: on a Linux host the script names the missing toolchain and exits 1.
+
+Two supported environments, both ending on a Mac:
+
+- **macOS** — the toolchain runs locally. Nothing to configure.
+- **A Docker container with a configured host bridge** (e.g. multiplai-kit's opt-in container→host SSH bridge) — the same commands are routed to a macOS host over SSH. Without that bridge configured, the container path also exits 1.
 
 ## How It Works
 

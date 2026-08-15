@@ -1,0 +1,12 @@
+{
+  "name": "multiplai-apple",
+  "version": "0.1.0",
+  "description": "Apple development pack: build, test, and drive iOS/macOS projects (swift-build). macOS only; from the multiplai-kit container it needs the opt-in container→host SSH bridge. Not part of the default install.",
+  "author": {
+    "name": "Spike",
+    "email": "fsm@spikelab.org"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/spikelab/multiplai-cc-mktplace",
+  "repository": "https://github.com/spikelab/multiplai-cc-mktplace"
+}

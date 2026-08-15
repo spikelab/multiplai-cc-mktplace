@@ -67,7 +67,7 @@ commands are listed in [`CLAUDE.md`](CLAUDE.md#gates-before-publishing).
 
 ## Counting skills
 
-Docs say "seven plugin packs, 40+ skills" on purpose — the number grows.
+Docs say "eight plugin packs, 40+ skills" on purpose — the number grows.
 When an exact count is needed, derive it, never quote from memory:
 
 ```bash

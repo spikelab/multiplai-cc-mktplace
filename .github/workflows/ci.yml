@@ -219,3 +219,20 @@ jobs:
         run: |
           uv run --project ../../../../.. --package research-pipeline \
             --extra dev python -m pytest tests/ -q
+
+  apple-tests:
+    name: multiplai-apple tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # swift-build is macOS-only, but what these tests check is the *refusal*:
+      # a Linux runner is the environment where a plain-Linux user's error
+      # message can be asserted for real. They shim `uname` and run the script
+      # with a scratch HOME — no Xcode, no SSH, no Mac needed.
+      - name: Run tests
+        working-directory: plugins/multiplai-apple
+        run: uv run --no-project --with pytest python -m pytest tests/ -q

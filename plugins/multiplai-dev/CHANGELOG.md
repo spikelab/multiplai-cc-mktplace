@@ -10,11 +10,23 @@ Version numbers are this plugin's version in the marketplace manifest
 
 Recorded history starts at **0.1.1**; anything earlier is in `git log` only.
 
-Of the 17 versions recorded here, `0.1.1` and `0.5.0` carry a git tag — the
-tagging convention started partway through. Dates on untagged versions are the
-release dates recorded at the time, not derived from a tag.
+Of the 25 versions recorded here, `0.1.1` and `0.5.0`–`0.5.3` carry a git tag;
+tagging then lapsed until `0.9.1`, and from there on every release is tagged
+when it lands. Dates on untagged versions are the release dates recorded at the
+time, not derived from a tag.
 
 ## [Unreleased]
+
+## [0.14.0] - 2026-08-14
+
+### Removed
+
+- **The `swift-build` skill moved to the new `multiplai-apple` plugin**,
+  unchanged. It is mac-only capability — the Swift/Xcode toolchain, and from
+  the multiplai-kit container the opt-in host SSH bridge — and multiplai-dev
+  is a cross-platform pack, so the mac-only skill now ships as an explicit
+  add-on. If you use `swift-build`, run
+  `/plugin install multiplai-apple@multiplai` to keep it.
 
 ## [0.13.0] - 2026-08-13
 

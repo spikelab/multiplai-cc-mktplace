@@ -23,7 +23,7 @@ docs/                              contracts that bind across plugins
 scripts/                           repo-level gates + their tests
 ```
 
-Seven plugins. **Do not state a skill count from memory** — the number has
+Eight plugins. **Do not state a skill count from memory** — the number has
 already drifted once in a neighbouring repo. Derive it:
 
 ```bash
@@ -78,7 +78,7 @@ The gate scripts and their tests are stdlib-only, which is why they alone use
 `--no-project`: it skips installing the workspace environment just to run a
 linter. Everything under `plugins/` needs `--project`.
 
-CI additionally runs the four per-plugin test suites, each from its own
+CI additionally runs the five per-plugin test suites, each from its own
 directory:
 
 | Suite | Command |
@@ -87,6 +87,7 @@ directory:
 | `multiplai-media` | `cd plugins/multiplai-media && uv run --no-project --with pytest python -m pytest tests/ -q` |
 | buildme | `cd plugins/multiplai-dev/skills/buildme/scripts && uv run --project ../../../../.. --package build-pipeline --extra dev python -m pytest tests/ -q` |
 | deep-research | `cd plugins/multiplai-research/skills/deep-research/scripts && uv run --project ../../../../.. --package research-pipeline --extra dev python -m pytest tests/ -q` |
+| `multiplai-apple` | `cd plugins/multiplai-apple && uv run --no-project --with pytest python -m pytest tests/ -q` |
 
 An extra (`--extra dev`) belongs to a *member*, not to the workspace, so it
 needs `--package <member-name>` alongside `--project`. Without it uv reports
@@ -113,8 +114,8 @@ must agree:
 Steps 1 and 2 are enforced: the **`changelog-gate`** CI job fails a pull
 request that changes a plugin without both. Step 3 is by hand at release time.
 
-The root [`CHANGELOG.md`](CHANGELOG.md) is an **index only** — seven
-independent release lines interleaved in one file would say less than seven
+The root [`CHANGELOG.md`](CHANGELOG.md) is an **index only** — eight
+independent release lines interleaved in one file would say less than eight
 files each saying one thing. Do not add entries to it.
 
 **The gate's escape hatch.** Docs-only changes (only `README.md` and/or
