@@ -396,6 +396,13 @@ async def check_file(
     hash, so the next run tries again.
     """
     try:
+        # No thinking config: this call keeps the SDK default (extended
+        # thinking ON) on purpose, and is the one memory-doctor pass that does.
+        # Deciding whether two statements can both be true is judgement, not
+        # extraction — which is why this pass gets CHECK_TIMEOUT_S (600s)
+        # against the duplication pass's 180s. Disabling thinking here would
+        # buy ~15s per file and pay for it in missed contradictions, and a
+        # missed contradiction is silent: nothing downstream detects one.
         response = await client.query(
             system=SYSTEM,
             messages=[{"role": "user", "content": build_prompt(filename, text)}],

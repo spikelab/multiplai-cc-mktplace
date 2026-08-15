@@ -940,15 +940,23 @@ class TestRouterThinking:
         monkeypatch.delenv(mr.ROUTER_THINKING_ENV_VAR, raising=False)
         assert mr.resolve_router_thinking() == {"type": "disabled"}
 
-    @pytest.mark.parametrize("value", ["1", "true", "yes", "on", "enabled", "TRUE"])
-    def test_opt_back_in_returns_none(self, value):
-        """None means "send no thinking config", i.e. the model's own default."""
-        import lib.memory_router as mr
-        assert mr.resolve_router_thinking(value) is None
+    @pytest.mark.parametrize("value", ["1", "true", "yes", "on", "TRUE"])
+    def test_opt_back_in_returns_none(self, monkeypatch, value):
+        """None means "send no thinking config", i.e. the model's own default.
 
-    def test_unrecognised_value_stays_disabled(self):
+        Read through the environment rather than a `raw=` argument: the value
+        is parsed by core's `option_bool`, the same reader every other boolean
+        option here uses, and a bypass that re-implemented its truth table is
+        the duplication this option no longer carries.
+        """
         import lib.memory_router as mr
-        assert mr.resolve_router_thinking("maybe") == {"type": "disabled"}
+        monkeypatch.setenv(mr.ROUTER_THINKING_ENV_VAR, value)
+        assert mr.resolve_router_thinking() is None
+
+    def test_unrecognised_value_stays_disabled(self, monkeypatch):
+        import lib.memory_router as mr
+        monkeypatch.setenv(mr.ROUTER_THINKING_ENV_VAR, "maybe")
+        assert mr.resolve_router_thinking() == {"type": "disabled"}
 
     def test_thinking_forwarded_to_client_when_core_supports_it(self, monkeypatch):
         import lib.memory_router as mr
@@ -983,27 +991,26 @@ class TestRouterThinking:
             mr.LLMRouter().select_multi("debug python code", None, self._corpora())
         assert "thinking" not in mock_client.query.call_args.kwargs
 
-    def test_core_probe_agrees_with_the_resolved_signature(self):
-        """The probe reports the resolved core, not a hardcoded guess.
+    def test_core_probe_agrees_with_the_resolved_signature(self, monkeypatch):
+        """The probe reports the resolved dependencies, not a hardcoded guess.
 
-        This tracks whichever core the lockfile resolves — it does not assert
-        that core is new enough, and cannot: both sides read the same signature.
-        What it catches is the probe drifting from reality (wrong module, wrong
+        This tracks whatever the lockfile resolves — it does not assert those
+        are new enough, and cannot: both sides read the same signature. What it
+        catches is the probe drifting from reality (wrong module, wrong
         attribute, exception swallowed into a wrong default), which would make
         every other test in this class assert against a fiction.
 
-        The version requirement itself is not testable from inside this repo and
-        is enforced by the lockfile: `uv lock --upgrade-package multiplai-core`.
+        The router no longer keeps its own copy of this probe or its own cache;
+        the name is re-exported from lib.thinking, which is also what the
+        by-name monkeypatches above are patching.
         """
         import inspect
         import lib.memory_router as mr
+        import lib.thinking as th
         from multiplai_core.model_client import ModelClient
         expected = "thinking" in inspect.signature(ModelClient.query).parameters
-        mr._CORE_THINKING_SUPPORT = None  # bypass the per-process cache
-        try:
-            assert mr.core_supports_thinking() is expected
-        finally:
-            mr._CORE_THINKING_SUPPORT = None
+        monkeypatch.setattr(th, "_SUPPORT_CACHE", {})  # bypass the process cache
+        assert mr.core_supports_thinking() is expected
 
 
 # ---------------------------------------------------------------------------

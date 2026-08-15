@@ -36,6 +36,7 @@ from typing import Optional, Sequence
 from multiplai_core.untrusted import fence
 
 from lib import utilisation as util
+from lib.thinking import UTILISATION_THINKING_OPTION, thinking_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -264,11 +265,14 @@ async def judge_one_detailed(
                     record.get("session"))
         return None, SKIP_NO_TRANSCRIPT
     try:
+        # Mechanical verdict extraction: extended thinking off by default
+        # (lib/thinking.py), which owns whether the keyword is sent at all.
         response = await client.query(
             system=JUDGE_SYSTEM,
             messages=[{"role": "user", "content": build_prompt(keys, transcript)}],
             model=model,
             timeout_s=timeout_s,
+            **thinking_kwargs(UTILISATION_THINKING_OPTION),
         )
         return parse_verdicts(response.content, keys), ""
     except Exception:

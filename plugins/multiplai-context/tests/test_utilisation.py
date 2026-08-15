@@ -1343,3 +1343,43 @@ class TestSectionKeys:
     def test_round_trip(self, file, section, key):
         assert util.section_key(file, section) == key
         assert util.split_key(key) == (file, section or None)
+
+
+class TestJudgeThinking:
+    """The judge call is mechanical verdict extraction: it carries the
+    thinking config resolved from ``utilisation_thinking`` (default:
+    disabled — see lib/thinking.py)."""
+
+    def _run(self, monkeypatch, *, supported):
+        import lib.thinking as th
+        from multiplai_core.plugin_options import option_var
+
+        monkeypatch.setattr(
+            th, "core_supports_thinking", lambda target=None: supported
+        )
+        monkeypatch.delenv(option_var(th.UTILISATION_THINKING_OPTION), raising=False)
+        monkeypatch.setattr(judge, "distilled_transcript", lambda *a, **k: "text")
+
+        captured = {}
+
+        async def query(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(content="<verdicts></verdicts>")
+
+        client = MagicMock()
+        client.query = query
+        record = _session("s1", [_inject("dev.md", "Testing", 100)],
+                          transcript="/transcripts/s1.jsonl")
+        asyncio.run(judge.judge_one_detailed(client, record, model="m"))
+        assert captured, "the model path must have been taken"
+        return captured
+
+    def test_judge_call_receives_thinking_disabled_by_default(self, monkeypatch):
+        assert self._run(monkeypatch, supported=True)["thinking"] == {
+            "type": "disabled"
+        }
+
+    def test_keyword_omitted_entirely_when_unsupported(self, monkeypatch):
+        """Routed through thinking_kwargs, so an unsupported dependency is
+        handed no keyword rather than `thinking=None`."""
+        assert "thinking" not in self._run(monkeypatch, supported=False)

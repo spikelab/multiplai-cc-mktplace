@@ -234,3 +234,46 @@ class TestPromptShape:
         capped = checkpoint_writer._cap_segment(huge)
         assert len(capped) < 300_000
         assert "elided for length" in capped
+
+
+class TestCheckpointThinking:
+    """The checkpoint write is mechanical summarisation: run_agent carries
+    the thinking config resolved from ``checkpoint_thinking`` (default:
+    disabled — see lib/thinking.py, RUN_AGENT target)."""
+
+    def _run(self, tmp_path, monkeypatch, *, supported):
+        import lib.thinking as th
+        from multiplai_core.plugin_options import option_var
+
+        monkeypatch.setattr(
+            th, "core_supports_thinking", lambda target=None: supported
+        )
+        monkeypatch.delenv(option_var(th.CHECKPOINT_THINKING_OPTION), raising=False)
+
+        now = datetime.now(timezone.utc)
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(
+            transcript, [_turn("user", "please build the widget", now)]
+        )
+        captured = []
+        monkeypatch.setattr(checkpoint_writer, "run_agent", _fake_run_agent(captured))
+
+        ok = asyncio.run(checkpoint_writer.write_checkpoint(_payload("s1", transcript)))
+
+        assert ok is True
+        return captured[0]["kwargs"]
+
+    def test_run_agent_receives_thinking_disabled_by_default(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        kwargs = self._run(tmp_path, monkeypatch, supported=True)
+        assert kwargs["thinking"] == {"type": "disabled"}
+
+    def test_keyword_omitted_entirely_when_unsupported(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        """This is the RUN_AGENT target, where the SDK boundary bites: core
+        forwards the value into ClaudeAgentOptions unguarded, so an SDK without
+        the field must be handed no keyword at all."""
+        kwargs = self._run(tmp_path, monkeypatch, supported=False)
+        assert "thinking" not in kwargs

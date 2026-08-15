@@ -60,6 +60,8 @@ from typing import Iterable, Mapping, Sequence
 
 from multiplai_core.untrusted import defang, fence, markdown_notice
 
+from lib.thinking import DUPLICATION_THINKING_OPTION, thinking_kwargs
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -566,6 +568,12 @@ async def confirm_pairs(
     failed_batches = 0
     unconfirmed = 0
     judged = 0
+    # Mechanical verdict extraction — "are these two lines the same claim?"
+    # over text the model sees in full — so extended thinking is off by default
+    # (lib/thinking.py). Its sibling contradiction pass deliberately keeps the
+    # SDK default; these are not the same kind of question. Resolved once per
+    # run, not per batch.
+    thinking = thinking_kwargs(DUPLICATION_THINKING_OPTION)
     for batch in _batches(list(pairs), max(1, batch_size)):
         try:
             response = await client.query(
@@ -573,6 +581,7 @@ async def confirm_pairs(
                 messages=[{"role": "user", "content": render_batch(batch)}],
                 model=model,
                 timeout_s=timeout_s,
+                **thinking,
             )
             result = parse_confirmations(response.content, batch)
             confirmations.extend(result.confirmations)
