@@ -11,33 +11,32 @@ multiplai-context performs when `resources_retrieval=qmd` — use it for
 deeper digging, different phrasings, or when the automatic injection
 missed a document you expect to exist.
 
-## Step 0 — is a resources index set up at all?
+## Step 0 — is a resources index configured at all?
 
-A fresh install has neither piece this skill needs: the **qmd CLI**
-(https://github.com/tobi/qmd) and an **indexed resources directory**
-(the `resources_dir` plugin option). Check before running anything:
+A fresh install has neither piece this skill needs: an **indexed resources
+directory** (the `resources_dir` plugin option) and a **reachable qmd**.
+Only the first is a plain options question, so settle it here:
 
-1. **Options.** If `resources_dir` is unset — no
-   `CLAUDE_PLUGIN_OPTION_RESOURCES_DIR` env var and no
-   `pluginConfigs` → `multiplai-context@<marketplace>` → `options` →
-   `resources_dir` in the user's `settings.json` — there is no knowledge
-   base configured.
-2. **Binary** (for `local` mode, the default):
-   `command -v qmd || test -x ~/.bun/bin/qmd`.
+**Options.** If `resources_dir` is unset — no
+`CLAUDE_PLUGIN_OPTION_RESOURCES_DIR` env var and no `pluginConfigs` →
+`multiplai-context@<marketplace>` → `options` → `resources_dir` in the
+user's `settings.json` — there is no knowledge base configured. Do **not**
+run qmd commands, show an error, or improvise infrastructure the user
+doesn't have. Answer plainly, naming what is missing and the fix, e.g.:
 
-If either is missing, do **not** run qmd commands, show an error, or
-improvise infrastructure the user doesn't have. Answer plainly, naming
-what is missing and the fix, e.g.:
-
-> Resources search isn't set up yet. It needs (1) the qmd CLI —
-> install from https://github.com/tobi/qmd — and (2) a resources
-> directory to index: set the `resources_dir` plugin option (and
+> Resources search isn't set up yet — there's no resources directory
+> configured. Set the `resources_dir` plugin option (and
 > `enable_resources`), then index it with qmd (`qmd collection add …`,
-> see the qmd docs). Until then I can search your files directly with
-> grep — want that instead?
+> see https://github.com/tobi/qmd). Until then I can search your files
+> directly with grep — want that instead?
 
 Then, if the user wants it, do the grep search yourself. Never present
 the missing index as an error — it is simply not configured.
+
+**Whether qmd itself is reachable depends on the mode**, so that check
+belongs after the configuration is resolved, not here. A missing `qmd`
+binary means nothing in `http` mode, where the daemon does the work and
+PATH is never consulted.
 
 ## Resolve the configuration first
 
@@ -53,6 +52,24 @@ The plugin options (in `settings.json` → `pluginConfigs` →
 | `qmd_collection` | `resources` | collection holding the index |
 | `resources_dir` | — | maps result URIs back to absolute file paths |
 | `workspace_dir` | — | the project-local `.qmd/` index lives at this root |
+
+### Then check that one mode is reachable
+
+Check only the mode you just resolved — each reaches qmd a different way,
+and a failure in one says nothing about the others:
+
+| Mode | Check |
+|---|---|
+| `local` (default) | `command -v qmd \|\| test -x ~/.bun/bin/qmd` |
+| `http` | `GET <qmd_http_url>/health` → `{"status":"ok",…}` |
+| `ssh` | `ssh -o BatchMode=yes <qmd_ssh_host> "command -v qmd"` |
+
+If the check fails, do **not** run qmd commands or improvise
+infrastructure the user doesn't have. Name what is unreachable and the
+fix — for `local`, install the qmd CLI from https://github.com/tobi/qmd;
+for `http`, start the daemon (`qmd mcp --http`) or point `qmd_http_url`
+at a live one; for `ssh`, install qmd on the bridge host. Then offer the
+grep search instead, as above.
 
 ## Commands (pick by depth)
 

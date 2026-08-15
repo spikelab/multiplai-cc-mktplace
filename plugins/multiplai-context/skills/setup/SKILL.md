@@ -61,13 +61,22 @@ default and belongs in the full interview.
 0. **Warm the plugin environment** (usually a no-op — the first hook fire
    already started the same build in the background):
    ```
-   uv sync --project "${CLAUDE_PLUGIN_ROOT}/scripts"
+   sh "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh" --warm
    ```
    Run it synchronously and wait. If the background build is still in
    flight this waits on uv's project lock and then no-ops; if the
-   environment is already built it returns in under a second. If `uv`
-   itself is missing, stop here and tell the user: the plugin needs
-   [uv](https://docs.astral.sh/uv)
+   environment is already built it returns in under a second.
+
+   Use this command, not a bare `uv sync`. The hooks gate themselves
+   behind an in-flight marker (`scripts/.warmup/`) while the environment
+   builds, and `--warm` is the only path that clears it. A bare `uv sync`
+   leaves the marker in place, so every hook stays gated for up to another
+   15 minutes — which is exactly the onboarding this step exists to
+   unblock.
+
+   A non-zero exit means the environment could not be built, and uv's
+   own error is in this command's output. If `uv` itself is missing, stop
+   here and tell the user: the plugin needs [uv](https://docs.astral.sh/uv)
    (`curl -LsSf https://astral.sh/uv/install.sh | sh`) — nothing below
    can run without it.
 
