@@ -10,9 +10,10 @@ Version numbers are this plugin's version in the marketplace manifest
 
 Recorded history starts at **0.1.5**; anything earlier is in `git log` only.
 
-Of the 3 versions recorded here, `0.1.7` carries a git tag — the tagging
-convention started partway through. Dates on untagged versions are the release
-dates recorded at the time, not derived from a tag.
+The tagging convention started at `0.1.7`, so `0.1.5` and `0.1.6` carry no git
+tag; every version from `0.1.7` on is tagged when it is released. Dates on
+untagged versions are the release dates recorded at the time, not derived from
+a tag.
 
 `multiplai-media@0.1.2` predates this file and has no section here.
 
@@ -20,22 +21,26 @@ dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
-## [0.2.2] - 2026-08-14
+## [0.2.2] - 2026-08-15
 
 ### Added
 
-- **`host-browser` now carries its own "when to reach for it" guidance.** A new
-  section at the top of the SKILL.md states the trigger and the entry paths:
-  a `WebFetch` 403 is not a dead end and must not be retried verbatim — it is
-  the signal to switch to the real browser (or drop the URL and say so); the
-  quick read-only path (`ab open <url>` then `ab snapshot -i`, with a settle
-  delay for heavy SPAs); and the two block classes — behavioral/
-  invisible-captcha walls, which genuine fingerprint + human pacing usually
-  passes, vs policy walls, which realism does not defeat (change inputs
-  rather than fight them). This routing used to live in multiplai-kit's
-  always-loaded `dotfiles/CLAUDE.md`; it moved here so a skill that drives
-  the real logged-in host Chrome is advertised only where the media pack is
-  actually installed.
+- **`host-browser` documents a short path for when you only need to read one
+  page.** Connect, then `hb goto --see <url>` — one command that opens, waits
+  for the page to settle, clears the cookie/consent overlay, says whether you
+  were walled (exit 1, plus a screenshot saved on the Mac), and prints the
+  interactive snapshot. Until now the only written-down entry was the full
+  interactive flow, so read-only work got hand-assembled out of `ab open` and
+  `ab snapshot` — which skips the connect step, exits 0 on the wall itself,
+  and hands back "Verify you are human" as if it were the page.
+- **Which wall you hit, and what each one wants.** Behavioral/invisible-captcha
+  walls (a genuine fingerprint plus human pacing usually passes); risk-scored
+  walls — DataDome, PerimeterX, Kasada — where the script's presence is not a
+  block and `hb dd` gives the real verdict; and policy walls (disposable-email
+  blocklists, "no automation" ToS) where realism changes nothing and the answer
+  is to change inputs or stop. Also the case that is not a wall at all: an
+  HTTP 429 is a rate limit, and re-requesting the same URL through your real
+  logged-in Chrome is the wrong response to it.
 
 ## [0.2.1] - 2026-08-04
 
