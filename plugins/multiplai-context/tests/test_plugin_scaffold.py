@@ -212,8 +212,8 @@ class TestHooksJson:
 
     def test_hook_scripts_exist(self):
         for hook in self.hooks:
-            if not hook["script"].endswith(".py"):
-                continue  # run.sh mode flags (--warm) name no script file
+            if hook["event"] == "Setup":
+                continue  # run.sh --warm names no script file
             script_path = PLUGIN_ROOT / hook["script"]
             assert script_path.is_file(), f"Hook script missing: {hook['script']}"
 

@@ -322,7 +322,7 @@ class TestHooksJsonWiring:
         (run.sh mode flags like --warm name no script file.)"""
         data = _load_hooks_json()
         for hook in data["hooks"]:
-            if not hook["script"].endswith(".py"):
+            if hook["event"] == "Setup":
                 continue
             script_path = PLUGIN_DIR / hook["script"]
             assert script_path.exists(), (

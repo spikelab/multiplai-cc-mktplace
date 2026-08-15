@@ -235,9 +235,12 @@ class TestPluginJsonFullWiring:
     def test_hooks_scripts_all_exist_and_are_python(self):
         """WHEN every hook script path in hooks.json is checked
         THEN each exists and is a .py file. (The Setup hook runs run.sh in
-        --warm mode and names no script — nothing to check on disk.)"""
+        --warm mode and names no script — nothing to check on disk. It is
+        excluded by EVENT: a `.py` filter would also excuse a command
+        parse_hooks could not parse at all, which is the case this guard
+        exists for.)"""
         for hook in self.hooks["hooks"]:
-            if not hook["script"].endswith(".py"):
+            if hook["event"] == "Setup":
                 continue
             script_path = PLUGIN_ROOT / hook["script"]
             assert script_path.is_file(), \
@@ -1209,9 +1212,11 @@ class TestPluginValidationReadiness:
             if not path.is_file():
                 missing.append(f"skill file: {skill['file']}")
 
-        # Hook scripts (run.sh mode flags like --warm name no file)
+        # Hook scripts. Setup runs run.sh --warm and names no file; every
+        # other event must resolve, including one whose command parse_hooks
+        # could not read (empty script -> the plugin root, not a file).
         for hook in hooks.get("hooks", []):
-            if not hook["script"].endswith(".py"):
+            if hook["event"] == "Setup":
                 continue
             path = PLUGIN_ROOT / hook["script"]
             if not path.is_file():
