@@ -20,6 +20,35 @@ dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.7.0] - 2026-08-15
+
+### Changed
+
+- **Deep research's mechanical nodes no longer pay extended-thinking latency.**
+  The Agent SDK enables extended thinking by default on every call, which costs
+  ~15s per call (18.4s → 2.9s measured 2026-08-09 on a cold no-tools call) and
+  buys nothing on formatting/parsing work. The `search`, `triage_relevance`,
+  `extract` and `verify` nodes — the high-volume per-source work — now pass
+  `thinking={"type": "disabled"}`; the reasoning nodes (`plan`, `diverge`,
+  `challenge`, `reassess`, `synthesize`, `adversarial`, `quality_check`) keep
+  the SDK default. Per node or skill-wide opt-back from `multiplai.conf`,
+  beside the existing `MODEL=`/`EFFORT=` keys: `[deep-research.search]
+  THINKING=on` or `[deep-research] THINKING=on` (see the skill's "Tuning"
+  section); `--thinking on|off` on the CLI overrides every node for one run,
+  the way `--effort` does. An unrecognized `THINKING=` value is ignored with a
+  warning rather than guessed at, so a typo cannot quietly strip thinking from
+  the reasoning nodes. On a `multiplai-core` or `claude-agent-sdk` too old to
+  carry the setting, it is dropped with a single warning naming the fix —
+  behavior degrades to today's (thinking on), never to an error.
+
+  Worth knowing if you rely on this skill's handling of hostile pages: the four
+  nodes that lose extended thinking are also the four that read
+  externally-authored text. What guards those calls is unchanged — the
+  fail-closed tool deny-list on every SDK call, plus the `<untrusted-content>`
+  fencing of page text — and no node's allow-list or prompt changed here. Set
+  `[deep-research.extract] THINKING=on` to buy the reasoning budget back on any
+  one of them.
+
 ## [0.6.5] - 2026-08-06
 
 A review of 0.6.4 found each of its three protections applied to one code path

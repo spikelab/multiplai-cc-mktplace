@@ -18,7 +18,7 @@ uv run --directory <this-dir> python -m research_pipeline --query "..." [options
 | Module | Purpose |
 |---|---|
 | `pipeline.py` | Orchestrator — sequences stages, invokes gates, handles recovery and resume |
-| `config.py` | `ResearchConfig` + preset definitions (micro/quick/standard/thorough) + per-node `models`/`efforts` tier maps |
+| `config.py` | `ResearchConfig` + preset definitions (micro/quick/standard/thorough) + per-node `models`/`efforts`/`thinkings` tier maps |
 | `models.py` | Pydantic models for every structured type flowing through the pipeline |
 | `state.py` | `ResearchState` with per-source granularity + JSON checkpointing |
 | `gates.py` | Query diversity, min sources, coverage, reassess — pure functions |
@@ -52,12 +52,21 @@ All tests use stubs/mocks — no real API calls. Run in milliseconds.
 - `ResearchConfig.prefer_claude_tools` (default True) — `--no-claude-tools` to disable
 - `ResearchConfig.allow_paid_fallback` (default False) — `--allow-paid-fallback` to enable (only unlocks Serper beyond free tier; Tavily/Exa/Brave are capped at free tier always)
 
-**Model/effort tiers:** every LLM call site reads `config.models[node]` and
-`config.efforts[node]`. Search, triage, extract, and verify run the parse-tier
-model (sonnet) at `effort="low"` — they're mechanical formatting/parsing work.
-The Claude Agent search provider gets its pin via
-`build_default_router(model=..., effort=...)`. `--model`/`--effort` override
-all nodes uniformly.
+**Model/effort/thinking tiers — three axes, and a new call site must set all
+three.** Every LLM call site reads `config.models[node]`,
+`config.efforts[node]` **and** `config.thinkings[node]`. Search, triage,
+extract, and verify run the parse-tier model (sonnet) at `effort="low"` with
+`thinking={"type": "disabled"}` — they're mechanical formatting/parsing work,
+and extended thinking costs ~15s per call there for nothing. The Claude Agent
+search provider gets its pin via
+`build_default_router(model=..., effort=..., thinking=...)`. Each CLI flag
+covers one axis: `--model`, `--effort`, `--thinking on|off`.
+
+Effort and thinking interact — effort guides thinking *depth*, so on a node
+with thinking disabled `effort=` is inert. Defaults and their rationale live in
+`_EFFORT_DEFAULTS` / `_THINKING_DEFAULTS` in `config.py`; both maps are built
+from one `multiplai.conf` read each (`_default_efforts` / `_default_thinkings`)
+because the loader is deliberately uncached.
 
 **Retry policy:** `sdk.llm_call` defaults to `max_attempts=2` (one transient
 retry inside `run_agent`). The fetcher and the Claude Agent search provider

@@ -530,3 +530,83 @@ class TestConfigFlags:
         )
         config = ResearchConfig.from_cli_args(args)
         assert config.allow_paid_fallback is True
+
+
+# ---------------------------------------------------------------------------
+# Thinking wiring — provider and fetcher accept and forward thinking=
+# ---------------------------------------------------------------------------
+
+
+class TestThinkingWiring:
+    """Search and fetch are mechanical work: both classes take thinking= next
+    to effort= and hand it to llm_call unchanged."""
+
+    def _capture_llm_call(
+        self, monkeypatch: pytest.MonkeyPatch, response: str
+    ) -> dict:
+        import research_pipeline.sdk as sdk_mod
+
+        captured: dict = {}
+
+        async def fake_llm_call(prompt, **kwargs):  # type: ignore
+            captured.update(kwargs)
+            return response
+
+        monkeypatch.setattr(sdk_mod, "llm_call", fake_llm_call)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_search_provider_forwards_thinking(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured = self._capture_llm_call(monkeypatch, "[]")
+        provider = ClaudeAgentSearchProvider(thinking={"type": "disabled"})
+        await provider.search("q")
+        assert captured["thinking"] == {"type": "disabled"}
+
+    @pytest.mark.asyncio
+    async def test_search_provider_defaults_to_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured = self._capture_llm_call(monkeypatch, "[]")
+        await ClaudeAgentSearchProvider().search("q")
+        assert captured["thinking"] is None
+
+    @pytest.mark.asyncio
+    async def test_fetcher_forwards_thinking(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured = self._capture_llm_call(
+            monkeypatch, '{"content_markdown": "c"}'
+        )
+        fetcher = ClaudeAgentFetcher(thinking={"type": "disabled"})
+        result = await fetcher.fetch_url("https://test.example")
+        assert result.success
+        assert captured["thinking"] == {"type": "disabled"}
+
+    @pytest.mark.asyncio
+    async def test_fetcher_defaults_to_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured = self._capture_llm_call(
+            monkeypatch, '{"content_markdown": "c"}'
+        )
+        result = await ClaudeAgentFetcher().fetch_url("https://test.example")
+        assert result.success
+        assert captured["thinking"] is None
+
+    @pytest.mark.asyncio
+    async def test_build_default_router_pins_thinking_on_provider(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The pipeline hands config.thinkings['search'] to the router build,
+        which must pin it on the Claude Agent provider."""
+        router = build_default_router(
+            quota_file=tmp_path / "quota.json",
+            prefer_claude_tools=True,
+            thinking={"type": "disabled"},
+        )
+        claude = next(
+            p for p in router.providers.values() if p.name == "claude_agent"
+        )
+        assert claude.thinking == {"type": "disabled"}

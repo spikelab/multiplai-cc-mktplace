@@ -15,6 +15,7 @@ validation, and the pipeline's LLMCallError taxonomy.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import threading
@@ -244,6 +245,74 @@ def reset_sdk_concurrency_stats() -> None:
         _sdk_peak_calls = 0
 
 
+# One-time probe: can the resolved dependencies carry a thinking= kwarg all the
+# way to the API? Two independent boundaries have to hold, and checking only
+# the near one is how this turns into a crash:
+#
+#   1. multiplai-core's run_agent() must accept `thinking=`.
+#   2. claude-agent-sdk's ClaudeAgentOptions must have a `thinking` field —
+#      because core forwards the value into `ClaudeAgentOptions(**opts_kwargs)`
+#      with no TypeError tolerance of its own. A core new enough to take the
+#      kwarg paired with an SDK too old to have the field is a hard failure on
+#      the first mechanical call, not a degradation.
+#
+# When either boundary fails the kwarg is dropped with a single warning, so the
+# run degrades to today's behavior (thinking on) instead of raising.
+_core_thinking_support: bool | None = None
+
+_THINKING_UNSUPPORTED_FIX = (
+    "Extended thinking stays on for every call, which costs ~15s each; "
+    "nothing else is affected. Fix: update this skill's plugin to a version "
+    "with current dependencies (reinstall it from the marketplace)."
+)
+
+
+def _sdk_options_accept_thinking() -> bool:
+    """Does the installed claude-agent-sdk's ClaudeAgentOptions take thinking=?
+
+    ``ClaudeAgentOptions`` is a dataclass, so its ``__init__`` signature is the
+    field list. An unanswerable probe returns True deliberately: if the SDK
+    cannot be imported or introspected at all, core's own import of it fails
+    next with a message about the real problem, and a warning here claiming
+    "your SDK is too old" would be a worse description of that.
+    """
+    try:
+        import claude_agent_sdk
+
+        params = inspect.signature(claude_agent_sdk.ClaudeAgentOptions).parameters
+    except Exception as e:  # noqa: BLE001 — missing, moved, or unsignable
+        log.debug("Could not introspect ClaudeAgentOptions (%s); assuming support", e)
+        return True
+    return "thinking" in params
+
+
+def _core_supports_thinking() -> bool:
+    global _core_thinking_support
+    if _core_thinking_support is None:
+        params = inspect.signature(run_agent).parameters
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            # A **kwargs callable swallows anything (test fakes included), and
+            # there is no declared forwarding path left to probe.
+            _core_thinking_support = True
+        elif "thinking" not in params:
+            _core_thinking_support = False
+            log.warning(
+                "multiplai-core's run_agent() does not accept thinking=. %s",
+                _THINKING_UNSUPPORTED_FIX,
+            )
+        elif not _sdk_options_accept_thinking():
+            _core_thinking_support = False
+            log.warning(
+                "the installed claude-agent-sdk's ClaudeAgentOptions has no "
+                "thinking field, and multiplai-core forwards the kwarg there "
+                "unguarded. %s",
+                _THINKING_UNSUPPORTED_FIX,
+            )
+        else:
+            _core_thinking_support = True
+    return _core_thinking_support
+
+
 class LLMCallError(Exception):
     """Raised when an LLM call fails beyond retry."""
 
@@ -261,6 +330,7 @@ async def llm_call(
     *,
     model: str | None = None,
     effort: str | None = None,
+    thinking: dict | None = None,
     max_turns: int = 1,
     max_attempts: int = 2,
     system_prompt: str | None = None,
@@ -278,6 +348,10 @@ async def llm_call(
     bypassPermissions.
 
     Args:
+        thinking: Extended-thinking config forwarded to run_agent, e.g.
+            {"type": "disabled"}. None (default) keeps the SDK default and
+            does not forward the kwarg at all, so a dependency that cannot
+            carry it is never handed it.
         max_attempts: Transient-error retries at the run_agent level (default 2:
             one retry). Callers with their own failover — the search router's
             provider chain, the fetcher's per-source error handling — pass 1.
@@ -302,6 +376,13 @@ async def llm_call(
         into.cache_read_tokens = result.usage.cache_read_tokens
         into.cost_usd = result.usage.cost_usd
 
+    # Forward thinking= only when set AND the resolved core *and* SDK can
+    # carry it — never handing the kwarg to a dependency that would choke on
+    # it keeps this a warning, not a TypeError.
+    thinking_kwargs: dict = {}
+    if thinking is not None and _core_supports_thinking():
+        thinking_kwargs["thinking"] = thinking
+
     call_usage = LLMCallUsage(num_calls=1)
     call_start = time.monotonic()
     async with _get_semaphore():
@@ -320,6 +401,7 @@ async def llm_call(
                 timeout_s=call_timeout,
                 label=label,
                 component="deep-research",
+                **thinking_kwargs,
             )
             call_ok = True
             _capture_usage(call_usage, result)
@@ -357,6 +439,7 @@ async def llm_call_structured(
     *,
     model: str | None = None,
     effort: str | None = None,
+    thinking: dict | None = None,
     max_retries: int = 1,
     system_prompt: str | None = None,
     allowed_tools: list[str] | None = None,
@@ -378,6 +461,7 @@ async def llm_call_structured(
             current_prompt,
             model=model,
             effort=effort,
+            thinking=thinking,
             system_prompt=system_prompt,
             allowed_tools=allowed_tools,
             max_turns=3 if allowed_tools else 1,
