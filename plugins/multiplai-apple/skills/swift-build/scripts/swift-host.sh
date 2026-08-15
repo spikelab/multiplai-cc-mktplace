@@ -54,10 +54,15 @@ run_on_host() {
   # plain Linux is unsupported even when SSH_BUILD_USER happens to be set —
   # the bridge assumes the container↔host identical-path mount, which a
   # random Linux box doesn't have.
+  #
+  # Off-Mac and NOT the container: name the real constraint and stop. No bridge
+  # vocabulary here — docs/degradation-contract.md rule 1: never mention the
+  # kit, the container, or the SSH bridge to a user who doesn't have one. That
+  # includes saying their SSH_BUILD_USER is ignored: on a plain Linux box the
+  # variable is not the problem, the missing toolchain is.
   if ! in_container; then
     echo "Error: swift-build needs macOS (Xcode/Swift toolchain); this host is $(uname -s)." >&2
-    echo "  Run it on a Mac, or from the multiplai container with the host bridge configured." >&2
-    echo "  (The SSH bridge is container-only; SSH_BUILD_USER is ignored on plain $(uname -s).)" >&2
+    echo "  Run it on a Mac — xcodebuild, xcrun/simctl and the iOS SDKs have no Linux equivalent." >&2
     exit 1
   fi
   # Container — SSH to host
