@@ -1279,16 +1279,23 @@ def autocompact_trigger_tokens() -> int | None:
     you disable compaction is the normal shape of that config, not a
     contradiction, and reading it as "auto mode on" silences the handoff
     advice in exactly the setup that has nothing else to fall back on.
+
+    The settings read is deferred below the ``CLAUDE_CODE_AUTO_COMPACT_WINDOW``
+    check, which does not change the answer — with no window configured the
+    result is ``None`` either way — but does keep the file off the
+    ``UserPromptSubmit`` path. checkpoint_nudge runs on every prompt inside a
+    10s budget, and a vanilla install never sets that variable, so the
+    settings.json open+parse would be pure overhead on every single prompt.
     """
     if _truthy(os.environ.get("DISABLE_COMPACT")) or _truthy(
         os.environ.get("DISABLE_AUTO_COMPACT")
     ):
         return None
-    if _autocompact_disabled_in_settings():
-        return None
 
     raw_window = os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "").strip()
     if not raw_window:
+        return None
+    if _autocompact_disabled_in_settings():
         return None
     try:
         window = int(raw_window)
