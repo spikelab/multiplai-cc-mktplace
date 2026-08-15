@@ -241,13 +241,13 @@ class TestCheckpointThinking:
     the thinking config resolved from ``checkpoint_thinking`` (default:
     disabled — see lib/thinking.py, RUN_AGENT target)."""
 
-    def test_run_agent_receives_thinking_disabled_by_default(
-        self, tmp_path, data_env, monkeypatch
-    ):
+    def _run(self, tmp_path, monkeypatch, *, supported):
         import lib.thinking as th
         from multiplai_core.plugin_options import option_var
 
-        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: True)
+        monkeypatch.setattr(
+            th, "core_supports_thinking", lambda target=None: supported
+        )
         monkeypatch.delenv(option_var(th.CHECKPOINT_THINKING_OPTION), raising=False)
 
         now = datetime.now(timezone.utc)
@@ -261,4 +261,19 @@ class TestCheckpointThinking:
         ok = asyncio.run(checkpoint_writer.write_checkpoint(_payload("s1", transcript)))
 
         assert ok is True
-        assert captured[0]["kwargs"]["thinking"] == {"type": "disabled"}
+        return captured[0]["kwargs"]
+
+    def test_run_agent_receives_thinking_disabled_by_default(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        kwargs = self._run(tmp_path, monkeypatch, supported=True)
+        assert kwargs["thinking"] == {"type": "disabled"}
+
+    def test_keyword_omitted_entirely_when_unsupported(
+        self, tmp_path, data_env, monkeypatch
+    ):
+        """This is the RUN_AGENT target, where the SDK boundary bites: core
+        forwards the value into ClaudeAgentOptions unguarded, so an SDK without
+        the field must be handed no keyword at all."""
+        kwargs = self._run(tmp_path, monkeypatch, supported=False)
+        assert "thinking" not in kwargs

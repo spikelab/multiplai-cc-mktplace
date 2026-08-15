@@ -25,7 +25,7 @@ from multiplai_core.paths import get_paths
 from multiplai_core.model_client import create_client
 from multiplai_core.log_utils import setup_logging
 from lib.project_identity import load_project_map, resolve_project
-from lib.thinking import NOW_THINKING_OPTION, resolve_thinking
+from lib.thinking import NOW_THINKING_OPTION, thinking_kwargs
 
 logger = setup_logging("synthesize_now")
 
@@ -181,10 +181,8 @@ async def _summarize_project(client, project: str, entries: list[dict],
     try:
         kwargs = {"model": model} if model else {}
         # Mechanical status summary: extended thinking off by default
-        # (lib/thinking.py). Keyword omitted when the resolve yields None.
-        thinking = resolve_thinking(NOW_THINKING_OPTION)
-        if thinking is not None:
-            kwargs["thinking"] = thinking
+        # (lib/thinking.py), which owns whether the keyword is sent at all.
+        kwargs.update(thinking_kwargs(NOW_THINKING_OPTION))
         response = await client.query(
             system=system,
             messages=[{"role": "user", "content": prompt}],

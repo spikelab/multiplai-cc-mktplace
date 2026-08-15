@@ -65,8 +65,6 @@ from typing import Mapping, Optional, Sequence
 
 from multiplai_core.untrusted import defang, fence, markdown_notice
 
-from lib.thinking import DOCTOR_THINKING_OPTION, resolve_thinking
-
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -398,19 +396,19 @@ async def check_file(
     hash, so the next run tries again.
     """
     try:
-        # Mechanical verdict extraction: extended thinking off by default
-        # (lib/thinking.py; option shared with the duplication pass). The
-        # keyword is omitted when the opt-back or an old core resolves to None.
-        thinking = resolve_thinking(DOCTOR_THINKING_OPTION)
-        query_kwargs: dict = dict(
+        # No thinking config: this call keeps the SDK default (extended
+        # thinking ON) on purpose, and is the one memory-doctor pass that does.
+        # Deciding whether two statements can both be true is judgement, not
+        # extraction — which is why this pass gets CHECK_TIMEOUT_S (600s)
+        # against the duplication pass's 180s. Disabling thinking here would
+        # buy ~15s per file and pay for it in missed contradictions, and a
+        # missed contradiction is silent: nothing downstream detects one.
+        response = await client.query(
             system=SYSTEM,
             messages=[{"role": "user", "content": build_prompt(filename, text)}],
             model=model,
             timeout_s=timeout_s,
         )
-        if thinking is not None:
-            query_kwargs["thinking"] = thinking
-        response = await client.query(**query_kwargs)
         return parse_findings(response.content, filename, text)
     except Exception:
         logger.exception(

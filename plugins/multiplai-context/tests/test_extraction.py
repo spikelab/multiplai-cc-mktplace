@@ -664,14 +664,27 @@ class TestExtractionThinking:
     thinking config resolved from ``extraction_thinking`` (default:
     disabled — see lib/thinking.py), on every retry attempt."""
 
-    def test_extraction_call_receives_thinking_disabled_by_default(self, monkeypatch):
+    def _run(self, monkeypatch, *, supported):
         import lib.thinking as th
         from lib.extraction import extract_units
         from multiplai_core.plugin_options import option_var
 
-        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: True)
+        monkeypatch.setattr(
+            th, "core_supports_thinking", lambda target=None: supported
+        )
         monkeypatch.delenv(option_var(th.EXTRACTION_THINKING_OPTION), raising=False)
 
         client = _make_mock_client(_tag_response([]))
         asyncio.run(extract_units("t", valid_targets=[], client=client))
+        return client
+
+    def test_extraction_call_receives_thinking_disabled_by_default(self, monkeypatch):
+        client = self._run(monkeypatch, supported=True)
         assert client.query.call_args.kwargs["thinking"] == {"type": "disabled"}
+
+    def test_keyword_omitted_entirely_when_unsupported(self, monkeypatch):
+        """Routed through thinking_kwargs rather than hand-rolled, so a
+        dependency that cannot carry the keyword is sent nothing at all — an
+        old core rejects the *name*, whatever its value."""
+        client = self._run(monkeypatch, supported=False)
+        assert "thinking" not in client.query.call_args.kwargs

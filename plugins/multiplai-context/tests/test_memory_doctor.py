@@ -53,10 +53,12 @@ class StubClient:
         self.replies = list(replies)
         self.calls = []
 
-    async def query(self, *, system, messages, model, timeout_s=None,
-                    thinking=None):
+    async def query(self, *, system, messages, model, timeout_s=None, **kwargs):
+        # `kwargs` verbatim, not a `thinking=None` parameter: the invariant
+        # worth testing is whether the keyword was *sent at all*, and a
+        # defaulted parameter cannot tell "omitted" from "passed as None".
         self.calls.append({"system": system, "user": messages[0]["content"],
-                           "thinking": thinking})
+                           "kwargs": kwargs})
         return Reply(self.replies.pop(0) if self.replies else "")
 
 
@@ -408,7 +410,7 @@ class TestContradictionGate:
             """Answers out of order on purpose."""
 
             async def query(self, *, system, messages, model, timeout_s=None,
-                            thinking=None):
+                            **kwargs):
                 user = messages[0]["content"]
                 name = next(n for n in lines if f"In {n} the gate" in user)
                 a, b, delay = lines[name]
@@ -1111,9 +1113,15 @@ class TestAnAmbiguousQuoteStillCitesARealLine:
 
 
 class TestDoctorThinking:
-    """Both doctor passes are mechanical verdict extraction: their model
-    calls carry the thinking config resolved from the shared
-    ``doctor_thinking`` option (default: disabled — see lib/thinking.py)."""
+    """The doctor's two passes take opposite sides of the thinking trade.
+
+    Duplication confirmation is verdict extraction over text the model sees in
+    full, so it runs with extended thinking disabled by default
+    (``duplication_thinking``). The contradiction pass is not: deciding whether
+    two statements can both be true is judgement, which is why it already
+    carried a 600s timeout against duplication's 180s. It keeps the SDK default
+    and has no switch.
+    """
 
     @pytest.fixture(autouse=True)
     def _default_thinking(self, monkeypatch):
@@ -1121,9 +1129,9 @@ class TestDoctorThinking:
         from multiplai_core.plugin_options import option_var
 
         monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: True)
-        monkeypatch.delenv(option_var(th.DOCTOR_THINKING_OPTION), raising=False)
+        monkeypatch.delenv(option_var(th.DUPLICATION_THINKING_OPTION), raising=False)
 
-    def test_duplication_stage_two_call_carries_thinking(self, memory):
+    def _duplication_pairs(self, memory):
         (memory / "alpha.md").write_text(
             "# Alpha\n\n- Cloud Run rolling deploys health-check the new "
             "revision first, then shift traffic on success.\n", encoding="utf-8")
@@ -1132,16 +1140,44 @@ class TestDoctorThinking:
             "revision first, then shift traffic on success too.\n", encoding="utf-8")
         pairs = dd.shortlist(dd.split_dir(memory))
         assert pairs, "fixture must shortlist"
-        client = StubClient("")
-        _run(dd.confirm_pairs(client, pairs, model="haiku"))
-        assert client.calls
-        assert client.calls[0]["thinking"] == {"type": "disabled"}
+        return pairs
 
-    def test_contradiction_call_carries_thinking(self, memory, data):
+    def test_duplication_stage_two_call_carries_thinking(self, memory):
+        client = StubClient("")
+        _run(dd.confirm_pairs(client, self._duplication_pairs(memory), model="haiku"))
+        assert client.calls
+        assert client.calls[0]["kwargs"]["thinking"] == {"type": "disabled"}
+
+    def test_duplication_omits_the_keyword_when_unsupported(
+        self, memory, monkeypatch
+    ):
+        """Routed through thinking_kwargs, so an unsupported dependency sends
+        no keyword at all rather than `thinking=None`."""
+        import lib.thinking as th
+
+        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: False)
+        client = StubClient("")
+        _run(dd.confirm_pairs(client, self._duplication_pairs(memory), model="haiku"))
+        assert client.calls
+        assert "thinking" not in client.calls[0]["kwargs"]
+
+    def test_contradiction_call_sends_no_thinking_config(self, memory, data):
+        """It keeps the SDK default — extended thinking on — so the keyword is
+        never sent, whatever `duplication_thinking` says."""
         (memory / "notes.md").write_text(
             "# Notes\n\n- " + "a note about postgres. " * 40 + "\n",
             encoding="utf-8")
         client = StubClient("<contradictions></contradictions>")
         _run(dc.run_pass(memory, data, client=client, model="haiku"))
         assert client.calls
-        assert client.calls[0]["thinking"] == {"type": "disabled"}
+        assert "thinking" not in client.calls[0]["kwargs"]
+
+    def test_the_contradiction_pass_has_no_thinking_wiring_at_all(self):
+        """Not "resolves to on" — absent. A switch that silently covered only
+        one of the doctor's two passes is what this replaced."""
+        import pathlib
+
+        source = pathlib.Path(dc.__file__).read_text(encoding="utf-8")
+        assert "lib.thinking" not in source
+        assert "thinking_kwargs" not in source
+        assert "thinking=" not in source

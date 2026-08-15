@@ -21,7 +21,7 @@ from typing import Any
 from multiplai_core.paths import Paths
 
 from lib.fsio import atomic_write_json
-from lib.thinking import CATALOG_THINKING_OPTION, resolve_thinking
+from lib.thinking import CATALOG_THINKING_OPTION, thinking_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -537,20 +537,22 @@ class GeneratorBase:
         Non-retryable errors (400, 401, 403, 404) are raised immediately.
         """
         # Mechanical structured-JSON generation: extended thinking off by
-        # default (lib/thinking.py). Resolved once per call, not per retry;
-        # the keyword is omitted when the opt-back or an old core resolves
-        # to None.
-        thinking = resolve_thinking(CATALOG_THINKING_OPTION)
-        query_kwargs: dict = dict(
-            system="You are a catalog generator. Produce structured JSON output.",
-            messages=[{"role": "user", "content": prompt}],
-            model=self._call_model,
-        )
-        if thinking is not None:
-            query_kwargs["thinking"] = thinking
+        # default (lib/thinking.py). Resolved once per call, not per retry —
+        # the answer cannot change between attempts. Everything else is still
+        # built per attempt: a client that appended to the messages list would
+        # otherwise corrupt the retry.
+        thinking = thinking_kwargs(CATALOG_THINKING_OPTION)
         for attempt in range(MAX_RETRIES + 1):
             try:
-                response = await self._model_client.query(**query_kwargs)
+                response = await self._model_client.query(
+                    system=(
+                        "You are a catalog generator. "
+                        "Produce structured JSON output."
+                    ),
+                    messages=[{"role": "user", "content": prompt}],
+                    model=self._call_model,
+                    **thinking,
+                )
                 return response.content
             except Exception as e:
                 is_last_attempt = attempt >= MAX_RETRIES

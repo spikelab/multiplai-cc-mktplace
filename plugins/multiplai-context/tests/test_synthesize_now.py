@@ -251,12 +251,14 @@ class TestSummaryThinking:
     """The status-summary call is mechanical: it carries the thinking config
     resolved from ``now_thinking`` (default: disabled — see lib/thinking.py)."""
 
-    def test_summary_call_receives_thinking_disabled_by_default(self, monkeypatch):
+    def _run(self, monkeypatch, *, supported):
         import synthesize_now
         import lib.thinking as th
         from multiplai_core.plugin_options import option_var
 
-        monkeypatch.setattr(th, "core_supports_thinking", lambda target=None: True)
+        monkeypatch.setattr(
+            th, "core_supports_thinking", lambda target=None: supported
+        )
         monkeypatch.delenv(option_var(th.NOW_THINKING_OPTION), raising=False)
 
         captured = {}
@@ -274,5 +276,15 @@ class TestSummaryThinking:
         result = asyncio.run(
             synthesize_now._summarize_project(_Client(), "proj", entries)
         )
-        assert captured["thinking"] == {"type": "disabled"}
-        assert result == "- did the thing"
+        assert result == "- did the thing", "the model path must have been taken"
+        return captured
+
+    def test_summary_call_receives_thinking_disabled_by_default(self, monkeypatch):
+        assert self._run(monkeypatch, supported=True)["thinking"] == {
+            "type": "disabled"
+        }
+
+    def test_keyword_omitted_entirely_when_unsupported(self, monkeypatch):
+        """Routed through thinking_kwargs, so an unsupported dependency is
+        handed no keyword rather than `thinking=None`."""
+        assert "thinking" not in self._run(monkeypatch, supported=False)

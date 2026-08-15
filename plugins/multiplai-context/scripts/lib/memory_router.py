@@ -43,7 +43,11 @@ from typing import Protocol, runtime_checkable
 from multiplai_core.plugin_options import option, option_var
 
 from lib.router_prompt import SYSTEM_PROMPT, FEW_SHOT_EXAMPLES, build_user_message
-from lib.thinking import THINKING_DISABLED, probe_core_thinking, resolve_thinking_option
+from lib.thinking import (
+    THINKING_DISABLED,
+    core_supports_thinking,
+    resolve_thinking_option,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,43 +95,32 @@ ROUTER_THINKING_OPTION = "router_thinking"
 ROUTER_THINKING_ENV_VAR = option_var(ROUTER_THINKING_OPTION)
 
 
-def core_supports_thinking() -> bool:
-    """True when the resolved ``multiplai-core`` accepts ``thinking`` on query.
-
-    The parameter landed in core 0.14.0. This plugin tracks core from ``main``
-    through the repo lockfile, so there is a window where this file wants the
-    argument and the resolved core has never heard of it — and the failure mode
-    is nasty: ``TypeError`` inside ``_select_async_multi``, caught by its
-    ``except Exception`` degrade path, silently answering every prompt with
-    ``token_overlap`` while the log says the llm router is configured.
-
-    Probing the signature turns that into one loud warning and a working (if
-    slower) router. Cached: this is called per prompt on a blocking hook path.
-    The probe itself now lives in ``lib/thinking.py`` (this pattern shipped
-    here first and every mechanical call site adopted it); the cache stays
-    module-local so this function's contract is unchanged.
-    """
-    global _CORE_THINKING_SUPPORT
-    if _CORE_THINKING_SUPPORT is None:
-        _CORE_THINKING_SUPPORT = probe_core_thinking()
-    return _CORE_THINKING_SUPPORT
+# Re-exported, not re-implemented. What this name has always meant here — "can
+# the resolved dependencies carry a thinking= kwarg, cached because this runs
+# per prompt on a blocking hook path" — is exactly ``lib/thinking.py``'s
+# function, down to the default target (``ModelClient.query``, the router's
+# call path). The wrapper this replaces added a second module-global cache over
+# the same probe, which is one more thing to keep in sync and nothing else.
+#
+# What it guards is worth restating, because the failure mode is quiet: an old
+# core rejects the *name* ``thinking``, and the resulting TypeError inside
+# ``_select_async_multi`` is caught by its ``except Exception`` degrade path —
+# so every prompt would answer from ``token_overlap`` while the log says the
+# llm router is configured.
 
 
-_CORE_THINKING_SUPPORT: bool | None = None
-
-
-def resolve_router_thinking(raw: str | None = None) -> dict | None:
+def resolve_router_thinking() -> dict | None:
     """Return the ``thinking`` config for router calls, or ``None`` to leave it
     to the model's default.
 
     Disabled unless the option explicitly asks for thinking back. ``None`` is
-    the "send nothing" signal that `multiplai_core` needs for old-SDK
+    the "send nothing" signal that `multiplai_core` needs for old-dependency
     tolerance, so this returns the dict for the *default* case and ``None`` for
     the opt-out — the inverse of how the other options here read. The shared
     implementation is ``lib/thinking.py``; this wrapper pins the router's
     option name and public name.
     """
-    return resolve_thinking_option(ROUTER_THINKING_OPTION, raw)
+    return resolve_thinking_option(ROUTER_THINKING_OPTION)
 
 
 def resolve_router_timeout(raw: str | float | None = None) -> float:
@@ -756,12 +749,13 @@ class LLMRouter:
         # rather than the `is not None` idiom used for the other arguments.
         self._thinking = thinking if thinking_set else resolve_router_thinking()
         if self._thinking is not None and not core_supports_thinking():
+            # core_supports_thinking() has already said *which* boundary failed
+            # and how to fix it, once per process. This adds the part only the
+            # router knows: what that costs against its own deadline.
             logger.warning(
-                "Resolved multiplai-core does not accept thinking= on "
-                "ModelClient.query (needs >= 0.14.0), so router calls keep "
-                "extended thinking on: expect ~18s per prompt against the %.0fs "
-                "ceiling instead of ~3s. Fix with `uv lock --upgrade-package "
-                "multiplai-core` at the repo root, then commit the lock.",
+                "Router calls therefore keep extended thinking on: expect ~18s "
+                "per prompt against the %.0fs ceiling instead of ~3s, so "
+                "prompts will start losing their injected memory.",
                 self._timeout_seconds,
             )
             self._thinking = None
