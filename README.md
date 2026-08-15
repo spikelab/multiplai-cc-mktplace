@@ -66,7 +66,7 @@ own, and each carries its own release notes — see
 | [`multiplai-pm`](plugins/multiplai-pm) | Product-management pack: JTBD synthesis, persona codification, PR/FAQ, strategy memos, job applications, landing pages. |
 | [`multiplai-writing`](plugins/multiplai-writing) | Content creation toolkit: briefs, drafts, copy editing, LinkedIn posts, image prompts. |
 | [`multiplai-research`](plugins/multiplai-research) | Code-driven deep-research pipeline, insight extraction, structured interviewing. |
-| [`multiplai-dev`](plugins/multiplai-dev) | Developer pack: spec-driven builds (buildme), code/security review, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring. |
+| [`multiplai-dev`](plugins/multiplai-dev) | Developer pack: spec-driven builds (buildme), executable plan authoring, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring. |
 | [`multiplai-media`](plugins/multiplai-media) | Transcription, YouTube transcripts, screen-recording demo videos, diagrams, host-browser automation. |
 | [`multiplai-messaging`](plugins/multiplai-messaging) | Messaging pack: read/search/post Slack as yourself, and search/read/draft Gmail (never sends). |
 | [`multiplai-apple`](plugins/multiplai-apple) | Apple development pack: build, test, and drive iOS/macOS projects (swift-build). macOS-only add-on — not part of the default install. |
@@ -93,7 +93,6 @@ contract](docs/degradation-contract.md)).
 | | codebase-walkthrough, learn-stack, skill-creator, plan | ✅ | |
 | | analyze-context-router, propose-skill | ✅ | Operate on multiplai-context — install it first. |
 | | devops-gcp | 🔑 | Knowledge pack; real operations need your `gcloud` auth. |
-| multiplai-apple | swift-build | 🍎 | Swift/Xcode toolchain is macOS-only. From the kit container: 🌉. Explicit add-on pack — install it only if you build Apple software. |
 | multiplai-media | youtube-transcript | ✅ | Subtitle path works anywhere. Audio-transcription fallback: 🍎 (Apple-Silicon mlx-whisper) or 🌉. |
 | | excalidraw | ✅ | |
 | | transcribe | 🍎 | mlx-whisper needs Apple Silicon macOS. From the kit container: 🌉. Plain Linux: use whisper.cpp / faster-whisper instead. |
@@ -106,6 +105,7 @@ contract](docs/degradation-contract.md)).
 | multiplai-research | deep-research | ✅ | Zero-config via the Agent SDK; optional 🔑 search-provider keys widen coverage. |
 | | extract-insights, interviewer | ✅ | |
 | multiplai-writing | writing (all modes) | ✅ | Voice memory files optional — asks if missing. |
+| multiplai-apple | swift-build | 🍎 | Swift/Xcode toolchain is macOS-only. From the kit container: 🌉. Explicit add-on pack — install it only if you build Apple software. |
 
 ## What runs unattended
 

@@ -1,9 +1,8 @@
 # multiplai-dev
 
 Developer skill pack for Claude Code: **spec-driven builds, executable plan
-authoring, code/security review, refactoring, walkthroughs, e2e tests, cloud
-ops, and skill authoring**. Part of the [`multiplai`](../../README.md)
-marketplace.
+authoring, refactoring, walkthroughs, e2e tests, cloud ops, and skill
+authoring**. Part of the [`multiplai`](../../README.md) marketplace.
 
 ## Installation
 
