@@ -18,6 +18,82 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.49.0] - 2026-08-15
+
+Standalone (vanilla Claude Code) hardening: this release is about the
+plugin working properly with no kit, no `CLAUDE_CONFIG_DIR`, and no
+options configured.
+
+### Fixed
+
+- **First session start can no longer be killed mid-install.** On a fresh
+  install the first hook fire must build the plugin's Python environment
+  (a full `uv` resolution, including cloning `multiplai-core`) — and the
+  hook timeouts (60s SessionStart, 30s/10s per-prompt) could kill that
+  build mid-flight, leaving a half-built environment and silent hooks.
+  The first fire now starts the build **in the background**, tells you in
+  one line that hooks go live on the next prompt (~1 min), and gets out
+  of the way. Concurrent hooks on a cold start share one build; a failed
+  build retries at most every 15 minutes and logs to
+  `scripts/.warmup.log`.
+- **Closing a tab during that first minute no longer loses the session.**
+  A `SessionEnd` or `PreCompact` firing while the environment is still
+  building has work with no second chance — it writes the marker that
+  carries the session's diary entry and learnings. Those hooks now run
+  as soon as the build lands instead of being skipped, and if the build
+  never lands the loss is written to `scripts/.warmup-deferred.log`
+  rather than going unrecorded.
+- **A build that already failed now says so.** For 15 minutes after a
+  failed build every prompt was told a build was in progress and that
+  hooks would go live on the next prompt — neither true — and nothing
+  named `scripts/.warmup.log`, where the error is. The message now says
+  the build failed, names that log, and says how to retry.
+- **A relocated environment is no longer read as a permanent cold
+  start.** The plugin guessed where `uv` puts its virtualenv. With
+  `UV_PROJECT_ENVIRONMENT` set — or a sideloaded copy sitting under an
+  unrelated project — the guess never matched, so every prompt started
+  another background build and no hook ever ran, behind a "first run"
+  banner that never went away. It now asks `uv` the same question its
+  own commands ask.
+- **Building the environment by hand no longer leaves the hooks gated.**
+  Pre-warming is now `sh <plugin-dir>/hooks/run.sh --warm` (what
+  `claude --init-only` and `/multiplai-context:setup` run): it builds
+  *and* clears the in-flight marker. A bare `uv sync` builds but leaves
+  the marker, and the hooks stayed quiet for another 15 minutes — which
+  was exactly the recovery the old troubleshooting notes gave you.
+- **A slow first build is no longer interrupted by a second one.** The
+  15-minute "the builder died" timer read a timestamp nothing refreshed,
+  so a first resolution over 15 minutes (it clones `multiplai-core`; a
+  slow link makes that ordinary) had a second `uv sync` started
+  alongside it, truncating the first one's log. Liveness of the running
+  build decides now, not its age.
+- **`autoCompactEnabled: false` is now respected on vanilla installs.**
+  The checkpoint nudges read the user-level `settings.json` to tell
+  disabled auto-compaction from steered auto-compaction, but only looked
+  at `$CLAUDE_CONFIG_DIR` — which vanilla Claude Code never sets — so the
+  disable was invisible everywhere but kit installs. Every
+  `CLAUDE_CONFIG_DIR` read now falls back to `~/.claude`, through one
+  shared resolver. The file is read only when auto-compaction steering is
+  actually configured, so it stays off the every-prompt path.
+- **`/multiplai-context:qmd-search` degrades honestly when qmd isn't set
+  up.** With no `resources_dir` configured, or with the configured mode
+  unreachable, the skill now answers "resources search isn't set up" —
+  naming what is missing and the fix — and offers a plain grep search
+  instead of running commands that cannot work. The check matches the
+  mode you configured: `http` mode is checked against the daemon's
+  health endpoint, not against a `qmd` binary it never uses.
+
+### Added
+
+- **A `Setup` hook: pre-warm with `claude --init-only`.** Claude Code's
+  Setup event (`--init-only`, or `--init`/`--maintenance` in `-p` mode)
+  now builds the plugin environment synchronously — the right entry point
+  for CI and scripted installs. `/multiplai-context:setup` also warms the
+  environment as its step 0, so onboarding never races the background
+  build. Unlike a session hook, it **fails** when `uv` is missing: its
+  whole job is to leave a working environment behind, so passing would
+  green-light an install that cannot run a single hook.
+
 ## [0.48.0] - 2026-08-15
 
 ### Changed

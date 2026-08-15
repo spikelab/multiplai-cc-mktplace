@@ -58,6 +58,28 @@ After they're written, you edit them with the user's answers.
 Exactly two questions. Do not add more — every other decision has a working
 default and belongs in the full interview.
 
+0. **Warm the plugin environment** (usually a no-op — the first hook fire
+   already started the same build in the background):
+   ```
+   sh "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh" --warm
+   ```
+   Run it synchronously and wait. If the background build is still in
+   flight this waits on uv's project lock and then no-ops; if the
+   environment is already built it returns in under a second.
+
+   Use this command, not a bare `uv sync`. The hooks gate themselves
+   behind an in-flight marker (`scripts/.warmup/`) while the environment
+   builds, and `--warm` is the only path that clears it. A bare `uv sync`
+   leaves the marker in place, so every hook stays gated for up to another
+   15 minutes — which is exactly the onboarding this step exists to
+   unblock.
+
+   A non-zero exit means the environment could not be built, and uv's
+   own error is in this command's output. If `uv` itself is missing, stop
+   here and tell the user: the plugin needs [uv](https://docs.astral.sh/uv)
+   (`curl -LsSf https://astral.sh/uv/install.sh | sh`) — nothing below
+   can run without it.
+
 1. Run `setup_check.py`. Read `memory_dir`, `existing`, `missing` from the JSON.
 
 2. If `existing` is non-empty, warn the user — name the files — and ask whether
@@ -143,7 +165,7 @@ default and belongs in the full interview.
 
 ## Full interview (`/multiplai-context:setup full`)
 
-Run quick-path steps 1–5 first — but skip any question already answered (if
+Run quick-path steps 0–5 first — but skip any question already answered (if
 `me.md` exists and carries a name, greet them by it and confirm rather than
 re-ask). Then continue:
 

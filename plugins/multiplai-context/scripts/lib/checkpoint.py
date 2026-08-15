@@ -54,7 +54,7 @@ from pathlib import Path
 
 from multiplai_core.plugin_options import option, option_float, option_int
 
-from lib.fsio import atomic_write
+from lib.fsio import atomic_write, claude_config_dir
 
 logger = logging.getLogger("multiplai.checkpoint")
 
@@ -1242,15 +1242,14 @@ def _autocompact_disabled_in_settings() -> bool:
     key is not: it lives in a settings file, and Claude Code layers several
     (managed / user / project / local) with rules this function does not
     reproduce. It reads the user-level file only — the one the /config
-    toggle writes — because a false negative here costs a nudge that was
+    toggle writes, at ``$CLAUDE_CONFIG_DIR/settings.json`` or its
+    ``~/.claude`` default when the env var is unset (vanilla installs never
+    set it) — because a false negative here costs a nudge that was
     already being shown, while missing the disable entirely costs the
     silence this whole function exists to prevent.
     """
-    cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
-    if not cfg:
-        return False
     try:
-        with open(os.path.join(cfg, "settings.json"), encoding="utf-8") as fh:
+        with open(claude_config_dir() / "settings.json", encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError, ValueError):
         return False
@@ -1280,16 +1279,23 @@ def autocompact_trigger_tokens() -> int | None:
     you disable compaction is the normal shape of that config, not a
     contradiction, and reading it as "auto mode on" silences the handoff
     advice in exactly the setup that has nothing else to fall back on.
+
+    The settings read is deferred below the ``CLAUDE_CODE_AUTO_COMPACT_WINDOW``
+    check, which does not change the answer — with no window configured the
+    result is ``None`` either way — but does keep the file off the
+    ``UserPromptSubmit`` path. checkpoint_nudge runs on every prompt inside a
+    10s budget, and a vanilla install never sets that variable, so the
+    settings.json open+parse would be pure overhead on every single prompt.
     """
     if _truthy(os.environ.get("DISABLE_COMPACT")) or _truthy(
         os.environ.get("DISABLE_AUTO_COMPACT")
     ):
         return None
-    if _autocompact_disabled_in_settings():
-        return None
 
     raw_window = os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "").strip()
     if not raw_window:
+        return None
+    if _autocompact_disabled_in_settings():
         return None
     try:
         window = int(raw_window)

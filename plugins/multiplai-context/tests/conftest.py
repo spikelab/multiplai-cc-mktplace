@@ -62,6 +62,24 @@ for _key in list(os.environ):
         del os.environ[_key]
 os.environ["WORKSPACE"] = _ISOLATED_WORKSPACE
 
+# Pin CLAUDE_CONFIG_DIR to an isolated (empty) dir rather than leaving it
+# unset: every config-dir read falls back to the *real* ``~/.claude`` when
+# the var is absent (lib.fsio.claude_config_dir), so an unset var would let
+# tests read the developer's actual settings.json / CLAUDE.md — the exact
+# nondeterminism the scrub above exists to prevent. Tests that exercise the
+# fallback itself delenv this and point HOME at a tmp dir.
+#
+# This import-time value covers collection only. Per TEST the autouse
+# ``_isolate_env`` fixture repoints the var at its own fresh directory: a
+# single shared one is writable by anything a test runs — ``hooks/run.sh``
+# drops its ``.multiplai-context-uv-warned`` marker there, since
+# ``_run_plugin_script`` hands subprocesses ``os.environ`` — so one test's
+# leftovers would decide a later test's warn-once behaviour, and the pair
+# would pass or fail by collection order.
+_ISOLATED_CONFIG_DIR = os.path.join(_ISOLATED_WORKSPACE, "claude-config")
+os.makedirs(_ISOLATED_CONFIG_DIR, exist_ok=True)
+os.environ["CLAUDE_CONFIG_DIR"] = _ISOLATED_CONFIG_DIR
+
 PLUGIN_ROOT = Path(__file__).parent.parent
 REPO_ROOT = PLUGIN_ROOT.parent.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
@@ -71,7 +89,10 @@ PLUGIN_JSON = PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
 MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 
 # Maps Claude Code hook event names to the plugin script each invokes.
+# "Setup" runs no script: run.sh --warm builds the scripts/ environment
+# synchronously (claude --init-only / --init / --maintenance in -p mode).
 EXPECTED_HOOK_SCRIPTS = {
+    "Setup": ["--warm"],
     "SessionStart": ["scripts/session_start.py"],
     "UserPromptSubmit": ["scripts/context_manager.py", "scripts/checkpoint_nudge.py"],
     "Notification": ["scripts/session_notification.py"],
@@ -110,7 +131,9 @@ def parse_hooks():
             for entry in group.get("hooks", []):
                 command = entry.get("command", "")
                 m = re.search(r"\$\{CLAUDE_PLUGIN_ROOT\}/(\S+?\.py)", command)
-                script = m.group(1) if m else ""
+                # Non-script hooks (run.sh --warm) carry the mode flag in
+                # the script slot; consumers guard with .is_file()/.py.
+                script = m.group(1) if m else ("--warm" if "--warm" in command else "")
                 out.append({
                     "event": event,
                     "script": script,
@@ -118,6 +141,19 @@ def parse_hooks():
                     "timeout": entry.get("timeout"),
                 })
     return out
+
+
+def script_hooks():
+    """Every hook that launches a plugin script — i.e. all but ``Setup``.
+
+    Filter on the EVENT, never on the parsed ``script`` value. ``parse_hooks``
+    leaves ``script`` empty when a command matches neither the
+    ``${CLAUDE_PLUGIN_ROOT}/….py`` pattern nor ``--warm`` — a typo'd path, a
+    renamed script, a dropped variable — and a ``script.endswith(".py")``
+    filter would silently skip exactly those, turning the file-existence
+    guards into no-ops for the one case they exist to catch.
+    """
+    return [h for h in parse_hooks() if h["event"] != "Setup"]
 
 
 def import_script(module_name: str, filename: str):
@@ -279,8 +315,19 @@ def template_files(plugin_root):
     return list(templates_dir.glob("*.md")) if templates_dir.exists() else []
 
 
+def _isolated_config_dir(tmp_path_factory) -> str:
+    """A fresh, empty ``CLAUDE_CONFIG_DIR`` for one test.
+
+    Deliberately a SIBLING of the test's ``tmp_path``, not a child: tests
+    own their ``tmp_path`` outright — several assert on its exact contents,
+    and one builds its own ``claude-config`` in there — so an autouse
+    fixture must not plant anything inside it.
+    """
+    return str(tmp_path_factory.mktemp("claude-config"))
+
+
 @pytest.fixture(autouse=True)
-def _isolate_env(monkeypatch):
+def _isolate_env(monkeypatch, tmp_path_factory):
     """Scrub ambient CLAUDE_PLUGIN_* / WORKSPACE before every test.
 
     ``data_dir`` is workspace-anchored: a leaked host ``WORKSPACE`` (or
@@ -291,6 +338,13 @@ def _isolate_env(monkeypatch):
     outranks CLAUDE_PLUGIN_DATA in data-dir resolution, which would hijack
     every test that anchors via CLAUDE_PLUGIN_DATA.
 
+    CLAUDE_CONFIG_DIR is re-pinned per test (its own fresh empty dir)
+    rather than left on the shared import-time one: it must stay set —
+    unset means every consumer falls back to the developer's real
+    ``~/.claude`` — but sharing one directory across the run lets anything
+    a test writes there (``run.sh``'s warn-once marker, a settings.json)
+    decide a later test's result by collection order.
+
     NOTE: this fixture cannot undo import-time state — loggers bound during
     collection point at the conftest-level pinned temp dir above, and
     multiplai_core.log_utils refuses non-tmp log dirs under pytest as
@@ -299,13 +353,15 @@ def _isolate_env(monkeypatch):
     for key in list(os.environ):
         if _is_ambient_key(key):
             monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", _isolated_config_dir(tmp_path_factory))
 
 
 @pytest.fixture
-def clean_env(monkeypatch):
+def clean_env(monkeypatch, tmp_path_factory):
     for key in list(os.environ):
         if _is_ambient_key(key):
             monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", _isolated_config_dir(tmp_path_factory))
 
 
 @pytest.fixture

@@ -90,12 +90,20 @@ more. On vanilla Claude Code:
    /plugin marketplace add spikelab/multiplai-cc-mktplace
    /plugin install multiplai-context@multiplai
    ```
-3. **Expect a slow first session start.** The first run installs the
-   workspace environment from `uv.lock` (the SessionStart hook allows 60s for
-   this). To do it ahead of time instead, run once from a shell:
+3. **The first session builds the environment in the background.** On the
+   first hook fire the plugin detaches a one-time build of its Python
+   environment from the committed `uv.lock` (~1 min; it includes cloning
+   `multiplai-core`) and injects a one-line notice; hooks go live on the
+   next prompt after the build finishes. Nothing blocks your session and
+   no hook gets killed mid-build. To build ahead of time instead, either
+   run `claude --init-only` once (the plugin's `Setup` hook builds the
+   environment synchronously) or, from a shell:
    ```
-   uv run --project <plugin-dir>/scripts <plugin-dir>/scripts/session_start.py </dev/null
+   sh <plugin-dir>/hooks/run.sh --warm
    ```
+   Both build the environment *and* clear the in-flight marker the hooks
+   gate themselves behind — a bare `uv sync` builds but leaves the marker,
+   which keeps the hooks quiet.
    Every later start is fast — resolution is already done, so no later run
    touches the network.
 4. Run `/multiplai-context:setup` in your first session — two questions
@@ -1129,8 +1137,11 @@ available at all, those passes no-op with a one-time warning.
 
 | Event | Script | Role |
 |-------|--------|------|
+| `Setup` | — (`run.sh --warm`) | Build the plugin's Python environment synchronously, once. Fires on `claude --init-only` (and `--init` / `--maintenance` in `-p` mode) — the place to do the full first resolution in CI or a scripted install. Runs no Python. |
 | `SessionStart` | `session_start.py` | Init session state; drain deferred extractions; emit the dream-due nudge, the **60-day** config-audit nudge, and any **due prospective intentions**; launch the **memory maintainer** detached (own 24h gate). **Does not** dump memory into context. |
 | `UserPromptSubmit` | `context_manager.py` | Route the prompt against catalogs and inject only the relevant memory. |
+| `UserPromptSubmit` | `checkpoint_nudge.py` | Tell *Claude* when the session is past the handoff threshold, so it wraps up and suggests `/clear` at a natural boundary (and, with `checkpoint_hard_stop_tokens` set, blocks new prompts past that ceiling). |
+| `Notification` | `session_notification.py` | Stamp the session registry with a `notification` event — Claude Code is waiting on the user, which is the session board's `waiting_input` signal. |
 | `Stop` | `session_stop.py` | Lightweight checkpoint (extraction is deferred, not run here). |
 | `SessionEnd` | `session_end.py` | Write a deferred-extraction marker for a drain to pick up; record the session's disposition. |
 | `PreCompact` | `pre_compact.py` | Enqueue a deferred-extraction marker so pre-compaction learnings survive; clear the re-recommendation cooldown map (injected context is summarized away). |
@@ -2056,7 +2067,9 @@ checks the plumbing mechanically and names what's missing.
 | Symptom | Fix |
 |---|---|
 | **Nothing runs at all — no diary, no injection, no logs.** Hooks disable themselves silently when `uv` is missing. | Install [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh \| sh`), restart the session. |
-| **First session start hangs ~60 seconds.** Cold start: the first run installs the workspace environment from `uv.lock`. Expected exactly once. | Wait it out, or pre-warm from a shell: `uv run --all-packages --project <repo-root> <plugin-dir>/scripts/session_start.py </dev/null`. Every later start reuses the environment. |
+| **First session says "building its Python environment" and hooks are quiet.** Cold start: the first hook fire builds the environment from `uv.lock` in the background (~1 min). Expected exactly once; hooks go live on the next prompt after it finishes. | Just keep working — or pre-warm ahead of time with `claude --init-only`, or from a shell: `sh <plugin-dir>/hooks/run.sh --warm`. |
+| **A message says the environment FAILED to build.** The build's error is the only thing that matters here. | Read `<plugin-dir>/scripts/.warmup.log` — the build's own output — fix what it names (usually no network, or no git for the `multiplai-core` clone), then rebuild with `claude --init-only` or `sh <plugin-dir>/hooks/run.sh --warm`. It also retries by itself within 15 minutes. |
+| **The environment is built but hooks still say "first run".** A bare `uv sync` builds the environment but leaves the in-flight marker the hooks gate behind. | Run `sh <plugin-dir>/hooks/run.sh --warm` (or `claude --init-only`), which clears it. Deleting `<plugin-dir>/scripts/.warmup/` by hand does the same. |
 | **Hooks appear to do nothing.** No visible effect, unsure if anything is installed correctly. | Run `/multiplai-context:health` — it verifies the model client, directories, memory freshness, and diary/learnings counts, and names the broken piece. |
 | **Memory not injected.** You told setup things, but a new session doesn't know them. | Two checks: (1) your `settings.json` key must be the compound `pluginConfigs["multiplai-context@multiplai"]` form — a bare `multiplai` key fails **silently** (see [Configuration](#configuration)); (2) read the `[context]` routing line in the activity log — [Observability](#observability) explains how to tell a healthy route from an abstention or a fallback. |
 | **Settings changed but nothing happened.** | Options are read at session start — restart Claude Code after any `settings.json` change. |

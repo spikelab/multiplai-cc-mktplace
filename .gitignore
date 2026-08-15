@@ -3,6 +3,11 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .venv/
+# multiplai-context cold-start pre-warm artifacts (hooks/run.sh): written
+# next to scripts/ when a repo checkout serves as a directory marketplace.
+.warmup/
+.warmup.log
+.warmup-deferred.log
 data/
 *.egg-info/
 .coverage
