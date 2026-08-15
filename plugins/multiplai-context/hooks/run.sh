@@ -215,19 +215,27 @@ if [ -z "$build_state" ]; then
         # on failure its exit code is recorded there, which both
         # rate-limits the retry and lets the next fire say "failed"
         # instead of "in progress".
-        (
-            "$UV" sync --project "$sdir" >"$build_log" 2>&1
+        #
+        # A separate `sh -c`, not a `( … ) &` subshell: inside it `$$` is
+        # the builder's OWN pid, recorded as its first act — before uv
+        # starts, so the cleanup at the end can never race it. (In a
+        # subshell `$$` is the launcher's pid, and recording `$!` from the
+        # launcher afterwards races a fast build finishing first, which
+        # resurrects the marker the builder just cleared.) That process
+        # stays alive for the whole build as uv's parent, so `kill -0` on
+        # the recorded pid answers "still building".
+        sh -c '
+            warm=$1; uv=$2; sdir=$3; log=$4
+            echo $$ >"$warm/pid"
+            "$uv" sync --project "$sdir" >"$log" 2>&1
             rc=$?
             if [ "$rc" -eq 0 ]; then
-                rm -f "$warm/pid" "$warm/status" 2>/dev/null
-                rmdir "$warm" 2>/dev/null
+                rm -f "$warm/pid" "$warm/status"
+                rmdir "$warm"
             else
-                echo "$rc" >"$warm/status" 2>/dev/null
+                echo "$rc" >"$warm/status"
             fi
-        ) </dev/null >/dev/null 2>&1 &
-        # $! is the detached subshell's pid; it stays alive for the whole
-        # build as uv's parent, so `kill -0` on it answers "still building".
-        echo "$!" >"$warm/pid" 2>/dev/null
+        ' _ "$warm" "$UV" "$sdir" "$build_log" </dev/null >/dev/null 2>&1 &
         build_state=inflight
     elif [ -d "$warm" ]; then
         build_state=inflight  # a concurrent hook won the mkdir race
