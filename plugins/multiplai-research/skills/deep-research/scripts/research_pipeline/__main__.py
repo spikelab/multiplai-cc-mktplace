@@ -130,6 +130,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override model for ALL pipeline nodes (bypasses ceiling)",
     )
+    parser.add_argument(
+        "--thinking",
+        choices=["on", "off"],
+        default=None,
+        help=(
+            "Extended thinking for ALL pipeline nodes, overriding the per-node "
+            "defaults and multiplai.conf: 'off' disables it everywhere, 'on' "
+            "restores the SDK default (search/triage/extract/verify ship with "
+            "it disabled)"
+        ),
+    )
     return parser
 
 

@@ -570,9 +570,22 @@ class TestToolUniverseDrift:
         assert not dupes, dupes
 
 
+@pytest.fixture(autouse=True)
+def _reset_thinking_probe(monkeypatch: pytest.MonkeyPatch):
+    """`_core_thinking_support` caches its answer against whatever run_agent it
+    first saw, module-globally and for the whole session. Reset it around every
+    test in this file so a test can never inherit another's probe answer —
+    which would otherwise make the outcome depend on collection order (a
+    cached True hands `thinking=` to a fake that cannot take it; a cached False
+    makes the forwarding assertions vacuous)."""
+    monkeypatch.setattr(sdk_module, "_core_thinking_support", None)
+    yield
+    sdk_module._core_thinking_support = None
+
+
 class TestThinkingParameter:
     """thinking= reaches run_agent only when set, and is dropped (with one
-    warning) when the resolved core's run_agent cannot accept it."""
+    warning) when the resolved core or SDK cannot carry it."""
 
     def _patch_run_agent(self, monkeypatch: pytest.MonkeyPatch) -> dict:
         from types import SimpleNamespace
@@ -590,9 +603,6 @@ class TestThinkingParameter:
             )
 
         monkeypatch.setattr(sdk_module, "run_agent", fake_run_agent)
-        # The support probe caches its answer against whatever run_agent it
-        # first saw — reset so each test probes its own fake.
-        monkeypatch.setattr(sdk_module, "_core_thinking_support", None)
         return captured
 
     @pytest.mark.asyncio
@@ -654,7 +664,6 @@ class TestThinkingParameter:
             )
 
         monkeypatch.setattr(sdk_module, "run_agent", old_core_run_agent)
-        monkeypatch.setattr(sdk_module, "_core_thinking_support", None)
 
         with caplog.at_level(logging.WARNING, logger="research_pipeline.sdk"):
             assert await llm_call("p", thinking={"type": "disabled"}) == "ok"
@@ -662,6 +671,125 @@ class TestThinkingParameter:
 
         warnings = [
             r for r in caplog.records
-            if "uv lock --upgrade-package multiplai-core" in r.getMessage()
+            if "run_agent() does not accept thinking=" in r.getMessage()
         ]
         assert len(warnings) == 1  # probe is cached: warn once, not per call
+        # The degradation contract wants the user's fix, not a maintainer's.
+        assert "reinstall it from the marketplace" in warnings[0].getMessage()
+        assert "uv lock" not in warnings[0].getMessage()
+
+    @staticmethod
+    def _new_core_run_agent(captured: dict):
+        """A run_agent with an explicit thinking= param — i.e. a current core,
+        so the SDK boundary is the only one left to decide the outcome."""
+        from types import SimpleNamespace
+
+        async def run_agent(
+            prompt, *, system_prompt=None, allowed_tools=None,
+            disallowed_tools=None, max_turns=1, max_attempts=2, model=None,
+            effort=None, thinking=None, timeout_s=600.0, label="", component="",
+        ):
+            captured["thinking"] = thinking
+            return SimpleNamespace(
+                text="ok",
+                usage=SimpleNamespace(
+                    input_tokens=1, output_tokens=1,
+                    cache_creation_tokens=0, cache_read_tokens=0, cost_usd=0.0,
+                ),
+            )
+
+        return run_agent
+
+    @pytest.mark.asyncio
+    async def test_dropped_when_core_accepts_it_but_the_sdk_does_not(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """core forwards thinking= straight into ClaudeAgentOptions(**kwargs)
+        with no TypeError tolerance of its own, so a current core paired with
+        an SDK too old to have the field is a hard crash on the first
+        mechanical call. Probing only the core boundary would ship that."""
+        captured: dict = {}
+        monkeypatch.setattr(
+            sdk_module, "run_agent", self._new_core_run_agent(captured)
+        )
+        monkeypatch.setattr(sdk_module, "_sdk_options_accept_thinking", lambda: False)
+
+        with caplog.at_level(logging.WARNING, logger="research_pipeline.sdk"):
+            assert await llm_call("p", thinking={"type": "disabled"}) == "ok"
+            assert await llm_call("p", thinking={"type": "disabled"}) == "ok"
+
+        assert captured["thinking"] is None  # dropped, not forwarded
+        warnings = [
+            r for r in caplog.records
+            if "claude-agent-sdk" in r.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert "reinstall it from the marketplace" in warnings[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_forwarded_when_core_and_sdk_both_carry_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict = {}
+        monkeypatch.setattr(
+            sdk_module, "run_agent", self._new_core_run_agent(captured)
+        )
+        monkeypatch.setattr(sdk_module, "_sdk_options_accept_thinking", lambda: True)
+
+        await llm_call("p", thinking={"type": "disabled"})
+        assert captured["thinking"] == {"type": "disabled"}
+
+
+class TestSdkOptionsThinkingProbe:
+    """`_sdk_options_accept_thinking` reads the real dataclass signature."""
+
+    def _install_fake_sdk(self, monkeypatch: pytest.MonkeyPatch, options) -> None:
+        import sys
+        from types import SimpleNamespace
+
+        monkeypatch.setitem(
+            sys.modules, "claude_agent_sdk",
+            SimpleNamespace(ClaudeAgentOptions=options),
+        )
+
+    def test_true_when_options_has_the_field(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeOptions:
+            model: str | None = None
+            thinking: dict | None = None
+
+        self._install_fake_sdk(monkeypatch, FakeOptions)
+        assert sdk_module._sdk_options_accept_thinking() is True
+
+    def test_false_when_options_lacks_the_field(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dataclasses import dataclass
+
+        @dataclass
+        class OldOptions:
+            model: str | None = None
+            effort: str | None = None
+
+        self._install_fake_sdk(monkeypatch, OldOptions)
+        assert sdk_module._sdk_options_accept_thinking() is False
+
+    def test_assumes_support_when_the_sdk_cannot_be_introspected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No SDK at all is a different failure with a better message of its
+        own — don't let an unanswerable probe claim the SDK is too old."""
+        import sys
+        from types import SimpleNamespace
+
+        monkeypatch.setitem(sys.modules, "claude_agent_sdk", SimpleNamespace())
+        assert sdk_module._sdk_options_accept_thinking() is True
+
+    def test_real_sdk_is_new_enough(self) -> None:
+        """The version this repo actually locks carries the field — if this
+        fails, the pipeline is silently paying ~15s of thinking per call."""
+        assert sdk_module._sdk_options_accept_thinking() is True

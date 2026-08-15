@@ -6,15 +6,20 @@ Presets control depth/breadth of research. CLI args override preset defaults.
 from __future__ import annotations
 
 import argparse
+import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from types import MappingProxyType
+from typing import Final, Literal
 
 SummaryLevel = Literal["gist", "structured", "detailed"]
 Preset = Literal["micro", "quick", "standard", "thorough"]
 ResearchType = Literal["general", "company", "job-market", "fact-check", "theme"]
 
 from .env import load_multiplai_conf, pick_model, resolve_effort
+
+log = logging.getLogger(__name__)
 
 # Reasoning nodes run opus (hard work); the high-volume per-source parse nodes
 # (triage, extract) run sonnet (cheap bulk work). Both are resolved from a
@@ -26,7 +31,36 @@ DEFAULT_MODEL = pick_model("opus", task="deep-research")
 PARSE_MODEL = pick_model("sonnet", task="deep-research.parse")
 
 
-def conf_effort(task: str, default: str | None = None) -> str | None:
+def _conf_sections() -> Mapping[str, Mapping[str, str]]:
+    """The ``_sections`` half of multiplai.conf, defensively unwrapped."""
+    return load_multiplai_conf().get("_sections", {}) or {}
+
+
+def _conf_section_value(
+    task: str,
+    key: str,
+    sections: Mapping[str, Mapping[str, str]] | None = None,
+) -> str:
+    """One normalized ``KEY=`` value from the ``[task]`` section, or ``""``.
+
+    The same lookup was written out once per tuning axis; this is it once.
+    ``sections`` lets a caller reuse a conf it has already loaded — the loader
+    re-reads and re-parses the file on **every** call (no cache, deliberately:
+    the tests point ``CLAUDE_MULTIPLAI_HOME`` at a tmp dir per test), so the
+    per-node maps below would otherwise pay one file read per node per axis.
+    """
+    if sections is None:
+        sections = _conf_sections()
+    section = sections.get(task) or {}
+    return (section.get(key) or "").strip().lower()
+
+
+def conf_effort(
+    task: str,
+    default: str | None = None,
+    *,
+    sections: Mapping[str, Mapping[str, str]] | None = None,
+) -> str | None:
     """``EFFORT=`` for *task* from multiplai.conf, capped by MULTIPLAI_EFFORT.
 
     Model and effort are two axes of the same tuning decision, and only the
@@ -37,8 +71,7 @@ def conf_effort(task: str, default: str | None = None) -> str | None:
     Returns *default* when the conf says nothing, so every existing per-node
     default below is unchanged unless someone opts in.
     """
-    section = (load_multiplai_conf().get("_sections", {}) or {}).get(task) or {}
-    requested = (section.get("EFFORT") or "").strip().lower()
+    requested = _conf_section_value(task, "EFFORT", sections)
     if not requested:
         return default
     # The ceiling exists so a budget run can force every node down; it must
@@ -46,45 +79,162 @@ def conf_effort(task: str, default: str | None = None) -> str | None:
     return resolve_effort(requested)
 
 
-def _node_effort(node: str, default: str | None) -> str | None:
+def _node_effort(
+    node: str,
+    default: str | None,
+    *,
+    sections: Mapping[str, Mapping[str, str]] | None = None,
+) -> str | None:
     """Per-node effort: the node's own conf section wins over the skill-wide
     one, which wins over the code default."""
-    return conf_effort(f"deep-research.{node}", conf_effort("deep-research", default))
+    return conf_effort(
+        f"deep-research.{node}",
+        conf_effort("deep-research", default, sections=sections),
+        sections=sections,
+    )
 
 
 # Extended thinking is ON by default in the Agent SDK, and effort does not
 # remove its latency: a cold no-tools call measured 18.4s → 2.9s with
 # thinking={"type": "disabled"} (2026-08-09). Mechanical parse/search nodes
 # disable it below; reasoning nodes keep the SDK default (None).
-THINKING_DISABLED: dict = {"type": "disabled"}
+#
+# Read-only, for the reason multiplai_core.env freezes EFFORT_TIERS: it is one
+# shared default behind every node, and a caller that mutated it would retune
+# the whole pipeline from a distance. Every path that reaches the SDK copies it
+# into a real dict first — ClaudeAgentOptions wants a plain mapping, not a
+# proxy — which is what the `dict(...)` calls below are for.
+THINKING_DISABLED: Final[Mapping[str, str]] = MappingProxyType({"type": "disabled"})
 
-# Truthy conf values that restore the SDK default (thinking back on).
+# Conf values that restore the SDK default (thinking back on), and those that
+# turn it off. Anything else is a typo rather than a third option — see
+# conf_thinking, which ignores it instead of guessing.
 _THINKING_ON_VALUES = ("1", "true", "yes", "on", "enabled")
+_THINKING_OFF_VALUES = ("0", "false", "no", "off", "disabled")
+
+# (task, value) pairs already warned about, so a bad skill-wide THINKING= is
+# one log line and not one per node.
+_warned_thinking_values: set[tuple[str, str]] = set()
 
 
-def conf_thinking(task: str, default: dict | None = None) -> dict | None:
+def conf_thinking(
+    task: str,
+    default: dict | Mapping[str, str] | None = None,
+    *,
+    sections: Mapping[str, Mapping[str, str]] | None = None,
+) -> dict | None:
     """``THINKING=`` for *task* from multiplai.conf.
 
     The efforts map got its conf half in ``conf_effort``; this is the same
-    mechanic for the thinking axis. A truthy value (``THINKING=on``) restores
-    the SDK default (returns ``None``); any other non-blank value disables
-    thinking. Returns *default* when the conf says nothing, so every per-node
-    default below is unchanged unless someone opts in.
+    mechanic for the thinking axis. ``THINKING=on`` restores the SDK default
+    (returns ``None``); ``THINKING=off`` disables thinking. An unrecognized
+    value is **ignored with a warning**, not treated as "off" — a typo must
+    not be able to silently strip extended thinking from the reasoning nodes,
+    which is the failure mode that guessing would produce. This matches
+    ``multiplai_core.env._normalize_effort``, which drops an unrecognized
+    ``EFFORT=`` rather than acting on it.
+
+    Returns *default* when the conf says nothing, so every per-node default
+    below is unchanged unless someone opts in.
     """
-    section = (load_multiplai_conf().get("_sections", {}) or {}).get(task) or {}
-    requested = (section.get("THINKING") or "").strip().lower()
+    requested = _conf_section_value(task, "THINKING", sections)
+    # Fresh copy per node — callers must never share one mutable dict, and the
+    # shared default is a read-only proxy the SDK would not accept anyway.
+    fallback = dict(default) if default is not None else None
     if not requested:
-        # Fresh copy per node — callers must never share one mutable dict.
-        return dict(default) if default else default
+        return fallback
     if requested in _THINKING_ON_VALUES:
         return None
-    return dict(THINKING_DISABLED)
+    if requested in _THINKING_OFF_VALUES:
+        return dict(THINKING_DISABLED)
+    if (task, requested) not in _warned_thinking_values:
+        _warned_thinking_values.add((task, requested))
+        log.warning(
+            "multiplai.conf [%s] THINKING=%s is not a recognized value; "
+            "ignoring it and keeping this node's default. Use %s to restore "
+            "extended thinking, or %s to disable it.",
+            task, requested,
+            "/".join(_THINKING_ON_VALUES), "/".join(_THINKING_OFF_VALUES),
+        )
+    return fallback
 
 
-def _node_thinking(node: str, default: dict | None) -> dict | None:
+def _node_thinking(
+    node: str,
+    default: dict | Mapping[str, str] | None,
+    *,
+    sections: Mapping[str, Mapping[str, str]] | None = None,
+) -> dict | None:
     """Per-node thinking: the node's own conf section wins over the skill-wide
     one, which wins over the code default."""
-    return conf_thinking(f"deep-research.{node}", conf_thinking("deep-research", default))
+    return conf_thinking(
+        f"deep-research.{node}",
+        conf_thinking("deep-research", default, sections=sections),
+        sections=sections,
+    )
+
+
+# Per-node reasoning effort: mechanical parse/search work runs "low", the
+# quality gate "medium", reasoning nodes None (SDK default).
+_EFFORT_DEFAULTS: tuple[tuple[str, str | None], ...] = (
+    ("plan", None),
+    ("diverge", None),
+    ("challenge", None),
+    ("search", "low"),
+    ("triage_relevance", "low"),
+    ("extract", "low"),
+    ("verify", "low"),
+    ("reassess", None),
+    ("synthesize", None),
+    ("adversarial", None),
+    ("quality_check", "medium"),
+)
+
+# Per-node extended thinking: mechanical parse/search work runs with thinking
+# disabled (the SDK default costs ~15s per call and buys nothing on
+# formatting/parsing); reasoning nodes keep the SDK default (None).
+#
+# Worth saying out loud, because it is not a coincidence: the four nodes that
+# lose extended thinking here are also the four that ingest attacker-authored
+# text — `search` parses model output built from search results,
+# `triage_relevance` scores third-party titles and snippets, `extract` and the
+# fetch it feeds handle raw page content. What bounds that risk is not the
+# thinking budget but the fail-closed deny-list in `sdk._deny_list` (every tool
+# outside the call's allow-list is explicitly denied under bypassPermissions)
+# plus the `defang_untrusted` fencing at the call sites. Re-enable per node
+# with `[deep-research.<node>] THINKING=on` if a future prompt change makes a
+# node's reasoning load-bearing.
+_THINKING_DEFAULTS: tuple[tuple[str, Mapping[str, str] | None], ...] = (
+    ("plan", None),
+    ("diverge", None),
+    ("challenge", None),
+    ("search", THINKING_DISABLED),
+    ("triage_relevance", THINKING_DISABLED),
+    ("extract", THINKING_DISABLED),
+    ("verify", THINKING_DISABLED),
+    ("reassess", None),
+    ("synthesize", None),
+    ("adversarial", None),
+    ("quality_check", None),
+)
+
+
+def _default_efforts() -> dict[str, str | None]:
+    """Build the per-node effort map from a single conf read."""
+    sections = _conf_sections()
+    return {
+        node: _node_effort(node, default, sections=sections)
+        for node, default in _EFFORT_DEFAULTS
+    }
+
+
+def _default_thinkings() -> dict[str, dict | None]:
+    """Build the per-node thinking map from a single conf read."""
+    sections = _conf_sections()
+    return {
+        node: _node_thinking(node, default, sections=sections)
+        for node, default in _THINKING_DEFAULTS
+    }
 
 
 @dataclass
@@ -189,6 +339,10 @@ class ResearchConfig:
     # Kept for record/CLI parity — call sites read the per-node `efforts` map.
     effort: str | None = None
 
+    # Extended thinking for all SDK calls ("on"/"off"). None = per-node
+    # defaults. Kept for record/CLI parity — call sites read `thinkings`.
+    thinking: str | None = None
+
     # Per-node model tiers: opus for reasoning, sonnet for the high-volume
     # per-source parse nodes (triage, extract). `--model` overrides all nodes.
     models: dict[str, str] = field(
@@ -207,51 +361,15 @@ class ResearchConfig:
         }
     )
 
-    # Per-node reasoning effort: mechanical parse/search work runs "low",
-    # the quality gate "medium", reasoning nodes None (SDK default).
+    # Per-node reasoning effort (defaults + rationale: _EFFORT_DEFAULTS).
     # `--effort` overrides all nodes, mirroring `--model`.
-    efforts: dict[str, str | None] = field(
-        default_factory=lambda: {
-            node: _node_effort(node, default)
-            for node, default in (
-                ("plan", None),
-                ("diverge", None),
-                ("challenge", None),
-                ("search", "low"),
-                ("triage_relevance", "low"),
-                ("extract", "low"),
-                ("verify", "low"),
-                ("reassess", None),
-                ("synthesize", None),
-                ("adversarial", None),
-                ("quality_check", "medium"),
-            )
-        }
-    )
+    efforts: dict[str, str | None] = field(default_factory=_default_efforts)
 
-    # Per-node extended thinking: mechanical parse/search work runs with
-    # thinking disabled (the SDK default costs ~15s per call and buys nothing
-    # on formatting/parsing); reasoning nodes keep the SDK default (None).
+    # Per-node extended thinking (defaults + rationale: _THINKING_DEFAULTS).
     # Conf-overridable per node or skill-wide, mirroring EFFORT:
     # [deep-research.search] THINKING=on / [deep-research] THINKING=on.
-    thinkings: dict[str, dict | None] = field(
-        default_factory=lambda: {
-            node: _node_thinking(node, default)
-            for node, default in (
-                ("plan", None),
-                ("diverge", None),
-                ("challenge", None),
-                ("search", THINKING_DISABLED),
-                ("triage_relevance", THINKING_DISABLED),
-                ("extract", THINKING_DISABLED),
-                ("verify", THINKING_DISABLED),
-                ("reassess", None),
-                ("synthesize", None),
-                ("adversarial", None),
-                ("quality_check", None),
-            )
-        }
-    )
+    # `--thinking on|off` overrides all nodes, mirroring `--effort`.
+    thinkings: dict[str, dict | None] = field(default_factory=_default_thinkings)
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> "ResearchConfig":
@@ -278,6 +396,7 @@ class ResearchConfig:
             allow_paid_fallback=getattr(args, "allow_paid_fallback", False),
             session_id=getattr(args, "session_id", "") or "",
             effort=getattr(args, "effort", None),
+            thinking=getattr(args, "thinking", None),
         )
         # Global model override — bypasses ceiling, sets all nodes to same model
         model_override = getattr(args, "model", None)
@@ -286,6 +405,16 @@ class ResearchConfig:
         # Global effort override — mirrors --model, sets all nodes to same effort
         if config.effort:
             config.efforts = {k: config.effort for k in config.efforts}
+        # Global thinking override — mirrors --effort. This is the per-run
+        # escape hatch from the disabled-by-default mechanical nodes; without
+        # it the only way back was editing multiplai.conf, which is a
+        # machine-level file and not a property of one run. Fresh dict per
+        # node, same as the default map.
+        if config.thinking:
+            config.thinkings = {
+                k: (None if config.thinking == "on" else dict(THINKING_DISABLED))
+                for k in config.thinkings
+            }
         return config
 
     @property

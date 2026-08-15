@@ -221,7 +221,7 @@ MODEL=opus
 EFFORT=medium
 THINKING=on                # restore extended thinking everywhere
 
-[deep-research.parse]      # MODEL= for the high-volume parse nodes
+[deep-research.parse]      # MODEL= only — a model group, not a node
 MODEL=sonnet
 
 [deep-research.extract]    # one node
@@ -233,16 +233,32 @@ THINKING=on
 
 `[deep-research.<node>]` beats `[deep-research]` beats the code default. Nodes:
 `plan`, `diverge`, `challenge`, `search`, `triage_relevance`, `extract`,
-`verify`, `reassess`, `synthesize`, `adversarial`, `quality_check`. `--model` /
-`--effort` on the CLI override every node uniformly. The `MULTIPLAI_MODEL` /
-`MULTIPLAI_EFFORT` ceilings cap all of the above.
+`verify`, `reassess`, `synthesize`, `adversarial`, `quality_check`.
+
+`[deep-research.parse]` is **not** one of them — it is a `MODEL=` group naming
+the parse-tier default, and `EFFORT=`/`THINKING=` are read per node only. To
+retune both parse nodes, write `[deep-research.extract]` and
+`[deep-research.triage_relevance]` separately.
+
+On the CLI, `--model` overrides the model on every node, `--effort` the effort
+on every node, and `--thinking on|off` the thinking on every node — each covers
+its own axis and nothing else. The `MULTIPLAI_MODEL` / `MULTIPLAI_EFFORT`
+ceilings cap the model and effort axes.
 
 `THINKING` controls extended thinking, which is on by default in the Agent SDK
 and adds ~15s of latency per call. The mechanical nodes — `search`,
 `triage_relevance`, `extract`, `verify` — run with thinking disabled by
 default; the reasoning nodes keep the SDK default. `THINKING=on` (or `1`,
 `true`, `yes`, `enabled`) restores the SDK default for that node or skill-wide;
-any other value disables thinking for that node.
+`off` (or `0`, `false`, `no`, `disabled`) turns it off. Any other value is
+ignored with a warning and the default stands — a typo will not silently strip
+thinking from the reasoning nodes.
+
+**`EFFORT=` and `THINKING=` are not independent.** Effort guides *how deeply*
+the model thinks, so on a node with thinking disabled it has nothing to guide
+and setting it does nothing. On `search`, `triage_relevance`, `extract` and
+`verify`, reach for `THINKING=on` first — that is the knob that changes their
+behavior — and use `EFFORT=` to tune the depth once thinking is back on.
 
 ## Architecture
 
