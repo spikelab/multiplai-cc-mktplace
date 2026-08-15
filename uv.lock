@@ -264,20 +264,20 @@ wheels = [
 
 [[package]]
 name = "claude-agent-sdk"
-version = "0.2.130"
+version = "0.2.139"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "mcp" },
     { name = "sniffio" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/19/aa/25cda3ddcff22a5097571be871e00cd9c4dca1326e16910c401998fbc258/claude_agent_sdk-0.2.130.tar.gz", hash = "sha256:4db7b937bb4e411ac1c9cdd7a7089043836d0a4ad80f8244e8a8413c399beb1e", size = 312211, upload-time = "2026-08-04T22:52:58.443Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/11/b6/cfcdefed1f866a8ba372ef3884c8020dd54338d15d8b45d5a1ff7432cea1/claude_agent_sdk-0.2.139.tar.gz", hash = "sha256:4395ed541cdd4c13aeb1213b3b414b7e8a94cc060a773137e961882e81c174a7", size = 319519, upload-time = "2026-08-14T22:34:48.038Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/76/75/d2e58ac7682c199d0a77e779f003d2afe0472b7d03519f9b7e627f6e3d93/claude_agent_sdk-0.2.130-py3-none-macosx_11_0_arm64.whl", hash = "sha256:f5d00a01b062df2b29b5d66f54feb3b337d72ef3adb2274aa5cf5f6ddd3f0e80", size = 78680625, upload-time = "2026-08-04T22:53:02.263Z" },
-    { url = "https://files.pythonhosted.org/packages/4b/e7/6859d995cb2dbee443d28ce1291a037bb0f4abb2ea8bfa00acb2a6f40ac2/claude_agent_sdk-0.2.130-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:fb97fd35918ffbfbf81eb6a4f140208e46291c5afaac572eff114689619fe7c2", size = 83787309, upload-time = "2026-08-04T22:53:05.488Z" },
-    { url = "https://files.pythonhosted.org/packages/6a/54/6dc1b455f38a4525aa49f16f889baee76c148707c6697ba03847fc8944b0/claude_agent_sdk-0.2.130-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:c3bcdefdae85fbec9b660d468510ab3ab1f2b2670225f689ac3f364737b50426", size = 88070783, upload-time = "2026-08-04T22:53:08.61Z" },
-    { url = "https://files.pythonhosted.org/packages/79/8c/5d92945d5d2465988de353f343675c3ae78aaf40b8b49dbcd6afd45a678a/claude_agent_sdk-0.2.130-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:9cdce7dc466a388520bf61aaad631df01d4d2450c0d1752f45ac6d57d97ffd49", size = 89327882, upload-time = "2026-08-04T22:53:12.614Z" },
-    { url = "https://files.pythonhosted.org/packages/31/93/73ba3cb9ac39ffb2a02d4252ee04573bb5ae5c14757f05d8a96850b51586/claude_agent_sdk-0.2.130-py3-none-win_amd64.whl", hash = "sha256:891af911201aeb082ba5cd706ae4969e61ba16d5f5f941f14685a9d3a55521df", size = 88862396, upload-time = "2026-08-04T22:53:17.122Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/7f/f04c33553cbc69bb96d045dc38a6266726fad72130f22f405dfe9eb54bf1/claude_agent_sdk-0.2.139-py3-none-macosx_11_0_arm64.whl", hash = "sha256:cbc50cc475ec633cabfa36347646097e9b1466d53130e4a04a87308ff830c87b", size = 88043656, upload-time = "2026-08-14T22:34:53.027Z" },
+    { url = "https://files.pythonhosted.org/packages/85/d0/a17f5318ca0220479f20fdf83fa54a838a0a13ee203495ff67c72c3f43a7/claude_agent_sdk-0.2.139-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:1c08206b1603444582cd365effaf95d2a8248661f1492281fb2d529b0887c047", size = 93000433, upload-time = "2026-08-14T22:34:58.225Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/2e/5bcec31700d76ad2d5b9fc28521a75a66f464063dac11373cf8d61446a4f/claude_agent_sdk-0.2.139-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:e69ae1a0b2af684c64839cc16e10b70800d9d2f57622b8c0d1739dd878cd7346", size = 97396659, upload-time = "2026-08-14T22:35:03.734Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/7f/582b3c1936c9f4ebc1bdc55a3923f1b680ef3c01928ffff1ea38eb84f637/claude_agent_sdk-0.2.139-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:34b289b3436fe24013f7b9cfe9f0a4e0806917a9ef8bbe829cda9a7b12d41a77", size = 98391889, upload-time = "2026-08-14T22:35:09.683Z" },
+    { url = "https://files.pythonhosted.org/packages/56/54/d94af31d19b4e8d63d1b15002fd333ea77a040b7ab7a388044e511c8f9f6/claude_agent_sdk-0.2.139-py3-none-win_amd64.whl", hash = "sha256:9b76f0ffe216d6ca290d5f4f295ecb030dc496f101986ac99480a89d4abc6426", size = 100746507, upload-time = "2026-08-14T22:35:15.144Z" },
 ]
 
 [[package]]
@@ -1015,7 +1015,7 @@ requires-dist = [
 [[package]]
 name = "multiplai-core"
 version = "0.13.0"
-source = { git = "https://github.com/spikelab/multiplai-core?branch=main#adc15ef7fa9f4fc8ca223a949862fc0d89f354f5" }
+source = { git = "https://github.com/spikelab/multiplai-core?branch=main#5de6a05646b5a2e6612364af8d30af3214d002d5" }
 dependencies = [
     { name = "anthropic" },
     { name = "pyyaml" },
