@@ -75,6 +75,58 @@ If it exits with "No Chrome DevTools endpoint on 9222", the user must run
 `chrome-agent` once on the Mac (it's a host alias, not a container command;
 ask them to run `chrome-agent` in a Mac terminal). Then re-run.
 
+## The short path — reading one page
+
+No login, no form, nothing to fill in: you just need the text of a page that
+came back empty, skeletal, or walled. That is Step 0 plus one command.
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/skills/host-browser/scripts/hb-connect.sh   # Step 0 — idempotent
+hb goto --see "$url"
+```
+
+**Connect first even here.** Skipping Step 0 leaves agent-browser driving the
+Chrome-for-Testing it launches by default: `navigator.webdriver === true`, no
+profile cookies, no history. That is the wrong browser and a wall stops it
+harder than whatever sent you here.
+
+**`hb goto --see` is the whole recipe.** It opens, waits for `networkidle`,
+runs `hb dismiss` to clear the cookie/consent overlay, prints a block verdict
+(exit `0` on real content, exit `1` plus a host-side screenshot on a wall),
+and emits the interactive snapshot. Assembling that by hand out of `ab open` +
+`ab snapshot` gets two things wrong: `ab open` exits `0` on a wall, so the
+"Verify you are human" page or the GDPR modal reads back as the article; and a
+snapshot without `-i` has no `@eN` refs, so nothing is left to act on. Do not
+hand-roll a settle delay either — `hb goto` already waits, and `hb waitfor`
+covers anything slower.
+
+Anything interactive — a login, a form, a signup, a flow a detector watches —
+uses the full human-paced flow in Step 1 instead.
+
+### Which wall did you hit
+
+`hb goto` exiting `1` tells you that you were stopped, not by what. Three
+kinds, wanting three different responses:
+
+- **Behavioral / invisible captcha** (hidden Turnstile, invisible reCAPTCHA) —
+  a genuine fingerprint plus human pacing usually passes it; that is this
+  skill's entire design. Continue with the human verbs in Step 1.
+- **Risk-scored** (DataDome, PerimeterX, Kasada) — these *score*, they do not
+  gate: finding the script in the page is not a block. `hb dd` gives the real
+  verdict (`clear` / `scored` / `CHALLENGED`), `hb warmup <homepage>` lowers
+  the score before a deep link, and only a rendered challenge is a stop — one
+  the human solves, via `hb solve-wait`. Sanctioned flow below.
+- **Policy** — a disposable-email blocklist, a device check that always
+  challenges, an explicit "no automation" ToS. Realism does not defeat these
+  and is not meant to: change inputs, or stop. See Ethics.
+
+**An HTTP 429 is none of the three.** It is a rate limit, and the answer is to
+back off and retry later — not to re-request the same URL through the user's
+real logged-in Chrome and residential IP, which spends their identity on a
+problem that time solves. See "One session, real rate" below.
+
+Model and ethics for all three: `references/antidetection.md`.
+
 ## Step 1 — Drive with `hb` (human-paced)
 
 Use `hb` exactly like `ab`, but prefer its human verbs for anything a bot
@@ -205,7 +257,7 @@ See "Untrusted content" in the global `CLAUDE.md` for the full convention.
 - **Grab a verification email + sign up** → `references/temp-email-and-signup.md`
   (full validated walkthrough: mail.tm inbox → drive a signup → read the code
   via in-page `fetch` → enter it).
-- **Anti-detection patterns & the two block classes** → `references/antidetection.md`.
+- **Anti-detection patterns & the wall classes** → `references/antidetection.md`.
 
 ## Gotchas (all hit during real runs)
 
@@ -224,7 +276,8 @@ See "Untrusted content" in the global `CLAUDE.md` for the full convention.
 ## Ethics
 
 Authorized, non-abusive automation only: one throwaway account, human pacing,
-respect rate limits, honor robots/ToS intent. **Distinguish the two walls:**
+respect rate limits, honor robots/ToS intent. **Distinguish behavioral walls
+from policy walls:**
 behavioral/captcha walls are fair game for human-paced genuine browsing;
 explicit **policy** walls (disposable-email blocks, "no automation" ToS) are a
 *stop* signal, not a puzzle to defeat. Never mass-target or spam.
