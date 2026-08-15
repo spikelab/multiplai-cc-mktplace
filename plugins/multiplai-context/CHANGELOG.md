@@ -16,23 +16,47 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.48.0] - 2026-08-15
+
 ### Changed
 
-- **Extended thinking is now off at every mechanical model call**, not just
-  the memory router's: diary/learnings extraction, the checkpoint writer, the
-  memory doctor's duplication and contradiction passes, the offline
-  utilisation judge, per-project `now/` summaries, and catalog generation.
-  These calls are parse/classify/summarise work over input the model sees in
-  full; a cold no-tools call drops 18.4 s → 2.9 s with thinking disabled
-  (measured 2026-08-09), so the background pipelines stop paying ~15 s of
-  latency per call for deliberation they never needed. Each subsystem has its
-  own opt-back option — `extraction_thinking`, `checkpoint_thinking`,
-  `doctor_thinking` (shared by both doctor passes), `utilisation_thinking`,
-  `now_thinking`, `catalog_thinking` — with the same contract as
-  `router_thinking`: default off, set `1`/`true` to restore the SDK default.
-  Needs `multiplai-core` ≥ 0.14.0; against an older core the plugin warns
-  once, keeps thinking on, and keeps working. Dream proposal generation keeps
-  extended thinking on by design.
+- **Extended thinking is now off at the mechanical model calls**, not just the
+  memory router's: diary/learnings extraction, the checkpoint writer, the
+  memory doctor's duplication confirmation, the offline utilisation judge,
+  per-project `now/` summaries, and catalog generation. These calls are
+  parse/classify/summarise work over input the model sees in full; a cold
+  no-tools call drops 18.4 s → 2.9 s with thinking disabled (measured
+  2026-08-09), so the background pipelines stop paying ~15 s of latency per
+  call for deliberation they never needed. Each subsystem has its own opt-back
+  option — `extraction_thinking`, `checkpoint_thinking`,
+  `duplication_thinking`, `utilisation_thinking`, `now_thinking`,
+  `catalog_thinking` — with the same contract as `router_thinking`: default
+  off, set `true`/`1`/`yes`/`on` to restore the SDK default. Values are read by
+  the same parser as every other boolean option here, so a value that is
+  neither true nor false logs a warning and leaves the default standing
+  instead of being guessed at.
+
+  **Two calls deliberately keep extended thinking on.** Dream proposal
+  generation, as before; and now the memory doctor's **contradiction** pass,
+  which reads as mechanical from the outside and is not — it has to hold two
+  statements side by side and decide whether they can both be true, which is
+  why it already carried a 600 s timeout against the duplication pass's 180 s.
+  A missed contradiction is silent, and none of these calls runs against a
+  deadline that 15 s would blow, so the trade only made sense where the
+  reasoning was not being used. There is no `doctor_thinking` option: the
+  switch that ships is `duplication_thinking`, named for the one pass it
+  actually moves.
+
+- **The old-dependency warning now names a fix you can actually perform.** If
+  the installed `multiplai-core` cannot carry a `thinking=` setting, it is
+  dropped with one warning per call path and behaviour degrades to today's
+  (thinking on), never to an error — and that warning now tells you to
+  reinstall the plugin from the marketplace, rather than to re-resolve a
+  lockfile that does not exist on an installed plugin. No version number is
+  quoted at you either: the capability is what matters, and the version that
+  the old text named was never published.
 
 ## [0.47.0] - 2026-08-12
 
