@@ -7,7 +7,7 @@ dependencies = [
     "multiplai-core",
     "google-api-python-client>=2.198.0,<3",
     "google-auth-oauthlib>=1.4.0,<2",
-    "google-auth[requests]>=2.56.2,<3",
+    "google-auth[requests]>=2.56.3,<3",
 ]
 
 [tool.uv]

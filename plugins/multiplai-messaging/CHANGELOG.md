@@ -12,6 +12,16 @@ Recorded history starts at **0.1.2**; anything earlier is in `git log` only.
 
 `multiplai-messaging@0.1.1` predates this file and has no section here.
 
+## [0.3.2] - 2026-08-16
+
+### Changed
+
+- **`gmail` now needs `google-auth[requests] >= 2.56.3`** (was `>= 2.56.2`). A
+  patch-level floor raise from Dependabot; nothing the skill does changes. It is
+  recorded because the floor is what an *installed* plugin resolves against —
+  the member is resolved standalone there, with no workspace root above it, so
+  the `pyproject.toml` bound is the whole constraint.
+
 ## [0.3.1] - 2026-08-04
 
 ### Fixed
