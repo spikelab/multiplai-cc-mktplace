@@ -340,20 +340,25 @@ Read the existing line and the proposed replacement, then decide one of:
   version of a line that already existed;
 - you rewrote the line rather than taking either version → record `edited`.
 
-Then record it, exactly like any other item — `--file` is the memory file from
-the heading and `--index` is its line number:
+Record them the same batched way as everything else — one call for all of them,
+with `"kind":"conflict"`. `file` is the memory file named in the heading and
+`index` is its **line number**, since a conflict has no `### N.` to key on:
 
-```bash
-uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" \
-  "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --mark-processed \
-  --proposal <exact-proposal-path> \
-  --kind conflict --file dolcebot.md --index 453 --status rejected
+```json
+[
+  {"kind":"conflict","file":"dolcebot.md","index":453,"status":"rejected"},
+  {"kind":"conflict","file":"dolcebot.md","index":455,"status":"applied","target":"dolcebot.md"}
+]
 ```
 
-**Recording it is not optional bookkeeping.** `## Conflict Resolutions` is a
+Feed that to the Step 4 command. Conflicts may ride in the same array as the
+`update` items for the file they touch — one call per target file, as Step 4
+already says.
+
+**Recording them is not optional bookkeeping.** `## Conflict Resolutions` is a
 regenerated section: an undecided conflict is re-derived and re-presented on
 every subsequent proposal, so a decision you make and do not record costs the
-same reading again next time, forever. Marking it moves the block under
+same reading again next time, forever. Recording moves the block under
 `## Processed`, which also stops the proposal being folded into a later run —
 that is what keeps the decision.
 
