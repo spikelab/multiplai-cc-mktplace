@@ -135,17 +135,18 @@ Details on the passes themselves in the
 │   └── marketplace.json          # marketplace manifest (lists plugins)
 ├── plugins/                      # each: .claude-plugin/plugin.json, skills/,
 │   │                             #        README.md, CHANGELOG.md
-│   ├── multiplai-context/        # hooks/ scripts/ skills/ templates/ tests/
-│   ├── multiplai-pm/             # .claude-plugin/plugin.json + skills/
+│   ├── multiplai-context/        # + evals/ hooks/ scripts/ templates/ tests/
+│   ├── multiplai-pm/             # the plain shape — nothing beyond the four above
 │   ├── multiplai-writing/
 │   ├── multiplai-research/
 │   ├── multiplai-dev/
-│   ├── multiplai-media/
-│   ├── multiplai-messaging/
-│   └── multiplai-apple/
+│   ├── multiplai-media/          # + tests/
+│   ├── multiplai-messaging/      # + tests/
+│   └── multiplai-apple/          # + tests/
 ├── docs/                         # cross-cutting contracts (degradation, untrusted content)
-├── scripts/                      # repo-level checks: lint_skills.py, scan_skills.py,
-│                                 # check_changelog.py — plus tests/ for all three
+├── scripts/                      # repo-level gates: lint_skills.py, scan_skills.py,
+│                                 # check_changelog.py, lint_workspace.py — plus
+│                                 # tests/ for all four
 ├── CHANGELOG.md                  # index only; the notes live per plugin
 ├── CLAUDE.md                     # orientation for an agent working in this repo
 ├── CONTRIBUTING.md               # gates, release convention, how to contribute
@@ -155,10 +156,19 @@ Details on the passes themselves in the
 ```
 
 Shared Python infrastructure (paths, config, logging, model client) lives in
-[`multiplai-core`](https://github.com/spikelab/multiplai-core), consumed via
-PEP 723 inline metadata pinned to immutable tags — its README carries an
-explicit [availability guarantee](https://github.com/spikelab/multiplai-core#availability-guarantee)
+[`multiplai-core`](https://github.com/spikelab/multiplai-core). Every script
+directory that needs it is a member of the single uv workspace rooted at
+`pyproject.toml`, and the one `uv.lock` at the repo root records what each
+dependency resolved to — so resolution happens when CI runs, not during your
+prompt. Core itself is declared unpinned and tracked from `main`: it is
+first-party and its releases have been additive throughout. Its README carries
+an explicit [availability guarantee](https://github.com/spikelab/multiplai-core#availability-guarantee)
 (the repo stays public; release tags are never moved or deleted).
+
+PEP 723 inline metadata was the previous convention here and is now a defect —
+`uv run` re-resolves an inline block on every invocation, which took the
+per-prompt hooks from ~0.05s to 12-68s, and Dependabot cannot read those blocks
+at all. `scripts/lint_workspace.py` fails a pull request that reintroduces one.
 
 ## Uninstall
 
