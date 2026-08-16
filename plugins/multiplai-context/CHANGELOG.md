@@ -18,7 +18,23 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
-## [0.49.0] - 2026-08-15
+## [0.49.1] - 2026-08-16
+
+### Fixed
+
+- **`scripts/.warmup-deferred.log` no longer grows without a bound.** It is the
+  one log the plugin writes outside `data/logs/`, so the retention sweep that
+  honours `MULTIPLAI_LOG_RETENTION_DAYS` never saw it, and every lifecycle hook
+  dropped during a build window appended to it forever.
+
+  It stays where it is: `data/logs/` is resolved by `multiplai_core.paths`
+  through several fallbacks, and `hooks/run.sh` exists precisely because that
+  package may not be importable yet — so it cannot ask where the directory is
+  without guessing. Instead the file is capped at 256 KB and rotated to
+  `.warmup-deferred.log.1` by rename, which is atomic and safe against the
+  detached subshells that may be appending at that moment. One generation is
+  kept, so the pair is bounded at 512 KB. A log under the cap is left alone: a
+  dropped session is rare and the record of the last one must survive the next.
 
 Standalone (vanilla Claude Code) hardening: this release is about the
 plugin working properly with no kit, no `CLAUDE_CONFIG_DIR`, and no

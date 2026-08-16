@@ -572,6 +572,40 @@ class TestColdStartLosesNothing:
             lambda: "dropped session_end.py" in _text(log), timeout=25
         ), f"nothing recorded the dropped session: {_text(log)!r}"
 
+    def test_the_deferred_log_is_rotated_once_it_passes_the_cap(self, tmp_path):
+        """It is the one log outside `data/logs/`, so `_sweep_logs` never sees
+        it and it grew without bound. `data/logs/` is unreachable from here —
+        `multiplai_core.paths` resolves it through fallbacks this script cannot
+        import — so the bound is a size cap enforced by rename."""
+        env, root, _uv_log = _prewarm_env(tmp_path)
+        env["UV_SYNC_FAIL"] = "1"
+        log = self._deferred_log(root)
+        log.write_text("x" * (262144 + 1))
+
+        _run(_cmd("session_end.py"), env, stdin="{}")
+
+        rotated = log.with_suffix(".log.1")
+        assert _wait_for(lambda: rotated.is_file(), timeout=25), \
+            "an oversized log was appended to rather than rotated"
+        assert rotated.stat().st_size > 262144, "rotated the wrong file"
+        assert log.stat().st_size < 262144, "the live log kept the old bytes"
+
+    def test_a_log_under_the_cap_is_left_alone(self, tmp_path):
+        """Rotating every run would throw away the record this file exists to
+        keep — a dropped session is rare and the next one must not erase it."""
+        env, root, _uv_log = _prewarm_env(tmp_path)
+        env["UV_SYNC_FAIL"] = "1"
+        log = self._deferred_log(root)
+        log.write_text("earlier drop\n")
+
+        _run(_cmd("session_end.py"), env, stdin="{}")
+
+        assert _wait_for(
+            lambda: "dropped session_end.py" in _text(log), timeout=25
+        )
+        assert "earlier drop" in _text(log), "history discarded under the cap"
+        assert not log.with_suffix(".log.1").exists()
+
     def test_prompt_hooks_are_not_replayed(self, tmp_path):
         """context_manager/checkpoint_nudge belong to a prompt that has
         already been answered — re-running them a minute later would inject
