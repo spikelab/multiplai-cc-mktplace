@@ -467,6 +467,15 @@ def _is_unmodified_generated(text: str) -> bool:
 # Sections dream re-derives from current state on every run. A folded proposal
 # carries yesterday's copies; merging them in would put two `## Routing Warnings`
 # sections in one document, the stale one first.
+#
+# A *decided* conflict resolution is not lost to this, and needs no exemption
+# here (issue #201). `_strip_regenerated` runs only inside
+# `_fold_pending_proposals`, which folds nothing that `_has_decided_items`
+# rejects — and marking a conflict processed moves its block under
+# `## Processed`, which is exactly what that predicate looks for. So the
+# proposal stops being foldable the moment any conflict in it is dispositioned,
+# and the decision survives. Adding a second mechanism here would be a
+# same-question-answered-twice hazard, not extra safety.
 _REGENERATED_SECTIONS = ("## Routing Warnings", "## Conflict Resolutions")
 
 
@@ -2222,10 +2231,21 @@ async def dream_auto() -> None:
             failed_count = 0
             for (filename, memory_file, _), updated_content in zip(targets, results):
                 if updated_content:
-                    # Atomic, like the triage path: the learnings this came from
-                    # are unlinked below, so a half-written file here is the one
-                    # loss with no source left to retry from.
-                    _atomic_write(memory_file, _refresh_last_updated(updated_content, today))
+                    try:
+                        # Atomic, like the triage path: the learnings this came from
+                        # are unlinked below, so a half-written file here is the one
+                        # loss with no source left to retry from.
+                        _atomic_write(memory_file, _refresh_last_updated(updated_content, today))
+                    except OSError:
+                        # Same reasoning as the triage path: an unhandled OSError on
+                        # the second file aborted the run with the first already
+                        # rewritten and `state` never saved. Counting it as a failed
+                        # apply keeps every source learnings file on disk (the
+                        # `failed_count == 0` guard below), so the next run retries
+                        # from intact material instead of losing it.
+                        failed_count += 1
+                        logger.exception("Could not write %s — not applied", filename)
+                        continue
                     updated_count += 1
                     logger.info("Applied updates to %s", filename)
                 else:
@@ -2569,16 +2589,52 @@ async def dream_triage(proposal_arg: str | None, *, dry_run: bool) -> int:
         memory_judge.default_cache_path(paths.data_dir()),
         persist_cache=not dry_run,
     )
-    disagreements = sum(
-        1 for item in triage.review
-        if triage_lib.reconciled_pair(
+    # Per-item first, then the breakdown. The bare count this used to log could
+    # not distinguish label noise from genuine caution, and resolution is
+    # one-way — see `triage_lib.reconciliation_detail` (issue #203).
+    disagreements = 0
+    prov_disagreed = kind_disagreed = 0
+    won: dict[str, int] = {}
+    resolved_kinds: dict[str, dict[str, int]] = {}
+    for item in triage.review:
+        detail = triage_lib.reconciliation_detail(
             item, verdicts.get((item.target, item.number))
-        )[2]
-    )
+        )
+        resolved_kind = str(detail["resolved_pair"]).split("/")[-1]
+        bucket = resolved_kinds.setdefault(resolved_kind, {})
+        bucket[str(detail["kind_won"])] = bucket.get(str(detail["kind_won"]), 0) + 1
+        if not detail["disagreed"]:
+            continue
+        disagreements += 1
+        prov_disagreed += bool(detail["provenance_disagreed"])
+        kind_disagreed += bool(detail["kind_disagreed"])
+        for half in ("provenance_won", "kind_won"):
+            if detail[half] in ("extractor", "judge"):
+                key = f"{half.split('_')[0]}:{detail[half]}"
+                won[key] = won.get(key, 0) + 1
+        logger.debug(
+            "triage: %s#%s provenance/kind contested — extractor=%s judge=%s "
+            "resolved=%s (provenance won by %s, kind won by %s)",
+            item.target, item.number, detail["extractor_pair"],
+            detail["judge_pair"], detail["resolved_pair"],
+            detail["provenance_won"], detail["kind_won"],
+        )
     if disagreements:
         logger.info(
             "triage: judge and extractor disagreed on the provenance/kind pair for "
-            "%d item(s); the more conservative half of each won", disagreements,
+            "%d of %d item(s); the more conservative half of each won "
+            "(provenance contested %d, kind contested %d; winners %s)",
+            disagreements, len(triage.review), prov_disagreed, kind_disagreed,
+            ", ".join(f"{k}={v}" for k, v in sorted(won.items())) or "none",
+        )
+    for resolved_kind, breakdown in sorted(resolved_kinds.items()):
+        # The number that decides whether the rubric or the labelling needs
+        # changing: how many items landed on this kind because *both* passes
+        # said so, versus because one said so and the other lost.
+        logger.info(
+            "triage: kind %s — %d item(s) [%s]",
+            resolved_kind or "-", sum(breakdown.values()),
+            ", ".join(f"{k}={v}" for k, v in sorted(breakdown.items())),
         )
     triage = triage_lib.apply_verdicts(triage, verdicts, mode=mode)
     if unjudged:
@@ -2795,6 +2851,99 @@ def _append_revert_line(receipt_path: Path, memory_dir: Path) -> None:
     except (OSError, subprocess.SubprocessError):
         logger.warning("triage: could not record the revert sha in the receipt",
                        exc_info=True)
+
+
+def _reconcile(*, dry_run: bool = False) -> int:
+    """Finish proposals that are fully decided but still sitting in the dreams root.
+
+    The invariant, and it needs no model call: a proposal with **zero pending
+    items** that is not in ``applied/``/``rejected/``/``superseded/`` is
+    finished-but-unfiled. Three things should have happened to it and did not —
+    archive, stamp, collect the spent learnings.
+
+    Why nothing else catches this (issue #202). ``/dream-remember`` Step 1 takes
+    the *newest* proposal by mtime and never looks at older ones, so a stale
+    fully-processed file is outside what the skill inspects and re-running it
+    cannot help. Nothing stamps on the apply path, so a review that ends before
+    Step 6 leaves memory changed with no state recording it and the gate reading
+    "due" forever. And ``_gc_learnings`` requires the proposal to be archived
+    before collecting its sources, so a missed archive silently pins the
+    learnings files too — which is the compounding part: the next ``/dream``
+    re-scans them and drafts items from material already consolidated.
+
+    Returns a process exit code: 0 when the root is clean or everything was
+    finished, 1 when at least one proposal could not be archived.
+    """
+    paths = get_paths()
+    dreams_dir = paths.dreams_dir()
+    if not dreams_dir.exists():
+        print("No dreams directory — nothing to reconcile.")
+        return 0
+
+    candidates = sorted(
+        p for p in dreams_dir.glob("processed-learnings-*.md") if p.is_file()
+    )
+    if not candidates:
+        print("Dreams root is empty — nothing to reconcile.")
+        return 0
+
+    finished: list[Path] = []
+    still_pending: list[Path] = []
+    for proposal in candidates:
+        try:
+            text = proposal.read_text()
+        except OSError:
+            logger.exception("reconcile: could not read %s — skipped", proposal)
+            continue
+        (still_pending if has_pending_items(text) else finished).append(proposal)
+
+    for proposal in still_pending:
+        print(f"pending:  {proposal.name} — has undecided items, left alone")
+
+    if not finished:
+        print(f"Nothing to reconcile ({len(still_pending)} proposal(s) still pending).")
+        return 0
+
+    if dry_run:
+        for proposal in finished:
+            print(f"WOULD FINISH: {proposal.name} — 0 pending items, not archived")
+        print(
+            f"reconcile (dry run): {len(finished)} finished-but-unfiled proposal(s). "
+            "Re-run without --dry-run to archive, stamp and collect."
+        )
+        return 0
+
+    failures = 0
+    for proposal in finished:
+        try:
+            archived = _archive_proposal(proposal, dreams_dir)
+        except OSError:
+            # Leave it in the root rather than half-finishing it: an un-archived
+            # proposal is the state this function exists to report, so failing
+            # loudly here is strictly better than stamping as if it worked.
+            logger.exception("reconcile: could not archive %s", proposal)
+            print(f"ERROR: could not archive {proposal.name} — left in the dreams root")
+            failures += 1
+            continue
+        print(f"archived: {proposal.name} -> {archived.parent.name}/{archived.name}")
+
+    # Stamp once, after the moves. `last_run` answers "has a dream been applied
+    # since?", and the answer is the same whether one proposal was filed or
+    # three. Only stamp if something actually moved — otherwise a run that
+    # failed every archive would silence the gate it should be tripping.
+    if failures < len(finished):
+        dream_state_file = paths.dream_state_file()
+        state = load_yaml(dream_state_file) or {}
+        state["last_run"] = datetime.now(timezone.utc).isoformat()
+        save_yaml(dream_state_file, state)
+        print(f"stamped:  dream_state last_run={state['last_run']}")
+
+        # Now that the proposals are archived, `_gc_learnings` can see their
+        # sources as spent. It applies its own per-file conditions and explains
+        # everything it keeps, so it is safe to call unconditionally here.
+        _gc_learnings()
+
+    return 1 if failures else 0
 
 
 def _gc_learnings() -> None:
@@ -3030,6 +3179,16 @@ def main() -> None:
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
+        "--reconcile",
+        action="store_true",
+        help="Find proposals in the dreams root with zero pending items and "
+             "finish them: archive, stamp dream_state, then collect spent "
+             "learnings. A fully-decided proposal left in the root is "
+             "indistinguishable from a pending one — it keeps the dream gate "
+             "nudging and pins the learnings files its sources came from. "
+             "Combine with --dry-run to report without changing anything.",
+    )
+    parser.add_argument(
         "--mark-processed",
         action="store_true",
         help="Move decided proposal items into the proposal's `## Processed` "
@@ -3050,7 +3209,10 @@ def main() -> None:
              "group, target the memory file actually written.",
     )
     parser.add_argument(
-        "--kind", choices=("update", "action"), default="update", help=argparse.SUPPRESS
+        "--kind",
+        choices=("update", "action", "conflict"),
+        default="update",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("--index", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--file", metavar="TARGET.md", help=argparse.SUPPRESS)
@@ -3068,11 +3230,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # `--dry-run` is read only by the triage path. Without this, `dream.py
-    # --dry-run` silently runs a full consolidation and writes a proposal —
-    # the opposite of what the flag's name promises.
-    if args.dry_run and not args.triage:
-        parser.error("--dry-run requires --triage")
+    # `--dry-run` is read only by the paths that name it below. Without this,
+    # `dream.py --dry-run` silently runs a full consolidation and writes a
+    # proposal — the opposite of what the flag's name promises. Widen this
+    # tuple when a new path honours the flag; never drop the guard.
+    if args.dry_run and not (args.triage or args.reconcile):
+        parser.error("--dry-run requires --triage or --reconcile")
 
     if args.mark_processed and args.decisions:
         if not args.proposal:
@@ -3114,6 +3277,18 @@ def main() -> None:
                 sys.exit(2)
             ref: tuple = ("update", args.file, args.index)
             label = f"update {args.file}#{args.index}"
+        elif args.kind == "conflict":
+            # A conflict has no `### N.` number — it is keyed by the memory line
+            # it proposes to supersede, so --file is the memory file and --index
+            # is the line number in it.
+            if not args.file:
+                print(
+                    "ERROR: --mark-processed --kind conflict needs --file "
+                    "(the memory file named in the heading); --index is its line number"
+                )
+                sys.exit(2)
+            ref = ("conflict", args.file, args.index)
+            label = f"conflict {args.file}:{args.index}"
         else:
             ref = ("action", args.index)
             label = f"action A{args.index}"
@@ -3152,6 +3327,9 @@ def main() -> None:
             )
             print(f"Archived proposal to {archived}")
         return
+
+    if args.reconcile:
+        sys.exit(_reconcile(dry_run=args.dry_run))
 
     if args.gc_learnings:
         _gc_learnings()

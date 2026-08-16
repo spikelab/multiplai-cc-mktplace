@@ -941,3 +941,83 @@ class TestPolicyConstants:
         for item in triage.review:
             for reason in item.reasons:
                 assert reason in REASON_LABELS, reason
+
+
+# ---------------------------------------------------------------------------
+# Provenance/kind disagreement detail (#203)
+# ---------------------------------------------------------------------------
+#
+# Resolution is strictly one-way (the more cautious half always wins), so every
+# disagreement can only move an item toward manual review. The aggregate count
+# alone therefore cannot separate label noise from genuine caution: on
+# processed-learnings-2026-08-12, 79 of 201 items (39%) had a contested label
+# and 64 ended `kind: RULE` (which never auto-applies), and the logs could not
+# say whether those two facts were related.
+
+class _Item:
+    def __init__(self, provenance="", kind=""):
+        self.provenance = provenance
+        self.kind = kind
+
+
+class _Verdict:
+    def __init__(self, provenance="", kind=""):
+        self.provenance = provenance
+        self.kind = kind
+
+
+def test_detail_records_both_pairs_and_the_resolution():
+    from lib.dream_triage import reconciliation_detail
+
+    d = reconciliation_detail(
+        _Item(provenance="EMPIRICAL", kind="FACT"),
+        _Verdict(provenance="INFERENCE", kind="RULE"),
+    )
+    assert d["extractor_pair"] == "EMPIRICAL/FACT"
+    assert d["judge_pair"] == "INFERENCE/RULE"
+    assert d["disagreed"] is True
+    assert d["provenance_disagreed"] is True
+    assert d["kind_disagreed"] is True
+
+
+def test_detail_names_which_side_won_each_half():
+    """The number that decides rubric-vs-labelling: RULE because both passes
+    said so, or RULE because one said FACT and lost."""
+    from lib.dream_triage import reconciled_pair, reconciliation_detail
+
+    item, verdict = _Item("EMPIRICAL", "FACT"), _Verdict("INFERENCE", "RULE")
+    provenance, kind, _ = reconciled_pair(item, verdict)
+    d = reconciliation_detail(item, verdict)
+
+    # The detail must agree with the decision it describes — it re-derives,
+    # it does not re-decide.
+    assert d["resolved_pair"] == f"{provenance}/{kind}"
+    assert d["provenance_won"] in ("extractor", "judge")
+    assert d["kind_won"] in ("extractor", "judge")
+
+
+def test_agreement_is_labelled_agreed_not_won():
+    from lib.dream_triage import reconciliation_detail
+
+    d = reconciliation_detail(_Item("EMPIRICAL", "RULE"), _Verdict("EMPIRICAL", "RULE"))
+    assert d["disagreed"] is False
+    assert d["provenance_won"] == "agreed"
+    assert d["kind_won"] == "agreed"
+
+
+def test_a_missing_judge_verdict_is_not_a_disagreement():
+    from lib.dream_triage import reconciliation_detail
+
+    d = reconciliation_detail(_Item("EMPIRICAL", "FACT"), None)
+    assert d["disagreed"] is False
+    assert d["judge_pair"] == "-/-"
+    assert d["kind_won"] == "only-one-label"
+
+
+def test_only_one_half_contested_is_reported_as_such():
+    from lib.dream_triage import reconciliation_detail
+
+    d = reconciliation_detail(_Item("EMPIRICAL", "RULE"), _Verdict("INFERENCE", "RULE"))
+    assert d["provenance_disagreed"] is True
+    assert d["kind_disagreed"] is False
+    assert d["kind_won"] == "agreed"

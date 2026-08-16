@@ -1,7 +1,8 @@
 """Tests for lib/routing_validation.py — deterministic post-proposal gate.
 
 Covers:
-- build_section_registry() maps H2 names to owning files
+- build_section_registry() maps H2-H4 names to owning files
+- section existence spans H2-H4 while collision checking stays H2-only (#200)
 - parse_proposal_entries() extracts targets/sections/text, skips action items
 - validate_proposal() flags misrouted sections (section owned by another file)
 - validate_proposal() flags new-section name collisions
@@ -21,8 +22,10 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from lib.routing_validation import (  # noqa: E402
     NEAR_DUPLICATE_QUOTES,
+    _owners,
     append_routing_warnings,
     build_section_registry,
+    index_sections,
     find_batch_near_duplicate_groups,
     find_duplicate_content,
     find_near_duplicate_line,
@@ -85,6 +88,81 @@ class TestBuildSectionRegistry:
 
     def test_missing_dir_returns_empty(self, tmp_path):
         assert build_section_registry(tmp_path / "nope") == {}
+
+    def test_indexes_h3_and_h4(self, tmp_path):
+        """Issue #200: memory files keep most sections at H3, not H2."""
+        (tmp_path / "a.md").write_text("## Top\n\n### Nested\n\n#### Deeper\n")
+        registry = build_section_registry(tmp_path)
+        assert registry["Top"] == ["a.md"]
+        assert registry["Nested"] == ["a.md"]
+        assert registry["Deeper"] == ["a.md"]
+
+    def test_ignores_h5_and_deeper(self, tmp_path):
+        (tmp_path / "a.md").write_text("## Top\n\n##### TooDeep\n")
+        assert "TooDeep" not in build_section_registry(tmp_path)
+
+    def test_same_name_at_two_depths_names_file_once(self, tmp_path):
+        (tmp_path / "a.md").write_text("## Dup\n\n### Dup\n")
+        assert build_section_registry(tmp_path)["Dup"] == ["a.md"]
+
+
+class TestSectionIndexLevels:
+    def test_records_heading_level(self):
+        idx = index_sections({"a.md": "## Two\n\n### Three\n\n#### Four\n"})
+        assert idx["Two"] == [("a.md", 2)]
+        assert idx["Three"] == [("a.md", 3)]
+        assert idx["Four"] == [("a.md", 4)]
+
+    def test_owners_filters_by_level(self):
+        idx = index_sections({"a.md": "## Shared\n", "b.md": "### Shared\n"})
+        assert _owners(idx["Shared"]) == ["a.md", "b.md"]
+        assert _owners(idx["Shared"], level=2) == ["a.md"]
+
+
+class TestSectionExistenceSpansAllLevels:
+    def test_h3_section_in_target_is_not_flagged_missing(self):
+        """The #200 regression: an H3 section that exists read as missing, and
+        the warning suggested rerouting to whichever file owned a same-named H2."""
+        memory = {
+            "ai-agent-patterns.md": "# A\n\n### Skill Architecture\n\nbody\n",
+            "claude-code-tools.md": "# C\n\n## Skill Architecture\n\nbody\n",
+        }
+        warnings = validate_proposal(
+            _proposal("ai-agent-patterns.md", "Skill Architecture", "Some new fact."),
+            memory,
+        )
+        assert not [w for w in warnings if "does not exist" in w]
+
+    def test_genuine_misroute_still_flagged(self):
+        memory = {
+            "python.md": "# P\n\nbody\n",
+            "claude-code-tools.md": "# C\n\n### Hook Timing\n\nbody\n",
+        }
+        warnings = validate_proposal(
+            _proposal("python.md", "Hook Timing", "Some new fact."), memory
+        )
+        assert any("does not exist" in w and "claude-code-tools.md" in w for w in warnings)
+
+    def test_new_section_colliding_with_h3_elsewhere_is_not_a_collision(self):
+        """Collision checking stays H2-scoped — the uniqueness invariant is H2's."""
+        memory = {
+            "python.md": "# P\n\nbody\n",
+            "dev.md": "# D\n\n### Migrations\n\nbody\n",
+        }
+        warnings = validate_proposal(
+            _proposal("python.md", "new section: Migrations", "Some new fact."), memory
+        )
+        assert not [w for w in warnings if "collides" in w]
+
+    def test_new_section_colliding_with_h2_elsewhere_still_flagged(self):
+        memory = {
+            "python.md": "# P\n\nbody\n",
+            "dev.md": "# D\n\n## Migrations\n\nbody\n",
+        }
+        warnings = validate_proposal(
+            _proposal("python.md", "new section: Migrations", "Some new fact."), memory
+        )
+        assert any("collides" in w and "dev.md" in w for w in warnings)
 
 
 class TestParseProposalEntries:

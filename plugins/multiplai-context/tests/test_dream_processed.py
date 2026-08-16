@@ -181,3 +181,114 @@ def test_a_heading_without_a_summary_is_not_an_item():
 
     assert _ACTION_ITEM_RE.match("### A2. Delete the stale worktree")
     assert not _ACTION_ITEM_RE.match("### A2.")
+
+
+# ---------------------------------------------------------------------------
+# Conflict resolutions (#201)
+# ---------------------------------------------------------------------------
+#
+# Conflicts were the only item kind with no way to record a decision: `--kind`
+# took update/action only, so a reviewer read one, decided, and the decision
+# evaporated — the same conflict re-presented on every later proposal.
+
+CONFLICT_PROPOSAL = """# Processed Learnings — 2026-08-14
+
+## Conflict Resolutions
+
+_Each of these learnings is about a line that already exists in memory._
+
+### `dolcebot.md` line 453
+
+- **Superseded** (was): the old CI-gap line.
+- **Now**: the restated CI-gap line.
+- **Basis**: EMPIRICAL/FACT; match confidence 0.61
+
+### `dolcebot.md` line 455
+
+- **Superseded** (was): the old beat-enabled warning.
+- **Now**: the restated beat-enabled warning.
+- **Basis**: EMPIRICAL/FACT; match confidence 0.47
+
+### `prompt-eng-guide.md` line 11
+
+- **Superseded** (was): the old caveat.
+- **Now**: the restated caveat.
+
+---
+
+## Updates for `testing.md` (1 learning)
+
+### 1. Clock mocking causes flaky retries
+**Section:** Test Reliability
+**Change:** add
+> Freeze the monotonic clock, not the wall clock.
+
+**Source:** 2026-07-20.md:3
+"""
+
+
+def test_conflict_moves_to_processed_keyed_by_file_and_line():
+    out = move_to_processed(
+        CONFLICT_PROPOSAL, ("conflict", "dolcebot.md", 453), "rejected",
+        ts="2026-08-16T00:00:00Z",
+    )
+    assert PROCESSED_HEADING in out
+    processed = out.split(PROCESSED_HEADING, 1)[1]
+    assert "### `dolcebot.md` line 453" in processed
+    assert "**Processed:** rejected · 2026-08-16T00:00:00Z" in processed
+    # The siblings stay pending, in the Conflict Resolutions section.
+    conflicts = out.split(PROCESSED_HEADING, 1)[0]
+    assert "### `dolcebot.md` line 455" in conflicts
+    assert "### `prompt-eng-guide.md` line 11" in conflicts
+
+
+def test_conflict_line_number_alone_is_not_enough():
+    """Two files can each have a conflict at the same line number."""
+    out = move_to_processed(
+        CONFLICT_PROPOSAL, ("conflict", "prompt-eng-guide.md", 453), "rejected",
+        ts="2026-08-16T00:00:00Z",
+    )
+    assert out == CONFLICT_PROPOSAL
+
+
+def test_conflict_marking_is_idempotent():
+    once = move_to_processed(
+        CONFLICT_PROPOSAL, ("conflict", "dolcebot.md", 453), "applied",
+        ts="2026-08-16T00:00:00Z",
+    )
+    twice = move_to_processed(
+        once, ("conflict", "dolcebot.md", 453), "applied",
+        ts="2026-08-16T00:00:00Z",
+    )
+    assert twice == once
+
+
+def test_conflicts_do_not_count_as_pending_items():
+    """`--archive` must not block on conflicts — the one thing that already
+    worked, and widening `has_pending_items` would break it."""
+    only_conflicts = CONFLICT_PROPOSAL.split("## Updates for")[0]
+    assert not has_pending_items(only_conflicts)
+    assert has_pending_items(CONFLICT_PROPOSAL)
+
+
+def test_conflict_decision_round_trips_through_a_file(tmp_path):
+    path = tmp_path / "processed-learnings-2026-08-14.md"
+    path.write_text(CONFLICT_PROPOSAL)
+    assert mark_processed(path, ("conflict", "dolcebot.md", 455), "edited")
+    assert "**Processed:** edited" in path.read_text()
+    assert not mark_processed(path, ("conflict", "dolcebot.md", 455), "edited")
+
+
+def test_conflict_decision_from_dict_requires_a_file():
+    import pytest
+
+    from lib.dream_processed import Decision
+
+    with pytest.raises(ValueError, match="kind 'conflict' needs a 'file'"):
+        Decision.from_dict({"kind": "conflict", "index": 453, "status": "rejected"})
+
+    d = Decision.from_dict(
+        {"kind": "conflict", "file": "dolcebot.md", "index": 453, "status": "rejected"}
+    )
+    assert d.ref == ("conflict", "dolcebot.md", 453)
+    assert d.label == "conflict dolcebot.md:453"
