@@ -84,6 +84,32 @@ warm="$sdir/.warmup"
 build_log="$sdir/.warmup.log"
 deferred_log="$sdir/.warmup-deferred.log"
 
+# Everything under `data/logs/` is swept on MULTIPLAI_LOG_RETENTION_DAYS by
+# multiplai_core.log_utils. This file cannot join them: `data/logs/` is resolved
+# by multiplai_core.paths through several fallbacks (a plugin option, then
+# WORKSPACE, then a home-scoped default), and reproducing that in POSIX sh would
+# mean guessing — in the one script that exists precisely because the Python
+# environment may not be importable yet.
+#
+# So it gets the retention a shell can actually implement: a size cap, enforced
+# by rename rather than by rewriting in place. The appenders are detached
+# subshells that may be mid-write; `mv` is atomic and an appender holding the old
+# descriptor keeps writing into the rotated file instead of into a truncated one.
+# One generation is kept, so the pair is bounded at 2x the cap.
+#
+# `build_log` needs none of this — it is opened with `>` per build.
+DEFERRED_LOG_MAX_BYTES=262144
+
+rotate_deferred_log() {
+    [ -f "$deferred_log" ] || return 0
+    # `wc -c` is POSIX; `stat` is spelled differently on BSD and GNU. Strip the
+    # padding BSD `wc` emits, or `[ -gt ]` gets a non-integer operand.
+    _size=$(wc -c <"$deferred_log" 2>/dev/null | tr -d ' ') || return 0
+    [ -n "$_size" ] || return 0
+    [ "$_size" -gt "$DEFERRED_LOG_MAX_BYTES" ] || return 0
+    mv -f "$deferred_log" "$deferred_log.1" 2>/dev/null || true
+}
+
 # --- no uv anywhere ---------------------------------------------------------
 if [ -z "$UV" ]; then
     if [ "$script" = "--warm" ]; then
@@ -270,6 +296,9 @@ if [ -n "$build_state" ]; then
             # guard is for a hand-run invocation, where there is no payload
             # and `cat` would block.
             [ -t 0 ] || payload=$(cat)
+            # In the parent, before the append starts: one check per deferred
+            # hook, and never a race between the size test and the rename.
+            rotate_deferred_log
             (
                 i=0
                 while [ -d "$warm" ] && [ ! -f "$warm/status" ] && [ "$i" -lt 300 ]
