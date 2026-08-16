@@ -18,6 +18,42 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.51.0] - 2026-08-16
+
+### Fixed
+
+- **Reference docs are found outside `reference/dev/`.** Session startup looked
+  for the engineering standards in exactly one directory, `reference/dev/`,
+  hardcoded — so a doc filed under any other subdirectory of `reference/` was
+  never injected, no matter how well the routing matched it, and the failure
+  was silent (a miss is a log line, not an error). All subdirectories of
+  `reference/` are now searched, `dev/` first so nothing that resolved before
+  resolves differently, then the rest in name order. First match wins.
+  Sessions with a `reference/` tree but no `dev/` inside it now get their docs
+  instead of nothing at all.
+
+- **The duplicate-detection tokenizer no longer discards code spans.** Text
+  inside backticks was deleted before comparison, which is exactly where the
+  distinctive words of a tool-usage rule live — `gh pr merge --squash
+  --delete-branch` against a memory line describing that same command scored
+  **0.00**, a total miss, because after stripping both sides had almost nothing
+  left to compare. Code spans are now kept and tokenized; that pair scores
+  **0.80**.
+
+  Backtested over the real 602-item backlog against memory before and after
+  consolidation, the measure it feeds — near-duplicate flagging in `## Routing
+  Warnings`, in `dream_prescreen.py`, and in the supersede edits at the top of
+  every proposal — goes from 317 true / 24 false to **332 true / 25 false**:
+  +15 real duplicates caught for one extra false positive. So a review pass
+  surfaces more items that memory already says, and the threshold governing
+  supersede precision did not have to move to get them.
+
+  Two things were tried and rejected on the same data, recorded so they are not
+  retried: collapsing plural to singular scored *worse* at every threshold
+  (12.7:1 against 13.2:1 baseline), and lowering the threshold to 0.30 scores
+  better on this measure but spends precision on supersede edits, which is the
+  trade this change exists to avoid.
+
 ## [0.50.0] - 2026-08-16
 
 ### Fixed

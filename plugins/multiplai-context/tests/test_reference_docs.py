@@ -238,3 +238,66 @@ class TestHookIntegration:
         (project / "pyproject.toml").write_text('[project]\nname = "site"\n')
         out = self._run_hook(tmp_path, "add an endpoint", project)
         assert "DEV REFERENCES" not in self._injected(out)
+
+
+class TestSiblingReferenceDirs:
+    """Issue #204: `dev` was hardcoded, so anything the kit shipped beside it —
+    `reference/review/`, the six per-language checklists from multiplai-kit#57 —
+    was invisible to the per-session pointer block. Invisibly so: a name that
+    resolves nowhere is skipped with a log line, not an error."""
+
+    def _refs(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        return tmp_path / "reference"
+
+    def test_dev_comes_first_and_siblings_follow(self, tmp_path, monkeypatch):
+        root = self._refs(tmp_path, monkeypatch)
+        for name in ("review", "dev", "arch"):
+            (root / name).mkdir(parents=True)
+        dirs = reference_docs.reference_dirs()
+        assert [d.name for d in dirs] == ["dev", "arch", "review"]
+
+    def test_missing_dev_does_not_hide_the_siblings(self, tmp_path, monkeypatch):
+        root = self._refs(tmp_path, monkeypatch)
+        (root / "review").mkdir(parents=True)
+        assert [d.name for d in reference_docs.reference_dirs()] == ["review"]
+
+    def test_no_reference_root_yields_nothing(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "empty"))
+        assert reference_docs.reference_dirs() == []
+
+    def test_files_under_reference_are_not_directories(self, tmp_path, monkeypatch):
+        root = self._refs(tmp_path, monkeypatch)
+        root.mkdir(parents=True)
+        (root / "README.md").write_text("# not a directory\n")
+        assert reference_docs.reference_dirs() == []
+
+    def test_a_doc_in_a_sibling_dir_now_resolves(self, tmp_path, monkeypatch):
+        root = self._refs(tmp_path, monkeypatch)
+        (root / "dev").mkdir(parents=True)
+        (root / "review").mkdir(parents=True)
+        (root / "review" / "go-review.md").write_text("## Errors\n\nbody\n")
+
+        resolved = reference_docs.resolve_docs(["go-review.md"])
+        assert len(resolved) == 1
+        path, sections = resolved[0]
+        assert path.parent.name == "review"
+        assert sections == ["Errors"]
+
+    def test_dev_wins_when_both_hold_the_name(self, tmp_path, monkeypatch):
+        """`dev` first is what makes this change invisible to existing setups."""
+        root = self._refs(tmp_path, monkeypatch)
+        (root / "dev").mkdir(parents=True)
+        (root / "review").mkdir(parents=True)
+        (root / "dev" / "shared.md").write_text("## FromDev\n")
+        (root / "review" / "shared.md").write_text("## FromReview\n")
+
+        resolved = reference_docs.resolve_docs(["shared.md"])
+        assert len(resolved) == 1, "a name in two directories must resolve once"
+        assert resolved[0][0].parent.name == "dev"
+
+    def test_a_name_in_no_directory_is_still_skipped_silently(self, tmp_path, monkeypatch):
+        root = self._refs(tmp_path, monkeypatch)
+        (root / "dev").mkdir(parents=True)
+        (root / "review").mkdir(parents=True)
+        assert reference_docs.resolve_docs(["nobody-wrote-this.md"]) == []

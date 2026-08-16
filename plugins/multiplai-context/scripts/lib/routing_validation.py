@@ -44,11 +44,10 @@ proposal. Callers wrap it fail-open + loud: a crash here must never lose a
 generated proposal.
 
 A near-duplicate warning is a **lead to verify by reading both lines**, not a
-verdict — and a clean run is not a certificate: the measure strips code spans
-and does not stem, so measured recall is roughly half (see
-:func:`find_near_duplicate_line` for a real pair it misses, and
-``dream_prescreen`` for the same caveat at review time). Nothing is dropped on
-its say-so; who holds the pen does not change.
+verdict — and a clean run is not a certificate. The measure keeps code spans as
+of issue #199 but still does not stem (stemming was backtested and made the
+ratio worse), so recall is better than it was and still partial. Nothing is
+dropped on its say-so; who holds the pen does not change.
 """
 
 import logging
@@ -429,16 +428,25 @@ def find_near_duplicate_line(
     the entry's coverage of every other file. :func:`validate_proposal` does
     exactly that; see the note there.
 
-    **Recall is partial and the misses are systematic.** ``content_words``
-    strips code spans and does not stem, so a real duplicate pair measured on
-    this workspace — "Never scatter worktrees inside project directories …"
-    against ``git-policy.md:93`` "Worktrees live under
-    ``$WORKSPACE/.worktrees/<name>`` (never inside project dirs)" — scores 0.29
-    and is *not* flagged: the distinctive tokens are inside backticks, and
-    worktree/worktrees, dirs/directories are separate words. Lowering the
-    threshold or stemming here would trade precision the same constant buys
-    ``conflict_edits`` for supersede edits, which is a calibration question, not
-    a tweak. Treat a clean result as "no cheap hit", never as "no duplicate".
+    **Recall is partial, and the pair that motivated issue #199 is still a
+    miss.** ``content_words`` now keeps code spans, which is worth +15 true
+    positives on the 602-item backtest — but it did *not* rescue this pair, and
+    that is worth knowing. "Never scatter worktrees inside project directories
+    …" against ``git-policy.md:93`` "Worktrees live under
+    ``$WORKSPACE/.worktrees/<name>`` (never inside project dirs)" scored 0.29
+    when code spans were stripped and scores **0.27** now: the freed backtick
+    content tokenizes as ``workspace/.worktrees`` and ``name``, which match
+    nothing and grow the union. What actually separates the two is stemming —
+    worktree/worktrees, dirs/directories, live/lives — and stemming was
+    backtested in the same run and made the overall ratio *worse* at every
+    threshold (12.7:1 against 13.2 baseline at 0.35).
+
+    So this pair is a genuine miss the measure cannot reach, not a defect
+    waiting on a config change. It is the reason to read the items rather than
+    trust a clean run. Lowering the threshold instead would trade precision the
+    same constant buys ``conflict_edits`` for supersede edits, which is a
+    calibration question, not a tweak. Treat a clean result as "no cheap hit",
+    never as "no duplicate".
     """
     return _best_near_duplicate(
         content_words(text), _corpus_word_lines(contents), threshold

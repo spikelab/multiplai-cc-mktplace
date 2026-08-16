@@ -28,10 +28,11 @@ half true, and intra-proposal duplicates could never be re-detected as the
 review applied items one at a time.
 
 A hit is a **lead to verify** by opening both lines — never a verdict. So is a
-miss: ``content_words`` strips code spans (they are identical boilerplate across
-memory files), so a rule whose distinctive tokens live inside backticks — most
-tool-usage rules — scores lower here than it reads. Measured recall against the
-real backlog is roughly half; this narrows the reading, it does not replace it.
+miss. ``content_words`` now keeps code spans (issue #199), which recovered the
+tool-usage rules whose distinctive tokens live inside backticks — measured +15
+true positives for one extra false positive on the 602-item backlog. Recall is
+better than it was and still partial: this narrows the reading, it does not
+replace it.
 
 Usage::
 

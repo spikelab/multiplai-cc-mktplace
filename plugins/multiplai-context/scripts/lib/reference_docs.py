@@ -80,8 +80,37 @@ _STATE_KEY = "dev_references"
 
 
 def reference_dir() -> Path:
-    """`$CLAUDE_CONFIG_DIR/reference/dev`, expanded. May not exist."""
+    """`$CLAUDE_CONFIG_DIR/reference/dev`, expanded. May not exist.
+
+    Still the *primary* directory and still what "is the kit installed?"
+    means. For resolving a doc name use :func:`reference_dirs`, which also
+    sees its siblings.
+    """
     return claude_config_dir() / "reference" / "dev"
+
+
+def reference_dirs() -> list[Path]:
+    """Every existing subdirectory of `$CLAUDE_CONFIG_DIR/reference/`, `dev` first.
+
+    `dev` was hardcoded, so anything the kit shipped beside it was invisible to
+    the per-session pointer block — and invisibly so, because a name that
+    resolves nowhere is skipped with a log line rather than an error (issue
+    #204). `reference/review/` (the six per-language review checklists) landed
+    in multiplai-kit#57 and reached nothing here.
+
+    `dev` stays first so a name present in both resolves exactly as it did
+    before; the rest are sorted for a stable, explainable order.
+    """
+    root = claude_config_dir() / "reference"
+    if not root.is_dir():
+        return []
+    dev = root / "dev"
+    dirs = [dev] if dev.is_dir() else []
+    try:
+        siblings = sorted(p for p in root.iterdir() if p.is_dir() and p != dev)
+    except OSError:
+        return dirs
+    return [*dirs, *siblings]
 
 
 def _requirement_name(spec: str) -> str:
@@ -270,18 +299,25 @@ def resolve_docs(names: list[str]) -> list[tuple[Path, list[str]]]:
     A named doc with no file is skipped silently here — the caller logs the
     gap, because "the map names a doc nobody wrote" and "the kit is not
     installed" want different messages.
+
+    Searched across every directory :func:`reference_dirs` returns, `dev`
+    first, so a bare name keeps resolving where it always did and a name only a
+    sibling directory holds now resolves at all. First hit wins; a name in two
+    directories is not an error, it is `dev` taking precedence.
     """
-    ref_dir = reference_dir()
+    dirs = reference_dirs()
     resolved: list[tuple[Path, list[str]]] = []
     for name in names:
-        path = ref_dir / name
-        if not path.is_file():
-            continue
-        try:
-            text = path.read_text()
-        except (OSError, UnicodeDecodeError):
-            continue
-        resolved.append((path, section_index(text)))
+        for ref_dir in dirs:
+            path = ref_dir / name
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text()
+            except (OSError, UnicodeDecodeError):
+                break
+            resolved.append((path, section_index(text)))
+            break
     return resolved
 
 
