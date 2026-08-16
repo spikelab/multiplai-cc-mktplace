@@ -617,8 +617,9 @@ def _dev_reference_block(
     standards pointer is not worth a broken turn.
     """
     try:
-        ref_dir = reference_docs.reference_dir()
-        if not ref_dir.is_dir():
+        # Any reference subdirectory will do: `dev` is the usual one, but a kit
+        # that ships only `review/` is still a kit with references (issue #204).
+        if not reference_docs.reference_dirs():
             return "", None
         candidates: list[Path] = []
         primary = reference_docs.find_project_dir(cwd or ".")

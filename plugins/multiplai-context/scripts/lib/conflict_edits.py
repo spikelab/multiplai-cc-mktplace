@@ -180,7 +180,30 @@ def content_words(text: str) -> set[str]:
     be able to tokenize once and reuse the set — see :func:`overlap_sets`.
     Re-deriving it per comparison is quadratic and was measured in minutes.
     """
-    text = re.sub(r"`[^`]*`", " ", text)          # code spans: often identical boilerplate
+    # Code spans are KEPT, as ordinary words (issue #199). They used to be
+    # stripped, on the reasoning that the same boilerplate recurs across memory
+    # files — true, but for a rule about tooling the distinctive tokens are
+    # usually the ones inside the backticks, so stripping removed the signal
+    # with the noise.
+    #
+    # Backtested rather than argued: the 602-item 2026-08-10 backlog scored
+    # twice, against memory after consolidation (`9e8475d` — the items are in
+    # there, a flag is TRUE) and against memory immediately before
+    # (`9e8475d^` — they are not, a flag is FALSE).
+    #
+    #     stripping code spans   317 true / 24 false   13.2:1   (was)
+    #     keeping them           332 true / 25 false   13.3:1   (is)
+    #
+    # +15 real duplicates caught for one extra false positive, at the SAME
+    # `MIN_OVERLAP`. Leaving the constant alone is the point: it also governs
+    # the supersede edits at the top of a proposal, and lowering it buys recall
+    # for the warning by spending precision there — see the module docstring.
+    #
+    # Singular collapse (`worktree`/`worktrees`) was tested in the same run and
+    # REJECTED: it looks compelling on a hand-picked pair, and over 602 items it
+    # made the ratio worse at every threshold (12.7:1 at 0.35, against 13.2
+    # baseline). Do not re-add it without a backtest that says otherwise.
+    text = text.replace("`", " ")
     text = re.sub(r"\*+|_+|→|—", " ", text)
     words = re.findall(r"[a-z0-9][a-z0-9.\-/]*", text.lower())
     return {w.strip(".-/") for w in words if w not in STOPWORDS and len(w) > 2}
