@@ -26,10 +26,38 @@ the **agent-browser** bridge, and assumes a container→host setup:
   set `AB_HOST`), with a host gateway that allowlists `agent-browser …`.
 - **`chrome-agent`** — a host alias that launches the real Chrome with CDP on
   `127.0.0.1:9222`. Run it once on the Mac before connecting.
+- **The opt-in flag** — see below. Configuring the bridge is not enough.
 
 Without `ab` + the bridge, `hb-connect.sh` exits with a clear message telling you
 which piece is missing. If you're on the Mac directly (no container), `ab`/CDP
 must still be reachable locally on the port.
+
+### The host browser is opt-in, and the switch is on the Mac
+
+In every multiplai-container release after **v0.9.6**, the host gateway refuses
+every `agent-browser` verb unless a flag file exists on the host:
+
+```bash
+mkdir -p ~/.local/state/multiplai
+touch ~/.local/state/multiplai/host-browser-enabled     # on
+rm ~/.local/state/multiplai/host-browser-enabled        # off
+```
+
+This skill is the one bridge tool that reaches the user's **real logged-in
+Chrome** — every cookie and every signed-in app on that machine — so enabling
+the bridge deliberately does not enable this deliberately. **Nothing in the
+container can create the flag**, which is the point: there is no route from a
+session to the Mac's home directory, and the gateway does not read
+`$XDG_STATE_HOME`, so the gated side cannot steer where the gate lives.
+
+A blocked call fails with `DENIED: host browser is not enabled on this host`
+and prints both commands. If you hit that, **ask the user to run the `touch`
+line** — do not look for another way to reach Chrome. Rationale and the full
+threat model: [multiplai-container
+README](https://github.com/spikelab/multiplai-container#the-host-browser-is-off-by-default).
+
+Standalone on a Mac with no container, there is no gateway and no flag — you
+talk to CDP directly.
 
 **`hb` is not on PATH** — it's this skill's script. Either call it by full path,
 or alias it once per session:

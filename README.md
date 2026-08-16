@@ -56,7 +56,8 @@ the five repos fit together — is mapped in the
 
 ## Plugins
 
-Eight plugin packs, 40+ skills. Each plugin is versioned and released on its
+Eight plugins — the memory engine plus seven themed skill packs — and 44
+skills between them. Each plugin is versioned and released on its
 own, and each carries its own release notes — see
 [`CHANGELOG.md`](CHANGELOG.md) for the index.
 
@@ -97,7 +98,7 @@ contract](docs/degradation-contract.md)).
 | | excalidraw | ✅ | |
 | | transcribe | 🍎 | mlx-whisper needs Apple Silicon macOS. From the kit container: 🌉. Plain Linux: use whisper.cpp / faster-whisper instead. |
 | | screen-demo | 🍎 | Needs ffmpeg + mlx-whisper on a Mac. From the kit container: 🌉. |
-| | host-browser | 🌉 | Drives the host's real Chrome via the `ab` bridge; on a Mac a local CDP Chrome also works. |
+| | host-browser | 🌉 | Drives the host's real Chrome via the `ab` bridge — **and only if you opt in on the host**: container releases after v0.9.6 refuse it unless `~/.local/state/multiplai/host-browser-enabled` exists on the Mac. On a Mac a local CDP Chrome also works, with no gateway and no flag. |
 | multiplai-messaging | slack | 🔑 | Your Slack `xoxp` user token. Full standalone setup docs in the skill. |
 | | gmail | 🔑 | Gmail OAuth credentials. Full standalone setup docs in the skill. |
 | | fireflies | 🔑 | Your Fireflies API key (`FIREFLIES_API_KEY`). Stdlib-only, no other setup. |

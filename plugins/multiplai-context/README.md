@@ -2055,6 +2055,14 @@ per-component log **and** stderr — visible under `claude --debug`.
   forever) — applies uniformly to every rotated `*-DATE.{log,jsonl}`.
   The rejected `<name>.log.DATE` form is auto-migrated to the standard
   `<name>-DATE.log`.
+- **One log sits outside all of the above:** `scripts/.warmup-deferred.log`,
+  where `hooks/run.sh` records a lifecycle hook it had to drop because the
+  dependency install was still running. It cannot live in `data/logs/` —
+  `run.sh` exists precisely for the window in which `multiplai_core.paths` is
+  not importable, so it cannot ask where that directory is. It is bounded by
+  size instead of by age: capped at **256 KB**, rotated to
+  `.warmup-deferred.log.1` by an atomic rename, one generation kept, so the
+  pair never exceeds 512 KB. `MULTIPLAI_LOG_RETENTION_DAYS` does not reach it.
 
 Every line follows the project logging standard:
 `[<UTC ISO-8601>Z] [<component>] [session:<8-char id>] LEVEL: message`.
