@@ -20,6 +20,18 @@ dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.7.1] - 2026-08-16
+
+### Changed
+
+- **`deep-research` now needs `exa-py >= 2.17.0`** (was `>= 1.0`). The floor
+  crosses a major version, so an install that had been pinned to a 1.x `exa-py`
+  will resolve a new one. The pipeline calls only `Exa(...)` and
+  `search_and_contents(...)`, both unchanged across 1.x → 2.x, and the suite
+  passes against 2.17.0; the note is here because the floor itself is what an
+  installed plugin resolves against — each skill's `scripts/` member resolves
+  standalone, with no workspace root above it.
+
 ## [0.7.0] - 2026-08-15
 
 ### Changed
