@@ -35,9 +35,15 @@ the [`multiplai`](../../README.md) marketplace.
   the SSH bridge. On plain Linux use whisper.cpp / faster-whisper instead.
 - `screen-demo` — needs ffmpeg + mlx-whisper on a Mac; from the kit container,
   the SSH bridge.
-- `host-browser` — needs the multiplai-kit container→host SSH bridge; on a Mac a
-  local CDP Chrome also works. Page content it reads is externally-authored text,
-  delivered fenced as data — see the
+- `host-browser` — needs the multiplai-kit container→host SSH bridge **and an
+  explicit opt-in on the host**: in container releases after v0.9.6 the gateway
+  refuses `agent-browser` unless
+  `~/.local/state/multiplai/host-browser-enabled` exists on the Mac
+  (`mkdir -p ~/.local/state/multiplai && touch ~/.local/state/multiplai/host-browser-enabled`).
+  This is the one bridge tool that reaches the user's real logged-in Chrome, so
+  enabling the bridge does not enable it. On a Mac with no container there is no
+  gateway and a local CDP Chrome works directly. Page content it reads is
+  externally-authored text, delivered fenced as data — see the
   [untrusted-content contract](../../docs/untrusted-content.md).
 
 Full details: [compatibility matrix](../../README.md#compatibility-matrix) and

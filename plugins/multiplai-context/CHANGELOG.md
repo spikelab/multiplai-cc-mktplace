@@ -18,6 +18,18 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.49.2] - 2026-08-16
+
+### Changed
+
+- **The log-retention docs now name the one log retention does not reach.**
+  README §"Log layout & retention" said `MULTIPLAI_LOG_RETENTION_DAYS` "applies
+  uniformly", which is true of everything in `data/logs/` and silent about
+  `scripts/.warmup-deferred.log` — the file 0.49.1 capped at 256 KB with one
+  rotated generation. Bounded by size, not by age, and for a reason worth
+  stating: `hooks/run.sh` exists for the window in which `multiplai_core.paths`
+  is not importable, so it cannot ask where `data/logs/` is. Docs only.
+
 ## [0.49.1] - 2026-08-16
 
 ### Fixed

@@ -21,6 +21,24 @@ a tag.
 
 Nothing yet.
 
+## [0.2.3] - 2026-08-16
+
+### Changed
+
+- **`host-browser` now documents that it is off by default.** From the
+  multiplai-container release after v0.9.6, the host gateway refuses every
+  `agent-browser` verb unless
+  `~/.local/state/multiplai/host-browser-enabled` exists on the Mac. The skill
+  described three prerequisites — `ab`, the SSH bridge, a CDP Chrome — and a
+  reader who satisfied all three still got `DENIED`. The flag is now the fourth,
+  with its own section in `SKILL.md` explaining why it is a host file (nothing
+  in the container can create it, and the gateway does not read
+  `$XDG_STATE_HOME`, so the gated side cannot steer where the gate lives) and
+  what to do when a call is refused: ask the user to run the `touch`, do not
+  route around it. The plugin README's compatibility note says the same in one
+  sentence. Docs only — no script changed, and standalone-on-a-Mac is unaffected
+  because there is no gateway in that path.
+
 ## [0.2.2] - 2026-08-15
 
 ### Added
