@@ -21,6 +21,25 @@ a tag.
 
 Nothing yet.
 
+## [0.2.4] - 2026-08-16
+
+### Fixed
+
+- **`youtube-transcript` now shows you what `yt-dlp` actually said.** Every
+  call site sent `yt-dlp`'s stderr to `/dev/null`, so a failure produced
+  `Error: Failed to download audio.` and nothing else. There was no way to tell
+  a bad URL from a network blip from a broken YouTube extractor, and the
+  skill's own guidance — show the user the error verbatim — was unfulfillable
+  while the script was eating it. On failure it now prints the last 20 lines of
+  what `yt-dlp` wrote.
+
+  Four sites, not the three originally reported: the metadata fetch was
+  swallowing errors too, and it runs *first*, so it is the one you hit on a bad
+  URL. The subtitle downloads now report as well — they fall through to the
+  audio fallback either way, but a genuine `yt-dlp` breakage used to be
+  indistinguishable from "this video has no subtitles", which sends you looking
+  in entirely the wrong place.
+
 ## [0.2.3] - 2026-08-16
 
 ### Changed

@@ -21,6 +21,22 @@ to prevent.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] - 2026-08-16
+
+Everything below had already landed while the marketplace version stayed at
+`0.1.0` — so it was shipping to installs under the previous version number.
+This release gives it a number of its own, which is what the section header
+above this one describes as the ambiguity worth removing.
+
+### Fixed
+- **`pm-jtbd-synthesis` no longer names a directory that does not exist.** Its
+  output guidance described a curated workspace as having `RESOURCES/` and
+  `PLANS/`; `PLANS/` was retired on 2026-08-11 and the convention is now
+  `ARTIFACTS/`. Text only — the instruction's actual write target was already
+  `INBOX/`, so nothing behaved differently.
+
 ### Added
 - **A plugin README** (`plugins/multiplai-pm/README.md`) — what the pack
   contains, what each skill needs, and how it degrades without the kit.

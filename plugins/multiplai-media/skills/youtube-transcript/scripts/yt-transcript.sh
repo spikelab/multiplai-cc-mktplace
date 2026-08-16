@@ -203,13 +203,34 @@ else
 fi
 trap 'rm -rf "$TMPDIR_WORK"' EXIT
 
+# yt-dlp's stderr, captured rather than discarded. Every call site used to send
+# it to /dev/null, so a failure produced "Error: Failed to download audio." and
+# nothing else — undiagnosable, and indistinguishable from "this video has no
+# subtitles". The skill's own guidance says to show the user the error verbatim,
+# which it could not do while the script was eating it.
+YTDLP_ERR="$TMPDIR_WORK/ytdlp-stderr.log"
+
+# Print what yt-dlp said, bounded. Called on the paths that give up.
+ytdlp_stderr() {  # $1 = leading message
+    echo "$1" >&2
+    if [[ -s "$YTDLP_ERR" ]]; then
+        echo "[yt-transcript] yt-dlp said:" >&2
+        tail -20 "$YTDLP_ERR" >&2
+    else
+        echo "[yt-transcript] yt-dlp wrote nothing to stderr." >&2
+    fi
+}
+
 # --- Get video title and ID for naming ---
 echo "[yt-transcript] Fetching video info ..."
-VIDEO_TITLE=$($YTDLP --print "%(title)s" --no-download "$URL" 2>/dev/null) || {
-    echo "Error: Could not fetch video info. Check the URL and your network." >&2
+# This runs before any download, so it is the first thing to fail on a bad URL,
+# a network problem, or an extractor break — and it was reporting all three the
+# same way.
+VIDEO_TITLE=$($YTDLP --print "%(title)s" --no-download "$URL" 2>"$YTDLP_ERR") || {
+    ytdlp_stderr "Error: Could not fetch video info. Check the URL and your network."
     exit 1
 }
-VIDEO_ID=$($YTDLP --print "%(id)s" --no-download "$URL" 2>/dev/null)
+VIDEO_ID=$($YTDLP --print "%(id)s" --no-download "$URL" 2>"$YTDLP_ERR")
 
 # Sanitize title for filesystem
 SAFE_TITLE=$(echo "$VIDEO_TITLE" | tr '/:*?"<>|\\' '-' | sed 's/  */ /g' | sed 's/^[.-]*//' | head -c 200)
@@ -248,7 +269,7 @@ VTT_FILE=""
 # Try manual subtitles
 echo "[yt-transcript] Trying manual subtitles ..."
 if $YTDLP --write-sub --sub-langs "en.*" --skip-download \
-    --output "$TMPDIR_WORK/subs" "$URL" 2>/dev/null; then
+    --output "$TMPDIR_WORK/subs" "$URL" 2>"$YTDLP_ERR"; then
     VTT_FILE=$(find "$TMPDIR_WORK" -name "subs*.vtt" -o -name "subs*.srt" 2>/dev/null | head -1)
     if [[ -n "$VTT_FILE" && -s "$VTT_FILE" ]]; then
         SUBS_DOWNLOADED=true
@@ -260,12 +281,18 @@ fi
 if [[ "$SUBS_DOWNLOADED" != true ]]; then
     echo "[yt-transcript] No manual subs. Trying auto-generated ..."
     if $YTDLP --write-auto-sub --sub-langs "en.*" --skip-download \
-        --output "$TMPDIR_WORK/subs" "$URL" 2>/dev/null; then
+        --output "$TMPDIR_WORK/subs" "$URL" 2>"$YTDLP_ERR"; then
         VTT_FILE=$(find "$TMPDIR_WORK" -name "subs*.vtt" -o -name "subs*.srt" 2>/dev/null | head -1)
         if [[ -n "$VTT_FILE" && -s "$VTT_FILE" ]]; then
             SUBS_DOWNLOADED=true
             echo "[yt-transcript] Auto-generated subtitles found."
         fi
+    else
+        # Not fatal — the audio fallback is next. But a real yt-dlp breakage
+        # (an extractor change, a network failure) is otherwise reported as
+        # "no subtitles available", which sends the reader looking in the
+        # wrong place entirely.
+        ytdlp_stderr "[yt-transcript] Subtitle download failed (falling back to audio)."
     fi
 fi
 
@@ -348,8 +375,8 @@ fi
 # Download audio
 AUDIO_FILE="$TMPDIR_WORK/${VIDEO_ID}.m4a"
 echo "[yt-transcript] Downloading audio ..."
-$YTDLP -x --audio-format m4a --output "$AUDIO_FILE" "$URL" 2>/dev/null || {
-    echo "Error: Failed to download audio." >&2
+$YTDLP -x --audio-format m4a --output "$AUDIO_FILE" "$URL" 2>"$YTDLP_ERR" || {
+    ytdlp_stderr "Error: Failed to download audio."
     exit 1
 }
 

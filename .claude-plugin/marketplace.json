@@ -31,7 +31,7 @@
       "name": "multiplai-pm",
       "source": "./plugins/multiplai-pm",
       "description": "Product-management skill pack: JTBD synthesis, persona codification, PR/FAQ, strategy memos, job applications, landing pages.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -114,7 +114,7 @@
       "name": "multiplai-media",
       "source": "./plugins/multiplai-media",
       "description": "Media skill pack: audio transcription, YouTube transcripts, screen-recording demo videos, diagrams, host-browser automation.",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
