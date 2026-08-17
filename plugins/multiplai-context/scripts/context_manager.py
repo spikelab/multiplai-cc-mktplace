@@ -116,6 +116,13 @@ def _rank_memory_files(memory_dir: Path) -> list[RankedFile]:
     now = time.time()
 
     for f in _iter_markdown_files(memory_dir):
+        # memory/CLAUDE.md is the memory system's own index, excluded from
+        # the catalog (generators/memory.py discover_sources); keep the
+        # recency fallback consistent — it ranks by mtime/size, and the
+        # index is both recently touched and large, so it would otherwise
+        # top this ranking.
+        if f.name.lower() == "claude.md":
+            continue
         try:
             st = f.stat()
         except OSError:

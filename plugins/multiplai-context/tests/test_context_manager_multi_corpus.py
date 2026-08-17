@@ -353,6 +353,24 @@ class TestAbstentionVsFallback:
         assert len(corpus_files(out, "MEMORY")) >= 1
         assert "real.md" in hook_context(out)
 
+    def test_recency_net_never_injects_claude_md_index(self, env_setup):
+        """The fallback ranks by mtime/size, and memory/CLAUDE.md — the
+        system's own index — would top that ranking; it must be skipped."""
+        (env_setup["memory_dir"] / "CLAUDE.md").write_text(
+            "# Memory index\n" + "meta " * 2000
+        )
+        (env_setup["memory_dir"] / "real.md").write_text("# Real\nbody")
+        _write_catalog(
+            env_setup["catalogs_dir"],
+            "memory.json",
+            [{"source": "ghost.md", "intent_domains": ["software architecture decisions"]}],
+        )
+
+        out = _run_hook(env_setup, prompt="software architecture decisions")
+        ctx = hook_context(out)
+        assert "real.md" in ctx
+        assert "CLAUDE.md" not in ctx
+
 
 class TestRoutingScoresEmission:
     """ROUTING_SCORES (consumed by /health) must report the *picked*

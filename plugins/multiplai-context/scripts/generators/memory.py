@@ -92,14 +92,24 @@ class MemoryGenerator(GeneratorBase):
         self._h2_by_key: dict[str, list[str]] = {}
 
     def discover_sources(self) -> dict[str, Any]:
-        """Find all .md files in the configured memory directory."""
+        """Find all .md files in the configured memory directory.
+
+        ``CLAUDE.md`` is excluded: it is the memory system's own index —
+        meta-documentation about how routing works, not personal context —
+        and cataloging it makes the router recommend it under a name three
+        other always-loaded files share. Memory-management skills read it
+        by explicit path instead. Mirrors the banks generator's
+        ``_NOT_CONTENT`` exclusion of ``bank.md``/``readme.md``; the base
+        class prunes any previously cataloged entry once the source stops
+        being discovered.
+        """
         memory_dir = Paths.resolve().memory_dir()
         if not memory_dir.exists() or not memory_dir.is_dir():
             return {}
 
         sources = {}
         for path in sorted(memory_dir.glob("*.md")):
-            if path.is_file():
+            if path.is_file() and path.name.lower() != "claude.md":
                 sources[path.name] = path
         return sources
 

@@ -29,6 +29,13 @@ Nothing yet.
   context the conversation already had. The hook now recognises these prompts
   and injects nothing, the same way a bare "yes"/"go ahead" continuation is
   skipped.
+- **`memory/CLAUDE.md` is no longer cataloged or injected as memory.** It is
+  the memory system's own index — meta-documentation, not personal context —
+  yet the catalog generator swept it up with the rest of `memory_dir` and the
+  router could recommend it (ambiguously labelled just "CLAUDE.md"). The
+  generator now skips it, the next catalog refresh prunes the existing entry,
+  and the recency fallback skips it too. Memory-management skills keep reading
+  it by explicit path.
 
 ## [0.52.0] - 2026-08-17
 
