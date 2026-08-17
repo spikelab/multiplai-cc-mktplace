@@ -3,8 +3,12 @@
 Design Decision 6: Sequential generation with early termination on critical
 failure, continuing past non-critical errors.
 
-Dispatches all registered generators (memory, diary, skills, resources) in
+Dispatches all registered generators (memory, banks, diary, skills) in
 a fixed order, with support for filtering, force mode, and dry-run mode.
+
+There is no resources generator. A resources corpus is retrieved through
+qmd at prompt time, not summarised into a catalog — see the note in
+``generators/config.py``.
 """
 
 import logging
@@ -16,7 +20,6 @@ from generators.base import GenerationResult
 from generators.config import CatalogConfig
 from generators.diary import DiaryGenerator
 from generators.memory import MemoryGenerator
-from generators.resources import ResourcesGenerator
 from generators.skills import SkillsGenerator
 from lib.banks import shared_banks
 
@@ -25,7 +28,7 @@ logger = logging.getLogger(__name__)
 # Canonical execution order
 # `banks` runs directly after `memory` because its collision detection
 # compares against the personal catalog that step has just written.
-GENERATOR_ORDER = ["memory", "banks", "diary", "skills", "resources"]
+GENERATOR_ORDER = ["memory", "banks", "diary", "skills"]
 
 # Generators that always run regardless of config flags
 _MANDATORY_GENERATORS = {"memory", "diary"}
@@ -36,7 +39,6 @@ GENERATOR_CLASSES = {
     "banks": BanksGenerator,
     "diary": DiaryGenerator,
     "skills": SkillsGenerator,
-    "resources": ResourcesGenerator,
 }
 
 
@@ -66,8 +68,6 @@ def _is_generator_enabled(name: str, config: CatalogConfig) -> bool:
         return bool(shared_banks())
     if name == "skills":
         return config.enable_skills
-    if name == "resources":
-        return config.enable_resources and bool(config.resources_dir.strip())
     return False
 
 
@@ -82,7 +82,6 @@ def _resolve_generators(
     When no filter is provided, config gating applies:
     - memory and diary always run (mandatory)
     - skills runs only if enable_skills is True
-    - resources runs only if enable_resources is True AND resources_dir is set
     """
     if generators is not None:
         return [name for name in GENERATOR_ORDER if name in generators]
@@ -144,7 +143,7 @@ async def generate_catalogs(
 
     # An explicit filter is an override: per this module's contract, a
     # generator named in `generators` runs even if its enable_* flag is off
-    # (e.g. `--only resources` with enable_resources=false). Signal that
+    # (e.g. `--only skills` with enable_skills=false). Signal that
     # intent so the generator's own enable-gate yields to the filter.
     explicitly_filtered = generators is not None
 

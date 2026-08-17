@@ -37,11 +37,13 @@ DEFAULT_KEEP_RATIO = 0.30  # token_overlap relative-cutoff: drop memory
                            # See memory_router.DEFAULT_KEEP_RATIO for the
                            # production-replay calibration. Clamped to (0, 1].
 
-# Resources retrieval backend. "catalog" is the original catalog+router
-# path; "qmd" routes resources retrieval through a qmd index instead
-# (see scripts/qmd_retrieval.py).
-VALID_RESOURCES_RETRIEVAL = ("catalog", "qmd")
-DEFAULT_RESOURCES_RETRIEVAL = "catalog"
+# A resources corpus is retrieved through qmd and nothing else
+# (see scripts/qmd_retrieval.py). The catalog+router path that memory,
+# banks, diary and skills use was removed in 0.52.0: it summarised each
+# resource file with an LLM call and routed on those summaries, which
+# suits a corpus you wrote and re-read, not one you collected. A research
+# archive is long, heterogeneous, and matched on passages rather than on
+# whole documents — the shape qmd's chunk-level index is built for.
 VALID_QMD_MODES = ("local", "ssh", "http")
 DEFAULT_QMD_MODE = "local"
 DEFAULT_QMD_SSH_HOST = "host.docker.internal"
@@ -72,7 +74,6 @@ class CatalogConfig:
     plugins_dir: str = ""  # empty → derived from $CLAUDE_CONFIG_DIR/plugins at use time
     enable_resources: bool = False
     resources_dir: str = ""
-    resources_retrieval: str = DEFAULT_RESOURCES_RETRIEVAL
     qmd_mode: str = DEFAULT_QMD_MODE
     qmd_ssh_host: str = DEFAULT_QMD_SSH_HOST
     qmd_collection: str = DEFAULT_QMD_COLLECTION
@@ -119,9 +120,6 @@ class CatalogConfig:
         if not 0.0 < self.keep_ratio <= 1.0:
             self.keep_ratio = DEFAULT_KEEP_RATIO
 
-        if self.resources_retrieval not in VALID_RESOURCES_RETRIEVAL:
-            self.resources_retrieval = DEFAULT_RESOURCES_RETRIEVAL
-
         if self.qmd_mode not in VALID_QMD_MODES:
             self.qmd_mode = DEFAULT_QMD_MODE
 
@@ -156,7 +154,7 @@ class CatalogConfig:
 _KNOWN_OPTIONS = (
     "catalog_model", "catalog_model_diary", "catalog_ttl_hours",
     "diary_catalog_days", "enable_skills", "skills_dir", "plugins_dir",
-    "enable_resources", "resources_dir", "resources_retrieval", "qmd_mode",
+    "enable_resources", "resources_dir", "qmd_mode",
     "qmd_ssh_host", "qmd_collection", "qmd_strategy", "qmd_http_url",
     "qmd_candidate_limit", "qmd_min_score", "catalog_concurrency",
     "recommend_cooldown_turns", "keep_ratio", "enable_costs",
@@ -203,7 +201,6 @@ def load_catalog_config() -> CatalogConfig:
     plugins_dir = option("plugins_dir", "")
     enable_resources = option_bool("enable_resources", False)
     resources_dir = option("resources_dir", "")
-    resources_retrieval = option("resources_retrieval", DEFAULT_RESOURCES_RETRIEVAL)
     qmd_mode = option("qmd_mode", DEFAULT_QMD_MODE)
     qmd_ssh_host = option("qmd_ssh_host", DEFAULT_QMD_SSH_HOST)
     qmd_collection = option("qmd_collection", DEFAULT_QMD_COLLECTION)
@@ -236,7 +233,6 @@ def load_catalog_config() -> CatalogConfig:
         plugins_dir=plugins_dir,
         enable_resources=enable_resources,
         resources_dir=resources_dir,
-        resources_retrieval=resources_retrieval,
         qmd_mode=qmd_mode,
         qmd_ssh_host=qmd_ssh_host,
         qmd_collection=qmd_collection,

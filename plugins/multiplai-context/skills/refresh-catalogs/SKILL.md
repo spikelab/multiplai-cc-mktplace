@@ -5,17 +5,17 @@ description: "Manually regenerate catalog indexes with support for --force, --dr
 
 # Refresh Catalogs
 
-Manually regenerate catalog indexes for memory, shared memory banks, diary, skills, and resources. This skill invokes the catalog dispatcher (`generate_catalogs` via `"${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"`) to rebuild catalog files used by the context manager for fast routing.
+Manually regenerate catalog indexes for memory, shared memory banks, diary, and skills. This skill invokes the catalog dispatcher (`generate_catalogs` via `"${CLAUDE_PLUGIN_ROOT}/scripts/generate_catalog.py"`) to rebuild catalog files used by the context manager for fast routing.
 
 ## Usage
 
-By default (no arguments), all enabled catalogs are regenerated using state-aware skipping — only catalogs whose source content has changed since the last run are rebuilt. Memory and diary catalogs are always processed (mandatory). Skills and resources catalogs only run if enabled in the plugin configuration.
+By default (no arguments), all enabled catalogs are regenerated using state-aware skipping — only catalogs whose source content has changed since the last run are rebuilt. Memory and diary catalogs are always processed (mandatory). The skills catalog only runs if enabled in the plugin configuration. There is no resources catalog — a resources corpus is retrieved through qmd at prompt time, never summarised into a catalog.
 
 ### Flags
 
 - **`--force`** — Force regeneration of all enabled catalogs, bypassing state-aware skipping. Ignores content hash state and regenerates regardless of whether sources have changed. Pass `--force` flag through to the dispatcher.
 - **`--dry-run`** — Preview mode. Reports what catalogs would be regenerated or skipped without writing any files, modifying `.generation-state.json`, or making LLM calls. Dry-run output shows which generators would run and which would be skipped. No side effects.
-- **`--only <generators>`** — Selectively regenerate specific catalogs. Provide a comma-separated list of generator names: `memory`, `banks`, `diary`, `skills`, `resources`. Example: `--only memory,diary` runs only those two generators. **`--only` is an explicit override: a generator named here runs even if its `enable_*` config flag is off** (e.g. `--only resources` rebuilds the resources catalog while `enable_resources` stays `false`, so you can keep a fresh index without turning on injection). The only hard requirement that still applies is `resources_dir` — `--only resources` no-ops if no resources directory is configured.
+- **`--only <generators>`** — Selectively regenerate specific catalogs. Provide a comma-separated list of generator names: `memory`, `banks`, `diary`, `skills`. Example: `--only memory,diary` runs only those two generators. **`--only` is an explicit override: a generator named here runs even if its `enable_*` config flag is off** (e.g. `--only skills` rebuilds the skills catalog while `enable_skills` stays `false`, so you can keep a fresh index without turning on injection).
 
 ### Combinations
 
@@ -53,8 +53,6 @@ The dispatcher respects these `plugin.json` userConfig settings:
 - `catalog_model` — Model for LLM-based catalog generation (default: `claude-sonnet-5`)
 - `catalog_model_diary` — Optional model override for the diary generator (default: inherit `catalog_model`)
 - `enable_skills` — Whether to include the skills catalog generator (default: false)
-- `enable_resources` — Whether to include the resources catalog generator (default: false)
-- `resources_dir` — Directory to scan for resources (required when enable_resources is true)
 
 ## Operational Notes
 

@@ -7,7 +7,7 @@ description: "Manually search the user's resources knowledge base via qmd (seman
 
 Search the user's resources knowledge base through its qmd index. This is
 the manual companion to the automatic per-prompt retrieval that
-multiplai-context performs when `resources_retrieval=qmd` — use it for
+multiplai-context performs when `enable_resources` is on — use it for
 deeper digging, different phrasings, or when the automatic injection
 missed a document you expect to exist.
 

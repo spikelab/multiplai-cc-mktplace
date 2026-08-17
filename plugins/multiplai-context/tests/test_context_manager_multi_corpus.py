@@ -122,7 +122,13 @@ class TestMultiCorpusOutput:
         assert len(corpus_files(out, "SKILLS")) >= 1
         assert len(corpus_files(out, "SKILLS")) >= 1
 
-    def test_resources_corpus_loaded_when_enabled(self, env_setup):
+    def test_resources_catalog_never_injects(self, env_setup):
+        """A resources.json left by a pre-0.52.0 install injects nothing.
+
+        Resources come from qmd or from nowhere. With no qmd index reachable
+        here, enabling resources must produce no RESOURCES section at all —
+        not a section rebuilt from the stale catalog on disk.
+        """
         (env_setup["memory_dir"] / "tech.md").write_text("# Tech prefs")
         (env_setup["resources_dir"] / "voice-ai.md").write_text("# Voice AI research notes")
         _write_catalog(
@@ -144,9 +150,8 @@ class TestMultiCorpusOutput:
                 # resources_dir already set in _run_hook
             },
         )
-        assert "=== RESOURCES ===" in hook_context(out)
-        assert "Voice AI research" in hook_context(out)
-        assert len(corpus_files(out, "RESOURCES")) >= 1
+        assert "=== RESOURCES ===" not in hook_context(out)
+        assert "Voice AI research" not in hook_context(out)
 
     def test_skills_disabled_means_no_skills_section(self, env_setup):
         """Without enable_skills, skills corpus is silently empty even if catalog exists."""

@@ -129,7 +129,7 @@ def main() -> None:
     if not workspace:
         rd = cfg.resources_dir.strip()
         workspace = str(Path(rd).expanduser().parent) if rd else ""
-    if not workspace or not cfg.enable_resources or cfg.resources_retrieval != "qmd":
+    if not workspace or not cfg.enable_resources:
         return
 
     # One refresh per workspace at a time; losers exit silently. The lock sits

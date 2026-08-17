@@ -1,6 +1,6 @@
 """Tests for skills catalog generator.
 
-Block 6: Skills and resources catalog generators.
+Block 6: Skills catalog generator.
 
 Covers all scenarios from requirements/skills-catalog-generator.md:
 - Skills catalog generator produces a valid catalog from skill files
