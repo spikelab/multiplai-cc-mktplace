@@ -78,13 +78,14 @@ The gate scripts and their tests are stdlib-only, which is why they alone use
 `--no-project`: it skips installing the workspace environment just to run a
 linter. Everything under `plugins/` needs `--project`.
 
-CI additionally runs the five per-plugin test suites, each from its own
+CI additionally runs the six per-plugin test suites, each from its own
 directory:
 
 | Suite | Command |
 |---|---|
 | `multiplai-context` | `cd plugins/multiplai-context && uv run --all-packages --project ../.. --with pytest --with pytest-asyncio --with pytest-timeout python -m pytest tests/ -q` |
 | `multiplai-media` | `cd plugins/multiplai-media && uv run --no-project --with pytest python -m pytest tests/ -q` |
+| `multiplai-pm` | `cd plugins/multiplai-pm && uv run --no-project --with pytest python -m pytest skills/plane/scripts/tests/ -q` |
 | buildme | `cd plugins/multiplai-dev/skills/buildme/scripts && uv run --project ../../../../.. --package build-pipeline --extra dev python -m pytest tests/ -q` |
 | deep-research | `cd plugins/multiplai-research/skills/deep-research/scripts && uv run --project ../../../../.. --package research-pipeline --extra dev python -m pytest tests/ -q` |
 | `multiplai-apple` | `cd plugins/multiplai-apple && uv run --no-project --with pytest python -m pytest tests/ -q` |

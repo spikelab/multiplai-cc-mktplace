@@ -23,6 +23,29 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 Nothing yet.
 
+## [0.3.0] - 2026-08-17
+
+### Added
+- **`plane` — Plane ticket management, the pack's first skill with a script.**
+  Talk to Claude about tickets ("what's on my board", "move SPK-12 to done",
+  "open a ticket for the login bug") and it drives a stdlib-only CLI against
+  the Plane API (Cloud or self-hosted). Every request passes a **project
+  allowlist** (`PLANE_ALLOWED_PROJECTS`, required, no default): the tool
+  refuses to read or write any project you did not explicitly list, so a token
+  that can reach a shared team project still cannot touch it. Issues, comments,
+  states, labels, members, cycles, estimates, attachments (download), search;
+  no deletes and no project mutation, by design. Run
+  `python3 skills/plane/scripts/plane.py check` first — it prints the resolved
+  config and self-tests the guardrail. Needs `PLANE_API_TOKEN`,
+  `PLANE_WORKSPACE` and `PLANE_ALLOWED_PROJECTS` in the environment; see the
+  README's configuration section.
+
+  Ported from the `dolce-plane` plugin
+  (DolceTech/DolceClaudeMarketplace, commit `7154f85`), code unchanged apart
+  from renamed identity strings and anonymized test fixtures; its 184-test
+  suite (allowlist parsing, adversarial guardrail coverage, markdown→HTML
+  escaping, search filtering) ships with it.
+
 ## [0.2.0] - 2026-08-16
 
 Everything below had already landed while the marketplace version stayed at
