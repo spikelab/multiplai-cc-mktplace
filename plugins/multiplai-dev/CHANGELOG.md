@@ -17,6 +17,17 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-08-17
+
+### Fixed
+
+- **`skill-creator`'s copy of the degradation contract no longer names a
+  directory that was retired.** Its output-location rule told you never to
+  write to `INBOX/`, `PLANS/`, or a workspace directory relative to the session
+  cwd; `PLANS/` was retired on 2026-08-11. A skill author following the rule
+  was being warned off a directory that does not exist. The rule itself is
+  unchanged.
+
 ## [0.14.0] - 2026-08-14
 
 ### Removed
