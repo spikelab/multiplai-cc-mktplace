@@ -2267,6 +2267,16 @@ async def dream_auto() -> None:
             # to change actually did. If any apply failed (API outage, unsafe
             # output), keep the backlog so the next run can retry — deleting it
             # here would lose the source insights with nothing persisted.
+            #
+            # The residual, stated rather than fixed: this is all-or-nothing per
+            # run, so a partial failure leaves the memory files that *did* write
+            # already rewritten while every learnings file is retained. The next
+            # run therefore re-consolidates material that is now in memory. That
+            # is the deliberate trade — re-proposing a line is recoverable and
+            # the cross-file dedup gate should catch it before it reaches the
+            # reviewer, where deleting a source whose memory write failed is
+            # not. Per-file retention would need the ledger to record which
+            # blocks fed which target, which it does not.
             if failed_count == 0:
                 for f in source_files:
                     f.unlink(missing_ok=True)
