@@ -8,16 +8,16 @@ Version numbers are this plugin's version in the marketplace manifest
 (`.claude-plugin/marketplace.json`); a released version is tagged
 `multiplai-pm@<version>`.
 
-Recorded history starts at **0.1.0**, the first and so far only version. This
-file was written on 2026-07-26 by reading the tag and `git log`, so early
-entries are summaries rather than notes taken at the time.
+Recorded history starts at **0.1.0**. This file was written on 2026-07-26 by
+reading the tag and `git log`, so the `0.1.0` entries are summaries rather than
+notes taken at the time.
 
 `multiplai-pm@0.1.0` was tagged on 2026-07-09 at the commit that created the
-plugin (2026-07-05). Everything under **Unreleased** below landed after that
-commit while the marketplace version stayed at `0.1.0` — so an install today
-already includes it, under the same version number. That is exactly the
-ambiguity the [changelog gate](../../CLAUDE.md#release-convention) now exists
-to prevent.
+plugin (2026-07-05). Everything now recorded under **0.2.0** landed after that
+commit while the marketplace version stayed at `0.1.0`, so for a while it was
+shipping to installs under the previous version number — exactly the ambiguity
+the [changelog gate](../../CLAUDE.md#release-convention) exists to prevent.
+Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
@@ -27,8 +27,7 @@ Nothing yet.
 
 Everything below had already landed while the marketplace version stayed at
 `0.1.0` — so it was shipping to installs under the previous version number.
-This release gives it a number of its own, which is what the section header
-above this one describes as the ambiguity worth removing.
+This release gives it a number of its own.
 
 ### Fixed
 - **`pm-jtbd-synthesis` no longer names a directory that does not exist.** Its
