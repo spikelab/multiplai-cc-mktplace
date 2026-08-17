@@ -18,6 +18,18 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.52.1] - 2026-08-17
+
+### Fixed
+
+- **Task notifications no longer trigger memory routing.** When a background
+  task finishes, Claude Code re-invokes the model with a synthetic
+  `<task-notification>` prompt, and the context hook used to route it like a
+  real question — each notification could inject several memory files whose
+  context the conversation already had. The hook now recognises these prompts
+  and injects nothing, the same way a bare "yes"/"go ahead" continuation is
+  skipped.
+
 ## [0.52.0] - 2026-08-17
 
 ### Removed
