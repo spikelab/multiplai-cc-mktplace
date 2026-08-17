@@ -121,10 +121,24 @@ class Metrics:
     failures: list[str] = field(default_factory=list)
 
 
+def _file_level(name: str) -> str:
+    """Strip a section anchor: ``file.md#Section`` scores as ``file.md``.
+
+    Since P1 (section-level retrieval) the router returns anchored picks
+    for catalog entries carrying ``section_anchors``; golden labels are
+    file-level. Exact string comparison silently scored every anchored
+    pick as a miss — recall collapsed from backtest ~49 to 3.7 on the
+    same router the day anchors went live.
+    """
+    return name.split("#", 1)[0]
+
+
 def _evaluate(metrics: Metrics, case: dict, picked: list[str], n_candidates: int, cap: int) -> bool:
-    expected = case.get("expected_files") or []
-    unexpected = set(case.get("unexpected_files") or [])
+    expected = [_file_level(f) for f in case.get("expected_files") or []]
+    unexpected = {_file_level(f) for f in case.get("unexpected_files") or []}
     none_expected = bool(case.get("expected_none"))
+    # Order-preserving dedup: two sections of one file are one retrieval.
+    picked = list(dict.fromkeys(_file_level(p) for p in picked))
     picked_set = set(picked)
     metrics.total += 1
 
