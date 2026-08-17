@@ -36,8 +36,14 @@ ${CLAUDE_PLUGIN_ROOT}/skills/youtube-transcript/scripts/yt-transcript.sh <youtub
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Error (missing deps, bad URL, download failed) |
-| 2 | No subtitles available and `--audio-fallback` not set — tell the user and offer to re-run with the flag |
+| 1 | Error (bad URL, missing ffmpeg/mlx-whisper for the audio fallback, output path outside the workspace, transcription failed) |
+| 2 | The video has no subtitles and `--audio-fallback` not set — tell the user and offer to re-run with the flag |
+| 3 | yt-dlp is not installed |
+| 4 | yt-dlp itself failed — **not** "no subtitles". Its output is printed above the error; show it verbatim |
+| 5 | A subtitle track exists but holds no caption text, and `--audio-fallback` not set |
+
+Codes 2, 4 and 5 are three different facts and must not be reported to the user
+as the same one. Only 2 says anything about the video's captions.
 
 ## Example Usage
 
@@ -69,6 +75,21 @@ only runs there — the script never installs software onto the user's own
 machine as a side effect). Show the printed install instructions verbatim and
 let the user install it, then re-run.
 
+## When exit code is 4 (yt-dlp failed)
+
+A yt-dlp call failed — fetching the video's metadata, downloading subtitles, or
+downloading audio. **Do not tell the user the video has no subtitles**: the
+script may never have reached the captions at all. The last 20 lines of what
+yt-dlp wrote are printed above the error; show them verbatim. The usual causes
+are a network problem, a private / geo-blocked / removed video, or a yt-dlp too
+old for a YouTube change (`uv tool install --upgrade yt-dlp`). Offer a retry.
+
+## When exit code is 5 (caption track with no text)
+
+The video has a subtitle track, but it holds no cues — there was nothing to
+save, and no file was written. Tell the user that, and offer `--audio-fallback`
+to transcribe the audio instead.
+
 ## Dependencies
 
 - **yt-dlp** — required (subtitle download and audio extraction); auto-installed/updated only inside the multiplai container (`MULTIPLAI_CONTAINER=1`)
@@ -80,8 +101,9 @@ let the user install it, then re-run.
 
 If the script returns an error, show it to the user verbatim. Common issues:
 - yt-dlp not installed (exit 3) → user installs it: `brew install yt-dlp` (macOS) or `uv tool install yt-dlp`
-- Video is private/geo-blocked → nothing we can do, tell user
-- Network issues → suggest retry
+- Video is private/geo-blocked (exit 4) → nothing we can do, tell user
+- Network issues (exit 4) → suggest retry
+- yt-dlp out of date for a YouTube change (exit 4) → `uv tool install --upgrade yt-dlp`
 
 ## Resources
 

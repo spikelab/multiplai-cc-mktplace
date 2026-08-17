@@ -77,7 +77,7 @@ skip the step.
 
 ## Output-location rule
 
-Never write to `INBOX/`, `PLANS/`, or any workspace directory *relative to the
+Never write to `INBOX/` or any workspace directory *relative to the
 session cwd*, and never create those directories on machines that don't have
 them. The pattern: **workspace `INBOX/` if it exists (resolve the workspace
 root from `$CLAUDE_CONFIG_DIR/.workspace`), else the current directory — and
