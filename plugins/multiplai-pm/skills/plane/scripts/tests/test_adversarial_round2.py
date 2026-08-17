@@ -11,26 +11,15 @@ Live evidence was gathered against a Plane Cloud workspace on api.plane.so on
 
 from __future__ import annotations
 
-import sys
 import types
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import plane  # noqa: E402
-
-OK = "1fa4d2f6-e016-428a-aca7-5ebb1c8bca4f"
-BAD = "b996f98b-0bdc-4bea-9ec0-92da5268f054"
-ALLOWED = {OK: "Mine"}
-
-
-def guard(method, path):
-    plane._guard(method, path, ALLOWED)
+import plane
+from conftest import ALLOWED, BAD, OK, guard
 
 
 # --- the guardrail after the dot-segment fix ---------------------------------

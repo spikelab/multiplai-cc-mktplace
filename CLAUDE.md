@@ -74,9 +74,11 @@ done
 uv run --no-project --with pytest python -m pytest scripts/tests/ -q
 ```
 
-The gate scripts and their tests are stdlib-only, which is why they alone use
-`--no-project`: it skips installing the workspace environment just to run a
-linter. Everything under `plugins/` needs `--project`.
+`--no-project` is the marker for stdlib-only code: the gate scripts and their
+tests use it, and so do the suites whose plugin code imports nothing beyond
+the stdlib (media, pm, apple in the table below) — it skips installing the
+workspace environment just to run a linter or a stdlib test. Anything under
+`plugins/` that imports dependencies needs `--project`.
 
 CI additionally runs the six per-plugin test suites, each from its own
 directory:

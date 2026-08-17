@@ -11,7 +11,6 @@ answers a paginated envelope.
 from __future__ import annotations
 
 import io
-import sys
 import types
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
@@ -19,14 +18,8 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import plane  # noqa: E402
-
-OK = "1fa4d2f6-e016-428a-aca7-5ebb1c8bca4f"
-BAD = "b996f98b-0bdc-4bea-9ec0-92da5268f054"
-ALLOWED = {OK: "Mine"}
-CFG = {"base": "https://api.plane.so", "workspace": "ws", "token": "t", "allowed": ALLOWED}
+import plane
+from conftest import ALLOWED, BAD, CFG, OK
 
 ISSUE = "792a89b1-37db-47e1-a947-6fb1b79198d6"
 

@@ -84,6 +84,9 @@ def _load_env_file() -> None:
             continue
         key, _, val = line.partition("=")
         key = key.strip()
+        # Accept `export PLANE_X=...` so a sourceable shell env file works too.
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
         # An exported-but-empty var counts as absent, otherwise
         # `export PLANE_API_TOKEN=` silently shadows the file.
         if key.startswith("PLANE_") and not os.environ.get(key, "").strip():
@@ -150,8 +153,10 @@ def _guard(method: str, path: str, allowed: dict) -> None:
        *after* the check, so the allowlisted UUID would launder the rest.
        Percent-encoding is decoded first, for the same reason.
     1. Every project UUID appearing in the path must be allowlisted.
-    2. Any project-ish query parameter carrying a UUID must be allowlisted too,
-       so a filter like `?project_id=<other>` cannot reach past the path check.
+    2. Any query parameter carrying a UUID must be allowlisted too — whatever
+       the key is called — so a filter like `?project_id=<other>` (or the same
+       filter under another name) cannot reach past the path check. `search`
+       alone is exempt: free text, and results are re-filtered client-side.
     3. A path with no project UUID is workspace-scoped: reads only.
     4. The project object itself is read-only (no create, rename or delete).
     """
@@ -163,9 +168,17 @@ def _guard(method: str, path: str, allowed: dict) -> None:
         if decoded == bare:
             break
         bare = decoded
+    if urllib.parse.unquote(bare) != bare:
+        # Still decodable after three passes: refuse rather than judge a
+        # spelling some server layer may keep unwrapping.
+        raise GuardError(
+            f"refusing a path still percent-encoded after 3 decode passes ({path!r})"
+        )
     # Some routers and WAFs treat "\" as "/"; normalise before splitting so
-    # both spellings are judged the same way.
-    bare = bare.replace("\\", "/")
+    # both spellings are judged the same way. Consecutive slashes are collapsed
+    # for the same reason: a fronting proxy that merges them (nginx does, by
+    # default) would otherwise see a different path than the one judged here.
+    bare = re.sub(r"/+", "/", bare.replace("\\", "/"))
     if any(seg in (".", "..") for seg in bare.split("/")):
         raise GuardError(
             f"refusing a path containing dot segments ({path!r}) — the project "
@@ -179,9 +192,13 @@ def _guard(method: str, path: str, allowed: dict) -> None:
         h = m.lower()
         path_ids.append(f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}")
 
+    # Every query parameter is inspected, whatever its key is called: a
+    # cross-project filter does not have to spell "project" in its name.
+    # `search` is exempt as free text — a user may legitimately search for a
+    # UUID, and cmd_search filters the results against the allowlist anyway.
     query_ids = []
     for key, value in urllib.parse.parse_qsl(query):
-        if "project" not in key.lower():
+        if key.lower() == "search":
             continue
         query_ids.extend(m.lower() for m in re.findall(_UUID, value))
 
@@ -248,13 +265,22 @@ def _request(
         except urllib.error.HTTPError as exc:
             if exc.code == 429 and attempt < max_retries:
                 attempt += 1
+                # X-RateLimit-Reset arrives in the wild as epoch seconds,
+                # delta seconds, or (through some proxies) an HTTP-date.
+                # Parse defensively: a non-numeric header falls back to
+                # exponential backoff instead of crashing mid-retry.
+                wait = float(2**attempt)
                 reset = exc.headers.get("X-RateLimit-Reset")
-                wait = (
-                    max(1, int(float(reset)) - int(time.time()))
-                    if reset
-                    else 2**attempt
-                )
-                time.sleep(min(wait, 60))
+                if reset:
+                    try:
+                        value = float(reset)
+                    except ValueError:
+                        value = None
+                    if value is not None:
+                        # Anything above ~3 years' worth of seconds is an
+                        # epoch timestamp, not a delta.
+                        wait = value - time.time() if value > 1e8 else value
+                time.sleep(min(max(wait, 1), 60))
                 continue
             detail = exc.read().decode(errors="replace")[:400]
             if exc.code == 401:
@@ -578,13 +604,22 @@ def resolve_issue(cfg: dict, ref: str, project_ref: str | None = None) -> dict:
         for p in allowed_projects(cfg):
             try:
                 found = _request("GET", f"/projects/{p['id']}/issues/{ref}/", cfg)
-            except PlaneError:
-                continue
+            except PlaneError as exc:
+                # 404 means "not in this project"; anything else (401, 5xx,
+                # network) must surface, or a bad token reads as "not found".
+                if "-> 404" in str(exc):
+                    continue
+                raise
             if isinstance(found, dict):
                 return found
         raise PlaneError(f"issue {ref} not found in any allowed project")
 
-    m = re.fullmatch(r"([A-Za-z]+)[-\s]?(\d+)", ref)
+    # A project identifier may itself contain digits (WEB3-12), so a separator
+    # is required after a digit; the separatorless spelling (SPK12) stays
+    # supported for the letters-only case.
+    m = re.fullmatch(r"([A-Za-z][A-Za-z0-9]*)[-\s](\d+)", ref) or re.fullmatch(
+        r"([A-Za-z]+)(\d+)", ref
+    )
     if m:
         project_ref = project_ref or m.group(1)
         seq = int(m.group(2))
@@ -626,8 +661,14 @@ def resolve_state(cfg: dict, project_id: str, name: str) -> str:
 
 
 def _parse_ts(value: str) -> datetime:
-    """Parse a Plane timestamp. `Z` is not something fromisoformat accepts."""
-    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    """Parse a Plane timestamp. `Z` is not something fromisoformat accepts.
+
+    A date-only value (legacy self-hosted cycle bounds) parses naive; it is
+    read as UTC so it stays comparable with tz-aware instants instead of
+    raising TypeError.
+    """
+    dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 # An empty cycle list is not proof that the project has none. Verified against
@@ -977,7 +1018,9 @@ def cmd_check(cfg, _args):
     """Show resolved config and prove the guardrail blocks what it claims to."""
     print(f"base url  : {cfg['base']}")
     print(f"workspace : {cfg['workspace']}")
-    print(f"token     : {cfg['token'][:10]}... ({len(cfg['token'])} chars)")
+    # Length only, never a prefix: `check` is the first command every session
+    # runs, and its output lands in transcripts and CI logs.
+    print(f"token     : set ({len(cfg['token'])} chars)")
     print("allowlist :")
     for pid, label in cfg["allowed"].items():
         print(f"  - {label}  [{pid}]")
@@ -1025,6 +1068,20 @@ def cmd_check(cfg, _args):
     )
     negative.append(("DELETE", f"/projects/{ok_id}/", "delete an allowed project"))
     negative.append(("PATCH", f"/projects/{ok_id}/", "rename an allowed project"))
+    negative.append(
+        ("DELETE", f"/projects/{ok_id}//",
+         "delete an allowed project via a trailing double slash")
+    )
+    negative.append(
+        # "%25252530" is "0" percent-encoded four times: three decode passes
+        # leave "%30", which must be refused, not waved through UUID-less.
+        ("GET", f"/projects/%25252530{off_id[1:]}/issues/",
+         "read via a path still percent-encoded after 3 passes")
+    )
+    negative.append(
+        ("GET", f"/projects/{ok_id}/issues/?module={off_id}",
+         "filter by a non-'project' query key carrying a blocked UUID")
+    )
     negative.append(("POST", "/projects/", "create a project"))
     negative.append(("POST", "/issues/search/", "write via a workspace-scoped path"))
 
@@ -1215,9 +1272,22 @@ def cmd_create(cfg, args):
         "POST", f"/projects/{proj['id']}/issues/", cfg,
         body=payload, dry_run=args.dry_run,
     )
-    if result is None:
+    # Keyed on the flag, not on `result`: _request also returns None for a
+    # real 2xx with an empty body, and that create must not read as a dry-run.
+    if args.dry_run:
         if args.cycle:
             _place_in_cycle(cfg, proj["id"], None, args.cycle, dry_run=True)
+        return
+    if not isinstance(result, dict):
+        print(
+            "created, but the server answered with no body — "
+            "run `issues` to find the new ref"
+        )
+        if args.cycle:
+            print(
+                "not added to the cycle: the response carried no issue id",
+                file=sys.stderr,
+            )
         return
     print(
         f"created {proj.get('identifier')}-{result.get('sequence_id')}  "
@@ -1256,8 +1326,9 @@ def cmd_update(cfg, args):
             "PATCH", f"/projects/{pid}/issues/{issue['id']}/", cfg,
             body=payload, dry_run=args.dry_run,
         )
-        if result is not None:
-            print(f"updated {result.get('name')}  ({', '.join(payload)})")
+        if not args.dry_run:
+            name = result.get("name") if isinstance(result, dict) else issue.get("name")
+            print(f"updated {name}  ({', '.join(payload)})")
     if args.cycle:
         _place_in_cycle(cfg, pid, issue, args.cycle, dry_run=args.dry_run)
 
@@ -1273,8 +1344,9 @@ def cmd_comment(cfg, args):
         "POST", f"/projects/{pid}/issues/{issue['id']}/comments/", cfg,
         body={"comment_html": md_to_html(text)}, dry_run=args.dry_run,
     )
-    if result is not None:
-        print(f"commented on {issue.get('name')} (comment {result.get('id')})")
+    if not args.dry_run:
+        cid = result.get("id") if isinstance(result, dict) else "?"
+        print(f"commented on {issue.get('name')} (comment {cid})")
 
 
 def cmd_comments(cfg, args):
@@ -1392,6 +1464,7 @@ def cmd_attachments(cfg, args):
         return
 
     os.makedirs(args.download, exist_ok=True)
+    taken: set[str] = set()
     for n, row in enumerate(rows):
         asset_id = str(row["asset"] or "")
         if not re.fullmatch(_UUID, asset_id):
@@ -1399,9 +1472,14 @@ def cmd_attachments(cfg, args):
             continue
         meta = asset_meta(cfg, asset_id)
         blob = fetch_asset(meta["asset_url"], cfg["base"])
-        dest = os.path.join(
-            args.download, _safe_filename(meta.get("asset_name"), f"asset-{n}.bin")
-        )
+        # Two attachments may sanitise to the same name; suffix instead of
+        # silently overwriting the first with the second.
+        name = _safe_filename(meta.get("asset_name"), f"asset-{n}.bin")
+        if name in taken:
+            stem, dot, ext = name.partition(".")
+            name = f"{stem}-{n}{dot}{ext}"
+        taken.add(name)
+        dest = os.path.join(args.download, name)
         with open(dest, "wb") as fh:
             fh.write(blob)
         print(f"{dest}  ({len(blob)} bytes)")

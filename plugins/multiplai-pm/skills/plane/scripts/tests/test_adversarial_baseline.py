@@ -12,24 +12,14 @@ Round 2 lives in test_adversarial_round2.py.
 from __future__ import annotations
 
 import io
-import sys
 import types
 from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import plane  # noqa: E402
-
-OK = "1fa4d2f6-e016-428a-aca7-5ebb1c8bca4f"
-BAD = "b996f98b-0bdc-4bea-9ec0-92da5268f054"
-ALLOWED = {OK: "Mine"}
-
-
-def guard(method, path, allowed=None):
-    plane._guard(method, path, allowed if allowed is not None else ALLOWED)
+import plane
+from conftest import ALLOWED, BAD, OK, guard
 
 
 # --- D1: dot-segment traversal walks out of an allowlisted project ------------

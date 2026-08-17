@@ -22,7 +22,7 @@ marketplace.
 | `pm-strategy-memo` | Leadership-grade strategy memos using Minto Pyramid, with a Working Backwards stress-test and a fresh-Claude reader-test. |
 | `job-application` | Draft tailored resumes and cover letters, then generate PDF applications. |
 | `landing-page` | Landing-page copy: create from scratch, audit an existing page (CRO review), or iterate copy variations for specific sections. |
-| `plane` | Work with [Plane](https://plane.so) tickets — list your board, read/create/update issues, comment, search — restricted to an explicit project allowlist so shared team projects cannot be touched. |
+| `plane` | Work with [Plane](https://plane.so) tickets — list your board, read/create/update issues, comment, search — restricted to an explicit project allowlist: writes outside it are refused, reads and search results are filtered to it (two workspace-scoped commands are disclosed in its SKILL.md). |
 
 ## Composition
 

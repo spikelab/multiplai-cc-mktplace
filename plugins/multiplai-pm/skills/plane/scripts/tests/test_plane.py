@@ -8,26 +8,14 @@ test_blocks_* is an attempt to reach a non-allowlisted project.
 from __future__ import annotations
 
 import os
-import sys
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import plane  # noqa: E402
-
-OK = "1fa4d2f6-e016-428a-aca7-5ebb1c8bca4f"
-OK2 = "6155159a-ff3b-447a-83db-6104be74ffb4"
-BAD = "b996f98b-0bdc-4bea-9ec0-92da5268f054"
-
-ALLOWED = {OK: "Mine", OK2: "Also mine"}
+import plane
+from conftest import ALLOWED, ALLOWED_TWO, BAD, OK, OK2, guard
+from conftest import Args as _Args
 
 ISSUE = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-
-
-def guard(method, path, allowed=None):
-    plane._guard(method, path, allowed if allowed is not None else ALLOWED)
 
 
 # --- the allowlist is enforced ----------------------------------------------
@@ -98,9 +86,23 @@ def test_allows_allowlisted_project_in_query_parameter():
     guard("GET", f"/issues/?project_id={OK}")
 
 
-def test_unrelated_uuid_in_query_is_not_treated_as_a_project():
-    """Only project-ish keys are checked; an assignee filter must still work."""
-    guard("GET", f"/projects/{OK}/issues/?assignees={BAD}")
+def test_any_query_key_carrying_a_blocked_uuid_is_refused():
+    """The key does not have to spell "project" for its UUID to be checked.
+
+    This deliberately reverses the earlier "only project-ish keys" rule: a
+    cross-project filter under another name (?module=, ?assignees=) slipped
+    past a substring match. The CLI sends no UUID-bearing query parameter
+    today, so failing closed costs nothing; a future feature that needs one
+    must exempt it explicitly, the way `search` is.
+    """
+    for key in ("assignees", "module", "cycle"):
+        with pytest.raises(plane.GuardError):
+            guard("GET", f"/projects/{OK}/issues/?{key}={BAD}")
+
+
+def test_search_query_text_is_exempt_from_the_uuid_check():
+    """Free text may quote any UUID; cmd_search re-filters results anyway."""
+    guard("GET", f"/issues/search/?search={BAD}&limit=100")
 
 
 # --- the project object itself is read-only ---------------------------------
@@ -152,7 +154,7 @@ def test_allows_workspace_reads():
 @pytest.mark.parametrize("method", ["GET", "POST", "PATCH", "DELETE"])
 def test_allows_every_method_on_allowlisted_subresource(method):
     guard(method, f"/projects/{OK}/issues/{ISSUE}/")
-    guard(method, f"/projects/{OK2}/issues/{ISSUE}/")
+    guard(method, f"/projects/{OK2}/issues/{ISSUE}/", ALLOWED_TWO)
 
 
 def test_empty_allowlist_blocks_everything():
@@ -359,12 +361,6 @@ def test_project_id_of_handles_both_shapes():
 
 
 # --- search filtering (the read-side half of the allowlist) -----------------
-
-
-class _Args:
-    def __init__(self, **kw):
-        self.json = False
-        self.__dict__.update(kw)
 
 
 @pytest.fixture

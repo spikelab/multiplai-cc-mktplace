@@ -10,31 +10,13 @@ from __future__ import annotations
 
 import contextlib
 import io
-import sys
 from html.parser import HTMLParser
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import plane  # noqa: E402
-
-OK = "1fa4d2f6-e016-428a-aca7-5ebb1c8bca4f"
-BAD = "b996f98b-0bdc-4bea-9ec0-92da5268f054"
-ALLOWED = {OK: "Mine"}
-CFG = {
-    "token": "plane_api_x",
-    "base": "https://api.plane.so",
-    "workspace": "acme",
-    "allowed": ALLOWED,
-}
-
-
-class _Args:
-    def __init__(self, **kw):
-        self.json = False
-        self.__dict__.update(kw)
+import plane
+from conftest import BAD, CFG, OK
+from conftest import Args as _Args
 
 
 # --- F1: search must fail closed, not open ----------------------------------
