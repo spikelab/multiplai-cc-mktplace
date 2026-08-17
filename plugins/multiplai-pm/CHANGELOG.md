@@ -23,6 +23,61 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 Nothing yet.
 
+## [0.3.0] - 2026-08-17
+
+### Added
+- **`plane` — Plane ticket management, the pack's first skill with a script.**
+  Talk to Claude about tickets ("what's on my board", "move SPK-12 to done",
+  "open a ticket for the login bug") and it drives a stdlib-only CLI against
+  the Plane API (Cloud or self-hosted). Every request passes a **project
+  allowlist** (`PLANE_ALLOWED_PROJECTS`, required, no default): writes to any
+  project you did not explicitly list are refused, and issue reads, listings
+  and search results are filtered to the allowlist. Two commands are
+  workspace-scoped by nature and disclosed as such in SKILL.md: `members`
+  returns the whole workspace roster, and `search` executes server-side across
+  the workspace before its results are filtered back down. Issues, comments,
+  states, labels, members, cycles, estimates, attachments (download), search;
+  no deletes and no project mutation, by design. Run
+  `python3 skills/plane/scripts/plane.py check` first — it prints the resolved
+  config and self-tests the guardrail. Needs `PLANE_API_TOKEN`,
+  `PLANE_WORKSPACE` and `PLANE_ALLOWED_PROJECTS` in the environment; see the
+  README's configuration section.
+
+  Ported from the `dolce-plane` plugin
+  (DolceTech/DolceClaudeMarketplace, commit `7154f85`), then hardened in a
+  pre-release review (the fixes below); its test suite (allowlist parsing,
+  adversarial guardrail coverage, markdown→HTML escaping, search filtering)
+  ships with it — 207 tests as of this release.
+
+### Fixed
+All found by review of the ported code, before its first release here:
+
+- **Guardrail hardening.** A trailing double slash (`/projects/<uuid>//`) no
+  longer slips a PATCH/DELETE past the "project object is read-only" rule —
+  consecutive slashes are collapsed before judging, the way a fronting proxy
+  would merge them. A path still percent-encoded after three decode passes is
+  refused instead of waved through. And every query parameter carrying a UUID
+  is checked against the allowlist whatever its key is called, so a
+  cross-project filter no longer has to spell "project" to be caught
+  (`search` free text alone is exempt; its results are re-filtered
+  client-side).
+- **`check` no longer prints a token prefix.** It printed the first 10
+  characters of `PLANE_API_TOKEN` into every transcript and CI log that
+  followed the documented "run `check` first" step; now it prints the length
+  only.
+- **Errors no longer masquerade as "not found".** A 401/5xx/network failure
+  while resolving an issue by UUID surfaces instead of being reported as
+  "issue not found in any allowed project" — an expired token now says so.
+- **Sturdier edges.** A non-numeric `X-RateLimit-Reset` header (some proxies
+  send an HTTP-date) falls back to exponential backoff instead of crashing
+  the 429 retry, and a delta-seconds value no longer degrades to a 1-second
+  spin. Date-only cycle bounds (legacy self-hosted) no longer crash `cycles`
+  and `--cycle active`. `attachments --download` suffixes colliding filenames
+  instead of silently overwriting. A create/update answered with an empty
+  2xx body is confirmed as real instead of being mistaken for a dry-run.
+  `PLANE_ENV_FILE` accepts `export KEY=VALUE` lines. Issue refs whose project
+  identifier contains digits (`WEB3-12`) parse.
+
 ## [0.2.0] - 2026-08-16
 
 Everything below had already landed while the marketplace version stayed at

@@ -188,6 +188,21 @@ jobs:
         working-directory: plugins/multiplai-media
         run: uv run --no-project --with pytest python -m pytest tests/ -q
 
+  pm-tests:
+    name: multiplai-pm tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # The plane skill's CLI and tests are stdlib-only — pytest is the only
+      # install; every network call is monkeypatched.
+      - name: Run tests
+        working-directory: plugins/multiplai-pm
+        run: uv run --no-project --with pytest python -m pytest skills/plane/scripts/tests/ -q
+
   buildme-tests:
     name: buildme pipeline tests
     runs-on: ubuntu-latest

@@ -30,8 +30,8 @@
     {
       "name": "multiplai-pm",
       "source": "./plugins/multiplai-pm",
-      "description": "Product-management skill pack: JTBD synthesis, persona codification, PR/FAQ, strategy memos, job applications, landing pages.",
-      "version": "0.2.0",
+      "description": "Product-management skill pack: JTBD synthesis, persona codification, PR/FAQ, strategy memos, job applications, landing pages, and Plane ticket management with a project allowlist.",
+      "version": "0.3.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"
@@ -45,7 +45,9 @@
         "personas",
         "strategy",
         "pr-faq",
-        "roadmap"
+        "roadmap",
+        "plane",
+        "tickets"
       ]
     },
     {

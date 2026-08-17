@@ -64,7 +64,7 @@ own, and each carries its own release notes — see
 | Plugin | Description |
 |--------|-------------|
 | [`multiplai-context`](plugins/multiplai-context) | Context routing, continuous learning, session awareness, and memory management. The heart of the system. |
-| [`multiplai-pm`](plugins/multiplai-pm) | Product-management pack: JTBD synthesis, persona codification, PR/FAQ, strategy memos, job applications, landing pages. |
+| [`multiplai-pm`](plugins/multiplai-pm) | Product-management pack: JTBD synthesis, persona codification, PR/FAQ, strategy memos, job applications, landing pages, Plane ticket management. |
 | [`multiplai-writing`](plugins/multiplai-writing) | Content creation toolkit: briefs, drafts, copy editing, LinkedIn posts, image prompts. |
 | [`multiplai-research`](plugins/multiplai-research) | Code-driven deep-research pipeline, insight extraction, structured interviewing. |
 | [`multiplai-dev`](plugins/multiplai-dev) | Developer pack: spec-driven builds (buildme), executable plan authoring, refactoring, walkthroughs, e2e tests, cloud ops, skill authoring. |
@@ -103,6 +103,7 @@ contract](docs/degradation-contract.md)).
 | | gmail | 🔑 | Gmail OAuth credentials. Full standalone setup docs in the skill. |
 | | fireflies | 🔑 | Your Fireflies API key (`FIREFLIES_API_KEY`). Stdlib-only, no other setup. |
 | multiplai-pm | job-application, landing-page, pm-jtbd-synthesis, pm-persona-codifier, pm-pr-faq, pm-strategy-memo | ✅ | Personal memory files are optional — skills ask for source material when absent. |
+| | plane | 🔑 | Your Plane API token plus a required project allowlist (`PLANE_*` env vars). Stdlib-only, works on Plane Cloud and self-hosted. |
 | multiplai-research | deep-research | ✅ | Zero-config via the Agent SDK; optional 🔑 search-provider keys widen coverage. |
 | | extract-insights, interviewer | ✅ | |
 | multiplai-writing | writing (all modes) | ✅ | Voice memory files optional — asks if missing. |
