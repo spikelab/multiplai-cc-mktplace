@@ -25,6 +25,31 @@ file. A proposal is archived (Step 6) only once **nothing is left pending**.
 
 ---
 
+## Step 0: Finish anything left unfiled
+
+Run this first, every time. It is fast, it takes no model call, and it is the
+only step that looks at proposals *other* than the newest one:
+
+```
+uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/dream.py" --reconcile
+```
+
+A proposal with zero pending items that is still sitting in the dreams root is
+finished-but-unfiled: it was reviewed and applied, but the archive, the state
+stamp, and the learnings collection never ran. It then looks pending forever,
+keeps the dream gate nudging, and — because `_gc_learnings` will not collect
+sources until their proposal is archived — pins the learnings files, so the next
+`/dream` re-drafts items from material already in memory.
+
+Step 1 below cannot fix this: it takes the newest proposal by mtime and never
+looks at older ones, so re-running this skill reviews the *newer* file and
+leaves the stale one exactly as it was. Hence a separate step, before it.
+
+Report what it archived, if anything, then continue. Add `--dry-run` first if
+the user wants to see the list before anything moves.
+
+---
+
 ## Step 1: Locate the Proposal
 
 Check `.multiplai/dreams/` for a file matching `processed-learnings-*.md` — top level
@@ -294,6 +319,56 @@ Four cases, in the order they usually appear:
 
 Record a merged or narrowed item as **`edited`**, not `applied` — the status
 must reflect that the text diverged from the proposal.
+
+### 2b. Decide the `## Conflict Resolutions` items, and record the decision
+
+That section sits at the top of the proposal and lists learnings that target a
+line **already in memory**. Each item is keyed by the memory file and line it
+would supersede, not by a number:
+
+```
+### `dolcebot.md` line 453
+```
+
+Read the existing line and the proposed replacement, then decide one of:
+
+- the learning **contradicts** the line → supersede it (edit memory), record
+  `applied`;
+- it **restates** the line, usually with less detail → change nothing, record
+  `rejected`. This is the common case: one measured proposal carried 12
+  conflict resolutions and all 12 were no-ops, each proposing a *less* specific
+  version of a line that already existed;
+- you rewrote the line rather than taking either version → record `edited`.
+
+Record them the same batched way as everything else — one call for all of them,
+with `"kind":"conflict"`. `file` is the memory file named in the heading and
+`index` is its **line number**, since a conflict has no `### N.` to key on:
+
+```json
+[
+  {"kind":"conflict","file":"dolcebot.md","index":453,"status":"rejected"},
+  {"kind":"conflict","file":"dolcebot.md","index":455,"status":"applied","target":"dolcebot.md"}
+]
+```
+
+Feed that to the Step 4 command. Conflicts may ride in the same array as the
+`update` items for the file they touch — one call per target file, as Step 4
+already says.
+
+**Recording them is not optional bookkeeping — an undecided conflict is lost,
+not deferred.** `## Conflict Resolutions` is regenerated, but only from
+learnings blocks that have not been consolidated yet: the run that drafts a
+conflict is the run that records its source block in the ledger, so from the
+next run on there is nothing left to derive it from. Once this proposal leaves
+the dreams root the conflict cannot come back — folding it forward strips the
+whole section, and archiving takes it with the file.
+
+So do not leave one undecided. `--archive` blocks on pending updates and
+actions but **not** on conflicts, so nothing will stop you finishing a proposal
+that still has some — `--reconcile` is the one command that does check, and it
+only refuses to file the proposal, it cannot recover a conflict you already
+archived past. Recording moves the block under `## Processed`, which both keeps
+the decision and stops the proposal being folded into a later run.
 
 ### 3. Escalate only what evidence cannot settle
 

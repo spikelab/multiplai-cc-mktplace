@@ -246,6 +246,54 @@ def reconciled_pair(item, verdict) -> tuple[str, str, bool]:
     return provenance, kind, disagreed
 
 
+def reconciliation_detail(item, verdict) -> dict[str, str | bool]:
+    """Everything :func:`reconciled_pair` decided, and which side each half
+    came from. Read-only — it re-derives, it does not re-decide.
+
+    The aggregate count alone cannot answer the question that decides what to
+    fix (issue #203). Resolution here is strictly one-way — the more cautious
+    half always wins — so every disagreement can only ever move an item
+    *toward* manual review. That makes label noise indistinguishable from
+    genuine caution in the totals: a proposal where 39% of items had a
+    contested label and 32% ended ``kind: RULE`` (which never auto-applies)
+    might be a rubric problem or a labelling problem, and the aggregate says
+    which exactly never.
+
+    Splitting it by *which half* disagreed and *which side won* is what
+    separates them: RULE because both passes independently said RULE is the
+    rubric working, RULE because one pass said FACT and lost is a labelling
+    cost. No behaviour changes — ``kind: RULE`` never auto-applying is correct
+    and stays.
+    """
+    ext_p = (getattr(item, "provenance", "") or "").upper()
+    ext_k = (getattr(item, "kind", "") or "").upper()
+    jud_p = (getattr(verdict, "provenance", "") or "").upper() if verdict else ""
+    jud_k = (getattr(verdict, "kind", "") or "").upper() if verdict else ""
+    provenance, kind, disagreed = reconciled_pair(item, verdict)
+
+    def _winner(ext: str, jud: str, resolved: str) -> str:
+        if not ext or not jud:
+            return "only-one-label"
+        if ext == jud:
+            return "agreed"
+        if resolved == ext:
+            return "extractor"
+        if resolved == jud:
+            return "judge"
+        return "neither"
+
+    return {
+        "extractor_pair": f"{ext_p or '-'}/{ext_k or '-'}",
+        "judge_pair": f"{jud_p or '-'}/{jud_k or '-'}",
+        "resolved_pair": f"{provenance or '-'}/{kind or '-'}",
+        "provenance_disagreed": bool(ext_p and jud_p and ext_p != jud_p),
+        "kind_disagreed": bool(ext_k and jud_k and ext_k != jud_k),
+        "provenance_won": _winner(ext_p, jud_p, provenance),
+        "kind_won": _winner(ext_k, jud_k, kind),
+        "disagreed": disagreed,
+    }
+
+
 # --- reason codes -----------------------------------------------------------
 
 # Ordered by how much they should worry a reader. An item can trip several;

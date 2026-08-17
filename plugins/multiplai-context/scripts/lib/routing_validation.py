@@ -2,11 +2,23 @@
 
 Pure code, no LLM. Two checks over a drafted proposal:
 
-1. **Section-registry check** — every H2 section name is unique across the
-   memory files (enforced by the workspace reorg), so a section name maps to
-   exactly one file. An entry whose ``Section:`` exists in a *different* file
-   than its target is a misroute; a "new section" whose name collides with
-   another file's section would break the registry invariant.
+1. **Section-registry check** — two questions off one index, deliberately
+   scoped differently (issue #200).
+
+   *Does this section exist?* spans **H2–H4**. Memory files carry most of
+   their sections at H3 — measured 2026-08-13 on the reporting corpus: 299 H2
+   against 347 H3, so an H2-only index is blind to 54% of real sections. It
+   reported "section X does not exist" for sections plainly present and then
+   suggested rerouting the item to whichever *other* file happened to own an
+   H2 by that name. Because a flagged item is never applied silently, each
+   false positive converted an auto-applicable item into a manual routing
+   question, pointed at the wrong file.
+
+   *Would this new section collide?* stays **H2-only**. The uniqueness
+   invariant in ``memory/CLAUDE.md`` is about H2 specifically — duplicate H2
+   names break deterministic routing — and an H3 of the same name elsewhere
+   does not break it. Widening the collision check would trade the old false
+   positives for new ones.
 
 2. **Cross-file dedup check** — normalized 8-gram token overlap of each
    proposed insert against *all* memory files (not just the target), catching
@@ -73,7 +85,10 @@ DUPLICATE_RATIO = 0.5
 # auto-applies — the opposite of what a cap is for.
 NEAR_DUPLICATE_QUOTES = 40
 
-_H2_RE = re.compile(r"^## +(.+?)\s*$", re.MULTILINE)
+# H2 through H4. Deeper than H4 is a sub-point inside a section, not a routing
+# target, and indexing it would make short generic names ("Notes", "Gotchas")
+# collide across the corpus for no gain.
+_HEADING_RE = re.compile(r"^(?P<hashes>#{2,4}) +(?P<name>.+?)\s*$", re.MULTILINE)
 _ENTRY_RE = re.compile(r"^### +(?P<num>A?\d+)\.\s*(?P<title>.*)$")
 _UPDATES_FOR_RE = re.compile(r"^## Updates for `(?P<file>[^`]+)`")
 _SECTION_FIELD_RE = re.compile(r"^\*\*Section:\*\*\s*(?P<value>.+?)\s*$")
@@ -88,26 +103,61 @@ _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 # Section registry
 # ---------------------------------------------------------------------------
 
-def build_section_registry(memory_dir: Path) -> dict[str, list[str]]:
-    """Map each H2 section name to the memory file(s) that contain it.
+def index_sections(contents: dict[str, str]) -> dict[str, list[tuple[str, int]]]:
+    """Map each H2–H4 section name to ``[(filename, heading level)]``.
 
-    With unique section names the value lists are singletons; a multi-file
-    value means the workspace invariant is already broken (worth surfacing,
-    but not this module's job to fix).
+    One pass, both questions. Callers that ask *does this section exist*
+    read every entry; callers enforcing the H2-uniqueness invariant filter to
+    ``level == 2``. Keeping the level here rather than building two indexes is
+    what lets the two checks disagree on scope without disagreeing on the
+    corpus they read (issue #200).
     """
-    registry: dict[str, list[str]] = {}
+    index: dict[str, list[tuple[str, int]]] = {}
+    for name, content in contents.items():
+        for match in _HEADING_RE.finditer(content):
+            index.setdefault(match.group("name"), []).append(
+                (name, len(match.group("hashes")))
+            )
+    return index
+
+
+def _owners(entries: list[tuple[str, int]], *, level: int | None = None) -> list[str]:
+    """Filenames from an index entry list, de-duplicated, order preserved.
+
+    A file that carries the same section name at two depths (or twice at one)
+    must not be named twice in a warning.
+    """
+    seen: list[str] = []
+    for filename, heading_level in entries:
+        if level is not None and heading_level != level:
+            continue
+        if filename not in seen:
+            seen.append(filename)
+    return seen
+
+
+def build_section_registry(memory_dir: Path) -> dict[str, list[str]]:
+    """Map each H2–H4 section name to the memory file(s) that contain it.
+
+    Existence semantics — the same scope :func:`index_sections` gives, flattened
+    for callers that do not care what depth a section sits at. For the
+    H2-uniqueness invariant use :func:`index_sections` and filter on level;
+    this function cannot answer that question and no longer pretends to.
+    """
+    contents: dict[str, str] = {}
     if not memory_dir.exists():
-        return registry
+        return {}
     for f in sorted(memory_dir.glob("*.md")):
         if not f.is_file():
             continue
         try:
-            content = f.read_text()
+            contents[f.name] = f.read_text()
         except OSError:
             continue
-        for match in _H2_RE.finditer(content):
-            registry.setdefault(match.group(1), []).append(f.name)
-    return registry
+    return {
+        section: _owners(entries)
+        for section, entries in index_sections(contents).items()
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -495,10 +545,7 @@ def validate_proposal(
     registry: an H2 in a ``CLAUDE.md`` is not a memory section, so registering
     it would turn every ordinary heading name into a phantom misroute.
     """
-    registry: dict[str, list[str]] = {}
-    for name, content in memory_contents.items():
-        for match in _H2_RE.finditer(content):
-            registry.setdefault(match.group(1), []).append(name)
+    section_index = index_sections(memory_contents)
 
     dedup_extra = dedup_extra or {}
     dedup_contents = {**memory_contents, **dedup_extra}
@@ -516,21 +563,41 @@ def validate_proposal(
         section, is_new = _parse_section_field(entry["section"])
 
         if section:
-            owners = registry.get(section, [])
+            found_in = section_index.get(section, [])
             if is_new:
-                collisions = [o for o in owners if o != entry["target"]]
+                # H2-only: the uniqueness invariant this warns about is an H2
+                # invariant. An H3 of the same name elsewhere is not a collision.
+                collisions = [
+                    o for o in _owners(found_in, level=2) if o != entry["target"]
+                ]
                 if collisions:
                     warnings.append(
                         f"{label}: proposed new section \"{section}\" collides with an "
                         f"existing section in `{', '.join(collisions)}` — section names "
                         f"must stay unique across memory files; reroute or rename."
                     )
-            elif owners and entry["target"] not in owners:
-                warnings.append(
-                    f"{label}: section \"{section}\" does not exist in "
-                    f"`{entry['target']}` but does in `{', '.join(owners)}` — "
-                    f"suggested reroute to `{owners[0]}`."
-                )
+            else:
+                # Existence spans H2-H4, so a section the target really has at
+                # H3 no longer reads as missing and no longer gets a reroute
+                # suggestion pointing at some other file's H2.
+                owners = _owners(found_in)
+                if owners and entry["target"] not in owners:
+                    # Name every owner, but *suggest* the H2 one. Section names
+                    # are unique at H2 by invariant, which is what makes routing
+                    # deterministic — so the H2 owner is where the item belongs.
+                    # `owners` is filename order at any depth, so `owners[0]` is
+                    # otherwise whichever file happens to sort first: measured
+                    # on one real corpus, 8 section names had more than one
+                    # owner and in 6 of them the alphabetically-first owner held
+                    # the name at H3 while a *different* file held it at H2
+                    # (`Architecture`, `Overview`, `Skill Architecture`, …).
+                    h2_owners = _owners(found_in, level=2)
+                    suggested = h2_owners[0] if h2_owners else owners[0]
+                    warnings.append(
+                        f"{label}: section \"{section}\" does not exist in "
+                        f"`{entry['target']}` but does in `{', '.join(owners)}` — "
+                        f"suggested reroute to `{suggested}`."
+                    )
 
         # An update/replace entry legitimately overlaps the old text in its
         # own target file — only cross-file hits are signal for those.

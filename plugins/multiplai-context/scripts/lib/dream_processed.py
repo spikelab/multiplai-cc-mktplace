@@ -9,11 +9,17 @@ the file itself is the decision record: whoever reviews next (GUI or CLI) sees
 only what is still above the processed section.
 
 That one heading — ``## Processed`` — is the entire cross-tool contract. There
-is no sidecar, no key scheme, and the ``**Processed:**`` annotation is history
-that is never re-parsed, so the two writers do not need to agree on it
-byte-for-byte. Mirror of multiplai-gui ``hub/src/multiplai_hub/dreams.py``
-(``move_to_processed`` / ``mark_processed``); keep the two in sync only on the
-``## Processed`` heading.
+is no sidecar and no key scheme. Mirror of multiplai-gui
+``hub/src/multiplai_hub/dreams.py`` (``move_to_processed`` / ``mark_processed``);
+keep the two in sync only on the ``## Processed`` heading.
+
+The ``**Processed:**`` annotation is *history*, and it stays outside that
+contract. :func:`archive_disposition` does now read it — to tell a
+fully-rejected proposal from an applied one when filing it — but reads it
+leniently and falls back to ``applied``, which is what the caller did before it
+existed. So a hub that writes the line in some other shape degrades to the old
+behaviour rather than misfiling; the two writers still do not need to agree on
+it byte-for-byte.
 """
 
 from __future__ import annotations
@@ -39,6 +45,11 @@ _ACTIONS_HEADER_RE = re.compile(r"^## Action Items\b")
 # format exists to prevent. Keep them byte-identical; change both or neither.
 _UPDATE_RE = re.compile(r"^### (?P<index>\d+)\.\s*(?P<summary>.+?)\s*$")
 _ACTION_ITEM_RE = re.compile(r"^### A(?P<index>\d+)\.\s*(?P<summary>.+?)\s*$")
+# Conflict resolutions are the third item kind, and the only one not numbered:
+# dream keys them by the memory line they propose to supersede, so the identity
+# is `file` + `line`, e.g. "### `dolcebot.md` line 453" (issue #201).
+_CONFLICTS_HEADER_RE = re.compile(r"^## Conflict Resolutions\b")
+_CONFLICT_RE = re.compile(r"^### `(?P<file>[^`]+)` line (?P<index>\d+)\s*$")
 # A block ends at the next item/section heading or a horizontal-rule separator.
 _BLOCK_BOUNDARY_RE = re.compile(r"^(?:#{2,3}\s|---\s*$)")
 
@@ -60,26 +71,38 @@ def _find_block(lines: list[str], ref: tuple):
     own ``## Updates for`` target, an action only inside ``## Action Items``. A
     block already under ``## Processed`` never matches, so moving is idempotent.
     """
-    want_update = ref[0] == "update"
-    want_target = ref[1] if want_update else None
-    want_index = ref[2] if want_update else ref[1]
+    kind = ref[0]
+    # update -> ("update", group file, index); conflict -> ("conflict", memory
+    # file, line); action -> ("action", index).
+    want_target = ref[1] if kind in ("update", "conflict") else None
+    want_index = ref[2] if kind in ("update", "conflict") else ref[1]
     target: str | None = None
     in_actions = False
+    in_conflicts = False
     for i, line in enumerate(lines):
         group = _GROUP_RE.match(line)
         if group:
-            target, in_actions = group.group("file"), False
+            target, in_actions, in_conflicts = group.group("file"), False, False
             continue
         if _ACTIONS_HEADER_RE.match(line):
-            target, in_actions = None, True
+            target, in_actions, in_conflicts = None, True, False
+            continue
+        if _CONFLICTS_HEADER_RE.match(line):
+            target, in_actions, in_conflicts = None, False, True
             continue
         if line.startswith("## "):
-            target, in_actions = None, False
+            target, in_actions, in_conflicts = None, False, False
             continue
-        if want_update and target == want_target:
+        if kind == "update" and target == want_target:
             m = _UPDATE_RE.match(line)
-        elif not want_update and in_actions:
+        elif kind == "action" and in_actions:
             m = _ACTION_ITEM_RE.match(line)
+        elif kind == "conflict" and in_conflicts:
+            m = _CONFLICT_RE.match(line)
+            # The conflict heading carries its own file, so unlike an update
+            # (located by the group heading above it) the file must match here.
+            if m and m.group("file") != want_target:
+                continue
         else:
             continue
         if m and int(m.group("index")) == want_index:
@@ -177,7 +200,7 @@ def mark_processed(
 # not been carried out yet. The field names ``kind``/``file``/``index`` do mirror
 # the hub's model, because those identify the same item in the same document.
 
-_VALID_KINDS = ("update", "action")
+_VALID_KINDS = ("update", "action", "conflict")
 _VALID_STATUSES = ("applied", "edited", "rejected")
 
 
@@ -189,6 +212,11 @@ class Decision:
     locates it); ``target`` is the memory file the text was actually written to
     (what the ``**Processed:**`` annotation records). They are usually equal, and
     a reroute is exactly when they are not.
+
+    For ``kind="conflict"`` the pair means something slightly different but
+    consistent: ``file`` is the memory file named in the conflict heading and
+    ``index`` is the **line number** in it, because that is what identifies a
+    conflict resolution — there is no ``### N.`` to key on.
     """
 
     kind: str
@@ -201,12 +229,16 @@ class Decision:
     def ref(self) -> tuple:
         if self.kind == "update":
             return ("update", self.file, self.index)
+        if self.kind == "conflict":
+            return ("conflict", self.file, self.index)
         return ("action", self.index)
 
     @property
     def label(self) -> str:
         if self.kind == "update":
             return f"update {self.file}#{self.index}"
+        if self.kind == "conflict":
+            return f"conflict {self.file}:{self.index}"
         return f"action A{self.index}"
 
     @classmethod
@@ -227,6 +259,11 @@ class Decision:
         file = raw.get("file")
         if kind == "update" and not file:
             raise ValueError("kind 'update' needs a 'file' (its `## Updates for` group)")
+        if kind == "conflict" and not file:
+            raise ValueError(
+                "kind 'conflict' needs a 'file' (the memory file in its heading); "
+                "'index' is the line number in that file"
+            )
         target = raw.get("target")
         return cls(kind=kind, index=index, status=status, file=file, target=target)
 
@@ -322,7 +359,12 @@ def latest_pending_proposal(dreams_dir: Path) -> Path | None:
 
 def has_pending_items(text: str) -> bool:
     """True if any update/action item is still outside ``## Processed`` — the
-    archive backstop: a proposal must be fully processed before it is archived."""
+    archive backstop: a proposal must be fully processed before it is archived.
+
+    Scope is updates and actions **only**; conflict resolutions are
+    :func:`has_pending_conflicts`. Keeping them apart is not an oversight — see
+    that function for the caller this narrower question is right for.
+    """
     target: str | None = None
     in_actions = False
     for line in text.splitlines():
@@ -341,3 +383,67 @@ def has_pending_items(text: str) -> bool:
         if in_actions and _ACTION_ITEM_RE.match(line):
             return True
     return False
+
+
+def has_pending_conflicts(text: str) -> bool:
+    """True if any conflict resolution is still outside ``## Processed``.
+
+    Separate from :func:`has_pending_items` because the two callers want
+    different questions, and merging them would break one of them.
+
+    ``_fold_pending_proposals`` asks "is there anything here worth folding
+    forward?" — and folding runs the text through ``_strip_regenerated``, which
+    *deletes* ``## Conflict Resolutions``. A conflicts-only proposal must
+    therefore answer **no**, or the fold would swallow it and drop every
+    undecided conflict in it. That is :func:`has_pending_items`, unchanged.
+
+    ``--reconcile`` asks "may this be archived, stamped and its learnings
+    collected?" — and an archived proposal's conflicts are equally gone, since
+    the section is re-derived only from learnings blocks that are still
+    *unconsolidated*. Once a run ledgers a block its conflict can never come
+    back. So that caller must answer **yes**, and it ORs the two.
+    """
+    in_conflicts = False
+    for line in text.splitlines():
+        if _CONFLICTS_HEADER_RE.match(line):
+            in_conflicts = True
+            continue
+        if line.startswith("## "):
+            in_conflicts = False
+            continue
+        if in_conflicts and _CONFLICT_RE.match(line):
+            return True
+    return False
+
+
+# Lenient on purpose — see the module docstring. Anything that is not a
+# recognised status simply does not vote, and a proposal with no votes files as
+# `applied`, which is what happened before this was read at all.
+_PROCESSED_STATUS_RE = re.compile(
+    r"^\*\*Processed:\*\*\s+(?P<status>applied|edited|rejected)\b"
+)
+
+
+def processed_statuses(text: str) -> list[str]:
+    """Every status recorded on a ``**Processed:**`` line, in document order."""
+    return [
+        m.group("status")
+        for m in (_PROCESSED_STATUS_RE.match(line.strip()) for line in text.splitlines())
+        if m
+    ]
+
+
+def archive_disposition(text: str) -> str:
+    """Which subdirectory a finished proposal belongs in: ``rejected`` when every
+    decided item was rejected, otherwise ``applied``.
+
+    A proposal reviewed and turned down in full is reviewed-and-done, not
+    applied — ``/dream-remember`` Step 6 has always said to pass
+    ``--archive-as rejected`` for it. The statuses needed to tell the two apart
+    were already written into the file by ``_processed_line``; nothing read them
+    until now, so any automated archive filed everything as ``applied``.
+    """
+    statuses = processed_statuses(text)
+    if statuses and all(s == "rejected" for s in statuses):
+        return "rejected"
+    return "applied"

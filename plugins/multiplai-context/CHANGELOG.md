@@ -18,6 +18,90 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.50.0] - 2026-08-16
+
+### Fixed
+
+- **A section that exists no longer reads as missing.** The dream routing gate
+  indexed only `##` headings, and memory files keep most of their sections at
+  `###` — measured on one real corpus, 302 H2 against 354 H3/H4, so **54% of
+  real sections were invisible to it**. It reported `section "X" does not exist`
+  for sections plainly present, and then suggested rerouting the item to
+  whichever *other* file happened to own an `##` by that name. Since a flagged
+  item is never applied unreviewed, each false positive turned an
+  auto-applicable item into a manual routing question pointed at the wrong file
+  — on one proposal, 3 of 5 routing warnings were this bug. Existence checking
+  now spans `##`–`####`. Collision checking stays `##`-only, because the
+  uniqueness invariant it enforces is about `##` specifically; widening it
+  would have traded the old false positives for new ones.
+
+  When a section genuinely is misrouted, the **reroute now names the `##`
+  owner**. Widening existence to `##`–`####` also widened the suggestion, which
+  took whichever owner sorted first at any depth: on one real corpus 8 section
+  names had more than one owner, and in 6 of them the alphabetically-first
+  owner held the name at `###` while a *different* file held the `##` — so the
+  suggestion pointed away from the only file the routing invariant says the
+  item can live in. Every owner is still listed in the warning.
+
+- **Conflict resolutions can now be decided.** Items under
+  `## Conflict Resolutions` were the only kind with nowhere to record a
+  decision: `--mark-processed --kind` took `update` and `action` only. A
+  reviewer read one, decided, and the decision evaporated — and the conflict
+  with it. The section is regenerated, but only from learnings blocks that have
+  not been consolidated yet, and the run that drafts a conflict is the run that
+  records its source block; so once the proposal was archived or folded forward
+  there was nothing left to re-derive it from. `--kind conflict` now marks
+  them, keyed by the memory file and line in the item's heading
+  (`--kind conflict --file dolcebot.md --index 453`). `/dream-remember` gained
+  a step telling you to do it, and what the three outcomes mean; previously the
+  skill did not mention the section at all.
+
+- **A failed memory write during unattended consolidation no longer aborts the
+  run.** `dream --auto` wrote each memory file inside a loop with no per-file
+  error handling, so an `OSError` on the second file left the first already
+  rewritten, the state never stamped, and nothing recording either. It now
+  counts a failed write as a failed apply, which keeps every source learnings
+  file on disk so the next run retries from intact material — the same handling
+  the triage path next to it already had.
+
+### Added
+
+- **`dream.py --reconcile`** — finds proposals that were fully decided but
+  never filed, and finishes them: archive, stamp, then collect spent learnings.
+  A proposal with zero pending items sitting in the dreams root is
+  indistinguishable from a pending one; it keeps the dream gate nudging, and
+  because learnings are only collected once their proposal is archived, it also
+  pins the learnings files so the next run re-drafts items already in memory.
+  One real proposal sat like that for two days and contributed 54 re-drafted
+  items to its successor. Nothing caught it because `/dream-remember` only ever
+  inspects the newest proposal, so re-running the skill could not fix it — the
+  skill now runs `--reconcile` as its first step. Pair with `--dry-run` to see
+  the list before anything moves.
+
+  Three things it is careful about, because it runs *before* you read anything
+  and what it authorizes cannot be undone. It counts an **undecided conflict
+  resolution** as pending, so a proposal whose updates are all decided but
+  whose conflicts are not stays in the root instead of being archived, stamped
+  and having its source learnings collected — after which no later run could
+  re-derive the conflict. It **files by what the review decided**: a proposal
+  every item of which was rejected lands in `dreams/rejected/`, not
+  `dreams/applied/`, matching what `/dream-remember` Step 6 has always asked
+  for by hand. And a proposal it **cannot read** is named in the output,
+  counted as still pending and left where it is, with a non-zero exit — the
+  same fail-closed handling `--gc-learnings` gives an unreadable proposal.
+
+- **Triage now logs which side won each contested label.** Where it previously
+  logged only *how many* items the extractor and the judge disagreed about, it
+  now records per item — at debug level — both pairs, the resolved pair, and
+  which side each half came from, plus a per-kind summary. Resolution is
+  strictly one-way (the more cautious half always wins), so every disagreement
+  can only push an item toward manual review, and the bare count could not
+  distinguish label noise from genuine caution. On one proposal, 39% of items
+  had a contested label and 32% ended `kind: RULE`, which never auto-applies —
+  the new breakdown answers whether those items are `RULE` because both passes
+  said so (the rubric working) or because one said `FACT` and lost (a labelling
+  cost). No behaviour change: `kind: RULE` still never auto-applies.
+
 ## [0.49.2] - 2026-08-16
 
 ### Changed
