@@ -1,9 +1,11 @@
 """qmd-backed resources retrieval for the context manager.
 
-When ``resources_retrieval == "qmd"`` the context manager bypasses the
-catalog+router path for the resources corpus and calls :func:`search`
-here instead. qmd (https://github.com/tobi/qmd) maintains a hybrid
-BM25 + vector index over the resources directory; this module queries it.
+This is the only way a resources corpus is retrieved. When
+``enable_resources`` is on and ``resources_dir`` is set, the context
+manager calls :func:`search` here — the catalog+router path that memory,
+banks, diary and skills use never applied to resources and was removed
+in 0.52.0. qmd (https://github.com/tobi/qmd) maintains a hybrid BM25 +
+vector index over the resources directory; this module queries it.
 
 Three execution modes (``qmd_mode`` plugin option):
 

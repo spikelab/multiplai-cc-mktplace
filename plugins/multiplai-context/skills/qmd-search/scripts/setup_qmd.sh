@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot setup for qmd-based resources retrieval (resources_retrieval=qmd).
+# One-shot setup for qmd-based resources retrieval.
 #
 # RUN THIS WHERE QMD WILL EXECUTE: on the machine itself for native installs
 # (qmd_mode=local), or on the Mac HOST for container setups (qmd_mode=ssh —
@@ -88,5 +88,5 @@ qmd status | head -12
 echo; echo "--- smoke query ---"
 qmd search "the" -c "$COLLECTION" -n 3 2>/dev/null | head -8 || true
 qmd vsearch "setup and configuration" -c "$COLLECTION" -n 3 | head -12
-echo; echo "Done. Set plugin options: enable_resources=true resources_retrieval=qmd"
+echo; echo "Done. Set plugin options: enable_resources=true resources_dir=<path>"
 echo "(and qmd_mode=ssh for container setups)."

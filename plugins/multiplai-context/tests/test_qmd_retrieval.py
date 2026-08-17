@@ -326,7 +326,6 @@ class TestSearch:
 class TestQmdConfig:
     def test_defaults(self):
         cfg = CatalogConfig()
-        assert cfg.resources_retrieval == "catalog"
         assert cfg.qmd_mode == "local"
         assert cfg.qmd_ssh_host == "host.docker.internal"
         assert cfg.qmd_collection == "resources"
@@ -384,7 +383,6 @@ class TestQmdRefreshRemoteQuoting:
 
     def test_invalid_values_fall_back(self):
         cfg = CatalogConfig(
-            resources_retrieval="elasticsearch",
             qmd_mode="teleport",
             qmd_ssh_host="  ",
             qmd_collection="",
@@ -393,7 +391,6 @@ class TestQmdRefreshRemoteQuoting:
             qmd_candidate_limit=0,
             qmd_min_score=1.7,
         )
-        assert cfg.resources_retrieval == "catalog"
         assert cfg.qmd_mode == "local"
         assert cfg.qmd_ssh_host == "host.docker.internal"
         assert cfg.qmd_collection == "resources"
@@ -403,7 +400,6 @@ class TestQmdRefreshRemoteQuoting:
         assert cfg.qmd_min_score == 0.30
 
     def test_loads_from_env(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_RESOURCES_RETRIEVAL", "qmd")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_MODE", "http")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_SSH_HOST", "myhost")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_COLLECTION", "notes")
@@ -412,7 +408,6 @@ class TestQmdRefreshRemoteQuoting:
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_CANDIDATE_LIMIT", "20")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_QMD_MIN_SCORE", "0.5")
         cfg = load_catalog_config()
-        assert cfg.resources_retrieval == "qmd"
         assert cfg.qmd_mode == "http"
         assert cfg.qmd_ssh_host == "myhost"
         assert cfg.qmd_collection == "notes"
@@ -423,7 +418,7 @@ class TestQmdRefreshRemoteQuoting:
 
     def test_target_from_config_uses_cwd_as_workspace(self):
         cfg = CatalogConfig(
-            resources_dir="/ws/RESOURCES", resources_retrieval="qmd", qmd_mode="http",
+            resources_dir="/ws/RESOURCES", qmd_mode="http",
             qmd_http_url="http://h:1", qmd_candidate_limit=7, qmd_min_score=0.4,
         )
         target = qr.target_from_config(cfg, "/some/project")

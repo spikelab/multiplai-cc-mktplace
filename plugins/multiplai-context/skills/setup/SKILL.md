@@ -185,9 +185,16 @@ F2. **Edit each of the three files** with the answers you collected, replacing
 
 F3. **Routing scope — ask what the context router should pull from.**
 
-   The router always pulls from memory and diary. Skills and resources are
-   opt-in because they cost LLM calls during catalog generation and only
-   help if the user actually keeps skills/resources in standard locations.
+   The router always pulls from memory and diary. Skills are opt-in because
+   they cost LLM calls during catalog generation and only help if the user
+   actually keeps skills in a standard location.
+
+   **Do not offer a resources directory here.** Resources are retrieved
+   through a qmd index, which needs qmd installed and a collection built on
+   the host — neither is something this interview can do, and turning
+   `enable_resources` on without them injects nothing. If the user raises it,
+   point them at `/multiplai-context:qmd-search`, whose
+   `scripts/setup_qmd.sh` does the indexing, and leave the option unset.
 
    Ask each question and capture answers; they are written to `settings.json`
    in F4. (Workaround for [#39455](https://github.com/anthropics/claude-code/issues/39455) —
@@ -201,12 +208,6 @@ F3. **Routing scope — ask what the context router should pull from.**
      location?"
      → `enable_skills` (bool), `skills_dir` (path; falls back to the
      plugin's default if left blank).
-   - **Resources routing.** "Should the router suggest reference docs from
-     a resources directory? (yes/no, default no) — If yes, what's the path?
-     ({name}, a workspace-rooted directory like `<workspace>/RESOURCES` is
-     typical.)"
-     → `enable_resources` (bool), `resources_dir` (path; required if
-     `enable_resources=true`).
    - **Memory router strategy.** "Memory routing: `token_overlap` (fast,
      offline, free) or `llm` (semantic match via Sonnet, one extra LLM
      call per prompt — better recall but pricier)? Default `token_overlap`."
@@ -223,17 +224,15 @@ F4. **Write all collected options to settings.json** — same file location,
            "workspace_dir": "...",
            "enable_skills": true,
            "skills_dir": "...",
-           "enable_resources": true,
-           "resources_dir": "...",
            "memory_router": "token_overlap"
          }
        }
      }
    }
    ```
-   Only include keys the user actually set. If skills/resources were just
-   enabled, remember for the wrap-up: `/multiplai-context:refresh-catalogs --force`
-   will need to run (after the restart) to populate the new catalogs.
+   Only include keys the user actually set. If skills was just enabled,
+   remember for the wrap-up: `/multiplai-context:refresh-catalogs --force`
+   will need to run (after the restart) to populate the new catalog.
 
 F5. **Project identity — how sessions map to projects.**
 
@@ -296,10 +295,10 @@ F6. **Offer git version control for the memory directory.**
      issue.
 
 F7. **Wrap up.** Confirm which files were written, then print the quick-path
-   step-7 walkthrough (the single restart + first recall). If skills or
-   resources were enabled in F3, append: "after that, run
+   step-7 walkthrough (the single restart + first recall). If skills was
+   enabled in F3, append: "after that, run
    `/multiplai-context:refresh-catalogs --force` once to populate the new
-   catalogs."
+   catalog."
 
 ## Important
 - The two helper scripts have documented contracts above. **Do not** explore

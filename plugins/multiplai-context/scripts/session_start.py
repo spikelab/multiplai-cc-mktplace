@@ -275,8 +275,8 @@ def _spawn_detached(script: Path, *args: str) -> None:
 
 
 def _launch_qmd_refresh(scripts_dir: Path, cwd: str) -> bool:
-    """Fire the incremental qmd index refresh, detached, when the qmd
-    resources backend is active.
+    """Fire the incremental qmd index refresh, detached, when resources
+    retrieval is configured.
 
     The refresh child (scripts/qmd_refresh.py) is flock-guarded per
     workspace and fully incremental, so launching it on every session
@@ -289,11 +289,7 @@ def _launch_qmd_refresh(scripts_dir: Path, cwd: str) -> bool:
         from generators.config import load_catalog_config
 
         cfg = load_catalog_config()
-        if not (
-            cfg.enable_resources
-            and cfg.resources_retrieval == "qmd"
-            and cfg.resources_dir.strip()
-        ):
+        if not (cfg.enable_resources and cfg.resources_dir.strip()):
             return False
         script = scripts_dir / "qmd_refresh.py"
         if not script.exists():
@@ -680,8 +676,9 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
             data_dir, cwd, session_id, hook_input.get("source", "")
         )
 
-    # Keep the qmd resources index fresh (no-op unless the qmd backend
-    # is active). Detached + flock-guarded, so this never blocks the hook.
+    # Keep the qmd resources index fresh (no-op unless enable_resources
+    # and resources_dir are both set). Detached + flock-guarded, so this
+    # never blocks the hook.
     with run.stage("launch_qmd"):
         _launch_qmd_refresh(paths.scripts_dir(), cwd)
 

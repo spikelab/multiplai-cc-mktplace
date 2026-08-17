@@ -407,19 +407,29 @@ class TestSkillsCatalogHit:
 # ---------------------------------------------------------------------------
 
 
-class TestResourcesCatalogHit:
-    """Requirement: Catalog-first read path for resources context.
+class TestResourcesIsNotACatalogType:
+    """Requirement: resources are never read from a catalog.
 
-    When both enable_resources and resources_dir are set and catalog exists,
-    use catalog for routing.
+    Retrieval goes through qmd at prompt time. A resources.json on disk —
+    left by a pre-0.52.0 install — must be ignored rather than injected,
+    since its summaries are stale by construction and nothing regenerates
+    them.
     """
 
-    def test_reads_from_valid_resources_catalog(self, plugin_data_env, monkeypatch, tmp_path):
-        """Scenario: Resources catalog exists and resources are enabled.
+    def test_resources_is_not_a_known_catalog_type(self):
+        """The read path refuses the type outright, before touching disk."""
+        import context_manager
 
-        WHEN enable_resources is true, resources_dir is configured,
-        and resources.json exists with valid schema version
-        THEN context manager reads resource metadata from catalog.
+        assert "resources" not in context_manager._KNOWN_CATALOG_TYPES
+
+    def test_stale_resources_catalog_on_disk_is_ignored(
+        self, plugin_data_env, monkeypatch, tmp_path
+    ):
+        """Scenario: a pre-0.52.0 resources.json survives an upgrade.
+
+        WHEN enable_resources is true, resources_dir is set, and a valid
+        resources.json exists
+        THEN the read path still returns nothing — the file is dead.
         """
         import context_manager
 
@@ -428,14 +438,9 @@ class TestResourcesCatalogHit:
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES", "true")
         monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_RESOURCES_DIR", str(resources_dir))
 
-        catalog = _valid_resources_catalog()
-        _write_catalog(plugin_data_env, "resources.json", catalog)
+        _write_catalog(plugin_data_env, "resources.json", _valid_resources_catalog())
 
-        result = context_manager._read_catalog_or_scan("resources")
-
-        assert len(result) > 0, (
-            "Valid resources catalog with resources enabled should return entries"
-        )
+        assert context_manager._read_catalog_or_scan("resources") == []
 
 
 # ---------------------------------------------------------------------------
@@ -793,6 +798,9 @@ class TestOptionalCatalogsMissing:
 
         WHEN enable_resources is false and resources catalog does not exist
         THEN does not attempt to read or scan resource files at all.
+        (Since 0.52.0 the type is unknown to the read path, so this holds
+        for every value of enable_resources — see
+        TestResourcesIsNotACatalogType.)
         """
         import context_manager
 
