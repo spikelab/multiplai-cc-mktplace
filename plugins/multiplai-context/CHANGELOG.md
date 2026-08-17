@@ -39,6 +39,10 @@ Nothing yet.
 - **`eval_router.py --strategy` now accepts `llm_hybrid`.** The strategy
   shipped in 0.40.0 but the eval harness's argument list was never extended,
   so the hybrid could not be scored against a golden set.
+- **`eval_router.py` scores section-anchored picks at file level.** Since
+  section-level retrieval went live the router returns picks like
+  `file.md#Section`, and the eval's exact string comparison scored every one
+  of them as a miss against file-level golden labels.
 
 ## [0.52.0] - 2026-08-17
 
