@@ -206,6 +206,38 @@ class TestSectionChecks:
         assert "Worktrees" in warnings[0]
         assert "reroute to `git-policy.md`" in warnings[0]
 
+    def test_reroute_names_the_h2_owner_not_the_first_by_filename(self):
+        """H2 names are unique across the corpus, and that invariant is what
+        makes routing deterministic — so the H2 owner is the one place the item
+        can go. Existence spans H2-H4, so the owner list is filename-ordered at
+        any depth: measured on one real corpus, 6 of the 8 multi-owner section
+        names had an H3 owner sorting first and a *different* file holding the
+        H2. Suggesting the H3 owner sends the reviewer to the wrong file.
+        """
+        memory = {
+            # Sorts first, but owns "Architecture" only at H3.
+            "infra-patterns.md": "# Infra\n\n## Networking\n\n### Architecture\n\n- x\n",
+            # The authoritative owner: same name at H2.
+            "multiplai.md": "# Multiplai\n\n## Architecture\n\n- y\n",
+        }
+        warnings = validate_proposal(
+            _proposal("python.md", "Architecture", "A brand new note."), memory
+        )
+        assert len(warnings) == 1
+        # Both owners are still reported — the reviewer needs to see the clash.
+        assert "infra-patterns.md" in warnings[0]
+        assert "reroute to `multiplai.md`" in warnings[0]
+
+    def test_reroute_falls_back_to_any_owner_when_no_h2_holds_the_name(self):
+        memory = {
+            "infra-patterns.md": "# Infra\n\n## Networking\n\n### Architecture\n\n- x\n",
+        }
+        warnings = validate_proposal(
+            _proposal("python.md", "Architecture", "A brand new note."), memory
+        )
+        assert len(warnings) == 1
+        assert "reroute to `infra-patterns.md`" in warnings[0]
+
     def test_correctly_routed_section_clean(self):
         warnings = validate_proposal(_proposal("python.md", "Packaging"), _memory_contents())
         assert warnings == []

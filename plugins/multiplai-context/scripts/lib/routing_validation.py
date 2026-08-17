@@ -582,10 +582,21 @@ def validate_proposal(
                 # suggestion pointing at some other file's H2.
                 owners = _owners(found_in)
                 if owners and entry["target"] not in owners:
+                    # Name every owner, but *suggest* the H2 one. Section names
+                    # are unique at H2 by invariant, which is what makes routing
+                    # deterministic — so the H2 owner is where the item belongs.
+                    # `owners` is filename order at any depth, so `owners[0]` is
+                    # otherwise whichever file happens to sort first: measured
+                    # on one real corpus, 8 section names had more than one
+                    # owner and in 6 of them the alphabetically-first owner held
+                    # the name at H3 while a *different* file held it at H2
+                    # (`Architecture`, `Overview`, `Skill Architecture`, …).
+                    h2_owners = _owners(found_in, level=2)
+                    suggested = h2_owners[0] if h2_owners else owners[0]
                     warnings.append(
                         f"{label}: section \"{section}\" does not exist in "
                         f"`{entry['target']}` but does in `{', '.join(owners)}` — "
-                        f"suggested reroute to `{owners[0]}`."
+                        f"suggested reroute to `{suggested}`."
                     )
 
         # An update/replace entry legitimately overlaps the old text in its
