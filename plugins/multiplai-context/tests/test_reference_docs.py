@@ -179,14 +179,16 @@ class TestDegradation:
         assert not reference_docs.reference_dir().is_dir()
         assert reference_docs.resolve_docs(["uv-python-best-practices.md"]) == []
 
-    def test_mapped_keys_with_no_docs_yield_no_names(self):
-        assert reference_docs.doc_names_for(["Cargo", "go"]) == []
+    def test_an_unmapped_key_yields_no_names(self):
+        assert reference_docs.doc_names_for(["nosuchstack"]) == []
 
     def test_doc_names_are_deduped_across_keys(self):
         names = reference_docs.doc_names_for(["pyproject", "pyproject", "django"])
         assert names == [
             "uv-python-best-practices.md",
             "python-project-structure.md",
+            "python-review.md",
+            "valid-patterns.md",
             "django-drf-best-practices.md",
         ]
 
@@ -238,3 +240,270 @@ class TestHookIntegration:
         (project / "pyproject.toml").write_text('[project]\nname = "site"\n')
         out = self._run_hook(tmp_path, "add an endpoint", project)
         assert "DEV REFERENCES" not in self._injected(out)
+
+
+class TestSiblingReferenceDirs:
+    """Issue #204: `dev` was hardcoded, so anything the kit shipped beside it —
+    `reference/review/`, the six per-language checklists from multiplai-kit#57 —
+    was invisible to the per-session pointer block. Invisibly so: a name that
+    resolves nowhere is skipped with a log line, not an error."""
+
+    def _refs(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        return tmp_path / "reference"
+
+    def test_dev_comes_first_and_review_follows(self, tmp_path, monkeypatch):
+        root = self._refs(tmp_path, monkeypatch)
+        for name in ("review", "dev"):
+            (root / name).mkdir(parents=True)
+        dirs = reference_docs.reference_dirs()
+        assert [d.name for d in dirs] == ["dev", "review"]
+
+    def test_precedence_is_the_allowlist_order_not_alphabetical(self, tmp_path, monkeypatch):
+        """`dev` sorts after `archive` and before `review`; only the declared
+        order may decide which copy of a name wins."""
+        root = self._refs(tmp_path, monkeypatch)
+        for name in ("archive", "dev", "review"):
+            (root / name).mkdir(parents=True)
+        assert [d.name for d in reference_docs.reference_dirs()] == ["dev", "review"]
+
+    def test_an_unlisted_directory_is_not_searched(self, tmp_path, monkeypatch):
+        """A stale copy parked in `reference/archive/` must not be injectable.
+
+        Unfiltered, `archive` sorts ahead of `review`, so renaming the `dev`
+        copy would silently promote the old one — the failure the renaming
+        contract exists to prevent."""
+        root = self._refs(tmp_path, monkeypatch)
+        (root / "archive").mkdir(parents=True)
+        (root / "review").mkdir(parents=True)
+        (root / "archive" / "python-review.md").write_text("## Stale\n")
+        (root / "review" / "python-review.md").write_text("## Current\n")
+
+        resolved = reference_docs.resolve_docs(["python-review.md"])
+        assert [p.parent.name for p, _ in resolved] == ["review"]
+        assert resolved[0][1] == ["Current"]
+
+    def test_a_hidden_directory_is_not_a_reference_dir(self, tmp_path, monkeypatch):
+        """`reference/` as a bare git checkout has a `.git` and no docs. That
+        must not read as "the kit is installed" — it sorts first AND makes the
+        list non-empty, which passed the context_manager gate with nothing to
+        resolve."""
+        root = self._refs(tmp_path, monkeypatch)
+        (root / ".git").mkdir(parents=True)
+        assert reference_docs.reference_dirs() == []
+
+    def test_missing_dev_does_not_hide_the_siblings(self, tmp_path, monkeypatch):
+        root = self._refs(tmp_path, monkeypatch)
+        (root / "review").mkdir(parents=True)
+        assert [d.name for d in reference_docs.reference_dirs()] == ["review"]
+
+    def test_no_reference_root_yields_nothing(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "empty"))
+        assert reference_docs.reference_dirs() == []
+
+    def test_files_under_reference_are_not_directories(self, tmp_path, monkeypatch):
+        root = self._refs(tmp_path, monkeypatch)
+        root.mkdir(parents=True)
+        (root / "README.md").write_text("# not a directory\n")
+        assert reference_docs.reference_dirs() == []
+
+    def test_a_doc_in_a_sibling_dir_now_resolves(self, tmp_path, monkeypatch):
+        root = self._refs(tmp_path, monkeypatch)
+        (root / "dev").mkdir(parents=True)
+        (root / "review").mkdir(parents=True)
+        (root / "review" / "go-review.md").write_text("## Errors\n\nbody\n")
+
+        resolved = reference_docs.resolve_docs(["go-review.md"])
+        assert len(resolved) == 1
+        path, sections = resolved[0]
+        assert path.parent.name == "review"
+        assert sections == ["Errors"]
+
+    def test_dev_wins_when_both_hold_the_name(self, tmp_path, monkeypatch):
+        """`dev` first is what makes this change invisible to existing setups."""
+        root = self._refs(tmp_path, monkeypatch)
+        (root / "dev").mkdir(parents=True)
+        (root / "review").mkdir(parents=True)
+        (root / "dev" / "shared.md").write_text("## FromDev\n")
+        (root / "review" / "shared.md").write_text("## FromReview\n")
+
+        resolved = reference_docs.resolve_docs(["shared.md"])
+        assert len(resolved) == 1, "a name in two directories must resolve once"
+        assert resolved[0][0].parent.name == "dev"
+
+    def test_a_name_in_no_directory_is_still_skipped_silently(self, tmp_path, monkeypatch):
+        root = self._refs(tmp_path, monkeypatch)
+        (root / "dev").mkdir(parents=True)
+        (root / "review").mkdir(parents=True)
+        assert reference_docs.resolve_docs(["nobody-wrote-this.md"]) == []
+
+    def test_an_unreadable_copy_does_not_suppress_a_readable_sibling(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        """"First hit wins" means first *readable* hit. A file that exists but
+        cannot be read is not a hit, so it must fall through exactly as a
+        missing file does — an unreadable `dev/` copy used to abandon the name
+        entirely and hide the perfectly good `review/` one."""
+        root = self._refs(tmp_path, monkeypatch)
+        (root / "dev").mkdir(parents=True)
+        (root / "review").mkdir(parents=True)
+        broken = root / "dev" / "python-review.md"
+        broken.write_text("## Unreadable\n")
+        broken.chmod(0o000)
+        if os.access(broken, os.R_OK):  # root, or a filesystem without modes
+            pytest.skip("file permissions are not enforced for this user")
+        (root / "review" / "python-review.md").write_text("## Readable\n")
+
+        with caplog.at_level("WARNING", logger=reference_docs.logger.name):
+            resolved = reference_docs.resolve_docs(["python-review.md"])
+        assert [p.parent.name for p, _ in resolved] == ["review"]
+        assert resolved[0][1] == ["Readable"]
+        assert "unreadable" in caplog.text.lower()
+
+
+class TestReviewChecklistsAreReachable:
+    """Issue #204 needs the *map* widened too, not only the search.
+
+    Every name `STACK_DOCS` could produce resolved under `dev/`, so on a real
+    install the intersection with `reference/review/` was empty and the search
+    change bought nothing. `go-review.md` was unreachable by construction:
+    `STACK_DOCS["go"]` was `[]`, so `doc_names_for` returned nothing and
+    `resolve_docs` was never called for a Go project at all.
+    """
+
+    REVIEW_DOCS = (
+        "python-review.md",
+        "javascript-review.md",
+        "ios-review.md",
+        "go-review.md",
+        "valid-patterns.md",
+    )
+
+    @pytest.fixture
+    def review_dir(self, tmp_path, monkeypatch):
+        """A config dir whose reference/review holds the kit's real filenames."""
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        docs = tmp_path / "reference" / "review"
+        docs.mkdir(parents=True)
+        for name in self.REVIEW_DOCS:
+            (docs / name).write_text("## Checks\n\nbody\n")
+        return docs
+
+    @pytest.mark.parametrize(
+        "manifest,body,expected",
+        [
+            ("pyproject.toml", '[project]\nname = "p"\n', "python-review.md"),
+            ("package.json", '{"dependencies": {}}', "javascript-review.md"),
+            ("Package.swift", "// swift-tools-version:6.0\n", "ios-review.md"),
+            ("go.mod", "module example.com/m\n", "go-review.md"),
+            # No Rust checklist ships in the kit; Rust gets the cross-language
+            # one, which is the honest answer and not a dead map entry.
+            ("Cargo.toml", '[package]\nname = "p"\n', "valid-patterns.md"),
+        ],
+    )
+    def test_each_stack_reaches_its_review_checklist(
+        self, review_dir, tmp_path, manifest, body, expected,
+    ):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / manifest).write_text(body)
+        keys = reference_docs.detect_stack_keys(project)
+        names = reference_docs.doc_names_for(keys)
+        assert expected in names, f"{manifest} maps to no {expected}"
+        resolved = reference_docs.resolve_docs(names)
+        assert expected in [p.name for p, _ in resolved]
+
+    def test_a_stack_whose_docs_are_all_review_docs_still_resolves(self, review_dir, tmp_path):
+        """A Go project has no `dev/` doc at all, so it is the case that proves
+        the search and the map were widened together."""
+        project = tmp_path / "svc"
+        project.mkdir()
+        (project / "go.mod").write_text("module example.com/svc\n")
+        names = reference_docs.doc_names_for(reference_docs.detect_stack_keys(project))
+        resolved = reference_docs.resolve_docs(names)
+        assert [p.name for p, _ in resolved] == ["go-review.md", "valid-patterns.md"]
+        assert all(p.parent.name == "review" for p, _ in resolved)
+
+    def test_the_cross_language_checklist_reaches_every_stack(self):
+        for key in reference_docs.STACK_DOCS:
+            names = reference_docs.doc_names_for([key])
+            # django/react/fastapi are framework keys that only ever appear
+            # alongside their language key, which carries the checklist.
+            if key in ("django", "react", "fastapi"):
+                continue
+            assert "valid-patterns.md" in names, key
+
+
+class TestMappedDocsMissingFromDisk:
+    """The map naming a doc nobody wrote is the one case the block is supposed
+    to be *loud* about — an INFO line is what makes a missing standard
+    non-silent, which is the whole premise of issue #204.
+
+    It is also the newly reachable path: the gate widened from "does
+    `reference/dev` exist" to "does `reference/` hold a doc directory", so a
+    kit shipping only `review/` now gets this far. Nothing covered it, which is
+    how a `NameError` in the log call shipped green.
+    """
+
+    def _setup(self, tmp_path, monkeypatch, dev_docs: tuple[str, ...]):
+        """cwd is a Node project whose docs are absent; the prompt names a
+        Python project whose docs are present."""
+        config = tmp_path / "config"
+        (config / "reference" / "dev").mkdir(parents=True)
+        for name in dev_docs:
+            write_doc(config / "reference" / "dev", name, ["Layout"])
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+
+        node = tmp_path / "web"
+        node.mkdir()
+        (node / "package.json").write_text('{"dependencies": {}}')
+        py = tmp_path / "py"
+        py.mkdir()
+        (py / "pyproject.toml").write_text('[project]\nname = "py"\n')
+        return node, py
+
+    @staticmethod
+    def _block(prompt, cwd):
+        import context_manager
+
+        return context_manager._dev_reference_block(prompt, str(cwd), {}, 1)
+
+    # Python-only names on purpose: `valid-patterns.md` is mapped to every
+    # stack, so putting it on disk would let the Node project resolve too and
+    # the test would stop being about a candidate that resolves nothing.
+    PY_DOCS = (
+        "uv-python-best-practices.md",
+        "python-project-structure.md",
+        "python-review.md",
+    )
+
+    def test_a_candidate_with_no_docs_on_disk_does_not_abandon_the_others(
+        self, tmp_path, monkeypatch,
+    ):
+        """The Node project's doc is not on disk. That must cost the Node
+        project its block and nothing else — the Python project the prompt
+        named is still a candidate."""
+        node, py = self._setup(tmp_path, monkeypatch, self.PY_DOCS)
+        block, project = self._block("check ../py/ please", node)
+        assert project == py.resolve()
+        assert "=== DEV REFERENCES ===" in block
+        assert "uv-python-best-practices.md" in block
+
+    def test_the_miss_is_logged_at_info_naming_what_was_searched(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        """A contentless DEBUG "detection failed" is not a diagnostic. The line
+        has to say which docs were wanted and which directories were looked
+        in, because "renamed on the kit side" and "kit not installed" are
+        different problems with the same symptom."""
+        import context_manager
+
+        node, _ = self._setup(tmp_path, monkeypatch, ())
+        with caplog.at_level("INFO", logger=context_manager.logger.name):
+            block, project = self._block("no path here", node)
+
+        assert (block, project) == ("", None)
+        assert "resolved=none" in caplog.text
+        assert "bun-vite-react-best-practices.md" in caplog.text
+        assert str(tmp_path / "config" / "reference" / "dev") in caplog.text
+        assert "Dev reference detection failed" not in caplog.text

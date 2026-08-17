@@ -323,3 +323,50 @@ def test_dedup_extra_never_joins_the_section_registry():
         dedup_extra={"CLAUDE.md (global)": "## Tool usage\n\nUnrelated prose entirely.\n"},
     )
     assert not any("does not exist in" in w for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# The tokenizer decision (#199), pinned to its backtest
+# ---------------------------------------------------------------------------
+#
+# One tokenizer serves three consumers — conflict_edits (supersede edits),
+# dream_prescreen (review-time lens) and routing_validation (draft-time gate).
+# Changing it moves all three at once, and MIN_OVERLAP is calibrated against
+# it, so these tests exist to make a casual revert visible.
+
+
+class TestContentWordsKeepsCodeSpans:
+    def test_backtick_content_survives_as_ordinary_words(self):
+        """Issue #199: stripping code spans removed the signal with the noise.
+        For a rule about tooling the distinctive tokens are usually inside the
+        backticks."""
+        words = prescreen.content_words("Run `uv run --no-project` before the gate")
+        assert "run" in words
+        assert "no-project" in words or "--no-project" in words.union(
+            {w.lstrip("-") for w in words}
+        )
+
+    def test_a_rule_whose_signal_is_only_in_backticks_now_matches(self):
+        """The measured case for the change. Both texts say the same thing and
+        the only substantial shared tokens are inside the code span, so the old
+        tokenizer scored them 0.00 — not a near miss, no overlap at all."""
+        from lib.conflict_edits import MIN_OVERLAP
+
+        item = "Use `gh pr merge --squash --delete-branch` to merge in this repo."
+        line = "This repo squash-merges only: `gh pr merge --squash --delete-branch`."
+        score = prescreen.overlap_sets(
+            prescreen.content_words(item), prescreen.content_words(line)
+        )
+        assert score >= MIN_OVERLAP, f"scored {score:.2f}, below {MIN_OVERLAP}"
+        # Guard the direction, not the exact number: stripping code spans is
+        # what this test exists to stop coming back.
+        assert "delete-branch" in prescreen.content_words(item)
+
+    def test_no_stemming(self):
+        """Backtested and rejected: singular collapse looks right on a
+        hand-picked pair and made the ratio worse at every threshold over the
+        602-item backlog (12.7:1 against 13.2 baseline at 0.35). Do not re-add
+        it without a backtest that says otherwise."""
+        words = prescreen.content_words("worktrees and directories")
+        assert "worktrees" in words and "worktree" not in words
+        assert "directories" in words and "directorie" not in words

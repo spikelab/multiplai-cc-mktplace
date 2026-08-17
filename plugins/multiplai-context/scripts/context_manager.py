@@ -605,20 +605,22 @@ def _dev_reference_block(
 ) -> tuple[str, Path | None]:
     """The DEV REFERENCES block for this turn, and the project it describes.
 
-    Returns ``("", None)`` whenever there is nothing to say: no
-    ``reference/dev/`` directory (a vanilla install — the docs ship with
-    multiplai-kit), no manifest anywhere in reach of cwd or the prompt, a
-    detected stack with no docs mapped to it, or a project already announced
-    this session. At most one project is announced per turn, so a prompt
-    naming three repos does not inject three blocks.
+    Returns ``("", None)`` whenever there is nothing to say: no reference
+    directory at all (a vanilla install — the docs ship with multiplai-kit), no
+    manifest anywhere in reach of cwd or the prompt, a detected stack with no
+    docs mapped to it, or a project already announced this session. At most one
+    project is announced per turn, so a prompt naming three repos does not
+    inject three blocks.
 
     Records the announcement by mutating ``state``; the caller owns
     persisting it. Never raises — the hook runs on every prompt, and a
     standards pointer is not worth a broken turn.
     """
     try:
-        ref_dir = reference_docs.reference_dir()
-        if not ref_dir.is_dir():
+        # Any reference subdirectory will do: `dev` is the usual one, but a kit
+        # that ships only `review/` is still a kit with references (issue #204).
+        dirs = reference_docs.reference_dirs()
+        if not dirs:
             return "", None
         candidates: list[Path] = []
         primary = reference_docs.find_project_dir(cwd or ".")
@@ -628,32 +630,46 @@ def _dev_reference_block(
             if project not in candidates:
                 candidates.append(project)
 
+        searched = ",".join(str(d) for d in dirs)
         for project in candidates:
-            keys = reference_docs.detect_stack_keys(project)
-            names = reference_docs.doc_names_for(keys)
-            if not names:
-                continue
-            docs = reference_docs.resolve_docs(names)
-            if not docs:
-                # The map named docs that are not on disk. Worth a line: it
-                # means this project builds with no standards loaded, and the
-                # usual cause is a doc renamed without updating the map.
+            # One bad project must not cost the others. The candidate list is
+            # cwd's project plus the ones the prompt named, and they are
+            # independent: an unreadable manifest in the first is no reason to
+            # stop before the one the user actually pointed at.
+            try:
+                keys = reference_docs.detect_stack_keys(project)
+                names = reference_docs.doc_names_for(keys)
+                if not names:
+                    continue
+                docs = reference_docs.resolve_docs(names)
+                if not docs:
+                    # The map named docs that are not on disk. Worth a line: it
+                    # means this project builds with no standards loaded, and
+                    # the usual cause is a doc renamed without updating the
+                    # map. Naming the directories actually searched is what
+                    # makes that diagnosable rather than merely reported.
+                    logger.info(
+                        "DEV_REFERENCES project=%s stack=%s wanted=%s resolved=none searched=%s",
+                        project, ",".join(keys), ",".join(names), searched,
+                    )
+                    continue
+                if not reference_docs.should_announce(state, project, turn_index):
+                    continue
+                block = reference_docs.build_block(project, docs)
+                if not block:
+                    continue
+                reference_docs.record_announced(state, project, turn_index)
                 logger.info(
-                    "DEV_REFERENCES project=%s stack=%s wanted=%s resolved=none under %s",
-                    project, ",".join(keys), ",".join(names), ref_dir,
+                    "DEV_REFERENCES project=%s stack=%s docs=%s",
+                    project, ",".join(keys), ",".join(p.name for p, _ in docs),
+                )
+                return block, project
+            except Exception:
+                logger.debug(
+                    "DEV_REFERENCES project=%s failed; trying the next candidate",
+                    project, exc_info=True,
                 )
                 continue
-            if not reference_docs.should_announce(state, project, turn_index):
-                continue
-            block = reference_docs.build_block(project, docs)
-            if not block:
-                continue
-            reference_docs.record_announced(state, project, turn_index)
-            logger.info(
-                "DEV_REFERENCES project=%s stack=%s docs=%s",
-                project, ",".join(keys), ",".join(p.name for p, _ in docs),
-            )
-            return block, project
         return "", None
     except Exception:
         logger.debug("Dev reference detection failed; injecting nothing", exc_info=True)

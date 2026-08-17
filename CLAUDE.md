@@ -229,11 +229,21 @@ them. But both mechanisms that load them live here, and they are independent:
 | A buildme run | `multiplai-dev`, `build_pipeline/config.py` | Contents, inlined into the spec-gen prompts | That generator is given no tools, so a pointer is useless to it |
 
 Each keeps its own stack→filename map (`STACK_DOCS` and
-`_DEFAULT_REFERENCE_DOCS`). **They must name the same files, and those files
-must exist in the kit** — resolution does no fuzzy matching and a miss is a log
-line, not a failure, so a doc renamed on the kit side goes quietly dead in both.
-The renaming contract is stated where a renamer will actually see it: the kit's
+`_DEFAULT_REFERENCE_DOCS`). **Every name in either must exist in the kit** —
+resolution does no fuzzy matching and a miss is a log line, not a failure, so a
+doc renamed on the kit side goes quietly dead in both. The renaming contract is
+stated where a renamer will actually see it: the kit's
 `dotfiles/reference/dev/README.md`.
+
+**The two maps agree on `reference/dev/` and deliberately diverge past it.** A
+name common to both must name the same file. But `STACK_DOCS` additionally
+names the review checklists in `reference/review/`, and
+`_DEFAULT_REFERENCE_DOCS` must not: `stack_reference_docs()` resolves only
+under `reference/dev/` (`build_pipeline/config.py:849`), so an entry naming a
+review doc there would be a dead map entry, and buildme inlines *contents*
+where the context hook injects a pointer. Adding a `reference/` subdirectory to
+the context side is a one-line change to `REFERENCE_SUBDIRS`; giving buildme
+the same reach is a resolver change, not a map change.
 
 ## Where the memory system lives — the common wrong-repo mistake
 

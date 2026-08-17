@@ -18,6 +18,81 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.51.0] - 2026-08-16
+
+### Fixed
+
+- **The per-language review checklists now reach a session.** Session startup
+  looked for the engineering standards in exactly one directory,
+  `reference/dev/`, hardcoded — so `reference/review/`, the checklists that
+  ship with multiplai-kit, was never injected, and the failure was silent (a
+  miss is a log line, not an error). Both halves are fixed, because either
+  alone changes nothing: `reference/review/` is now searched after
+  `reference/dev/`, **and** the stack→doc map names those files, which it did
+  not. A project now also gets the checklist for its language —
+  `python-review.md` for Python, `javascript-review.md` for Node/TypeScript,
+  `ios-review.md` for Swift, `go-review.md` for Go — plus the cross-language
+  `valid-patterns.md` in every case. Go and Rust projects, which mapped to no
+  docs at all and so were skipped before any lookup happened, now get one.
+
+  `c-embedded-review.md` is still unreachable: nothing detects a C project, so
+  there is no stack to attach it to. That needs a detection change, not a map
+  entry.
+
+- **Only `dev/` and `review/` are searched, in that order.** Briefly, every
+  subdirectory of `reference/` was, which made "which copy of a doc wins" an
+  alphabetical accident — an old copy parked in `reference/archive/` would beat
+  the current one in `reference/review/` the day the `dev/` copy was renamed,
+  and be injected with no sign anything was wrong. A hidden directory counted
+  too, so a `reference/` that was a bare git checkout read as "the kit is
+  installed" and then found nothing. The list is now fixed and its order is the
+  precedence.
+
+- **A standards doc the map names but nobody wrote is reported again.** When a
+  project's docs resolved to nothing, the log line meant to say so — the only
+  thing that makes a missing standard visible — crashed, and the crash also
+  abandoned every other project in the same turn. So a session whose working
+  directory held one project with no docs got no standards for the project it
+  was actually pointed at either. The line is back, and now names the
+  directories it searched; one project failing no longer costs the others.
+
+- **A doc that cannot be read no longer hides a readable copy of itself.** A
+  broken symlink or a file with bad bytes in `reference/dev/` used to abandon
+  that filename entirely, including a perfectly good copy of it in
+  `reference/review/`. Unreadable is now treated like absent — the next
+  directory is tried — and it is logged as a warning rather than passed over.
+
+- **The duplicate-detection tokenizer no longer discards code spans.** Text
+  inside backticks was deleted before comparison, which is exactly where the
+  distinctive words of a tool-usage rule live — `gh pr merge --squash
+  --delete-branch` against a memory line describing that same command scored
+  **0.00**, a total miss, because after stripping both sides had almost nothing
+  left to compare. Code spans are now kept and tokenized; that pair scores
+  **0.80**.
+
+  Two things read this tokenizer, and they are different comparisons, so they
+  were measured separately.
+
+  *Near-duplicate flagging* — the `## Routing Warnings` section of a proposal
+  and the draft-time gate in `dream_prescreen.py` — scores every backlog item
+  against the whole memory corpus. Backtested over the real 602-item backlog
+  against memory before and after consolidation, it goes from 317 true / 24
+  false to **332 true / 25 false**: +15 real duplicates caught for one extra
+  false positive, with the threshold unmoved.
+
+  *Supersede edits*, at the top of every proposal, compare one learning against
+  the lines of its one target file and take the single best match. The backlog
+  backtest says nothing about that path. Measured on its own against the live
+  4,651-line memory corpus at the same threshold: **24 new matches, 6 matches
+  lost, and 0 edits retargeted onto a different line**. More conflicts
+  surfaced, and none silently repointed at something else.
+
+  Two things were tried and rejected on the same data, recorded so they are not
+  retried: collapsing plural to singular scored *worse* at every threshold
+  (12.7:1 against 13.2:1 baseline), and lowering the threshold to 0.30 scores
+  better on this measure but spends precision on supersede edits, which is the
+  trade this change exists to avoid.
+
 ## [0.50.0] - 2026-08-16
 
 ### Fixed

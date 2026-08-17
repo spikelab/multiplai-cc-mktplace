@@ -19,19 +19,23 @@ about the project, not an answer to the prompt, so repeating it each turn buys
 nothing. The re-announce window covers compaction, which drops the block out
 of context without touching this state.
 
-Degrades to injecting nothing — with no error — when `reference/dev/` does not
-exist. That is the vanilla-Claude-Code case (the docs ship with multiplai-kit),
-and the degradation contract requires the plugin work without it.
+Degrades to injecting nothing — with no error — when `reference/` holds none of
+:data:`REFERENCE_SUBDIRS`. That is the vanilla-Claude-Code case (the docs ship
+with multiplai-kit), and the degradation contract requires the plugin work
+without it.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import tomllib
 from pathlib import Path
 
 from lib.fsio import claude_config_dir
+
+logger = logging.getLogger(__name__)
 
 # Manifest filename → stack key. The key vocabulary is deliberately the same
 # one buildme's `_DEFAULT_REFERENCE_DOCS` uses (multiplai-dev's
@@ -47,14 +51,62 @@ _MANIFEST_KEYS: tuple[tuple[str, str], ...] = (
     ("requirements.txt", "pyproject"),
 )
 
-# Stack/framework key → doc filenames under reference/dev/. A name with no
-# file on disk is skipped (the map may name a doc that has not been written).
+# Subdirectories of `reference/` that may hold docs, in resolution order.
+#
+# An allowlist rather than "every subdirectory", for two reasons found by
+# review. `p.is_dir()` is true for `reference/.git`, so a bare checkout with no
+# doc directories would have made `reference_dirs()` non-empty and passed the
+# context_manager gate with nothing to resolve. And an unfiltered listing makes
+# precedence an alphabetical accident: park an old copy in
+# `reference/archive/` and, the day the `dev/` copy is renamed, `archive` sorts
+# ahead of `review` and a stale doc is injected silently — the exact failure the
+# module docstring's renaming contract exists to prevent.
+#
+# Order IS the precedence: first hit wins in :func:`resolve_docs`. `dev` leads
+# because it is the historical directory, so every name that resolved before
+# resolves to the same file now. Adding a directory here is a deliberate,
+# reviewed act; that is the point.
+REFERENCE_SUBDIRS: tuple[str, ...] = ("dev", "review")
+
+# Stack/framework key → doc filenames, resolved across REFERENCE_SUBDIRS. A
+# name with no file on disk is skipped (the map may name a doc that has not
+# been written).
+#
+# Two genres are named here, and they live in different directories. The
+# `*-best-practices.md` / `*-structure.md` docs are prescriptive standards
+# (`reference/dev/`); the `*-review.md` checklists and `valid-patterns.md` are
+# review aids (`reference/review/`, from multiplai-kit#57). Resolution does not
+# care which directory a name is in, so both are just names.
+#
+# `valid-patterns.md` is cross-language ("patterns that look wrong and are
+# not") and is the companion to whichever checklist applies, so every stack
+# carries it. `Cargo` carries only that one: the kit ships no Rust review
+# checklist (verified against reference/review/ on 2026-08-17), and naming a
+# file nobody wrote is how a map entry goes quietly dead.
+#
+# `c-embedded-review.md` is deliberately absent: nothing in `_MANIFEST_KEYS`
+# detects a C project, so there is no key to hang it on. Adding one is a
+# detection change, not a mapping change.
 STACK_DOCS: dict[str, list[str]] = {
-    "pyproject": ["uv-python-best-practices.md", "python-project-structure.md"],
-    "package": ["bun-vite-react-best-practices.md"],
-    "Package": ["swift-best-practices.md", "swift-testing-strategies.md"],
-    "Cargo": [],
-    "go": [],
+    "pyproject": [
+        "uv-python-best-practices.md",
+        "python-project-structure.md",
+        "python-review.md",
+        "valid-patterns.md",
+    ],
+    "package": [
+        "bun-vite-react-best-practices.md",
+        "javascript-review.md",
+        "valid-patterns.md",
+    ],
+    "Package": [
+        "swift-best-practices.md",
+        "swift-testing-strategies.md",
+        "ios-review.md",
+        "valid-patterns.md",
+    ],
+    "Cargo": ["valid-patterns.md"],
+    "go": ["go-review.md", "valid-patterns.md"],
     "django": ["django-drf-best-practices.md"],
     "react": ["react-nextjs-best-practices.md"],
     "fastapi": ["fastapi-best-practices.md"],
@@ -80,8 +132,31 @@ _STATE_KEY = "dev_references"
 
 
 def reference_dir() -> Path:
-    """`$CLAUDE_CONFIG_DIR/reference/dev`, expanded. May not exist."""
+    """`$CLAUDE_CONFIG_DIR/reference/dev`, expanded. May not exist.
+
+    Still the *primary* directory and still what "is the kit installed?"
+    means. For resolving a doc name use :func:`reference_dirs`, which also
+    sees its siblings.
+    """
     return claude_config_dir() / "reference" / "dev"
+
+
+def reference_dirs() -> list[Path]:
+    """The existing :data:`REFERENCE_SUBDIRS` under `$CLAUDE_CONFIG_DIR/reference/`.
+
+    `dev` was hardcoded, so anything the kit shipped beside it was invisible to
+    the per-session pointer block — and invisibly so, because a name that
+    resolves nowhere is skipped with a log line rather than an error (issue
+    #204). `reference/review/` (the six review checklists) landed in
+    multiplai-kit#57 and reached nothing here.
+
+    Returned in :data:`REFERENCE_SUBDIRS` order, which is the resolution
+    precedence, not an alphabetical listing — see that constant for why the set
+    is closed. `dev` leads, so a name present in both resolves exactly as it
+    did before.
+    """
+    root = claude_config_dir() / "reference"
+    return [d for name in REFERENCE_SUBDIRS if (d := root / name).is_dir()]
 
 
 def _requirement_name(spec: str) -> str:
@@ -270,18 +345,32 @@ def resolve_docs(names: list[str]) -> list[tuple[Path, list[str]]]:
     A named doc with no file is skipped silently here — the caller logs the
     gap, because "the map names a doc nobody wrote" and "the kit is not
     installed" want different messages.
+
+    Searched across every directory :func:`reference_dirs` returns, `dev`
+    first, so a bare name keeps resolving where it always did and a name only a
+    sibling directory holds now resolves at all. First hit wins; a name in two
+    directories is not an error, it is `dev` taking precedence.
+
+    A file that exists but cannot be read is not a hit, so it falls through to
+    the next directory exactly as a missing file does. It is logged rather than
+    swallowed: a symlink whose target is gone, or a doc with bad bytes, is a
+    broken install and the reader would otherwise only see the sibling copy
+    silently winning — or, before this, silently losing.
     """
-    ref_dir = reference_dir()
+    dirs = reference_dirs()
     resolved: list[tuple[Path, list[str]]] = []
     for name in names:
-        path = ref_dir / name
-        if not path.is_file():
-            continue
-        try:
-            text = path.read_text()
-        except (OSError, UnicodeDecodeError):
-            continue
-        resolved.append((path, section_index(text)))
+        for ref_dir in dirs:
+            path = ref_dir / name
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text()
+            except (OSError, UnicodeDecodeError) as exc:
+                logger.warning("Reference doc %s exists but is unreadable: %s", path, exc)
+                continue
+            resolved.append((path, section_index(text)))
+            break
     return resolved
 
 

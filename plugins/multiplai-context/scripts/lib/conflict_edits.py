@@ -180,7 +180,30 @@ def content_words(text: str) -> set[str]:
     be able to tokenize once and reuse the set — see :func:`overlap_sets`.
     Re-deriving it per comparison is quadratic and was measured in minutes.
     """
-    text = re.sub(r"`[^`]*`", " ", text)          # code spans: often identical boilerplate
+    # Code spans are KEPT, as ordinary words (issue #199). They used to be
+    # stripped, on the reasoning that the same boilerplate recurs across memory
+    # files — true, but for a rule about tooling the distinctive tokens are
+    # usually the ones inside the backticks, so stripping removed the signal
+    # with the noise.
+    #
+    # Backtested rather than argued: the 602-item 2026-08-10 backlog scored
+    # twice, against memory after consolidation (`9e8475d` — the items are in
+    # there, a flag is TRUE) and against memory immediately before
+    # (`9e8475d^` — they are not, a flag is FALSE).
+    #
+    #     stripping code spans   317 true / 24 false   13.2:1   (was)
+    #     keeping them           332 true / 25 false   13.3:1   (is)
+    #
+    # +15 real duplicates caught for one extra false positive, at the SAME
+    # `MIN_OVERLAP`. Leaving the constant alone is the point: it also governs
+    # the supersede edits at the top of a proposal, and lowering it buys recall
+    # for the warning by spending precision there — see the module docstring.
+    #
+    # Singular collapse (`worktree`/`worktrees`) was tested in the same run and
+    # REJECTED: it looks compelling on a hand-picked pair, and over 602 items it
+    # made the ratio worse at every threshold (12.7:1 at 0.35, against 13.2
+    # baseline). Do not re-add it without a backtest that says otherwise.
+    text = text.replace("`", " ")
     text = re.sub(r"\*+|_+|→|—", " ", text)
     words = re.findall(r"[a-z0-9][a-z0-9.\-/]*", text.lower())
     return {w.strip(".-/") for w in words if w not in STOPWORDS and len(w) > 2}
@@ -218,12 +241,15 @@ def screenable_lines(text: str) -> list[tuple[int, str, frozenset[str]]]:
 
     * whatever :data:`SKIP_LINE_RE` already calls structure — headings, table
       rows, horizontal rules, the ``**Last Updated`` stamp;
-    * everything inside a fenced code block. :func:`content_words` strips
-      *inline* code spans for this reason already; a fenced block is the same
-      content one level up, and the corpus now includes the global ``CLAUDE.md``
-      (30,673 bytes on the measured machine), which is dense with bash and
-      config samples. A near-duplicate warning that points a reviewer at a line
-      of shell is a lead they cannot act on;
+    * everything inside a fenced code block. This is NOT the inline-code-span
+      rule one level up: :func:`content_words` deliberately *keeps* inline
+      spans (issue #199), because in a prose rule the backticked token is
+      usually the distinguishing word of the sentence around it. A fenced block
+      has no sentence around it — the whole line is the sample — so a match
+      there is one line of shell resembling another. The corpus includes the
+      global ``CLAUDE.md`` (30,673 bytes on the measured machine), which is
+      dense with bash and config samples, and a near-duplicate warning that
+      points a reviewer at a line of shell is a lead they cannot act on;
     * lines of :data:`MIN_LINE_LEN` characters or fewer.
 
     Words come back as ``frozenset`` so a caller may tokenize the corpus once
