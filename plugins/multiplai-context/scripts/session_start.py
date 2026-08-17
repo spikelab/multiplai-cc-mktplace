@@ -676,8 +676,9 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
             data_dir, cwd, session_id, hook_input.get("source", "")
         )
 
-    # Keep the qmd resources index fresh (no-op unless the qmd backend
-    # is active). Detached + flock-guarded, so this never blocks the hook.
+    # Keep the qmd resources index fresh (no-op unless enable_resources
+    # and resources_dir are both set). Detached + flock-guarded, so this
+    # never blocks the hook.
     with run.stage("launch_qmd"):
         _launch_qmd_refresh(paths.scripts_dir(), cwd)
 

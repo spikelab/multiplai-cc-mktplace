@@ -219,7 +219,7 @@
     "catalog_thinking": {
       "type": "boolean",
       "title": "Catalog Generator Extended Thinking",
-      "description": "Extended thinking on catalog-generation calls (memory, skills, resources, diary generators). Off by default: producing structured JSON catalog entries is mechanical. Set true/1/yes/on to restore thinking. If the installed multiplai-core or claude-agent-sdk is too old to carry the setting, the plugin warns once, keeps thinking on, and keeps working.",
+      "description": "Extended thinking on catalog-generation calls (memory, banks, skills, diary generators). Off by default: producing structured JSON catalog entries is mechanical. Set true/1/yes/on to restore thinking. If the installed multiplai-core or claude-agent-sdk is too old to carry the setting, the plugin warns once, keeps thinking on, and keeps working.",
       "default": false
     },
     "recommend_cooldown_turns": {
