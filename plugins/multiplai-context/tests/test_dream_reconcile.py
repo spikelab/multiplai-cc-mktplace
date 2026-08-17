@@ -57,6 +57,52 @@ PENDING = """# Processed Learnings — 2026-08-14
 **Source:** 2026-08-14.md:3
 """
 
+# Every *update* decided, one conflict resolution still undecided. By
+# `has_pending_items` alone this reads as finished — and filing it would archive
+# the proposal, stamp, and let `_gc_learnings` delete the learnings the conflict
+# was derived from, after which nothing can re-derive it.
+UNDECIDED_CONFLICT = """# Processed Learnings — 2026-08-12
+
+## Conflict Resolutions
+
+### `dolcebot.md` line 453
+
+- **Superseded** (was): the old CI-gap line.
+- **Now**: the restated CI-gap line.
+
+---
+
+## Updates for `testing.md` (1 learning)
+
+---
+
+## Processed
+
+### 1. Clock mocking causes flaky retries
+**Processed:** applied → testing.md · 2026-08-13T10:00:00Z
+**Section:** Test Reliability
+"""
+
+# Reviewed in full and turned down in full: `/dream-remember` Step 6 requires
+# `--archive-as rejected` for this, and the statuses to prove it are on the
+# `**Processed:**` lines.
+ALL_REJECTED = """# Processed Learnings — 2026-08-09
+
+## Updates for `testing.md` (2 learnings)
+
+---
+
+## Processed
+
+### 1. Clock mocking causes flaky retries
+**Processed:** rejected · 2026-08-11T10:00:00Z
+**Section:** Test Reliability
+
+### 2. Prefer fixture factories
+**Processed:** rejected · 2026-08-11T10:00:00Z
+**Section:** Test Reliability
+"""
+
 
 @pytest.fixture
 def dreams(tmp_path, monkeypatch):
@@ -156,6 +202,116 @@ def test_archive_failure_does_not_stamp(dreams, monkeypatch, capsys):
     assert not state_file.exists()
     assert calls["gc"] == 0
     assert "ERROR" in capsys.readouterr().out
+
+
+def test_undecided_conflict_blocks_the_archive(dreams, capsys):
+    """The loss this guards against is total: archiving strips the proposal's
+    only copy of the conflict, `_gc_learnings` then deletes the learnings block
+    it was derived from, and `_with_conflict_resolutions` only ever re-derives
+    from blocks still missing from the ledger. Nothing brings it back."""
+    dreams_dir, state_file, calls = dreams
+    proposal = dreams_dir / "processed-learnings-2026-08-12.md"
+    proposal.write_text(UNDECIDED_CONFLICT)
+
+    assert dream._reconcile() == 0
+    out = capsys.readouterr().out
+    assert "pending:" in out
+    assert proposal.is_file(), "an undecided conflict must keep the proposal in the root"
+    assert not (dreams_dir / "applied").exists()
+    assert not state_file.exists()
+    assert calls["gc"] == 0, "collection would delete the conflict's source learnings"
+
+
+def test_deciding_the_conflict_unblocks_it(dreams):
+    """Same file, conflict marked: it is genuinely finished and must file."""
+    from lib.dream_processed import move_to_processed
+
+    dreams_dir, state_file, calls = dreams
+    proposal = dreams_dir / "processed-learnings-2026-08-12.md"
+    proposal.write_text(
+        move_to_processed(
+            UNDECIDED_CONFLICT, ("conflict", "dolcebot.md", 453), "rejected",
+            ts="2026-08-16T00:00:00Z",
+        )
+    )
+
+    assert dream._reconcile() == 0
+    assert not proposal.exists()
+    assert (dreams_dir / "applied" / "processed-learnings-2026-08-12.md").is_file()
+    assert calls["gc"] == 1
+
+
+def test_fully_rejected_proposal_files_as_rejected(dreams):
+    """`applied/` is positive evidence that memory was written — a proposal
+    every item of which was turned down must not claim it."""
+    dreams_dir, _, _ = dreams
+    (dreams_dir / "processed-learnings-2026-08-09.md").write_text(ALL_REJECTED)
+
+    assert dream._reconcile() == 0
+    assert (dreams_dir / "rejected" / "processed-learnings-2026-08-09.md").is_file()
+    assert not (dreams_dir / "applied").exists()
+
+
+def test_a_single_applied_item_keeps_it_applied(dreams):
+    dreams_dir, _, _ = dreams
+    mixed = ALL_REJECTED.replace(
+        "### 2. Prefer fixture factories\n**Processed:** rejected",
+        "### 2. Prefer fixture factories\n**Processed:** applied → testing.md",
+    )
+    (dreams_dir / "processed-learnings-2026-08-09.md").write_text(mixed)
+
+    assert dream._reconcile() == 0
+    assert (dreams_dir / "applied" / "processed-learnings-2026-08-09.md").is_file()
+    assert not (dreams_dir / "rejected").exists()
+
+
+def test_unreadable_proposal_is_named_and_counted(dreams, monkeypatch, capsys):
+    """A file that cannot be read is in neither bucket by construction, so the
+    closing count used to under-report the root and never named it. Fail closed
+    and visibly, the way `_gc_learnings` next door already does."""
+    dreams_dir, state_file, calls = dreams
+    bad = dreams_dir / "processed-learnings-2026-08-13.md"
+    bad.write_text(DECIDED)
+
+    real_read = Path.read_text
+
+    def _read(self, *a, **kw):
+        if self.name == bad.name:
+            raise OSError("permission denied")
+        return real_read(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", _read)
+
+    assert dream._reconcile() == 1
+    out = capsys.readouterr().out
+    assert bad.name in out
+    assert "1 proposal(s) still pending" in out
+    assert bad.is_file()
+    assert not state_file.exists()
+    assert calls["gc"] == 0
+
+
+def test_unreadable_proposal_does_not_stop_a_readable_one(dreams, monkeypatch, capsys):
+    dreams_dir, state_file, calls = dreams
+    bad = dreams_dir / "processed-learnings-2026-08-13.md"
+    bad.write_text(DECIDED)
+    good = dreams_dir / "processed-learnings-2026-08-10.md"
+    good.write_text(DECIDED)
+
+    real_read = Path.read_text
+
+    def _read(self, *a, **kw):
+        if self.name == bad.name:
+            raise OSError("permission denied")
+        return real_read(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", _read)
+
+    assert dream._reconcile() == 1, "the unreadable file is still an unclean pass"
+    assert (dreams_dir / "applied" / good.name).is_file()
+    assert bad.is_file()
+    out = capsys.readouterr().out
+    assert f"ERROR: could not read {bad.name}" in out
 
 
 def test_bare_dry_run_is_still_rejected():

@@ -6,9 +6,12 @@ tracks what has been reviewed.
 
 from lib.dream_processed import (
     PROCESSED_HEADING,
+    archive_disposition,
+    has_pending_conflicts,
     has_pending_items,
     mark_processed,
     move_to_processed,
+    processed_statuses,
 )
 
 PROPOSAL = """# Processed Learnings — 2026-07-20
@@ -189,7 +192,8 @@ def test_a_heading_without_a_summary_is_not_an_item():
 #
 # Conflicts were the only item kind with no way to record a decision: `--kind`
 # took update/action only, so a reviewer read one, decided, and the decision
-# evaporated — the same conflict re-presented on every later proposal.
+# evaporated — and the conflict with it, since the section is re-derived only
+# from learnings blocks that are still unconsolidated.
 
 CONFLICT_PROPOSAL = """# Processed Learnings — 2026-08-14
 
@@ -263,12 +267,62 @@ def test_conflict_marking_is_idempotent():
     assert twice == once
 
 
-def test_conflicts_do_not_count_as_pending_items():
-    """`--archive` must not block on conflicts — the one thing that already
-    worked, and widening `has_pending_items` would break it."""
+def test_has_pending_items_stays_blind_to_conflicts():
+    """`has_pending_items` answers "is there anything worth folding forward?".
+
+    Folding runs `_strip_regenerated`, which deletes `## Conflict Resolutions`
+    outright — so a conflicts-only proposal must answer *no* here, or the fold
+    would swallow it and take every undecided conflict with it. The question
+    "may this be archived?" is a different one and is
+    `has_pending_conflicts`; see `_reconcile_is_finished`.
+    """
     only_conflicts = CONFLICT_PROPOSAL.split("## Updates for")[0]
     assert not has_pending_items(only_conflicts)
     assert has_pending_items(CONFLICT_PROPOSAL)
+
+
+def test_has_pending_conflicts_sees_undecided_conflicts():
+    only_conflicts = CONFLICT_PROPOSAL.split("## Updates for")[0]
+    assert has_pending_conflicts(only_conflicts)
+    assert has_pending_conflicts(CONFLICT_PROPOSAL)
+    # A proposal with no conflicts section at all.
+    assert not has_pending_conflicts(PROPOSAL)
+
+
+def test_has_pending_conflicts_clears_once_every_conflict_is_decided():
+    text = CONFLICT_PROPOSAL
+    for ref in (
+        ("conflict", "dolcebot.md", 453),
+        ("conflict", "dolcebot.md", 455),
+        ("conflict", "prompt-eng-guide.md", 11),
+    ):
+        assert has_pending_conflicts(text)
+        text = move_to_processed(text, ref, "rejected", ts="2026-08-16T00:00:00Z")
+    assert not has_pending_conflicts(text)
+    # The decided blocks live under `## Processed` — being `### ` headings there
+    # must not read back as pending.
+    assert text.count("### `dolcebot.md` line 453") == 1
+
+
+def test_archive_disposition_is_rejected_only_when_everything_was():
+    all_rejected = (
+        "# P\n\n## Processed\n\n"
+        "### 1. a\n**Processed:** rejected · 2026-08-16T00:00:00Z\n\n"
+        "### 2. b\n**Processed:** rejected · 2026-08-16T00:00:00Z\n"
+    )
+    assert archive_disposition(all_rejected) == "rejected"
+    assert processed_statuses(all_rejected) == ["rejected", "rejected"]
+
+    mixed = all_rejected.replace(
+        "### 2. b\n**Processed:** rejected",
+        "### 2. b\n**Processed:** applied → testing.md",
+    )
+    assert archive_disposition(mixed) == "applied"
+
+    # No decided items at all (and an unrecognised annotation) falls back to
+    # `applied` — the behaviour before anything read these lines.
+    assert archive_disposition(PROPOSAL) == "applied"
+    assert archive_disposition("**Processed:** approved · x") == "applied"
 
 
 def test_conflict_decision_round_trips_through_a_file(tmp_path):

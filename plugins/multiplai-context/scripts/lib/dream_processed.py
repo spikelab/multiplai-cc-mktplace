@@ -9,11 +9,17 @@ the file itself is the decision record: whoever reviews next (GUI or CLI) sees
 only what is still above the processed section.
 
 That one heading — ``## Processed`` — is the entire cross-tool contract. There
-is no sidecar, no key scheme, and the ``**Processed:**`` annotation is history
-that is never re-parsed, so the two writers do not need to agree on it
-byte-for-byte. Mirror of multiplai-gui ``hub/src/multiplai_hub/dreams.py``
-(``move_to_processed`` / ``mark_processed``); keep the two in sync only on the
-``## Processed`` heading.
+is no sidecar and no key scheme. Mirror of multiplai-gui
+``hub/src/multiplai_hub/dreams.py`` (``move_to_processed`` / ``mark_processed``);
+keep the two in sync only on the ``## Processed`` heading.
+
+The ``**Processed:**`` annotation is *history*, and it stays outside that
+contract. :func:`archive_disposition` does now read it — to tell a
+fully-rejected proposal from an applied one when filing it — but reads it
+leniently and falls back to ``applied``, which is what the caller did before it
+existed. So a hub that writes the line in some other shape degrades to the old
+behaviour rather than misfiling; the two writers still do not need to agree on
+it byte-for-byte.
 """
 
 from __future__ import annotations
@@ -353,7 +359,12 @@ def latest_pending_proposal(dreams_dir: Path) -> Path | None:
 
 def has_pending_items(text: str) -> bool:
     """True if any update/action item is still outside ``## Processed`` — the
-    archive backstop: a proposal must be fully processed before it is archived."""
+    archive backstop: a proposal must be fully processed before it is archived.
+
+    Scope is updates and actions **only**; conflict resolutions are
+    :func:`has_pending_conflicts`. Keeping them apart is not an oversight — see
+    that function for the caller this narrower question is right for.
+    """
     target: str | None = None
     in_actions = False
     for line in text.splitlines():
@@ -372,3 +383,67 @@ def has_pending_items(text: str) -> bool:
         if in_actions and _ACTION_ITEM_RE.match(line):
             return True
     return False
+
+
+def has_pending_conflicts(text: str) -> bool:
+    """True if any conflict resolution is still outside ``## Processed``.
+
+    Separate from :func:`has_pending_items` because the two callers want
+    different questions, and merging them would break one of them.
+
+    ``_fold_pending_proposals`` asks "is there anything here worth folding
+    forward?" — and folding runs the text through ``_strip_regenerated``, which
+    *deletes* ``## Conflict Resolutions``. A conflicts-only proposal must
+    therefore answer **no**, or the fold would swallow it and drop every
+    undecided conflict in it. That is :func:`has_pending_items`, unchanged.
+
+    ``--reconcile`` asks "may this be archived, stamped and its learnings
+    collected?" — and an archived proposal's conflicts are equally gone, since
+    the section is re-derived only from learnings blocks that are still
+    *unconsolidated*. Once a run ledgers a block its conflict can never come
+    back. So that caller must answer **yes**, and it ORs the two.
+    """
+    in_conflicts = False
+    for line in text.splitlines():
+        if _CONFLICTS_HEADER_RE.match(line):
+            in_conflicts = True
+            continue
+        if line.startswith("## "):
+            in_conflicts = False
+            continue
+        if in_conflicts and _CONFLICT_RE.match(line):
+            return True
+    return False
+
+
+# Lenient on purpose — see the module docstring. Anything that is not a
+# recognised status simply does not vote, and a proposal with no votes files as
+# `applied`, which is what happened before this was read at all.
+_PROCESSED_STATUS_RE = re.compile(
+    r"^\*\*Processed:\*\*\s+(?P<status>applied|edited|rejected)\b"
+)
+
+
+def processed_statuses(text: str) -> list[str]:
+    """Every status recorded on a ``**Processed:**`` line, in document order."""
+    return [
+        m.group("status")
+        for m in (_PROCESSED_STATUS_RE.match(line.strip()) for line in text.splitlines())
+        if m
+    ]
+
+
+def archive_disposition(text: str) -> str:
+    """Which subdirectory a finished proposal belongs in: ``rejected`` when every
+    decided item was rejected, otherwise ``applied``.
+
+    A proposal reviewed and turned down in full is reviewed-and-done, not
+    applied — ``/dream-remember`` Step 6 has always said to pass
+    ``--archive-as rejected`` for it. The statuses needed to tell the two apart
+    were already written into the file by ``_processed_line``; nothing read them
+    until now, so any automated archive filed everything as ``applied``.
+    """
+    statuses = processed_statuses(text)
+    if statuses and all(s == "rejected" for s in statuses):
+        return "rejected"
+    return "applied"

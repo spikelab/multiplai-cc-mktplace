@@ -58,6 +58,8 @@ from lib import citation_repair, learnings_ledger, taxonomy
 from lib.dream_processed import (
     PROCESSED_HEADING,
     Decision,
+    archive_disposition,
+    has_pending_conflicts,
     has_pending_items,
     latest_pending_proposal as _latest_pending_proposal,
     mark_many_processed,
@@ -476,6 +478,16 @@ def _is_unmodified_generated(text: str) -> bool:
 # proposal stops being foldable the moment any conflict in it is dispositioned,
 # and the decision survives. Adding a second mechanism here would be a
 # same-question-answered-twice hazard, not extra safety.
+#
+# An *undecided* one is a different story, and the reason `--reconcile` has its
+# own predicate (`_reconcile_is_finished`). "Regenerated" does not mean
+# "regenerated forever": `_with_conflict_resolutions` is fed `pending_text` —
+# only the learnings blocks *not* yet in the ledger — so a conflict can be
+# re-derived only while the block it came from is still unconsolidated. The run
+# that first drafts it ledgers that block, so from the next run on there is
+# nothing left to derive it from. Between that and the strip above, an
+# undecided conflict that leaves the dreams root (folded forward, or archived)
+# is gone for good. Nothing brings it back.
 _REGENERATED_SECTIONS = ("## Routing Warnings", "## Conflict Resolutions")
 
 
@@ -2853,6 +2865,25 @@ def _append_revert_line(receipt_path: Path, memory_dir: Path) -> None:
                        exc_info=True)
 
 
+def _reconcile_is_finished(text: str) -> bool:
+    """The archive-authorizing predicate for ``--reconcile``: **nothing** left
+    undecided, conflict resolutions included.
+
+    Deliberately not :func:`has_pending_items` alone, which is blind to
+    ``## Conflict Resolutions``. That blindness is correct where it is used (see
+    :func:`lib.dream_processed.has_pending_conflicts`) and was harmless while
+    only a human ran ``--stamp --archive`` at the end of a review they had just
+    read. It is not harmless here: ``--reconcile`` is Step 0 of
+    ``/dream-remember``, running *before* the reviewer opens anything, and what
+    it authorizes is irreversible — archive, stamp, and an unconditional
+    ``_gc_learnings`` that deletes the source learnings files. A proposal whose
+    updates are all decided but whose conflicts are not would have been filed
+    and its sources collected with those conflicts never seen, and they cannot
+    be re-derived afterwards.
+    """
+    return not has_pending_items(text) and not has_pending_conflicts(text)
+
+
 def _reconcile(*, dry_run: bool = False) -> int:
     """Finish proposals that are fully decided but still sitting in the dreams root.
 
@@ -2872,7 +2903,8 @@ def _reconcile(*, dry_run: bool = False) -> int:
     re-scans them and drafts items from material already consolidated.
 
     Returns a process exit code: 0 when the root is clean or everything was
-    finished, 1 when at least one proposal could not be archived.
+    finished, 1 when at least one proposal could not be archived **or could not
+    be read**.
     """
     paths = get_paths()
     dreams_dir = paths.dreams_dir()
@@ -2887,36 +2919,53 @@ def _reconcile(*, dry_run: bool = False) -> int:
         print("Dreams root is empty — nothing to reconcile.")
         return 0
 
-    finished: list[Path] = []
+    finished: list[tuple[Path, str]] = []
     still_pending: list[Path] = []
+    unreadable = 0
     for proposal in candidates:
         try:
             text = proposal.read_text()
         except OSError:
-            logger.exception("reconcile: could not read %s — skipped", proposal)
+            # Fail closed and *visibly*, the same way `_gc_learnings` treats an
+            # unreadable pending proposal. A bare `continue` put the file in
+            # neither list, so the closing count under-reported the root and the
+            # operator was never told which file could not be read — the one
+            # thing they need in order to fix it.
+            logger.exception("reconcile: could not read %s", proposal)
+            print(f"ERROR: could not read {proposal.name} — left in the dreams root")
+            still_pending.append(proposal)
+            unreadable += 1
             continue
-        (still_pending if has_pending_items(text) else finished).append(proposal)
+        if _reconcile_is_finished(text):
+            finished.append((proposal, text))
+        else:
+            still_pending.append(proposal)
 
     for proposal in still_pending:
         print(f"pending:  {proposal.name} — has undecided items, left alone")
 
     if not finished:
         print(f"Nothing to reconcile ({len(still_pending)} proposal(s) still pending).")
-        return 0
+        return 1 if unreadable else 0
 
     if dry_run:
-        for proposal in finished:
+        for proposal, _ in finished:
             print(f"WOULD FINISH: {proposal.name} — 0 pending items, not archived")
         print(
             f"reconcile (dry run): {len(finished)} finished-but-unfiled proposal(s). "
             "Re-run without --dry-run to archive, stamp and collect."
         )
-        return 0
+        return 1 if unreadable else 0
 
     failures = 0
-    for proposal in finished:
+    for proposal, text in finished:
         try:
-            archived = _archive_proposal(proposal, dreams_dir)
+            # File it by what the review actually decided. Every item's outcome
+            # is already on its `**Processed:**` line; nothing read them, so a
+            # proposal rejected in full landed in `applied/` — the disposition
+            # `/dream-remember` Step 6 requires `--archive-as rejected` for, and
+            # the one `_gc_learnings` reads as evidence the memory was written.
+            archived = _archive_proposal(proposal, dreams_dir, archive_disposition(text))
         except OSError:
             # Leave it in the root rather than half-finishing it: an un-archived
             # proposal is the state this function exists to report, so failing
@@ -2943,7 +2992,7 @@ def _reconcile(*, dry_run: bool = False) -> int:
         # everything it keeps, so it is safe to call unconditionally here.
         _gc_learnings()
 
-    return 1 if failures else 0
+    return 1 if (failures or unreadable) else 0
 
 
 def _gc_learnings() -> None:
