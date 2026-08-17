@@ -210,15 +210,41 @@ trap 'rm -rf "$TMPDIR_WORK"' EXIT
 # which it could not do while the script was eating it.
 YTDLP_ERR="$TMPDIR_WORK/ytdlp-stderr.log"
 
-# Print what yt-dlp said, bounded. Called on the paths that give up.
+# Every yt-dlp call redirects into that one file, so each call overwrites what
+# the last one wrote — and the EXIT trap above deletes it. A failure that does
+# NOT abort on the spot (the two subtitle attempts, which fall through) has to
+# bank what it saw before the next call destroys it. Capturing stderr and then
+# discarding it unread is the same defect as sending it to /dev/null.
+YTDLP_FAILURES="$TMPDIR_WORK/ytdlp-failures.log"
+
+# What yt-dlp said on the most recent call, bounded — or an honest note that it
+# said nothing. Writes to stdout; callers redirect.
+ytdlp_said() {
+    if [[ -s "$YTDLP_ERR" ]]; then
+        echo "[yt-transcript] yt-dlp said:"
+        tail -20 "$YTDLP_ERR"
+    else
+        echo "[yt-transcript] yt-dlp wrote nothing to stderr."
+    fi
+}
+
+# Print what yt-dlp said, bounded. Called on the paths that give up immediately.
 ytdlp_stderr() {  # $1 = leading message
     echo "$1" >&2
-    if [[ -s "$YTDLP_ERR" ]]; then
-        echo "[yt-transcript] yt-dlp said:" >&2
-        tail -20 "$YTDLP_ERR" >&2
-    else
-        echo "[yt-transcript] yt-dlp wrote nothing to stderr." >&2
-    fi
+    ytdlp_said >&2
+}
+
+# Bank a failure that does not give up here, so a later verdict can still show
+# it. Nothing is printed yet — the next attempt may well succeed.
+bank_ytdlp_failure() {  # $1 = what was being attempted
+    { echo "[yt-transcript] $1 failed."; ytdlp_said; } >>"$YTDLP_FAILURES"
+}
+
+# Print every banked failure. Called where the fall-through paths finally decide.
+report_banked_failures() {  # $1 = leading message
+    echo "$1" >&2
+    [[ -s "$YTDLP_FAILURES" ]] && cat "$YTDLP_FAILURES" >&2
+    return 0
 }
 
 # --- Get video title and ID for naming ---
@@ -226,11 +252,21 @@ echo "[yt-transcript] Fetching video info ..."
 # This runs before any download, so it is the first thing to fail on a bad URL,
 # a network problem, or an extractor break — and it was reporting all three the
 # same way.
+#
+# Both calls MUST carry a `|| { ... }` handler. Without one, `set -e` (top of
+# file) aborts here with the captured log never printed and the EXIT trap then
+# deleting it: the user's last output is "Fetching video info ..." and then
+# nothing, which is exactly the symptom this reporting exists to remove. The
+# raw yt-dlp status would escape too — a yt-dlp exit 2 read by the calling
+# Claude as "no subtitles available" (SKILL.md's code 2).
 VIDEO_TITLE=$($YTDLP --print "%(title)s" --no-download "$URL" 2>"$YTDLP_ERR") || {
     ytdlp_stderr "Error: Could not fetch video info. Check the URL and your network."
-    exit 1
+    exit 4
 }
-VIDEO_ID=$($YTDLP --print "%(id)s" --no-download "$URL" 2>"$YTDLP_ERR")
+VIDEO_ID=$($YTDLP --print "%(id)s" --no-download "$URL" 2>"$YTDLP_ERR") || {
+    ytdlp_stderr "Error: Could not fetch the video ID. Check the URL and your network."
+    exit 4
+}
 
 # Sanitize title for filesystem
 SAFE_TITLE=$(echo "$VIDEO_TITLE" | tr '/:*?"<>|\\' '-' | sed 's/  */ /g' | sed 's/^[.-]*//' | head -c 200)
@@ -264,6 +300,10 @@ fi
 
 # --- Try subtitle download (manual first, then auto-generated) ---
 SUBS_DOWNLOADED=false
+# Did a yt-dlp *call* fail, as opposed to succeeding and finding nothing? The
+# two are different verdicts and the caller acts on them differently — see the
+# decision below the subtitle processing.
+SUB_DOWNLOAD_FAILED=false
 VTT_FILE=""
 
 # Try manual subtitles
@@ -275,6 +315,16 @@ if $YTDLP --write-sub --sub-langs "en.*" --skip-download \
         SUBS_DOWNLOADED=true
         echo "[yt-transcript] Manual subtitles found."
     fi
+else
+    # Banked rather than printed: the auto-sub attempt is next and may succeed,
+    # in which case this was noise. But that attempt redirects into the same
+    # file, so if it is not kept now it is gone. The case this exists for: a
+    # video with manual subs whose download fails on a transient network error,
+    # then an auto-sub attempt that exits 0 with no auto-captions (normal for
+    # such a video) — which used to end at "No subtitles available" with the
+    # real error captured and deleted unread.
+    SUB_DOWNLOAD_FAILED=true
+    bank_ytdlp_failure "Manual subtitle download"
 fi
 
 # Try auto-generated subtitles
@@ -288,11 +338,8 @@ if [[ "$SUBS_DOWNLOADED" != true ]]; then
             echo "[yt-transcript] Auto-generated subtitles found."
         fi
     else
-        # Not fatal — the audio fallback is next. But a real yt-dlp breakage
-        # (an extractor change, a network failure) is otherwise reported as
-        # "no subtitles available", which sends the reader looking in the
-        # wrong place entirely.
-        ytdlp_stderr "[yt-transcript] Subtitle download failed (falling back to audio)."
+        SUB_DOWNLOAD_FAILED=true
+        bank_ytdlp_failure "Auto-generated subtitle download"
     fi
 fi
 
@@ -338,20 +385,56 @@ with open(sys.argv[1], 'r', encoding='utf-8') as f:
 print('\n'.join(seen))
 " "$VTT_FILE" > "$OUTPUT_FILE"
 
-    LINES=$(wc -l < "$OUTPUT_FILE" | tr -d ' ')
-    echo "[yt-transcript] Done. Saved $LINES lines to: $OUTPUT_FILE"
-    exit 0
+    # A caption track can exist and be non-empty on disk while containing no
+    # cues at all — WEBVTT header, Kind:/Language:, timestamp lines, nothing
+    # else. It passes the -s guard above, the filter then prints an empty join,
+    # and `wc -l` on the resulting single newline says 1: the run used to end
+    # "Done. Saved 1 lines to: <file>", exit 0, over a 1-byte file.
+    if ! grep -q '[^[:space:]]' "$OUTPUT_FILE"; then
+        rm -f "$OUTPUT_FILE"
+        if [[ "$AUDIO_FALLBACK" == true ]]; then
+            echo "[yt-transcript] The subtitle track holds no caption text." >&2
+            SUBS_DOWNLOADED=false
+        else
+            echo "Error: the subtitle track for this video holds no caption text." >&2
+            echo "  A caption track exists, but it has no cues in it — there is nothing to save." >&2
+            echo "Re-run with --audio-fallback to download the audio and transcribe it locally." >&2
+            echo "(Requires ffmpeg and mlx-whisper)" >&2
+            exit 5
+        fi
+    else
+        LINES=$(wc -l < "$OUTPUT_FILE" | tr -d ' ')
+        echo "[yt-transcript] Done. Saved $LINES lines to: $OUTPUT_FILE"
+        exit 0
+    fi
 fi
 
-# --- Audio fallback ---
+# --- No usable subtitles: which verdict? ---
+# "The video has no subtitles" and "yt-dlp failed" are different facts and must
+# not share an exit code. SKILL.md defines 2 as a property of the *video*, so a
+# calling Claude that receives 2 tells the user the video has none — for a video
+# it may never have managed to look at.
 if [[ "$AUDIO_FALLBACK" != true ]]; then
+    if [[ "$SUB_DOWNLOAD_FAILED" == true ]]; then
+        report_banked_failures "Error: the subtitle download failed. This is NOT the same as the video having no subtitles."
+        echo "Usually a network problem, a private/geo-blocked video, or a yt-dlp that needs updating." >&2
+        echo "Retry, or re-run with --audio-fallback to download the audio and transcribe it locally." >&2
+        exit 4
+    fi
     echo "Error: No subtitles available for this video." >&2
     echo "Re-run with --audio-fallback to download audio and transcribe locally." >&2
     echo "(Requires ffmpeg and mlx-whisper)" >&2
     exit 2
 fi
 
-echo "[yt-transcript] No subtitles available. Falling back to audio transcription ..."
+# --- Audio fallback ---
+# The fallback is configured, so a failed subtitle download is not fatal — but
+# it is still reported, because it is why we are here.
+if [[ "$SUB_DOWNLOAD_FAILED" == true ]]; then
+    report_banked_failures "[yt-transcript] Subtitle download failed (falling back to audio)."
+fi
+
+echo "[yt-transcript] No usable subtitles. Falling back to audio transcription ..."
 
 # Check audio fallback dependencies
 if ! command -v ffmpeg &>/dev/null; then
@@ -377,7 +460,7 @@ AUDIO_FILE="$TMPDIR_WORK/${VIDEO_ID}.m4a"
 echo "[yt-transcript] Downloading audio ..."
 $YTDLP -x --audio-format m4a --output "$AUDIO_FILE" "$URL" 2>"$YTDLP_ERR" || {
     ytdlp_stderr "Error: Failed to download audio."
-    exit 1
+    exit 4
 }
 
 if [[ ! -f "$AUDIO_FILE" ]]; then

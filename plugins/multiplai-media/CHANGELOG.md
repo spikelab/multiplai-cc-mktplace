@@ -33,12 +33,36 @@ Nothing yet.
   while the script was eating it. On failure it now prints the last 20 lines of
   what `yt-dlp` wrote.
 
-  Four sites, not the three originally reported: the metadata fetch was
-  swallowing errors too, and it runs *first*, so it is the one you hit on a bad
-  URL. The subtitle downloads now report as well — they fall through to the
-  audio fallback either way, but a genuine `yt-dlp` breakage used to be
-  indistinguishable from "this video has no subtitles", which sends you looking
-  in entirely the wrong place.
+  Five sites, not the three originally reported: the two metadata fetches were
+  swallowing errors too, and they run *first*, so they are what a bad URL
+  actually hits. One of them had no failure handler at all, which under
+  `set -e` ended the run with the captured log deleted unread — output stopped
+  dead after `Fetching video info ...`, the exact symptom this was meant to
+  remove.
+
+- **A failed subtitle download is no longer reported as "this video has no
+  subtitles".** The two are different facts and now have different exit codes.
+  A `yt-dlp` failure — network, private or geo-blocked video, broken extractor
+  — is **exit 4**, and its output is printed; "the video genuinely has no
+  captions" keeps **exit 2**. Previously both were 2, so Claude would tell you
+  a video had no subtitles when nothing had managed to look at it, and offer
+  audio transcription for a video it had never identified. Relatedly, the
+  message promising a fallback to audio now only appears when
+  `--audio-fallback` is actually set.
+
+  A failure on the *manual* subtitle download also used to be captured and then
+  destroyed: the auto-caption attempt overwrote the same log, and for a video
+  with manual subs and no auto-captions that attempt exits cleanly — so the run
+  ended "No subtitles available" with the real error gone. Failures are now
+  kept until something reports them.
+
+- **An empty caption track is no longer saved as a transcript.** A video whose
+  subtitle track exists but holds no cues produced a 1-byte file and
+  `Done. Saved 1 lines`, exit 0. It is now **exit 5** with no file written, and
+  `--audio-fallback` transcribes the audio instead.
+
+  Exit codes 4 and 5 are new; `SKILL.md` documents both, including what Claude
+  should tell you for each.
 
 ## [0.2.3] - 2026-08-16
 
