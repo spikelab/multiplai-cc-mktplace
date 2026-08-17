@@ -312,6 +312,28 @@ class TestAbstentionVsFallback:
         assert len(corpus_files(out, "MEMORY")) == 0
         assert hook_context(out) == ""
 
+    def test_task_notification_injects_nothing(self, env_setup):
+        """A harness task-notification skips routing — no injection, no
+        recency dump, even when its text would match a catalog entry."""
+        for name in ("alpha.md", "beta.md"):
+            (env_setup["memory_dir"] / name).write_text(f"# {name}\nbody")
+        _write_catalog(
+            env_setup["catalogs_dir"],
+            "memory.json",
+            [{"source": "alpha.md", "intent_domains": ["software architecture decisions"]}],
+        )
+
+        out = _run_hook(
+            env_setup,
+            prompt=(
+                "<task-notification> <task-id>bd748hcod</task-id> "
+                "<tool-use-id>toolu_01X</tool-use-id> the background task "
+                "about software architecture decisions finished"
+            ),
+        )
+        assert len(corpus_files(out, "MEMORY")) == 0
+        assert hook_context(out) == ""
+
     def test_genuine_drift_still_uses_recency_safety_net(self, env_setup):
         """Router picks a file that isn't on disk → net still fires.
 
@@ -330,6 +352,24 @@ class TestAbstentionVsFallback:
         out = _run_hook(env_setup, prompt="software architecture decisions")
         assert len(corpus_files(out, "MEMORY")) >= 1
         assert "real.md" in hook_context(out)
+
+    def test_recency_net_never_injects_claude_md_index(self, env_setup):
+        """The fallback ranks by mtime/size, and memory/CLAUDE.md — the
+        system's own index — would top that ranking; it must be skipped."""
+        (env_setup["memory_dir"] / "CLAUDE.md").write_text(
+            "# Memory index\n" + "meta " * 2000
+        )
+        (env_setup["memory_dir"] / "real.md").write_text("# Real\nbody")
+        _write_catalog(
+            env_setup["catalogs_dir"],
+            "memory.json",
+            [{"source": "ghost.md", "intent_domains": ["software architecture decisions"]}],
+        )
+
+        out = _run_hook(env_setup, prompt="software architecture decisions")
+        ctx = hook_context(out)
+        assert "real.md" in ctx
+        assert "CLAUDE.md" not in ctx
 
 
 class TestRoutingScoresEmission:

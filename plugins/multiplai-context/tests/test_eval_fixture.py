@@ -48,3 +48,31 @@ def test_clean_intent_cases_route_correctly():
         got = set(picks)
         assert set(c["expected_files"]) <= got, f"{c['id']}: missed {c['expected_files']}, got {sorted(got)}"
         assert not (set(c["unexpected_files"]) & got), f"{c['id']}: pulled unexpected {sorted(set(c['unexpected_files']) & got)}"
+
+
+def test_evaluate_scores_anchored_picks_at_file_level():
+    """A pick of ``file.md#Section`` satisfies an expected ``file.md``.
+
+    Since P1 the router returns section-anchored picks; golden labels are
+    file-level. Exact string comparison scored every anchored pick as a
+    miss (recall 49 -> 3.7 on the same router, same cases).
+    """
+    from eval_router import Metrics, _evaluate
+
+    case = {
+        "id": "anchored",
+        "expected_files": ["life.md"],
+        "expected_none": False,
+        "unexpected_files": ["multiplai.md#Some Section"],
+    }
+    m = Metrics()
+    ok = _evaluate(m, case, ["life.md#Long-Term Plan", "life.md#Travel"], 2, 10)
+    assert ok, m.failures
+    assert m.recall_num == 1 and m.recall_den == 1
+    # Two sections of one file are one file-level retrieval.
+    assert m.precision_total == 1
+
+    m2 = Metrics()
+    ok2 = _evaluate(m2, case, ["multiplai.md#Other Section"], 1, 10)
+    assert not ok2  # unexpected file hit at file level, expected missed
+    assert m2.fp_hits == 1

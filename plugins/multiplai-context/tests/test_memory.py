@@ -198,6 +198,17 @@ class TestDiscoverSources:
         sources = gen.discover_sources()
         assert len(sources) == 3
 
+    def test_claude_md_index_is_not_a_source(self, tmp_path, monkeypatch):
+        """memory/CLAUDE.md is the system's own index, never cataloged."""
+        gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)
+        monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+        monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MEMORY_DIR", str(memory_dir))
+        _write_memory_file(memory_dir, "CLAUDE.md", "# Memory index\nMeta")
+        _write_memory_file(memory_dir, "preferences.md", "# Preferences\nContent")
+
+        sources = gen.discover_sources()
+        assert list(sources) == ["preferences.md"]
+
     def test_empty_memory_dir_returns_empty(self, tmp_path, monkeypatch):
         """Empty memory directory returns empty dict."""
         gen, catalogs_dir, memory_dir = _make_memory_generator(tmp_path)

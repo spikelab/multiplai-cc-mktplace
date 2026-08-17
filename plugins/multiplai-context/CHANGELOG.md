@@ -18,6 +18,32 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.52.1] - 2026-08-17
+
+### Fixed
+
+- **Task notifications no longer trigger memory routing.** When a background
+  task finishes, Claude Code re-invokes the model with a synthetic
+  `<task-notification>` prompt, and the context hook used to route it like a
+  real question — each notification could inject several memory files whose
+  context the conversation already had. The hook now recognises these prompts
+  and injects nothing, the same way a bare "yes"/"go ahead" continuation is
+  skipped.
+- **`memory/CLAUDE.md` is no longer cataloged or injected as memory.** It is
+  the memory system's own index — meta-documentation, not personal context —
+  yet the catalog generator swept it up with the rest of `memory_dir` and the
+  router could recommend it (ambiguously labelled just "CLAUDE.md"). The
+  generator now skips it, the next catalog refresh prunes the existing entry,
+  and the recency fallback skips it too. Memory-management skills keep reading
+  it by explicit path.
+- **`eval_router.py --strategy` now accepts `llm_hybrid`.** The strategy
+  shipped in 0.40.0 but the eval harness's argument list was never extended,
+  so the hybrid could not be scored against a golden set.
+- **`eval_router.py` scores section-anchored picks at file level.** Since
+  section-level retrieval went live the router returns picks like
+  `file.md#Section`, and the eval's exact string comparison scored every one
+  of them as a miss against file-level golden labels.
+
 ## [0.52.0] - 2026-08-17
 
 ### Removed

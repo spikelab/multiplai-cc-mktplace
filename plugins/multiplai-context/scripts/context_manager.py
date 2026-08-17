@@ -116,6 +116,13 @@ def _rank_memory_files(memory_dir: Path) -> list[RankedFile]:
     now = time.time()
 
     for f in _iter_markdown_files(memory_dir):
+        # memory/CLAUDE.md is the memory system's own index, excluded from
+        # the catalog (generators/memory.py discover_sources); keep the
+        # recency fallback consistent — it ranks by mtime/size, and the
+        # index is both recently touched and large, so it would otherwise
+        # top this ranking.
+        if f.name.lower() == "claude.md":
+            continue
         try:
             st = f.stat()
         except OSError:
@@ -1109,6 +1116,29 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
                 write_session_state(paths.data_dir(), _ss)
         except Exception:
             logger.debug("Could not persist cwd to session_state", exc_info=True)
+
+    # Task-notification guard. When a background task finishes, the
+    # harness re-invokes the model with a synthetic
+    # "<task-notification> <task-id>…" prompt, and UserPromptSubmit
+    # fires on it like any user turn. The conversation already holds
+    # that task's context, so routing the notification text only
+    # injects noise (2026-08-10: two notifications each pulled 4-5
+    # memory files). Same class as the routers' continuation guard,
+    # but placed here so it covers every strategy — and an early
+    # return rather than a blanked prompt, because the recency
+    # fallback below is not prompt-gated and would fire on the empty
+    # pick set.
+    if prompt.lstrip().startswith("<task-notification>"):
+        logger.info("Task notification — routing skipped, nothing injected")
+        log_event(
+            "context", "skip",
+            "task notification — context already in conversation, "
+            "nothing injected",
+            session_id=session_id,
+        )
+        run.note(outcome="task_notification", files=0, bytes=0)
+        _emit_result("")
+        return
 
     # Last-assistant-response disambiguation. Failure modes already
     # encoded in read_last_assistant_response (returns None on any error).
