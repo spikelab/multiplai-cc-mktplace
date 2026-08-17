@@ -35,13 +35,23 @@ Nothing yet.
   uniqueness invariant it enforces is about `##` specifically; widening it
   would have traded the old false positives for new ones.
 
+  When a section genuinely is misrouted, the **reroute now names the `##`
+  owner**. Widening existence to `##`–`####` also widened the suggestion, which
+  took whichever owner sorted first at any depth: on one real corpus 8 section
+  names had more than one owner, and in 6 of them the alphabetically-first
+  owner held the name at `###` while a *different* file held the `##` — so the
+  suggestion pointed away from the only file the routing invariant says the
+  item can live in. Every owner is still listed in the warning.
+
 - **Conflict resolutions can now be decided.** Items under
   `## Conflict Resolutions` were the only kind with nowhere to record a
   decision: `--mark-processed --kind` took `update` and `action` only. A
-  reviewer read one, decided, and the decision evaporated — and because the
-  section is regenerated from current state on every run, the same conflicts
-  came back on every later proposal. `--kind conflict` now marks them, keyed by
-  the memory file and line in the item's heading
+  reviewer read one, decided, and the decision evaporated — and the conflict
+  with it. The section is regenerated, but only from learnings blocks that have
+  not been consolidated yet, and the run that drafts a conflict is the run that
+  records its source block; so once the proposal was archived or folded forward
+  there was nothing left to re-derive it from. `--kind conflict` now marks
+  them, keyed by the memory file and line in the item's heading
   (`--kind conflict --file dolcebot.md --index 453`). `/dream-remember` gained
   a step telling you to do it, and what the three outcomes mean; previously the
   skill did not mention the section at all.
@@ -67,6 +77,18 @@ Nothing yet.
   inspects the newest proposal, so re-running the skill could not fix it — the
   skill now runs `--reconcile` as its first step. Pair with `--dry-run` to see
   the list before anything moves.
+
+  Three things it is careful about, because it runs *before* you read anything
+  and what it authorizes cannot be undone. It counts an **undecided conflict
+  resolution** as pending, so a proposal whose updates are all decided but
+  whose conflicts are not stays in the root instead of being archived, stamped
+  and having its source learnings collected — after which no later run could
+  re-derive the conflict. It **files by what the review decided**: a proposal
+  every item of which was rejected lands in `dreams/rejected/`, not
+  `dreams/applied/`, matching what `/dream-remember` Step 6 has always asked
+  for by hand. And a proposal it **cannot read** is named in the output,
+  counted as still pending and left where it is, with a non-zero exit — the
+  same fail-closed handling `--gc-learnings` gives an unreadable proposal.
 
 - **Triage now logs which side won each contested label.** Where it previously
   logged only *how many* items the extractor and the judge disagreed about, it

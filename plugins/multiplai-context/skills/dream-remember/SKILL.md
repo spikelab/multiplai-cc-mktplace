@@ -355,15 +355,20 @@ Feed that to the Step 4 command. Conflicts may ride in the same array as the
 `update` items for the file they touch — one call per target file, as Step 4
 already says.
 
-**Recording them is not optional bookkeeping.** `## Conflict Resolutions` is a
-regenerated section: an undecided conflict is re-derived and re-presented on
-every subsequent proposal, so a decision you make and do not record costs the
-same reading again next time, forever. Recording moves the block under
-`## Processed`, which also stops the proposal being folded into a later run —
-that is what keeps the decision.
+**Recording them is not optional bookkeeping — an undecided conflict is lost,
+not deferred.** `## Conflict Resolutions` is regenerated, but only from
+learnings blocks that have not been consolidated yet: the run that drafts a
+conflict is the run that records its source block in the ledger, so from the
+next run on there is nothing left to derive it from. Once this proposal leaves
+the dreams root the conflict cannot come back — folding it forward strips the
+whole section, and archiving takes it with the file.
 
-`--archive` does not block on conflicts, so leaving one undecided will not stop
-you finishing. It will just come back.
+So do not leave one undecided. `--archive` blocks on pending updates and
+actions but **not** on conflicts, so nothing will stop you finishing a proposal
+that still has some — `--reconcile` is the one command that does check, and it
+only refuses to file the proposal, it cannot recover a conflict you already
+archived past. Recording moves the block under `## Processed`, which both keeps
+the decision and stops the proposal being folded into a later run.
 
 ### 3. Escalate only what evidence cannot settle
 
