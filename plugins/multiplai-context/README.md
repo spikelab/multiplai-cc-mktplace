@@ -19,8 +19,8 @@ doesn't. Native Windows (without WSL) isn't supported.
 1. **Setup** — `/multiplai-context:setup` walks you through populating a small set
    of memory files (who you are, how you work, technical preferences).
 2. **Per prompt** — a `UserPromptSubmit` hook routes your prompt against
-   indexed catalogs of memory (and optionally skills/resources) and
-   injects only the relevant pieces. No memory dump. Files injected on
+   indexed catalogs of memory (and optionally skills) and injects only the
+   relevant pieces. No memory dump. Files injected on
    recent turns are skipped — they're already in the conversation (see
    [Re-recommendation cooldown](#re-recommendation-cooldown)). The same hook
    also points Claude at the engineering standards for the project's stack,
@@ -42,7 +42,7 @@ doesn't. Native Windows (without WSL) isn't supported.
 ```
   setup → memory files
               ↓
-  every prompt: context_manager picks relevant memory/skills/resources
+  every prompt: context_manager picks relevant memory/skills
               ↓
   Stop / SessionEnd: diary written, learnings queued
               ↓
@@ -177,7 +177,9 @@ Most users only touch these:
 Optional, for power users:
 
 - `enable_skills` + `skills_dir` — index a skills corpus for routing.
-- `enable_resources` + `resources_dir` — index a research/notes corpus.
+- `enable_resources` + `resources_dir` — retrieve a research/notes corpus
+  through qmd. Needs a qmd index built on the host first; see
+  [Resources retrieval via qmd](#resources-retrieval-via-qmd).
 
 Everything else (catalog model, TTL, diary catalog window, individual
 `*_dir` overrides) has sensible defaults — leave alone unless you're
@@ -215,12 +217,12 @@ over the anchor:
 | `duplication_thinking` | `false` | Extended thinking on the memory doctor's **duplication**-confirmation call (stage 2), and that call only. The doctor's contradiction pass is not covered — it keeps extended thinking on and has no switch, because deciding whether two statements can both be true is judgement rather than extraction. Set `true`/`1` to restore it. Same old-dependency behaviour as `router_thinking`. |
 | `utilisation_thinking` | `false` | Extended thinking on the offline utilisation judge's per-session verdict calls. Set `true`/`1` to restore it. Same old-dependency behaviour as `router_thinking`. |
 | `now_thinking` | `false` | Extended thinking on the per-project `now/` status-summary calls. Set `true`/`1` to restore it. Same old-dependency behaviour as `router_thinking`. |
-| `catalog_thinking` | `false` | Extended thinking on catalog-generation calls (memory, skills, resources, diary generators). Set `true`/`1` to restore it. Same old-dependency behaviour as `router_thinking`. |
+| `catalog_thinking` | `false` | Extended thinking on catalog-generation calls (memory, banks, skills, diary generators). Set `true`/`1` to restore it. Same old-dependency behaviour as `router_thinking`. |
 | `recommend_cooldown_turns` | `4` | After a file is injected, suppress re-injecting it for this many turns (it's already in the conversation). `0` disables. See [Re-recommendation cooldown](#re-recommendation-cooldown). |
 | `keep_ratio` | `0.30` | `token_overlap` relevance cutoff: keep a memory file only if it scores ≥ this fraction of the top match (0–1). Higher = stricter (fewer, more-relevant files, less 10-file cap saturation); lower admits more of the weaker tail. Ignored under `llm`. See [Routing relevance cutoff](#routing-relevance-cutoff). |
 | `memory_conflict_preamble` | `true` | Conflict-surfacing directive + per-file last-updated stamps above every injected MEMORY block, so the model flags memory-vs-session disagreements. ~90 tokens per memory-carrying turn; turn off to save them. |
 | `enable_skills` / `skills_dir` | `false` / `~/.claude/skills` | Optionally catalog skills for routing |
-| `enable_resources` / `resources_dir` | `false` / `""` | Optionally catalog a research/reference corpus. The flag gates *injection*; you can still refresh the catalog while it's off via `refresh-catalogs --only resources` (needs `resources_dir` set). Only `.md`/`.markdown` files are indexed. |
+| `enable_resources` / `resources_dir` | `false` / `""` | Optionally retrieve a research/reference corpus per prompt, through qmd. There is no resources catalog and no generator — the index is qmd's, built on the host. See [Resources retrieval via qmd](#resources-retrieval-via-qmd). |
 
 #### Router latency
 
@@ -257,18 +259,34 @@ both, and has not been scored yet.
 
 ### Resources retrieval via qmd
 
-By default the resources corpus goes through the same catalog+router
-path as memory. For larger corpora (hundreds of documents), set
-`resources_retrieval=qmd` to retrieve through a
-[qmd](https://github.com/tobi/qmd) hybrid index instead: BM25 keyword
-search + vector search fused by reciprocal rank, per prompt, no LLM in
-the loop (~1–2s). Results are injected as path + excerpt entries in the
-`=== RESOURCES ===` section; Claude reads the full file on demand. The
-catalog path is untouched for other users — `catalog` stays the default.
+**qmd is the only way a resources corpus is retrieved.** Set
+`enable_resources` and `resources_dir`, build the index (below), and
+every prompt is matched against a [qmd](https://github.com/tobi/qmd)
+hybrid index: BM25 keyword search + vector search fused by reciprocal
+rank, no LLM in the loop (~1–2s). Results are injected as path +
+excerpt entries in the `=== RESOURCES ===` section; Claude reads the
+full file on demand.
+
+The catalog+router path memory uses does not apply here and was removed
+in 0.52.0. It summarised each resource file with one LLM call and routed
+on those summaries — which fits a corpus you wrote and re-read, not one
+you collected. A research archive is long, heterogeneous, and answers a
+prompt with a passage rather than a whole document, which is the shape
+qmd's chunk-level index is built for.
+
+Turning `enable_resources` on **without** a qmd index injects nothing.
+Nothing breaks — retrieval is fail-open — but nothing arrives either, so
+do the host setup below first.
+
+**This is not yet a one-command feature.** qmd has to be installed and a
+collection built on the host, and on a container setup the gateway needs
+the qmd allowlist entry too — three steps a plugin install cannot do for
+you. Treat resources as opt-in for people who want it enough to run the
+setup script; making it work out of the box is future work, and until
+then leaving `enable_resources` off costs you nothing.
 
 | Option | Default | Purpose |
 |--------|---------|---------|
-| `resources_retrieval` | `catalog` | `qmd` routes resources retrieval through the qmd index |
 | `qmd_mode` | `local` | `http` = POST to a resident `qmd mcp --http` daemon on the host (preferred: warm models, no cold start); `local` = qmd on PATH (native installs); `ssh` = qmd runs on the host over the container→host SSH bridge |
 | `qmd_http_url` | `http://host.docker.internal:8181` | Daemon base URL for `http` mode — see the exposure note below |
 | `qmd_candidate_limit` | `10` | Docs the daemon reranks per query in `http` mode (latency dial; capped at 50) |
@@ -568,10 +586,10 @@ All commands are namespaced under `/multiplai-context:`.
 | `/multiplai-context:health` | **Is it broken?** Mechanical infrastructure check (deterministic script): active model client, directories present, memory-file freshness by mtime, diary/learnings/dream counts. Fast, cheap, run anytime. |
 | `/multiplai-context:memory-health-audit` | **Is it good?** Analytical effectiveness audit — cross-correlates retrieval logs, diary, learnings, and memory structure to find what's useful, what's wasted, and what to restructure. Slower; run ~monthly. |
 | `/multiplai-context:log-doctor` | **Why is it failing?** Analyzes the runtime logs across subsystems (context_manager, extract_learnings, backfill, dream, lifecycle hooks) to surface failures, anomalies, and degradation, verifies root causes against source, and produces a fix-recommendation report. Can focus on one subsystem or actively probe a functionality to confirm its logs appear. Log text is **untrusted input** — quoted lines arrive inside `untrusted-content` fences, control/bidi characters stripped and instruction-shaped spans marked `⟪INJECTION?⟫`; see [`docs/untrusted-content.md`](../../docs/untrusted-content.md). |
-| `/multiplai-context:refresh-catalogs` | Regenerate catalog indexes. Supports `--force`, `--dry-run`, `--only`. `--only <gen>` is an explicit override — it runs even if that generator's `enable_*` flag is off (e.g. `--only resources` refreshes the resources catalog while `enable_resources` stays `false`). |
+| `/multiplai-context:refresh-catalogs` | Regenerate catalog indexes. Supports `--force`, `--dry-run`, `--only`. `--only <gen>` is an explicit override — it runs even if that generator's `enable_*` flag is off (e.g. `--only skills` refreshes the skills catalog while `enable_skills` stays `false`). Generators: `memory`, `banks`, `diary`, `skills`. |
 | `/multiplai-context:backfill` | Reconstruct learnings/diary/now summaries from existing Claude Code transcripts. Default window 7 days; `--days N`, `--since DATE`, `--all`. |
 | `/multiplai-context:now` | Rebuild per-project `now/` status snapshots from recent diary entries. Run after a backfill, or any time the injected project state looks stale. |
-| `/multiplai-context:qmd-search` | Manually search the resources knowledge base via qmd (semantic + keyword) — the manual companion to `resources_retrieval=qmd`. |
+| `/multiplai-context:qmd-search` | Manually search the resources knowledge base via qmd (semantic + keyword) — the manual companion to the automatic per-prompt retrieval. |
 | `/multiplai-context:costs` | Report API-equivalent costs for Claude Code usage — per chat, skill, subagent, project, model, day, or branch. Also reports **per outcome** (`--group task --pr-join` = cost per merged PR; `--group build` = cost per DONE and per FAILED buildme block) and **cache utilization** (`--report cache`). Cross-model comparisons are per-outcome only — different models tokenize differently, so a cheaper per-token model that loops twice is more expensive. Collects fresh data from session transcripts, then reports from the cost ledger. Requires `enable_costs`. Interface pinned by [`skills/costs/CONTRACT.md`](skills/costs/CONTRACT.md). |
 | `/multiplai-context:fleet-status` | **What is actually blocked on me?** One ranked snapshot of everything in flight — agent sessions waiting on an answer, open PRs with CI and review state, dirty or unpushed checkouts, background jobs, and the pending backlog. Ranked by what needs a decision only you can make (approved PR → red CI → stacked PRs → a session that asked a question → collisions), capped at 8 items, with the full report one `--full` away. Read-only: it merges nothing, kills nothing, deletes nothing. Needs `git`; `gh` is optional and its absence reports "not read", never "none". |
 | `/multiplai-context:memory-bank` | Work with **shared memory banks** — git repositories of memory files a team or household shares. `list` and `sync` subscribed banks, `check` for cross-bank collisions, `contribute` a dream item as a pull request on the bank, and `adopt` — the migration that moves personal memory into a bank and deletes the local copy. `contribute` and `adopt` are dry-run without `--apply`; adoption never deletes a file the bank does not already contain line for line. See [Shared memory banks](#shared-memory-banks). |
@@ -1232,7 +1250,7 @@ Then, in this order, always:
 4. Inject `now/<project>.md`, then the checkpoint rebuild if the source
    allows it.
 5. Launch, detached and each behind its own gate: the qmd index refresh
-   *(only with the qmd backend)*, cost collection *(only with
+   *(only with `enable_resources`)*, cost collection *(only with
    `enable_costs`)*, the **extraction drain** for markers left by earlier
    sessions, and the **memory maintainer** *(24h gate, checked before
    spawning so 95% of sessions pay nothing)*.

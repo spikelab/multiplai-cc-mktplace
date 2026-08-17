@@ -1,11 +1,11 @@
-"""End-to-end tests for the qmd resources backend in context_manager.
+"""End-to-end tests for qmd resources retrieval in context_manager.
 
-Drives the full stdin → stdout hook flow with resources_retrieval=qmd
-and a FAKE qmd binary on PATH (qmd_mode=local), verifying:
+Drives the full stdin → stdout hook flow with enable_resources on and a
+FAKE qmd binary on PATH (qmd_mode=local), verifying:
 
 - qmd results render in the === RESOURCES === section (path + excerpt
   + read-the-full-file preamble)
-- the resources catalog/router path is skipped under the qmd backend
+- a resources catalog left on disk is never read
 - fail-open when qmd is missing or broken
 - a `local`-mode integration test against a real qmd, gated on qmd
   being installed (BM25 only — no embedding model download needed)
@@ -44,7 +44,6 @@ def _run_hook(env_setup, *, prompt: str, qmd_bin_dir: Path | None,
               extra_env: dict | None = None) -> dict:
     qmd_env = {
         "CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES": "true",
-        "CLAUDE_PLUGIN_OPTION_RESOURCES_RETRIEVAL": "qmd",
         "CLAUDE_PLUGIN_OPTION_QMD_MODE": "local",
         # Point HOME away from any real ~/.bun/bin qmd; PATH carries the fake.
         "HOME": str(env_setup["tmp_path"]),
@@ -105,8 +104,8 @@ class TestQmdBackendE2E:
                         qmd_bin_dir=bin_dir)
         assert corpus_files(out, "RESOURCES") == []
 
-    def test_resources_catalog_not_loaded_under_qmd(self, env_setup):
-        """A resources catalog on disk must be ignored when the backend is qmd."""
+    def test_resources_catalog_on_disk_is_never_read(self, env_setup):
+        """A resources.json left by a pre-0.52.0 install must be ignored."""
         from generators.base import CATALOG_SCHEMA_VERSION
 
         (env_setup["resources_dir"] / "catalog-doc.md").write_text("# Catalog doc")
@@ -121,15 +120,14 @@ class TestQmdBackendE2E:
         assert "catalog-doc.md" not in hook_context(out)
         assert "water/filters.md" in hook_context(out)
 
-    def test_catalog_backend_untouched_by_default(self, env_setup):
-        """resources_retrieval unset → catalog path (no qmd invocation)."""
+    def test_nothing_retrieved_when_resources_disabled(self, env_setup):
+        """enable_resources off → qmd is never invoked, even with one on PATH."""
         bin_dir = _fake_qmd(env_setup["tmp_path"], QMD_RESULTS)
         out = _run_hook(
             env_setup, prompt="which water filter should I buy?",
             qmd_bin_dir=bin_dir,
-            extra_env={"CLAUDE_PLUGIN_OPTION_RESOURCES_RETRIEVAL": "catalog"},
+            extra_env={"CLAUDE_PLUGIN_OPTION_ENABLE_RESOURCES": "false"},
         )
-        # No resources catalog on disk → no resources under the catalog path.
         assert corpus_files(out, "RESOURCES") == []
 
 

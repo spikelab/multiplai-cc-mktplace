@@ -1,8 +1,8 @@
 """Context manager hook for multiplai plugin.
 
-Manages context assembly for user prompts across three corpora —
-memory, skills, and resources — using catalog-first reads with
-intent-domain routing.
+Manages context assembly for user prompts. Memory and skills are read
+catalog-first and routed by intent domain; resources bypass both and
+come from a qmd index.
 
 Pipeline:
     1. Read stdin (cwd, prompt, transcript_path)
@@ -19,12 +19,12 @@ back to live scanning (fail-open). Warnings emit once per session.
 
 Memory remains the only corpus with a metadata-fallback path
 (_read_top_memory_files) so prompts still get useful context even
-without a current catalog. Skills and resources are catalog-only.
+without a current catalog. Skills are catalog-only.
 
-Resources alternative backend: when ``resources_retrieval == "qmd"``,
-the resources corpus skips the catalog+router path entirely and is
-retrieved per-prompt from a qmd index (scripts/qmd_retrieval.py);
-results render as path+excerpt entries in the same RESOURCES section.
+Resources do not use the catalog or the router at all. When
+``enable_resources`` is on and ``resources_dir`` is set, they are
+retrieved per-prompt from a qmd index (scripts/qmd_retrieval.py) and
+render as path+excerpt entries in the RESOURCES section.
 
 A fourth section, DEV REFERENCES, does NOT go through the router at
 all: engineering standards apply because of what the project is, not
@@ -69,7 +69,7 @@ from generators.config import load_catalog_config
 logger = setup_logging("context_manager")
 
 # Catalog types supported by _read_catalog_or_scan()
-_KNOWN_CATALOG_TYPES = frozenset({"memory", "banks", "diary", "skills", "resources"})
+_KNOWN_CATALOG_TYPES = frozenset({"memory", "banks", "diary", "skills"})
 
 # Cap on the last-assistant-response text handed to the router — see the
 # truncation site in _assemble_and_emit for why (P7).
@@ -182,8 +182,10 @@ def _read_catalog_or_scan(catalog_type: str, ttl_hours: float | None = None) -> 
     fall back to live file scanning.
 
     Args:
-        catalog_type: One of ``"memory"``, ``"diary"``, ``"skills"``,
-            or ``"resources"``.
+        catalog_type: One of ``"memory"``, ``"banks"``, ``"diary"``
+            or ``"skills"``. Anything else returns an empty list —
+            notably ``"resources"``, which has not been a catalog
+            since 0.52.0.
         ttl_hours: When set (> 0), a catalog older than this is flagged
             as stale via a once-per-session warning (the entries are
             still returned — staleness is advisory, not fatal).
@@ -326,9 +328,11 @@ def _warn_once(warn_key: str, message: str) -> None:
 def _load_corpora(cfg) -> dict[str, list[dict]]:
     """Read all enabled catalogs.
 
-    Memory is always loaded. Skills and resources are gated by their
-    respective ``enable_*`` plugin options — when disabled, the corpus
-    is treated as empty (no routing, no content loading).
+    Memory is always loaded. Skills are gated on ``enable_skills`` —
+    when disabled, the corpus is treated as empty (no routing, no
+    content loading). Resources never enter the router at all; the
+    key stays in the dict so downstream shapes are uniform, and
+    _qmd_resources_entries() fills it.
 
     Shared memory banks (``banks.json``) are folded into the **memory**
     corpus rather than routed as a corpus of their own: a bank's file
@@ -346,14 +350,6 @@ def _load_corpora(cfg) -> dict[str, list[dict]]:
     }
     if cfg.enable_skills:
         corpora["skills"] = _read_catalog_or_scan("skills", ttl_hours)
-    # Under the qmd backend the resources corpus never enters the router:
-    # retrieval happens in _qmd_resources_entries() against the qmd index.
-    if (
-        cfg.enable_resources
-        and cfg.resources_dir.strip()
-        and cfg.resources_retrieval != "qmd"
-    ):
-        corpora["resources"] = _read_catalog_or_scan("resources", ttl_hours)
     return corpora
 
 
@@ -501,32 +497,8 @@ def _build_skills_recommendations(
     return result
 
 
-def _load_resources_content(cfg, picks: list[str]) -> dict[str, str]:
-    """Read picked resource files from configured resources_dir."""
-    if not picks or not cfg.enable_resources or not cfg.resources_dir.strip():
-        return {}
-    resources_dir = Path(cfg.resources_dir).expanduser()
-    if not resources_dir.exists():
-        return {}
-    result: dict[str, str] = {}
-    for pick in picks:
-        base, _ = parse_section_ref(pick)
-        path = resources_dir / base
-        if not path.exists():
-            logger.debug("Picked resource file missing: %s", path)
-            continue
-        try:
-            text = path.read_text()
-        except (OSError, UnicodeDecodeError):
-            logger.warning("Failed to read picked resource file: %s", path)
-            continue
-        _, content = load_picked_content(pick, text)
-        result[pick] = content
-    return result
-
-
 def _qmd_resources_entries(cfg, prompt: str, cwd: str) -> list[dict]:
-    """Retrieve resources via the qmd backend (``resources_retrieval == "qmd"``).
+    """Retrieve resources from the qmd index over ``resources_dir``.
 
     Returns ``[{"path", "title", "score", "snippet"}, ...]`` best first.
     The workspace root (where the project-local ``.qmd/`` index lives) is
@@ -1165,11 +1137,10 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
             router_ran = True
             run.note(router=router.name)
             logger.info(
-                "Router %s picked: memory=%d skills=%d resources=%d",
+                "Router %s picked: memory=%d skills=%d",
                 router.name,
                 len(picks_by_corpus.get("memory", [])),
                 len(picks_by_corpus.get("skills", [])),
-                len(picks_by_corpus.get("resources", [])),
             )
             # Routing-quality diagnostics (token_overlap only; the LLM
             # router exposes no scores). Machine-readable line consumed
@@ -1181,10 +1152,12 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
                 # It's a JSON key (not a trailing key=value) so parsers
                 # anchored on `memory=({...})$` keep working.
                 _plog = _prompt_for_log(prompt)
-                for _ct in ("memory", "skills", "resources"):
-                    # memory always logs (the /health contract); skills /
-                    # resources log when their corpus is enabled so those
-                    # injections leave a score trail too.
+                for _ct in ("memory", "skills"):
+                    # memory always logs (the /health contract); skills
+                    # logs when its corpus is enabled so those injections
+                    # leave a score trail too. Resources never reach the
+                    # router, so they have no scores to log here — their
+                    # trail is the QMD_RETRIEVAL line.
                     if _ct != "memory" and not corpora.get(_ct):
                         continue
                     _d = router_diag.get(_ct) or {}
@@ -1221,20 +1194,15 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
             logger.exception("Router call failed; per-corpus picks will be empty")
 
     # Bundle + co_retrieve_for expansion (per-corpus, against that corpus's catalog)
-    for corpus_type in ("memory", "skills", "resources"):
+    for corpus_type in ("memory", "skills"):
         picks = picks_by_corpus.get(corpus_type) or []
         if picks:
             picks_by_corpus[corpus_type] = expand_picks(picks, corpora.get(corpus_type) or [])
 
-    # qmd resources backend: retrieval runs against the qmd index instead
-    # of the router (whose resources corpus was left empty above). Entry
+    # Resources retrieval: qmd against its index, never the router. Entry
     # paths become the corpus picks so the cooldown machinery below dedups
     # qmd injections exactly like router picks.
-    qmd_active = (
-        cfg.enable_resources
-        and cfg.resources_retrieval == "qmd"
-        and bool(cfg.resources_dir.strip())
-    )
+    qmd_active = cfg.enable_resources and bool(cfg.resources_dir.strip())
     qmd_entries: dict[str, dict] = {}
     if qmd_active and prompt:
         # Staged: this shells out to the qmd CLI, and qmd_retrieval.py:472
@@ -1344,15 +1312,12 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
         skills_content = _build_skills_recommendations(
             cfg, picks_by_corpus.get("skills") or [], corpora.get("skills") or []
         )
-        if qmd_active:
-            # Cooldown may have trimmed the picks; render only the survivors.
-            resources_content = {
-                path: _render_qmd_resource(qmd_entries[path])
-                for path in picks_by_corpus.get("resources") or []
-                if path in qmd_entries
-            }
-        else:
-            resources_content = _load_resources_content(cfg, picks_by_corpus.get("resources") or [])
+        # Cooldown may have trimmed the picks; render only the survivors.
+        resources_content = {
+            path: _render_qmd_resource(qmd_entries[path])
+            for path in picks_by_corpus.get("resources") or []
+            if path in qmd_entries
+        }
 
     # Memory fallback — a safety net for *failure*, not for abstention.
     # A successful router run that returns no memory picks is a
@@ -1449,7 +1414,7 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
     if resources_content:
         parts.append(_render_corpus_section(
             "RESOURCES", resources_content,
-            preamble=_QMD_RESOURCES_PREAMBLE if qmd_active else "",
+            preamble=_QMD_RESOURCES_PREAMBLE,
         ))
     if dev_refs:
         parts.append(dev_refs)

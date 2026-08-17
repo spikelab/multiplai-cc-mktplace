@@ -1,6 +1,6 @@
 {
   "name": "multiplai-context",
-  "version": "0.51.0",
+  "version": "0.52.0",
   "description": "Context routing, continuous learning, session awareness, and memory management for Claude Code.",
   "author": {
     "name": "Spike",
@@ -110,26 +110,20 @@
     },
     "enable_resources": {
       "type": "boolean",
-      "title": "Enable Resources Catalog",
-      "description": "Whether the resources catalog generator runs during catalog generation",
+      "title": "Enable Resources Retrieval",
+      "description": "Whether a resources corpus is retrieved per prompt. Requires resources_dir and a qmd index over it (see README \u2192 qmd retrieval for host prerequisites). Off means no resources are ever injected.",
       "default": false
     },
     "resources_dir": {
       "type": "string",
       "title": "Resources Directory",
-      "description": "Directory to scan for resources when enable_resources is true",
+      "description": "Directory holding the resources corpus, indexed by qmd. Read when enable_resources is true.",
       "default": ""
-    },
-    "resources_retrieval": {
-      "type": "string",
-      "title": "Resources Retrieval Backend",
-      "description": "How resources are retrieved when enable_resources is true: 'catalog' (catalog + router, the default) or 'qmd' (hybrid BM25+vector search via a qmd index over resources_dir; see README \u2192 qmd retrieval for host prerequisites).",
-      "default": "catalog"
     },
     "qmd_mode": {
       "type": "string",
       "title": "qmd Execution Mode",
-      "description": "Where qmd runs when resources_retrieval is 'qmd': 'http' (POST an authored typed query to a resident 'qmd mcp --http' daemon on the host \u2014 preferred: warm models, no per-prompt cold start, qmd does the fusion+rerank), 'local' (qmd on PATH \u2014 native installs), or 'ssh' (qmd on the host over the container\u2192host SSH bridge).",
+      "description": "Where qmd runs: 'http' (POST an authored typed query to a resident 'qmd mcp --http' daemon on the host \u2014 preferred: warm models, no per-prompt cold start, qmd does the fusion+rerank), 'local' (qmd on PATH \u2014 native installs), or 'ssh' (qmd on the host over the container\u2192host SSH bridge).",
       "default": "local"
     },
     "qmd_ssh_host": {

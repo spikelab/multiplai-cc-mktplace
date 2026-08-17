@@ -18,6 +18,49 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.52.0] - 2026-08-17
+
+### Removed
+
+- **The resources catalog generator is gone. qmd is now the only way a
+  resources corpus is retrieved.** Setting `enable_resources` used to summarise
+  every file under `resources_dir` with one LLM call each, write a
+  `resources.json`, and route prompts against those summaries — the same
+  mechanism memory, banks, diary and skills use. It was the wrong mechanism for
+  this corpus. A catalog summary works when you wrote the file and will
+  recognise it from one line; a research archive is collected rather than
+  written, is long and heterogeneous, and answers a prompt with a *passage*
+  rather than a whole document. Routing on whole-document summaries cannot
+  express that, which is what qmd's chunk-level hybrid index is built for.
+
+  Concretely: `generators/resources.py` and the `resources` entry in the
+  dispatcher are deleted, `--only resources` now fails by name instead of
+  silently doing nothing, and a `resources.json` left on disk by an older
+  install is ignored rather than injected — its summaries are stale by
+  construction now that nothing regenerates them. You may delete that file.
+
+- **The `resources_retrieval` option is gone**, because there is no longer a
+  choice to make. If you had set it to `qmd`, delete the line — behaviour is
+  unchanged. If you had it at the old default (`catalog`, including by never
+  setting it) **and** `enable_resources` was on, resources now come from qmd,
+  which needs an index: run
+  `skills/qmd-search/scripts/setup_qmd.sh --workspace <ws> --resources-dir <dir>`
+  on the host. Until you do, no resources are injected. Nothing breaks —
+  retrieval is fail-open — but nothing arrives either.
+
+- **`/multiplai-context:setup` no longer offers to configure a resources
+  directory.** The interview could set `enable_resources` but could not build
+  the qmd index it needs, which left new installs with an option switched on
+  and nothing behind it. Resources are now set up deliberately, through
+  `/multiplai-context:qmd-search` and its `setup_qmd.sh`.
+
+### Changed
+
+- `catalog_thinking` now names the generators that actually exist (memory,
+  banks, skills, diary). The per-prompt `Router … picked:` log line drops its
+  always-zero `resources=` field; the machine-read `ROUTING` line is unchanged
+  and still carries `resources=`, which qmd fills.
+
 ## [0.51.0] - 2026-08-16
 
 ### Fixed
