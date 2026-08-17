@@ -241,12 +241,15 @@ def screenable_lines(text: str) -> list[tuple[int, str, frozenset[str]]]:
 
     * whatever :data:`SKIP_LINE_RE` already calls structure — headings, table
       rows, horizontal rules, the ``**Last Updated`` stamp;
-    * everything inside a fenced code block. :func:`content_words` strips
-      *inline* code spans for this reason already; a fenced block is the same
-      content one level up, and the corpus now includes the global ``CLAUDE.md``
-      (30,673 bytes on the measured machine), which is dense with bash and
-      config samples. A near-duplicate warning that points a reviewer at a line
-      of shell is a lead they cannot act on;
+    * everything inside a fenced code block. This is NOT the inline-code-span
+      rule one level up: :func:`content_words` deliberately *keeps* inline
+      spans (issue #199), because in a prose rule the backticked token is
+      usually the distinguishing word of the sentence around it. A fenced block
+      has no sentence around it — the whole line is the sample — so a match
+      there is one line of shell resembling another. The corpus includes the
+      global ``CLAUDE.md`` (30,673 bytes on the measured machine), which is
+      dense with bash and config samples, and a near-duplicate warning that
+      points a reviewer at a line of shell is a lead they cannot act on;
     * lines of :data:`MIN_LINE_LEN` characters or fewer.
 
     Words come back as ``frozenset`` so a caller may tokenize the corpus once
