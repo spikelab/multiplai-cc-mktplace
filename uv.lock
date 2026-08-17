@@ -411,7 +411,7 @@ wheels = [
 
 [[package]]
 name = "exa-py"
-version = "2.17.0"
+version = "2.18.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpcore" },
@@ -422,9 +422,9 @@ dependencies = [
     { name = "requests" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/af/b8/a1a10d0a50b4a8532e021cc507d19479f2f673783758f895f12d9d180e25/exa_py-2.17.0.tar.gz", hash = "sha256:f2461f07668a2c702bc5d8cdd1aecbeb4529a1e2be55a4539427ad4acc09e6e0", size = 64142, upload-time = "2026-08-07T18:29:05.007Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/58/34/16d6d767889fdb86735d5be34dcc5db9f456870815bf3d0ddc8d5fdfbfec/exa_py-2.18.1.tar.gz", hash = "sha256:f571f001ca8122b4432ef795b1c5c0afe97b5d20e84d4a1b769b9a888141e9c7", size = 72979, upload-time = "2026-08-14T15:38:33.854Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f5/6c/fc9f0422a6587ad1acb31de77f311975168232f5609116d27e5e3c0fd9da/exa_py-2.17.0-py3-none-any.whl", hash = "sha256:1754620db086bcedb44d11941a35b79e17d0e2b137010d3b4f2713a7f4b97199", size = 87520, upload-time = "2026-08-07T18:29:04.006Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/5f/bdd2230640e2792b3048e69bbb70ab65b8ddf8e51e2ef8880d8cce466a1f/exa_py-2.18.1-py3-none-any.whl", hash = "sha256:98a43c8c598b0360ee8c1a014e7433ae92dcbf58af3d40cac701e145c6e2680e", size = 102929, upload-time = "2026-08-14T15:38:32.531Z" },
 ]
 
 [[package]]
@@ -1688,7 +1688,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "exa-py", specifier = ">=2.17.0" },
+    { name = "exa-py", specifier = ">=2.18.1" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "multiplai-core", extras = ["sdk"], git = "https://github.com/spikelab/multiplai-core?branch=main" },
     { name = "playwright", marker = "extra == 'browser'", specifier = ">=1.40" },
