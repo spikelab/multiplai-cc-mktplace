@@ -265,7 +265,7 @@ def main() -> None:
     ap.add_argument("--k", type=int, default=10, help="max files per corpus (default 10)")
     ap.add_argument("--keep-ratio", type=float, default=None,
                     help="override token_overlap relative-cutoff ratio (default: module default)")
-    ap.add_argument("--strategy", choices=["token_overlap", "llm"], help="override router strategy for this run")
+    ap.add_argument("--strategy", choices=["token_overlap", "llm", "llm_hybrid"], help="override router strategy for this run")
     ap.add_argument("--quiet", action="store_true", help="metrics only")
     ap.add_argument("--no-write", action="store_true", help="don't write the snapshot file")
     args = ap.parse_args()

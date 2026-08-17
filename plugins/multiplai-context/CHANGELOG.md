@@ -36,6 +36,9 @@ Nothing yet.
   generator now skips it, the next catalog refresh prunes the existing entry,
   and the recency fallback skips it too. Memory-management skills keep reading
   it by explicit path.
+- **`eval_router.py --strategy` now accepts `llm_hybrid`.** The strategy
+  shipped in 0.40.0 but the eval harness's argument list was never extended,
+  so the hybrid could not be scored against a golden set.
 
 ## [0.52.0] - 2026-08-17
 
