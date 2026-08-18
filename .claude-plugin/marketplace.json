@@ -31,7 +31,7 @@
       "name": "multiplai-pm",
       "source": "./plugins/multiplai-pm",
       "description": "Product-management skill pack: JTBD synthesis, persona codification, PR/FAQ, strategy memos, job applications, landing pages, and Plane ticket management with a project allowlist.",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "author": {
         "name": "Spike",
         "email": "fsm@spikelab.org"

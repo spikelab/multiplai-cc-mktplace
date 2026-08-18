@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import mimetypes
 import os
 import re
 import sys
@@ -900,6 +901,20 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _asset_host_ok(url: str, base: str, verb: str) -> None:
+    """Shared host check for the two calls that live outside `_request`."""
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    base_host = (urllib.parse.urlparse(base).hostname or "").lower()
+    if parsed.scheme != "https" or not (
+        host == base_host or host.endswith(".amazonaws.com")
+    ):
+        raise PlaneError(
+            f"refusing to {verb} an asset {'from' if verb == 'download' else 'to'} "
+            f"{host or url!r} — not a host Plane serves assets from"
+        )
+
+
 def fetch_asset(url: str, base: str) -> bytes:
     """The one network call that does not go through `_request`, and why.
 
@@ -915,16 +930,7 @@ def fetch_asset(url: str, base: str) -> bytes:
     the API host or an *.amazonaws.com host only (any bucket — an anonymous GET
     carries nothing worth stealing), and a size cap.
     """
-    parsed = urllib.parse.urlparse(url)
-    host = (parsed.hostname or "").lower()
-    base_host = (urllib.parse.urlparse(base).hostname or "").lower()
-    if parsed.scheme != "https" or not (
-        host == base_host or host.endswith(".amazonaws.com")
-    ):
-        raise PlaneError(
-            f"refusing to download an asset from {host or url!r} — not a host "
-            "Plane serves assets from"
-        )
+    _asset_host_ok(url, base, "download")
 
     req = urllib.request.Request(url, method="GET")
     req.add_header("User-Agent", _UA)
@@ -939,6 +945,70 @@ def fetch_asset(url: str, base: str) -> bytes:
     if len(blob) > _ASSET_MAX_BYTES:
         raise PlaneError(f"asset is larger than {_ASSET_MAX_BYTES} bytes — refused")
     return blob
+
+
+def _multipart(boundary: str, fields: dict, filename: str, mime: str, blob: bytes) -> bytes:
+    """Hand-rolled multipart/form-data, because plane.py has no `requests`.
+
+    The `file` part goes last: an S3 presigned POST ignores everything after
+    it, so a policy field written after the binary would simply not be read.
+    """
+    out = bytearray()
+    for key, value in fields.items():
+        out += f"--{boundary}\r\n".encode()
+        out += f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode()
+        out += f"{value}\r\n".encode()
+    out += f"--{boundary}\r\n".encode()
+    out += (
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+    ).encode()
+    out += f"Content-Type: {mime}\r\n\r\n".encode()
+    out += blob
+    out += f"\r\n--{boundary}--\r\n".encode()
+    return bytes(out)
+
+
+def push_asset(url: str, fields: dict, filename: str, mime: str, blob: bytes, base: str) -> None:
+    """The second network call outside `_request`, and why — same trap as `fetch_asset`.
+
+    Plane hands out a presigned S3 POST form; the signature in those fields is
+    the authorisation, so this upload must be anonymous. Sending `X-API-Key`
+    here would be worse than on the download: urllib copies custom headers onto
+    a cross-host redirect, so a 302 from the bucket would deliver the Plane
+    token to amazonaws.com along with the file.
+
+    Hence the same five protections `fetch_asset` imposes: no credential
+    header, redirects refused rather than followed, https on the API host or an
+    *.amazonaws.com host only, and a size cap on what is sent (checked by the
+    caller, which is where the file is read).
+    """
+    _asset_host_ok(url, base, "upload")
+    if len(blob) > _ASSET_MAX_BYTES:
+        raise PlaneError(f"refusing to upload more than {_ASSET_MAX_BYTES} bytes")
+
+    # A boundary that appears inside the file would end the part early. It is
+    # random, so this never fires — but "never" is cheaper to guarantee than to
+    # argue about.
+    boundary = "----planeFormBoundary" + os.urandom(16).hex()
+    while boundary.encode() in blob:
+        boundary = "----planeFormBoundary" + os.urandom(16).hex()
+    body = _multipart(boundary, fields, _safe_filename(filename, "upload.bin"), mime, blob)
+
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("User-Agent", _UA)
+    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(req, timeout=120) as resp:
+            if resp.status >= 300:
+                raise PlaneError(f"asset upload -> {resp.status}")
+    except urllib.error.HTTPError as exc:
+        # The body is S3's XML error, which names the failing policy condition
+        # (e.g. EntityTooLarge) and carries no signed material.
+        detail = exc.read().decode(errors="replace")[:300]
+        raise PlaneError(f"asset upload -> {exc.code} {detail}") from None
+    except urllib.error.URLError as exc:
+        raise PlaneError(f"asset upload -> {exc.reason}") from None
 
 
 def slim(issue: dict, identifier: str = "") -> dict:
@@ -1349,6 +1419,58 @@ def cmd_comment(cfg, args):
         print(f"commented on {issue.get('name')} (comment {cid})")
 
 
+def _resolve_comment_id(comments: list[dict], ref: str) -> str:
+    """Full comment UUID, or a unique prefix of one, -> comment UUID.
+
+    Ambiguity is refused rather than resolved by taking the first match, on the
+    same reasoning as `resolve_member`: overwriting the wrong comment destroys
+    text nobody kept a copy of, and it is silent.
+    """
+    needle = (ref or "").strip().lower()
+    ids = [str(c.get("id") or "") for c in comments if c.get("id")]
+    for cid in ids:
+        if cid.lower() == needle:
+            return cid
+    if len(needle) < 8:
+        raise PlaneError(
+            f"comment id {ref!r} is too short — give the full id or at least "
+            "its first 8 characters, as printed by `comments`"
+        )
+    hits = [cid for cid in ids if cid.lower().startswith(needle)]
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        raise PlaneError(
+            f"no comment on this issue matching {ref!r}. "
+            f"Comments here: {', '.join(ids) or '(none)'}"
+        )
+    raise PlaneError(
+        f"{len(hits)} comments match {ref!r} ({', '.join(hits)}) — "
+        "give more of the id"
+    )
+
+
+def cmd_comment_edit(cfg, args):
+    """Replace the body of one existing comment. Not an append, like `update`."""
+    # Checked before the issue lookup: resolving a ref pages through a
+    # project's issues, which is too much work to spend on a missing argument.
+    text = _body_text(args) or args.text
+    if not text:
+        raise PlaneError("no comment text — pass TEXT, --body or --body-file")
+
+    issue = resolve_issue(cfg, args.ref, args.project)
+    pid = _project_id_of(issue)
+    comments = list(_paginate(f"/projects/{pid}/issues/{issue['id']}/comments/", cfg))
+    cid = _resolve_comment_id(comments, args.comment_id)
+
+    _request(
+        "PATCH", f"/projects/{pid}/issues/{issue['id']}/comments/{cid}/", cfg,
+        body={"comment_html": md_to_html(text)}, dry_run=args.dry_run,
+    )
+    if not args.dry_run:
+        print(f"edited comment {cid} on {issue.get('name')}")
+
+
 def cmd_comments(cfg, args):
     issue = resolve_issue(cfg, args.ref, args.project)
     pid = _project_id_of(issue)
@@ -1363,7 +1485,9 @@ def cmd_comments(cfg, args):
     for c in items:
         who = c.get("actor_detail") or {}
         name = who.get("display_name") or who.get("email") or c.get("actor") or "?"
-        print(f"--- {name}  {c.get('created_at', '')}")
+        # The id is printed because `comment-edit` needs one and there is no
+        # other way to see it: Plane's UI does not show comment ids either.
+        print(f"--- {name}  {c.get('created_at', '')}  [{c.get('id')}]")
         print(html_to_text(c.get("comment_html") or "") or "(empty)")
         print()
 
@@ -1425,27 +1549,137 @@ def cmd_estimates(cfg, args):
     _emit(rows, args, ["value", "key", "id"])
 
 
+def _upload_credentials(data) -> tuple[str, dict, str]:
+    """Pull the presigned form and the new attachment id out of step 1's answer.
+
+    Plane Cloud answers with `upload_data: {url, fields}` beside the attachment
+    record. Both are read from the top level too, because self-hosted builds
+    have spelled it that way. Anything else is refused loudly: guessing wrong
+    here means POSTing a file to a URL nobody chose.
+    """
+    if not isinstance(data, dict):
+        raise PlaneError(
+            "the attachment credentials call returned "
+            f"{type(data).__name__}, not an object"
+        )
+    form = data.get("upload_data")
+    if not isinstance(form, dict):
+        form = data
+    url = form.get("url")
+    fields = form.get("fields")
+    # Keys only, never values: `fields` carries the policy and the signature.
+    keys = ", ".join(sorted(str(k) for k in data)) or "(none)"
+    if not isinstance(url, str) or not isinstance(fields, dict):
+        raise PlaneError(
+            "the attachment credentials response carries no presigned upload "
+            f"form (keys: {keys}) — report this shape rather than guessing at it"
+        )
+    attachment = data.get("attachment")
+    aid = attachment.get("id") if isinstance(attachment, dict) else None
+    aid = aid or data.get("asset_id") or data.get("id")
+    if not isinstance(aid, str) or not re.fullmatch(_UUID, aid):
+        raise PlaneError(
+            f"the attachment credentials response carries no attachment id "
+            f"(keys: {keys})"
+        )
+    return url, {str(k): str(v) for k, v in fields.items()}, aid
+
+
+def upload_attachment(cfg, project_id: str, issue_id: str, path: str, *, dry_run=False):
+    """Three calls: ask Plane for a presigned form, POST the file to S3, confirm.
+
+    Only the first and last go through `_request`; the middle one is
+    `push_asset`, which explains why it must not.
+    """
+    if not os.path.isfile(path):
+        raise PlaneError(f"no file to upload at {path!r}")
+    try:
+        with open(path, "rb") as fh:
+            blob = fh.read(_ASSET_MAX_BYTES + 1)
+    except OSError as exc:
+        raise PlaneError(f"cannot read {path!r}: {exc}") from None
+    if len(blob) > _ASSET_MAX_BYTES:
+        raise PlaneError(
+            f"{path} is larger than {_ASSET_MAX_BYTES} bytes — refused"
+        )
+
+    name = _safe_filename(os.path.basename(path), "upload.bin")
+    mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    endpoint = f"/projects/{project_id}/issues/{issue_id}/issue-attachments/"
+
+    created = _request(
+        "POST", endpoint, cfg,
+        body={"name": name, "size": len(blob), "type": mime},
+        dry_run=dry_run,
+    )
+    if dry_run:
+        print(
+            "[dry-run] the file POST to storage and the completion PATCH are "
+            "skipped — Plane only issues the presigned form for a real request"
+        )
+        return
+
+    url, fields, attachment_id = _upload_credentials(created)
+    try:
+        push_asset(url, fields, name, mime, blob, cfg["base"])
+    except PlaneError as exc:
+        raise PlaneError(
+            f"{name}: attachment {attachment_id} was created on the issue but "
+            f"the file did not upload ({exc}). The issue now carries a "
+            "half-uploaded attachment — remove it in Plane before retrying."
+        ) from None
+    try:
+        _request("PATCH", f"{endpoint}{attachment_id}/", cfg, body={"is_uploaded": True})
+    except PlaneError as exc:
+        raise PlaneError(
+            f"{name}: the file uploaded but marking attachment "
+            f"{attachment_id} complete failed ({exc}). It will not show in "
+            "Plane until that PATCH succeeds."
+        ) from None
+    print(f"uploaded {name}  ({len(blob)} bytes)  attachment {attachment_id}")
+
+
 def cmd_attachments(cfg, args):
-    """List an issue's attachments, both kinds, and optionally download them.
+    """List an issue's attachments, both kinds, upload files, or download them.
 
     Two kinds because there are two: an attachment record under
     issue-attachments/, and an image pasted into the description, which Plane
     Cloud stores as an inline asset and never lists as an attachment.
     """
+    upload = getattr(args, "upload", None)
+    if upload and args.download:
+        raise PlaneError(
+            "--upload and --download move files in opposite directions — "
+            "pass one or the other"
+        )
+
     issue = resolve_issue(cfg, args.ref, args.project)
     pid = _project_id_of(issue)
+
+    if upload:
+        for path in upload:
+            upload_attachment(cfg, pid, issue["id"], path, dry_run=args.dry_run)
+        return
+
     # The list projection has no description_html; re-read the issue itself.
     detail = _request("GET", f"/projects/{pid}/issues/{issue['id']}/", cfg) or issue
 
     rows = []
     for rec in _paginate(f"/projects/{pid}/issues/{issue['id']}/issue-attachments/", cfg):
         attrs = rec.get("attributes") or {}
+        # `asset` is the storage key on Plane Cloud —
+        # "<workspace-uuid>/<hash>-<filename>" — which /assets/ cannot resolve;
+        # the record's own id is the one that endpoint answers to. Older builds
+        # put an asset UUID in `asset`, so take whichever of the two is a UUID.
+        # Reading `asset` first and never reaching `id` is why --download used
+        # to skip every real attachment with "no asset id to fetch".
+        candidate = str(rec.get("asset") or "")
         rows.append(
             {
                 "kind": "record",
                 "name": attrs.get("name"),
                 "type": attrs.get("type"),
-                "asset": rec.get("asset") or rec.get("id"),
+                "asset": candidate if re.fullmatch(_UUID, candidate) else rec.get("id"),
             }
         )
     for asset_id in inline_asset_ids(detail):
@@ -1470,8 +1704,16 @@ def cmd_attachments(cfg, args):
         if not re.fullmatch(_UUID, asset_id):
             print(f"skipped {row['name']!r}: no asset id to fetch", file=sys.stderr)
             continue
-        meta = asset_meta(cfg, asset_id)
-        blob = fetch_asset(meta["asset_url"], cfg["base"])
+        # One unresolvable asset must not end the run. A half-uploaded
+        # attachment (is_uploaded false) has a record but no url, and it sorts
+        # before the inline images appended after the records — letting it
+        # raise would drop every remaining row on the floor.
+        try:
+            meta = asset_meta(cfg, asset_id)
+            blob = fetch_asset(meta["asset_url"], cfg["base"])
+        except PlaneError as exc:
+            print(f"skipped {row['name']!r}: {exc}", file=sys.stderr)
+            continue
         # Two attachments may sanitise to the same name; suffix instead of
         # silently overwriting the first with the second.
         name = _safe_filename(meta.get("asset_name"), f"asset-{n}.bin")
@@ -1658,7 +1900,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--body")
     sp.add_argument("--body-file")
 
-    sp = add("comments", cmd_comments, "list comments on an issue")
+    sp = add("comment-edit", cmd_comment_edit, "replace an existing comment's body")
+    sp.add_argument("ref")
+    sp.add_argument(
+        "comment_id", metavar="COMMENT_ID",
+        help="comment id, or a unique prefix of one, as printed by `comments`",
+    )
+    sp.add_argument("text", nargs="?", help="replacement markdown")
+    sp.add_argument("--body")
+    sp.add_argument("--body-file")
+
+    sp = add("comments", cmd_comments, "list comments on an issue, with their ids")
     sp.add_argument("ref")
 
     add("states", cmd_states, "list workflow states")
@@ -1667,9 +1919,17 @@ def build_parser() -> argparse.ArgumentParser:
     add("cycles", cmd_cycles, "list cycles, marking the active one")
     add("estimates", cmd_estimates, "list the project's estimate points")
 
-    sp = add("attachments", cmd_attachments, "list or download an issue's attachments")
+    sp = add(
+        "attachments", cmd_attachments,
+        "list an issue's attachments, or upload/download files",
+    )
     sp.add_argument("ref")
-    sp.add_argument("--download", metavar="DIR", help="download into DIR")
+    move = sp.add_mutually_exclusive_group()
+    move.add_argument("--download", metavar="DIR", help="download into DIR")
+    move.add_argument(
+        "--upload", metavar="FILE", action="append",
+        help="upload a local file as an attachment; repeat for several",
+    )
 
     sp = add(
         "search", cmd_search, "search issues (allowlisted projects only)", project=False
