@@ -581,3 +581,46 @@ def test_several_uploads_run_in_order(monkeypatch, tmp_path):
         )
     assert names == ["one.txt", "two.png"]
     assert [m for m, _ in rec.paths()] == ["POST", "PATCH", "POST", "PATCH"]
+
+
+# --- one unfetchable asset must not end the download --------------------------
+
+
+BROKEN = "dddd4444-5555-6666-7777-888899990000"
+INLINE = "eeee5555-6666-7777-8888-999900001111"
+
+
+def test_an_unfetchable_attachment_is_skipped_and_the_rest_still_download(
+    monkeypatch, tmp_path, capsys
+):
+    """A half-uploaded attachment — the very state a failed `--upload` leaves
+    behind — has a record but no asset url. Letting it raise took down every
+    row after it, including the inline images appended past the records."""
+    issue_stub(monkeypatch)
+    records = [
+        dict(CLOUD_RECORD, id=BROKEN, attributes={"name": "half.png"},
+             is_uploaded=False),
+        CLOUD_RECORD,
+    ]
+    monkeypatch.setattr(
+        plane, "_request",
+        lambda *a, **k: {"description_html": f'<img src="{INLINE}">'},
+    )
+    monkeypatch.setattr(plane, "_paginate", lambda *a, **k: iter(records))
+
+    def meta(cfg, aid):
+        if aid == BROKEN:
+            raise plane.PlaneError(f"asset {aid} returned no url: {{}}")
+        return {"asset_name": f"{aid[:4]}.png", "asset_url": f"https://x/{aid}"}
+
+    monkeypatch.setattr(plane, "asset_meta", meta)
+    monkeypatch.setattr(plane, "fetch_asset", lambda url, base: url.encode())
+
+    plane.cmd_attachments(
+        CFG, Args(ref="SPK-1", project=None, download=str(tmp_path), upload=None,
+                  dry_run=False, json=False),
+    )
+
+    got = sorted(p.name for p in tmp_path.iterdir())
+    assert got == ["d269.png", "eeee.png"], got
+    assert "half.png" in capsys.readouterr().err

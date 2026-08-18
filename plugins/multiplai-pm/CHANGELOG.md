@@ -65,6 +65,12 @@ Nothing yet.
   when `asset` is not itself a UUID. Only images pasted into a description ever
   came back before; files attached to the ticket did not.
 
+  One attachment it cannot fetch no longer ends the download. A half-uploaded
+  attachment has a record but no file behind it, and it used to abort the whole
+  command — so everything listed after it, including images pasted into the
+  description, was silently left out of the directory. Such a row is now
+  reported on stderr and the rest still download.
+
 ## [0.3.0] - 2026-08-17
 
 ### Added

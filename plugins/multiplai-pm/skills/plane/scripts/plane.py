@@ -1704,8 +1704,16 @@ def cmd_attachments(cfg, args):
         if not re.fullmatch(_UUID, asset_id):
             print(f"skipped {row['name']!r}: no asset id to fetch", file=sys.stderr)
             continue
-        meta = asset_meta(cfg, asset_id)
-        blob = fetch_asset(meta["asset_url"], cfg["base"])
+        # One unresolvable asset must not end the run. A half-uploaded
+        # attachment (is_uploaded false) has a record but no url, and it sorts
+        # before the inline images appended after the records — letting it
+        # raise would drop every remaining row on the floor.
+        try:
+            meta = asset_meta(cfg, asset_id)
+            blob = fetch_asset(meta["asset_url"], cfg["base"])
+        except PlaneError as exc:
+            print(f"skipped {row['name']!r}: {exc}", file=sys.stderr)
+            continue
         # Two attachments may sanitise to the same name; suffix instead of
         # silently overwriting the first with the second.
         name = _safe_filename(meta.get("asset_name"), f"asset-{n}.bin")
