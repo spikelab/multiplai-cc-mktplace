@@ -61,9 +61,10 @@ scan is already per-project, so it does not make resolution faster.
 | `create --title T [--body M \| --body-file F] [--priority] [--state] [--target-date]` | New issue. |
 | `update <ref> [--title] [--body] [--priority] [--state] [--target-date]` | Partial update. |
 | `comment <ref> "text"` | Add a comment. |
-| `comments <ref>` | Read the comment thread. |
+| `comment-edit <ref> <comment-id> "text"` | Replace an existing comment's body. |
+| `comments <ref>` | Read the comment thread; each entry prints its comment id. |
 | `states [-p P]` / `labels [-p P]` / `members` / `cycles [-p P]` / `estimates [-p P]` | Reference data. |
-| `attachments <ref> [--download DIR]` | List an issue's attachments; download them. |
+| `attachments <ref> [--download DIR \| --upload FILE]` | List an issue's attachments; download or upload them. |
 | `search <query> [--limit N]` | Workspace search, filtered to allowlisted projects. |
 
 `create` and `update` also take `--assignee`, `--label` (`--create-labels` to add a
@@ -97,6 +98,14 @@ Priorities: `urgent`, `high`, `medium`, `low`, `none`. States are given **by nam
 
 5. **`update --body` replaces the whole description.** It is not an append. To add to an
    existing issue, either `comment`, or `get` the body first and send it back extended.
+   `comment-edit` works the same way on a comment: the text you pass becomes the entire
+   comment. Get the id from `comments` — a unique prefix of at least 8 characters is
+   enough, and an ambiguous one is refused rather than guessed at.
+
+   ```bash
+   $PLANE comments SPK-12              # --- alice  2026-08-18T10:00:00Z  [aaaa1111-...]
+   $PLANE comment-edit SPK-12 aaaa1111 "Corrected: shipped in **v2026.08.19**."
+   ```
 
 6. **Report the ref you changed.** After a write, say `DFT-1`, not "the ticket" — the
    user needs something they can click.
@@ -116,6 +125,20 @@ Priorities: `urgent`, `high`, `medium`, `low`, `none`. States are given **by nam
    `issue-attachments/` is empty for images pasted into a description (they are inline
    assets, which `attachments` also lists). Report what was checked, not what was assumed.
 
+10. **`--upload` sends the file to Plane's storage host, not to the Plane API.** Plane
+    answers the upload request with a presigned form for its object store (Plane Cloud
+    uses an `*.amazonaws.com` S3 bucket), and the tool then POSTs the file bytes straight
+    there over HTTPS — anonymously, because the presigned signature *is* the
+    authorisation. The Plane API token is deliberately not sent on that request, redirects
+    are refused rather than followed, no host other than the API host or `*.amazonaws.com`
+    is accepted, and files above 32 MB are refused. Tell the user where a file went if it
+    matters to them; it leaves the Plane API host.
+
+    If the upload fails after Plane has already created the attachment record, the error
+    says so and names the attachment id — the issue is then carrying a half-uploaded
+    attachment that has to be removed in Plane before retrying. Pass that on verbatim
+    rather than just retrying.
+
 ## Examples
 
 ```bash
@@ -128,14 +151,20 @@ $PLANE create -p SPK --title "Fix login redirect" \
 $PLANE --dry-run update SPK-12 --state Done       # print the PATCH, send nothing
 $PLANE update SPK-12 --state Done
 $PLANE comment SPK-12 "Deployed in **v2026.07.28**."
+$PLANE comment-edit SPK-12 aaaa1111 "Deployed in **v2026.07.29**."
+$PLANE attachments SPK-12 --upload report.pdf --upload screenshot.png
+$PLANE --dry-run attachments SPK-12 --upload report.pdf   # print step 1, send nothing
 $PLANE search "migrations"
 $PLANE --json issues -p SPK | jq '[.[] | select(.priority == "urgent")]'
 ```
 
 ## Limits
 
-- No attachment **upload**; download works, and `![alt](url)` in a body references an
-  image that must already be hosted somewhere.
+- Attachments upload and download, but only as *attachments*: `![alt](url)` in a body
+  still references an image that must already be hosted somewhere, and an uploaded file
+  does not become an inline image in the description.
+- Uploads are capped at 32 MB per file, and there is no progress output — a large file
+  looks like a hang until it finishes.
 - No module assignment on write.
 - No delete, by design: the tool can create and modify issues but not remove them, and it
   refuses to touch project objects at all — so it cannot enable a project's cycles module

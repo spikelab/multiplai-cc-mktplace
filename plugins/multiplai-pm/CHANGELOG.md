@@ -23,6 +23,38 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 Nothing yet.
 
+## [0.4.0] - 2026-08-18
+
+### Added
+- **`plane comment-edit` — fix a comment instead of adding a correction under
+  it.** `comments` now prints each comment's id, and `comment-edit SPK-12 <id>
+  "new text"` replaces that comment's body. The first 8 characters of an id are
+  usually enough; if a prefix matches more than one comment the command refuses
+  and lists the candidates, because overwriting the wrong comment destroys text
+  nobody kept a copy of. Like `update --body`, it replaces the whole body — it
+  is not an append.
+- **`plane attachments --upload FILE` — put a file on a ticket.** Repeat the
+  flag for several files. Each upload prints the filename, its size, and the new
+  attachment id. `--upload` and `--download` cannot be combined.
+
+  Where the bytes go is worth knowing: Plane hands out a presigned form for its
+  object store (`*.amazonaws.com` on Plane Cloud) and the file is POSTed
+  straight there over HTTPS, so it does not travel through the Plane API host.
+  That request is anonymous by design — your Plane token is never attached to
+  it, redirects are refused rather than followed, and no host besides the API
+  host or `*.amazonaws.com` is accepted. Files over 32 MB are refused, and
+  `--dry-run` prints what would be requested without asking Plane for an upload
+  form at all.
+
+  If the file fails to upload after Plane has created the attachment record,
+  the error says exactly that and names the attachment id, so you can delete
+  the half-uploaded record before retrying rather than wondering why an empty
+  attachment appeared.
+
+### Changed
+- `plane comments` prints `[<comment-id>]` on each header line. Plane's own UI
+  does not show comment ids, so this is the only place to get one.
+
 ## [0.3.0] - 2026-08-17
 
 ### Added
