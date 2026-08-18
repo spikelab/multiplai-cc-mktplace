@@ -55,6 +55,16 @@ Nothing yet.
 - `plane comments` prints `[<comment-id>]` on each header line. Plane's own UI
   does not show comment ids, so this is the only place to get one.
 
+### Fixed
+- **`plane attachments --download` now fetches attachment records instead of
+  skipping them.** It printed `skipped '<name>': no asset id to fetch` for every
+  real attachment on Plane Cloud and downloaded nothing: it was reading the
+  record's `asset` field, which holds a storage key like
+  `<workspace-uuid>/<hash>-<filename>` rather than the asset id the download
+  endpoint answers to. The record's own id is that asset id, and is now used
+  when `asset` is not itself a UUID. Only images pasted into a description ever
+  came back before; files attached to the ticket did not.
+
 ## [0.3.0] - 2026-08-17
 
 ### Added

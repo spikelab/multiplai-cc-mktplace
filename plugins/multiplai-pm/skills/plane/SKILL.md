@@ -124,6 +124,7 @@ Priorities: `urgent`, `high`, `medium`, `low`, `none`. States are given **by nam
    cycle list comes back empty when the token's user is not a member of that project, and
    `issue-attachments/` is empty for images pasted into a description (they are inline
    assets, which `attachments` also lists). Report what was checked, not what was assumed.
+   The `asset` column is the id to fetch, not the storage path Plane keeps internally.
 
 10. **`--upload` sends the file to Plane's storage host, not to the Plane API.** Plane
     answers the upload request with a presigned form for its object store (Plane Cloud

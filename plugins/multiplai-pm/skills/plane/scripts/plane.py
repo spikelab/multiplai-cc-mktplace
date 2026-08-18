@@ -1667,12 +1667,19 @@ def cmd_attachments(cfg, args):
     rows = []
     for rec in _paginate(f"/projects/{pid}/issues/{issue['id']}/issue-attachments/", cfg):
         attrs = rec.get("attributes") or {}
+        # `asset` is the storage key on Plane Cloud —
+        # "<workspace-uuid>/<hash>-<filename>" — which /assets/ cannot resolve;
+        # the record's own id is the one that endpoint answers to. Older builds
+        # put an asset UUID in `asset`, so take whichever of the two is a UUID.
+        # Reading `asset` first and never reaching `id` is why --download used
+        # to skip every real attachment with "no asset id to fetch".
+        candidate = str(rec.get("asset") or "")
         rows.append(
             {
                 "kind": "record",
                 "name": attrs.get("name"),
                 "type": attrs.get("type"),
-                "asset": rec.get("asset") or rec.get("id"),
+                "asset": candidate if re.fullmatch(_UUID, candidate) else rec.get("id"),
             }
         )
     for asset_id in inline_asset_ids(detail):

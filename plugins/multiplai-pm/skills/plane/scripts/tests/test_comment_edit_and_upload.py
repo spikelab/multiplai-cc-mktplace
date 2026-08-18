@@ -510,6 +510,57 @@ def test_upload_and_download_are_refused_together_before_any_request(monkeypatch
         )
 
 
+# --- what the live round-trip found: the record's asset field is not an id ---
+
+
+# Verbatim from Plane Cloud, 2026-08-18, for a file this tool uploaded to
+# SPK-37. `asset` is the storage key; `id` is what /assets/ answers to.
+CLOUD_RECORD = {
+    "id": "d269e4b7-d480-4dcd-ab54-a95f37193ac9",
+    "attributes": {"name": "marker.png", "size": 118, "type": "image/png"},
+    "asset": "a2667d8d-0a51-46c4-ace0-da990f0f0a07/4ffc08aa-marker.png",
+    "is_uploaded": True,
+}
+
+
+def test_a_cloud_attachment_record_lists_a_fetchable_asset_id(monkeypatch):
+    """`--download` skipped every real attachment before this: it read `asset`,
+    found a storage key rather than a UUID, and never reached the record id."""
+    issue_stub(monkeypatch)
+    monkeypatch.setattr(plane, "_request", lambda *a, **k: {"description_html": ""})
+    monkeypatch.setattr(
+        plane, "_paginate", lambda path, *a, **k: iter([CLOUD_RECORD])
+    )
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        plane.cmd_attachments(
+            CFG, Args(ref="SPK-1", project=None, download=None, upload=None,
+                      dry_run=False, json=True),
+        )
+    row = plane.json.loads(buf.getvalue())[0]
+    assert row["asset"] == CLOUD_RECORD["id"]
+    assert row["name"] == "marker.png"
+
+
+def test_an_asset_uuid_in_the_asset_field_is_still_preferred(monkeypatch):
+    """Self-hosted builds have put the asset UUID there; that spelling still
+    wins over the record id."""
+    issue_stub(monkeypatch)
+    asset_uuid = "11111111-2222-3333-4444-555555555555"
+    monkeypatch.setattr(plane, "_request", lambda *a, **k: {"description_html": ""})
+    monkeypatch.setattr(
+        plane, "_paginate",
+        lambda path, *a, **k: iter([dict(CLOUD_RECORD, asset=asset_uuid)]),
+    )
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        plane.cmd_attachments(
+            CFG, Args(ref="SPK-1", project=None, download=None, upload=None,
+                      dry_run=False, json=True),
+        )
+    assert plane.json.loads(buf.getvalue())[0]["asset"] == asset_uuid
+
+
 def test_several_uploads_run_in_order(monkeypatch, tmp_path):
     issue_stub(monkeypatch)
     rec = Calls(credentials_route())
