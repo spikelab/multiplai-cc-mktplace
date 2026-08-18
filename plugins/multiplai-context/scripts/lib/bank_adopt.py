@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from lib.bank_collisions import find_collisions
-from lib.bank_git import dirty_paths, head_sha, is_git_repo, run_git, stage_commit
+from lib.bank_git import dirty_paths, head_sha, is_git_repo, stage_commit
 from lib.banks import MemoryBank, configured_banks, split_ref
 from lib.memory_write_floor import is_safe_target
 

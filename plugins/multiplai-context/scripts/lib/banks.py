@@ -45,7 +45,7 @@ from multiplai_core.banks import (  # noqa: F401  (re-exported for callers)
     personal_bank,
     split_bank_ref,
 )
-from multiplai_core.paths import Paths
+from multiplai_core.paths import get_paths
 from multiplai_core.plugin_options import option_float
 from multiplai_core.untrusted import fence
 
@@ -97,10 +97,10 @@ SHARED_BANK_NOTICE = (
 def configured_banks() -> tuple[MemoryBank, ...]:
     """The workspace's banks, ``personal`` first. Never raises, never empty."""
     try:
-        return Paths.resolve().memory_banks()
+        return get_paths().memory_banks()
     except Exception:  # pragma: no cover - defensive
         logger.warning("Could not resolve memory banks; using personal only", exc_info=True)
-        return (personal_bank(Paths.resolve().memory_dir()),)
+        return (personal_bank(get_paths().memory_dir()),)
 
 
 #: How long a synced bank stays fresh before session start pulls it again.

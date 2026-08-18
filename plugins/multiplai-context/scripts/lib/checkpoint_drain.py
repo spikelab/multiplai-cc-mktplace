@@ -20,12 +20,12 @@ never producing a file costs a rebuild; an exception escaping into
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from lib import checkpoint as cp
 from lib.extraction_drain import DrainResult, _launch_queue
+from lib.fsio import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +62,7 @@ def queue_pending_checkpoint(data_dir: Path, payload: dict) -> Path | None:
     record["queued_at"] = datetime.now(timezone.utc).isoformat()
     try:
         pdir.mkdir(parents=True, exist_ok=True)
-        tmp = marker.with_suffix(".tmp")
-        tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
-        os.replace(str(tmp), str(marker))
+        atomic_write_json(marker, record)
     except OSError:
         logger.exception("Could not queue pending checkpoint for %s", session_id)
         return None

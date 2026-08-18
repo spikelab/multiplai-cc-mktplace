@@ -36,7 +36,6 @@ import asyncio
 import json
 import logging
 import math
-import os
 import re
 from typing import Protocol, runtime_checkable
 
@@ -44,7 +43,6 @@ from multiplai_core.plugin_options import option, option_var
 
 from lib.router_prompt import SYSTEM_PROMPT, FEW_SHOT_EXAMPLES, build_user_message
 from lib.thinking import (
-    THINKING_DISABLED,
     core_supports_thinking,
     resolve_thinking_option,
 )

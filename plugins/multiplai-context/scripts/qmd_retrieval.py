@@ -458,15 +458,6 @@ def fts_ladder(flat: str, target: QmdTarget, runner=run_qmd) -> list[dict]:
     return interleave_ladder_steps(steps, target)
 
 
-def fused_search(flat: str, target: QmdTarget, runner=run_qmd) -> list | None:
-    """Vector + BM25 fused by reciprocal rank (per file), no LLM rerank."""
-    vec = runner("vsearch", flat, TIMEOUT_VEC, target) or []
-    fts = fts_ladder(flat, target, runner)
-    if not vec and not fts:
-        return None
-    return rrf_fuse(vec, fts, target)
-
-
 def http_timeout(candidate_limit: int) -> float:
     """Request timeout for the daemon's /query, scaled to the latency dial.
 
@@ -551,12 +542,20 @@ def search(prompt: str, target: QmdTarget, runner=run_qmd,
 
         flat = sanitize_query(prompt)
         results = None
+        fts: list | None = None
         if target.strategy == "hybrid":
             results = runner("query", flat, TIMEOUT_HYBRID, target)
         elif target.strategy == "fused":
-            results = fused_search(flat, target, runner)
+            # Vector + BM25 fused by reciprocal rank (per file), no LLM
+            # rerank. The ladder runs once and is reused by the fallback
+            # below — it costs up to three subprocess/SSH round-trips.
+            vec = runner("vsearch", flat, TIMEOUT_VEC, target) or []
+            fts = fts_ladder(flat, target, runner)
+            results = rrf_fuse(vec, fts, target) if (vec or fts) else None
         if not results:
-            results = fts_ladder(flat, target, runner)[:MAX_RESULTS] or None
+            if fts is None:
+                fts = fts_ladder(flat, target, runner)
+            results = fts[:MAX_RESULTS] or None
         return results_to_entries(results or [], target, target.min_score)
     except Exception:
         # Retrieval is a nicety — never let it break the prompt.

@@ -85,8 +85,6 @@ _catalog_warnings_emitted: set[str] = set()
 class RankedFile:
     """A memory file ranked by metadata."""
     path: Path
-    size: int
-    mtime: float
     score: float
 
 
@@ -131,7 +129,7 @@ def _rank_memory_files(memory_dir: Path) -> list[RankedFile]:
         recency_score = max(0.0, 1.0 - age / (86400 * _RECENCY_DECAY_DAYS))
         size_score = min(1.0, st.st_size / _SIZE_NORM_BYTES)
         score = recency_score * _RECENCY_WEIGHT + size_score * _SIZE_WEIGHT
-        ranked.append(RankedFile(path=f, size=st.st_size, mtime=st.st_mtime, score=score))
+        ranked.append(RankedFile(path=f, score=score))
 
     ranked.sort(key=lambda r: r.score, reverse=True)
     return ranked
@@ -616,6 +614,12 @@ def _dev_reference_block(
             # independent: an unreadable manifest in the first is no reason to
             # stop before the one the user actually pointed at.
             try:
+                # Announce gate first: it is a dict lookup, where stack
+                # detection and doc resolution read manifests and whole
+                # reference docs (~60k chars) — waste on the ~29 of 30
+                # turns whose announcement is already recorded.
+                if not reference_docs.should_announce(state, project, turn_index):
+                    continue
                 keys = reference_docs.detect_stack_keys(project)
                 names = reference_docs.doc_names_for(keys)
                 if not names:
@@ -631,8 +635,6 @@ def _dev_reference_block(
                         "DEV_REFERENCES project=%s stack=%s wanted=%s resolved=none searched=%s",
                         project, ",".join(keys), ",".join(names), searched,
                     )
-                    continue
-                if not reference_docs.should_announce(state, project, turn_index):
                     continue
                 block = reference_docs.build_block(project, docs)
                 if not block:
@@ -1078,36 +1080,27 @@ def main() -> None:
         _emit_result("")
         return
 
-    session_id = (
-        input_data.get("session_id") if isinstance(input_data, dict) else None
-    )
+    session_id = input_data.get("session_id")
     setup_logging("context_manager", session_id=session_id or "")
     with hook_run("context_manager", logger, session_id=session_id or "") as run:
         _assemble_and_emit(input_data, run)
 
 
-def _assemble_and_emit(input_data: object, run: HookRun) -> None:
+def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
     """The hook body: route every corpus, assemble the block, emit the payload."""
     paths = get_paths()
     memory_dir = paths.memory_dir()
-    # The ordered banks for this workspace. With no `memory-banks.yaml` this is
-    # exactly one bank at `memory_dir`, so every path below behaves as before.
-    banks = configured_banks()
 
-    prompt = input_data.get("prompt", "") if isinstance(input_data, dict) else ""
-    transcript_path = (
-        input_data.get("transcript_path") if isinstance(input_data, dict) else None
-    )
-    session_id = (
-        input_data.get("session_id") if isinstance(input_data, dict) else None
-    )
+    prompt = input_data.get("prompt", "")
+    transcript_path = input_data.get("transcript_path")
+    session_id = input_data.get("session_id")
 
     # Capture the working directory for the diary/now pipeline. UserPromptSubmit
     # reliably carries cwd, so this is the dependable place to record it;
     # SessionEnd reads it back from session_state to tag the diary entry (and
     # thus the project). Best-effort and only written when it changes, so the
     # common steady-state path adds no extra write.
-    cwd = input_data.get("cwd", "") if isinstance(input_data, dict) else ""
+    cwd = input_data.get("cwd", "")
     if cwd:
         try:
             _ss = read_session_state(paths.data_dir()) or {}
@@ -1139,6 +1132,11 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
         run.note(outcome="task_notification", files=0, bytes=0)
         _emit_result("")
         return
+
+    # The ordered banks for this workspace. With no `memory-banks.yaml` this is
+    # exactly one bank at `memory_dir`, so every path below behaves as before.
+    # Resolved after the guards above so notification turns pay nothing.
+    banks = configured_banks()
 
     # Last-assistant-response disambiguation. Failure modes already
     # encoded in read_last_assistant_response (returns None on any error).
@@ -1283,7 +1281,7 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
     refloor_dropped: dict[str, list[str]] = {}
     # Capture what the router actually picked, before cooldown trims it,
     # so the fallback can tell genuine abstention from cooldown removal.
-    router_picked = {ct: bool(picks_by_corpus.get(ct)) for ct in ("memory", "skills", "resources")}
+    router_picked_memory = bool(picks_by_corpus.get("memory"))
     if cooldown_active:
         try:
             _ss = read_session_state(paths.data_dir())
@@ -1376,7 +1374,7 @@ def _assemble_and_emit(input_data: object, run: HookRun) -> None:
     # picked files that cooldown then trimmed, that's a deliberate
     # "already in context", not abstention — and must not trigger the
     # recency dump either.
-    router_abstained = router_ran and not router_picked["memory"]
+    router_abstained = router_ran and not router_picked_memory
     mem_on_cooldown = bool(cooldown_suppressed.get("memory")) and not memory_content
     if not memory_content and not router_abstained and not mem_on_cooldown:
         # Don't re-inject files still within the cooldown window, and cap the

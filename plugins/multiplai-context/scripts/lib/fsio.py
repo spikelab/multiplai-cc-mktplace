@@ -38,6 +38,6 @@ def atomic_write(path: Path, content: str) -> None:
         raise
 
 
-def atomic_write_json(path: Path, data: dict, *, indent: int | None = 2) -> None:
-    """Atomically write *data* as JSON (see :func:`atomic_write`)."""
-    atomic_write(path, json.dumps(data, indent=indent))
+def atomic_write_json(path: Path, data: dict) -> None:
+    """Atomically write *data* as JSON, indent=2 (see :func:`atomic_write`)."""
+    atomic_write(path, json.dumps(data, indent=2))

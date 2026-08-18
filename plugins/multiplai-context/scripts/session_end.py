@@ -28,8 +28,6 @@ A missing ``reason`` is treated as ``"other"`` — the safe half of the split,
 because a queued marker survives either way and a killed spawn does not.
 """
 
-import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multiplai_core.config import read_session_state
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import hook_run, setup_logging, log_event
+from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
 
 logger = setup_logging("session_end")
@@ -79,9 +78,7 @@ def _save_deferred_marker(
     }
 
     marker_path = pending_dir / f"{session_id}.json"
-    tmp = marker_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(marker, indent=2))
-    os.replace(str(tmp), str(marker_path))
+    atomic_write_json(marker_path, marker)
     logger.info("Wrote deferred extraction marker: %s", marker_path)
     log_event(
         "session", "end",

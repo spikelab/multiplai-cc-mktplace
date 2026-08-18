@@ -274,7 +274,7 @@ def _spawn_detached(script: Path, *args: str) -> None:
     )
 
 
-def _launch_qmd_refresh(scripts_dir: Path, cwd: str) -> bool:
+def _launch_qmd_refresh(scripts_dir: Path, cwd: str, cfg=None) -> bool:
     """Fire the incremental qmd index refresh, detached, when resources
     retrieval is configured.
 
@@ -286,9 +286,10 @@ def _launch_qmd_refresh(scripts_dir: Path, cwd: str) -> bool:
     and swallowed.
     """
     try:
-        from generators.config import load_catalog_config
+        if cfg is None:
+            from generators.config import load_catalog_config
 
-        cfg = load_catalog_config()
+            cfg = load_catalog_config()
         if not (cfg.enable_resources and cfg.resources_dir.strip()):
             return False
         script = scripts_dir / "qmd_refresh.py"
@@ -303,7 +304,7 @@ def _launch_qmd_refresh(scripts_dir: Path, cwd: str) -> bool:
         return False
 
 
-def _launch_cost_collection(scripts_dir: Path) -> bool:
+def _launch_cost_collection(scripts_dir: Path, cfg=None) -> bool:
     """Fire the incremental cost collector, detached, when enabled.
 
     The collector (scripts/collect_costs.py) prices the session-transcript
@@ -317,9 +318,10 @@ def _launch_cost_collection(scripts_dir: Path) -> bool:
     logged and swallowed — cost accounting must never block session start.
     """
     try:
-        from generators.config import load_catalog_config
+        if cfg is None:
+            from generators.config import load_catalog_config
 
-        cfg = load_catalog_config()
+            cfg = load_catalog_config()
         if not cfg.enable_costs:
             return False
         script = scripts_dir / "collect_costs.py"
@@ -679,13 +681,22 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     # Keep the qmd resources index fresh (no-op unless enable_resources
     # and resources_dir are both set). Detached + flock-guarded, so this
     # never blocks the hook.
+    # One config parse shared by both launchers below (it is uncached and
+    # logs its defaulted-options line on every call).
+    try:
+        from generators.config import load_catalog_config
+
+        catalog_cfg = load_catalog_config()
+    except Exception:
+        logger.warning("Could not load catalog config", exc_info=True)
+        catalog_cfg = None
     with run.stage("launch_qmd"):
-        _launch_qmd_refresh(paths.scripts_dir(), cwd)
+        _launch_qmd_refresh(paths.scripts_dir(), cwd, cfg=catalog_cfg)
 
     # Price the session-transcript corpus into the cost ledger (no-op unless
     # enable_costs is set). Detached + flock-guarded — never blocks the hook.
     with run.stage("launch_costs"):
-        _launch_cost_collection(paths.scripts_dir())
+        _launch_cost_collection(paths.scripts_dir(), cfg=catalog_cfg)
 
     # Fast-forward subscribed shared memory banks (no-op unless a bank is
     # configured). Detached + TTL-gated — a bank that will not pull is stale,

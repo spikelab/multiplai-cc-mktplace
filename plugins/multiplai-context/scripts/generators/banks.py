@@ -43,6 +43,7 @@ from multiplai_core.log_utils import log_event
 from multiplai_core.paths import Paths
 
 from generators.base import CATALOG_SCHEMA_VERSION, GenerationResult
+from lib.fsio import atomic_write_json
 from generators.memory import MemoryGenerator
 from lib.bank_collisions import find_collisions, render_report, to_json
 from lib.banks import CATALOG_FRAGMENT, MemoryBank, shared_banks
@@ -319,9 +320,9 @@ class BanksGenerator:
             "entries": entries,
             "collisions": to_json(collisions),
         }
-        (self._catalogs_dir / self.catalog_filename).write_text(
-            json.dumps(catalog, indent=2) + "\n", encoding="utf-8"
-        )
+        # Atomic like every other catalog write — a crash mid-write must not
+        # truncate the one catalog the memory router reads on every prompt.
+        atomic_write_json(self._catalogs_dir / self.catalog_filename, catalog)
         report = self._catalogs_dir / COLLISION_REPORT
         if collisions:
             report.write_text(render_report(collisions), encoding="utf-8")

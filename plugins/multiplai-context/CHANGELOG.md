@@ -18,6 +18,21 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.52.2] - 2026-08-18
+
+### Changed
+
+- **Simplification pass over the hook scripts — no behaviour change intended,
+  a little less work per prompt.** The per-prompt context hook now skips the
+  memory-bank resolution and the dev-reference doc reads on turns that cannot
+  inject them (task notifications, already-announced projects), the resources
+  retrieval no longer runs its keyword-search ladder twice when both search
+  arms come up empty, and the PreCompact hook reads the transcript tail once
+  instead of twice. Several small marker files that were written with a bare
+  temp-and-rename now go through the shared atomic writer, so a crash mid-write
+  can no longer truncate them — this includes the shared-banks catalog. Dead
+  code, duplicate helpers, and unused imports were removed along the way.
+
 ## [0.52.1] - 2026-08-17
 
 ### Fixed
