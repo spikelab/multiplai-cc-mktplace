@@ -66,39 +66,207 @@ def _read(path: Path, missing: str) -> str:
     return missing
 
 
+# How many signatures a single line of the rendered context lists before it
+# says "+N more". This is prompt context, not a report: the reviewer has
+# tasks.md in the same prompt and can read the rest there.
+SPLIT_CONTEXT_SIGNATURE_LIMIT = 8
+
+# What the context says when tasks.md parses but carries no `Interfaces:`
+# section anywhere. There is no graph to hand over, so the reviewer does its
+# own reading exactly as it did before this was wired — said out loud rather
+# than returning "" so nobody mistakes the silence for "one atomic group".
+NO_GRAPH_NOTE = (
+    "## Block dependency partition\n"
+    "(graph unavailable — the blocks in tasks.md declare no `Interfaces:` "
+    "signatures, so buildme has no dependency graph to hand you. Do the "
+    "separability partition yourself from the plan's prose.)"
+)
+
+
+def _blocks_phrase(numbers: list[int]) -> str:
+    """`block 3` / `blocks 1, 2` — a finding names blocks the way a human does."""
+    joined = ", ".join(str(n) for n in numbers)
+    return f"block{'' if len(numbers) == 1 else 's'} {joined}"
+
+
+def _signature_line(label: str, signatures: list[str]) -> str:
+    """One `label: sig; sig; ...` line, capped, or `(none)`."""
+    if not signatures:
+        return f"    {label}: (none)"
+    shown = signatures[:SPLIT_CONTEXT_SIGNATURE_LIMIT]
+    text = "; ".join(shown)
+    extra = len(signatures) - len(shown)
+    if extra:
+        text += f"; (+{extra} more)"
+    return f"    {label}: {text}"
+
+
+def render_split_context(assessment) -> str:
+    """Render a :class:`PlanSplitAssessment` as the prompt's `{split_context}`.
+
+    Two things a finding has to carry, so both are here verbatim: **which
+    blocks go in which group**, and **the exact signature boundary each cut
+    crosses**. The atomicity verdict quotes the literal keyword that matched
+    (the classification is a substring heuristic, so the evidence travels with
+    it) and the package spread names which block pulled the plan into which
+    package.
+
+    The triggers are reported as triggers: a fired count is what makes checks 1
+    and 2 worth running, never a verdict. The block trigger's default of 8 is
+    an unmeasured placeholder and the rendered text says so, so no reviewer
+    treats a count as a finding.
+
+    Pure: formats the assessment, reads nothing, changes nothing.
+    """
+    split = assessment.split
+    atomicity = assessment.atomicity
+    spread = assessment.spread
+
+    lines = [
+        "## Block dependency partition (parsed by buildme from `Interfaces:`)",
+        "",
+        "buildme parsed every block's `Interfaces:` section out of tasks.md and "
+        "partitioned the resulting signature graph. Read this instead of "
+        "redoing the partition by hand — and say so if the plan's prose "
+        "contradicts it.",
+        "",
+        f"Blocks: {assessment.block_count}. "
+        f"Size trigger (>{assessment.block_trigger}): "
+        f"{'FIRED' if assessment.size_triggered else 'not fired'}. "
+        f"Package trigger (>{assessment.package_trigger}): "
+        f"{'FIRED' if assessment.package_triggered else 'not fired'}.",
+        "A trigger is not a verdict, and the block trigger's default is an "
+        "unmeasured placeholder — it only decides whether checks 1 and 2 are "
+        "worth running.",
+        "",
+        f"### Separability — {split.group_count} independently-shippable group(s)",
+    ]
+
+    for group in split.groups:
+        names = "; ".join(group.block_names)
+        lines.append(
+            f"- Group {group.index + 1}: {_blocks_phrase(group.block_numbers)} "
+            f"— {names}"
+        )
+        lines.append(_signature_line("produces", group.produces))
+        lines.append(_signature_line("consumes", group.consumes))
+
+    for boundary in split.boundaries:
+        lines.append(
+            f"- Cut after group {boundary.after_group + 1}: between block "
+            f"{boundary.last_block_before} and block "
+            f"{boundary.first_block_after}"
+        )
+        if boundary.crossing_signatures:
+            lines.append(_signature_line("crosses", boundary.crossing_signatures))
+        else:
+            lines.append("    crosses: nothing — no signature spans this cut")
+        lines.append(_signature_line("boundary", boundary.boundary_signatures))
+
+    lines.append(f"Verdict: {split.reason}")
+    if split.unresolved_consumes:
+        lines.append(_signature_line(
+            "Consumed but produced outside this plan",
+            split.unresolved_consumes,
+        ))
+
+    lines.append("")
+    lines.append(
+        "### Atomicity — "
+        + ("SPLIT: high-risk work ships beside unrelated feature work"
+           if atomicity.should_split else "no unrelated feature work to isolate")
+    )
+    lines.append(atomicity.reason)
+    for high_risk in atomicity.high_risk_blocks:
+        evidence = "; ".join(
+            f"{kind}: "
+            + ", ".join(f'"{kw}"' for kw in high_risk.matched_keywords.get(kind, []))
+            for kind in high_risk.kinds
+        )
+        lines.append(
+            f"- block {high_risk.number} ({high_risk.name}) — matched {evidence}"
+        )
+    if atomicity.unrelated_block_numbers:
+        unrelated = ", ".join(
+            f"block {n} ({name})" for n, name
+            in zip(atomicity.unrelated_block_numbers, atomicity.unrelated_block_names)
+        )
+        lines.append(f"- unrelated feature work: {unrelated}")
+
+    lines.append("")
+    lines.append(f"### Package spread — {spread.count} top-level package(s)")
+    if spread.packages:
+        for package in spread.packages:
+            lines.append(
+                f"- {package}: "
+                f"{_blocks_phrase(spread.blocks_by_package.get(package, []))}"
+            )
+    else:
+        lines.append("- (no block names a path, so no package could be counted)")
+
+    lines.append("")
+    lines.append(
+        "This is buildme's parse, not a finding. An `oversized-plan` finding "
+        "still has to be yours, and it proposes a cut — it never performs one."
+    )
+    return "\n".join(lines)
+
+
 def _split_context(config, change_dir: Path) -> str:
     """Context block describing the plan's independently-shippable groups.
 
-    ===================== UNWIRED SEAM — READ BEFORE CHANGING =================
-    `plan_split.py` (a separate work item, already on disk) provides pure
-    functions over `list[BlockInfo]` that partition blocks into
-    independently-shippable groups and flag migration-plus-feature. This
-    function is where that result is turned into prompt context for the
-    `oversized-plan` category. NOTHING calls plan_split today.
+    Parses `tasks.md` with the engine's own parser
+    (:func:`build_pipeline.tdd_engine.parse_blocks` — the same one the build
+    runs on, so the reviewer sees the blocks the builder will see, not a second
+    parser's opinion of them), runs the three pure checks in
+    :mod:`build_pipeline.plan_split`, and renders the result into the prompt's
+    `{split_context}` slot. That replaces the reviewer's own reading of every
+    `Interfaces:` section with buildme's parsed graph — a better input to the
+    same check, not a new one.
 
-    Returning "" is a *complete* behaviour, not a stub: the prompt's check 2
-    tells the reviewer to do the partition itself from each block's
-    `Interfaces:` section, so the category works without this. Wiring the
-    partition in replaces the reviewer's own reading with buildme's parsed
-    graph — a better input to the same check, not a new one.
+    Thresholds come from config via ``getattr`` with a default, so a stale
+    config object cannot crash the phase.
 
-    To wire it, this body becomes roughly:
+    **Degrades, never raises.** A missing tasks.md, an unparseable one, or an
+    unexpected failure returns ""; a plan whose blocks declare no `Interfaces:`
+    signatures returns :data:`NO_GRAPH_NOTE`. In every one of those cases the
+    phase still runs and the prompt's check 2 still tells the reviewer to do
+    the partition itself.
 
+    It proposes; a gate disposes. Nothing here creates a ticket, moves a card,
+    or writes a byte to tasks.md.
+    """
+    try:
         from ..plan_split import assess_plan_split
-        blocks = <parse tasks.md into list[BlockInfo]>
+        from ..tdd_engine import parse_blocks
+
+        blocks = parse_blocks(change_dir / "tasks.md")
+        if not blocks:
+            log.info(
+                "No blocks parsed from %s — plan review runs without the "
+                "dependency graph", change_dir / "tasks.md",
+            )
+            return ""
+        if not any(block.produces or block.consumes for block in blocks):
+            log.info(
+                "%d block(s) in %s declare no Interfaces: signatures — no "
+                "dependency graph to hand the reviewer",
+                len(blocks), change_dir.name,
+            )
+            return NO_GRAPH_NOTE
+
         assessment = assess_plan_split(
             blocks,
             block_trigger=getattr(config, "plan_split_block_trigger", 8),
             package_trigger=getattr(config, "plan_split_package_trigger", 3),
         )
-        return "## Block dependency partition\n" + <render assessment>
-
-    and the returned string is injected verbatim as the prompt's
-    `{split_context}` slot. Nothing else in this module changes. Leave the ""
-    return reachable — a change with no parseable blocks must still review.
-    ===========================================================================
-    """
-    return ""
+        return render_split_context(assessment)
+    except Exception as split_err:  # a review without the graph beats no review
+        log.warning(
+            "Could not build the block dependency graph for %s (non-fatal): %s",
+            change_dir, split_err,
+        )
+        return ""
 
 
 async def run_plan_review(

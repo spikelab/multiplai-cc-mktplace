@@ -28,7 +28,8 @@ The full pipeline runs as a subprocess to keep the parent context lean:
 
 ```
 Interview → Research → Spec Generation (+ unknowns/explainers) → Design Audit
-  → Prototype → Review → TDD Build → Respec → Archive → Publish (push + draft PR)
+  → Plan Review → Prototype → Review → TDD Build → Respec → Archive
+  → Publish (push + draft PR)
 ```
 
 Each phase checkpoints state to disk. If the build crashes, restarting resumes from the last completed phase.
@@ -68,10 +69,11 @@ The pipeline generates artifacts in dependency order:
 
 ```
 proposal.md  (no dependencies)
+├── use-cases.md  (requires: proposal)
 ├── requirements/*.md  (requires: proposal)
 ├── design.md  (requires: proposal)
 │   └── unknowns.md  (requires: design)
-│       └── tasks.md  (requires: requirements + design + unknowns)
+│       └── tasks.md  (requires: requirements + design + unknowns + use-cases)
 │           └── rubric.md  (requires: tasks)
 ```
 
@@ -131,6 +133,43 @@ reports but never regenerates a second time.
 > Note: the multi-agent codebase-analysis step (`run_codebase_analysis`) **is**
 > wired — see [Phase 2.5](#phase-25-codebase-analysis).
 
+### Phase 4.5: Plan Review
+
+The second pair of eyes the board's Planning column has always claimed. A
+read-only reviewer (`Read`/`Grep`/`Glob`, 30 turns) reads `tasks.md` against
+`rubric.md`, the design's global constraints and `use-cases.md`, and reports
+findings under six categories:
+
+| Category | What it means |
+|----------|---------------|
+| `rubric-conflict` | A block asks for something the rubric scores down |
+| `block-contradiction` | Two blocks contradict each other |
+| `constraint-violation` | A block breaks a constraint the design stated |
+| `over-prescription` | The plan dictates a block-internal choice that belongs to the implementer |
+| `use-case-coverage` | A use case no block delivers |
+| `oversized-plan` | The change should be several changes |
+
+Critical and major findings drive **one** regeneration of `tasks.md`, then the
+review runs once more report-only and the plan stands — the same
+one-pass rule as the design audit, recorded in
+`spec_gen.plan_review_regen_done`, with the stage itself recorded as
+`plan_review_done` and checked before the model call so a resume costs nothing.
+
+`oversized-plan` is deliberately excluded from that regeneration. It names a
+proposed cut and the signature boundary the cut crosses, and stops there:
+nothing in this phase splits `tasks.md`, creates a ticket or moves a card.
+Handing it to a rewriter would have the rewriter perform the split silently
+inside one plan, which is the opposite of what the finding asks for. The two
+triggers behind it read from `multiplai.conf` — `[buildme.plan_review]
+PLAN_SPLIT_BLOCK_TRIGGER` (default 8) and `PLAN_SPLIT_PACKAGE_TRIGGER`
+(default 3) — and both defaults are placeholders nobody has measured, which is
+why they are knobs.
+
+The phase prints `PHASE:PLAN_REVIEW:COMPLETE` and keeps the card in the
+Planning column: this review *is* the work Planning stands for, so it does not
+move the card. It is best-effort — a failed plan review leaves the reviewed
+plan standing and never fails the build.
+
 ### Phase 5: Prototype
 
 The cheapest artifact that proves the shape, **before** the expensive TDD build:
@@ -162,6 +201,8 @@ Paths are printed in a deliberate order: `REVIEW:READ_FIRST:<unknowns.md>` comes
 **first, above everything else** — reading it is the anti-slop step — followed by
 `PROTOTYPE:file://…` and `PROTOTYPE_NOTES:file://…` (the container's localhost is
 not the user's, so the shared-mount `file://` path is the channel that works).
+Read `use-cases.md` before `tasks.md`: a use case no block delivers is the
+cheapest thing to catch here.
 
 ### Phase 7: TDD Build
 
@@ -360,6 +401,7 @@ specs/
 │       ├── .build-state.json      # Resumable state checkpoint
 │       ├── .board.json            # Kanban card (column, branch, pr_url, history)
 │       ├── proposal.md            # Why this change exists
+│       ├── use-cases.md           # Who it is for, and what they can observe
 │       ├── design.md              # How to implement (architecture decisions)
 │       ├── unknowns.md            # Explainer per dependency new to this project
 │       ├── tasks.md               # Block-by-block work breakdown
@@ -394,19 +436,59 @@ Users cannot reset their password without contacting support.
 
 Add self-service password reset via email link with time-limited tokens.
 
+**Goals:** a user resets their own password without contacting support; reset
+requests are throttled per email address.
+
+**Non-Goals:** SMS-based reset; admin-initiated password reset.
+
 ## Capabilities
 
 ### New Capabilities
-- `password-reset`: Email-based password reset with token expiry
-- `rate-limiting`: Throttle reset requests per email address
+- `password-reset`
+- `rate-limiting`
 
 ### Modified Capabilities
-- `user-auth`: Add password_reset_token field to user model
+- `user-auth`
 
 ## Impact
 
-New dependency: email sending service (SES). Database migration for token column.
+New dependency: `django-ses` for email sending. Database migration for the
+token column.
 ```
+
+Capability entries are **kebab-case names only** — no descriptions. The intent
+lives in `use-cases.md`, and `_extract_capabilities` harvests every backticked
+list item in this file, so a trailing description is noise it has to strip.
+Goals and Non-Goals live here, under What Changes; `design.md` no longer
+carries them.
+
+### use-cases.md
+
+Who the change is for, and what each of them can observe once it lands.
+`tasks.md` requires this file: a use case is delivered by a block or by
+nothing at all, and the plan review checks exactly that.
+
+```markdown
+# Use cases — who this change is for
+
+## Personas
+
+### locked-out-user
+- **Who they are:** an existing customer who cannot sign in, at 11pm
+- **The job they are doing:** getting back into their account tonight
+- **The constraint they are under:** support is closed until morning
+
+## Use cases
+
+- locked-out-user wants to request a reset link so that they receive an email
+  within a minute of asking
+- locked-out-user wants an expired link to say so so that they know to ask for
+  a new one instead of retrying the old one
+```
+
+Every outcome is observable from **outside** the system — something the persona
+can see, read or measure without reading the code. An outcome phrased as an
+internal implementation detail is not a use case.
 
 ### requirements/password-reset.md
 
@@ -447,16 +529,6 @@ Architecture decisions with rationale and alternatives considered.
 
 App uses Django with PostgreSQL. Email sending not yet implemented.
 
-## Goals / Non-Goals
-
-**Goals:**
-- Self-service password reset
-- Rate limiting to prevent abuse
-
-**Non-Goals:**
-- SMS-based reset (future)
-- Admin-initiated password reset
-
 ## Decisions
 
 ### 1. Token storage: Database column on User model
@@ -467,6 +539,10 @@ App uses Django with PostgreSQL. Email sending not yet implemented.
 **Rationale:** Already have AWS account, cost-effective at our volume.
 **Alternatives:** SendGrid (more features, higher cost), SMTP (unreliable)
 ```
+
+Goals and Non-Goals are **not** here — they belong to the proposal's What
+Changes section, and restating them in two documents is how the two drift
+apart.
 
 ### tasks.md — Advanced Tier (Opus)
 
@@ -597,7 +673,7 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts \
 | `--no-pr` | Do not open a PR after pushing |
 | `--pr-ready` | Open the PR ready-for-review instead of draft |
 | `--lenient-review` | Accept-and-continue instead of failing on low review scores — `build`, `tdd` |
-| `--trust-repo` | Opt-in for auto-approving agents — `build`, `spec-generate`, `tdd`, `apply` |
+| `--trust-repo` | Opt-in for auto-approving agents — `build`, `spec-generate`, `tdd`, `apply`. Now also required by the reviews and the spec audits, which hold `Read`/`Grep`/`Glob`; `BUILDME_TRUST_REPO=1` is the environment equivalent |
 | `--block N` | Resume TDD from specific block (tdd/apply only) |
 
 ### specs/config.yaml toggles
@@ -662,6 +738,7 @@ BOARD:password-reset:Shaping
 PHASE:SPEC_GENERATION:COMPLETE
 PHASE:DESIGN_AUDIT:COMPLETE
 BOARD:password-reset:Planning
+PHASE:PLAN_REVIEW:COMPLETE
 PHASE:PROTOTYPE:COMPLETE
 REVIEW:READ_FIRST:/…/specs/changes/password-reset/unknowns.md
 PROTOTYPE:file:///…/specs/changes/password-reset/prototype/mockup.html
@@ -715,8 +792,15 @@ Gates are pure functions (no LLM calls) that return pass/fail decisions:
 
 The per-block review is a two-verdict review (spec compliance + rubric
 scores), optionally run as a panel of reviewers in fresh contexts and merged.
-A separate security-review step exists in the code (`run_security_review`) but
-is **not currently wired** — there is no distinct security gate.
+Each reviewer runs as a subagent holding `Read`, `Grep` and `Glob` for at most
+30 turns, so it can open the file a changed line calls into rather than judging
+a diff string — which is why the review now needs `--trust-repo`. No review
+step anywhere in the pipeline holds `Write`, `Edit`, `Bash` or `NotebookEdit`.
+
+**Security review is out of scope for this pipeline.** The `run_security_review`
+step, its prompt and the `security_review` config toggle were deleted; there is
+no security gate and none is planned here. Run Claude Code's built-in
+`/security-review` on the branch instead.
 
 ### Test integrity
 
@@ -794,6 +878,24 @@ budget:
   max_usd: 25
 ```
 
+Per-step model and effort come from `multiplai.conf`, not from
+`specs/config.yaml`, and `specs/config.yaml` wins where the two overlap:
+
+```ini
+[buildme.review]
+MODEL=opus                 # the per-block reviewer
+EFFORT=high
+
+[buildme.plan_review]
+MODEL=opus                 # the plan reviewer; EFFORT falls back to [buildme.review]
+PLAN_SPLIT_BLOCK_TRIGGER=8
+PLAN_SPLIT_PACKAGE_TRIGGER=3
+```
+
+`[buildme.spec] MODEL=` and `[buildme.agent] MODEL=` are read and resolved but
+**no call site consumes them yet** — setting them changes nothing today. The
+matching `EFFORT=` keys in those sections do take effect.
+
 ## State & Recovery
 
 State is checkpointed to `.build-state.json` after every phase transition:
@@ -809,8 +911,9 @@ State is checkpointed to `.build-state.json` after every phase transition:
   "source_repo": "/Users/me/knowhere/PROJECTS/project",
   "pr_url": null,
   "spec_gen": {
-    "completed_artifacts": ["proposal", "requirements", "design", "unknowns", "tasks", "rubric"],
+    "completed_artifacts": ["proposal", "use-cases", "requirements", "design", "unknowns", "tasks", "rubric"],
     "explainers_done": true,
+    "plan_review_done": true,
     "prototype_done": true
   },
   "tdd": {
@@ -837,7 +940,7 @@ If the build crashes, restarting with the same `--change` name loads state and s
 | `tdd_engine.py` | Block-by-block TDD with agent spawning | Via llm_steps |
 | `apply.py` | Manual single-agent implementation | Via sdk |
 | `change_manager.py` | Directory ops, artifact DAG, archiving | No |
-| `config.py` | BuildConfig, tier detection, test discovery | No |
+| `config.py` | BuildConfig, tier detection, test discovery, per-step model/effort from `multiplai.conf`, the reviewer's `CLAUDE.md` chain (`convention_files`) | No |
 | `state.py` | BuildState with checkpoint/resume | No |
 | `models.py` | Pydantic models for structured data | No |
 | `gates.py` | Quality gate assertions + agent-report parsers (pure code) | No |
@@ -845,7 +948,7 @@ If the build crashes, restarting with the same `--change` name loads state and s
 | `git_ops.py` | Every `git`/`gh` call: worktree, branch, commits, push, PR | No |
 | `board.py` | Board seam: `column_for`, `.board.json`, `BOARD:` line | No |
 | `budget.py` | Per-build token/cost accounting + circuit-breaker | No |
-| `sdk.py` | `llm_call()` + `agent_call()` wrappers | Yes |
+| `sdk.py` | `llm_call()` / `agent_call()` wrappers, their `*_structured` twins, and the `--trust-repo` gate every tool-holding call passes through | Yes |
 | `rubric.py` | Rubric generation, change type detection | Via sdk |
 | `progress.py` | Tail-able progress file writer | No |
 | `env.py` | .env loading, model resolution | No |
@@ -854,8 +957,10 @@ If the build crashes, restarting with the same `--change` name loads state and s
 | `llm_steps/tdd_steps.py` | Test writer, implementer, refactorer | Yes |
 | `llm_steps/docs_steps.py` | The documentation phase — README/CHANGELOG/`docs/**` updated from the build diff | Yes |
 | `llm_steps/respec_steps.py` | Implementation-notes file + the `respec.md` proposal | Yes |
-| `llm_steps/review_steps.py` | Per-block code review + panel merge (wired); security review (not wired) | Yes |
+| `llm_steps/review_steps.py` | Per-block code review (read-only subagent) + panel merge | Yes |
+| `llm_steps/plan_review_steps.py` | The PLAN_REVIEW phase — reads `tasks.md` against rubric, constraints and use cases | Yes |
 | `prompts/*.py` | Prompt templates with `{placeholders}` | — |
+| `prompts/vendored/` | Reviewer prompt blocks borrowed from `anthropics/claude-plugins-official` (`pr-review-toolkit`, Apache-2.0), pinned by blob SHA in `SOURCES.json`; `scripts/check_vendored_prompts.py` re-fetches each pin and reports drift — run it before a release | — |
 
 ## Testing
 
@@ -864,7 +969,8 @@ cd skills/buildme/scripts
 PYTHONPATH=. python -m pytest tests/ -xvs
 ```
 
-969 tests covering config, state, models, gates, change manager, dependency
-detection, spec generator, prototype/docs/respec steps, git lifecycle, board
-seam, and the TDD engine. All tests mock LLM calls (and `gh`) — no API keys
+1335 tests covering config, state, models, gates, change manager, dependency
+detection, spec generator, plan review and its split assessment, vendored-prompt
+pins, prototype/docs/respec steps, git lifecycle, board seam, and the TDD
+engine. All tests mock LLM calls (and `gh`) — no API keys
 needed.

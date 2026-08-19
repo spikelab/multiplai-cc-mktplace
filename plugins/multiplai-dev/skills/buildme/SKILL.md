@@ -44,7 +44,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | Flag | Effect |
 |------|--------|
 | `--auto` | Skip review checkpoint (overnight/autonomous runs) |
-| `--spec-only` | Stop after spec generation + design audit |
+| `--spec-only` | Stop after spec generation, the design audit, the plan review and the prototype — everything up to the review checkpoint, no TDD build |
 | `--skip-research` | Skip the research phase |
 | `--lenient-review` | Accept-and-continue when a block exhausts its review iterations, or when the final review fails or errors, instead of failing the build. Unattended overnight runs only — the default is to fail, so low-scoring work is never silently marked done. |
 | `--skip-explainers` | Skip the unknowns/edge-case explainer pass for dependencies new to this project. `unknowns.md` is still written, recording the skip. Default: **on** — the explainers are the anti-slop mechanism, so skipping is a deliberate choice, not a default. |
@@ -54,6 +54,7 @@ pushing that branch and opening a draft PR — see [Git lifecycle](#git-lifecycl
 | `--no-push` | Do not push the build's branch to `origin`. |
 | `--no-pr` | Do not open a pull request after pushing. |
 | `--pr-ready` | Open the PR ready-for-review instead of the default draft. |
+| `--trust-repo` | Required for every run that reaches a tool-using agent — which now includes the reviews. The per-block code review, the design audit, the tasks audit and the plan review all run as subagents that `Read`/`Grep`/`Glob` the repo, so a `spec-generate` or review-only run needs this flag too, not just a full `build`. `BUILDME_TRUST_REPO=1` is the environment equivalent. Without it the step stops and says so. |
 
 `specs/config.yaml` equivalents (CLI flags win): `explainers: {enabled: true}`,
 `prototype: {enabled: auto|true|false}`, `respec: {halt_on_contradiction: false}`,
@@ -105,9 +106,16 @@ did not fit, so the generator knows what it did not receive, and the TDD phases
 (which do hold `Read`) can fetch it. The old behaviour was a flat character cut
 that ended mid-sentence, which presents a truncated rule as a complete one.
 
-The same docs also reach the **reviewer** via `standards_files`, which is
-resolved separately (absolute path, then project dir, then `reference/dev/`,
-then `$CLAUDE_CONFIG_DIR`) and is not capped.
+**The reviewer gets its conventions from two separate places.** The first is
+automatic: buildme hands it the repo-root `CLAUDE.md` plus the `CLAUDE.md` (and
+`CLAUDE.local.md`) in every directory that is an *ancestor* of a file the block
+changed — `config.convention_files()`. A sibling directory's file is never
+included; its rules do not govern this change, and feeding them in manufactures
+violations out of rules that never applied. Nothing has to be configured for
+this. The second is `standards_files` in `specs/config.yaml`, opt-in and for
+style guides that are not a `CLAUDE.md`; it resolves separately (absolute path,
+then project dir, then `reference/dev/`, then `$CLAUDE_CONFIG_DIR`) and is not
+capped. The reference docs above reach the spec generator, not the reviewer.
 
 ## Git lifecycle
 
@@ -289,7 +297,9 @@ generation (via change_manager) including the unknowns/explainer pass, the
 design audit — which critiques the specs for consistency *and* plan quality
 (over-engineering, task granularity, testability, uncovered edge cases) and
 folds every critical/major gap back into one regeneration pass of `design.md`
-and `tasks.md` before re-auditing once, report-only — the
+and `tasks.md` before re-auditing once, report-only — the plan review, which
+reads `tasks.md` against the rubric, the constraints and the use cases and
+regenerates `tasks.md` at most once, the
 prototype stage, TDD implementation (test-writer + implementer agents per block),
 integration gates, scored quality reviews, entry point verification, the
 documentation update, the respec proposal, and publishing (push + draft PR).
@@ -334,7 +344,11 @@ Work through them **in this order**, and do not skip the first one:
    prototype in a browser/editor via the shared mount (the container's
    `localhost` is not the user's, so `file://` is the channel that works) and
    read `NOTES.md`'s `PROVES:` / `DISPROVES:` / `OPEN_QUESTIONS:` slots.
-4. Then `design.md`, `tasks.md`, `rubric.md` as usual.
+4. `use-cases.md` — the personas this change is for and the outcomes each one
+   can observe from outside the system. Read it before `tasks.md`: the plan
+   review checks that every use case here is delivered by some block, and a use
+   case with no block is the cheapest thing to catch at this checkpoint.
+5. Then `proposal.md`, `design.md`, `tasks.md`, `rubric.md` as usual.
 
 **Prototype-first is the default for anything with a UI or an output format.**
 The pipeline auto-detects this (frontend/fullstack change types, or a
@@ -349,7 +363,8 @@ genuinely invisible; `--spec-only` runs include the prototype stage.
 
 Parse pipeline stdout for progress lines:
 - `PHASE:<name>:COMPLETE` — phase transitions (now includes
-  `CODEBASE_ANALYSIS`, `PROTOTYPE`, `DOCS_UPDATE`, `RESPEC`, `PUBLISH`)
+  `CODEBASE_ANALYSIS`, `PLAN_REVIEW`, `PROTOTYPE`, `DOCS_UPDATE`, `RESPEC`,
+  `PUBLISH`)
 - `REFERENCES:<doc names>` — the stack/framework reference docs the specs were
   generated against, or `(none)`. Emitted once per run
 - `BLOCK:<n>/<total>:<name>:COMPLETE` — block progress

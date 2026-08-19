@@ -8,7 +8,8 @@ which ones are vocabulary only.
 Every "covered" claim below carries `file:line` evidence. If a claim and the code
 disagree, the code is right and this file is stale — fix it here.
 
-Line numbers were re-derived on **2026-08-04** against the buildme subtree in
+Line numbers were re-derived on **2026-08-19** for the Planning row and on
+**2026-08-04** for the rest, against the buildme subtree in
 `plugins/multiplai-dev/skills/buildme/`. Paths are relative to
 `scripts/build_pipeline/`.
 
@@ -26,7 +27,7 @@ Testing** — not Deploying/Deployed (see [Deploy is out of scope](#deploy-is-ou
 | 3 | Shaping | Product | actively spec'ing, consulting eng | spec ready |
 | 4 | Planning | Eng | specs → impl plan, reviewed by another eng | plan approved |
 | 5 | In Development | Author | plan being implemented; may bounce back to Shaping/Planning | branch pushed |
-| 6 | In Review | Reviewer | branch reviewed (fetch + diff) before the prod PR | merged to staging |
+| 6 | In Review | Reviewer | a real PR into `staging_*`, reviewed there — not a fetch-and-diff of the branch. Decided 2026-08-11 (`DolceBot/ARTIFACTS/dark-factory-2026/plan-agent-collaboration-protocol-2026-08-11.md`), and the rule is for everyone, not only agents: two review surfaces for the same code is worse than either alone. The staging PR merges as a merge commit, never a squash — the ticket sync reads `DB-XXXX` out of the commit message | merged to staging |
 | 7 | Testing | Product/QA | on staging; E2E/manual testing not possible in docker | prod PR opened |
 | 8 | Ready for Prod | — | prod PR open, awaiting merge | prod PR merged |
 | 9 | Deploying | Ops | picked up next deployment session | deployed |
@@ -50,8 +51,8 @@ pure function over the table at `board.py:91 _PHASE_COLUMNS` (exhaustive over
 |---|--------|----------|----------|
 | 1 | Backlog | **Never driven.** No phase maps to it; nothing in the pipeline writes it. | Absent from `board.py:91-112 _PHASE_COLUMNS`; stated in the module docstring `board.py:41-46` |
 | 2 | Accepted | **Mapped, never written.** `BuildPhase.INIT` maps to Accepted, but no card is recorded that early — the change directory does not exist yet at INIT, so the first recorded column is always Shaping. | `board.py:92` (INIT → ACCEPTED); `board.py:30-34`; first actual write is `orchestrator.py:80` at BOOTSTRAP |
-| 3 | Shaping | **Driven.** BOOTSTRAP, INTERVIEW_DONE, RESEARCH, CODEBASE_ANALYSIS and SPEC_GENERATION all map to Shaping and each records the card. Products: `codebase-analysis.md`, `proposal.md`, `requirements/*.md`. | `board.py:93-99`; recorded at `orchestrator.py:80`, `:108`, `:129`, `:142`, `:184` |
-| 4 | Planning | **Driven.** DESIGN_AUDIT, PROTOTYPE and REVIEW map to Planning. The "reviewed by another eng" half of the column is stood in for by the adversarial design audit and the tasks-shape audit, plus the prototype's findings pass. | `board.py:100-102`; recorded at `orchestrator.py:201`, `:209`, `:229`; audits at `llm_steps/spec_steps.py:220 run_design_audit`, `spec_generator.py:495 _audit_tasks_shape`; prototype at `orchestrator.py:203-209` → `llm_steps/prototype_steps.py:36 run_prototype` |
+| 3 | Shaping | **Driven.** BOOTSTRAP, INTERVIEW_DONE, RESEARCH, CODEBASE_ANALYSIS and SPEC_GENERATION all map to Shaping and each records the card. Products: `codebase-analysis.md`, `proposal.md`, `use-cases.md`, `requirements/*.md`. | `board.py:93-99`; recorded at `orchestrator.py:80`, `:108`, `:129`, `:142`, `:184` |
+| 4 | Planning | **Driven.** DESIGN_AUDIT, PLAN_REVIEW, PROTOTYPE and REVIEW all map to Planning. The "reviewed by another eng" half of the column is now a phase rather than a stand-in: `PLAN_REVIEW` reads `tasks.md` against the rubric, the design's constraints and `use-cases.md` as a read-only subagent, and regenerates `tasks.md` at most once. It never moves the card — it *is* the work the card is parked on. The adversarial design audit and the tasks-shape audit still run before it, and the prototype's findings pass after. | `board.py:91-112 _PHASE_COLUMNS` (`:100` DESIGN_AUDIT, `:104` PLAN_REVIEW, `:105` PROTOTYPE, `:106` REVIEW); recorded at `orchestrator.py:201`, `:221`, `:229`, `:249`; plan review at `llm_steps/plan_review_steps.py:272 run_plan_review`, staged at `:373 run_plan_review_stage`; audits at `llm_steps/spec_steps.py:255 run_design_audit`, `:301 run_tasks_audit`, `spec_generator.py:586 _audit_tasks_shape`; prototype at `llm_steps/prototype_steps.py:36 run_prototype` |
 | 5 | In Development | **Driven.** TDD_BUILD, DOCS_UPDATE and RESPEC all map to In Development, and the card is recorded **before** the engine runs, so a card is in development for the whole build rather than only once it succeeds. Every block-status change re-records the same column. Updating README/CHANGELOG/`docs/**` is part of producing the change, not a separate review stage, so `DOCS_UPDATE` deliberately shares the column rather than introducing a new one. | `board.py:103-107` (TDD_BUILD / DOCS_UPDATE / RESPEC → IN_DEVELOPMENT); recorded at `orchestrator.py:236` (pre-engine) and again at `:263` (DOCS_UPDATE) and `:294` (RESPEC); per-block at `tdd_engine.py:81` |
 | 6 | In Review | **Driven, but only on a real push + PR.** `BuildPhase.PUBLISH` itself still maps to In Development; In Review is recorded from the publish step *after* `git push` succeeded **and** `gh pr create` returned. A run with `--no-push`, `--no-pr`, `--no-worktree`, or a failed push finishes in In Development. Its exit condition (merged to staging) is **not** implemented. | `board.py:108-110` (PUBLISH → IN_DEVELOPMENT); push at `orchestrator.py:1051`, PR at `:1068`, In Review recorded at `orchestrator.py:1093-1097`; publish skipped with no pipeline branch at `orchestrator.py:1023-1024` |
 | 7 | Testing | **Never driven.** There is no staging deploy and no QA/E2E agent. The nearest thing is a post-TDD entry-point smoke check, which warns and does not move any card. | `board.py:41-46`; `tdd_engine.py:2237 _verify_entry_point`, called at `tdd_engine.py:1907`, records no board column |
@@ -86,10 +87,12 @@ rather than an oversight.
 ### Column 6's exit — a reviewer agent and a staging merge
 
 What makes In Review real today is that a branch is pushed and a PR exists
-(`orchestrator.py:1051`, `:1068`) — a reviewer *can* `git fetch` and diff it.
-Nothing does. The missing pieces:
+(`orchestrator.py:1051`, `:1068`) — a reviewer *can* open it. Nothing does. Note
+that the protocol decided on 2026-08-11 puts the review **on a PR into
+`staging_*`**, so a reviewer agent reviews the PR rather than fetching the
+branch and diffing it locally. The missing pieces:
 
-- **A reviewer agent** that fetches the pushed branch, diffs it against the base,
+- **A reviewer agent** that reads the staging PR's diff against its base,
   reads the change's `specs/` (proposal, requirements, design, `codebase-analysis.md`,
   `unknowns.md`, `respec.md`) and reviews the diff against them — a real out-of-process review,
   unlike `_run_final_review`, which sees only the working tree it just produced.

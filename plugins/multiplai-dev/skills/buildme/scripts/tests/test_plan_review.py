@@ -189,17 +189,240 @@ class TestRunPlanReview:
         assert NO_USE_CASES in call.await_args.args[0]
 
 
-# --- 3. The unwired oversized-plan seam ----------------------------------
+# --- 3. The wired oversized-plan seam ------------------------------------
+
+SPLITTABLE_TASKS = """# Tasks
+
+## 1. Parse the export log
+
+Read ingest/reader.py and yield rows.
+
+Interfaces:
+- Produces: `parse_log(path: Path) -> list[Row]`
+- Consumes: (none)
+
+## 2. Store the parsed rows
+
+Write the rows through ingest/store.py.
+
+Interfaces:
+- Produces: `store_rows(rows: list[Row]) -> None`
+- Consumes: `parse_log(path: Path) -> list[Row]`
+
+## 3. Render the dashboard page
+
+Adds dashboard/views.py rendering the summary.
+
+Interfaces:
+- Produces: `render_dashboard() -> str`
+- Consumes: (none)
+"""
+
+CHAINED_TASKS = """# Tasks
+
+## 1. Parse the export log
+
+Interfaces:
+- Produces: `parse_log(path: Path) -> list[Row]`
+
+## 2. Store the parsed rows
+
+Interfaces:
+- Produces: `store_rows(rows: list[Row]) -> None`
+- Consumes: `parse_log(path: Path) -> list[Row]`
+
+## 3. Summarise the stored rows
+
+Interfaces:
+- Produces: `summarise() -> Summary`
+- Consumes: `store_rows(rows: list[Row]) -> None`
+"""
+
+MIGRATION_PLUS_FEATURE_TASKS = """# Tasks
+
+## 1. Add the archived column
+
+A schema change: alter table exports to add column archived.
+
+Interfaces:
+- Produces: `0007_add_archived` migration
+- Consumes: (none)
+
+## 2. Render the dashboard page
+
+Interfaces:
+- Produces: `render_dashboard() -> str`
+- Consumes: (none)
+"""
+
+
+def _tasks_dir(tmp_path, text: str, name: str = "split") -> Path:
+    change_dir = tmp_path / name
+    change_dir.mkdir(parents=True)
+    (change_dir / "tasks.md").write_text(text)
+    return change_dir
+
 
 class TestSplitContextSeam:
-    def test_seam_is_unwired_and_returns_no_context(self, tmp_path):
-        """`plan_split.py` is a separate work item. Until it is wired in, the
-        prompt does the partition itself, so "" is a complete behaviour."""
-        assert _split_context(_stub_config(tmp_path), tmp_path) == ""
+    """`_split_context` hands the reviewer buildme's own parsed graph.
 
-    def test_the_seam_is_documented_where_the_wiring_goes(self):
-        assert "UNWIRED SEAM" in _split_context.__doc__
-        assert "plan_split" in _split_context.__doc__
+    It replaces the reviewer's reading of every `Interfaces:` section with the
+    graph the builder itself will run on — a better input to check 2, not a new
+    check. Everything here stays a proposal: no ticket, no card, no edit.
+    """
+
+    def test_a_splittable_plan_names_its_groups_and_their_cut(self, tmp_path):
+        context = _split_context(
+            _stub_config(tmp_path), _tasks_dir(tmp_path, SPLITTABLE_TASKS))
+
+        assert "2 independently-shippable group(s)" in context
+        assert "Group 1: blocks 1, 2 — Parse the export log; Store the parsed rows" in context
+        assert "Group 2: block 3 — Render the dashboard page" in context
+        assert "Cut after group 1: between block 2 and block 3" in context
+
+    def test_the_cut_carries_the_exact_signature_boundary_it_crosses(self, tmp_path):
+        context = _split_context(
+            _stub_config(tmp_path), _tasks_dir(tmp_path, SPLITTABLE_TASKS))
+
+        # Verbatim signatures, not a paraphrase: a cut a reviewer cannot name a
+        # boundary for is not a cut (PLAN_REVIEW_PROMPT).
+        assert "boundary: parse_log(path: Path) -> list[Row]; store_rows(rows: list[Row]) -> None" in context
+        assert "crosses: nothing — no signature spans this cut" in context
+
+    def test_a_fully_chained_plan_renders_as_one_atomic_group_with_the_reason(
+        self, tmp_path,
+    ):
+        context = _split_context(
+            _stub_config(tmp_path), _tasks_dir(tmp_path, CHAINED_TASKS))
+
+        assert "1 independently-shippable group(s)" in context
+        assert "Group 1: blocks 1, 2, 3" in context
+        assert "one atomic change and cannot be reviewed or reverted in pieces" in context
+        assert "Cut after group" not in context
+
+    def test_atomicity_quotes_the_literal_keyword_that_matched(self, tmp_path):
+        context = _split_context(
+            _stub_config(tmp_path),
+            _tasks_dir(tmp_path, MIGRATION_PLUS_FEATURE_TASKS))
+
+        assert "SPLIT: high-risk work ships beside unrelated feature work" in context
+        assert 'migration: "migration"' in context
+        assert '"alter table"' in context
+        assert "unrelated feature work: block 2 (Render the dashboard page)" in context
+
+    def test_the_package_spread_names_which_block_reached_which_package(
+        self, tmp_path,
+    ):
+        context = _split_context(
+            _stub_config(tmp_path), _tasks_dir(tmp_path, SPLITTABLE_TASKS))
+
+        assert "### Package spread — 2 top-level package(s)" in context
+        assert "- ingest: blocks 1, 2" in context
+        assert "- dashboard: block 3" in context
+
+    def test_a_missing_tasks_md_renders_no_context_and_does_not_raise(
+        self, tmp_path,
+    ):
+        """A change with no plan yet still gets reviewed: the prompt's check 2
+        tells the reviewer to do the partition itself."""
+        assert _split_context(_stub_config(tmp_path), tmp_path / "nowhere") == ""
+
+    def test_an_unparseable_tasks_md_renders_no_context(self, tmp_path):
+        change_dir = _tasks_dir(tmp_path, "just prose, no numbered headings\n")
+        assert _split_context(_stub_config(tmp_path), change_dir) == ""
+
+    def test_blocks_with_no_interfaces_say_the_graph_is_unavailable(
+        self, tmp_path,
+    ):
+        """Said out loud rather than returned as "": with no signatures every
+        block is its own component, and silence would read as a clean split."""
+        change_dir = _tasks_dir(
+            tmp_path, "## 1. Do it\n\n- [ ] a\n\n## 2. Do more\n\n- [ ] b\n")
+        context = _split_context(_stub_config(tmp_path), change_dir)
+
+        assert "graph unavailable" in context
+        assert "independently-shippable" not in context
+
+    def test_an_unexpected_failure_degrades_to_no_context(self, tmp_path):
+        change_dir = _tasks_dir(tmp_path, SPLITTABLE_TASKS)
+        with patch("build_pipeline.tdd_engine.parse_blocks",
+                   side_effect=RuntimeError("boom")):
+            assert _split_context(_stub_config(tmp_path), change_dir) == ""
+
+    def test_the_triggers_are_read_from_config(self, tmp_path):
+        config = _stub_config(
+            tmp_path, plan_split_block_trigger=2, plan_split_package_trigger=1)
+        context = _split_context(config, _tasks_dir(tmp_path, SPLITTABLE_TASKS))
+
+        assert "Size trigger (>2): FIRED" in context
+        assert "Package trigger (>1): FIRED" in context
+
+    def test_the_triggers_fall_back_when_the_config_object_is_stale(
+        self, tmp_path,
+    ):
+        config = _stub_config(tmp_path)
+        del config.plan_split_block_trigger
+        del config.plan_split_package_trigger
+        context = _split_context(config, _tasks_dir(tmp_path, SPLITTABLE_TASKS))
+
+        assert "Size trigger (>8): not fired" in context
+        assert "Package trigger (>3): not fired" in context
+
+    def test_the_placeholder_trigger_is_never_presented_as_a_verdict(
+        self, tmp_path,
+    ):
+        context = _split_context(
+            _stub_config(tmp_path), _tasks_dir(tmp_path, SPLITTABLE_TASKS))
+
+        assert "A trigger is not a verdict" in context
+        assert "unmeasured placeholder" in context
+
+    def test_building_the_graph_writes_nothing(self, tmp_path):
+        """It proposes; a gate disposes. Reading tasks.md must not touch it."""
+        change_dir = _tasks_dir(tmp_path, SPLITTABLE_TASKS)
+        before = sorted(p.name for p in change_dir.iterdir())
+        tasks = (change_dir / "tasks.md").read_text()
+
+        _split_context(_stub_config(tmp_path), change_dir)
+
+        assert sorted(p.name for p in change_dir.iterdir()) == before
+        assert (change_dir / "tasks.md").read_text() == tasks
+        assert "oversized-plan" in PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES
+
+    @pytest.mark.asyncio
+    async def test_the_rendered_context_reaches_the_prompts_split_context_slot(
+        self, tmp_path,
+    ):
+        change_dir = _change_dir(tmp_path)
+        (change_dir / "tasks.md").write_text(SPLITTABLE_TASKS)
+        context = _split_context(_stub_config(tmp_path), change_dir)
+
+        call = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        with patch.object(plan_review_steps, "agent_call_structured", call):
+            await run_plan_review(
+                change_dir, _stub_config(tmp_path), split_context=context)
+
+        prompt = call.await_args.args[0]
+        assert "Group 2: block 3 — Render the dashboard page" in prompt
+        assert "boundary: parse_log(path: Path) -> list[Row]" in prompt
+
+    @pytest.mark.asyncio
+    async def test_the_stage_parses_the_plan_and_feeds_the_graph_to_the_prompt(
+        self, tmp_path,
+    ):
+        """The whole wiring, end to end: nothing passes `split_context` in by
+        hand in production — the stage builds it from tasks.md."""
+        config, state, state_path = _stage_setup(tmp_path, change="plan-split")
+        (config.change_dir / "tasks.md").write_text(SPLITTABLE_TASKS)
+
+        call = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        with patch.object(plan_review_steps, "agent_call_structured", call):
+            await run_plan_review_stage(
+                config.change_dir, config, state, state_path)
+
+        prompt = call.await_args.args[0]
+        assert "## Block dependency partition" in prompt
+        assert "Group 1: blocks 1, 2" in prompt
 
     @pytest.mark.asyncio
     async def test_an_empty_seam_still_produces_a_reviewable_prompt(self, tmp_path):
