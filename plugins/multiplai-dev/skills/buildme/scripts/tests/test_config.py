@@ -1,13 +1,17 @@
 """Tests for config — tier detection, test command discovery, config loading."""
 
+import argparse
 import os
 import pytest
 from pathlib import Path
 from unittest.mock import patch
 
+from multiplai_core.env import CURRENT_MODEL
+
 from build_pipeline.config import (
     KNOWN_EFFORTS,
     conf_effort,
+    conf_model,
     detect_tier,
     BuildConfig,
     GateToggles,
@@ -214,9 +218,17 @@ class TestReviewModel:
 
 
 class TestStandardsFiles:
-    def test_defaults_empty(self):
-        config = BuildConfig()
+    def test_defaults_empty(self, tmp_path):
+        """No opt-in standards and no CLAUDE.md → the prompt says none provided.
+
+        `project_dir` is pinned to an empty directory rather than left at the
+        default cwd: `standards_text` now also resolves the project's own
+        conventions chain, and the cwd during a test run is a real repo that
+        has a CLAUDE.md.
+        """
+        config = BuildConfig(project_dir=tmp_path)
         assert config.standards_files == []
+        assert config.convention_files() == []
         assert config.standards_text() == ""
 
     def test_parsed_from_specs_config_yaml(self, tmp_path):
@@ -1093,3 +1105,345 @@ class TestBuildConfigEffortFields:
             config = BuildConfig(effort="low", review_effort="max")
             assert config.review_effort == "max"
             assert config.spec_effort == "low"
+
+
+class TestConfModel:
+    """`conf_model` is `conf_effort`'s twin: model and effort are two axes of
+    one tuning decision, and per-step model was the axis with no conf reach."""
+
+    @staticmethod
+    def _conf(tmp_path: Path, body: str) -> dict:
+        (tmp_path / "multiplai.conf").write_text(body)
+        return {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}
+
+    def test_absent_conf_returns_none(self, tmp_path):
+        """None, not the default-tier ID — otherwise a field defaulted from
+        this could never fall back to another field, and "the conf said
+        nothing" would be indistinguishable from "the conf said opus"."""
+        from build_pipeline.config import conf_model
+
+        with patch.dict(os.environ, self._conf(tmp_path, ""), clear=True):
+            assert conf_model("buildme.review") is None
+
+    def test_section_without_a_model_key_returns_none(self, tmp_path):
+        from build_pipeline.config import conf_model
+
+        body = "[buildme.review]\nEFFORT=high\n"
+        with patch.dict(os.environ, self._conf(tmp_path, body), clear=True):
+            assert conf_model("buildme.review") is None
+
+    def test_blank_value_is_treated_as_unset(self, tmp_path):
+        from build_pipeline.config import conf_model
+
+        with patch.dict(os.environ, self._conf(tmp_path, "[buildme.spec]\nMODEL=\n"), clear=True):
+            assert conf_model("buildme.spec") is None
+
+    def test_section_model_resolves_to_a_concrete_id(self, tmp_path):
+        from build_pipeline.config import conf_model
+
+        body = "[buildme.review]\nMODEL=sonnet\n"
+        with patch.dict(os.environ, self._conf(tmp_path, body), clear=True):
+            assert conf_model("buildme.review") == CURRENT_MODEL["sonnet"]
+
+    def test_model_is_ceiling_capped(self, tmp_path):
+        """A budget run forces every step down; a conf override must not escape."""
+        env = self._conf(tmp_path, "[buildme.review]\nMODEL=opus\n")
+        env["MULTIPLAI_MODEL"] = "claude-sonnet-4-6"
+        with patch.dict(os.environ, env, clear=True):
+            assert conf_model("buildme.review") == "claude-sonnet-4-6"
+
+    def test_non_anthropic_provider_is_dropped_with_a_warning(self, tmp_path, caplog):
+        """`pick_model` raises for a provider this call site cannot honor; the
+        wrapper turns that into a diagnosable log line plus the fallback,
+        rather than an exception out of BuildConfig()."""
+        from build_pipeline.config import conf_model
+
+        body = "[buildme.review]\nMODEL=openai:gpt-5\n"
+        with patch.dict(os.environ, self._conf(tmp_path, body), clear=True):
+            with caplog.at_level("WARNING"):
+                assert conf_model("buildme.review") is None
+        assert any("Ignoring [buildme.review] MODEL=" in r.getMessage()
+                   for r in caplog.records)
+
+
+class TestBuildConfigModelFields:
+    @staticmethod
+    def _env(tmp_path: Path, body: str = "") -> dict:
+        (tmp_path / "multiplai.conf").write_text(body)
+        return {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}
+
+    def test_defaults_fall_back_without_a_conf(self, tmp_path):
+        with patch.dict(os.environ, self._env(tmp_path), clear=True):
+            config = BuildConfig(model="claude-sonnet-4-6")
+        # review_model keeps its None-means-`model` contract (_panel_models
+        # resolves it); the others land on a concrete ID.
+        assert config.review_model is None
+        assert config.spec_model == "claude-sonnet-4-6"
+        assert config.agent_model == "claude-sonnet-4-6"
+        assert config.plan_review_model == "claude-sonnet-4-6"
+
+    def test_spec_model_reads_its_conf_section(self, tmp_path):
+        body = "[buildme.spec]\nMODEL=sonnet\n"
+        with patch.dict(os.environ, self._env(tmp_path, body), clear=True):
+            config = BuildConfig(model="claude-opus-4-6")
+        assert config.spec_model == CURRENT_MODEL["sonnet"]
+        assert config.agent_model == "claude-opus-4-6"
+
+    def test_agent_model_reads_its_conf_section(self, tmp_path):
+        body = "[buildme.agent]\nMODEL=sonnet\n"
+        with patch.dict(os.environ, self._env(tmp_path, body), clear=True):
+            config = BuildConfig(model="claude-opus-4-6")
+        assert config.agent_model == CURRENT_MODEL["sonnet"]
+        assert config.spec_model == "claude-opus-4-6"
+
+    def test_review_model_reads_its_conf_section(self, tmp_path):
+        body = "[buildme.review]\nMODEL=sonnet\n"
+        with patch.dict(os.environ, self._env(tmp_path, body), clear=True):
+            config = BuildConfig(model="claude-opus-4-6")
+        assert config.review_model == CURRENT_MODEL["sonnet"]
+
+    def test_plan_review_model_falls_back_to_review_model(self, tmp_path):
+        body = "[buildme.review]\nMODEL=sonnet\n"
+        with patch.dict(os.environ, self._env(tmp_path, body), clear=True):
+            config = BuildConfig(model="claude-opus-4-6")
+        assert config.plan_review_model == CURRENT_MODEL["sonnet"]
+
+    def test_plan_review_model_reads_its_own_section(self, tmp_path):
+        body = "[buildme.review]\nMODEL=sonnet\n[buildme.plan_review]\nMODEL=haiku\n"
+        with patch.dict(os.environ, self._env(tmp_path, body), clear=True):
+            config = BuildConfig(model="claude-opus-4-6")
+        assert config.plan_review_model == CURRENT_MODEL["haiku"]
+        assert config.review_model == CURRENT_MODEL["sonnet"]
+
+    def test_plan_review_model_falls_through_to_model_when_review_is_unset(self, tmp_path):
+        """review_model may legitimately be None; plan_review_model must still
+        name a model, so its chain ends at `model`."""
+        with patch.dict(os.environ, self._env(tmp_path), clear=True):
+            config = BuildConfig(model="claude-sonnet-4-6")
+        assert config.plan_review_model == "claude-sonnet-4-6"
+
+    def test_plan_review_effort_falls_back_to_review_effort(self, tmp_path):
+        body = "[buildme]\nEFFORT=low\n[buildme.review]\nEFFORT=high\n"
+        env = self._env(tmp_path, body)
+        env["MULTIPLAI_EFFORT"] = "high"
+        with patch.dict(os.environ, env, clear=True):
+            config = BuildConfig()
+        assert config.plan_review_effort == "high"
+
+    def test_plan_review_effort_reads_its_own_section(self, tmp_path):
+        body = ("[buildme]\nEFFORT=low\n[buildme.review]\nEFFORT=high\n"
+                "[buildme.plan_review]\nEFFORT=medium\n")
+        env = self._env(tmp_path, body)
+        env["MULTIPLAI_EFFORT"] = "high"
+        with patch.dict(os.environ, env, clear=True):
+            config = BuildConfig()
+        assert config.plan_review_effort == "medium"
+        assert config.review_effort == "high"
+
+    def test_an_explicit_step_model_still_wins_over_the_conf(self, tmp_path):
+        body = "[buildme.spec]\nMODEL=sonnet\n"
+        with patch.dict(os.environ, self._env(tmp_path, body), clear=True):
+            config = BuildConfig(model="claude-opus-4-6", spec_model="model-x")
+        assert config.spec_model == "model-x"
+
+    def test_specs_config_yaml_outranks_the_conf_for_review_model(self, tmp_path):
+        """The project's stated choice beats a machine-wide default. The conf
+        value must not look 'already set' to `_load_specs_config`."""
+        project = tmp_path / "project"
+        specs = project / "specs"
+        specs.mkdir(parents=True)
+        (specs / "config.yaml").write_text("code_review:\n  model: claude-haiku-4-5\n")
+        body = "[buildme.review]\nMODEL=sonnet\n"
+        with patch.dict(os.environ, self._env(tmp_path, body), clear=True):
+            config = BuildConfig(project_dir=project)
+            config.specs_dir = specs
+            config._load_specs_config()
+        assert config.review_model == "claude-haiku-4-5"
+
+    def test_an_explicitly_constructed_review_model_survives_specs_config_yaml(self, tmp_path):
+        project = tmp_path / "project"
+        specs = project / "specs"
+        specs.mkdir(parents=True)
+        (specs / "config.yaml").write_text("code_review:\n  model: claude-haiku-4-5\n")
+        with patch.dict(os.environ, self._env(tmp_path), clear=True):
+            config = BuildConfig(project_dir=project, review_model="model-x")
+            config.specs_dir = specs
+            config._load_specs_config()
+        assert config.review_model == "model-x"
+
+    def test_env_review_model_still_wins_over_the_conf(self, tmp_path):
+        """BUILDME_REVIEW_MODEL is applied last in from_cli_args and outranks
+        both config.yaml and the conf section."""
+        project = tmp_path / "project"
+        (project / "specs").mkdir(parents=True)
+        args = argparse.Namespace(project_dir=str(project))
+        env = self._env(tmp_path, "[buildme.review]\nMODEL=sonnet\n")
+        env["BUILDME_REVIEW_MODEL"] = "claude-haiku-4-5"
+        with patch.dict(os.environ, env, clear=True):
+            config = BuildConfig.from_cli_args(args)
+        assert config.review_model == "claude-haiku-4-5"
+
+
+class TestPlanSplitTriggers:
+    """W14's oversized-plan triggers. 8 is a placeholder, not a measurement —
+    which is exactly why it is a conf knob and not a constant in the source."""
+
+    @staticmethod
+    def _env(tmp_path: Path, body: str = "") -> dict:
+        (tmp_path / "multiplai.conf").write_text(body)
+        return {"CLAUDE_MULTIPLAI_HOME": str(tmp_path)}
+
+    def test_defaults(self, tmp_path):
+        with patch.dict(os.environ, self._env(tmp_path), clear=True):
+            config = BuildConfig()
+        assert config.plan_split_block_trigger == 8
+        assert config.plan_split_package_trigger == 3
+
+    def test_read_from_the_conf(self, tmp_path):
+        body = ("[buildme.plan_review]\nPLAN_SPLIT_BLOCK_TRIGGER=12\n"
+                "PLAN_SPLIT_PACKAGE_TRIGGER=2\n")
+        with patch.dict(os.environ, self._env(tmp_path, body), clear=True):
+            config = BuildConfig()
+        assert config.plan_split_block_trigger == 12
+        assert config.plan_split_package_trigger == 2
+
+    def test_unparseable_value_warns_and_keeps_the_default(self, tmp_path, caplog):
+        body = "[buildme.plan_review]\nPLAN_SPLIT_BLOCK_TRIGGER=eight\n"
+        with patch.dict(os.environ, self._env(tmp_path, body), clear=True):
+            with caplog.at_level("WARNING"):
+                config = BuildConfig()
+        assert config.plan_split_block_trigger == 8
+        assert any("PLAN_SPLIT_BLOCK_TRIGGER" in r.getMessage() for r in caplog.records)
+
+
+class TestConventionFiles:
+    """R2: the project's own CLAUDE.md chain reaches the reviewer, scoped to
+    the directories the change actually touched."""
+
+    @staticmethod
+    def _project(tmp_path: Path) -> Path:
+        project = tmp_path / "project"
+        project.mkdir()
+        return project
+
+    def test_empty_project_has_no_conventions(self, tmp_path):
+        config = BuildConfig(project_dir=self._project(tmp_path))
+        assert config.convention_files(["src/app.py"]) == []
+        assert config.standards_text(["src/app.py"]) == ""
+
+    def test_root_claude_md_is_always_included(self, tmp_path):
+        project = self._project(tmp_path)
+        (project / "CLAUDE.md").write_text("ROOT-RULE")
+        config = BuildConfig(project_dir=project)
+        assert config.convention_files() == [project / "CLAUDE.md"]
+        assert "ROOT-RULE" in config.standards_text()
+
+    def test_ancestor_directory_claude_md_is_included(self, tmp_path):
+        project = self._project(tmp_path)
+        (project / "CLAUDE.md").write_text("ROOT-RULE")
+        pkg = project / "src" / "api"
+        pkg.mkdir(parents=True)
+        (pkg / "CLAUDE.md").write_text("API-RULE")
+        config = BuildConfig(project_dir=project)
+        files = config.convention_files(["src/api/handlers.py"])
+        assert files == [project / "CLAUDE.md", pkg / "CLAUDE.md"]
+
+    def test_sibling_directory_claude_md_is_not_picked_up(self, tmp_path):
+        """A directory's CLAUDE.md governs files at or below it only. Handing
+        the reviewer a sibling's rules manufactures violations of rules that
+        never applied to the change."""
+        project = self._project(tmp_path)
+        api = project / "src" / "api"
+        web = project / "src" / "web"
+        api.mkdir(parents=True)
+        web.mkdir(parents=True)
+        (api / "CLAUDE.md").write_text("API-RULE")
+        (web / "CLAUDE.md").write_text("WEB-RULE")
+        config = BuildConfig(project_dir=project)
+        text = config.standards_text(["src/api/handlers.py"])
+        assert "API-RULE" in text
+        assert "WEB-RULE" not in text
+
+    def test_a_child_directory_claude_md_is_not_picked_up(self, tmp_path):
+        """The other direction: a rule below the changed file does not govern it."""
+        project = self._project(tmp_path)
+        deep = project / "src" / "api" / "internal"
+        deep.mkdir(parents=True)
+        (deep / "CLAUDE.md").write_text("DEEP-RULE")
+        config = BuildConfig(project_dir=project)
+        assert config.convention_files(["src/api/handlers.py"]) == []
+
+    def test_claude_local_md_is_included_too(self, tmp_path):
+        project = self._project(tmp_path)
+        (project / "CLAUDE.local.md").write_text("LOCAL-RULE")
+        config = BuildConfig(project_dir=project)
+        assert config.convention_files() == [project / "CLAUDE.local.md"]
+
+    def test_absolute_changed_paths_are_accepted(self, tmp_path):
+        project = self._project(tmp_path)
+        pkg = project / "src"
+        pkg.mkdir()
+        (pkg / "CLAUDE.md").write_text("SRC-RULE")
+        config = BuildConfig(project_dir=project)
+        files = config.convention_files([str(pkg / "app.py")])
+        assert files == [pkg / "CLAUDE.md"]
+
+    def test_a_path_outside_the_project_is_skipped(self, tmp_path):
+        """A path that does not live under the project has no ancestor chain
+        here; walking one would climb out of the repo."""
+        project = self._project(tmp_path)
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        (outside / "CLAUDE.md").write_text("OUTSIDE-RULE")
+        config = BuildConfig(project_dir=project)
+        assert config.convention_files([str(outside / "x.py")]) == []
+
+    def test_each_file_appears_once_across_changed_paths(self, tmp_path):
+        project = self._project(tmp_path)
+        (project / "CLAUDE.md").write_text("ROOT-RULE")
+        pkg = project / "src"
+        pkg.mkdir()
+        (pkg / "CLAUDE.md").write_text("SRC-RULE")
+        config = BuildConfig(project_dir=project)
+        files = config.convention_files(["src/a.py", "src/b.py"])
+        assert files == [project / "CLAUDE.md", pkg / "CLAUDE.md"]
+
+    def test_conventions_are_tagged_with_their_path(self, tmp_path):
+        """The reviewer has to cite the rule it quotes, so the path travels
+        with the text."""
+        project = self._project(tmp_path)
+        pkg = project / "src"
+        pkg.mkdir()
+        (pkg / "CLAUDE.md").write_text("SRC-RULE")
+        config = BuildConfig(project_dir=project)
+        text = config.standards_text(["src/a.py"])
+        assert "### Conventions: src/CLAUDE.md" in text
+
+    def test_standards_files_still_work_alongside_conventions(self, tmp_path):
+        """The automatic source adds to the opt-in one; it does not replace it."""
+        project = self._project(tmp_path)
+        (project / "CLAUDE.md").write_text("ROOT-RULE")
+        docs = project / "docs"
+        docs.mkdir()
+        (docs / "standards.md").write_text("Never use bare except.")
+        config = BuildConfig(
+            project_dir=project,
+            config_dir=tmp_path / "no-such-config",
+            standards_files=["docs/standards.md"],
+        )
+        text = config.standards_text(["src/a.py"])
+        assert "ROOT-RULE" in text
+        assert "Never use bare except." in text
+        assert text.index("ROOT-RULE") < text.index("Never use bare except.")
+
+    def test_unreadable_conventions_file_is_skipped_not_fatal(self, tmp_path, caplog):
+        project = self._project(tmp_path)
+        (project / "CLAUDE.md").write_bytes(b"\xff\xfe\x00garbage\x80\x81")
+        pkg = project / "src"
+        pkg.mkdir()
+        (pkg / "CLAUDE.md").write_text("SRC-RULE")
+        config = BuildConfig(project_dir=project)
+        with caplog.at_level("WARNING"):
+            text = config.standards_text(["src/a.py"])
+        assert "SRC-RULE" in text
+        assert any("Conventions file unreadable" in r.getMessage() for r in caplog.records)

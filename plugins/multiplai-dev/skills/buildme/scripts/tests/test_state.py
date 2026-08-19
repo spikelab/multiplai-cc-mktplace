@@ -531,3 +531,65 @@ class TestGitLifecycleState:
         order = [p.value for p in BuildPhase]
         assert order.index("tdd_build") < order.index("publish")
         assert order.index("publish") + 1 == order.index("complete")
+
+
+class TestPrePlanReviewCheckpointResume:
+    """A .build-state.json written before BuildPhase.PLAN_REVIEW existed must
+    still load, and the inserted phase must land where it runs — ahead of a
+    checkpoint parked at DESIGN_AUDIT, behind one already past the prototype.
+    The stored phase is a name, not an ordinal, so the insertion cannot shift
+    it; is_phase_complete compares enum *positions*, which is what has to be
+    asserted."""
+
+    FIXTURE = "build-state-pre-plan-review.json"
+
+    def test_fixture_predates_the_change(self):
+        """Guard the guard: regenerating this fixture with current code would
+        stop it testing backwards compatibility."""
+        raw = (FIXTURES / self.FIXTURE).read_text()
+        for token in ("plan_review", "prototype", "budget", "docs_impact"):
+            assert token not in raw, f"{self.FIXTURE} is no longer a pre-change fixture"
+
+    def test_loads_and_resumes_with_plan_review_still_ahead(self):
+        s = BuildState.load(FIXTURES / self.FIXTURE)
+
+        assert s.phase == BuildPhase.DESIGN_AUDIT
+        assert s.change_name == "legacy-plan"
+        # The two flags the new phase writes take their defaults on an old
+        # checkpoint, so the phase runs once rather than being skipped.
+        assert s.spec_gen.plan_review_done is False
+        assert s.spec_gen.plan_review_regen_done is False
+        # A field that predates it keeps the value it was written with.
+        assert s.spec_gen.tasks_audit_done is True
+
+        assert s.is_phase_complete(BuildPhase.SPEC_GENERATION)
+        # The resume point is the design audit, with the new phase after it
+        # rather than silently skipped...
+        assert not s.is_phase_complete(BuildPhase.DESIGN_AUDIT)
+        assert not s.is_phase_complete(BuildPhase.PLAN_REVIEW)
+        assert not s.is_phase_complete(BuildPhase.PROTOTYPE)
+
+    def test_plan_review_is_ordered_between_design_audit_and_prototype(self):
+        order = list(BuildPhase)
+        assert order.index(BuildPhase.DESIGN_AUDIT) < order.index(BuildPhase.PLAN_REVIEW)
+        assert order.index(BuildPhase.PLAN_REVIEW) < order.index(BuildPhase.PROTOTYPE)
+
+    def test_a_checkpoint_past_the_prototype_does_not_rewind_for_the_review(self):
+        """...and an old checkpoint already at the review checkpoint is not
+        sent back to review its plan — its planning is done."""
+        s = BuildState.load(FIXTURES / "build-state-pre-prototype-tdd.json")
+        assert s.phase == BuildPhase.REVIEW
+        assert s.is_phase_complete(BuildPhase.PLAN_REVIEW)
+
+    def test_roundtrip_rewrites_with_the_new_fields(self, tmp_path):
+        """Loading an old checkpoint and re-checkpointing must not lose data."""
+        s = BuildState.load(FIXTURES / self.FIXTURE)
+        out = tmp_path / "state.json"
+        s.checkpoint(out)
+
+        reloaded = BuildState.load(out)
+        assert reloaded.phase == BuildPhase.DESIGN_AUDIT
+        assert reloaded.spec_gen.completed_artifacts == s.spec_gen.completed_artifacts
+        written = json.loads(out.read_text())["spec_gen"]
+        assert written["plan_review_done"] is False
+        assert written["plan_review_regen_done"] is False

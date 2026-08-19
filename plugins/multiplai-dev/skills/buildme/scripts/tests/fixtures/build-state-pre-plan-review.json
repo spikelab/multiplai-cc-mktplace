@@ -1,0 +1,22 @@
+{
+  "change_name": "legacy-plan",
+  "mode": "scratch",
+  "tier": "advanced",
+  "phase": "design_audit",
+  "bootstrap_done": true,
+  "interview_summary": "Export the audit log nightly.",
+  "research_path": null,
+  "spec_gen": {
+    "completed_artifacts": ["proposal", "requirements", "design", "unknowns", "tasks", "rubric"],
+    "research_path": null,
+    "codebase_analysis_path": null,
+    "tasks_audit_done": true,
+    "explainers_done": true,
+    "design_audit_regen_done": false,
+    "design_audit_done": false
+  },
+  "tdd": null,
+  "state_file": "",
+  "started_at": "2026-07-28T11:02:41.551210+00:00",
+  "updated_at": "2026-07-28T11:26:09.338771+00:00"
+}

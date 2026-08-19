@@ -1,7 +1,7 @@
 """LLM step functions for code review.
 
-Each function calls llm_call_structured() or llm_call() to produce
-ReviewResult objects for gate evaluation.
+The review itself runs as a read-only subagent (agent_call_structured with
+`REVIEWER_TOOLS`), producing ReviewResult objects for gate evaluation.
 """
 
 from __future__ import annotations
@@ -12,9 +12,21 @@ import math
 
 from ..models import AgentResult, ReviewFinding, ReviewResult, ReviewScore
 from ..prompts.review import CODE_REVIEW_PROMPT
-from ..sdk import llm_call, llm_call_structured, agent_call, LLMCallError
+from ..sdk import agent_call, agent_call_structured, LLMCallError
 
 log = logging.getLogger(__name__)
+
+# The reviewer's tool set, and the reason it is a constant: a reviewer that can
+# `Write`, `Edit` or `Bash` is a reviewer that can fix what it found, which
+# destroys the adjudication seam (findings are proposals the orchestrator
+# disposes of) and walks straight past `unchanged_tests_gate`, whose whole
+# premise is that only the implementer's windows are writable. Read-only, no
+# exceptions — `test_no_review_step_can_write` asserts it.
+REVIEWER_TOOLS = ["Read", "Grep", "Glob"]
+
+# Reviewers are not implementers: enough turns to open the changed files, grep
+# for callers and read the conventions docs, not enough to go wandering.
+REVIEWER_MAX_TURNS = 30
 
 
 def _panel_models(config) -> list[str]:
@@ -151,11 +163,16 @@ async def run_code_review(
 ) -> ReviewResult:
     """Run the two-verdict code review (spec compliance + rubric scores).
 
+    Each reviewer is a read-only subagent (`REVIEWER_TOOLS`) rooted at the
+    project dir, so it can open the file around a hunk, grep for a changed
+    symbol's callers, and read the conventions docs before making a claim —
+    the diff is still ground truth for *what changed*, but it is no longer the
+    only thing the reviewer can see.
+
     Runs every model in `config.review_panel` concurrently, each in its own
-    fresh single-turn context (models miss their own errors in-context but
-    catch them with fresh context, and different families find largely
-    disjoint error sets), then merges. With no panel configured this is one
-    call — unchanged from before.
+    fresh context (models miss their own errors in-context but catch them with
+    fresh context, and different families find largely disjoint error sets),
+    then merges. With no panel configured this is one call.
 
     Args:
         diff: The git diff to review
@@ -193,9 +210,11 @@ async def run_code_review(
     # opposite of the feature's purpose. Survivors are merged; only an
     # all-members-failed panel is a real failure.
     settled = await asyncio.gather(*[
-        llm_call_structured(
-            prompt, ReviewResult, model=m, effort=config.review_effort,
-            max_retries=1, budget_label="review",
+        agent_call_structured(
+            prompt, ReviewResult, allowed_tools=REVIEWER_TOOLS,
+            model=m, effort=config.review_effort,
+            max_retries=1, max_turns=REVIEWER_MAX_TURNS,
+            cwd=str(config.project_dir), budget_label="review",
         )
         for m in models
     ], return_exceptions=True)

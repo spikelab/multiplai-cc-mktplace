@@ -1,7 +1,8 @@
 """LLM step functions for spec generation and design audit.
 
-Each function calls llm_call() with the appropriate prompt template
-and returns structured output.
+Spec generation calls llm_call() with the appropriate prompt template; the
+adversarial audits call agent_call() with a read-only tool set. Both return
+structured output.
 """
 
 from __future__ import annotations
@@ -19,9 +20,43 @@ from ..prompts.spec_generation import (
 )
 from ..prompts.design_audit import DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT
 from ..prompts.explainer import EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT
-from ..sdk import llm_call, extract_json, LLMCallError
+from ..sdk import agent_call, llm_call, extract_json, LLMCallError
 
 log = logging.getLogger(__name__)
+
+# The audits are reviews, so they get the reviewer's tool set and nothing more:
+# read-only. An auditor that could `Write` or `Edit` would fix the design it was
+# asked to judge, and the one-regeneration-pass rule (see CLAUDE.md, "Audit
+# feedback is one pass, decided in one place") would no longer be the only way
+# an artifact changes. `test_no_review_step_can_write` asserts the list.
+AUDITOR_TOOLS = ["Read", "Grep", "Glob"]
+
+# Enough turns to open the artifacts' neighbours and grep the codebase for a
+# name the design claims exists; not enough to go wandering.
+AUDITOR_MAX_TURNS = 30
+
+
+async def _audit_agent_text(prompt: str, config, *, budget_label: str) -> str:
+    """Run one audit as a read-only subagent, returning its raw text.
+
+    The audits read a JSON list rather than a Pydantic model, so this is the
+    `agent_call` twin of the `llm_call` they used to make: same
+    return-the-text contract, same non-fatal degradation (a failed agent hands
+    back its partial output, which the caller's JSON parse then rejects with
+    the warning it already had).
+    """
+    result = await agent_call(
+        prompt,
+        allowed_tools=AUDITOR_TOOLS,
+        model=config.model,
+        effort=config.spec_effort,
+        max_turns=AUDITOR_MAX_TURNS,
+        cwd=str(config.project_dir),
+        budget_label=budget_label,
+    )
+    if not result.success:
+        log.warning("%s subagent failed: %s", budget_label, result.error)
+    return result.output or ""
 
 
 async def generate_artifact(
@@ -220,6 +255,9 @@ async def run_explainer(dep, config, usage_context: str = "") -> str:
 async def run_design_audit(change_dir: Path, config) -> list[dict]:
     """Run adversarial design audit on generated artifacts.
 
+    Runs as a read-only subagent, so the auditor can open the codebase the
+    design claims to change instead of judging four documents in isolation.
+
     Returns list of gap dicts with category, severity, description, suggestion.
     """
     proposal = _read_file(change_dir / "proposal.md")
@@ -247,7 +285,7 @@ async def run_design_audit(change_dir: Path, config) -> list[dict]:
     )
 
     log.info("Running design audit on %s", change_dir.name)
-    raw = await llm_call(prompt, model=config.model, effort=config.spec_effort, budget_label="design_audit")
+    raw = await _audit_agent_text(prompt, config, budget_label="design_audit")
 
     try:
         gaps = extract_json(raw)
@@ -265,8 +303,9 @@ async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
 
     Checks that each block is a vertical slice — end-to-end exercisable when it
     completes — rather than a layer (schema block, API block, UI block, final
-    wiring block). Returns a list of finding dicts with category, severity,
-    description, suggestion; empty list when the shape is clean.
+    wiring block). Runs as a read-only subagent. Returns a list of finding
+    dicts with category, severity, description, suggestion; empty list when the
+    shape is clean.
     """
     tasks = _read_file(change_dir / "tasks.md")
     design = _read_file(change_dir / "design.md")
@@ -286,7 +325,7 @@ async def run_tasks_audit(change_dir: Path, config) -> list[dict]:
     )
 
     log.info("Running tasks shape audit on %s", change_dir.name)
-    raw = await llm_call(prompt, model=config.model, effort=config.spec_effort, budget_label="tasks_audit")
+    raw = await _audit_agent_text(prompt, config, budget_label="tasks_audit")
 
     try:
         findings = extract_json(raw)

@@ -200,6 +200,26 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             # Spec'ing is done being shaped; the card is now being planned.
             board.record(config, state, BuildPhase.DESIGN_AUDIT, progress=progress)
 
+        # Phase: Plan Review — the second pair of eyes the board's Planning
+        # column has always claimed ("specs -> impl plan, reviewed by another
+        # eng"). Reads tasks.md against rubric.md, the constraints and the use
+        # cases; critical/major findings drive ONE regeneration of tasks.md,
+        # recorded in spec_gen.plan_review_regen_done. Best-effort — a review
+        # failure leaves the reviewed plan standing and never fails the build.
+        if not state.is_phase_complete(BuildPhase.PLAN_REVIEW):
+            log.info("START phase=PLAN_REVIEW")
+            from .llm_steps.plan_review_steps import run_plan_review_stage
+            findings = await run_plan_review_stage(
+                config.change_dir, config, state, state_path,
+            )
+            log.info(
+                "DONE phase=PLAN_REVIEW findings=%d",
+                len(findings) if findings else 0,
+            )
+            state.advance_to(BuildPhase.PLAN_REVIEW, state_path)
+            print("PHASE:PLAN_REVIEW:COMPLETE", flush=True)
+            board.record(config, state, BuildPhase.PLAN_REVIEW, progress=progress)
+
         # Phase: Prototype — a cheap artifact that proves the shape before the
         # expensive TDD build. Phase failure is never build failure.
         if not state.is_phase_complete(BuildPhase.PROTOTYPE):

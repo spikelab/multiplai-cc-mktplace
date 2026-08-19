@@ -10,7 +10,7 @@ import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Iterable, Literal
 
 import yaml
 
@@ -251,6 +251,52 @@ def conf_effort(task: str, default: str | None = None) -> str | None:
     return pick_effort(requested, task=task)
 
 
+def conf_model(task: str, default_tier: str = "opus") -> str | None:
+    """``MODEL=`` for *task* from multiplai.conf, or None when it says nothing.
+
+    The model twin of :func:`conf_effort`, and the reason it exists is the same:
+    ``pick_model`` cannot express "the conf said nothing". It always returns a
+    concrete ID (the *default_tier* one), so a field defaulted straight from it
+    could never fall back to another field, and `[buildme.review] MODEL=` would
+    be indistinguishable from no override at all. Returning None here keeps the
+    fallback chain in ``__post_init__`` — and `review_model`'s "None → use
+    `model`" contract — intact.
+
+    A section naming a non-Anthropic provider is dropped with a warning rather
+    than raised: buildme's SDK adapter is provider-unaware, and ``pick_model``
+    raises for exactly that reason. Same shape as `conf_effort`'s unknown-value
+    handling — diagnose in the log, fall back to the default.
+    """
+    section = (load_multiplai_conf().get("_sections", {}) or {}).get(task) or {}
+    if not (section.get("MODEL") or "").strip():
+        return None
+    try:
+        return pick_model(default_tier, task=task)
+    except ValueError as e:
+        log.warning("Ignoring [%s] MODEL= in multiplai.conf: %s", task, e)
+        return None
+
+
+def conf_int(task: str, key: str, default: int) -> int:
+    """An integer knob for *task* from multiplai.conf, or *default*.
+
+    The third member of the `conf_effort` / `conf_model` family, for tuning
+    values that are neither a model nor an effort. Same contract: an absent,
+    blank or unparseable value logs and yields *default*, so a typo is
+    diagnosable from the log instead of silently reshaping a gate.
+    """
+    section = (load_multiplai_conf().get("_sections", {}) or {}).get(task) or {}
+    raw = (section.get(key) or "").strip().strip("\"'")
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        log.warning("Unparseable [%s] %s=%r in multiplai.conf (want an integer) "
+                    "— using %d", task, key, raw, default)
+        return default
+
+
 def _normalize_prototype_toggle(value) -> str:
     """Map a config.yaml `prototype.enabled` value to "auto" | "true" | "false".
 
@@ -382,10 +428,32 @@ class BuildConfig:
     model: str = DEFAULT_MODEL
 
     # Optional stronger model for quality reviews (None → falls back to
-    # `model`). Populated from BUILDME_REVIEW_MODEL (env, wins) or
-    # `code_review.model` in specs/config.yaml; both ceiling-capped by
-    # resolve_model, matching the existing model-resolution pattern.
+    # `model`). Populated from BUILDME_REVIEW_MODEL (env, wins),
+    # `code_review.model` in specs/config.yaml, then `[buildme.review] MODEL=`
+    # in multiplai.conf — in that order; the first two are ceiling-capped by
+    # resolve_model, the conf one by pick_model, matching the existing
+    # model-resolution pattern.
+    #
+    # The conf read happens in __post_init__ (not a default_factory) so
+    # `_review_model_from_conf` can record where the value came from: without
+    # it, specs/config.yaml could no longer override a conf-set reviewer,
+    # because `_load_specs_config` only fills an *unset* review_model.
     review_model: str | None = None
+    _review_model_from_conf: bool = field(default=False, repr=False)
+
+    # Per-step model overrides, the other axis of the same tuning decision as
+    # the effort fields below. `[buildme.spec]` / `[buildme.agent]` /
+    # `[buildme.plan_review]` MODEL= tune one step without a code edit.
+    #
+    # Unlike `review_model` these resolve to a concrete ID in __post_init__
+    # (spec/agent from `model`, plan_review from `review_model`-or-`model`), so
+    # a call site can pass them straight to the SDK. review_model keeps its
+    # None-means-`model` contract because `_panel_models` and its tests already
+    # depend on it.
+    spec_model: str | None = field(default_factory=lambda: conf_model("buildme.spec"))
+    agent_model: str | None = field(default_factory=lambda: conf_model("buildme.agent"))
+    plan_review_model: str | None = field(
+        default_factory=lambda: conf_model("buildme.plan_review"))
 
     # Reasoning effort, the second axis of the same tuning decision as `model`.
     # None → SDK default. `[buildme] EFFORT=` sets the pipeline-wide value;
@@ -402,6 +470,30 @@ class BuildConfig:
     spec_effort: str | None = field(default_factory=lambda: conf_effort("buildme.spec"))
     review_effort: str | None = field(default_factory=lambda: conf_effort("buildme.review"))
     agent_effort: str | None = field(default_factory=lambda: conf_effort("buildme.agent"))
+    # PLAN_REVIEW is a review, so it inherits the reviewer's effort rather than
+    # the pipeline-wide one — `[buildme.review] EFFORT=high` should not have to
+    # be repeated to make the plan review think as hard as the code review.
+    plan_review_effort: str | None = field(
+        default_factory=lambda: conf_effort("buildme.plan_review"))
+
+    # PLAN_REVIEW's oversized-plan triggers, both read from multiplai.conf
+    # (`[buildme.plan_review] PLAN_SPLIT_BLOCK_TRIGGER=` /
+    # `PLAN_SPLIT_PACKAGE_TRIGGER=`).
+    #
+    # 8 is a PLACEHOLDER, not a measured number — nobody has measured the
+    # block-count distribution across real runs, so it is a guess wearing a
+    # decimal point. It lives here as a knob rather than a constant in the
+    # source precisely so it can be replaced once the run archive says where
+    # per-block review actually starts failing.
+    plan_split_block_trigger: int = field(
+        default_factory=lambda: conf_int("buildme.plan_review",
+                                         "PLAN_SPLIT_BLOCK_TRIGGER", 8))
+    # The second trigger: distinct top-level packages a block set touches. A
+    # change spanning several packages is a different risk class from a deep
+    # change inside one, at identical block count.
+    plan_split_package_trigger: int = field(
+        default_factory=lambda: conf_int("buildme.plan_review",
+                                         "PLAN_SPLIT_PACKAGE_TRIGGER", 3))
 
     # Coding-standards docs pushed into the reviewer's context (paths from
     # `standards_files` in specs/config.yaml). Pull-for-implementer,
@@ -430,12 +522,32 @@ class BuildConfig:
     budget_max_usd: float | None = None
 
     def __post_init__(self) -> None:
-        # Per-step effort falls back to the pipeline-wide root, so `effort` is
-        # the one field a caller (or `[buildme] EFFORT=`) has to set to move
-        # every step.
-        for attr in ("spec_effort", "review_effort", "agent_effort"):
+        # `review_model` reads its conf section here rather than in a
+        # default_factory so the source is recorded: specs/config.yaml must
+        # still beat multiplai.conf, and `_load_specs_config` can only know to
+        # overwrite a conf-supplied value if it is told which one that was. A
+        # caller-supplied review_model leaves the flag False and stands.
+        if self.review_model is None:
+            self.review_model = conf_model("buildme.review")
+            self._review_model_from_conf = self.review_model is not None
+
+        # Per-step effort/model falls back to its root, so one field moves
+        # every step that has not been tuned individually. Order matters:
+        # `review_*` is resolved before the `plan_review_*` entry that reads
+        # it, and `plan_review_model` gets a second entry so it lands on a
+        # concrete ID even when `review_model` is None (its own root).
+        for attr, root in (
+            ("spec_effort", "effort"),
+            ("review_effort", "effort"),
+            ("agent_effort", "effort"),
+            ("plan_review_effort", "review_effort"),
+            ("spec_model", "model"),
+            ("agent_model", "model"),
+            ("plan_review_model", "review_model"),
+            ("plan_review_model", "model"),
+        ):
             if getattr(self, attr) is None:
-                setattr(self, attr, self.effort)
+                setattr(self, attr, getattr(self, root))
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> BuildConfig:
@@ -507,8 +619,15 @@ class BuildConfig:
         # Reviewer context: coding standards + optional stronger review model
         self.standards_files = data.get("standards_files") or []
         code_review_cfg = data.get("code_review", {}) or {}
-        if code_review_cfg.get("model") and not self.review_model:
+        # The project's own config.yaml outranks multiplai.conf — the conf is a
+        # machine-wide default, config.yaml is this repo's stated choice. So a
+        # value that only came from `[buildme.review] MODEL=` is overwritable
+        # here, while an explicitly-constructed one still wins.
+        if code_review_cfg.get("model") and (
+            not self.review_model or self._review_model_from_conf
+        ):
             self.review_model = resolve_model(code_review_cfg["model"])
+            self._review_model_from_conf = False
         self._load_review_panel(code_review_cfg)
         self._load_review_gate(code_review_cfg)
         self.adjudicate_findings = bool(code_review_cfg.get("adjudicate", True))
@@ -694,17 +813,77 @@ class BuildConfig:
     def progress_file_path(self) -> Path:
         return self.project_dir / "build-progress.md"
 
-    def standards_text(self) -> str:
+    def convention_files(self, changed_paths: Iterable[str] | None = None) -> list[Path]:
+        """The `CLAUDE.md` chain that governs *changed_paths*, outermost first.
+
+        Always the repo-root `CLAUDE.md` (this is the file every contributor is
+        told to read), plus `CLAUDE.md` / `CLAUDE.local.md` in any directory
+        that is an **ancestor** of a changed file. A directory's conventions
+        doc governs files at or below it and nothing else — a sibling
+        directory's `CLAUDE.md` is not a rule the change has to satisfy, and
+        handing one to the reviewer manufactures violations out of rules that
+        never applied.
+
+        Paths may be absolute or project-relative (a git diff's are relative).
+        Anything resolving outside the project dir is skipped: it has no
+        ancestor chain here, and walking one would climb out of the repo.
+        """
+        found: list[Path] = []
+
+        def _collect(directory: Path) -> None:
+            for name in ("CLAUDE.md", "CLAUDE.local.md"):
+                candidate = directory / name
+                if candidate.is_file() and candidate not in found:
+                    found.append(candidate)
+
+        root = self.project_dir
+        _collect(root)
+
+        for entry in changed_paths or []:
+            if not entry:
+                continue
+            path = Path(entry)
+            path = path if path.is_absolute() else root / path
+            try:
+                relative = path.relative_to(root)
+            except ValueError:
+                continue
+            # Ancestors only, root-down and excluding the file itself, so the
+            # ordering is general rule first, most specific rule last.
+            directory = root
+            for part in relative.parts[:-1]:
+                directory = directory / part
+                _collect(directory)
+        return found
+
+    def standards_text(self, changed_paths: Iterable[str] | None = None) -> str:
         """Concatenated contents of the coding-standards docs for the reviewer.
 
-        Resolves each `standards_files` entry (absolute, or relative to the
-        project dir, then $CLAUDE_CONFIG_DIR/reference/dev/, then
-        $CLAUDE_CONFIG_DIR). Missing OR unreadable files are logged and
-        skipped — one bad standards doc must not fail the block. Returns ""
-        when nothing resolves — the review prompt then says
-        "(no standards provided)".
+        Two independent sources, conventions first:
+
+        * the `CLAUDE.md` chain governing *changed_paths* (`convention_files`) —
+          automatic, tagged with its project-relative path so the reviewer can
+          cite the rule it is quoting;
+        * every `standards_files` entry (absolute, or relative to the project
+          dir, then $CLAUDE_CONFIG_DIR/reference/dev/, then $CLAUDE_CONFIG_DIR)
+          — the opt-in source, unchanged.
+
+        Missing OR unreadable files are logged and skipped — one bad doc must
+        not fail the block. Returns "" when nothing resolves — the review
+        prompt then says "(no standards provided)".
         """
         parts: list[str] = []
+        for path in self.convention_files(changed_paths):
+            try:
+                text = path.read_text()
+            except (OSError, UnicodeDecodeError) as e:
+                log.warning("Conventions file unreadable, skipping: %s (%s)", path, e)
+                continue
+            try:
+                label = str(path.relative_to(self.project_dir))
+            except ValueError:
+                label = str(path)
+            parts.append(f"### Conventions: {label}\n{text}")
         for entry in self.standards_files:
             path = self._resolve_standards_file(entry)
             if path is None:

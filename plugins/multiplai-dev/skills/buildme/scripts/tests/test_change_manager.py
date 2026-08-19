@@ -131,6 +131,7 @@ class TestArtifactStatus:
     def test_all_done(self, cm, specs_dir):
         change = cm.create_change("test")
         (change / "proposal.md").write_text("x")
+        (change / "use-cases.md").write_text("x")
         (change / "design.md").write_text("x")
         (change / "requirements").mkdir(exist_ok=True)
         (change / "requirements" / "cap1.md").write_text("x")
@@ -159,9 +160,12 @@ class TestArtifactStatus:
         assert status["unknowns"] == ArtifactStatus.READY
         assert status["tasks"] == ArtifactStatus.BLOCKED
 
-    def test_tasks_ready_with_requirements_design_and_unknowns(self, cm, specs_dir):
+    def test_tasks_ready_with_requirements_design_unknowns_and_use_cases(
+        self, cm, specs_dir,
+    ):
         change = cm.create_change("test")
         (change / "proposal.md").write_text("x")
+        (change / "use-cases.md").write_text("x")
         (change / "design.md").write_text("x")
         (change / "requirements").mkdir(exist_ok=True)
         (change / "requirements" / "cap1.md").write_text("x")
@@ -174,6 +178,28 @@ class TestArtifactStatus:
         (change / "proposal.md").write_text("x")
         status = cm.artifact_status(change)
         assert status["unknowns"] == ArtifactStatus.BLOCKED
+
+    def test_use_cases_requires_only_the_proposal(self, cm, specs_dir):
+        """Personas can be written as soon as the problem is stated — the
+        node sits alongside requirements and design, not behind them."""
+        change = cm.create_change("test")
+        assert cm.artifact_status(change)["use-cases"] == ArtifactStatus.BLOCKED
+        (change / "proposal.md").write_text("x")
+        status = cm.artifact_status(change)
+        assert status["use-cases"] == ArtifactStatus.READY
+
+    def test_tasks_blocked_without_use_cases(self, cm, specs_dir):
+        """A use case is delivered by a block or by nothing at all, so the
+        breakdown is not written until the use cases are on disk."""
+        change = cm.create_change("test")
+        (change / "proposal.md").write_text("x")
+        (change / "design.md").write_text("x")
+        (change / "requirements").mkdir(exist_ok=True)
+        (change / "requirements" / "cap1.md").write_text("x")
+        (change / "unknowns.md").write_text("x")
+        status = cm.artifact_status(change)
+        assert status["use-cases"] == ArtifactStatus.READY
+        assert status["tasks"] == ArtifactStatus.BLOCKED
 
 
 class TestReadyArtifacts:
@@ -212,6 +238,50 @@ class TestArtifactContext:
         (change / "proposal.md").write_text("x")
         ctx = cm.artifact_context(change, "design")
         assert "proposal" in ctx["dependencies"]
+
+    def test_use_cases_template_carries_both_section_headings(self, cm):
+        """The document's whole job is those two sections — personas, and the
+        outcomes they can observe."""
+        change = cm.create_change("test")
+        ctx = cm.artifact_context(change, "use-cases")
+        assert "## Personas" in ctx["template"]
+        assert "## Use cases" in ctx["template"]
+        assert ctx["output_path"] == "use-cases.md"
+        assert "proposal" in ctx["dependencies"]
+
+    def test_use_cases_instruction_sets_the_observable_outcome_bar(self, cm):
+        change = cm.create_change("test")
+        instruction = cm.artifact_context(change, "use-cases")["instruction"]
+        assert "WHO" in instruction
+        assert "persona" in instruction
+        assert "observable" in instruction
+        assert "OUTSIDE the system" in instruction
+
+    def test_proposal_states_goals_and_non_goals_under_what_changes(self, cm):
+        """design.md no longer carries them, so the proposal must ask for
+        both by name or they are simply never written."""
+        change = cm.create_change("test")
+        ctx = cm.artifact_context(change, "proposal")
+        template = ctx["template"]
+        what_changes = template.split("## What Changes", 1)[1].split("## Capabilities", 1)[0]
+        assert "Goals" in what_changes
+        assert "Non-Goals" in what_changes
+        assert "Goals" in ctx["instruction"] and "Non-Goals" in ctx["instruction"]
+
+    def test_proposal_no_longer_asks_for_personas_or_use_cases(self, cm):
+        change = cm.create_change("test")
+        ctx = cm.artifact_context(change, "proposal")
+        assert "## Personas" not in ctx["template"]
+        assert "## Use cases" not in ctx["template"]
+
+    def test_design_drops_goals_non_goals_and_keeps_its_other_sections(self, cm):
+        change = cm.create_change("test")
+        ctx = cm.artifact_context(change, "design")
+        template = ctx["template"]
+        assert "Goals / Non-Goals" not in template
+        assert "## Context" in template
+        assert "## Decisions" in template
+        assert "## Risks / Trade-offs" in template
 
     def test_loads_project_context(self, cm, specs_dir):
         config = specs_dir / "config.yaml"

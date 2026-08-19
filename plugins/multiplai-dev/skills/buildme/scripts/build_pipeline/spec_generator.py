@@ -4,7 +4,8 @@ Entry point: run_spec_generator(config, args)
 
 Flow:
 1. Bootstrap change directory
-2. Generate artifacts in dependency order (proposal -> requirements+design -> tasks -> rubric)
+2. Generate artifacts in dependency order
+   (proposal -> use-cases+requirements+design -> unknowns -> tasks -> rubric)
 3. Run design audit
 4. Return exit code
 """
@@ -195,6 +196,8 @@ async def _generate_single_artifact(
 
     if artifact_id == "requirements":
         await _generate_requirements(cm, change_dir, config, state)
+    elif artifact_id == "use-cases":
+        await _generate_use_cases(change_dir, context, config, state)
     elif artifact_id == "unknowns":
         await _generate_unknowns(cm, change_dir, config, state)
     elif artifact_id == "rubric":
@@ -274,6 +277,94 @@ async def _generate_requirements(
 
         req_file.write_text(content)
         log.info("Wrote requirements: %s", req_file)
+
+
+# The use-cases prompt lives here rather than in prompts/spec_generation.py
+# because `spec_steps._build_prompt` dispatches on a fixed set of artifact ids
+# and raises ValueError on anything else — this artifact therefore builds its
+# own prompt and calls llm_call directly. Moving the template into
+# prompts/spec_generation.py and adding the matching `_build_prompt` branch is
+# the tidier home for it, and is a change to files this work item does not own.
+USE_CASES_PROMPT = """\
+You are generating the use cases document for a spec-driven change.
+
+## Project Context
+{project_context}
+
+## Interview Summary
+{interview_summary}
+
+## Proposal
+{proposal_content}
+
+## Instructions
+{instruction}
+
+## Output Format
+Generate the document as markdown following this template structure:
+
+{template}
+
+Rules:
+- Every persona block names who they are, the job they are doing, and the
+  constraint they are under
+- Every use case reads exactly: <persona> wants <goal> so that <observable outcome>
+- Every use case names a persona defined in the Personas section
+- Every outcome is observable from OUTSIDE the system — something the persona
+  can see, read, or measure without reading the code. "The cache is warmed" is
+  not an outcome; "the page loads before they finish reading the heading" is
+- No use case invents a persona, a goal, or an outcome the proposal and the
+  interview do not support
+
+Output ONLY the markdown content. No commentary.
+"""
+
+
+async def _generate_use_cases(
+    change_dir: Path,
+    context: dict,
+    config,
+    state: BuildState,
+) -> None:
+    """Write use-cases.md — the personas and the outcomes they can observe.
+
+    Separate from `generate_artifact` for the reason stated on
+    ``USE_CASES_PROMPT``: that function's prompt builder knows a fixed set of
+    artifact ids. The call is otherwise identical — same model, same effort,
+    same tool-free system prompt, one budget label of its own.
+    """
+    from .sdk import llm_call
+
+    proposal_path = change_dir / "proposal.md"
+    proposal_content = (
+        proposal_path.read_text() if proposal_path.exists() else "(not available)"
+    )
+
+    prompt = USE_CASES_PROMPT.format(
+        project_context=context.get("context", ""),
+        interview_summary=state.interview_summary or "(none provided)",
+        proposal_content=proposal_content,
+        instruction=context.get("instruction", ""),
+        template=context.get("template", ""),
+    )
+
+    content = await llm_call(
+        prompt,
+        model=config.model,
+        effort=getattr(config, "spec_effort", None),
+        system_prompt=(
+            "You are a technical specification generator. Your ONLY job is to "
+            "generate the requested document content based on the context provided "
+            "in the prompt. Output the document directly — do NOT attempt to use "
+            "tools, explore code, or request more information. All the context you "
+            "need is in the prompt. Output ONLY markdown content."
+        ),
+        budget_label="spec:use-cases",
+    )
+
+    output_path = change_dir / (context.get("output_path") or "use-cases.md")
+    output_path.write_text(content)
+    log.info("Wrote artifact: %s", output_path)
 
 
 UNKNOWNS_HEADER = "# Unknowns — what we are about to depend on\n"

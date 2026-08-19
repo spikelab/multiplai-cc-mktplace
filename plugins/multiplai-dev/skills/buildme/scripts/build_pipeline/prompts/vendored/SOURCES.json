@@ -1,0 +1,47 @@
+[
+  {
+    "repo": "anthropics/claude-plugins-official",
+    "path": "plugins/pr-review-toolkit/agents/code-reviewer.md",
+    "blob_sha": "834b70c21f1f1bd4d01b8025bc830bf00887f2e7",
+    "tree_sha": "d409052c02b7f3a894ae315a665b88df3d8a677c",
+    "licence": "Apache-2.0",
+    "modified": true,
+    "used_by": ["CODE_REVIEWER_CONVENTIONS_BLOCK"]
+  },
+  {
+    "repo": "anthropics/claude-plugins-official",
+    "path": "plugins/pr-review-toolkit/agents/silent-failure-hunter.md",
+    "blob_sha": "b8a8dfa41e18ef6ac801ae64be38b2508aa04f44",
+    "tree_sha": "d409052c02b7f3a894ae315a665b88df3d8a677c",
+    "licence": "Apache-2.0",
+    "modified": true,
+    "used_by": ["SILENT_FAILURE_PROCESS_BLOCK", "SILENT_FAILURE_OUTPUT_BLOCK"]
+  },
+  {
+    "repo": "anthropics/claude-plugins-official",
+    "path": "plugins/pr-review-toolkit/agents/type-design-analyzer.md",
+    "blob_sha": "9c17fec6b276cbe42f80b5e96e21e016b59c8e06",
+    "tree_sha": "d409052c02b7f3a894ae315a665b88df3d8a677c",
+    "licence": "Apache-2.0",
+    "modified": true,
+    "used_by": ["TYPE_INVARIANT_BLOCK"]
+  },
+  {
+    "repo": "anthropics/claude-plugins-official",
+    "path": "plugins/pr-review-toolkit/agents/pr-test-analyzer.md",
+    "blob_sha": "05b342b9175af85c5d7404bac67f5c62da375aa2",
+    "tree_sha": "d409052c02b7f3a894ae315a665b88df3d8a677c",
+    "licence": "Apache-2.0",
+    "modified": true,
+    "used_by": ["TEST_COVERAGE_BLOCK"]
+  },
+  {
+    "repo": "anthropics/claude-plugins-official",
+    "path": "plugins/pr-review-toolkit/LICENSE",
+    "blob_sha": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+    "tree_sha": "24487989f834fa3253e85150760f742fe5931715",
+    "licence": "Apache-2.0",
+    "modified": false,
+    "used_by": []
+  }
+]

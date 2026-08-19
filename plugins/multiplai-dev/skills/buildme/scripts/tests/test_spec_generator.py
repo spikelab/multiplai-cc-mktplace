@@ -107,8 +107,27 @@ class TestArtifactDependencyOrder:
     def test_rubric_requires_tasks(self):
         assert "tasks" in ARTIFACT_DAG["rubric"]["requires"]
 
+    def test_use_cases_requires_only_the_proposal(self):
+        assert ARTIFACT_DAG["use-cases"]["requires"] == ["proposal"]
+        assert ARTIFACT_DAG["use-cases"]["generates"] == "use-cases.md"
+
+    def test_tasks_requires_use_cases(self):
+        """The task breakdown is what delivers a use case, so it is written
+        with the use cases already on disk."""
+        assert "use-cases" in ARTIFACT_DAG["tasks"]["requires"]
+
+    def test_every_node_is_declared_after_the_nodes_it_requires(self):
+        """`artifact_status` resolves each node against the statuses computed
+        so far, so a node declared before its dependency reads that dependency
+        as absent and reports BLOCKED forever."""
+        seen: list[str] = []
+        for aid, spec in ARTIFACT_DAG.items():
+            missing = [dep for dep in spec["requires"] if dep not in seen]
+            assert not missing, f"{aid} is declared before {missing}"
+            seen.append(aid)
+
     def test_full_ordering(self):
-        """Proposal -> requirements+design -> tasks -> rubric."""
+        """Proposal -> use-cases+requirements+design -> tasks -> rubric."""
         _ = ChangeManager(Path("/fake"))
         # Simulate walking the DAG
         order = []
@@ -125,6 +144,8 @@ class TestArtifactDependencyOrder:
 
         assert order.index("proposal") < order.index("requirements")
         assert order.index("proposal") < order.index("design")
+        assert order.index("proposal") < order.index("use-cases")
+        assert order.index("use-cases") < order.index("tasks")
         assert order.index("requirements") < order.index("tasks")
         assert order.index("design") < order.index("tasks")
         assert order.index("tasks") < order.index("rubric")
@@ -176,8 +197,10 @@ class TestResumeSkipsExisting:
         mock_content = "# Generated Content\nSome content here."
 
         with patch("build_pipeline.llm_steps.spec_steps.generate_artifact", new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.sdk.llm_call", new_callable=AsyncMock) as mock_llm, \
              patch("build_pipeline.spec_generator.generate_rubric", new_callable=AsyncMock) as mock_rubric:
             mock_gen.return_value = mock_content
+            mock_llm.return_value = "## Personas\n\n## Use cases\n"
             mock_rubric.return_value = "# Rubric\nContent"
 
             await _generate_all_artifacts(cm, change_dir, config, state)
@@ -205,6 +228,7 @@ class TestTasksAuditResumeDurability:
         # Every artifact already on disk → DAG loop sees all DONE and never
         # re-enters _generate_single_artifact.
         (change_dir / "proposal.md").write_text("# Proposal")
+        (change_dir / "use-cases.md").write_text("## Personas\n\n## Use cases\n")
         (change_dir / "design.md").write_text("# Design")
         (change_dir / "unknowns.md").write_text("# Unknowns\n\nNo dependencies new to this project.")
         (change_dir / "tasks.md").write_text("## 1. Vertical slice A")
@@ -232,7 +256,8 @@ class TestTasksAuditResumeDurability:
             phase=BuildPhase.SPEC_GENERATION,
             spec_gen=SpecGenState(
                 completed_artifacts=[
-                    "proposal", "requirements", "design", "unknowns", "tasks", "rubric",
+                    "proposal", "use-cases", "requirements", "design",
+                    "unknowns", "tasks", "rubric",
                 ],
                 tasks_audit_done=audit_done,
                 explainers_done=True,
@@ -1075,6 +1100,7 @@ class TestUnknownsGateResumeDurability:
         project_dir = tmp_path / "proj"
         project_dir.mkdir()
         (change_dir / "proposal.md").write_text("## Impact\nAdds `polars`.\n")
+        (change_dir / "use-cases.md").write_text("## Personas\n\n## Use cases\n")
         (change_dir / "design.md").write_text("## Decisions\nNone.\n")
         (change_dir / "unknowns.md").write_text("# Unknowns\n\n## polars\n")
         (change_dir / "tasks.md").write_text("## 1. Slice")
@@ -1100,7 +1126,8 @@ class TestUnknownsGateResumeDurability:
             phase=BuildPhase.SPEC_GENERATION,
             spec_gen=SpecGenState(
                 completed_artifacts=[
-                    "proposal", "requirements", "design", "unknowns", "tasks", "rubric",
+                    "proposal", "use-cases", "requirements", "design",
+                    "unknowns", "tasks", "rubric",
                 ],
                 tasks_audit_done=True,
                 explainers_done=explainers_done,
@@ -1299,3 +1326,116 @@ class TestCodebaseAnalysisReachesTheDesign:
         kwargs = mock_gen.await_args.kwargs
         assert "MODULE-MAP-MARKER" in kwargs["codebase_analysis"]
         assert "HOUSE-MARKER" in kwargs["reference_docs"]
+
+
+class TestUseCasesGeneration:
+    """use-cases.md carries the personas and the outcomes they can observe.
+    It is generated like every other artifact — in dependency order, from the
+    template and instruction the change manager holds — and its prompt must
+    reach the model with the proposal, both section headings, and the
+    observable-outcome bar intact."""
+
+    def _setup(self, tmp_path):
+        specs_dir = tmp_path / "specs"
+        specs_dir.mkdir()
+        cm = ChangeManager(specs_dir)
+        cm.init_specs()
+        change_dir = cm.create_change("test-feature")
+        (change_dir / "proposal.md").write_text("## Why\nPROPOSAL-MARKER\n")
+
+        config = MagicMock()
+        config.change_name = "test-feature"
+        config.specs_dir = specs_dir
+        config.change_dir = change_dir
+        config.project_dir = tmp_path
+        config.model = "test-model"
+        config.spec_effort = "medium"
+        config.state_file_path.return_value = change_dir / ".build-state.json"
+
+        state = BuildState(
+            change_name="test-feature", mode="scratch", tier="standard",
+            state_file=str(change_dir / ".build-state.json"),
+            phase=BuildPhase.SPEC_GENERATION,
+            spec_gen=SpecGenState(),
+            interview_summary="INTERVIEW-MARKER",
+        )
+        return cm, change_dir, config, state
+
+    @pytest.mark.asyncio
+    async def test_writes_the_document_and_records_completion(self, tmp_path):
+        cm, change_dir, config, state = self._setup(tmp_path)
+
+        with patch("build_pipeline.sdk.llm_call", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = (
+                "## Personas\n\n### Analyst\n\n## Use cases\n"
+                "- Analyst wants a summary so that they can see the trend\n"
+            )
+            await _generate_single_artifact(cm, change_dir, "use-cases", config, state)
+
+        written = (change_dir / "use-cases.md").read_text()
+        assert "## Personas" in written
+        assert "## Use cases" in written
+        assert "use-cases" in state.spec_gen.completed_artifacts
+
+    @pytest.mark.asyncio
+    async def test_prompt_carries_proposal_template_and_the_outcome_bar(self, tmp_path):
+        cm, change_dir, config, state = self._setup(tmp_path)
+
+        with patch("build_pipeline.sdk.llm_call", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = "## Personas\n\n## Use cases\n"
+            await _generate_single_artifact(cm, change_dir, "use-cases", config, state)
+
+        prompt = mock_llm.await_args.args[0]
+        assert "PROPOSAL-MARKER" in prompt
+        assert "INTERVIEW-MARKER" in prompt
+        # The template's two headings and the instruction's bar both reach it.
+        assert "## Personas" in prompt
+        assert "## Use cases" in prompt
+        assert "observable outcome" in prompt
+        assert "OUTSIDE the system" in prompt
+
+    @pytest.mark.asyncio
+    async def test_call_is_tool_free_and_billed_to_its_own_label(self, tmp_path):
+        """Like every spec-generation call: no tools (the generator has none)
+        and its own budget label so a runaway is attributable."""
+        cm, change_dir, config, state = self._setup(tmp_path)
+
+        with patch("build_pipeline.sdk.llm_call", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = "## Personas\n\n## Use cases\n"
+            await _generate_single_artifact(cm, change_dir, "use-cases", config, state)
+
+        kwargs = mock_llm.await_args.kwargs
+        assert kwargs["budget_label"] == "spec:use-cases"
+        assert "allowed_tools" not in kwargs
+        assert "do NOT attempt to use" in kwargs["system_prompt"]
+
+    @pytest.mark.asyncio
+    async def test_generated_in_dependency_order_with_the_other_artifacts(self, tmp_path):
+        """The DAG loop reaches it off the proposal alone, and tasks is not
+        written until it exists."""
+        cm, change_dir, config, state = self._setup(tmp_path)
+        config.explainers_active = True
+        config.project_description = ""
+        config.task_granularity = "checkboxes"
+
+        order: list[str] = []
+
+        async def _record(artifact_id, *_a, **_kw):
+            order.append(artifact_id)
+            return "## 1. Slice"
+
+        with patch("build_pipeline.llm_steps.spec_steps.generate_artifact",
+                   new_callable=AsyncMock) as mock_gen, \
+             patch("build_pipeline.sdk.llm_call", new_callable=AsyncMock) as mock_llm, \
+             patch("build_pipeline.spec_generator._audit_tasks_shape",
+                   new_callable=AsyncMock), \
+             patch("build_pipeline.spec_generator.generate_rubric",
+                   new_callable=AsyncMock) as mock_rubric:
+            mock_gen.side_effect = _record
+            mock_llm.side_effect = lambda *_a, **_kw: order.append("use-cases") or "## Personas\n\n## Use cases\n"
+            mock_rubric.return_value = "# Rubric"
+            await _generate_all_artifacts(cm, change_dir, config, state)
+
+        assert (change_dir / "use-cases.md").exists()
+        assert "use-cases" in order
+        assert order.index("use-cases") < order.index("tasks")
