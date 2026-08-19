@@ -185,3 +185,57 @@ class TestRubricHasCoreDimensions:
         assert "rubric-req-marker" in prompt
         assert "### auth" in prompt
         assert "(no specs)" not in prompt
+
+
+class TestArchitectureBaseline:
+    """The Code Architecture fallback baseline reaches the rendered prompt."""
+
+    @pytest.mark.asyncio
+    async def test_rubric_prompt_states_both_binding_rules(self, tmp_path):
+        """Both rules that bind the smell baseline must survive .format() rendering.
+
+        Without them the baseline reads as a hard checklist: it would override a
+        project's own documented standards, and label heuristics as violations.
+        """
+        change_dir = tmp_path / "change"
+        change_dir.mkdir()
+        (change_dir / "proposal.md").write_text("REST API with database models and endpoint")
+        (change_dir / "tasks.md").write_text("## 1. Setup")
+
+        config = MagicMock()
+        config.model = "test-model"
+
+        with patch("build_pipeline.rubric.llm_call", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = "# Rubric\nContent"
+            await generate_rubric(change_dir, config)
+
+        prompt = mock_llm.call_args[0][0]
+
+        # Rule 1 — the repo overrides.
+        assert "The repo overrides." in prompt
+        assert "A documented repo standard always wins" in prompt
+        assert "suppress the smell" in prompt
+
+        # Rule 2 — always a judgment call.
+        assert "Always a judgment call." in prompt
+        assert "labelled heuristic" in prompt
+        assert '"possible Feature Envy"' in prompt
+        assert "already enforces" in prompt
+
+        # The baseline they bind is a fallback, and all twelve smells are present.
+        assert "When the project documents no standards of its own" in prompt
+        for smell in (
+            "Mysterious Name",
+            "Duplicated Code",
+            "Feature Envy",
+            "Data Clumps",
+            "Primitive Obsession",
+            "Repeated Switches",
+            "Shotgun Surgery",
+            "Divergent Change",
+            "Speculative Generality",
+            "Message Chains",
+            "Middle Man",
+            "Refused Bequest",
+        ):
+            assert smell in prompt

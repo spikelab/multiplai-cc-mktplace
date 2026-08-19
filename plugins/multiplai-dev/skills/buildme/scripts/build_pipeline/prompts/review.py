@@ -1,4 +1,4 @@
-"""Prompt templates for code and security review."""
+"""Prompt templates for code review."""
 
 CODE_REVIEW_PROMPT = """\
 You are reviewing a block implementation against its spec and a quality
@@ -233,67 +233,4 @@ Return a JSON object matching this schema:
 
 `passed` is false when any issue would make the build untrustworthy as
 delivered. Return ONLY the JSON. No commentary.
-"""
-
-SECURITY_REVIEW_PROMPT = """\
-You are performing a security review of code changes.
-
-## Diff
-```
-{diff}
-```
-
-## Rubric
-{rubric}
-
-## Instructions
-Review the diff for security issues across these OWASP categories:
-- Injection (SQL, command, XSS)
-- Broken authentication/authorization
-- Sensitive data exposure (secrets, PII in logs)
-- Security misconfiguration
-- Insecure deserialization
-- Using components with known vulnerabilities
-- Insufficient logging/monitoring
-
-Also check:
-- Input validation and sanitization
-- Proper error handling (no stack traces leaked)
-- Secure defaults
-- Principle of least privilege
-
-## Output Format
-Return a JSON object matching the ReviewResult schema:
-
-```json
-{{
-  "scores": [
-    {{
-      "dimension": "Security Posture",
-      "weight": 2,
-      "score": 4,
-      "evidence": "Specific evidence"
-    }},
-    {{
-      "dimension": "Input Validation",
-      "weight": 2,
-      "score": 3,
-      "evidence": "Specific evidence"
-    }}
-  ],
-  "issues": [
-    {{
-      "dimension": "Security",
-      "severity": "Critical",
-      "description": "SQL injection via unsanitized input",
-      "file_path": "path/to/file.py",
-      "line": 42
-    }}
-  ]
-}}
-```
-
-Be thorough but not paranoid. Flag real vulnerabilities, not theoretical impossibilities.
-
-Return ONLY the JSON. No commentary.
 """

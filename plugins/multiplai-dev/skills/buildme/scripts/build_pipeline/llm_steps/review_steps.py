@@ -1,4 +1,4 @@
-"""LLM step functions for code and security review.
+"""LLM step functions for code review.
 
 Each function calls llm_call_structured() or llm_call() to produce
 ReviewResult objects for gate evaluation.
@@ -11,7 +11,7 @@ import logging
 import math
 
 from ..models import AgentResult, ReviewFinding, ReviewResult, ReviewScore
-from ..prompts.review import CODE_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT
+from ..prompts.review import CODE_REVIEW_PROMPT
 from ..sdk import llm_call, llm_call_structured, agent_call, LLMCallError
 
 log = logging.getLogger(__name__)
@@ -235,47 +235,8 @@ async def run_code_review(
     return result
 
 
-# NOTE: not currently wired into the pipeline. No caller invokes a dedicated
-# security review; there is no active security gate.
-async def run_security_review(
-    diff: str,
-    rubric: str,
-    config,
-) -> ReviewResult:
-    """Run security-focused review of code changes.
-
-    Args:
-        diff: The git diff to review
-        rubric: The rubric.md content (for context)
-        config: BuildConfig for model selection
-
-    Returns:
-        ReviewResult with security-focused scores and issues.
-    """
-    prompt = SECURITY_REVIEW_PROMPT.format(
-        diff=diff,
-        rubric=rubric,
-    )
-
-    log.info("Running security review (%d bytes diff)", len(diff))
-    result = await llm_call_structured(
-        prompt,
-        ReviewResult,
-        model=config.model,
-        effort=config.review_effort,
-        max_retries=1,
-        budget_label="security_review",
-    )
-    log.info(
-        "Security review: weighted_avg=%.1f issues=%d",
-        result.weighted_average,
-        len(result.issues),
-    )
-    return result
-
-
-# NOTE: not currently wired into the pipeline (pairs with run_security_review,
-# which is also not wired; the review-fix loop in tdd_engine uses run_implementer).
+# NOTE: not currently wired into the pipeline. No caller invokes it; the
+# review-fix loop in tdd_engine uses run_implementer instead.
 async def run_review_fix(
     issues: list[dict],
     diff: str,

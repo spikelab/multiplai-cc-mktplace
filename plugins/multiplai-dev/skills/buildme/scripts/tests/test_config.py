@@ -115,13 +115,12 @@ class TestGateToggles:
     def test_defaults_all_enabled(self):
         g = GateToggles()
         assert g.code_review_per_block
-        assert g.security_review_per_block
         assert g.test_quality_enabled
         assert g.e2e_test_entry_point_check
 
     def test_toggle_off(self):
-        g = GateToggles(security_review_per_block=False)
-        assert not g.security_review_per_block
+        g = GateToggles(test_quality_enabled=False)
+        assert not g.test_quality_enabled
 
 
 class TestTierProperties:

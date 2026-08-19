@@ -275,12 +275,11 @@ def _normalize_prototype_toggle(value) -> str:
 @dataclass
 class GateToggles:
     """Per-gate on/off switches from config.yaml."""
-    # RESERVED / not yet wired: no code path consults these two toggles. The
+    # RESERVED / not yet wired: no code path consults this toggle. The
     # active per-block review is run_code_review (llm_steps/review_steps.py),
     # called from tdd_engine._run_quality_review; it always runs — there is no
-    # off-switch consulted yet. No security-review gate exists either.
+    # off-switch consulted yet.
     code_review_per_block: bool = True
-    security_review_per_block: bool = True
     test_quality_enabled: bool = True
     e2e_test_entry_point_check: bool = True
     # B1 explainer gate: write unknowns.md before depending on anything new to
@@ -517,7 +516,6 @@ class BuildConfig:
 
         # Gate toggles
         code_review = data.get("code_review", {})
-        security_review = data.get("security_review", {})
         test_quality = data.get("test_quality", {})
         e2e_test = data.get("e2e_test", {})
         explainers = data.get("explainers", {}) or {}
@@ -525,7 +523,6 @@ class BuildConfig:
         respec = data.get("respec", {}) or {}
         self.gates = GateToggles(
             code_review_per_block=code_review.get("per_block", True),
-            security_review_per_block=security_review.get("per_block", True),
             test_quality_enabled=test_quality.get("enabled", True),
             e2e_test_entry_point_check=e2e_test.get("entry_point_check", True),
             explainers_enabled=explainers.get("enabled", True),
