@@ -904,7 +904,9 @@ def resolve_label(
     return create_label(cfg, project_id, name)
 
 
-def resolve_label_object(cfg: dict, project_id: str, ref: str) -> dict:
+def resolve_label_object(
+    cfg: dict, project_id: str, ref: str, *, labels: list[dict] | None = None
+) -> dict:
     """Label name, full UUID, or a unique id prefix -> the whole label object.
 
     `resolve_label` above answers "which id do I attach to this issue"; this one
@@ -917,7 +919,8 @@ def resolve_label_object(cfg: dict, project_id: str, ref: str) -> dict:
     needle = (ref or "").strip().lower()
     if not needle:
         raise PlaneError("empty label reference")
-    labels = project_labels(cfg, project_id)
+    if labels is None:
+        labels = project_labels(cfg, project_id)
     if not labels:
         raise PlaneError("this project has no labels yet")
 
@@ -1662,7 +1665,8 @@ def cmd_label_create(cfg, args):
 def cmd_label_edit(cfg, args):
     """Change a label in place. Every issue carrying it sees the new name."""
     proj = resolve_project(cfg, args.project)
-    label = resolve_label_object(cfg, proj["id"], args.label)
+    labels = project_labels(cfg, proj["id"])
+    label = resolve_label_object(cfg, proj["id"], args.label, labels=labels)
 
     payload: dict = {}
     if args.name is not None:
@@ -1670,7 +1674,7 @@ def cmd_label_edit(cfg, args):
         if not renamed:
             raise PlaneError("empty label name")
         collision = [
-            x for x in project_labels(cfg, proj["id"])
+            x for x in labels
             if (x.get("name") or "").strip().lower() == renamed.lower()
             and x["id"] != label["id"]
         ]
@@ -1722,7 +1726,7 @@ def cmd_label_delete(cfg, args):
         dry_run=args.dry_run,
     )
     if not args.dry_run:
-        print(f"deleted label {name!r} [{label['id']}] — detached from {where}")
+        print(f"deleted label {name!r} [{label['id']}] — it was on {where}")
 
 
 def cmd_cycles(cfg, args):
