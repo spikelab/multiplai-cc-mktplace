@@ -9,7 +9,7 @@
 | `spec_generator.py` | Artifact pipeline (proposal → tasks → rubric) | Via llm_steps |
 | `tdd_engine.py` | Block-by-block TDD with agent spawning. Each block runs test → implement → **refactor** on every tier; the refactor is verified (suite re-run + `unchanged_tests_gate`) and its diff discarded on failure. `_run_refactor_all` is the one conservative whole-change pass, between the block loop and `_run_final_review`, guarded by `TDDState.refactor_all_done`. | Via llm_steps |
 | `change_manager.py` | Manages specs/ directory (DAG, status, templates, archiving) | No |
-| `config.py` | BuildConfig, tier detection, test command discovery, reference-doc resolution (`stack_reference_docs`/`reference_docs_text`: built-in stack map + `reference_docs:` overrides from `specs/config.yaml` + django/fastapi/react manifest detection; `summarize_reference_doc` reduces an over-limit doc on section boundaries and always emits the full section index) | No |
+| `config.py` | BuildConfig, tier detection, test command discovery, reference-doc resolution (`stack_reference_docs`/`reference_docs_text`: built-in stack map + `reference_docs:` overrides from `specs/config.yaml` + django/fastapi/react manifest detection; `summarize_reference_doc` reduces an over-limit doc on section boundaries and always emits the full section index). Also the per-step tuning knobs: `conf_model`/`conf_int` join `conf_effort` as the multiplai.conf readers that can say "the conf said nothing" (`pick_model` cannot — it always returns a concrete ID), feeding `spec_model`/`agent_model`/`plan_review_model`, `plan_review_effort` and the two `plan_split_*_trigger` integers; `specs/config.yaml` overrides a conf-supplied `review_model`, which is what `_review_model_from_conf` exists to record. `convention_files()` resolves the project's own `CLAUDE.md` chain for the reviewer. | No |
 | `state.py` | BuildState with checkpoint/resume | No |
 | `models.py` | Pydantic models for all structured data | No |
 | `gates.py` | Quality gate assertions (pure code) + agent-report parsers (`parse_agent_status`, `parse_implementation_note`, `parse_docs_impact`). New gates: `unknowns_gate`, `prototype_required`, `prototype_gate`, `docs_freshness_gate` (warn-only). | No |
@@ -17,7 +17,7 @@
 | `dependencies.py` | Pure detection of dependencies **new to this project**: parses the proposal's `## Impact` and design's `## Decisions`, subtracts every manifest (`pyproject.toml`, `package.json`, `Package.swift`, `Cargo.toml`, `go.mod`, `requirements.txt`) and every existing import. Feeds the B1 explainer gate. No LLM, no network. | No |
 | `git_ops.py` | Every `git`/`gh` invocation: worktree+branch setup, explicit-path commits, the TDD loop's whole-tree `commit_tree`/`tree_is_clean`/`discard_to`, push, `gh pr create`. `shell=False`, fixed argv, never merges/force-pushes/deletes; the one destructive call (`discard_to`) refuses unless the target sha is still an ancestor of HEAD. `BOOKKEEPING_EXCLUDES` is the single list of buildme's own files, honored by every commit path and by the discard's `clean`. | No |
 | `board.py` | Board seam: pure `column_for(phase, block_status)` → `BoardColumn`, `.board.json` card writer, `BOARD:<slug>:<Column>` stdout line. Drives Shaping → Planning → In Development → In Review only; its docstring names the columns it never sets. The `BoardCard`/`BoardEvent` pydantic models live here deliberately (they are the card file's private schema, not shared pipeline data). | No |
-| `sdk.py` | `llm_call()` + `agent_call()` adapters over `multiplai_core.run_agent()` | Yes (SDK) |
+| `sdk.py` | `llm_call()` / `llm_call_structured()` (toolless) + `agent_call()` / `agent_call_structured()` (tool-holding) adapters over `multiplai_core.run_agent()`. `agent_call_structured` is the reviewer's entry point: it runs the agent loop, then parses the final message into a pydantic model with one re-ask on a parse failure. Every `agent_call` path goes through `_require_trusted_repo()`, so a tool-holding review needs `--trust-repo` / `BUILDME_TRUST_REPO=1`. | Yes (SDK) |
 | `rubric.py` | Rubric generation and change type detection | Via sdk |
 | _(logging)_ | Uses shared `log_utils.setup_logging()` from hooks/ | No |
 | `env.py` | .env loading, multiplai.conf parsing, model resolution | No |
@@ -32,7 +32,8 @@
 | `tdd_steps.py` | `run_test_writer()`, `run_implementer()`, `run_refactorer()`, `run_refactor_all()`, `run_integration_fix()` | TDD agent spawning with tool allowlists. Reports carry the `SURPRISES:` / `SPEC_IMPACT:` REQUIRED slots parsed by `gates.parse_implementation_note`. `run_refactor_all()` is the whole-change pass: same `REFACTORER_TOOLS`, more turns/time, `budget_label="refactor_all"`. |
 | `respec_steps.py` | `append_implementation_note()`, `format_implementation_note()`, `notes_path()`, `ensure_delta_sections()`, `run_respec_audit()` | B3 loop back to the spec. Each parsed `ImplementationNote` is appended to `implementation-notes.md` **as the build runs** (a crashed build still leaves the learning on disk). `run_respec_audit()` (BuildPhase.RESPEC, after TDD_BUILD) reads those notes + current requirements/design and writes `respec.md` in ADDED/MODIFIED/REMOVED form — **propose only, never edits the specs**, and non-fatal on LLM failure. |
 | `docs_steps.py` | `run_docs_update()` | The documentation phase (BuildPhase.DOCS_UPDATE, between TDD_BUILD and RESPEC). One agent with `Read/Write/Edit/Glob/Grep` over the whole build diff (`tdd_engine.capture_build_diff`) plus `implementation-notes.md`; it discovers the project's own `README*` / `CHANGELOG*` / `docs/**` and updates whatever the diff made stale. Closes with a REQUIRED `DOCS_IMPACT:` slot parsed by `gates.parse_docs_impact`. **Always on** — no flag, no config toggle — and non-fatal like RESPEC: the code is already built, so a docs failure logs and the build continues (that path still reaches `docs_freshness_gate`, which is exactly when its warning is warranted). |
-| `review_steps.py` | `run_code_review()`, `merge_panel_results()`, `run_security_review()`, `run_review_fix()` | `run_code_review()` is **wired** as the active per-block review — `tdd_engine._run_quality_review` calls it with the block's actual diff, rubric, spec context, and coding standards. Runs every model in `config.review_panel` concurrently (empty panel → one reviewer on `review_model`-or-`model`, byte-identical to the pre-panel behavior), drops members that failed, and folds the survivors with `merge_panel_results()`. `run_security_review()` / `run_review_fix()` remain **not wired**. |
+| `review_steps.py` | `run_code_review()`, `merge_panel_results()`, `run_review_fix()` | `run_code_review()` calls `agent_call_structured` with `REVIEWER_TOOLS = ["Read", "Grep", "Glob"]` and `REVIEWER_MAX_TURNS = 30`, so the reviewer opens the files a changed line calls into instead of judging a diff string — and the whole step now needs a trusted repo. It is **wired** as the active per-block review — `tdd_engine._run_quality_review` calls it with the block's actual diff, rubric, spec context, and coding standards. Runs every model in `config.review_panel` concurrently (empty panel → one reviewer on `review_model`-or-`model`, byte-identical to the pre-panel behavior), drops members that failed, and folds the survivors with `merge_panel_results()`. `run_review_fix()` remains **not wired**. Security review is out of scope for this pipeline — the dedicated security-review prompt, step function and `security_review` config toggle were deleted; use Claude Code's built-in `/security-review` instead. |
+| `plan_review_steps.py` | `run_plan_review()`, `run_plan_review_stage()` | The `PLAN_REVIEW` phase, between `DESIGN_AUDIT` and `PROTOTYPE`. Reads `tasks.md` against `rubric.md`, the constraints and `use-cases.md` as a read-only subagent (`PLAN_REVIEW_TOOLS = ["Read", "Grep", "Glob"]`, `PLAN_REVIEW_MAX_TURNS = 30`) on `plan_review_model`/`plan_review_effort`. Critical/major findings drive **one** regeneration of `tasks.md` (`SpecGenState.plan_review_regen_done`), then one report-only re-check; the stage as a whole is `plan_review_done`, checked before the model call. `oversized-plan` is in `PLAN_REVIEW_PROPOSE_ONLY_CATEGORIES` — it never earns the regeneration, because acting on it means splitting `tasks.md` across tickets, which no code path here does. Best-effort: a failure leaves the reviewed plan standing. Its own module rather than `review_steps.py` only because that file was being edited concurrently. |
 
 ## Prompt Templates (prompts/)
 
@@ -43,13 +44,15 @@ Templates are Python f-strings with `{placeholders}`. Each template is a constan
 | `spec_generation.py` | PROPOSAL_PROMPT, SPEC_PROMPT, DESIGN_PROMPT, TASKS_PROMPT |
 | `test_writing.py` | TEST_WRITER_PROMPT |
 | `implementation.py` | IMPLEMENTER_PROMPT_CLEAN, IMPLEMENTER_PROMPT_MINIMUM, REFACTOR_PROMPT, REFACTOR_ALL_PROMPT |
-| `review.py` | CODE_REVIEW_PROMPT, FINDING_ADJUDICATION_PROMPT, FINAL_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT |
+| `review.py` | CODE_REVIEW_PROMPT, FINDING_ADJUDICATION_PROMPT, FINAL_REVIEW_PROMPT |
 | `design_audit.py` | DESIGN_AUDIT_PROMPT, TASKS_AUDIT_PROMPT |
 | `prototype.py` | PROTOTYPE_PROMPT |
 | `explainer.py` | EXPLAINER_PROMPT, UNKNOWNS_REGEN_PROMPT |
 | `docs_update.py` | DOCS_UPDATE_PROMPT |
 | `respec.py` | RESPEC_PROMPT |
 | `rubric_prompts.py` | RUBRIC_PROMPT |
+| `plan_review.py` | PLAN_REVIEW_PROMPT |
+| `vendored/` | Prompt text borrowed from `anthropics/claude-plugins-official`'s `pr-review-toolkit` under Apache-2.0 — `reviewer_blocks.py` holds the blocks, `SOURCES.json` pins each one by blob SHA, `LICENSE` sits beside them. Never edit a block to fit a local house rule; `scripts/check_vendored_prompts.py` re-fetches every pin and reports drift, and it is a **run-it-before-a-release** script wired to nothing. |
 
 ## Testing
 
@@ -202,6 +205,26 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   break a build; only the explicit `check()` at loop boundaries stops one.
   Every `llm_call`/`agent_call` passes a `budget_label` so the stop can say
   which phase spent the money.
+- **A reviewer's tools are read-only — `Read`, `Grep`, `Glob`, and nothing
+  else.** This holds for `run_code_review`, `run_design_audit`, `run_tasks_audit`
+  and `run_plan_review` alike. A reviewer holding `Write` or `Edit` would fix
+  the thing it was asked to judge, which destroys the finding and the evidence
+  for it at the same time, and it would route around the one-regeneration-pass
+  rule that is the only bound on spec-rewriting spend.
+  `test_no_review_step_can_write` asserts the shape of every one of those tool
+  lists, so adding a writable tool breaks a test rather than a build. The turn
+  cap (30) is part of the same bound: enough to open a neighbour and grep for a
+  name the plan claims exists, not enough to wander.
+- **PLAN_REVIEW regenerates `tasks.md` at most once, and never acts on
+  `oversized-plan`.** The single pass is recorded in
+  `SpecGenState.plan_review_regen_done` and the stage in `plan_review_done`,
+  checked *before* the model call — same argument as the design audit's two
+  flags: `tasks.md` already exists when the review runs, so file existence
+  proves nothing. `oversized-plan` is excluded from the regenerable categories
+  on purpose: its output is a proposed cut across several tickets, and handing
+  it to a rewriter would have the rewriter perform the split silently inside
+  one plan, which is the opposite of what the finding asks for. This phase
+  proposes; a human or a later gate disposes.
 
 ## Adding a New Gate
 
@@ -227,6 +250,7 @@ specs/
 │   ├── .board.json                   — kanban card (board.py)
 │   ├── codebase-analysis.md          — what the repo already looks like
 │   ├── proposal.md
+│   ├── use-cases.md               — personas + the use cases they must observe
 │   ├── design.md
 │   ├── unknowns.md                   — explainer per new-to-this-project dependency
 │   ├── tasks.md
@@ -242,8 +266,13 @@ specs/
 The hardcoded `ARTIFACT_DAG` constant defines the dependency graph. Templates and instructions are Python constants in `change_manager.py`.
 
 `unknowns` sits between `design` and `tasks` (`tasks` requires
-`["requirements", "design", "unknowns"]`), so the edge cases are on disk while
-the task breakdown is written. `codebase-analysis.md`,
+`["requirements", "design", "unknowns", "use-cases"]`), so the edge cases are on
+disk while the task breakdown is written. `use-cases` hangs off `proposal` and
+is required by `tasks` for the same reason: a use case is delivered by a block
+or by nothing at all, and PLAN_REVIEW checks block coverage against it. It is
+its own artifact rather than two more proposal sections because
+`_extract_capabilities` reads backticked list items out of `proposal.md`'s
+`## Capabilities` section, and persona names would land in that harvest. `codebase-analysis.md`,
 `implementation-notes.md`, `respec.md`, `prototype/` and `.board.json` are
 **not** DAG artifacts — they are written by their phases. All of them travel into `archive/<date>-<name>/`; only
 `requirements/*.md` ever merge into `registry/`.
@@ -256,9 +285,16 @@ keep old checkpoints loadable (fixtures under `tests/fixtures/` cover this):
 
 ```
 INIT → BOOTSTRAP → INTERVIEW_DONE → RESEARCH → CODEBASE_ANALYSIS
-  → SPEC_GENERATION → DESIGN_AUDIT → PROTOTYPE → REVIEW → TDD_BUILD
-  → DOCS_UPDATE → RESPEC → PUBLISH → COMPLETE  (or FAILED)
+  → SPEC_GENERATION → DESIGN_AUDIT → PLAN_REVIEW → PROTOTYPE → REVIEW
+  → TDD_BUILD → DOCS_UPDATE → RESPEC → PUBLISH → COMPLETE  (or FAILED)
 ```
+
+`PLAN_REVIEW` sits between `DESIGN_AUDIT` and `PROTOTYPE` — it needs
+`tasks.md` and `rubric.md` to exist, and it must run before anything is built
+against them. It maps to the Planning column and never moves the card: the plan
+review *is* the "reviewed by another eng" work Planning already stands for.
+Old checkpoints load unchanged (`tests/fixtures/build-state-pre-plan-review.json`
+covers it).
 
 `PROTOTYPE`, `RESPEC` and `PUBLISH` are the additions from the dark-factory
 lifecycle plan. `DOCS_UPDATE` sits between the build and the respec proposal so

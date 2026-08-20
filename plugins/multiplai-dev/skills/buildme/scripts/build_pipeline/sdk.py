@@ -1,9 +1,11 @@
 """SDK wrapper for LLM calls — single-turn and multi-turn with file tools.
 
-Three call patterns:
+Four call patterns:
 - llm_call(): Single-turn, no tools, returns text. For reviews, rubric scoring, etc.
 - agent_call(): Multi-turn with file tools, returns AgentResult. For TDD agents.
 - llm_call_structured(): Single-turn, returns Pydantic model. For structured output.
+- agent_call_structured(): Multi-turn with tools, returns Pydantic model. For
+  reviewers that must read the repo before answering.
 
 The SDK machinery (isolation flags, hard timeout, stderr capture, big-prompt
 tempfile fallback, unknown-message skip) lives in multiplai_core.agent_runner —
@@ -366,3 +368,56 @@ async def llm_call_structured(
                 )
 
     raise LLMCallError(f"Structured output validation failed after {max_retries + 1} attempts: {last_error}")
+
+
+async def agent_call_structured(
+    prompt: str,
+    schema: type[T],
+    *,
+    allowed_tools: list[str],
+    model: str | None = None,
+    effort: str | None = None,
+    max_retries: int = 1,
+    max_turns: int = 50,
+    cwd: str | None = None,
+    call_timeout: float = DEFAULT_AGENT_CALL_TIMEOUT_S,
+    budget_label: str = "",
+) -> T:
+    """Agent call with tools and Pydantic-validated structured output.
+
+    Same caller contract as `llm_call_structured` — returns the validated model
+    or raises `LLMCallError` — but the answer comes from a tool-using agent, so
+    `allowed_tools` (and its complement deny-list, applied inside `agent_call`)
+    and the repo trust gate both apply.
+
+    `agent_call` degrades to `AgentResult(success=False)` instead of raising, so
+    a failed run is treated here as a validation failure: it consumes a retry
+    and, once retries are exhausted, surfaces as `LLMCallError` like any other
+    unusable response.
+    """
+    current_prompt = prompt
+    last_error: Exception | None = None
+
+    for attempt in range(max_retries + 1):
+        result = await agent_call(current_prompt, allowed_tools=allowed_tools,
+                                  model=model, effort=effort, max_turns=max_turns,
+                                  cwd=cwd, call_timeout=call_timeout,
+                                  budget_label=budget_label)
+        try:
+            if not result.success:
+                raise ValueError(f"Agent call failed: {result.error or 'no error reported'}")
+            payload = extract_json(result.output)
+            return schema.model_validate(payload)
+        except (ValidationError, ValueError, json.JSONDecodeError) as e:
+            last_error = e
+            log.warning("Structured agent output validation failed (attempt %d/%d): %s",
+                        attempt + 1, max_retries + 1, e)
+            if attempt < max_retries:
+                current_prompt = (
+                    f"{prompt}\n\n---\n"
+                    f"Previous response failed validation: {e}\n"
+                    f"Return ONLY valid JSON matching this schema:\n"
+                    f"{json.dumps(schema.model_json_schema(), indent=2)}\n"
+                )
+
+    raise LLMCallError(f"Structured agent output validation failed after {max_retries + 1} attempts: {last_error}")

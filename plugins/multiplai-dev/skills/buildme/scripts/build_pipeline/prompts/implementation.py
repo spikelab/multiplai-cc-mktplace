@@ -221,6 +221,11 @@ Work through these in order, and stop when you run out of clear wins:
    introduced for its own sake — inline it into its caller.
 4. **Make naming consistent across blocks.** The same concept named three ways
    in three blocks gets one name.
+5. **Remove wasted work.** Redundant computation or repeated I/O across blocks,
+   independent operations run sequentially, blocking work added to a hot path.
+   Also: long-lived objects built from closures keep the entire enclosing scope
+   alive for the object's lifetime — prefer a class that copies only the fields
+   it needs.
 
 ## What to leave alone
 
@@ -233,6 +238,10 @@ Work through these in order, and stop when you run out of clear wins:
   what it does. No new features, no bug fixes, no performance rewrites.
 - **Test files are not yours to touch.** Source files only. The tests are the
   contract this refactor is measured against.
+- **Altitude is reported, not acted on.** If a change is implemented as a
+  special case layered on shared infrastructure where generalizing the
+  underlying mechanism would be the real fix, say so in your report under
+  `SURPRISES:` — do not restructure. Module boundaries stay as designed.
 - **When in doubt, leave it.** A skipped opportunity costs nothing; a reverted
   pass costs the whole diff.
 
@@ -246,7 +255,7 @@ file. A red suite or any test-file change discards this entire pass and keeps
 the build exactly as it was. Run the suite yourself before you finish.
 
 ## Output
-Report what you changed and why, grouped by the four categories above, and
+Report what you changed and why, grouped by the five categories above, and
 confirm the full suite is green. If you changed nothing, say so plainly — "the
 blocks were already consistent" is a valid and useful result.
 """

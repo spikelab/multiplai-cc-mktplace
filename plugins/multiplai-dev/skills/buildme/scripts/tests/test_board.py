@@ -51,6 +51,7 @@ EXPECTED_COLUMNS = {
     BuildPhase.CODEBASE_ANALYSIS: BoardColumn.SHAPING,
     BuildPhase.SPEC_GENERATION: BoardColumn.SHAPING,
     BuildPhase.DESIGN_AUDIT: BoardColumn.PLANNING,
+    BuildPhase.PLAN_REVIEW: BoardColumn.PLANNING,
     BuildPhase.PROTOTYPE: BoardColumn.PLANNING,
     BuildPhase.REVIEW: BoardColumn.PLANNING,
     BuildPhase.TDD_BUILD: BoardColumn.IN_DEVELOPMENT,

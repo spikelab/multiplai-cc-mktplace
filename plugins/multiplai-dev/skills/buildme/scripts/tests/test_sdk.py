@@ -2,8 +2,10 @@
 failure-path budget accounting."""
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
+from pydantic import BaseModel
 from unittest.mock import AsyncMock, patch
 
 from build_pipeline import budget as budget_mod
@@ -12,6 +14,7 @@ from build_pipeline.sdk import (
     _deny_list,
     RepoTrustError,
     agent_call,
+    agent_call_structured,
     llm_call,
     llm_call_structured,
     LLMCallError,
@@ -296,3 +299,100 @@ class TestEffortReachesTheSdk:
             await agent_call("hello", allowed_tools=["Read"], effort="high")
 
         assert run.call_args.kwargs["effort"] == "high"
+
+
+class TestAgentCallStructured:
+    """Same caller contract as `llm_call_structured` — a validated model or an
+    `LLMCallError` — but backed by a tool-using agent, whose failures arrive as
+    `AgentResult(success=False)` rather than as exceptions."""
+
+    class Answer(BaseModel):
+        value: int
+
+    @staticmethod
+    def _run_result(text: str):
+        result = SimpleNamespace()
+        result.text = text
+        result.turns = 1
+        result.files_changed = []
+        result.usage = SimpleNamespace()
+        return result
+
+    @pytest.fixture(autouse=True)
+    def _trusted(self, monkeypatch):
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+
+    @pytest.mark.asyncio
+    async def test_happy_path_returns_validated_model(self):
+        with patch("build_pipeline.sdk.run_agent", new_callable=AsyncMock) as run:
+            run.return_value = self._run_result('{"value": 1}')
+            answer = await agent_call_structured(
+                "review it", self.Answer, allowed_tools=["Read", "Grep"],
+            )
+
+        assert answer.value == 1
+        assert run.call_args.kwargs["allowed_tools"] == ["Read", "Grep"]
+        denied = run.call_args.kwargs["disallowed_tools"]
+        assert "Bash" in denied
+        assert "Write" in denied
+        assert "Read" not in denied
+
+    @pytest.mark.asyncio
+    async def test_one_retry_then_success(self):
+        """The repair prompt echoes the schema, exactly as llm_call_structured."""
+        with patch("build_pipeline.sdk.run_agent", new_callable=AsyncMock) as run:
+            run.side_effect = [
+                self._run_result("sorry, no JSON here"),
+                self._run_result('{"value": 7}'),
+            ]
+            answer = await agent_call_structured(
+                "review it", self.Answer, allowed_tools=["Read"],
+            )
+
+        assert answer.value == 7
+        assert run.await_count == 2
+        repair_prompt = run.await_args_list[1].args[0]
+        assert "Return ONLY valid JSON matching this schema" in repair_prompt
+        assert '"value"' in repair_prompt
+
+    @pytest.mark.asyncio
+    async def test_failed_agent_run_is_treated_as_a_validation_failure(self):
+        """agent_call degrades to success=False instead of raising — that must
+        consume a retry rather than being validated as if it were output."""
+        with patch("build_pipeline.sdk.run_agent", new_callable=AsyncMock) as run:
+            run.side_effect = [
+                AgentRunError("boom", reason="boom", stderr_tail=""),
+                self._run_result('{"value": 3}'),
+            ]
+            answer = await agent_call_structured(
+                "review it", self.Answer, allowed_tools=["Read"],
+            )
+
+        assert answer.value == 3
+        assert run.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_exhausted_retries_raises_llm_call_error(self):
+        """run_code_review gathers with return_exceptions=True, so exhaustion
+        must arrive as an exception, not as a half-built model."""
+        with patch("build_pipeline.sdk.run_agent", new_callable=AsyncMock) as run:
+            run.side_effect = [
+                self._run_result("nope"),
+                self._run_result("still nope"),
+            ]
+            with pytest.raises(LLMCallError):
+                await agent_call_structured(
+                    "review it", self.Answer, allowed_tools=["Read"],
+                )
+
+        assert run.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_untrusted_repo_refused(self, monkeypatch):
+        monkeypatch.delenv("BUILDME_TRUST_REPO", raising=False)
+        with patch("build_pipeline.sdk.run_agent", new_callable=AsyncMock) as run:
+            with pytest.raises(RepoTrustError):
+                await agent_call_structured(
+                    "review it", self.Answer, allowed_tools=["Read"],
+                )
+        run.assert_not_awaited()

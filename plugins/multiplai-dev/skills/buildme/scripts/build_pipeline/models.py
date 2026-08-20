@@ -23,6 +23,17 @@ class BuildPhase(str, Enum):
     CODEBASE_ANALYSIS = "codebase_analysis"
     SPEC_GENERATION = "spec_generation"
     DESIGN_AUDIT = "design_audit"
+    # The plan review the board already claims exists: column 4 is "specs ->
+    # impl plan, reviewed by another eng", and nothing implemented that review
+    # until this phase. It reads tasks.md against rubric.md, the constraints
+    # and the use cases, and reports findings a human reviewer could have left
+    # on the plan PR. Ordinal position matters: state.is_phase_complete
+    # compares positions in this enum, so PLAN_REVIEW sits where it runs —
+    # after the design audit (which is what writes the tasks.md it reviews),
+    # before the prototype. Checkpoints written before this phase existed still
+    # load (the stored value is a phase name, not an index) and resume at their
+    # recorded phase.
+    PLAN_REVIEW = "plan_review"
     # Cheap shape proof (mockup / sample output / CLI transcript) before the
     # expensive TDD build. Ordinal position matters: state.is_phase_complete
     # compares positions in this enum, so PROTOTYPE sits where it runs — after
@@ -360,6 +371,54 @@ class FinalReviewVerdict(BaseModel):
 
 
 # --- Gates ---
+
+# --- Plan review (the PLAN_REVIEW phase) ---
+
+class PlanReviewCut(BaseModel):
+    """One ticket in a proposed split of an oversized plan.
+
+    Carried by an `oversized-plan` finding and by nothing else. It is a
+    *proposal*: no code path creates the ticket, moves a card, or splits
+    tasks.md from it — the next gate (human or agent) decides.
+    """
+
+    ticket: str
+    # Block numbers from tasks.md that belong in this ticket.
+    blocks: list[int] = Field(default_factory=list)
+    # The cross-block signature boundary this cut crosses, named so a reader
+    # can check the cut is real: the `Produces:`/`Consumes:` line that would
+    # become the seam between the two tickets.
+    boundary: str = ""
+
+
+class PlanReviewFinding(BaseModel):
+    """One claim the plan review leaves on the plan, in a human's shape.
+
+    The seat has to be swappable: a finding here is exactly what a human
+    reviewer would leave on the plan PR — a file, a location in it, a claim,
+    and a reason. There is deliberately no machine-only field and no
+    auto-apply hook; `severity` decides only whether the ONE regeneration pass
+    sees the finding, never whether anything is applied without a gate.
+    """
+
+    category: str
+    severity: str = "minor"  # critical | major | minor
+    # Where the claim lands, the way a PR comment lands: which artifact, and
+    # where in it (a block heading, a criterion, a line quote).
+    file_path: str = "tasks.md"
+    location: str = ""
+    claim: str = ""
+    reason: str = ""
+    # Populated only for category "oversized-plan" — which blocks go in which
+    # ticket, and the signature boundary each cut crosses.
+    proposed_cut: list[PlanReviewCut] = Field(default_factory=list)
+
+
+class PlanReviewResult(BaseModel):
+    """Structured output of one PLAN_REVIEW pass."""
+
+    findings: list[PlanReviewFinding] = Field(default_factory=list)
+
 
 class GateResult(BaseModel):
     passed: bool

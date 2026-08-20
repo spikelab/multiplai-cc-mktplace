@@ -28,7 +28,8 @@ class TestPhaseOrdering:
         assert names.index("bootstrap") < names.index("research")
         assert names.index("research") < names.index("spec_generation")
         assert names.index("spec_generation") < names.index("design_audit")
-        assert names.index("design_audit") < names.index("prototype")
+        assert names.index("design_audit") < names.index("plan_review")
+        assert names.index("plan_review") < names.index("prototype")
         assert names.index("prototype") < names.index("review")
         assert names.index("review") < names.index("tdd_build")
         assert names.index("tdd_build") < names.index("complete")
@@ -1733,3 +1734,158 @@ class TestPRBody:
         assert "respec.md" in body
         assert "unknowns.md" not in body  # absent artifacts are not linked
         assert "calling session's decision" in body
+
+
+class TestPlanReviewPhase:
+    """W9: the PLAN_REVIEW phase — the second pair of eyes the board's
+    Planning column has always claimed. It runs between DESIGN_AUDIT and
+    PROTOTYPE, is skipped on resume when `plan_review_done` is recorded, and
+    never fails the build."""
+
+    def _args(self, tmp_path, change):
+        return argparse.Namespace(
+            mode="only",
+            change=change,
+            project_dir=str(tmp_path),
+            auto=True,
+            spec_only=True,
+            skip_research=True,
+            interview_summary="",
+            research_path="",
+            context_files=[],
+            session_id="",
+        )
+
+    def _config(self, tmp_path, change):
+        config = BuildConfig(
+            project_dir=tmp_path, change_name=change, mode="only",
+            auto=True, spec_only=True, skip_research=True,
+        )
+        config.specs_dir = tmp_path / "specs"
+        # --no-prototype: this class is about the plan review, and the
+        # prototype phase sits immediately after it.
+        config.prototype_mode = "false"
+        cm = ChangeManager(config.specs_dir)
+        cm.init_specs()
+        cm.create_change(change)
+        (config.change_dir / "proposal.md").write_text("## Why\nShip it.\n")
+        (config.change_dir / "design.md").write_text("## Decisions\nNone.")
+        (config.change_dir / "tasks.md").write_text("## Block 1\n- [ ] do it\n")
+        (config.change_dir / "rubric.md").write_text("## Criteria\n- correctness\n")
+        state = BuildState(
+            change_name=change, mode="only", tier="advanced",
+            phase=BuildPhase.DESIGN_AUDIT,
+            state_file=str(config.state_file_path()),
+        )
+        state.checkpoint(config.state_file_path())
+        return config
+
+    @pytest.mark.asyncio
+    async def test_phase_runs_and_emits_its_stdout_line(self, tmp_path, capsys):
+        from unittest.mock import AsyncMock, patch
+        from build_pipeline.models import PlanReviewResult
+
+        config = self._config(tmp_path, "review-plan")
+        mock_review = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   AsyncMock(return_value=[])), \
+                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                      mock_review):
+            result = await run_orchestrator(config, self._args(tmp_path, "review-plan"))
+
+        assert result == 0
+        assert mock_review.await_count == 1
+        out = capsys.readouterr().out
+        assert "PHASE:PLAN_REVIEW:COMPLETE" in out
+        # ...and it sits between the two phases it was inserted between.
+        assert out.index("PHASE:DESIGN_AUDIT:COMPLETE") < out.index(
+            "PHASE:PLAN_REVIEW:COMPLETE")
+
+    @pytest.mark.asyncio
+    async def test_recorded_stage_is_skipped_on_resume(self, tmp_path):
+        """`plan_review_done` is checked BEFORE the model call, so a resume
+        costs nothing at all."""
+        from unittest.mock import AsyncMock, patch
+        from build_pipeline.state import SpecGenState
+
+        config = self._config(tmp_path, "resume-plan")
+        state = BuildState.load(config.state_file_path())
+        state.spec_gen = SpecGenState(plan_review_done=True)
+        state.checkpoint(config.state_file_path())
+
+        mock_review = AsyncMock()
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   AsyncMock(return_value=[])), \
+                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                      mock_review):
+            result = await run_orchestrator(config, self._args(tmp_path, "resume-plan"))
+
+        assert result == 0
+        mock_review.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_review_failure_never_fails_the_build(self, tmp_path):
+        from unittest.mock import AsyncMock, patch
+
+        config = self._config(tmp_path, "broken-plan")
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   AsyncMock(return_value=[])), \
+                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                      AsyncMock(side_effect=RuntimeError("model exploded"))):
+            result = await run_orchestrator(config, self._args(tmp_path, "broken-plan"))
+
+        assert result == 0
+
+    @pytest.mark.asyncio
+    async def test_a_failed_review_is_retried_on_a_resume(self, tmp_path):
+        """`run_plan_review_stage` leaves `plan_review_done` False on an LLM
+        failure precisely so a resume tries again. Advancing the phase pointer
+        anyway made `is_phase_complete` report the phase finished, and the
+        retry never happened."""
+        from unittest.mock import AsyncMock, patch
+
+        config = self._config(tmp_path, "retry-plan")
+        args = self._args(tmp_path, "retry-plan")
+        crash = AsyncMock(side_effect=KeyboardInterrupt)
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   AsyncMock(return_value=[])), \
+                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                      AsyncMock(side_effect=RuntimeError("model exploded"))), \
+                patch("build_pipeline.orchestrator._run_prototype_phase", crash), \
+                pytest.raises(KeyboardInterrupt):
+            await run_orchestrator(config, args)
+
+        # The build died after the failed review. Nothing recorded the phase.
+        resumed = BuildState.load(config.state_file_path())
+        assert not resumed.is_phase_complete(BuildPhase.PLAN_REVIEW)
+        assert not (resumed.spec_gen and resumed.spec_gen.plan_review_done)
+
+        # The resume runs it again.
+        from build_pipeline.models import PlanReviewResult
+        retry = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   AsyncMock(return_value=[])), \
+                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                      retry):
+            assert await run_orchestrator(config, args) == 0
+        retry.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_checkpoint_past_the_phase_does_not_re_enter_it(self, tmp_path):
+        """advance_to only ever runs forwards: a state already at PROTOTYPE
+        must not be sent back to review the plan."""
+        from unittest.mock import AsyncMock, patch
+
+        config = self._config(tmp_path, "past-plan")
+        state = BuildState.load(config.state_file_path())
+        state.advance_to(BuildPhase.PROTOTYPE, config.state_file_path())
+
+        mock_review = AsyncMock()
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   AsyncMock(return_value=[])), \
+                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                      mock_review):
+            result = await run_orchestrator(config, self._args(tmp_path, "past-plan"))
+
+        assert result == 0
+        mock_review.assert_not_awaited()

@@ -55,6 +55,20 @@ class SpecGenState(BaseModel):
     # four-artifact audit purely to rediscover that there is nothing to do.
     # Old checkpoints default to False (the stage has not run).
     design_audit_done: bool = False
+    # The PLAN_REVIEW phase's single regeneration pass rewrote tasks.md. Same
+    # durability argument as design_audit_regen_done: tasks.md already exists
+    # when the plan review runs, so file existence proves nothing and the
+    # checkpoint is the only record that the one pass has been spent. Old
+    # checkpoints default to False (the pass has not run, so running it once is
+    # correct).
+    plan_review_regen_done: bool = False
+    # The plan-review stage as a whole (review -> optional regeneration ->
+    # optional report-only re-check) has run to completion. Distinct from the
+    # flag above, which only records the regeneration: a review that finds
+    # nothing actionable never regenerates, so without this a resume would
+    # re-run a five-artifact review purely to rediscover there is nothing to
+    # do. Checked BEFORE the model call. Old checkpoints default to False.
+    plan_review_done: bool = False
 
 
 class TDDState(BaseModel):

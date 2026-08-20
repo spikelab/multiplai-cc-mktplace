@@ -14,8 +14,8 @@ Driven, end to end, by a real build:
 
   * **Shaping** — bootstrap → interview → research → codebase analysis →
     spec generation (proposal, requirements).
-  * **Planning** — design audit → prototype → the review checkpoint
-    (design.md / tasks.md / rubric.md, audited).
+  * **Planning** — design audit → plan review → prototype → the review
+    checkpoint (design.md / tasks.md / rubric.md, audited and reviewed).
   * **In Development** — the TDD build, the documentation update, and the
     respec pass.
   * **In Review** — entered *only* when the PUBLISH phase has pushed the
@@ -98,6 +98,10 @@ _PHASE_COLUMNS: dict[BuildPhase, BoardColumn] = {
     BuildPhase.CODEBASE_ANALYSIS: BoardColumn.SHAPING,
     BuildPhase.SPEC_GENERATION: BoardColumn.SHAPING,
     BuildPhase.DESIGN_AUDIT: BoardColumn.PLANNING,
+    # The plan review IS the Planning column's stated gate ("specs -> impl
+    # plan, reviewed by another eng"), so it never moves the card — it is the
+    # work the card is already parked on.
+    BuildPhase.PLAN_REVIEW: BoardColumn.PLANNING,
     BuildPhase.PROTOTYPE: BoardColumn.PLANNING,
     BuildPhase.REVIEW: BoardColumn.PLANNING,
     BuildPhase.TDD_BUILD: BoardColumn.IN_DEVELOPMENT,

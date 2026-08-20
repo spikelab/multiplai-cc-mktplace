@@ -162,10 +162,32 @@ whose `Produces:` line it names. Report (category "interface-mismatch"):
 
 ## Placeholders
 
-Report any block text that defers specification (category "placeholder"):
-"TBD", "TODO", "add appropriate error handling", "similar to block N", or any
-instruction that requires the implementer to guess a name, signature, or
-literal value.
+Flag deferred specification only on the **contract surface** — the parts of a
+block another block or a test has to agree with (category "placeholder"):
+
+- a `Consumes:` or `Produces:` signature left unnamed or unspecified, or given
+  as prose where a signature belongs
+- a shared constant, wire format, on-disk format, or public name that another
+  block reads, left unstated
+- "TBD", "TODO", or "similar to block N" on anything that crosses a block
+  boundary
+- an instruction that requires the implementer to guess a name, signature, or
+  literal value that a later block has to match exactly
+
+**What NOT to Flag — block-internal choices.** These belong to the implementer,
+and a block that leaves them open is correctly scoped, not under-specified:
+
+- helper or private function names, and how the work is factored inside the
+  block
+- which files the block creates and how its code is laid out across them
+- control flow — loops, early returns, error handling that stays inside the
+  block
+- open guidance such as "handle the empty case sensibly" or "extract a helper if
+  it gets long"
+- test names, fixture names, or how the block organises its own tests
+
+If the missing detail is invisible from outside the block, it is not a
+placeholder.
 
 ## What NOT to Flag
 

@@ -15,8 +15,9 @@ REVIEW_OK = ReviewResult(
 
 
 def _mock_llm():
+    """The reviewer seam: a read-only subagent, not a toolless single-turn call."""
     return patch(
-        "build_pipeline.llm_steps.review_steps.llm_call_structured",
+        "build_pipeline.llm_steps.review_steps.agent_call_structured",
         new_callable=AsyncMock,
         return_value=REVIEW_OK,
     )
@@ -256,7 +257,7 @@ class TestPanelResilience:
     async def test_one_failed_member_is_dropped_and_the_review_proceeds(self):
         from build_pipeline.sdk import LLMCallError
         config = self._panel_config("model-a", "model-b")
-        with patch("build_pipeline.llm_steps.review_steps.llm_call_structured",
+        with patch("build_pipeline.llm_steps.review_steps.agent_call_structured",
                    new_callable=AsyncMock,
                    side_effect=[LLMCallError("backend unreachable"), REVIEW_OK]):
             result = await run_code_review("diff", "rubric", config)
@@ -268,7 +269,7 @@ class TestPanelResilience:
     async def test_all_members_failing_raises(self):
         from build_pipeline.sdk import LLMCallError
         config = self._panel_config("model-a", "model-b")
-        with patch("build_pipeline.llm_steps.review_steps.llm_call_structured",
+        with patch("build_pipeline.llm_steps.review_steps.agent_call_structured",
                    new_callable=AsyncMock, side_effect=LLMCallError("down")):
             with pytest.raises(LLMCallError, match="every member"):
                 await run_code_review("diff", "rubric", config)
@@ -299,3 +300,80 @@ class TestPanelDispatch:
         with _mock_llm() as mock_call:
             await run_code_review("diff", "rubric", config)
         assert mock_call.call_args.kwargs["model"] == "claude-opus-5"
+
+
+# Every tool that can change the tree. A review step holding any of these could
+# fix what it found, which destroys the adjudication seam (findings are
+# proposals the orchestrator disposes of) and walks past `unchanged_tests_gate`,
+# whose premise is that only the implementer's windows are writable.
+WRITE_CAPABLE_TOOLS = {"Write", "Edit", "Bash", "NotebookEdit", "MultiEdit"}
+
+
+class TestReviewersAreReadOnlySubagents:
+    def test_no_review_step_can_write(self):
+        """Every review/audit step's tool list, checked against one deny set.
+
+        Asserting on the constants rather than on a call keeps this true for
+        steps added later: a new reviewer that reuses REVIEWER_TOOLS is covered
+        the day it lands, and one that spells its own list is caught here.
+        """
+        from build_pipeline.llm_steps.review_steps import REVIEWER_TOOLS
+        from build_pipeline.llm_steps.spec_steps import AUDITOR_TOOLS
+
+        lists = [("REVIEWER_TOOLS", REVIEWER_TOOLS), ("AUDITOR_TOOLS", AUDITOR_TOOLS)]
+        try:  # PLAN_REVIEW is a separate work item; cover it once it exists.
+            from build_pipeline.llm_steps.plan_review_steps import PLAN_REVIEW_TOOLS
+        except ImportError:
+            pass
+        else:
+            lists.append(("PLAN_REVIEW_TOOLS", PLAN_REVIEW_TOOLS))
+
+        for name, tools in lists:
+            assert tools, f"{name} must not be empty"
+            offenders = WRITE_CAPABLE_TOOLS.intersection(tools)
+            assert not offenders, f"{name} grants write-capable tools: {sorted(offenders)}"
+
+    @pytest.mark.asyncio
+    async def test_review_runs_as_a_read_only_subagent_in_the_project_dir(self, tmp_path):
+        config = BuildConfig(model="claude-sonnet-4-6", project_dir=tmp_path)
+        with _mock_llm() as mock_call:
+            await run_code_review("diff", "rubric", config)
+        kwargs = mock_call.call_args.kwargs
+        assert kwargs["allowed_tools"] == ["Read", "Grep", "Glob"]
+        assert not WRITE_CAPABLE_TOOLS.intersection(kwargs["allowed_tools"])
+        assert kwargs["cwd"] == str(tmp_path)
+        assert kwargs["budget_label"] == "review"
+
+    @pytest.mark.asyncio
+    async def test_reviewer_turns_are_bounded(self):
+        """A reviewer is not an implementer — the turn budget says so."""
+        config = BuildConfig(model="claude-sonnet-4-6")
+        with _mock_llm() as mock_call:
+            await run_code_review("diff", "rubric", config)
+        assert mock_call.call_args.kwargs["max_turns"] == 30
+
+    @pytest.mark.asyncio
+    async def test_audits_run_as_read_only_subagents(self, tmp_path):
+        """The design and tasks audits get tools too, and keep their labels."""
+        from unittest.mock import MagicMock
+
+        from build_pipeline.llm_steps.spec_steps import run_design_audit, run_tasks_audit
+        from build_pipeline.models import AgentResult
+
+        change_dir = tmp_path / "changes" / "feat"
+        change_dir.mkdir(parents=True)
+        for name in ("proposal.md", "design.md", "tasks.md"):
+            (change_dir / name).write_text("body")
+        config = MagicMock(model="test-model", project_dir=tmp_path)
+
+        for step, label in ((run_design_audit, "design_audit"),
+                            (run_tasks_audit, "tasks_audit")):
+            with patch("build_pipeline.llm_steps.spec_steps.agent_call",
+                       new_callable=AsyncMock,
+                       return_value=AgentResult(success=True, output="[]")) as mock_agent:
+                await step(change_dir, config)
+            kwargs = mock_agent.call_args.kwargs
+            assert kwargs["allowed_tools"] == ["Read", "Grep", "Glob"]
+            assert not WRITE_CAPABLE_TOOLS.intersection(kwargs["allowed_tools"])
+            assert kwargs["cwd"] == str(tmp_path)
+            assert kwargs["budget_label"] == label

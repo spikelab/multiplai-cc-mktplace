@@ -8,6 +8,7 @@ Directory layout:
       config.yaml          — project context
       changes/<name>/      — active changes
         proposal.md
+        use-cases.md       — personas + the use cases they must observe
         design.md
         tasks.md
         rubric.md
@@ -89,8 +90,18 @@ def extract_global_constraints(design_text: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+# Insertion order is load-bearing: `artifact_status` resolves each node against
+# the statuses it has already computed, so every node must appear AFTER the
+# nodes it requires or it reads its dependency as absent and reports BLOCKED.
 ARTIFACT_DAG: dict[str, dict] = {
     "proposal": {"generates": "proposal.md", "requires": []},
+    # Who the change is for, and what they can observe when it lands. Its own
+    # artifact rather than two more proposal sections: the proposal is about
+    # the change, this is about the people it is for, and keeping the personas
+    # out of proposal.md also keeps their backticked names away from
+    # `_extract_capabilities`, which reads backticked list items out of
+    # proposal.md's `## Capabilities` section.
+    "use-cases": {"generates": "use-cases.md", "requires": ["proposal"]},
     "requirements": {"generates": "requirements/*.md", "requires": ["proposal"]},
     "design": {"generates": "design.md", "requires": ["proposal"]},
     # Explainer gate (B1): before the build depends on anything new to this
@@ -98,7 +109,14 @@ ARTIFACT_DAG: dict[str, dict] = {
     # tasks so the edge cases are on disk while the task breakdown is written —
     # and so the test_writer can turn them into tests.
     "unknowns": {"generates": "unknowns.md", "requires": ["design"]},
-    "tasks": {"generates": "tasks.md", "requires": ["requirements", "design", "unknowns"]},
+    # `tasks` is what carries the use cases: a use case is delivered by a block
+    # or by nothing at all, so the breakdown must be written with the use cases
+    # already on disk — that is also what PLAN_REVIEW checks block coverage
+    # against.
+    "tasks": {
+        "generates": "tasks.md",
+        "requires": ["requirements", "design", "unknowns", "use-cases"],
+    },
     "rubric": {"generates": "rubric.md", "requires": ["tasks"]},
 }
 
@@ -107,24 +125,49 @@ TEMPLATES: dict[str, str] = {
     "proposal": """\
 ## Why
 
-<!-- Explain the motivation for this change. What problem does this solve? Why now? -->
+<!-- The problem, and why now. -->
 
 ## What Changes
 
-<!-- Describe what will change. Be specific about new capabilities, modifications, or removals. -->
+<!-- What will change. Then, explicitly:
+     Goals — what this change aims to achieve.
+     Non-Goals — what is deliberately out of scope. -->
 
 ## Capabilities
 
 ### New Capabilities
-<!-- Capabilities being introduced. Each creates requirements/<name>.md -->
-- `<name>`: <brief description>
+<!-- kebab-case names only, one per line, no descriptions — use-cases.md
+     already carries the intent. Each creates requirements/<name>.md -->
+- `<capability-name>`
 
 ### Modified Capabilities
 <!-- Existing capabilities whose REQUIREMENTS are changing. Leave empty if none. -->
 
 ## Impact
 
-<!-- Affected code, APIs, dependencies, systems -->
+<!-- Affected code, APIs, dependencies, systems. Facts about the codebase, not
+     restatements of What Changes. Wrap every dependency name in backticks so
+     the dependency scan can see it. -->
+""",
+    "use-cases": """\
+# Use cases — who this change is for
+
+## Personas
+
+<!-- One block per persona. Real people in a real situation, not job titles. -->
+
+### <persona-name>
+- **Who they are:** <role, and the situation they are in>
+- **The job they are doing:** <the job they are trying to get done>
+- **The constraint they are under:** <time, access, skill, budget, policy>
+
+## Use cases
+
+<!-- One per line, in this exact form:
+     <persona> wants <goal> so that <observable outcome>.
+     The outcome must be observable from OUTSIDE the system — something the
+     persona can see, read, or measure without reading the code. -->
+- <persona> wants <goal> so that <observable outcome>
 """,
     "requirements": """\
 ## ADDED Requirements
@@ -140,14 +183,6 @@ TEMPLATES: dict[str, str] = {
 ## Context
 
 <!-- Background and current state -->
-
-## Goals / Non-Goals
-
-**Goals:**
-<!-- What this design aims to achieve -->
-
-**Non-Goals:**
-<!-- What is explicitly out of scope -->
 
 ## Decisions
 
@@ -220,8 +255,27 @@ Satisfies: <!-- spec references -->
 INSTRUCTIONS: dict[str, str] = {
     "proposal": (
         "Create the proposal document that establishes WHY this change is needed. "
-        "Sections: Why, What Changes, Capabilities (with kebab-case names for specs), Impact. "
+        "Sections: Why; What Changes (which states Goals — what this change aims "
+        "to achieve — and Non-Goals — what is deliberately out of scope — "
+        "explicitly); Capabilities (kebab-case names only, no descriptions, each "
+        "becoming requirements/<name>.md); Impact (facts about the codebase — "
+        "affected code, APIs, dependencies, systems — not a restatement of What "
+        "Changes, with every dependency name in backticks). "
+        "Personas and use cases live in use-cases.md, not here. "
         "Keep concise (1-2 pages). Focus on the 'why' not the 'how'."
+    ),
+    "use-cases": (
+        "Create the use cases document that establishes WHO this change is for. "
+        "Personas: one block per persona, naming who they are, the job they are "
+        "doing, and the constraint they are under — real people in a real "
+        "situation, not job titles. "
+        "Use cases: one per line, in the form "
+        "'<persona> wants <goal> so that <observable outcome>'. "
+        "Every use case names a persona defined above it, and every outcome is "
+        "observable from OUTSIDE the system — something that persona can see, "
+        "read, or measure without reading the code. An outcome phrased as an "
+        "internal implementation detail is not a use case; rewrite it as what "
+        "the persona observes."
     ),
     "requirements": (
         "Create one requirements file per capability listed in the proposal, "
@@ -231,7 +285,9 @@ INSTRUCTIONS: dict[str, str] = {
     ),
     "design": (
         "Create the design document explaining HOW to implement the change. "
-        "Sections: Context, Goals/Non-Goals, Decisions (with alternatives), Risks/Trade-offs."
+        "Sections: Context, Decisions (with alternatives), Risks/Trade-offs. "
+        "Goals and Non-Goals belong to the proposal's What Changes section — "
+        "do not restate them here."
     ),
     "unknowns": (
         "Write one section per dependency that is new to this project, covering: "

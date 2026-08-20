@@ -488,3 +488,59 @@ class TestBuiltinsAndMembersNeverFire:
         (project / "package.json").write_text(json.dumps({"dependencies": {}}))
         change = _write_change(tmp_path / "change", impact="Serves files via `st-cache`.")
         assert [d.name for d in detect_new_dependencies(change, project)] == ["st-cache"]
+
+
+class TestTemplateHeadingsFeedTheScan:
+    """The scan reads two heading strings out of two spec templates. Reshaping
+    either template renames the section the scan looks for and turns dependency
+    detection into a silent no-op — so the coupling is asserted against the
+    shipped templates, not against handwritten markdown."""
+
+    def test_proposal_template_still_carries_the_impact_heading(self):
+        from build_pipeline.change_manager import TEMPLATES
+        assert "\n## Impact\n" in TEMPLATES["proposal"]
+
+    def test_design_template_still_carries_the_decisions_heading(self):
+        from build_pipeline.change_manager import TEMPLATES
+        assert "\n## Decisions\n" in TEMPLATES["design"]
+
+    def test_scan_finds_a_dependency_written_into_the_shipped_templates(
+        self, tmp_path, project,
+    ):
+        """End to end over the real templates: a backticked name under the
+        proposal's Impact and the design's Decisions is detected."""
+        from build_pipeline.change_manager import TEMPLATES
+
+        (project / "pyproject.toml").write_text(
+            '[project]\nname = "demo"\ndependencies = []\n'
+        )
+        change = tmp_path / "change"
+        change.mkdir(parents=True)
+        (change / "proposal.md").write_text(
+            TEMPLATES["proposal"].replace(
+                "## Impact\n", "## Impact\n\nAudio goes through `mlx-whisper`.\n",
+            )
+        )
+        (change / "design.md").write_text(
+            TEMPLATES["design"].replace(
+                "## Decisions\n", "## Decisions\n\nChart with `altair`.\n",
+            )
+        )
+        found = {d.name: d.mentioned_in for d in detect_new_dependencies(change, project)}
+        assert found["mlx-whisper"] == ["proposal.md § Impact"]
+        assert found["altair"] == ["design.md § Decisions"]
+
+    def test_use_cases_document_is_not_scanned_for_dependencies(
+        self, tmp_path, project,
+    ):
+        """Personas and outcomes name people and behaviour, not libraries —
+        use-cases.md is not one of the scan's two sources."""
+        (project / "pyproject.toml").write_text(
+            '[project]\nname = "demo"\ndependencies = []\n'
+        )
+        change = _write_change(tmp_path / "change")
+        (change / "use-cases.md").write_text(
+            "## Personas\n\n### Analyst\n- **Who they are:** uses `polars` daily\n\n"
+            "## Use cases\n- Analyst wants a chart so that they can see the trend\n"
+        )
+        assert detect_new_dependencies(change, project) == []

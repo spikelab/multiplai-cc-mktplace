@@ -200,6 +200,34 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             # Spec'ing is done being shaped; the card is now being planned.
             board.record(config, state, BuildPhase.DESIGN_AUDIT, progress=progress)
 
+        # Phase: Plan Review — the second pair of eyes the board's Planning
+        # column has always claimed ("specs -> impl plan, reviewed by another
+        # eng"). Reads tasks.md against rubric.md, the constraints and the use
+        # cases; critical/major findings drive ONE regeneration of tasks.md,
+        # recorded in spec_gen.plan_review_regen_done. Best-effort — a review
+        # failure leaves the reviewed plan standing and never fails the build.
+        if not state.is_phase_complete(BuildPhase.PLAN_REVIEW):
+            log.info("START phase=PLAN_REVIEW")
+            from .llm_steps.plan_review_steps import run_plan_review_stage
+            findings = await run_plan_review_stage(
+                config.change_dir, config, state, state_path,
+            )
+            log.info(
+                "DONE phase=PLAN_REVIEW findings=%d",
+                len(findings) if findings else 0,
+            )
+            # Advance only when the stage recorded itself done. `advance_to`
+            # is what makes `plan_review_done` mean anything: the stage leaves
+            # the flag False on an LLM failure precisely so a resume retries,
+            # and moving the pointer anyway made `is_phase_complete` report the
+            # phase finished and skip it forever. A failed review leaves the
+            # pointer at DESIGN_AUDIT; the phases after it are guarded on their
+            # own positions and run regardless.
+            if state.spec_gen is not None and state.spec_gen.plan_review_done:
+                state.advance_to(BuildPhase.PLAN_REVIEW, state_path)
+            print("PHASE:PLAN_REVIEW:COMPLETE", flush=True)
+            board.record(config, state, BuildPhase.PLAN_REVIEW, progress=progress)
+
         # Phase: Prototype — a cheap artifact that proves the shape before the
         # expensive TDD build. Phase failure is never build failure.
         if not state.is_phase_complete(BuildPhase.PROTOTYPE):

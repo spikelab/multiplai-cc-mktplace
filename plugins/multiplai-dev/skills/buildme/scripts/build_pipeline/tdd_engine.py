@@ -31,6 +31,7 @@ from .gates import (
     agent_status_gate,
     baseline_test_gate,
     integration_gate,
+    parse_diff_paths,
     parse_implementation_note,
     red_gate,
     review_iteration_gate,
@@ -1574,7 +1575,9 @@ async def _run_quality_review(block: BlockInfo, config: BuildConfig) -> ReviewRe
         rubric,
         config,
         spec_context=spec_context,
-        standards=config.standards_text(),
+        # The conventions chain is scoped to the files this block touched, so a
+        # sibling package's CLAUDE.md never reaches the reviewer as a rule.
+        standards=config.standards_text(parse_diff_paths(diff)),
         implementer_report="\n\n".join(report_parts),
     )
 

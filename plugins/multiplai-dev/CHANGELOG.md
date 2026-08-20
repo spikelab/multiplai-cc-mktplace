@@ -17,6 +17,140 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-19
+
+### Changed
+
+- **buildme's reviews now need `--trust-repo`.** The per-block code review and
+  the design and tasks audits run as subagents that can `Read`, `Grep` and
+  `Glob` your repository, so they cross the same trust gate every other buildme
+  agent crosses. A full `build` run already required `--trust-repo` (or
+  `BUILDME_TRUST_REPO=1`); a `spec-generate` or review-only invocation did not,
+  and now does. Without the flag those steps stop with the message that names
+  it. The reviewer holds no `Write`, `Edit`, `Bash` or `NotebookEdit` in any
+  step, and stops after 30 turns.
+- **The reviewer reads the code, not just the diff.** Because it holds `Read`
+  and `Grep` it can open the file a changed line calls into, and check whether
+  a rule it wants to cite actually says what it thinks. A finding must now
+  quote the rule and name the file it came from.
+- **The reviewer reads your project's own `CLAUDE.md`.** buildme collects the
+  repo-root `CLAUDE.md` plus the `CLAUDE.md` (and `CLAUDE.local.md`) in every
+  directory that is an ancestor of a changed file, and hands them to the
+  reviewer as the conventions the change must satisfy. A sibling directory's
+  file is never included — its rules do not govern this change, and feeding
+  them in manufactures violations. This is automatic and separate from
+  `standards_files` in `specs/config.yaml`, which is still the way to push in a
+  style guide that is not a `CLAUDE.md`.
+- **The review names what a deleted line used to guarantee.** For every line
+  the change removes or replaces, the reviewer states the invariant that line
+  enforced and points at where it is re-established — or reports that it is
+  not.
+- **The tasks audit stopped second-guessing the implementer.** It flags gaps on
+  the contract surface (a function signature, a file format, a wire protocol,
+  an error the caller must handle) and no longer flags helper names, file
+  layout or control flow inside a block. Those are the implementing agent's
+  call.
+- **Rubric generation falls back to twelve named code smells** — Fowler's, via
+  the `mattpocock/skills` code-review checklist — when your project documents
+  no standards of its own. A standard your repo does document always wins over
+  the baseline.
+- **The whole-change refactor pass looks for wasted work** — redundant
+  computation and repeated I/O across blocks — and reports a wrong-altitude
+  implementation without acting on it.
+- **The board doc's In Review row now matches the protocol decided on
+  2026-08-11**: In Review means a real PR into staging, for everyone, not a
+  reviewer fetching a branch and diffing it. No code changed — `board.py`
+  already stops at In Review.
+- **The reviewer's standards block is capped per document.** Each `CLAUDE.md`
+  and each `standards_files` entry is trimmed on section boundaries at 12,000
+  characters, with the full section index always emitted so the reviewer (which
+  holds `Read`) knows what it did not receive. Uncapped, a large conventions
+  chain was rebuilt for every block and then sent to every panel member.
+- **A change created before `use-cases.md` existed gets its plan rewritten.**
+  Resuming such a change generates `use-cases.md`, and now regenerates
+  `tasks.md` and `rubric.md` against it — otherwise the plan the build runs was
+  written without the use cases it is required to cover, and the plan review
+  spent its one regeneration reporting that.
+- **The plan review's rewrite of `tasks.md` is re-audited.** The rewritten plan
+  goes through the same vertical-slice shape audit the original does, and
+  `rubric.md` is regenerated from it, so per-block review no longer scores new
+  blocks against the rubric for the plan they replaced.
+- **`[buildme.plan_review]` now actually follows `code_review.model` and
+  `BUILDME_REVIEW_MODEL`.** The plan reviewer's model was frozen before either
+  override was read, so a project that set `code_review: {model: opus}` still
+  got the base model. `[buildme.plan_review] MODEL=` continues to win over both.
+- **The oversized-plan check stopped reading English as file paths.** "read/write
+  access" and "pass/fail gate" were counted as three top-level packages, firing
+  the package-spread trigger on plans that named no path at all. A match now has
+  to look like a path — an extension, a third segment, or backticks around it.
+- **Blocks written as `def name(...)` no longer collapse into one group.** The
+  interface graph keyed on the first token of a signature, so every such block
+  looked like it produced the same thing and both split checks went silent.
+- **A failed plan review is retried on a resume.** The phase pointer used to
+  advance past it regardless, which meant an LLM failure skipped the review for
+  the rest of the build.
+- **The `many-files` split trigger is gone.** It could never fire (no caller has
+  a file count before anything is built) and could not have changed the verdict
+  if it had. Plan size is what the block-count and package-spread triggers
+  answer.
+
+### Added
+
+- **A plan review runs between the design audit and the prototype.** A
+  read-only reviewer reads `tasks.md` against `rubric.md`, the project's
+  constraints and the use cases, and reports under six headings:
+  `rubric-conflict`, `block-contradiction`, `constraint-violation`,
+  `over-prescription`, `use-case-coverage`, `oversized-plan`. Critical and
+  major findings drive **one** regeneration of `tasks.md`, then the review
+  re-runs report-only and the plan stands. It prints
+  `PHASE:PLAN_REVIEW:COMPLETE` and keeps the card in the Planning column. An
+  `oversized-plan` finding *proposes* a cut and names the signature boundary it
+  crosses; nothing here ever splits a plan, creates a ticket or moves a card.
+  A failed plan review never fails the build.
+- **`use-cases.md`, a new spec artifact** between `proposal.md` and `tasks.md`.
+  It carries `## Personas` (who they are, the job they are doing, the
+  constraint they are under) and `## Use cases` (`<persona> wants <goal> so
+  that <observable outcome>`), and `tasks.md` now requires it alongside
+  requirements, design and unknowns — so the work breakdown is written with the
+  use cases already on disk, and the plan review can check that every use case
+  is delivered by some block. `proposal.md` keeps Why / What Changes /
+  Capabilities / Impact, with What Changes now stating Goals and Non-Goals
+  explicitly; `design.md` dropped its `## Goals / Non-Goals` section, which
+  restated them. This is a third artifact rather than two more proposal
+  sections, decided on 2026-08-19: it diverges from the written plan, which
+  called for putting personas and use cases inside `proposal.md`.
+- **Per-step model and effort, set from `multiplai.conf`.** Three sections take
+  effect today: `[buildme.review] MODEL=` picks the reviewer's model, and
+  `[buildme.plan_review] MODEL=` / `EFFORT=` tune the plan review — its effort
+  inherits `[buildme.review]` rather than the pipeline-wide value, so raising
+  the reviewer raises both. Two more resolve and are readable on the config
+  object but **no call site consumes them yet**: `[buildme.spec] MODEL=` and
+  `[buildme.agent] MODEL=` change nothing today. `specs/config.yaml` still
+  outranks `multiplai.conf`, which is a machine-wide default.
+- **Two knobs for the oversized-plan check**, both under
+  `[buildme.plan_review]`: `PLAN_SPLIT_BLOCK_TRIGGER` (default 8) and
+  `PLAN_SPLIT_PACKAGE_TRIGGER` (default 3). The defaults are placeholders — no
+  run archive has been measured — which is why they are knobs and not
+  constants.
+- **Part of the reviewer's prompt is borrowed, and says so.** Four blocks come
+  from `anthropics/claude-plugins-official`'s `pr-review-toolkit` under
+  Apache-2.0. They live under `build_pipeline/prompts/vendored/` with the
+  upstream `LICENSE` beside them, each pinned by blob SHA, each header naming
+  its source path and the fact that it was modified.
+  `scripts/check_vendored_prompts.py` re-fetches every pin and reports drift;
+  run it before a release.
+- **`deepen` records where it left upstream.** It was re-synced against
+  `mattpocock/skills` at `885e2ca` (2026-08-19) and now carries a "Divergence
+  from upstream" section naming that commit and mapping every file to its
+  upstream path.
+
+### Removed
+
+- **The security review step is gone from the pipeline.** The unwired
+  `run_security_review()` function, its prompt and the `security_review` config
+  toggle are deleted. Security review is out of scope for buildme — use Claude
+  Code's built-in `/security-review` on the branch instead.
+
 ## [0.14.1] - 2026-08-17
 
 ### Fixed

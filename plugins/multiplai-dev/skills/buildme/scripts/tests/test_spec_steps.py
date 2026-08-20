@@ -17,7 +17,18 @@ from build_pipeline.llm_steps.spec_steps import (
     run_design_audit,
     run_tasks_audit,
 )
+from build_pipeline.models import AgentResult
 from build_pipeline.prompts.spec_generation import DESIGN_PROMPT, TASKS_PROMPT
+
+
+def _agent_text(text: str) -> AgentResult:
+    """What a successful audit subagent hands back.
+
+    The audits run as read-only subagents (`agent_call`), so their seam returns
+    an AgentResult rather than a bare string. Their tool list is asserted in
+    test_review_steps.py — here the result only has to carry the text.
+    """
+    return AgentResult(success=True, output=text)
 
 
 def _make_config(tmp_path, req_files: dict[str, str]) -> BuildConfig:
@@ -151,9 +162,9 @@ class TestDesignAudit:
         (change_dir / "tasks.md").write_text("## 1. Do the thing")
 
         with patch(
-            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
         ) as mock_llm:
-            mock_llm.return_value = "[]"
+            mock_llm.return_value = _agent_text("[]")
             await run_design_audit(change_dir, config)
 
         prompt = mock_llm.call_args[0][0]
@@ -225,9 +236,9 @@ class TestTasksAudit:
         config = MagicMock(model="test-model")
 
         with patch(
-            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
         ) as mock_llm:
-            mock_llm.return_value = "[]"
+            mock_llm.return_value = _agent_text("[]")
             findings = await run_tasks_audit(change_dir, config)
 
         prompt = mock_llm.call_args[0][0]
@@ -248,9 +259,9 @@ class TestTasksAudit:
         )
 
         with patch(
-            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
         ) as mock_llm:
-            mock_llm.return_value = raw
+            mock_llm.return_value = _agent_text(raw)
             findings = await run_tasks_audit(change_dir, config)
 
         assert len(findings) == 1
@@ -262,9 +273,9 @@ class TestTasksAudit:
         config = MagicMock(model="test-model")
 
         with patch(
-            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
         ) as mock_llm:
-            mock_llm.return_value = "not json at all"
+            mock_llm.return_value = _agent_text("not json at all")
             findings = await run_tasks_audit(change_dir, config)
 
         assert findings == []
@@ -277,9 +288,9 @@ class TestTasksAudit:
         config = MagicMock(model="test-model")
 
         with patch(
-            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
         ) as mock_llm, caplog.at_level("WARNING"):
-            mock_llm.return_value = '{"findings": [{"category": "horizontal-decomposition"}]}'
+            mock_llm.return_value = _agent_text('{"findings": [{"category": "horizontal-decomposition"}]}')
             findings = await run_tasks_audit(change_dir, config)
 
         assert findings == []
@@ -294,9 +305,9 @@ class TestTasksAudit:
         config = MagicMock(model="test-model")
 
         with patch(
-            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
         ) as mock_llm:
-            mock_llm.return_value = '["Blocks 1-3 are layers", "re-slice them"]'
+            mock_llm.return_value = _agent_text('["Blocks 1-3 are layers", "re-slice them"]')
             findings = await run_tasks_audit(change_dir, config)
 
         assert findings == []
@@ -311,9 +322,9 @@ class TestTasksAudit:
         )
 
         with patch(
-            "build_pipeline.llm_steps.spec_steps.llm_call", new_callable=AsyncMock
+            "build_pipeline.llm_steps.spec_steps.agent_call", new_callable=AsyncMock
         ) as mock_llm:
-            mock_llm.return_value = raw
+            mock_llm.return_value = _agent_text(raw)
             findings = await run_tasks_audit(change_dir, config)
 
         assert len(findings) == 1

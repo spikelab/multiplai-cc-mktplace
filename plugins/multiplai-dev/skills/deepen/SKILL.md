@@ -9,7 +9,7 @@ Surface architectural friction and propose **deepening opportunities** — refac
 
 > **Prerequisites:** the HTML report renderer runs via `uv` (https://docs.astral.sh/uv/) — `uv run` reads the script's inline PEP 723 header and fetches its deps (network needed on first run). The analysis itself needs no network.
 
-Ported from Matt Pocock's `improve-codebase-architecture` skill; the vocabulary and process are his. The localization adds per-language idiom packs and moves the HTML report into a tested Python renderer.
+Ported from Matt Pocock's `improve-codebase-architecture` skill; the vocabulary and process are his. What we changed and what we deliberately left behind is recorded under [Divergence from upstream](#divergence-from-upstream), with the commit this was last synced against.
 
 ## Glossary
 
@@ -48,6 +48,11 @@ The idiom pack tells you how the **glossary terms map to that language's natural
 ## Process
 
 ### 1. Explore
+
+**Scope before you scan: YAGNI.** Deepening a module pays off by making future changes to it easier, so put extra weight on the parts of the codebase that have recently changed. Decide *where* to look before you look:
+
+- If the user named a direction (a module, a subsystem, a pain point), take it, and skip the inference below.
+- Otherwise, walk back a good stretch of the commit history (`git log --oneline`) to find the codebase's hot spots — the files and areas that keep coming up — and let those paths pull your attention first. If the changes are scattered with no clear hot spot, widen the net.
 
 Read the project's domain glossary (`CONTEXT.md`) and any ADRs in the area you're touching first. Either may be absent — that's fine.
 
@@ -123,3 +128,28 @@ Side effects happen inline as decisions crystallize:
 - **Sharpening a fuzzy term during the conversation?** Update `CONTEXT.md` right there.
 - **User rejects the candidate with a load-bearing reason?** Offer an ADR, framed as: _"Want me to record this as an ADR so future architecture reviews don't re-suggest it?"_ Only offer when the reason would actually be needed by a future explorer to avoid re-suggesting the same thing — skip ephemeral reasons ("not worth it right now") and self-evident ones. Default location: `docs/adr/NNNN-<slug>.md`, using the standard Michael Nygard format.
 - **Want to explore alternative interfaces for the deepened module?** See [INTERFACE-DESIGN.md](INTERFACE-DESIGN.md).
+
+## Divergence from upstream
+
+Upstream is [`mattpocock/skills`](https://github.com/mattpocock/skills), last synced against `main` at `885e2ca4d842d139e9aef4e48d366c63cb1b8013` (2026-08-19). Diff against that SHA to see what has moved since:
+
+| Ours | Upstream path |
+|---|---|
+| `SKILL.md` | `skills/engineering/improve-codebase-architecture/SKILL.md` |
+| `LANGUAGE.md` | `skills/engineering/codebase-design/SKILL.md` |
+| `DEEPENING.md` | `skills/engineering/codebase-design/DEEPENING.md` |
+| `INTERFACE-DESIGN.md` | `skills/engineering/codebase-design/DESIGN-IT-TWICE.md` |
+| `HTML-REPORT.md` | `skills/engineering/improve-codebase-architecture/HTML-REPORT.md` (same name, rewritten — ours specs the JSON contract, upstream's specs an HTML scaffold; don't merge it line by line) |
+
+**Deliberately not adopted.** Re-read this list before pulling the next diff — each of these will show up as a difference every time, and none of them is drift:
+
+- **Upstream's skill split.** Upstream moved the glossary out into a standalone `codebase-design` skill that others reach through the Skill tool. We keep one skill with `LANGUAGE.md` as a reference file. The per-language idiom packs are ours, they only make sense sitting next to the glossary, and one skill is one thing to install.
+- **`disable-model-invocation: true`.** Upstream ships this command-only. We want the router to be able to reach it, so the frontmatter stays model-invocable.
+- **Skill calls to `grilling` and `domain-modeling`.** Neither upstream skill is in this plugin. Their behaviour is inlined into step 3 — the grilling loop itself, the `CONTEXT.md` updates, and the ADR offer with its default path and format.
+- **Tailwind and Mermaid over CDN, with the model writing the markup.** Replaced by `scripts/render_report.py`, a tested Jinja renderer that takes JSON. The model produces data, not markup, so the report is reproducible and its styling is covered by `tests/`.
+- **Upstream's em-dash removal.** Upstream stripped em-dashes repo-wide; we keep house punctuation. Expect punctuation-only differences on lines that are otherwise identical, especially in `DEEPENING.md` and `INTERFACE-DESIGN.md`.
+- **TypeScript as the default example language.** Upstream's sketches are TypeScript throughout. Where the text is upstream's we keep the examples verbatim so the diff stays small, and point the reader at `idioms/<lang>.md` for the native form.
+
+**Ours, with no upstream counterpart** — `idioms/` (Python, Swift, TypeScript, React) and the language-detection step; `dependency_category` and `adr_callout` on each candidate; `scripts/` and `tests/`; the `Explore` subagent type in step 1.
+
+**Adopted at the 2026-08-19 sync:** the YAGNI scoping rule in step 1; and in `LANGUAGE.md` the deep-vs-shallow contrast, the three interface-design questions, the designing-for-testability rules, and the "Going deeper" pointers.

@@ -1,14 +1,53 @@
-"""Prompt templates for code and security review."""
+"""Prompt templates for code review.
 
-CODE_REVIEW_PROMPT = """\
+`CODE_REVIEW_PROMPT` is composed, not written in one piece: the Conventions,
+Removed Behavior and output-field sections fold in prose vendored from
+Anthropic's Apache-2.0 `pr-review-toolkit` agents. Those blocks live in
+`prompts/vendored/`, each under an attribution header; see that package's
+`SOURCES.json` for the pins. Composition happens at import time with plain
+concatenation, so the vendored strings must contain no brace characters —
+the whole template is later run through `str.format()`.
+"""
+
+from .vendored.reviewer_blocks import (
+    CODE_REVIEWER_CONVENTIONS_BLOCK,
+    SILENT_FAILURE_OUTPUT_BLOCK,
+    SILENT_FAILURE_PROCESS_BLOCK,
+    TEST_COVERAGE_BLOCK,
+    TYPE_INVARIANT_BLOCK,
+)
+
+CODE_REVIEW_PROMPT = (
+    """\
 You are reviewing a block implementation against its spec and a quality
 rubric. The diff is the only ground truth; everything the implementer reports
 about their own work is a claim you verify against it.
 
+## Tools — the diff says what changed, the repo says what it means
+
+You are not working from the diff alone. You hold `Read`, `Grep` and `Glob`
+over the project, and you should use them before you make a claim:
+
+- **Open the surrounding file.** A hunk shows you changed lines, not the
+  function they sit in. Read enough of the file to know whether the change is
+  correct where it landed.
+- **Grep for callers of every changed symbol.** A signature, a return type, a
+  raised error or a default that moved is a claim about every call site, and
+  the diff shows you none of them.
+- **Read the conventions docs before citing one.** Quote the rule as written,
+  from the file it is written in.
+
+The diff stays ground truth for *what changed* — anything outside it is
+context, not something you are reviewing. And you have `Read`, `Grep` and
+`Glob` and nothing else, deliberately: you report, you never fix. Do not
+propose to edit a file yourself; describe the change and let the build's own
+agents make it.
+
 ## Diff (ground truth)
 ```
 {diff}
-```
+```"""
+    + """
 
 ## Spec Context — the scenarios this block must satisfy
 {spec_context}
@@ -22,24 +61,83 @@ about their own work is a claim you verify against it.
 ## Coding Standards
 {standards}
 
+## Conventions
+
+The standards above carry the project's own `CLAUDE.md` chain — the repo root's
+file plus any `CLAUDE.md` governing a directory a changed file sits under. Those
+are written rules, and this angle is about them alone.
+
+**The evidence bar: only flag a violation when you can quote the exact rule and
+the exact line that breaks it.** No style preferences, no "spirit of the doc"
+inferences, no rule you believe a project like this one probably has. Name the
+`CLAUDE.md` path and quote the rule verbatim, so the report can cite it. If no
+`CLAUDE.md` applies to any changed file, return nothing for this angle — that
+is the correct result, not a gap.
+
+"""
+    + CODE_REVIEWER_CONVENTIONS_BLOCK
+    + """
+Report an issue in `issues` only at confidence 80 or above; below that it is a
+`findings` entry with its honest confidence, and the orchestrator decides.
+Record the score in the JSON `confidence` field on its 0.0-1.0 scale — a 0-100
+score of 85 is `0.85`.
+
 ## Review Method
 1. Start with strengths: name what the implementation genuinely does well,
    grounded in specific lines of the diff.
 2. Verify the implementer's claims: for each claim (behavior implemented,
    tests run, evidence shown), find the supporting code in the diff. A claim
    without supporting code in the diff is a finding.
-3. Judge spec compliance scenario by scenario — Missing / Extra /
+3. Account for what the diff removed. For every line the diff **deletes or
+   replaces**, name the invariant or behavior it enforced, then search the new
+   code for where that invariant is re-established. If you cannot find it, that
+   is a finding: a removed guard, a dropped error path, a narrowed validation,
+   a deleted test that covered a real case. Work it through the Removed
+   Behavior section below.
+4. Judge spec compliance scenario by scenario — Missing / Extra /
    Misunderstood — sorting each deviation into exactly one:
    - **Missing** (`missing`) — spec behavior with no implementation in the diff
    - **Extra** (`extra`) — implementation beyond what the spec asks for
    - **Misunderstood** (`misunderstood`) — implementation that addresses a
      scenario but gets its meaning wrong
-4. Score each rubric dimension 1-5 with evidence from the diff. Where coding
+5. Score each rubric dimension 1-5 with evidence from the diff. Where coding
    standards are provided, reflect violations in the relevant dimension
    scores.
-5. For every issue, cite the file path and line, say why it matters, and say
+6. For every issue, cite the file path and line, say why it matters, and say
    how to fix it — all three in the description.
 
+## Removed Behavior
+
+A deletion leaves no trace to review. This build deletes code on purpose — a
+refactor pass runs on every block and one more runs over the whole change —
+and the test files are hash-protected while a guard clause in source is not.
+So removals get their own pass, and `removed-behavior` is a `dimension` value
+you may use on any finding this section produces.
+
+Take every `-` line in the diff. For each one, answer two questions in order:
+**what did this line guarantee, and where in the new code is that guarantee
+now?** A removal is fine when the second answer exists and you can point at it.
+A removal you cannot account for is a finding, whatever the implementer's
+report says about it.
+
+"""
+    + TYPE_INVARIANT_BLOCK
+    + """
+Deleted error handling is the case that hides best, because the code still
+runs. Audit what the change did to failure paths:
+
+"""
+    + SILENT_FAILURE_PROCESS_BLOCK
+    + """
+"""
+    + SILENT_FAILURE_OUTPUT_BLOCK
+    + """
+A deleted or weakened test is a removal too, and the same two questions apply
+to it — what did this test guarantee, and what still guarantees it?
+
+"""
+    + TEST_COVERAGE_BLOCK
+    + """
 ## Severity Calibration
 Critical = correctness or security is broken; blocks merge.
 Major = this block cannot be trusted until fixed.
@@ -107,8 +205,15 @@ Write each so it can be judged alone — a finding whose evidence is "see above"
 cannot be adjudicated and will be discarded. Every issue you list should also
 appear as a finding.
 
+`dimension` is normally a rubric dimension's name. Two values are also
+available for findings the rubric has no dimension for:
+`removed-behavior` — an invariant, guard, error path, validation or test the
+diff deleted and did not re-establish — and `conventions` — a written
+`CLAUDE.md` rule the diff breaks, quoted.
+
 Return ONLY the JSON. No commentary.
 """
+)
 
 # Reviewers propose; the orchestrator disposes. Roughly a quarter of reviewer
 # suggestions are wrong, so auto-applying them spends an implementer turn (and
@@ -233,67 +338,4 @@ Return a JSON object matching this schema:
 
 `passed` is false when any issue would make the build untrustworthy as
 delivered. Return ONLY the JSON. No commentary.
-"""
-
-SECURITY_REVIEW_PROMPT = """\
-You are performing a security review of code changes.
-
-## Diff
-```
-{diff}
-```
-
-## Rubric
-{rubric}
-
-## Instructions
-Review the diff for security issues across these OWASP categories:
-- Injection (SQL, command, XSS)
-- Broken authentication/authorization
-- Sensitive data exposure (secrets, PII in logs)
-- Security misconfiguration
-- Insecure deserialization
-- Using components with known vulnerabilities
-- Insufficient logging/monitoring
-
-Also check:
-- Input validation and sanitization
-- Proper error handling (no stack traces leaked)
-- Secure defaults
-- Principle of least privilege
-
-## Output Format
-Return a JSON object matching the ReviewResult schema:
-
-```json
-{{
-  "scores": [
-    {{
-      "dimension": "Security Posture",
-      "weight": 2,
-      "score": 4,
-      "evidence": "Specific evidence"
-    }},
-    {{
-      "dimension": "Input Validation",
-      "weight": 2,
-      "score": 3,
-      "evidence": "Specific evidence"
-    }}
-  ],
-  "issues": [
-    {{
-      "dimension": "Security",
-      "severity": "Critical",
-      "description": "SQL injection via unsanitized input",
-      "file_path": "path/to/file.py",
-      "line": 42
-    }}
-  ]
-}}
-```
-
-Be thorough but not paranoid. Flag real vulnerabilities, not theoretical impossibilities.
-
-Return ONLY the JSON. No commentary.
 """
