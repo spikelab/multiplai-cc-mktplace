@@ -13,12 +13,13 @@ segment still must be.
 from __future__ import annotations
 
 import io
+import json
 from contextlib import redirect_stdout
 
 import pytest
 
 import plane
-from conftest import ALLOWED, BAD, CFG, OK, Args, guard
+from conftest import BAD, CFG, OK, Args, guard
 
 L1 = "aaaa1111-2222-3333-4444-555566667777"
 L2 = "aaaa1111-9999-8888-7777-666655554444"
@@ -39,6 +40,8 @@ class Calls:
     def __init__(self, routes=None):
         self.routes = routes or {}
         self.calls: list[tuple] = []
+        self.listings: list[str] = []
+        self.scans: list[tuple] = []
 
     def __call__(self, method, path, cfg, *, params=None, body=None, dry_run=False, **kw):
         bare = path.split("?")[0]
@@ -48,14 +51,25 @@ class Calls:
 
 
 def stub(monkeypatch, *, labels=LABELS, issues=(), routes=None):
-    """Wire resolve_project, the label list and the issue scan to fixtures."""
-    monkeypatch.setattr(plane, "resolve_project", lambda cfg, ref=None: dict(PROJECT))
-    monkeypatch.setattr(plane, "project_labels", lambda cfg, pid: [dict(x) for x in labels])
-    monkeypatch.setattr(
-        plane, "_paginate",
-        lambda path, cfg, **kw: iter([dict(x) for x in issues]),
-    )
+    """Wire resolve_project, the label list and the issue scan to fixtures.
+
+    The returned recorder also carries `listings` (one entry per project_labels
+    call) and `scans` (the params of every _paginate call), because two findings
+    here are about how often the tool fetches and how much it asks for.
+    """
     calls = Calls(routes)
+
+    def listing(cfg, pid):
+        calls.listings.append(pid)
+        return [dict(x) for x in labels]
+
+    def paginate(path, cfg, **kw):
+        calls.scans.append((path, kw.get("params")))
+        return iter([dict(x) for x in issues])
+
+    monkeypatch.setattr(plane, "resolve_project", lambda cfg, ref=None: dict(PROJECT))
+    monkeypatch.setattr(plane, "project_labels", listing)
+    monkeypatch.setattr(plane, "_paginate", paginate)
     monkeypatch.setattr(plane, "_request", calls)
     return calls
 
@@ -109,8 +123,13 @@ def test_colour_forms_normalise_to_six_digit_hex(given, want):
     assert plane.normalize_color(given) == want
 
 
-@pytest.mark.parametrize("given", ["", "red", "#gggggg", "#ff88", "#ff88000", "  "])
+@pytest.mark.parametrize(
+    "given",
+    ["", "red", "#gggggg", "#ff88", "#ff88000", "  ", "##ff8800", "###f80", "#"],
+)
 def test_a_colour_that_is_not_hex_is_refused_locally(given):
+    # The repeated-hash cases are why this does not use lstrip("#"): that takes a
+    # character set, so it would accept "##ff8800" as a colour.
     with pytest.raises(plane.PlaneError, match="hex colour"):
         plane.normalize_color(given)
 
@@ -133,10 +152,18 @@ def test_an_ambiguous_id_prefix_is_refused_rather_than_guessed(monkeypatch):
         plane.resolve_label_object(CFG, OK, "aaaa1111")
 
 
-def test_a_short_id_prefix_does_not_match_at_all(monkeypatch):
+def test_a_short_id_prefix_says_it_is_short_not_that_nothing_matches(monkeypatch):
+    # "bbbb" does prefix L3's id. Reporting "no label matching" there tells the
+    # user the label does not exist when it does.
+    stub(monkeypatch)
+    with pytest.raises(plane.PlaneError, match="too short"):
+        plane.resolve_label_object(CFG, OK, "bbbb")
+
+
+def test_a_reference_matching_nothing_at_all_lists_what_exists(monkeypatch):
     stub(monkeypatch)
     with pytest.raises(plane.PlaneError, match="no label matching"):
-        plane.resolve_label_object(CFG, OK, "bbbb")
+        plane.resolve_label_object(CFG, OK, "zzzz")
 
 
 def test_duplicate_names_are_refused_rather_than_resolved(monkeypatch):
@@ -153,6 +180,57 @@ def test_an_unknown_label_lists_what_does_exist(monkeypatch):
     with pytest.raises(plane.PlaneError) as exc:
         plane.resolve_label_object(CFG, OK, "nope")
     assert "bug" in str(exc.value) and "chore" in str(exc.value)
+
+
+# --- one resolver, so a reference cannot mean two things ----------------------
+
+
+def test_attaching_and_editing_read_a_reference_the_same_way(monkeypatch):
+    """`--label <full-uuid>` used to fail on create/update and work on
+    label-edit, because each command had its own matching rules."""
+    stub(monkeypatch)
+    assert plane.resolve_label(CFG, OK, L2) == L2
+    assert plane.resolve_label(CFG, OK, "bbbb2222-3333") == L3
+    # An ambiguous reference is never answered by creating a third label.
+    with pytest.raises(plane.PlaneError, match="2 labels are named"):
+        plane.resolve_label(
+            CFG, OK, "bug",
+            labels=[{"id": L1, "name": "bug"}, {"id": L2, "name": "Bug"}],
+        )
+
+
+def test_the_label_list_is_fetched_once_per_command_not_once_per_flag(monkeypatch):
+    calls = stub(monkeypatch)
+    payload: dict = {}
+    plane._apply_assignment_flags(
+        CFG,
+        Args(assignee=None, label=["bug", "chore", "docs"], create_labels=False,
+             estimate=None, dry_run=False),
+        OK, payload,
+    )
+    assert payload["labels"] == [L1, L2, L3]
+    assert len(calls.listings) == 1
+
+
+def test_repeating_a_new_label_name_creates_it_once(monkeypatch):
+    calls = stub(monkeypatch, labels=[], routes={f"/projects/{OK}/labels/": {"id": L3}})
+    payload: dict = {}
+    plane._apply_assignment_flags(
+        CFG,
+        Args(assignee=None, label=["triage", "triage"], create_labels=True,
+             estimate=None, dry_run=False),
+        OK, payload,
+    )
+    assert [c[0] for c in calls.calls] == ["POST"]
+    assert payload["labels"] == [L3, L3]
+
+
+def test_a_short_new_label_name_that_prefixes_an_id_can_still_be_created(monkeypatch):
+    # "bbbb" prefixes L3's id, so resolution reports it as a truncated id. With
+    # --create-labels that has to mean "create a label called bbbb", not fail.
+    calls = stub(monkeypatch, routes={f"/projects/{OK}/labels/": {"id": L2}})
+    assert plane.resolve_label(CFG, OK, "bbbb", create=True) == L2
+    assert calls.calls[0][:2] == ("POST", f"/projects/{OK}/labels/")
 
 
 # --- create ------------------------------------------------------------------
@@ -322,6 +400,114 @@ def test_delete_dry_run_sends_nothing(monkeypatch):
     assert "deleted label" not in out
 
 
+def test_dry_run_previews_the_delete_without_needing_yes(monkeypatch):
+    """The safe command must not be one flag away from the destructive one.
+
+    Requiring --yes to *preview* means the only way to see the request is to
+    type the confirmation, and dropping --dry-run from that line deletes.
+    """
+    calls = stub(monkeypatch, issues=issues_carrying(L1))
+    run(plane.cmd_label_delete, CFG, Args(
+        project=None, label="bug", yes=False, dry_run=True,
+    ))
+    method, path, _body, dry = calls.calls[0]
+    assert (method, path, dry) == ("DELETE", f"/projects/{OK}/labels/{L1}/", True)
+
+
+def test_the_usage_count_names_what_it_scanned(monkeypatch):
+    """The count gates an irreversible write, so it must not read as absolute:
+    archived issues are not in /issues/ and are not counted."""
+    stub(monkeypatch, issues=issues_carrying(L2))
+    out = run(plane.cmd_label_delete, CFG, Args(
+        project=None, label="bug", yes=True, dry_run=False,
+    ))
+    assert "no issues" in out
+    assert "archived issues are not scanned" in out
+
+
+def test_the_usage_scan_does_not_ask_for_issue_bodies(monkeypatch):
+    """A count needs every page, so the payload is the whole cost — and rule 11
+    has the user run this twice."""
+    calls = stub(monkeypatch, issues=issues_carrying(L1))
+    run(plane.cmd_label_delete, CFG, Args(
+        project=None, label="bug", yes=True, dry_run=False,
+    ))
+    scans = [params for path, params in calls.scans if path.endswith("/issues/")]
+    assert scans and all((params or {}).get("fields") == "id,labels" for params in scans)
+
+
+def test_deleting_a_label_group_parent_is_refused_not_counted(monkeypatch):
+    """Plane deletes a group's children with it, and the issue count does not
+    see that: a parent usually carries no issues at all."""
+    calls = stub(monkeypatch, labels=[
+        {"id": L1, "name": "Platform"},
+        {"id": L2, "name": "backend", "parent": L1},
+        {"id": L3, "name": "frontend", "parent": {"id": L1}},
+    ])
+    with pytest.raises(plane.PlaneError, match="label group with 2 child"):
+        with redirect_stdout(io.StringIO()):
+            plane.cmd_label_delete(CFG, Args(
+                project=None, label="Platform", yes=True, dry_run=False,
+            ))
+    assert calls.calls == []
+
+
+def test_a_child_label_is_still_deletable(monkeypatch):
+    calls = stub(monkeypatch, labels=[
+        {"id": L1, "name": "Platform"},
+        {"id": L2, "name": "backend", "parent": L1},
+    ])
+    run(plane.cmd_label_delete, CFG, Args(
+        project=None, label="backend", yes=True, dry_run=False,
+    ))
+    assert calls.calls[0][:2] == ("DELETE", f"/projects/{OK}/labels/{L2}/")
+
+
+# --- --json is honoured by the writes too ------------------------------------
+
+
+def test_json_output_carries_the_new_label_id(monkeypatch):
+    stub(monkeypatch, routes={f"/projects/{OK}/labels/": {"id": L3}})
+    out = run(plane.cmd_label_create, CFG, Args(
+        project=None, name="triage", color="#f80", description=None,
+        dry_run=False, json=True,
+    ))
+    assert json.loads(out)["id"] == L3
+
+
+def test_json_output_carries_what_the_edit_changed(monkeypatch):
+    stub(monkeypatch)
+    out = run(plane.cmd_label_edit, CFG, Args(
+        project=None, label="bug", name="defect", color=None, description=None,
+        dry_run=False, json=True,
+    ))
+    got = json.loads(out)
+    assert (got["id"], got["was"], got["changed"]) == (L1, "bug", {"name": "defect"})
+
+
+def test_the_blast_radius_is_parseable_when_the_delete_is_refused(monkeypatch):
+    """--json exists so a caller can act on the count. Printing it as prose and
+    then erroring leaves the one number that matters unparseable."""
+    stub(monkeypatch, issues=issues_carrying(L1, L1))
+    out = io.StringIO()
+    with pytest.raises(plane.PlaneError, match="without --yes"):
+        with redirect_stdout(out):
+            plane.cmd_label_delete(CFG, Args(
+                project=None, label="bug", yes=False, dry_run=False, json=True,
+            ))
+    got = json.loads(out.getvalue())
+    assert (got["on_issues"], got["deleted"]) == (2, False)
+    assert "archived" in got["counted_over"]
+
+
+def test_a_completed_delete_prints_one_json_document(monkeypatch):
+    stub(monkeypatch, issues=issues_carrying(L1))
+    out = run(plane.cmd_label_delete, CFG, Args(
+        project=None, label="bug", yes=True, dry_run=False, json=True,
+    ))
+    assert json.loads(out)["deleted"] is True
+
+
 def test_usage_counts_an_issue_once_even_with_expanded_labels(monkeypatch):
     monkeypatch.setattr(
         plane, "_paginate",
@@ -344,3 +530,27 @@ def test_labels_listing_shows_the_description_it_can_now_set(monkeypatch):
     out = run(plane.cmd_labels, CFG, Args(project=None))
     assert "DESCRIPTION" in out
     assert "docs work" in out
+
+
+def test_a_long_or_multiline_description_does_not_push_the_id_off_the_row(monkeypatch):
+    """`_table` sizes a column to its longest value, and `id` is what
+    `label-edit` and `label-delete` need. Free text goes last, one line, capped."""
+    stub(monkeypatch, labels=[
+        {"id": L1, "name": "bug", "color": "#ff0000",
+         "description": "why this exists " * 12 + "\nand a second paragraph"},
+        {"id": L2, "name": "chore", "color": "#00ff00", "description": ""},
+    ])
+    out = run(plane.cmd_labels, CFG, Args(project=None))
+    lines = out.splitlines()
+    assert any("bug" in ln and L1 in ln for ln in lines)
+    assert any("chore" in ln and L2 in ln for ln in lines)
+    assert max(len(ln) for ln in lines) < 110
+
+
+def test_json_output_keeps_the_whole_description(monkeypatch):
+    long = "why this exists " * 12
+    stub(monkeypatch, labels=[
+        {"id": L1, "name": "bug", "color": "#ff0000", "description": long},
+    ])
+    out = run(plane.cmd_labels, CFG, Args(project=None, json=True))
+    assert json.loads(out)[0]["description"] == long

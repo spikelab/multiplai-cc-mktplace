@@ -351,6 +351,8 @@ def test_assignment_flags_become_whole_list_writes(monkeypatch):
     monkeypatch.setattr(
         plane, "resolve_label", lambda cfg, pid, n, **kw: f"label-{n}"
     )
+    # Listed once for the whole command now, not once per --label.
+    monkeypatch.setattr(plane, "project_labels", lambda cfg, pid: [])
     payload: dict = {}
     args = types.SimpleNamespace(
         assignee=["alice", "bob"], label=["a", "b"],
