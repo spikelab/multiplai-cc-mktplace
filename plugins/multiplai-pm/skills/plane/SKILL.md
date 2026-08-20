@@ -64,6 +64,9 @@ scan is already per-project, so it does not make resolution faster.
 | `comment-edit <ref> <comment-id> "text"` | Replace an existing comment's body. |
 | `comments <ref>` | Read the comment thread; each entry prints its comment id. |
 | `states [-p P]` / `labels [-p P]` / `members` / `cycles [-p P]` / `estimates [-p P]` | Reference data. |
+| `label-create --name N [--color C] [--description D]` | New label in the project. |
+| `label-edit <label> [--name] [--color] [--description]` | Rename, recolour or re-describe one. |
+| `label-delete <label> --yes` | Delete a label. Destructive — see rule 11. |
 | `attachments <ref> [--download DIR \| --upload FILE]` | List an issue's attachments; download or upload them. |
 | `search <query> [--limit N]` | Workspace search, filtered to allowlisted projects. |
 
@@ -140,6 +143,20 @@ Priorities: `urgent`, `high`, `medium`, `low`, `none`. States are given **by nam
     attachment that has to be removed in Plane before retrying. Pass that on verbatim
     rather than just retrying.
 
+11. **`label-delete` is the one destructive command here, and Plane has no undo.**
+    Deleting a label strips it from every issue that carried it; those issues are
+    otherwise untouched, but the labelling is gone and cannot be restored. So the
+    command counts the issues carrying the label, prints that count, and then
+    refuses unless `--yes` is passed. Run it once without `--yes` to see the
+    number, show the user, and only then confirm. `label-edit --name` is the
+    non-destructive alternative when the real intent is a rename — every issue
+    keeps the label.
+
+    The count comes from scanning the project's issues client-side, because
+    `?labels=<uuid>` puts a non-project UUID in the query string and rule 2 of the
+    guardrail refuses those by design. On a very large project that scan is slow,
+    the same way resolving `SPK-12` is.
+
 ## Examples
 
 ```bash
@@ -153,6 +170,11 @@ $PLANE --dry-run update SPK-12 --state Done       # print the PATCH, send nothin
 $PLANE update SPK-12 --state Done
 $PLANE comment SPK-12 "Deployed in **v2026.07.28**."
 $PLANE comment-edit SPK-12 aaaa1111 "Deployed in **v2026.07.29**."
+$PLANE labels -p SPK                                # name, colour, description, id
+$PLANE label-create -p SPK --name triage --color '#ff8800' --description "Needs a look"
+$PLANE label-edit -p SPK triage --name "Needs triage"     # renames it everywhere
+$PLANE label-delete -p SPK triage                   # prints the usage count, refuses
+$PLANE label-delete -p SPK triage --yes             # deletes it
 $PLANE attachments SPK-12 --upload report.pdf --upload screenshot.png
 $PLANE --dry-run attachments SPK-12 --upload report.pdf   # print step 1, send nothing
 $PLANE search "migrations"
@@ -167,7 +189,10 @@ $PLANE --json issues -p SPK | jq '[.[] | select(.priority == "urgent")]'
 - Uploads are capped at 32 MB per file, and there is no progress output — a large file
   looks like a hang until it finishes.
 - No module assignment on write.
-- No delete, by design: the tool can create and modify issues but not remove them, and it
-  refuses to touch project objects at all — so it cannot enable a project's cycles module
-  or create its estimate set either. Those are set up in Plane.
+- Issues are never deleted: the tool can create and modify them but not remove them.
+  Labels are the single exception (`label-delete`, gated on `--yes`).
+- It refuses to touch project objects at all — so it cannot enable a project's cycles
+  module or create its estimate set. Those are set up in Plane.
+- Label *groups* (a label with a parent) are not exposed: `label-create` and
+  `label-edit` set name, colour and description only.
 - Sub-issues, relations and worklogs are not exposed.

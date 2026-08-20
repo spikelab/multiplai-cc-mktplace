@@ -831,6 +831,53 @@ def resolve_member(cfg: dict, project_id: str, ref: str) -> str:
     raise PlaneError(f"{len(hits)} members match {ref!r} ({mails}) — use the email")
 
 
+def normalize_color(value: str) -> str:
+    """Accept `#rrggbb`, `rrggbb` or `#rgb` -> `#rrggbb`.
+
+    Validated here rather than left to the server: Plane answers a malformed
+    colour with a bare 400 whose body does not name the field, which reads like
+    the whole write failed for some other reason.
+    """
+    raw = (value or "").strip().lstrip("#")
+    if not re.fullmatch(r"[0-9a-fA-F]{3}|[0-9a-fA-F]{6}", raw):
+        raise PlaneError(
+            f"{value!r} is not a hex colour — give #rrggbb (e.g. #ff8800), "
+            "#rgb, or the same without the leading #"
+        )
+    if len(raw) == 3:
+        raw = "".join(c * 2 for c in raw)
+    return f"#{raw.lower()}"
+
+
+def project_labels(cfg: dict, project_id: str) -> list[dict]:
+    return list(_paginate(f"/projects/{project_id}/labels/", cfg))
+
+
+def create_label(
+    cfg: dict,
+    project_id: str,
+    name: str,
+    *,
+    color: str | None = None,
+    description: str | None = None,
+    dry_run: bool = False,
+) -> str | None:
+    """POST one label. Returns its new UUID, or None under --dry-run."""
+    body = {"name": name.strip()}
+    if color is not None:
+        body["color"] = normalize_color(color)
+    if description is not None:
+        body["description"] = description
+    made = _request(
+        "POST", f"/projects/{project_id}/labels/", cfg, body=body, dry_run=dry_run
+    )
+    if dry_run:
+        return None
+    if not isinstance(made, dict) or not made.get("id"):
+        raise PlaneError(f"creating label {name!r} returned no id: {made!r}")
+    return made["id"]
+
+
 def resolve_label(
     cfg: dict, project_id: str, name: str, *, create: bool = False, dry_run: bool = False
 ) -> str | None:
@@ -843,7 +890,7 @@ def resolve_label(
     needle = (name or "").strip().lower()
     if not needle:
         raise PlaneError("empty label name")
-    for x in _paginate(f"/projects/{project_id}/labels/", cfg):
+    for x in project_labels(cfg, project_id):
         if needle in (x["id"].lower(), (x.get("name") or "").strip().lower()):
             return x["id"]
     if not create:
@@ -854,12 +901,69 @@ def resolve_label(
     if dry_run:
         print(f"[dry-run] POST label {name!r} (new)")
         return None
-    made = _request(
-        "POST", f"/projects/{project_id}/labels/", cfg, body={"name": name.strip()}
-    )
-    if not isinstance(made, dict) or not made.get("id"):
-        raise PlaneError(f"creating label {name!r} returned no id: {made!r}")
-    return made["id"]
+    return create_label(cfg, project_id, name)
+
+
+def resolve_label_object(cfg: dict, project_id: str, ref: str) -> dict:
+    """Label name, full UUID, or a unique id prefix -> the whole label object.
+
+    `resolve_label` above answers "which id do I attach to this issue"; this one
+    answers "which label am I about to rewrite or destroy", so it returns the
+    object (the caller needs the current name to report) and refuses ambiguity
+    instead of taking the first match. Two labels can only share a name on a
+    Plane that lost its uniqueness constraint, but guessing which one to delete
+    is not a recoverable mistake.
+    """
+    needle = (ref or "").strip().lower()
+    if not needle:
+        raise PlaneError("empty label reference")
+    labels = project_labels(cfg, project_id)
+    if not labels:
+        raise PlaneError("this project has no labels yet")
+
+    for x in labels:
+        if str(x.get("id", "")).lower() == needle:
+            return x
+
+    by_name = [x for x in labels if (x.get("name") or "").strip().lower() == needle]
+    if len(by_name) == 1:
+        return by_name[0]
+    if len(by_name) > 1:
+        ids = ", ".join(x["id"] for x in by_name)
+        raise PlaneError(
+            f"{len(by_name)} labels are named {ref!r} ({ids}) — give the id instead"
+        )
+
+    if len(needle) >= 8:
+        hits = [x for x in labels if str(x.get("id", "")).lower().startswith(needle)]
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) > 1:
+            ids = ", ".join(x["id"] for x in hits)
+            raise PlaneError(f"{len(hits)} labels match {ref!r} ({ids}) — give more of the id")
+
+    known = ", ".join(x.get("name") or x["id"] for x in labels)
+    raise PlaneError(f"no label matching {ref!r} in this project. Labels here: {known}")
+
+
+def label_usage(cfg: dict, project_id: str, label_id: str) -> int:
+    """How many issues currently carry this label.
+
+    Counted by scanning the project's issues, not by asking the API to filter:
+    `?labels=<uuid>` puts a UUID that is not a project into the query string,
+    and the guardrail refuses every non-allowlisted UUID there by design
+    (rule 2). Widening that exemption to buy one count would be a bad trade, so
+    this pays the same per-project scan `resolve_issue` already pays.
+    """
+    needle = label_id.lower()
+    count = 0
+    for issue in _paginate(f"/projects/{project_id}/issues/", cfg):
+        for lab in issue.get("labels") or []:
+            got = lab.get("id") if isinstance(lab, dict) else lab
+            if str(got or "").lower() == needle:
+                count += 1
+                break
+    return count
 
 
 # Plane Cloud stores a pasted image as an inline node in description_html with
@@ -1154,6 +1258,10 @@ def cmd_check(cfg, _args):
     )
     negative.append(("POST", "/projects/", "create a project"))
     negative.append(("POST", "/issues/search/", "write via a workspace-scoped path"))
+    negative.append(
+        ("DELETE", f"/projects/{off_id}/labels/{off_id}/",
+         "delete a label in a project not in the allowlist")
+    )
 
     failures = 0
     for method, path, label in negative:
@@ -1169,6 +1277,10 @@ def cmd_check(cfg, _args):
         ("GET", f"/projects/{ok_id}/issues/", "read an allowed project"),
         ("POST", f"/projects/{ok_id}/issues/", "create an issue in an allowed project"),
         ("GET", "/members/", "read workspace members"),
+        # The label's own UUID is not a project id, so the guard must not judge
+        # it against the allowlist — only the /projects/<uuid> segment counts.
+        ("DELETE", f"/projects/{ok_id}/labels/{'1'*8}-1111-1111-1111-{'1'*12}/",
+         "delete a label in an allowed project"),
     ]
     for method, path, label in positive:
         try:
@@ -1509,10 +1621,108 @@ def cmd_states(cfg, args):
 def cmd_labels(cfg, args):
     proj = resolve_project(cfg, args.project)
     rows = [
-        {"name": x.get("name"), "color": x.get("color"), "id": x["id"]}
-        for x in _paginate(f"/projects/{proj['id']}/labels/", cfg)
+        {
+            "name": x.get("name"),
+            "color": x.get("color"),
+            "description": x.get("description"),
+            "id": x["id"],
+        }
+        for x in project_labels(cfg, proj["id"])
     ]
-    _emit(rows, args, ["name", "color", "id"])
+    _emit(rows, args, ["name", "color", "description", "id"])
+
+
+def cmd_label_create(cfg, args):
+    proj = resolve_project(cfg, args.project)
+    name = (args.name or "").strip()
+    if not name:
+        raise PlaneError("empty label name")
+
+    # Checked here rather than left to the server's uniqueness constraint: a
+    # 400 does not tell the user the label they wanted already exists, and the
+    # useful next move is `label-edit`, not a retry.
+    clash = [
+        x for x in project_labels(cfg, proj["id"])
+        if (x.get("name") or "").strip().lower() == name.lower()
+    ]
+    if clash:
+        raise PlaneError(
+            f"a label named {name!r} already exists here [{clash[0]['id']}] — "
+            "use `label-edit` to change it"
+        )
+
+    new_id = create_label(
+        cfg, proj["id"], name,
+        color=args.color, description=args.description, dry_run=args.dry_run,
+    )
+    if not args.dry_run:
+        print(f"created label {name!r} in {proj.get('name')} [{new_id}]")
+
+
+def cmd_label_edit(cfg, args):
+    """Change a label in place. Every issue carrying it sees the new name."""
+    proj = resolve_project(cfg, args.project)
+    label = resolve_label_object(cfg, proj["id"], args.label)
+
+    payload: dict = {}
+    if args.name is not None:
+        renamed = args.name.strip()
+        if not renamed:
+            raise PlaneError("empty label name")
+        collision = [
+            x for x in project_labels(cfg, proj["id"])
+            if (x.get("name") or "").strip().lower() == renamed.lower()
+            and x["id"] != label["id"]
+        ]
+        if collision:
+            raise PlaneError(
+                f"another label is already named {renamed!r} [{collision[0]['id']}]"
+            )
+        payload["name"] = renamed
+    if args.color is not None:
+        payload["color"] = normalize_color(args.color)
+    if args.description is not None:
+        payload["description"] = args.description
+    if not payload:
+        raise PlaneError("nothing to change — pass --name, --color or --description")
+
+    _request(
+        "PATCH", f"/projects/{proj['id']}/labels/{label['id']}/", cfg,
+        body=payload, dry_run=args.dry_run,
+    )
+    if not args.dry_run:
+        changed = ", ".join(f"{k}={v!r}" for k, v in payload.items())
+        print(f"edited label {label.get('name')!r} [{label['id']}] — {changed}")
+
+
+def cmd_label_delete(cfg, args):
+    """Delete a label. The only destructive command in this tool.
+
+    Two gates, because Plane has no undo for this and the blast radius is not
+    visible from the label itself: the issues carrying it are counted and shown
+    first, and `--yes` must be passed. Deleting detaches the label from every
+    one of those issues; nothing else about them changes.
+    """
+    proj = resolve_project(cfg, args.project)
+    label = resolve_label_object(cfg, proj["id"], args.label)
+    name = label.get("name") or label["id"]
+    used_by = label_usage(cfg, proj["id"], label["id"])
+
+    where = f"{used_by} issue(s)" if used_by else "no issues"
+    print(f"label {name!r} [{label['id']}] in {proj.get('name')} is on {where}")
+
+    if not args.yes:
+        raise PlaneError(
+            f"refusing to delete {name!r} without --yes. Deleting it removes the "
+            f"label from {where} and cannot be undone."
+        )
+
+    _request(
+        "DELETE", f"/projects/{proj['id']}/labels/{label['id']}/", cfg,
+        dry_run=args.dry_run,
+    )
+    if not args.dry_run:
+        print(f"deleted label {name!r} [{label['id']}] — detached from {where}")
 
 
 def cmd_cycles(cfg, args):
@@ -1915,6 +2125,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     add("states", cmd_states, "list workflow states")
     add("labels", cmd_labels, "list labels")
+
+    sp = add("label-create", cmd_label_create, "create a label")
+    sp.add_argument("--name", required=True)
+    sp.add_argument("--color", help="hex colour, e.g. #ff8800")
+    sp.add_argument("--description")
+
+    sp = add("label-edit", cmd_label_edit, "rename or recolour an existing label")
+    sp.add_argument(
+        "label", metavar="LABEL", help="label name, UUID, or a unique id prefix"
+    )
+    sp.add_argument("--name", help="new name")
+    sp.add_argument("--color", help="hex colour, e.g. #ff8800")
+    sp.add_argument("--description")
+
+    sp = add("label-delete", cmd_label_delete, "delete a label (needs --yes)")
+    sp.add_argument(
+        "label", metavar="LABEL", help="label name, UUID, or a unique id prefix"
+    )
+    sp.add_argument(
+        "--yes", action="store_true",
+        help="confirm — deletion removes the label from every issue carrying it",
+    )
     add("members", cmd_members, "list workspace members", project=False)
     add("cycles", cmd_cycles, "list cycles, marking the active one")
     add("estimates", cmd_estimates, "list the project's estimate points")

@@ -23,6 +23,41 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 Nothing yet.
 
+## [0.5.0] - 2026-08-20
+
+### Added
+- **`plane label-create`, `label-edit` and `label-delete` — manage a project's
+  labels, not just attach them.** Until now the skill could read labels and put
+  an existing one on an issue; creating one was a side effect of
+  `--label X --create-labels` and there was no way to fix a typo in a name or
+  change a colour. Now:
+
+  ```bash
+  plane label-create -p SPK --name triage --color '#ff8800' --description "Needs a look"
+  plane label-edit  -p SPK triage --name "Needs triage"
+  plane label-delete -p SPK "Needs triage" --yes
+  ```
+
+  A label is named by its name, its full UUID, or at least the first 8
+  characters of one. An ambiguous reference is refused and the candidates
+  listed, rather than resolved by taking the first match.
+
+- **`labels` now lists each label's description**, which is the field
+  `label-create --description` and `label-edit --description` set.
+
+### Changed
+- **`label-delete` is the first command in this skill that destroys something,
+  and it is gated twice.** It prints how many issues currently carry the label,
+  then refuses unless `--yes` is passed. Deleting a label strips it from every
+  one of those issues and Plane has no undo; a rename (`label-edit --name`) is
+  the non-destructive move when that was the real intent. Everything else is
+  unchanged — issues still cannot be deleted, and project objects are still
+  untouchable.
+- A colour that is not hex is refused locally with a message naming the field,
+  instead of reaching Plane and coming back as a bare `400`.
+- Creating a label whose name already exists now says so and points at
+  `label-edit`, instead of failing on the server's uniqueness constraint.
+
 ## [0.4.0] - 2026-08-18
 
 ### Added
