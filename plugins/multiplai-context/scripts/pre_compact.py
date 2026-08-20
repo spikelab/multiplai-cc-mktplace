@@ -41,7 +41,6 @@ at the threshold instead (see ``checkpoint_hard_stop_tokens``).
 """
 
 import json
-import os
 import subprocess
 import sys
 import time
@@ -54,6 +53,7 @@ from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.paths import get_paths
 from multiplai_core.log_utils import hook_run, setup_logging, log_event
 from lib import checkpoint as cp
+from lib.fsio import atomic_write_json
 from lib.hook_input import read_hook_input
 from lib.runtime import run_supervised, uv_run_argv
 
@@ -73,7 +73,34 @@ _INFLIGHT_POLL_S = 2.0
 _HOOK_BUDGET_S = 270
 
 
-def _sync_checkpoint(hook_input: dict, data_dir) -> bool:
+# Sentinel: distinguishes "caller did not precompute the gate" (recompute it)
+# from "the gate is closed" (None).
+_GATE_UNSET = object()
+
+
+def _session_gate(hook_input: dict, data_dir):
+    """Shared preamble for the two checkpoint passes.
+
+    Returns ``(cfg, session_id, transcript_path, state, tokens)``, or ``None``
+    when checkpointing is disabled, the payload is incomplete, or this is a
+    child session (M7). Computed once per hook run by ``_compact_pass`` so the
+    transcript tail (512 KB) is read once, not once per pass.
+    """
+    cfg = cp.load_config()
+    if not cfg.enabled:
+        return None
+    session_id = hook_input.get("session_id") or ""
+    transcript_path = hook_input.get("transcript_path") or ""
+    if not session_id or not transcript_path:
+        return None
+    if cp.is_child_session(transcript_path):
+        return None
+    state = cp.load_state(data_dir, session_id)
+    tokens = cp.read_context_tokens(transcript_path, after_ts=state.get("rebuild_ts"))
+    return cfg, session_id, transcript_path, state, tokens
+
+
+def _sync_checkpoint(hook_input: dict, data_dir, gate=_GATE_UNSET) -> bool:
     """Write a fresh checkpoint synchronously before compaction.
 
     Best-effort with a hard time bound (cfg.timeout_s, which also caps the
@@ -85,18 +112,11 @@ def _sync_checkpoint(hook_input: dict, data_dir) -> bool:
     the result any more — it is kept because "did the last-chance checkpoint
     actually land?" is the one question worth asking of this hook's logs.
     """
-    cfg = cp.load_config()
-    if not cfg.enabled:
+    if gate is _GATE_UNSET:
+        gate = _session_gate(hook_input, data_dir)
+    if gate is None:
         return False
-    session_id = hook_input.get("session_id") or ""
-    transcript_path = hook_input.get("transcript_path") or ""
-    if not session_id or not transcript_path:
-        return False
-    if cp.is_child_session(transcript_path):
-        return False
-
-    state = cp.load_state(data_dir, session_id)
-    tokens = cp.read_context_tokens(transcript_path, after_ts=state.get("rebuild_ts"))
+    cfg, session_id, transcript_path, _state, tokens = gate
     if tokens <= 0:
         return False
 
@@ -165,7 +185,7 @@ def _sync_checkpoint(hook_input: dict, data_dir) -> bool:
         cp.release_writer(data_dir, session_id)
 
 
-def _mark_pending_rebuild(hook_input: dict, data_dir) -> bool:
+def _mark_pending_rebuild(hook_input: dict, data_dir, gate=_GATE_UNSET) -> bool:
     """Write the pending marker so SessionStart(source=compact) re-injects.
 
     The Stop hook writes this marker at the handoff threshold; a manual
@@ -179,15 +199,11 @@ def _mark_pending_rebuild(hook_input: dict, data_dir) -> bool:
     happens and the injection is additive, so a checkpoint that lags by a
     band is strictly better than none.
     """
-    cfg = cp.load_config()
-    if not cfg.enabled:
+    if gate is _GATE_UNSET:
+        gate = _session_gate(hook_input, data_dir)
+    if gate is None:
         return False
-    session_id = hook_input.get("session_id") or ""
-    transcript_path = hook_input.get("transcript_path") or ""
-    if not session_id or not transcript_path:
-        return False
-    if cp.is_child_session(transcript_path):
-        return False
+    _cfg, session_id, _transcript_path, _state, tokens = gate
 
     try:
         text = cp.checkpoint_file(data_dir, session_id).read_text()
@@ -197,8 +213,6 @@ def _mark_pending_rebuild(hook_input: dict, data_dir) -> bool:
         logger.info("PreCompact: checkpoint invalid — no rebuild marker")
         return False
 
-    state = cp.load_state(data_dir, session_id)
-    tokens = cp.read_context_tokens(transcript_path, after_ts=state.get("rebuild_ts"))
     if tokens <= 0:
         logger.info("PreCompact: context size unknown (0 tokens) — no rebuild marker")
         return False
@@ -286,8 +300,19 @@ def _compact_pass(
     # stage makes a model call, which is why this hook's ceiling is 300s and
     # every other hook's is under 60.
     with run.stage("checkpoint"):
+        # Inside the stage, not before it. The gate reads the transcript tail
+        # (512 KB), and the per-stage HOOK_ENTRY timings are the only
+        # instrument for this hook's 270s budget — work done between stages is
+        # unattributed wall-clock, which is exactly the blindness the staged
+        # structure exists to remove.
         try:
-            _sync_checkpoint(hook_input, data_dir)
+            gate = _session_gate(hook_input, data_dir)
+        except Exception:
+            logger.exception("PreCompact: session gate failed (non-fatal)")
+            gate = None
+
+        try:
+            _sync_checkpoint(hook_input, data_dir, gate=gate)
         except Exception:
             logger.exception("PreCompact: checkpoint pass failed (non-fatal)")
 
@@ -296,7 +321,7 @@ def _compact_pass(
     # plugin no longer has anything to say to it (see the module docstring).
     with run.stage("rebuild_marker"):
         try:
-            _mark_pending_rebuild(hook_input, data_dir)
+            _mark_pending_rebuild(hook_input, data_dir, gate=gate)
         except Exception:
             logger.exception("PreCompact: rebuild-marker pass failed (non-fatal)")
 
@@ -327,10 +352,8 @@ def _compact_pass(
     # marker for the same session (and vice versa).
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
     marker_path = pending_dir / f"precompact-{session_id}-{stamp}.json"
-    tmp = marker_path.with_suffix(".tmp")
     try:
-        tmp.write_text(json.dumps(marker, indent=2))
-        os.replace(str(tmp), str(marker_path))
+        atomic_write_json(marker_path, marker)
         logger.info("PreCompact: wrote deferred extraction marker %s", marker_path)
         log_event(
             "session", "precompact",

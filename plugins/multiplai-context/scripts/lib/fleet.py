@@ -46,6 +46,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+# From the leaf module, NOT from `lib.fleet_sources.common`: importing any
+# name out of that package runs its __init__ and loads all four collectors
+# (and `subprocess`) onto the hook path this module sits on. The
+# TYPE_CHECKING block below exists for exactly that reason.
+from lib.timeparse import parse_ts as _parse_ts
 from lib.fsio import atomic_write
 from lib.session_registry import entry_disposition_block
 
@@ -653,14 +658,6 @@ class Fleet:
 # Reading the two stores
 # ---------------------------------------------------------------------------
 
-def _parse_ts(raw) -> datetime | None:
-    try:
-        ts = datetime.fromisoformat(str(raw))
-    except (TypeError, ValueError):
-        return None
-    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
-
-
 def split_sections(text: str) -> dict[str, str]:
     """Split a checkpoint into ``{section name: body}``.
 
@@ -854,12 +851,20 @@ def load_agent(
     roster: Roster | None = None,
     pane_map: "PaneMap | None" = None,
     viewed: "dict[str, Viewed] | None" = None,
+    git_cache: "dict[str, tuple[str, str, str]] | None" = None,
 ) -> Agent | None:
     """Build one :class:`Agent` from a registry entry plus its checkpoint.
 
     A session with no checkpoint directory is a valid entry with the fields
     the registry does have — never dropped, never a crash. That case is the
     common one: the checkpoint writer only fires past a token band.
+
+    ``git_cache`` is valid for ONE ``collect`` pass and must not outlive it.
+    It memoises the branch read from each cwd's ``.git/HEAD``, which is live
+    state: a caller that hoisted it — a refresh loop, a long-lived view —
+    would keep reporting the branch each worktree was on when it was first
+    seen, so a ``git switch`` would never appear on the board. ``collect``
+    builds a fresh dict per pass for exactly that reason.
     """
     try:
         raw = json.loads(entry_path.read_text(encoding="utf-8"))
@@ -882,7 +887,14 @@ def load_agent(
     # One parse for both state and reason — two hand-rolled reads of the
     # same block is how they drift.
     disp_state, disp_reason = entry_disposition_block(raw)
-    branch, repo_root, repo_id = _git_info(cwd)
+    # Sessions cluster on a handful of cwds, so `collect` shares one memo
+    # across its ~hundreds of entries rather than re-walking the same parents.
+    if git_cache is not None and cwd in git_cache:
+        branch, repo_root, repo_id = git_cache[cwd]
+    else:
+        branch, repo_root, repo_id = _git_info(cwd)
+        if git_cache is not None:
+            git_cache[cwd] = (branch, repo_root, repo_id)
     hostname = str(raw.get("hostname") or "")
     # Strictly tri-state. An entry written before the field existed says
     # nothing about where it ran, and `Roster.judges` must be able to tell that
@@ -1083,12 +1095,15 @@ def collect(data_dir: Path, now: datetime | None = None) -> Fleet:
     # next one unseen against a directory that moved in between.
     viewed = load_viewed(data_dir)
     agents: list[Agent] = []
+    git_cache: dict[str, tuple[str, str, str]] = {}
     try:
         entries = sorted(sessions_dir.glob("*.json"))
     except OSError:
         entries = []
     for entry in entries:
-        agent = load_agent(entry, data_dir, now, roster, pane_map, viewed)
+        agent = load_agent(
+            entry, data_dir, now, roster, pane_map, viewed, git_cache=git_cache
+        )
         if agent is not None:
             agents.append(agent)
 

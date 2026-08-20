@@ -35,7 +35,7 @@ from multiplai_core.paths import get_paths
 
 from lib import bank_adopt, bank_proposals
 from lib.bank_collisions import find_collisions, render_report
-from lib.bank_git import current_branch, head_sha, is_git_repo, pull_ff_only
+from lib.bank_git import head_sha, is_git_repo, pull_ff_only
 from lib.bank_policy import load_policy
 from lib.banks import configured_banks, shared_banks, sync_ttl_hours
 

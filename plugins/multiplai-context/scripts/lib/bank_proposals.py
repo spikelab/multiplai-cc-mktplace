@@ -45,7 +45,6 @@ import dataclasses
 import logging
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
 from lib.bank_git import (

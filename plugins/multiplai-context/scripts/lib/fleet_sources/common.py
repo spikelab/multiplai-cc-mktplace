@@ -8,6 +8,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+# Re-exported: the collectors here import it from this module, but it is DEFINED
+# in a leaf so `lib.fleet` — which runs on the hook path — can use it without
+# importing this package and the four subprocess-shelling collectors with it.
+from lib.timeparse import parse_ts  # noqa: F401
+
 logger = logging.getLogger(__name__)
 
 # Every subprocess this package runs is bounded. A `git` call against a repo on

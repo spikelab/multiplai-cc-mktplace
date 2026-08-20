@@ -123,9 +123,10 @@ class GeneratorBase:
       - catalog_filename (str): output catalog filename
       - discover_sources() -> dict[str, Path]: find raw files to catalog
       - build_prompt(source: Path) -> str: LLM prompt for one entry
-      - parse_response(raw: str) -> dict: parse LLM output
 
     Optional overrides:
+      - parse_response(raw: str) -> dict: defaults to fenced-JSON parsing,
+        which is what every current generator wants
       - merge_entry(existing, new) -> dict: preserve hand-authored fields
       - hash_source(path: Path) -> str: custom content hashing
     """
@@ -173,8 +174,12 @@ class GeneratorBase:
         raise NotImplementedError
 
     def parse_response(self, raw: str) -> dict:
-        """Parse LLM response text into a catalog entry dict."""
-        raise NotImplementedError
+        """Parse LLM response text into a catalog entry dict.
+
+        Default: strip any markdown fence and parse JSON — every current
+        generator wants exactly that. Override for custom parsing.
+        """
+        return self._parse_json_response(raw)
 
     def _disabled_result(self, dry_run: bool = False) -> GenerationResult:
         """Create a zero-work result for when the generator is disabled or skipped.

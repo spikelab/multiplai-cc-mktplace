@@ -95,12 +95,29 @@ SHARED_BANK_NOTICE = (
 
 
 def configured_banks() -> tuple[MemoryBank, ...]:
-    """The workspace's banks, ``personal`` first. Never raises, never empty."""
+    """The workspace's banks, ``personal`` first.
+
+    Never raises. Empty only when the workspace cannot be resolved at all —
+    previously that case escaped as an exception from the ``except`` branch,
+    which is worse: this is called from hooks.
+
+    ``Paths.resolve()`` rather than ``get_paths()``, for both calls. The latter
+    caches in a module global, which would pin the bank list to whatever the
+    environment said the first time anything in the process asked — the same
+    reason ``generators/base.py`` resolves fresh for ``catalogs_dir``. And the
+    call in the ``except`` branch is inside the handler: if resolution is what
+    failed, ``get_paths()`` there re-raises out of a function whose contract is
+    "never raises", so it gets its own guard.
+    """
     try:
         return Paths.resolve().memory_banks()
     except Exception:  # pragma: no cover - defensive
         logger.warning("Could not resolve memory banks; using personal only", exc_info=True)
-        return (personal_bank(Paths.resolve().memory_dir()),)
+        try:
+            return (personal_bank(Paths.resolve().memory_dir()),)
+        except Exception:
+            logger.warning("Could not resolve the memory dir either", exc_info=True)
+            return ()
 
 
 #: How long a synced bank stays fresh before session start pulls it again.

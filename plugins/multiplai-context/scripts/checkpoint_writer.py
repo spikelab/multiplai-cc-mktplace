@@ -32,7 +32,6 @@ MCP servers.
 """
 
 import asyncio
-import json
 import re
 import sys
 from datetime import datetime, timezone
@@ -45,6 +44,7 @@ from multiplai_core.log_utils import setup_logging, log_event
 from multiplai_core.model_client import DEFAULT_MODEL
 from multiplai_core.paths import get_paths
 from lib import checkpoint as cp
+from lib.hook_input import read_hook_input
 from lib.thinking import CHECKPOINT_THINKING_OPTION, RUN_AGENT, thinking_kwargs
 from lib.transcript_distiller import distill
 
@@ -472,12 +472,15 @@ def main() -> int:
     Detached spawns (``cp.spawn_writer``) are never waited on, so the code is
     ignored there.
     """
-    try:
-        payload = json.loads(sys.stdin.read() or "{}")
-    except (json.JSONDecodeError, ValueError):
-        logger.warning("Unparseable checkpoint payload; exiting")
-        return 0
-    if not isinstance(payload, dict):
+    payload = read_hook_input()
+    if not payload:
+        # `read_hook_input` returns {} for BOTH an unreadable stdin and a
+        # literal `{}` on the wire, so this cannot tell them apart — and a
+        # bare `{}` used to run the whole body against defaults. No caller
+        # sends one (`cp.spawn_writer` always populates the payload), so the
+        # cheap check stays; a caller that ever wants "checkpoint with
+        # defaults" needs an explicit field, not an empty object.
+        logger.warning("No usable checkpoint payload on stdin; exiting")
         return 0
 
     session_id = payload.get("session_id") or ""
@@ -501,7 +504,7 @@ def main() -> int:
         # transcript from its own bookmark, so a retry would repeat work the
         # degraded-write path has by then folded in. A child that dies before
         # reaching here leaves the marker for recover_stale_processing.
-        marker_path = payload.get("marker_path") if isinstance(payload, dict) else ""
+        marker_path = payload.get("marker_path")
         if marker_path:
             try:
                 Path(str(marker_path)).unlink(missing_ok=True)

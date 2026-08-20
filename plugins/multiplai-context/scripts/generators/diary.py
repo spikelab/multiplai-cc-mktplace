@@ -38,10 +38,18 @@ def _is_valid_date_stem(stem: str) -> bool:
 
 
 def _count_words_in_file(day_file: Path) -> int:
-    """Compute total word count of a per-day diary file."""
-    if not day_file.is_file():
+    """Compute total word count of a per-day diary file; 0 if it is not there.
+
+    The guard stays here even though the caller checks first. Between that
+    check and this read is a window in which the file can vanish — `dream`
+    triage and manual cleanup both delete under `.multiplai/diary/` — and
+    without it a `FileNotFoundError` propagates out of `DiaryGenerator.run()`
+    and abandons the whole catalog over one missing day.
+    """
+    try:
+        return len(day_file.read_text(encoding="utf-8").split())
+    except OSError:
         return 0
-    return len(day_file.read_text(encoding="utf-8").split())
 
 
 class DiaryGenerator(GeneratorBase):
@@ -115,10 +123,6 @@ class DiaryGenerator(GeneratorBase):
             "Respond with ONLY valid JSON, no explanation.\n\n"
             f"---\n{content}\n---"
         )
-
-    def parse_response(self, raw: str) -> dict:
-        """Parse LLM response into a diary catalog entry dict."""
-        return self._parse_json_response(raw)
 
     async def run(
         self, *, force: bool = False, dry_run: bool = False, force_enable: bool = False

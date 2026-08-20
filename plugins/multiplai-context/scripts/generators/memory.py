@@ -207,10 +207,6 @@ class MemoryGenerator(GeneratorBase):
             f"---\n{content}\n---"
         )
 
-    def parse_response(self, raw: str) -> dict:
-        """Parse LLM response into a memory catalog entry dict."""
-        return self._parse_json_response(raw)
-
     def merge_entry(self, existing: dict | None, new: dict) -> dict:
         """Merge new LLM entry with existing, preserving hand-authored fields.
 

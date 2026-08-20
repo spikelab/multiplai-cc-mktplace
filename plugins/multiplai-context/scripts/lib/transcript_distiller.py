@@ -107,6 +107,17 @@ def _parse_timestamp(record: dict) -> datetime | None:
         return None
 
 
+def _iter_lines(path: Path) -> Iterator[str]:
+    """Stream a file's lines without materializing it (transcripts are
+    multi-MB). Any OSError — on open or mid-read — ends the stream, matching
+    the previous whole-file ``read_text`` contract."""
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            yield from fh
+    except OSError:
+        return
+
+
 def _derive_project(cwd: str) -> str:
     """Derive a project slug from a cwd path."""
     if not cwd:
@@ -132,12 +143,7 @@ def iter_distilled_turns(
 
     Skips records outside [since, until] window and non-message records.
     """
-    try:
-        lines = jsonl_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return
-
-    for line in lines:
+    for line in _iter_lines(jsonl_path):
         line = line.strip()
         if not line:
             continue

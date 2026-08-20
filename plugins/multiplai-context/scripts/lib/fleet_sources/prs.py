@@ -23,8 +23,9 @@ import logging
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 
+from lib.fleet_sources.common import parse_ts as _parse_ts
 from lib.fleet_sources.common import run
 
 logger = logging.getLogger(__name__)
@@ -125,17 +126,6 @@ _AUTH_MARKERS = (
     "bad credentials",
     "requires authentication",
 )
-
-
-def _parse_ts(raw) -> datetime | None:
-    if not raw:
-        return None
-    try:
-        text = str(raw).replace("Z", "+00:00")
-        ts = datetime.fromisoformat(text)
-    except (TypeError, ValueError):
-        return None
-    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
 
 
 def _rollup(raw) -> str:
