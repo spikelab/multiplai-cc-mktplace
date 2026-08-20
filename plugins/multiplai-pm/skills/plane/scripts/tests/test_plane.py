@@ -151,10 +151,28 @@ def test_allows_workspace_reads():
 # --- allowed operations still work -----------------------------------------
 
 
-@pytest.mark.parametrize("method", ["GET", "POST", "PATCH", "DELETE"])
+@pytest.mark.parametrize("method", ["GET", "POST", "PATCH"])
 def test_allows_every_method_on_allowlisted_subresource(method):
     guard(method, f"/projects/{OK}/issues/{ISSUE}/")
     guard(method, f"/projects/{OK2}/issues/{ISSUE}/", ALLOWED_TWO)
+
+
+def test_delete_reaches_labels_and_nothing_else():
+    """Rule 5. The tool deletes labels; the guard is what makes that a property.
+
+    Without this, "issues are never deleted" holds only because no call site
+    writes one — a copy-pasted `_request` line would delete issues with the
+    guardrail reporting PASS.
+    """
+    guard("DELETE", f"/projects/{OK}/labels/{ISSUE}/")
+    for path in (
+        f"/projects/{OK}/issues/{ISSUE}/",
+        f"/projects/{OK}/issues/{ISSUE}/comments/{ISSUE}/",
+        f"/projects/{OK}/labels/",
+        f"/projects/{OK}/cycles/{ISSUE}/",
+    ):
+        with pytest.raises(plane.GuardError, match="only deletion"):
+            guard("DELETE", path)
 
 
 def test_empty_allowlist_blocks_everything():

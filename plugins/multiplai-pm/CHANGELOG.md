@@ -23,6 +23,77 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 Nothing yet.
 
+## [0.5.0] - 2026-08-20
+
+### Added
+- **`plane label-create`, `label-edit` and `label-delete` — manage a project's
+  labels, not just attach them.** Until now the skill could read labels and put
+  an existing one on an issue; creating one was a side effect of
+  `--label X --create-labels` and there was no way to fix a typo in a name or
+  change a colour. Now:
+
+  ```bash
+  plane label-create -p SPK --name triage --color '#ff8800' --description "Needs a look"
+  plane label-edit  -p SPK triage --name "Needs triage"
+  plane label-delete -p SPK "Needs triage" --yes
+  ```
+
+  A label is named by its name, its full UUID, or at least the first 8
+  characters of one — the same way in every command that takes one. An
+  ambiguous reference is refused and the candidates listed, rather than
+  resolved by taking the first match, and an id prefix shorter than 8
+  characters is reported as too short rather than as a label that does not
+  exist.
+
+  All three honour `--json`: `label-create` returns the new id, and
+  `label-delete` returns the usage count as data on the run that refuses —
+  which is the number you are being asked to act on.
+
+- **`labels` now lists each label's description**, which is the field
+  `label-create --description` and `label-edit --description` set. It is the
+  last column, on one line, and truncated: descriptions are free text, and one
+  long one would otherwise push the `id` column off the row. `--json` carries
+  the full text.
+
+### Changed
+- **`label-delete` is the first command in this skill that destroys something,
+  and it is gated twice.** It prints how many issues currently carry the label,
+  then refuses unless `--yes` is passed. Deleting a label strips it from every
+  one of those issues and Plane has no undo; a rename (`label-edit --name`) is
+  the non-destructive move when that was the real intent. Everything else is
+  unchanged — issues still cannot be deleted, and project objects are still
+  untouchable.
+
+  Three things about that count and that gate:
+
+  - The count covers the issues the API lists, so **archived issues are not
+    counted** — the command says so on the same line, because "no issues" would
+    otherwise read as an absolute right before an irreversible write.
+  - `--dry-run` prints the DELETE **without** `--yes`. Requiring both would mean
+    the only way to preview the request is to type the confirmation flag, so the
+    safe command and the destructive one would differ by one flag earlier in the
+    line.
+  - A **label group's parent is refused** rather than counted. Plane deletes a
+    group's children along with it, and the issue count does not show that: a
+    parent usually carries no issues at all. This tool does not manage groups,
+    so it does not delete one either.
+
+- **`DELETE` is now pinned to label paths in the guardrail.** The guard refuses
+  the verb on anything but `/projects/<project>/labels/<label>/`. "Issues are
+  never deleted" was previously true only because no call site wrote one; now a
+  call site that tries fails closed, and `check` proves it on issue, comment and
+  cycle paths.
+- A colour that is not hex is refused locally with a message naming the field,
+  instead of reaching Plane and coming back as a bare `400`. `##ff8800` counts
+  as not hex, and the check now happens before any network call rather than
+  after two listings.
+- Creating a label whose name already exists now says so and points at
+  `label-edit`, instead of failing on the server's uniqueness constraint.
+- Repeating `--label` on `create`/`update` lists the project's labels **once**
+  per command instead of once per flag, and the `label-delete` usage scan asks
+  for `id,labels` rather than whole issues — it cannot stop at the first page,
+  so the payload is its entire cost.
+
 ## [0.4.0] - 2026-08-18
 
 ### Added

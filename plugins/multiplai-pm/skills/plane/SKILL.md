@@ -64,6 +64,9 @@ scan is already per-project, so it does not make resolution faster.
 | `comment-edit <ref> <comment-id> "text"` | Replace an existing comment's body. |
 | `comments <ref>` | Read the comment thread; each entry prints its comment id. |
 | `states [-p P]` / `labels [-p P]` / `members` / `cycles [-p P]` / `estimates [-p P]` | Reference data. |
+| `label-create [-p P] --name N [--color C] [--description D]` | New label in the project. |
+| `label-edit [-p P] <label> [--name] [--color] [--description]` | Rename, recolour or re-describe one. |
+| `label-delete [-p P] <label> --yes` | Delete a label. Destructive — see rule 11. |
 | `attachments <ref> [--download DIR \| --upload FILE]` | List an issue's attachments; download or upload them. |
 | `search <query> [--limit N]` | Workspace search, filtered to allowlisted projects. |
 
@@ -140,6 +143,34 @@ Priorities: `urgent`, `high`, `medium`, `low`, `none`. States are given **by nam
     attachment that has to be removed in Plane before retrying. Pass that on verbatim
     rather than just retrying.
 
+11. **`label-delete` is the one destructive command here, and Plane has no undo.**
+    Deleting a label strips it from every issue that carried it; those issues are
+    otherwise untouched, but the labelling is gone and cannot be restored. So the
+    command counts the issues carrying the label, prints that count, and then
+    refuses unless `--yes` is passed. Run it once without `--yes` to see the
+    number, show the user, and only then confirm. `label-edit --name` is the
+    non-destructive alternative when the real intent is a rename — every issue
+    keeps the label.
+
+    The count comes from scanning the project's issues client-side, because
+    `?labels=<uuid>` puts a non-project UUID in the query string and rule 2 of the
+    guardrail refuses those by design. On a very large project that scan is slow,
+    the same way resolving `SPK-12` is.
+
+    **Pass on the scope with the number.** The scan sees what `issues` lists, so
+    archived issues are not counted — the command prints that qualifier and you
+    should keep it when you relay the count. "No issues" here means "none of the
+    issues the API listed", not "none anywhere" (rule 9).
+
+    `--dry-run` prints the DELETE without `--yes`, so a preview never requires
+    typing the confirmation flag. Under `--json` the count comes back as data,
+    including on the run that refuses — that is the number the user is being
+    asked to act on.
+
+    A label *group's* parent is refused outright rather than counted: Plane
+    deletes a group's children with it, and the issue count does not show that.
+    Delete the children individually, or re-parent them in Plane first.
+
 ## Examples
 
 ```bash
@@ -153,6 +184,12 @@ $PLANE --dry-run update SPK-12 --state Done       # print the PATCH, send nothin
 $PLANE update SPK-12 --state Done
 $PLANE comment SPK-12 "Deployed in **v2026.07.28**."
 $PLANE comment-edit SPK-12 aaaa1111 "Deployed in **v2026.07.29**."
+$PLANE labels -p SPK                                # name, colour, id, description
+$PLANE label-create -p SPK --name triage --color '#ff8800' --description "Needs a look"
+$PLANE label-edit -p SPK triage --name "Needs triage"     # renames it everywhere
+$PLANE --dry-run label-delete -p SPK triage         # print the DELETE, send nothing
+$PLANE label-delete -p SPK triage                   # prints the usage count, refuses
+$PLANE label-delete -p SPK triage --yes             # deletes it
 $PLANE attachments SPK-12 --upload report.pdf --upload screenshot.png
 $PLANE --dry-run attachments SPK-12 --upload report.pdf   # print step 1, send nothing
 $PLANE search "migrations"
@@ -167,7 +204,14 @@ $PLANE --json issues -p SPK | jq '[.[] | select(.priority == "urgent")]'
 - Uploads are capped at 32 MB per file, and there is no progress output — a large file
   looks like a hang until it finishes.
 - No module assignment on write.
-- No delete, by design: the tool can create and modify issues but not remove them, and it
-  refuses to touch project objects at all — so it cannot enable a project's cycles module
-  or create its estimate set either. Those are set up in Plane.
+- Issues are never deleted: the tool can create and modify them but not remove them.
+  Labels are the single exception (`label-delete`, gated on `--yes`). This is enforced
+  in the guardrail, not just left unimplemented — `DELETE` is refused on any path but
+  `/projects/<project>/labels/<label>/`, so a call site that tried would fail closed.
+- It refuses to touch project objects at all — so it cannot enable a project's cycles
+  module or create its estimate set. Those are set up in Plane.
+- Label *groups* (a label with a parent) are not exposed: `label-create` and
+  `label-edit` set name, colour and description only, `labels` does not show which
+  labels are children, and `label-delete` refuses a parent rather than destroy the
+  group with it.
 - Sub-issues, relations and worklogs are not exposed.
