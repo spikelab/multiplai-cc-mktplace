@@ -13,6 +13,7 @@ import pytest
 
 from check_vendored_prompts import (
     FetchError,
+    build_parser,
     ManifestError,
     VendoredSource,
     check_sources,
@@ -332,3 +333,17 @@ class TestFetchMechanics:
     def test_empty_sha_is_a_fetch_error_not_a_match(self):
         with pytest.raises(FetchError):
             fetch_blob_sha(self._source(), runner=lambda argv: _proc(0, stdout="\n"), sleep=lambda _: None)
+
+
+class TestRetriesFlag:
+    def test_a_negative_retry_count_is_rejected_at_the_flag(self, capsys):
+        """A negative makes `range(1, retries + 2)` empty, so the fetch loop
+        never runs its body and falls out to a bare `assert last is not None` —
+        an AssertionError traceback past every documented exit code."""
+        with pytest.raises(SystemExit) as exit_info:
+            build_parser().parse_args(["--retries", "-1"])
+        assert exit_info.value.code == 2
+        assert "--retries" in capsys.readouterr().err
+
+    def test_zero_retries_is_allowed(self):
+        assert build_parser().parse_args(["--retries", "0"]).retries == 0

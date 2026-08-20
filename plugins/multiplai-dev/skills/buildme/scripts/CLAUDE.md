@@ -271,8 +271,8 @@ disk while the task breakdown is written. `use-cases` hangs off `proposal` and
 is required by `tasks` for the same reason: a use case is delivered by a block
 or by nothing at all, and PLAN_REVIEW checks block coverage against it. It is
 its own artifact rather than two more proposal sections because
-`_extract_capabilities` harvests every backticked list item in `proposal.md`,
-and persona names would land in that harvest. `codebase-analysis.md`,
+`_extract_capabilities` reads backticked list items out of `proposal.md`'s
+`## Capabilities` section, and persona names would land in that harvest. `codebase-analysis.md`,
 `implementation-notes.md`, `respec.md`, `prototype/` and `.board.json` are
 **not** DAG artifacts — they are written by their phases. All of them travel into `archive/<date>-<name>/`; only
 `requirements/*.md` ever merge into `registry/`.

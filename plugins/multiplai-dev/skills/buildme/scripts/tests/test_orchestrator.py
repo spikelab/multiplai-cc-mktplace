@@ -1837,6 +1837,40 @@ class TestPlanReviewPhase:
         assert result == 0
 
     @pytest.mark.asyncio
+    async def test_a_failed_review_is_retried_on_a_resume(self, tmp_path):
+        """`run_plan_review_stage` leaves `plan_review_done` False on an LLM
+        failure precisely so a resume tries again. Advancing the phase pointer
+        anyway made `is_phase_complete` report the phase finished, and the
+        retry never happened."""
+        from unittest.mock import AsyncMock, patch
+
+        config = self._config(tmp_path, "retry-plan")
+        args = self._args(tmp_path, "retry-plan")
+        crash = AsyncMock(side_effect=KeyboardInterrupt)
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   AsyncMock(return_value=[])), \
+                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                      AsyncMock(side_effect=RuntimeError("model exploded"))), \
+                patch("build_pipeline.orchestrator._run_prototype_phase", crash), \
+                pytest.raises(KeyboardInterrupt):
+            await run_orchestrator(config, args)
+
+        # The build died after the failed review. Nothing recorded the phase.
+        resumed = BuildState.load(config.state_file_path())
+        assert not resumed.is_phase_complete(BuildPhase.PLAN_REVIEW)
+        assert not (resumed.spec_gen and resumed.spec_gen.plan_review_done)
+
+        # The resume runs it again.
+        from build_pipeline.models import PlanReviewResult
+        retry = AsyncMock(return_value=PlanReviewResult(findings=[]))
+        with patch("build_pipeline.llm_steps.spec_steps.run_design_audit",
+                   AsyncMock(return_value=[])), \
+                patch("build_pipeline.llm_steps.plan_review_steps.run_plan_review",
+                      retry):
+            assert await run_orchestrator(config, args) == 0
+        retry.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_a_checkpoint_past_the_phase_does_not_re_enter_it(self, tmp_path):
         """advance_to only ever runs forwards: a state already at PROTOTYPE
         must not be sent back to review the plan."""

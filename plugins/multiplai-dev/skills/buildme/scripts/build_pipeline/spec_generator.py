@@ -197,7 +197,15 @@ async def _generate_single_artifact(
     if artifact_id == "requirements":
         await _generate_requirements(cm, change_dir, config, state)
     elif artifact_id == "use-cases":
+        # A change created before `use-cases` joined ARTIFACT_DAG already has a
+        # tasks.md, and the DAG loop reads a file that exists as DONE — so the
+        # plan would never be written against the use cases it is now required
+        # to cover, and PLAN_REVIEW would spend its one regeneration reporting
+        # `use-case-coverage` on every one of them.
+        plan_predates_use_cases = (change_dir / "tasks.md").exists()
         await _generate_use_cases(change_dir, context, config, state)
+        if plan_predates_use_cases:
+            await _backfill_plan_for_use_cases(cm, change_dir, config, state)
     elif artifact_id == "unknowns":
         await _generate_unknowns(cm, change_dir, config, state)
     elif artifact_id == "rubric":
@@ -233,12 +241,49 @@ async def _generate_single_artifact(
             if state.spec_gen:
                 state.spec_gen.tasks_audit_done = True
 
-    # Mark completed
+    # Mark completed. `completed_artifacts` is a resume ledger keyed by id, so
+    # a re-generated artifact (the use-cases backfill regenerates tasks and
+    # rubric) must not be entered twice.
     if state.spec_gen:
-        state.spec_gen.completed_artifacts.append(artifact_id)
+        if artifact_id not in state.spec_gen.completed_artifacts:
+            state.spec_gen.completed_artifacts.append(artifact_id)
         state.checkpoint(config.state_file_path())
 
     print(f"PHASE: artifact_{artifact_id}_complete")
+
+
+async def _backfill_plan_for_use_cases(
+    cm: ChangeManager,
+    change_dir: Path,
+    config,
+    state: BuildState,
+) -> None:
+    """Rewrite tasks.md and rubric.md against a just-added use-cases.md.
+
+    Only reached on a change whose plan predates the artifact — a DAG
+    migration, not a normal build. Both are regenerated, in that order,
+    because `ARTIFACT_DAG` declares rubric requires tasks and the per-block
+    review scores blocks against the rubric.
+
+    Non-fatal: a failure here leaves the existing plan standing, which is the
+    same position the change was already in.
+    """
+    log.info(
+        "Plan predates use-cases.md — regenerating tasks.md and rubric.md "
+        "against it (DAG backfill)"
+    )
+    print("PHASE: use_cases_backfill")
+    for artifact_id in ("tasks", "rubric"):
+        try:
+            await _generate_single_artifact(
+                cm, change_dir, artifact_id, config, state,
+            )
+        except Exception as backfill_err:
+            log.warning(
+                "Backfill of %s after use-cases.md failed (non-fatal): %s",
+                artifact_id, backfill_err,
+            )
+            return
 
 
 async def _generate_requirements(
@@ -924,21 +969,35 @@ async def _reaudit_after_design_feedback(change_dir: Path, config) -> None:
         print("PHASE: design_audit_recheck — clean")
 
 
+#: A capability line: `- \`capability-name\`: description`.
+_CAPABILITY_ITEM = re.compile(r"^-\s+`([a-z0-9-]+)`", re.MULTILINE)
+#: The `## Capabilities` section — both the New and Modified subsections under
+#: it — up to the next `##` heading.
+_CAPABILITIES_SECTION = re.compile(
+    r"^##\s+Capabilities\s*$(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL)
+#: The `## Impact` section, which the proposal template asks the generator to
+#: fill with backticked dependency names.
+_IMPACT_SECTION = re.compile(
+    r"^##\s+Impact\s*$.*?(?=^##\s|\Z)", re.MULTILINE | re.DOTALL)
+
+
 def _extract_capabilities(proposal_text: str) -> list[str]:
     """Extract capability names from proposal markdown.
 
     Looks for lines like: - `capability-name`: description
     under the New Capabilities section.
+
+    Scoped to `## Capabilities`, because the template tells the generator to
+    wrap every dependency name in backticks under `## Impact` — and a
+    whole-file scan turned `django-ses` into a capability and wrote
+    `requirements/django-ses.md` for it. A proposal with no `## Capabilities`
+    heading falls back to the whole document minus `## Impact`: the old
+    behaviour, minus the one section known to carry backticked
+    non-capabilities.
     """
-    import re
-
-    capabilities = []
-    # Match backtick-wrapped capability names in list items
-    pattern = re.compile(r"^-\s+`([a-z0-9-]+)`", re.MULTILINE)
-    for match in pattern.finditer(proposal_text):
-        capabilities.append(match.group(1))
-
-    return capabilities
+    section = _CAPABILITIES_SECTION.search(proposal_text)
+    scope = section.group(1) if section else _IMPACT_SECTION.sub("", proposal_text)
+    return [match.group(1) for match in _CAPABILITY_ITEM.finditer(scope)]
 
 
 def _load_or_create_state(config) -> BuildState:

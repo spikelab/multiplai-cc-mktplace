@@ -216,7 +216,15 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 "DONE phase=PLAN_REVIEW findings=%d",
                 len(findings) if findings else 0,
             )
-            state.advance_to(BuildPhase.PLAN_REVIEW, state_path)
+            # Advance only when the stage recorded itself done. `advance_to`
+            # is what makes `plan_review_done` mean anything: the stage leaves
+            # the flag False on an LLM failure precisely so a resume retries,
+            # and moving the pointer anyway made `is_phase_complete` report the
+            # phase finished and skip it forever. A failed review leaves the
+            # pointer at DESIGN_AUDIT; the phases after it are guarded on their
+            # own positions and run regardless.
+            if state.spec_gen is not None and state.spec_gen.plan_review_done:
+                state.advance_to(BuildPhase.PLAN_REVIEW, state_path)
             print("PHASE:PLAN_REVIEW:COMPLETE", flush=True)
             board.record(config, state, BuildPhase.PLAN_REVIEW, progress=progress)
 

@@ -116,6 +116,11 @@ def render_split_context(assessment) -> str:
     an unmeasured placeholder and the rendered text says so, so no reviewer
     treats a count as a finding.
 
+    ``PlanSplitAssessment.should_split`` — the module's own composite answer —
+    is rendered too, labelled as arithmetic rather than a finding. Computing it
+    and then leaving it out had the reviewer re-derive from prose the one thing
+    this seam exists to hand it.
+
     Pure: formats the assessment, reads nothing, changes nothing.
     """
     split = assessment.split
@@ -139,7 +144,18 @@ def render_split_context(assessment) -> str:
         "unmeasured placeholder — it only decides whether checks 1 and 2 are "
         "worth running.",
         "",
-        f"### Separability — {split.group_count} independently-shippable group(s)",
+        "buildme's own arithmetic over the three checks: "
+        + (
+            "THIS PLAN COMES APART. "
+            if assessment.should_split else
+            "no cut is indicated. "
+        )
+        + "That is arithmetic, not a finding — an `oversized-plan` finding is "
+        "still yours to make or to withhold, and the parse below is the "
+        "evidence you weigh.",
+        "",
+        f"### Separability — {split.group_count} independently-shippable group(s)"
+        + ("" if split.splittable else " (the work is atomic)"),
     ]
 
     for group in split.groups:
@@ -153,8 +169,9 @@ def render_split_context(assessment) -> str:
 
     for boundary in split.boundaries:
         lines.append(
-            f"- Cut after group {boundary.after_group + 1}: between block "
-            f"{boundary.last_block_before} and block "
+            f"- Cut after group {boundary.after_group + 1}"
+            + (" (clean)" if boundary.is_clean else "")
+            + f": between block {boundary.last_block_before} and block "
             f"{boundary.first_block_after}"
         )
         if boundary.crossing_signatures:
@@ -464,9 +481,22 @@ async def _apply_plan_review_findings(
     is what was reviewed, and rewriting design.md from a plan review would
     relitigate a document the design audit already settled. A regeneration
     failure is non-fatal — the reviewed plan stands.
+
+    The rewrite is followed by the two things that hang off tasks.md and would
+    otherwise describe the plan it replaced: the shape audit (which is what
+    catches a horizontally-decomposed plan, and only ever ran inside
+    ``_generate_single_artifact``), and rubric.md (which ``ARTIFACT_DAG``
+    declares requires ``tasks``, and which the per-block review scores against).
+    Both are bounded by the same thing that bounds this function — it runs at
+    most once per build, behind ``plan_review_regen_done``.
     """
     from ..change_manager import ChangeManager
-    from ..spec_generator import read_codebase_analysis, read_unknowns
+    from ..spec_generator import (
+        _audit_tasks_shape,
+        _generate_rubric,
+        read_codebase_analysis,
+        read_unknowns,
+    )
     from .spec_steps import generate_artifact
 
     cm = ChangeManager(config.specs_dir)
@@ -498,6 +528,28 @@ async def _apply_plan_review_findings(
 
     output_path.write_text(content)
     log.info("Rewrote %s from plan review findings", output_path)
+
+    # Re-audit the plan that will actually be built. Non-fatal: a failed audit
+    # leaves the regenerated plan standing, same as everywhere else here.
+    try:
+        await _audit_tasks_shape(change_dir, context, config, output_path)
+    except Exception as audit_err:
+        log.warning(
+            "Tasks shape re-audit after plan review failed (non-fatal): %s",
+            audit_err,
+        )
+
+    # rubric.md was generated from the plan this rewrite replaced, and the
+    # per-block review scores blocks against it. A stale rubric here is worse
+    # than a slow one.
+    try:
+        await _generate_rubric(change_dir, config, state)
+    except Exception as rubric_err:
+        log.warning(
+            "Rubric regeneration after plan review failed (non-fatal): %s",
+            rubric_err,
+        )
+
     _commit_plan(config, change_dir)
     print("PHASE: plan_review_feedback_applied — 1 artifact(s)")
     return 1
@@ -518,7 +570,9 @@ def _commit_plan(config, change_dir: Path) -> None:
         return
     if rel:
         git_ops.commit_stage(
-            config, "docs(specs): regenerate tasks.md after plan review", [rel],
+            config,
+            "docs(specs): regenerate tasks.md and rubric.md after plan review",
+            [rel],
         )
 
 

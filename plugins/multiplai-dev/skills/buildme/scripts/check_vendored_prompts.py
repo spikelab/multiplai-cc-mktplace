@@ -350,6 +350,20 @@ def render_json(results: list[CheckResult], manifest: Path) -> str:
 # --------------------------------------------------------------------------
 
 
+def _non_negative_int(value: str) -> int:
+    """`--retries` as a count, never a negative.
+
+    A negative makes `range(1, retries + 2)` empty, so the fetch loop never
+    runs its body and falls out to a bare `assert last is not None` — an
+    AssertionError traceback past every documented exit code, from a flag the
+    user typed. argparse turns the ValueError into the usage message instead.
+    """
+    number = int(value)
+    if number < 0:
+        raise ValueError(f"expected a count of 0 or more, got {number}")
+    return number
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="check_vendored_prompts.py",
@@ -379,7 +393,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--retries",
-        type=int,
+        type=_non_negative_int,
         default=2,
         help="re-issue an identical request this many times on a 5xx/DNS/timeout "
         "failure only; 404/403/429 are never retried (default: 2)",

@@ -99,9 +99,16 @@ EXTERNAL_SERVICE_KEYWORDS: tuple[str, ...] = (
 )
 
 #: kind name → keyword tuple. Five of the six high-risk kinds from programme
-#: index item 26; the sixth ("more than N files") is not a keyword question and
-#: is handled by the ``file_count``/``file_trigger`` arguments of
-#: :func:`check_atomicity`.
+#: index item 26.
+#:
+#: The sixth ("more than N files") is deliberately absent. It shipped here as a
+#: ``file_count``/``file_trigger`` pair on :func:`check_atomicity` and could
+#: never fire: this phase runs before anything is built, so no caller has a
+#: file count to pass, and the check's verdict is "high-risk work is mixed with
+#: unrelated work" — a size number cannot answer that, and there is no cut to
+#: propose from one. Size is what ``block_count`` and :func:`package_spread`
+#: are for; wiring it back in means giving it a check of its own, not an
+#: argument on this one.
 HIGH_RISK_KEYWORDS: dict[str, tuple[str, ...]] = {
     "migration": MIGRATION_KEYWORDS,
     "payments": PAYMENTS_KEYWORDS,
@@ -110,18 +117,19 @@ HIGH_RISK_KEYWORDS: dict[str, tuple[str, ...]] = {
     "external-service": EXTERNAL_SERVICE_KEYWORDS,
 }
 
-#: Name of the sixth kind, the one that is counted rather than matched.
-MANY_FILES_KIND = "many-files"
-
-#: Default file count above which the sixth kind fires. Same status as the
-#: block trigger: a placeholder nobody has measured. Callers pass their own.
-DEFAULT_FILE_TRIGGER = 20
-
-#: First path segments that name no package — a URL scheme, a relative-path
-#: marker, or a host name. Filtered out of :func:`top_level_packages`.
+#: First path segments that name no package — a filesystem root, or a scheme
+#: word used without its ``://``. Filtered out of :func:`top_level_packages`.
+#:
+#: This set is smaller than it looks like it should be, and deliberately: the
+#: head group of :data:`_PATH` cannot contain ``.``, ``/`` or ``~``, and its
+#: lookbehind already refuses a head preceded by one — so ``https://host/p``,
+#: ``./rel/path`` and ``/usr/local/bin`` produce no match to filter in the
+#: first place. Only a head written bare in prose (``usr/local/bin``) reaches
+#: here. Entries that could never match were removed rather than left in as
+#: apparent protection.
 NON_PACKAGE_SEGMENTS: frozenset[str] = frozenset({
     "http", "https", "file", "ftp", "ssh", "git", "mailto",
-    ".", "..", "~", "usr", "var", "etc", "tmp", "opt", "home", "dev", "proc",
+    "usr", "var", "etc", "tmp", "opt", "home", "dev", "proc",
 })
 
 
@@ -143,13 +151,6 @@ class BlockGroup(BaseModel):
     produces: list[str] = Field(default_factory=list)
     consumes: list[str] = Field(default_factory=list)
 
-    @property
-    def size(self) -> int:
-        return len(self.block_numbers)
-
-    def label(self) -> str:  # pragma: no cover - display helper
-        return f"blocks {', '.join(str(n) for n in self.block_numbers)}"
-
 
 class CutBoundary(BaseModel):
     """The seam between two adjacent groups — one proposed cut."""
@@ -168,8 +169,12 @@ class CutBoundary(BaseModel):
     #: so a looser partitioner can populate it without changing the shape.
     crossing_signatures: list[str] = Field(default_factory=list)
     #: The contract surface the cut separates: everything the earlier side
-    #: produces, and everything the later side consumes. This is what a finding
-    #: quotes when it names "the signature boundary this cut crosses".
+    #: produces, and everything the later side consumes — BOTH SIDES WHOLE, not
+    #: just the two groups adjacent to the cut. A three-group partition cut
+    #: after group 0 separates group 0 from groups 1 AND 2, and the prompt tells
+    #: the reviewer an `oversized-plan` finding must "name the signature
+    #: boundary this cut crosses" — quoting a partial one reads as the whole.
+    #: This is what a finding quotes when it names that boundary.
     boundary_signatures: list[str] = Field(default_factory=list)
 
     @property
@@ -270,6 +275,20 @@ class PlanSplitAssessment(BaseModel):
 _WHITESPACE = re.compile(r"\s+")
 _SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*")
 
+# Leading tokens that declare a signature rather than name it. `def`,
+# `class`, `POST` and friends are the same word in every block that uses that
+# style, so taking one as the fallback key makes every such block look like it
+# produces the same thing — which unions the whole plan into one component and
+# silences both split checks. Skipped when picking the fallback symbol.
+_DECLARATION_LEADS = frozenset({
+    "def", "async", "class", "func", "function", "fn", "proc", "sub",
+    "struct", "enum", "protocol", "interface", "trait", "impl", "type",
+    "const", "let", "var", "val", "public", "private", "internal",
+    "protected", "static", "final", "export", "default", "extension",
+    "abstract", "override", "new", "get", "set",
+    "post", "put", "patch", "delete", "head", "options",
+})
+
 
 def normalize_signature(signature: str) -> str:
     """Canonical form of one `Interfaces:` signature.
@@ -299,10 +318,30 @@ def signature_keys(signature: str) -> frozenset[str]:
     if not normalized:
         return frozenset()
     keys = {normalized.lower()}
-    symbol = _SYMBOL.match(normalized)
+    symbol = _leading_symbol(normalized)
     if symbol:
-        keys.add(symbol.group(0).lower())
+        keys.add(symbol)
     return frozenset(keys)
+
+
+def _leading_symbol(normalized: str) -> str | None:
+    """The first token of ``normalized`` that actually names something.
+
+    Declaration keywords are skipped, so ``def export_job(...)`` keys on
+    ``export_job`` and ``POST /jobs`` — whose next token is not an identifier —
+    gets no fallback key at all rather than keying on ``post``.
+    """
+    remainder = normalized
+    while True:
+        match = _SYMBOL.match(remainder)
+        if not match:
+            return None
+        token = match.group(0)
+        if token.lower() not in _DECLARATION_LEADS:
+            return token.lower()
+        remainder = remainder[match.end():].lstrip()
+        if not remainder:
+            return None
 
 
 def _keys_for(signatures: list[str]) -> frozenset[str]:
@@ -419,7 +458,10 @@ def partition_blocks(blocks: list[BlockInfo]) -> SplitProposal:
             last_block_before=groups[i].block_numbers[-1],
             first_block_after=groups[i + 1].block_numbers[0],
             crossing_signatures=_dedup(crossing),
-            boundary_signatures=_dedup(groups[i].produces + groups[i + 1].consumes),
+            boundary_signatures=_dedup(
+                [sig for g in earlier for sig in g.produces]
+                + [sig for g in later for sig in g.consumes]
+            ),
         ))
 
     all_produced = _keys_for([s for b in ordered for s in b.produces])
@@ -472,8 +514,6 @@ def _block_text(block: BlockInfo) -> str:
 def check_atomicity(
     blocks: list[BlockInfo],
     *,
-    file_count: int | None = None,
-    file_trigger: int = DEFAULT_FILE_TRIGGER,
     kinds: dict[str, tuple[str, ...]] | None = None,
 ) -> AtomicityFinding:
     """Check 1 — a high-risk kind plus unrelated feature work means split.
@@ -482,12 +522,11 @@ def check_atomicity(
     is large, but because a migration should land on its own branch so it can
     be reverted on its own. Highest-value of the three checks.
 
-    Six machine-checkable high-risk kinds (programme index item 26): a
-    migration, payments, auth, a contract change, an external-service
-    integration, or more than N files. The first five are detected by keyword;
-    the sixth is ``file_count > file_trigger``, and only when the caller passes
-    a ``file_count`` — this module has no filesystem access and ``BlockInfo``
-    carries no file list.
+    Five machine-checkable high-risk kinds (programme index item 26), all
+    detected by keyword: a migration, payments, auth, a contract change, an
+    external-service integration. Item 26's sixth ("more than N files") is not
+    checked here — see :data:`HIGH_RISK_KEYWORDS` for why a size number cannot
+    answer this check's question.
 
     **The detection is heuristic and it is a keyword match over block prose.**
     It reads each block's name, description and interface signatures, and looks
@@ -531,21 +570,15 @@ def check_atomicity(
             ))
 
     kinds_present = sorted({k for hr in high_risk for k in hr.kinds})
-    many_files = file_count is not None and file_count > file_trigger
-    if many_files:
-        kinds_present = sorted({*kinds_present, MANY_FILES_KIND})
 
     if not high_risk:
-        reason = (
-            f"{len(ordered)} block(s) touch {file_count} files, above the "
-            f"{file_trigger}-file trigger, but no block matches a keyword "
-            "high-risk kind."
-            if many_files else
-            "No block matches a high-risk kind (migration, payments, auth, "
-            "contract change, external service) — nothing to isolate."
-        )
         return AtomicityFinding(
-            should_split=False, kinds_present=kinds_present, reason=reason,
+            should_split=False,
+            kinds_present=kinds_present,
+            reason=(
+                "No block matches a high-risk kind (migration, payments, auth, "
+                "contract change, external service) — nothing to isolate."
+            ),
         )
 
     # Which blocks share a signature path with a high-risk one?
@@ -591,10 +624,6 @@ def check_atomicity(
     )
 
 
-#: Alias under the name the plan-review wiring seam documents for this check
-#: (`llm_steps/plan_review_steps.py`). Same function, no second implementation.
-migration_plus_feature = check_atomicity
-
 # --- Check 3: package spread --------------------------------------------------
 
 _PATH = re.compile(r"(?<![\w./-])([A-Za-z_][\w-]*)/((?:[\w.-]+/)*[\w.-]+)")
@@ -605,18 +634,42 @@ def top_level_packages(text: str) -> list[str]:
 
     Heuristic, and only as good as the paths a block's prose names: it matches
     slash-separated path-looking tokens (``apps/orders/views.py``,
-    ``build_pipeline/models.py``) and takes the first segment. Filesystem roots,
-    URL schemes and relative markers are dropped (:data:`NON_PACKAGE_SEGMENTS`).
-    A block that names no path contributes nothing rather than guessing.
+    ``build_pipeline/models.py``) and takes the first segment. Filesystem roots
+    and bare scheme words are dropped (:data:`NON_PACKAGE_SEGMENTS`). A block
+    that names no path contributes nothing rather than guessing.
+
+    A `word/word` token is not enough on its own — English writes "read/write
+    access", "red/green cycle", "pass/fail gate", and counting those as
+    packages fired the spread trigger on plans that named no path at all. A
+    match must additionally look like a path: carry a dot in its tail (an
+    extension), name three or more segments, or be written inside backticks.
     """
     packages: list[str] = []
     for match in _PATH.finditer(text):
         head = match.group(1)
-        if head.lower() in NON_PACKAGE_SEGMENTS or "." in head:
+        if head.lower() in NON_PACKAGE_SEGMENTS:
+            continue
+        if not _looks_like_path(match, text):
             continue
         if head not in packages:
             packages.append(head)
     return packages
+
+
+def _looks_like_path(match: re.Match[str], text: str) -> bool:
+    """Whether a `word/word…` match is a path rather than an English slash.
+
+    Three independent signals, any one of which is enough: an extension in the
+    tail, a third segment, or backticks around the token — the way a block's
+    prose marks a path it means literally.
+    """
+    tail = match.group(2)
+    if "." in tail:
+        return True
+    if "/" in tail:
+        return True
+    start, end = match.span()
+    return (start > 0 and text[start - 1] == "`") or (end < len(text) and text[end] == "`")
 
 
 def package_spread(blocks: list[BlockInfo]) -> PackageSpread:
@@ -649,8 +702,6 @@ def assess_plan_split(
     *,
     block_trigger: int,
     package_trigger: int,
-    file_count: int | None = None,
-    file_trigger: int = DEFAULT_FILE_TRIGGER,
 ) -> PlanSplitAssessment:
     """Run all three checks with the caller's thresholds.
 
@@ -671,9 +722,7 @@ def assess_plan_split(
         package_trigger=package_trigger,
         size_triggered=len(ordered) > block_trigger,
         package_triggered=spread.count > package_trigger,
-        atomicity=check_atomicity(
-            ordered, file_count=file_count, file_trigger=file_trigger,
-        ),
+        atomicity=check_atomicity(ordered),
         split=partition_blocks(ordered),
         spread=spread,
     )

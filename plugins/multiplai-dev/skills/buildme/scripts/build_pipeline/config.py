@@ -62,6 +62,20 @@ _DEFAULT_REFERENCE_DOCS: dict[str, list[str]] = {
 # section index — so the generator always knows what it did not receive.
 REFERENCE_DOC_CHAR_LIMIT = 24000
 
+# Per-document ceiling for the reviewer's standards block (the project's
+# CLAUDE.md chain plus any `standards_files`). Tighter than the spec-gen
+# ceiling above because this text is paid for far more often: `standards_text`
+# is called once per block, and `run_code_review` then fans that prompt out to
+# every model in `review_panel` — a 40 KB chain over a 12-block build with a
+# 3-member panel is ~1.4 MB of duplicated prompt text.
+#
+# 12000 is a judgment, not a measurement: it admits a typical CLAUDE.md whole
+# and trims only the outliers. Trimming is safe here in a way it is not for the
+# spec generator — that one has no tools, while a reviewer holds `Read` and
+# `summarize_reference_doc` always emits the full section index, so a section
+# that did not fit is known to exist and can be fetched.
+STANDARDS_DOC_CHAR_LIMIT = 12000
+
 
 _H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 
@@ -359,6 +373,22 @@ class GitToggles:
     pr: Literal["draft", "ready", "none"] = "draft"
 
 
+# (field, root) pairs for the per-step effort/model fallbacks, in resolution
+# order: a root must be resolved before anything that reads it.
+# `plan_review_model` appears twice so it lands on a concrete ID even when
+# `review_model` — its own root — is None.
+_STEP_FALLBACKS: tuple[tuple[str, str], ...] = (
+    ("spec_effort", "effort"),
+    ("review_effort", "effort"),
+    ("agent_effort", "effort"),
+    ("plan_review_effort", "review_effort"),
+    ("spec_model", "model"),
+    ("agent_model", "model"),
+    ("plan_review_model", "review_model"),
+    ("plan_review_model", "model"),
+)
+
+
 @dataclass
 class BuildConfig:
     """Complete configuration for a build pipeline run."""
@@ -440,6 +470,9 @@ class BuildConfig:
     # because `_load_specs_config` only fills an *unset* review_model.
     review_model: str | None = None
     _review_model_from_conf: bool = field(default=False, repr=False)
+    # Set in __post_init__: the per-step fields nobody asked for explicitly,
+    # and therefore the only ones _resolve_step_fallbacks may rewrite.
+    _derived_step_fields: set[str] = field(default_factory=set, repr=False)
 
     # Per-step model overrides, the other axis of the same tuning decision as
     # the effort fields below. `[buildme.spec]` / `[buildme.agent]` /
@@ -531,22 +564,32 @@ class BuildConfig:
             self.review_model = conf_model("buildme.review")
             self._review_model_from_conf = self.review_model is not None
 
-        # Per-step effort/model falls back to its root, so one field moves
-        # every step that has not been tuned individually. Order matters:
-        # `review_*` is resolved before the `plan_review_*` entry that reads
-        # it, and `plan_review_model` gets a second entry so it lands on a
-        # concrete ID even when `review_model` is None (its own root).
-        for attr, root in (
-            ("spec_effort", "effort"),
-            ("review_effort", "effort"),
-            ("agent_effort", "effort"),
-            ("plan_review_effort", "review_effort"),
-            ("spec_model", "model"),
-            ("agent_model", "model"),
-            ("plan_review_model", "review_model"),
-            ("plan_review_model", "model"),
-        ):
-            if getattr(self, attr) is None:
+        # Which per-step fields the caller (and the conf) left unset. Only
+        # these are re-derived later: a field someone asked for explicitly
+        # must never be overwritten by a root that moved afterwards.
+        self._derived_step_fields = {
+            attr for attr, _ in _STEP_FALLBACKS if getattr(self, attr) is None
+        }
+        self._resolve_step_fallbacks()
+
+    def _resolve_step_fallbacks(self) -> None:
+        """Point every unset per-step field at its root.
+
+        Per-step effort/model falls back to its root, so one field moves every
+        step that has not been tuned individually. Order matters: `review_*` is
+        resolved before the `plan_review_*` entry that reads it, and
+        `plan_review_model` gets a second entry so it lands on a concrete ID
+        even when `review_model` is None (its own root).
+
+        `from_cli_args` runs this a second time, after specs/config.yaml and
+        BUILDME_REVIEW_MODEL have moved `review_model`. Resolving only in
+        __post_init__ froze `plan_review_model` on `model` before either
+        override existed, so neither ever reached the plan reviewer.
+        """
+        for attr in self._derived_step_fields:
+            setattr(self, attr, None)
+        for attr, root in _STEP_FALLBACKS:
+            if attr in self._derived_step_fields and getattr(self, attr) is None:
                 setattr(self, attr, getattr(self, root))
 
     @classmethod
@@ -581,6 +624,10 @@ class BuildConfig:
         env_review_model = os.environ.get("BUILDME_REVIEW_MODEL")
         if env_review_model:
             config.review_model = resolve_model(env_review_model)
+        # `review_model` has just moved (config.yaml, then the env override),
+        # so every step that falls back to it is re-derived here. Fields the
+        # caller or multiplai.conf set explicitly are untouched.
+        config._resolve_step_fallbacks()
         config._discover_test_command()
         log.info("Running in %s mode (%s)", tier, model_name)
         return config
@@ -827,6 +874,12 @@ class BuildConfig:
         Paths may be absolute or project-relative (a git diff's are relative).
         Anything resolving outside the project dir is skipped: it has no
         ancestor chain here, and walking one would climb out of the repo.
+
+        Both sides are resolved before the containment check. `relative_to` is
+        purely lexical, so `../etc/x.py` under `/proj` "succeeds" and returns
+        `../etc/x.py` — and the ancestor walk then reads `..` as a path part
+        and collects the parent directory's `CLAUDE.md`, feeding rules from
+        outside the repo to the reviewer as this project's conventions.
         """
         found: list[Path] = []
 
@@ -838,6 +891,10 @@ class BuildConfig:
 
         root = self.project_dir
         _collect(root)
+        try:
+            resolved_root = root.resolve()
+        except OSError:  # unresolvable project dir — no chain to walk
+            return found
 
         for entry in changed_paths or []:
             if not entry:
@@ -845,8 +902,8 @@ class BuildConfig:
             path = Path(entry)
             path = path if path.is_absolute() else root / path
             try:
-                relative = path.relative_to(root)
-            except ValueError:
+                relative = path.resolve().relative_to(resolved_root)
+            except (ValueError, OSError):
                 continue
             # Ancestors only, root-down and excluding the file itself, so the
             # ordering is general rule first, most specific rule last.
@@ -871,6 +928,10 @@ class BuildConfig:
         Missing OR unreadable files are logged and skipped — one bad doc must
         not fail the block. Returns "" when nothing resolves — the review
         prompt then says "(no standards provided)".
+
+        Each document is capped at :data:`STANDARDS_DOC_CHAR_LIMIT` on section
+        boundaries (:func:`summarize_reference_doc`), because this text is
+        rebuilt once per block and then fanned out to every panel member.
         """
         parts: list[str] = []
         for path in self.convention_files(changed_paths):
@@ -883,7 +944,10 @@ class BuildConfig:
                 label = str(path.relative_to(self.project_dir))
             except ValueError:
                 label = str(path)
-            parts.append(f"### Conventions: {label}\n{text}")
+            parts.append(
+                f"### Conventions: {label}\n"
+                + summarize_reference_doc(label, text, STANDARDS_DOC_CHAR_LIMIT)
+            )
         for entry in self.standards_files:
             path = self._resolve_standards_file(entry)
             if path is None:
@@ -894,7 +958,10 @@ class BuildConfig:
             except (OSError, UnicodeDecodeError) as e:
                 log.warning("Standards file unreadable, skipping: %s (%s)", path, e)
                 continue
-            parts.append(f"### Standard: {path.name}\n{text}")
+            parts.append(
+                f"### Standard: {path.name}\n"
+                + summarize_reference_doc(path.name, text, STANDARDS_DOC_CHAR_LIMIT)
+            )
         return "\n\n".join(parts)
 
     def _resolve_standards_file(self, entry: str) -> Path | None:

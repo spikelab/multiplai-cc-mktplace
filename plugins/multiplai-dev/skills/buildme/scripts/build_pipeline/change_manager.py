@@ -98,9 +98,9 @@ ARTIFACT_DAG: dict[str, dict] = {
     # Who the change is for, and what they can observe when it lands. Its own
     # artifact rather than two more proposal sections: the proposal is about
     # the change, this is about the people it is for, and keeping the personas
-    # out of proposal.md also keeps their backticked names out of
-    # `_extract_capabilities`, which harvests every backticked list item in
-    # that file.
+    # out of proposal.md also keeps their backticked names away from
+    # `_extract_capabilities`, which reads backticked list items out of
+    # proposal.md's `## Capabilities` section.
     "use-cases": {"generates": "use-cases.md", "requires": ["proposal"]},
     "requirements": {"generates": "requirements/*.md", "requires": ["proposal"]},
     "design": {"generates": "design.md", "requires": ["proposal"]},

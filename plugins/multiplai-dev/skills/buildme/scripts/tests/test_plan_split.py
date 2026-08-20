@@ -13,12 +13,9 @@ import pytest
 
 from build_pipeline.models import BlockInfo
 from build_pipeline.plan_split import (
-    DEFAULT_FILE_TRIGGER,
     HIGH_RISK_KEYWORDS,
-    MANY_FILES_KIND,
     assess_plan_split,
     check_atomicity,
-    migration_plus_feature,
     normalize_signature,
     package_spread,
     partition_blocks,
@@ -131,12 +128,42 @@ class TestFullyChained:
         assert proposal.group_count == 1
         assert proposal.groups[0].block_numbers == [1, 2, 3, 4]
 
+    def test_def_style_signatures_do_not_collapse_the_whole_plan(self):
+        """Blocks written as `def name(...)` share a leading token, not work.
+        Keying on it unioned every block into one component, which reported
+        the plan atomic and silenced both split checks."""
+        blocks = [
+            _block(1, "Export", produces=["def export_job(x: int) -> None"]),
+            _block(2, "Report", produces=["def send_report(y: str) -> None"]),
+        ]
+        assert partition_blocks(blocks).group_count == 2
+
     def test_two_blocks_producing_the_same_signature_are_one_group(self):
         blocks = [
             _block(1, "A", produces=["save(x: int) -> None"]),
             _block(2, "B", produces=["save(x: int) -> None"]),
         ]
         assert partition_blocks(blocks).group_count == 1
+
+    def test_a_cut_boundary_covers_both_whole_sides(self):
+        """A three-group partition cut after group 0 separates group 0 from
+        groups 1 AND 2. Building the boundary from the two adjacent groups
+        dropped everything the third one consumes, and the prompt quotes this
+        list as "the signature boundary this cut crosses"."""
+        blocks = [
+            _block(1, "A", produces=["a() -> int"], consumes=["outside_a() -> int"]),
+            _block(2, "B", produces=["b() -> int"], consumes=["outside_b() -> int"]),
+            _block(3, "C", produces=["c() -> int"], consumes=["outside_c() -> int"]),
+        ]
+        proposal = partition_blocks(blocks)
+        assert proposal.group_count == 3
+        first_cut = proposal.boundaries[0]
+        assert first_cut.after_group == 0
+        assert "a() -> int" in first_cut.boundary_signatures
+        # Group 2 is on the later side of this cut; what it consumes belongs to
+        # the boundary just as much as group 1's does.
+        assert "outside_b() -> int" in first_cut.boundary_signatures
+        assert "outside_c() -> int" in first_cut.boundary_signatures
 
     def test_consumes_nothing_in_the_plan_produces_is_reported_unresolved(self):
         blocks = [
@@ -214,18 +241,24 @@ class TestAtomicity:
         assert kind in finding.kinds_present
         assert finding.should_split is True
 
-    def test_many_files_is_the_sixth_kind_and_comes_from_the_caller(self):
+    def test_the_check_is_keyword_only_and_takes_no_file_count(self):
+        """Item 26's sixth kind ("more than N files") is not checked here. It
+        shipped as a `file_count`/`file_trigger` pair that no caller could
+        supply — the phase runs before anything is built — and that could not
+        have changed the verdict if one had, because "high-risk work is mixed
+        with unrelated work" is not a question a size number answers."""
+        import inspect
+        params = inspect.signature(check_atomicity).parameters
+        assert "file_count" not in params
+        assert "file_trigger" not in params
+        assert "file_count" not in inspect.signature(assess_plan_split).parameters
         blocks = [
             _block(1, "Rename", description="Rename the helper across the tree"),
             _block(2, "Widget", description="Render a widget"),
         ]
-        quiet = check_atomicity(blocks, file_count=5, file_trigger=20)
-        assert quiet.kinds_present == []
-        loud = check_atomicity(blocks, file_count=40, file_trigger=20)
-        assert loud.kinds_present == [MANY_FILES_KIND]
-        # No keyword block, so there is nothing to isolate the feature work from.
-        assert loud.should_split is False
-        assert "above the 20-file trigger" in loud.reason
+        finding = check_atomicity(blocks)
+        assert finding.kinds_present == []
+        assert finding.should_split is False
 
     def test_keyword_sets_are_overridable(self):
         blocks = [
@@ -236,9 +269,6 @@ class TestAtomicity:
         finding = check_atomicity(blocks, kinds={"custom": ("frobnicate",)})
         assert finding.should_split is True
         assert finding.kinds_present == ["custom"]
-
-    def test_the_wiring_seam_alias_is_the_same_function(self):
-        assert migration_plus_feature is check_atomicity
 
     def test_the_five_keyword_kinds_are_the_documented_ones(self):
         assert sorted(HIGH_RISK_KEYWORDS) == [
@@ -286,6 +316,27 @@ class TestPackageSpread:
         blocks = [_block(1, "A", produces=["read(path='conf/app.yml') -> dict"])]
         assert package_spread(blocks).packages == ["conf"]
 
+    def test_prose_slashes_are_not_packages(self):
+        """English writes "read/write access". Counting those as packages fired
+        the spread trigger on plans naming no path at all."""
+        text = "read/write access, a red/green cycle and a pass/fail gate"
+        assert top_level_packages(text) == []
+
+    def test_a_two_segment_path_still_counts_when_it_is_marked_as_one(self):
+        """Backticks are how a block's prose says it means a literal path."""
+        assert top_level_packages("touch `apps/orders` next") == ["apps"]
+
+    def test_three_segments_are_enough_without_an_extension(self):
+        assert top_level_packages("edit engine/core/parse") == ["engine"]
+
+    def test_prose_slashes_do_not_trigger_the_spread(self):
+        blocks = [
+            _block(1, "A", description="Gate on pass/fail"),
+            _block(2, "B", description="Document read/write access"),
+            _block(3, "C", description="Run the red/green cycle"),
+        ]
+        assert package_spread(blocks).count == 0
+
 
 # --- Signature matching -------------------------------------------------------
 
@@ -295,6 +346,20 @@ class TestSignatureMatching:
 
     def test_symbol_is_a_fallback_key(self):
         assert "parse" in signature_keys("parse(x: str) -> Doc")
+
+    def test_a_declaration_keyword_is_never_the_fallback_key(self):
+        """`def` leads every signature written that way, so keying on it made
+        every such block look like it produced the same thing."""
+        assert signature_keys("def export_job(x) -> None") == frozenset(
+            {"def export_job(x) -> none", "export_job"})
+        assert "def" not in signature_keys("def export_job(x) -> None")
+        assert "class" not in signature_keys("class UserService")
+        assert "userservice" in signature_keys("class UserService")
+
+    def test_an_http_verb_leaves_no_fallback_key(self):
+        """`POST /jobs` has no identifier after the verb — better no fallback
+        key than one shared by every route in the plan."""
+        assert signature_keys("POST /api/jobs") == frozenset({"post /api/jobs"})
         assert "parse(x: str) -> doc" in signature_keys("`parse(x: str) -> Doc`")
 
     def test_a_reworded_consume_still_links_the_blocks(self):
@@ -377,9 +442,6 @@ class TestAssessPlanSplit:
         assert assessment.package_triggered is False
         assert assessment.should_split is True
         assert assessment.atomicity.should_split is True
-
-    def test_default_file_trigger_is_a_named_placeholder(self):
-        assert DEFAULT_FILE_TRIGGER == 20
 
 
 # --- Purity -------------------------------------------------------------------

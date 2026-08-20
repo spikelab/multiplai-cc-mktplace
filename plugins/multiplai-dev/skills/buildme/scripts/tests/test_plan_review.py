@@ -278,7 +278,13 @@ class TestSplitContextSeam:
         assert "2 independently-shippable group(s)" in context
         assert "Group 1: blocks 1, 2 — Parse the export log; Store the parsed rows" in context
         assert "Group 2: block 3 — Render the dashboard page" in context
-        assert "Cut after group 1: between block 2 and block 3" in context
+        # `is_clean` is rendered: a cut no signature crosses is the cheap one.
+        assert "Cut after group 1 (clean): between block 2 and block 3" in context
+        # The module's own composite answer reaches the reviewer instead of
+        # being computed and discarded. Here it is "no": the plan comes apart,
+        # but at 3 blocks no trigger fired and no block is high-risk.
+        assert "no cut is indicated" in context
+        assert "arithmetic, not a finding" in context
 
     def test_the_cut_carries_the_exact_signature_boundary_it_crosses(self, tmp_path):
         context = _split_context(
@@ -288,6 +294,24 @@ class TestSplitContextSeam:
         # boundary for is not a cut (PLAN_REVIEW_PROMPT).
         assert "boundary: parse_log(path: Path) -> list[Row]; store_rows(rows: list[Row]) -> None" in context
         assert "crosses: nothing — no signature spans this cut" in context
+
+    def test_the_composite_verdict_says_split_when_the_arithmetic_says_so(
+        self, tmp_path,
+    ):
+        """`PlanSplitAssessment.should_split` is the module's stated top-level
+        answer. Rendering it is what stops the reviewer re-deriving it from
+        prose."""
+        tasks = "# Tasks\n\n" + "\n".join(
+            f"## {i}. Widget {i}\n\nRender widget {i}.\n\n"
+            f"Interfaces:\n- Produces: `render_widget_{i}(data: dict) -> str`\n"
+            for i in range(1, 12)
+        )
+        context = _split_context(
+            _stub_config(tmp_path), _tasks_dir(tmp_path, tasks))
+
+        assert "Size trigger (>8): FIRED" in context
+        assert "THIS PLAN COMES APART" in context
+        assert "arithmetic, not a finding" in context
 
     def test_a_fully_chained_plan_renders_as_one_atomic_group_with_the_reason(
         self, tmp_path,
@@ -539,6 +563,76 @@ class TestPlanReviewStage:
         # One regeneration, then ONE report-only re-check. No loop.
         assert review.await_count == 2
         assert state.spec_gen.plan_review_regen_done is True
+        assert state.spec_gen.plan_review_done is True
+
+    @pytest.mark.asyncio
+    async def test_the_rewritten_plan_is_re_audited_for_shape(self, tmp_path):
+        """The shape audit is what catches a horizontally-decomposed plan, and
+        it only ever ran inside `_generate_single_artifact` — so the plan the
+        build is actually built against had never been through it."""
+        config, state, state_path = _stage_setup(tmp_path)
+        review = AsyncMock(side_effect=[
+            PlanReviewResult(findings=[_finding(severity="critical")]),
+            PlanReviewResult(findings=[]),
+        ])
+        regen = AsyncMock(return_value="## Block 1\n- [ ] do it properly\n")
+        shape_audit = AsyncMock(return_value=[])
+        with patch.object(plan_review_steps, "run_plan_review", review), \
+                patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen), \
+                patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit",
+                      shape_audit), \
+                patch("build_pipeline.spec_generator.generate_rubric",
+                      AsyncMock(return_value="## Criteria\n- fresh\n")):
+            await run_plan_review_stage(config.change_dir, config, state, state_path)
+
+        shape_audit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_the_rubric_is_regenerated_against_the_rewritten_plan(
+        self, tmp_path,
+    ):
+        """ARTIFACT_DAG declares rubric requires tasks, and the per-block review
+        scores blocks against rubric.md — leaving it describing the plan this
+        rewrite replaced scores new blocks on old criteria."""
+        config, state, state_path = _stage_setup(tmp_path)
+        review = AsyncMock(side_effect=[
+            PlanReviewResult(findings=[_finding(severity="critical")]),
+            PlanReviewResult(findings=[]),
+        ])
+        regen = AsyncMock(return_value="## Block 1\n- [ ] do it properly\n")
+        rubric = AsyncMock(return_value="## Criteria\n- covers the new blocks\n")
+        with patch.object(plan_review_steps, "run_plan_review", review), \
+                patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen), \
+                patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit",
+                      AsyncMock(return_value=[])), \
+                patch("build_pipeline.spec_generator.generate_rubric", rubric):
+            await run_plan_review_stage(config.change_dir, config, state, state_path)
+
+        rubric.assert_awaited_once()
+        assert "covers the new blocks" in (config.change_dir / "rubric.md").read_text()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_re_audit_or_rubric_leaves_the_plan_standing(
+        self, tmp_path,
+    ):
+        """Both follow-ups are non-fatal, like every other step in this stage."""
+        config, state, state_path = _stage_setup(tmp_path)
+        review = AsyncMock(side_effect=[
+            PlanReviewResult(findings=[_finding(severity="critical")]),
+            PlanReviewResult(findings=[]),
+        ])
+        regen = AsyncMock(return_value="## Block 1\n- [ ] do it properly\n")
+        with patch.object(plan_review_steps, "run_plan_review", review), \
+                patch("build_pipeline.llm_steps.spec_steps.generate_artifact", regen), \
+                patch("build_pipeline.llm_steps.spec_steps.run_tasks_audit",
+                      AsyncMock(side_effect=RuntimeError("audit exploded"))), \
+                patch("build_pipeline.spec_generator.generate_rubric",
+                      AsyncMock(side_effect=RuntimeError("rubric exploded"))):
+            findings = await run_plan_review_stage(
+                config.change_dir, config, state, state_path)
+
+        assert len(findings) == 1
+        assert "do it properly" in (config.change_dir / "tasks.md").read_text()
         assert state.spec_gen.plan_review_done is True
 
     @pytest.mark.asyncio

@@ -61,6 +61,38 @@ time, not derived from a tag.
   2026-08-11**: In Review means a real PR into staging, for everyone, not a
   reviewer fetching a branch and diffing it. No code changed — `board.py`
   already stops at In Review.
+- **The reviewer's standards block is capped per document.** Each `CLAUDE.md`
+  and each `standards_files` entry is trimmed on section boundaries at 12,000
+  characters, with the full section index always emitted so the reviewer (which
+  holds `Read`) knows what it did not receive. Uncapped, a large conventions
+  chain was rebuilt for every block and then sent to every panel member.
+- **A change created before `use-cases.md` existed gets its plan rewritten.**
+  Resuming such a change generates `use-cases.md`, and now regenerates
+  `tasks.md` and `rubric.md` against it — otherwise the plan the build runs was
+  written without the use cases it is required to cover, and the plan review
+  spent its one regeneration reporting that.
+- **The plan review's rewrite of `tasks.md` is re-audited.** The rewritten plan
+  goes through the same vertical-slice shape audit the original does, and
+  `rubric.md` is regenerated from it, so per-block review no longer scores new
+  blocks against the rubric for the plan they replaced.
+- **`[buildme.plan_review]` now actually follows `code_review.model` and
+  `BUILDME_REVIEW_MODEL`.** The plan reviewer's model was frozen before either
+  override was read, so a project that set `code_review: {model: opus}` still
+  got the base model. `[buildme.plan_review] MODEL=` continues to win over both.
+- **The oversized-plan check stopped reading English as file paths.** "read/write
+  access" and "pass/fail gate" were counted as three top-level packages, firing
+  the package-spread trigger on plans that named no path at all. A match now has
+  to look like a path — an extension, a third segment, or backticks around it.
+- **Blocks written as `def name(...)` no longer collapse into one group.** The
+  interface graph keyed on the first token of a signature, so every such block
+  looked like it produced the same thing and both split checks went silent.
+- **A failed plan review is retried on a resume.** The phase pointer used to
+  advance past it regardless, which meant an LLM failure skipped the review for
+  the rest of the build.
+- **The `many-files` split trigger is gone.** It could never fire (no caller has
+  a file count before anything is built) and could not have changed the verdict
+  if it had. Plan size is what the block-count and package-spread triggers
+  answer.
 
 ### Added
 

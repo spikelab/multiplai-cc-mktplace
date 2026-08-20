@@ -1283,6 +1283,45 @@ class TestBuildConfigModelFields:
             config = BuildConfig.from_cli_args(args)
         assert config.review_model == "claude-haiku-4-5"
 
+    def test_plan_review_model_follows_specs_config_yaml(self, tmp_path):
+        """`plan_review_model` falls back to `review_model`, and config.yaml
+        sets `review_model` *after* __post_init__ ran. Resolving the fallback
+        only at construction froze the plan reviewer on `model` and neither
+        override ever reached it."""
+        project = tmp_path / "project"
+        specs = project / "specs"
+        specs.mkdir(parents=True)
+        (specs / "config.yaml").write_text("code_review:\n  model: claude-haiku-4-5\n")
+        args = argparse.Namespace(project_dir=str(project))
+        with patch.dict(os.environ, self._env(tmp_path), clear=True):
+            config = BuildConfig.from_cli_args(args)
+        assert config.review_model == "claude-haiku-4-5"
+        assert config.plan_review_model == "claude-haiku-4-5"
+
+    def test_plan_review_model_follows_the_env_override(self, tmp_path):
+        project = tmp_path / "project"
+        (project / "specs").mkdir(parents=True)
+        args = argparse.Namespace(project_dir=str(project))
+        env = self._env(tmp_path)
+        env["BUILDME_REVIEW_MODEL"] = "claude-haiku-4-5"
+        with patch.dict(os.environ, env, clear=True):
+            config = BuildConfig.from_cli_args(args)
+        assert config.plan_review_model == "claude-haiku-4-5"
+
+    def test_an_explicit_plan_review_model_survives_the_re_resolve(self, tmp_path):
+        """Re-deriving after config.yaml must not clobber a field somebody
+        actually asked for — here via `[buildme.plan_review] MODEL=`."""
+        project = tmp_path / "project"
+        specs = project / "specs"
+        specs.mkdir(parents=True)
+        (specs / "config.yaml").write_text("code_review:\n  model: claude-haiku-4-5\n")
+        args = argparse.Namespace(project_dir=str(project))
+        body = "[buildme.plan_review]\nMODEL=sonnet\n"
+        with patch.dict(os.environ, self._env(tmp_path, body), clear=True):
+            config = BuildConfig.from_cli_args(args)
+        assert config.review_model == "claude-haiku-4-5"
+        assert config.plan_review_model == CURRENT_MODEL["sonnet"]
+
 
 class TestPlanSplitTriggers:
     """W14's oversized-plan triggers. 8 is a placeholder, not a measurement —
@@ -1397,6 +1436,50 @@ class TestConventionFiles:
         (outside / "CLAUDE.md").write_text("OUTSIDE-RULE")
         config = BuildConfig(project_dir=project)
         assert config.convention_files([str(outside / "x.py")]) == []
+
+    def test_a_dot_dot_path_does_not_walk_out_of_the_project(self, tmp_path):
+        """`relative_to` is lexical: `../etc/x.py` under /proj "succeeds" and
+        comes back as `../etc/x.py`, and the ancestor walk then reads `..` as a
+        path part and collects the PARENT directory's CLAUDE.md — feeding rules
+        from outside the repo to the reviewer as this project's conventions."""
+        project = self._project(tmp_path)
+        (tmp_path / "CLAUDE.md").write_text("PARENT-RULE")
+        etc = tmp_path / "etc"
+        etc.mkdir()
+        (etc / "CLAUDE.md").write_text("ETC-RULE")
+        config = BuildConfig(project_dir=project)
+        assert config.convention_files(["../etc/x.py"]) == []
+        assert "PARENT-RULE" not in config.standards_text(["../etc/x.py"])
+        assert "ETC-RULE" not in config.standards_text(["../etc/x.py"])
+
+    def test_a_dot_dot_path_that_lands_back_inside_still_resolves(self, tmp_path):
+        """Resolution, not rejection: a path that walks out and back in is a
+        path inside the project and keeps its chain."""
+        project = self._project(tmp_path)
+        pkg = project / "src"
+        pkg.mkdir()
+        (pkg / "CLAUDE.md").write_text("SRC-RULE")
+        config = BuildConfig(project_dir=project)
+        assert config.convention_files(["src/../src/app.py"]) == [pkg / "CLAUDE.md"]
+
+    def test_a_long_conventions_doc_is_capped_on_section_boundaries(self, tmp_path):
+        """standards_text is rebuilt per block and fanned out to every panel
+        member, so an uncapped chain is paid for N x M times."""
+        from build_pipeline.config import STANDARDS_DOC_CHAR_LIMIT
+
+        project = self._project(tmp_path)
+        body = "\n\n".join(
+            f"## Section {i}\n" + ("rule text. " * 400) for i in range(12)
+        )
+        (project / "CLAUDE.md").write_text(body)
+        assert len(body) > STANDARDS_DOC_CHAR_LIMIT
+        config = BuildConfig(project_dir=project)
+        text = config.standards_text()
+        assert len(text) < len(body)
+        # Every section is still NAMED, so the reviewer (which holds Read) knows
+        # what it did not receive.
+        for i in range(12):
+            assert f"Section {i}" in text
 
     def test_each_file_appears_once_across_changed_paths(self, tmp_path):
         project = self._project(tmp_path)
