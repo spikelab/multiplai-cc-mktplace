@@ -123,9 +123,10 @@ class GeneratorBase:
       - catalog_filename (str): output catalog filename
       - discover_sources() -> dict[str, Path]: find raw files to catalog
       - build_prompt(source: Path) -> str: LLM prompt for one entry
-      - parse_response(raw: str) -> dict: parse LLM output
 
     Optional overrides:
+      - parse_response(raw: str) -> dict: defaults to fenced-JSON parsing,
+        which is what every current generator wants
       - merge_entry(existing, new) -> dict: preserve hand-authored fields
       - hash_source(path: Path) -> str: custom content hashing
     """

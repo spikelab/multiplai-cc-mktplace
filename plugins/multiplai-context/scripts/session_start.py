@@ -681,16 +681,28 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     # Keep the qmd resources index fresh (no-op unless enable_resources
     # and resources_dir are both set). Detached + flock-guarded, so this
     # never blocks the hook.
-    # One config parse shared by both launchers below (it is uncached and
-    # logs its defaulted-options line on every call).
-    try:
-        from generators.config import load_catalog_config
-
-        catalog_cfg = load_catalog_config()
-    except Exception:
-        logger.warning("Could not load catalog config", exc_info=True)
-        catalog_cfg = None
     with run.stage("launch_qmd"):
+        # One config parse shared by both launchers below (it is uncached and
+        # logs its defaulted-options line on every call). Inside the stage
+        # because that is where its cost is spent and measured.
+        #
+        # A failure here used to hand both launchers `cfg=None`, and each of
+        # them re-parses on None — so a malformed options file was parsed
+        # THREE times on the path that could least afford it, and logged a
+        # traceback both launchers had previously swallowed. Handing them
+        # plain defaults instead means one attempt, and both launchers see the
+        # disabled-by-default config that a failed parse should imply.
+        try:
+            from generators.config import CatalogConfig, load_catalog_config
+
+            try:
+                catalog_cfg = load_catalog_config()
+            except Exception:
+                logger.debug("Could not load catalog config", exc_info=True)
+                catalog_cfg = CatalogConfig()
+        except Exception:
+            logger.debug("Could not import the catalog config", exc_info=True)
+            catalog_cfg = None
         _launch_qmd_refresh(paths.scripts_dir(), cwd, cfg=catalog_cfg)
 
     # Price the session-transcript corpus into the cost ledger (no-op unless

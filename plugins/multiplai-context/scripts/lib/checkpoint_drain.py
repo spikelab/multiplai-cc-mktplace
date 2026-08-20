@@ -18,7 +18,6 @@ never producing a file costs a rebuild; an exception escaping into
 ``session_end.py`` or the launcher's drain costs the diary too.
 """
 
-import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path

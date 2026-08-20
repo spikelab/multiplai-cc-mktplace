@@ -6,8 +6,12 @@ import logging
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
+
+# Re-exported: the collectors here import it from this module, but it is DEFINED
+# in a leaf so `lib.fleet` — which runs on the hook path — can use it without
+# importing this package and the four subprocess-shelling collectors with it.
+from lib.timeparse import parse_ts  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -35,21 +39,6 @@ class Ran:
     @property
     def lines(self) -> list[str]:
         return [ln for ln in self.out.splitlines() if ln.strip()]
-
-
-def parse_ts(raw) -> datetime | None:
-    """ISO string -> tz-aware UTC datetime, ``None`` on anything unparseable.
-
-    One rule for every fleet source — this used to exist in three copies, one
-    of which had already dropped the ``Z`` normalisation.
-    """
-    if not raw:
-        return None
-    try:
-        ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
 
 
 def run(

@@ -38,8 +38,18 @@ def _is_valid_date_stem(stem: str) -> bool:
 
 
 def _count_words_in_file(day_file: Path) -> int:
-    """Compute total word count of a per-day diary file (caller checks existence)."""
-    return len(day_file.read_text(encoding="utf-8").split())
+    """Compute total word count of a per-day diary file; 0 if it is not there.
+
+    The guard stays here even though the caller checks first. Between that
+    check and this read is a window in which the file can vanish — `dream`
+    triage and manual cleanup both delete under `.multiplai/diary/` — and
+    without it a `FileNotFoundError` propagates out of `DiaryGenerator.run()`
+    and abandons the whole catalog over one missing day.
+    """
+    try:
+        return len(day_file.read_text(encoding="utf-8").split())
+    except OSError:
+        return 0
 
 
 class DiaryGenerator(GeneratorBase):

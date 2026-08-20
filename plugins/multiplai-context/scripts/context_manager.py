@@ -618,6 +618,14 @@ def _dev_reference_block(
                 # detection and doc resolution read manifests and whole
                 # reference docs (~60k chars) — waste on the ~29 of 30
                 # turns whose announcement is already recorded.
+                #
+                # It does cost the resolved=none diagnostic below on the turns
+                # it skips. That is acceptable BECAUSE the line still fires on
+                # every announcement-due turn, so a doc renamed out from under
+                # the map is reported within one cooldown rather than never —
+                # but it is a real trade, not a free efficiency win, and the
+                # log is the only signal that a project is building with no
+                # standards loaded.
                 if not reference_docs.should_announce(state, project, turn_index):
                     continue
                 keys = reference_docs.detect_stack_keys(project)

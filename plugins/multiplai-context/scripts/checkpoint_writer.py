@@ -474,6 +474,12 @@ def main() -> int:
     """
     payload = read_hook_input()
     if not payload:
+        # `read_hook_input` returns {} for BOTH an unreadable stdin and a
+        # literal `{}` on the wire, so this cannot tell them apart — and a
+        # bare `{}` used to run the whole body against defaults. No caller
+        # sends one (`cp.spawn_writer` always populates the payload), so the
+        # cheap check stays; a caller that ever wants "checkpoint with
+        # defaults" needs an explicit field, not an empty object.
         logger.warning("No usable checkpoint payload on stdin; exiting")
         return 0
 

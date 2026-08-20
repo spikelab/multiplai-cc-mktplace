@@ -33,6 +33,43 @@ Nothing yet.
   can no longer truncate them — this includes the shared-banks catalog. Dead
   code, duplicate helpers, and unused imports were removed along the way.
 
+  Review of that pass found five places where the behaviour did change, all
+  corrected before release:
+
+  - **The expensive fleet collectors stopped staying off the hook path.** A
+    shared timestamp parser had moved into `lib/fleet_sources.common`, and
+    importing any name from that package runs its `__init__` — so
+    `import lib.fleet`, which every session start does, loaded all four
+    collectors and `subprocess` with them (measured 16-22 ms and four
+    process-shelling modules resident, for a six-line function). The parser
+    now lives in a leaf module both sides import, and
+    `tests/test_hook_path_imports.py` fails if anything on the hook path ever
+    pulls the collectors in again.
+  - **Marker files stay world-readable.** Routing them through the shared
+    atomic writer swapped `write_text` for `mkstemp`, which creates 0600.
+    `claude.sh` on the Mac drains the extraction markers a *container* wrote;
+    a marker its uid cannot read is indistinguishable, to that drain's error
+    handling, from no marker at all — a silently lost day of diary and
+    learnings. The writer chmods to 0644, and restores the trailing newline
+    the hand-rolled `json.dumps(...) + "\n"` calls produced.
+  - **A diary file that vanishes mid-run no longer aborts the catalog.** The
+    word-count helper had its existence guard removed in favour of the
+    caller's check, leaving a window — `dream` triage and manual cleanup both
+    delete under `.multiplai/diary/` — in which a `FileNotFoundError`
+    propagated out of the whole generation pass.
+  - **The bank list is resolved fresh, and cannot raise.** `configured_banks`
+    had moved to the cached path accessor, pinning the bank list to whatever
+    the environment said the first time anything in the process asked; and its
+    fallback call sat unguarded inside its own `except`, so a resolution
+    failure escaped a function documented as never raising.
+  - **A malformed options file is parsed once at session start, not three
+    times.** The shared parse was hoisted out of its timing stage and handed
+    `None` to both launchers on failure, each of which re-parses on `None`.
+    The transcript-tail read in PreCompact moved back inside the stage whose
+    budget it spends, for the same reason: work between stages is
+    unattributed wall-clock, and those timings are the only instrument for
+    that hook's 270-second ceiling.
+
 ## [0.52.1] - 2026-08-17
 
 ### Fixed

@@ -299,13 +299,18 @@ def _compact_pass(
     # SessionStart(source=compact) rebuild will inject. Never fatal. This
     # stage makes a model call, which is why this hook's ceiling is 300s and
     # every other hook's is under 60.
-    try:
-        gate = _session_gate(hook_input, data_dir)
-    except Exception:
-        logger.exception("PreCompact: session gate failed (non-fatal)")
-        gate = None
-
     with run.stage("checkpoint"):
+        # Inside the stage, not before it. The gate reads the transcript tail
+        # (512 KB), and the per-stage HOOK_ENTRY timings are the only
+        # instrument for this hook's 270s budget — work done between stages is
+        # unattributed wall-clock, which is exactly the blindness the staged
+        # structure exists to remove.
+        try:
+            gate = _session_gate(hook_input, data_dir)
+        except Exception:
+            logger.exception("PreCompact: session gate failed (non-fatal)")
+            gate = None
+
         try:
             _sync_checkpoint(hook_input, data_dir, gate=gate)
         except Exception:

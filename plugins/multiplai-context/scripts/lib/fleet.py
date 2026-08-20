@@ -46,7 +46,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from lib.fleet_sources.common import parse_ts as _parse_ts
+# From the leaf module, NOT from `lib.fleet_sources.common`: importing any
+# name out of that package runs its __init__ and loads all four collectors
+# (and `subprocess`) onto the hook path this module sits on. The
+# TYPE_CHECKING block below exists for exactly that reason.
+from lib.timeparse import parse_ts as _parse_ts
 from lib.fsio import atomic_write
 from lib.session_registry import entry_disposition_block
 
@@ -854,6 +858,13 @@ def load_agent(
     A session with no checkpoint directory is a valid entry with the fields
     the registry does have — never dropped, never a crash. That case is the
     common one: the checkpoint writer only fires past a token band.
+
+    ``git_cache`` is valid for ONE ``collect`` pass and must not outlive it.
+    It memoises the branch read from each cwd's ``.git/HEAD``, which is live
+    state: a caller that hoisted it — a refresh loop, a long-lived view —
+    would keep reporting the branch each worktree was on when it was first
+    seen, so a ``git switch`` would never appear on the board. ``collect``
+    builds a fresh dict per pass for exactly that reason.
     """
     try:
         raw = json.loads(entry_path.read_text(encoding="utf-8"))

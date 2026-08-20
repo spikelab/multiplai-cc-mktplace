@@ -23,7 +23,7 @@ import logging
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 
 from lib.fleet_sources.common import parse_ts as _parse_ts
 from lib.fleet_sources.common import run
