@@ -18,6 +18,75 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.52.3] - 2026-08-22
+
+### Fixed
+
+- **The utilisation judge's extended thinking had switched off by accident, and
+  it moved the number 5x.** `lib/thinking.py` shipped in 0.48.0 (2026-08-16) and
+  swept the judge in with the other mechanical call sites, so it went from
+  thinking-on (the SDK default — no thinking module existed before) to
+  thinking-off. Not one line of the judge changed, so nothing in that diff said
+  a measurement had moved. Re-measured on a fixed 30-session subset with the
+  prompt held constant and only the toggle moved: **14.5% of sections credited
+  with thinking off against 2.8% with it on.**
+
+  Thinking is now **pinned on** in `lib/utilisation_judge.py`, as a named
+  constant with the measurement written next to it, rather than inherited from
+  a default tuned for hook latency. On is the deliberate choice: ruling on
+  dependence is the same "hold two things side by side and decide" work the
+  memory doctor's contradiction pass keeps thinking for, spot-checks show the
+  thinking-off judge buying its higher number with topical false positives, and
+  the latency argument does not reach an offline pass sampled five sessions a
+  night on a 180s budget. `utilisation_thinking=false` still turns it off — the
+  pin is a default, not a lock.
+
+- **Every judge verdict now records what produced it** — plugin version, model,
+  thinking on/off — and **the report can no longer average across the
+  discontinuity.** Only stamped verdicts count toward the `judge` column;
+  everything written before the stamp existed is carried per row as
+  `legacy_judge`, labelled `comparable_to_judge: false`, and the human table
+  prints a warning naming how many sessions are held aside. Nothing is
+  backfilled or rewritten: no existing record says which instrument produced
+  it, and a guessed provenance is worse than an absent one. The practical cost
+  is that the judge column restarts from empty and rebuilds as the nightly pass
+  accumulates stamped verdicts.
+
+- **The judge parser stopped dropping verdicts silently.** Measured across 63
+  judged sessions, only 558 of 595 injected section-keys came back with a
+  verdict; the other 37 vanished with no trace. Dropping is still correct — a
+  missing section is recorded as *not observed*, never as unused, so the rates
+  stay honest — but each drop now logs a warning naming the sections, split by
+  cause (no verdict returned, malformed tag, a section that was never injected,
+  a duplicate). The prompt asks for one verdict per injected section, so a
+  shortfall is model non-compliance and has to be visible to be fixed.
+
+### Changed
+
+- **The two memory-utilisation prompts no longer tell the model the answer
+  before asking the question.** Both the extraction pass and the sampling judge
+  opened by stating the conclusion as fact — "Most injected memory goes unused"
+  / "Most injected memory is not used" — and then told the model not to look
+  for a reason to disagree. The metric those prompts produce is the evidence
+  for that claim, so the claim was making itself true. Both lines are now
+  neutral: an empty answer is explicitly permitted without being predicted, in
+  either direction. Measured effect is real but an order of magnitude smaller
+  than the thinking flip above (~1.5x against 5x).
+
+- **"Dependence, not topical similarity" now names the failure it exists to
+  stop.** Spot-checks found the neutral prompt crediting `python.md` on the
+  evidence "the session executed Python scripts extensively" and `git-policy.md`
+  on "the session checked git status" — neither file was consulted. Both
+  prompts now say outright that the session *doing* the thing a file is about
+  is not evidence, and give the counterfactual test to use instead (would
+  anything have gone differently had the section not been there?). The rule is
+  symmetric — it also says a section that shaped a decision counts even when
+  the session was nominally about something else — and predicts no answer.
+
+  Everything that made the measurement rigorous is untouched: the evidence
+  requirement, the untrusted-content fencing, and the output tags the regex
+  parsers match on.
+
 ## [0.52.2] - 2026-08-18
 
 ### Changed

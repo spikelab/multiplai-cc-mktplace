@@ -411,9 +411,16 @@ concrete statement of what it informed</used>
 - List ONLY sections the session demonstrably RELIED ON. Judge dependence, not \
 topical similarity: a section about the same subject the session touched was \
 not used unless the work actually leaned on what it said.
-- **"None of them" is a normal and expected answer.** Most injected memory goes \
-unused. Emit an empty <utilisation></utilisation> block and move on — do not \
-look for a reason to name one.
+- **Doing the thing a file is about is not evidence.** "Ran Python" does not \
+credit `python.md`; "checked git status" does not credit `git-policy.md`. Ask \
+instead: would something in this session have gone differently — a convention \
+followed, a path taken, a choice made — if that section had not been in front \
+of you? If not, leave it out, however close the subject matter. This cuts both \
+ways: a section whose content visibly shaped a decision belongs in the list \
+even when the session was nominally about something else.
+- **An empty answer is valid.** List only what you can evidence: do not \
+stretch to fill the list, and do not withhold a section you can point at. If \
+nothing qualifies, emit an empty <utilisation></utilisation> block.
 - Every <used> MUST carry evidence in its body. A <used> with an empty body is \
 recorded as unsupported and does not count. If you cannot point at anything, \
 leave the section out.

@@ -111,6 +111,40 @@ RETENTION_DAYS = 90
 
 ESTIMATORS = ("self_report", "judge")
 
+#: The day the judge's instrument changed under it, and the reason every judge
+#: verdict now carries a stamp saying what produced it.
+#:
+#: ``lib/thinking.py`` shipped in plugin 0.48.0 on this date and switched the
+#: utilisation judge from extended-thinking-on (the SDK default; no thinking
+#: module existed before it) to off. No line of the judge changed, so nothing in
+#: the diff said the measurement had moved. Re-measured on a fixed 30-session
+#: subset with the prompt held constant and only the toggle moved: 14.5% of
+#: sections credited with thinking off against 2.8% with it on. That is a 5x
+#: change in sensitivity, larger than any prompt edit we have made, and the
+#: stored corpus straddles the date — so verdicts either side of it are readings
+#: from two different instruments and averaging them produces a number that
+#: describes neither.
+#:
+#: Only a *date* is recorded here, because that is all the historical data
+#: supports: no pre-existing record says which instrument produced it. Which is
+#: why the rule below is stamp-based rather than date-based — a verdict counts
+#: toward the judge estimator when it carries a :data:`JUDGE_INSTRUMENT_KEY`
+#: stamp, and is held aside as ``legacy_judge`` when it does not. Existing
+#: records are never rewritten: a backfilled stamp would be a guess about which
+#: side of this line a verdict fell on, and a guessed provenance is worse than
+#: an absent one.
+JUDGE_INSTRUMENT_CHANGED_AT = "2026-08-16"
+
+#: Field on a session record carrying what produced its judge verdicts —
+#: plugin version, model, thinking on/off. Written by
+#: ``lib/utilisation_judge.current_instrument``.
+JUDGE_INSTRUMENT_KEY = "judge_instrument"
+
+#: Field on a *totals* record asserting that its ``judge_*`` counters came only
+#: from stamped verdicts. Absent on every totals record written before the stamp
+#: existed, which is exactly what makes those counters legacy.
+TOTALS_JUDGE_STAMPED_KEY = "judge_instrument_stamped"
+
 #: One line each, rendered above every table. The biases are the point.
 ESTIMATOR_NOTES = {
     "self_report": (
@@ -121,7 +155,9 @@ ESTIMATOR_NOTES = {
     "judge": (
         "offline judge — an independent cheap-tier pass over a distilled "
         "transcript, sampled nightly; unbiased by the session's own reasoning, "
-        "but accumulates slowly and is absent for most sessions"
+        "but accumulates slowly and is absent for most sessions. Counts only "
+        "verdicts stamped with the instrument that produced them; older, "
+        "unstamped verdicts are reported separately and never merged in"
     ),
 }
 
@@ -433,14 +469,30 @@ def record_self_report(path: Path, session: str, entries: Sequence[dict]) -> dic
 
 
 def record_judge(
-    path: Path, session: str, entries: Sequence[dict], *, status: str = "ok"
+    path: Path,
+    session: str,
+    entries: Sequence[dict],
+    *,
+    status: str = "ok",
+    instrument: Optional[dict] = None,
 ) -> dict:
-    """Store estimator B's answer.
+    """Store estimator B's answer, with the instrument that produced it.
 
     Only ever called with a parsed result. A failed, timed-out or unparseable
     batch calls nothing at all, leaving ``judge: null`` — see contract C4.
+
+    *instrument* is what makes the verdict comparable to another one: plugin
+    version, model, thinking on/off. Without it a reader can only average
+    across whatever the settings happened to be, which is how a 5x change in
+    the judge's sensitivity sat unnoticed in the corpus for six days
+    (:data:`JUDGE_INSTRUMENT_CHANGED_AT`). A verdict written without a stamp is
+    still stored and still honest — it is simply held aside from the judge
+    estimator by :func:`aggregate` rather than blended into it.
     """
-    return upsert_session(path, session, {"judge": list(entries), "judge_status": status})
+    updates: dict = {"judge": list(entries), "judge_status": status}
+    if isinstance(instrument, dict) and instrument:
+        updates[JUDGE_INSTRUMENT_KEY] = dict(instrument)
+    return upsert_session(path, session, updates)
 
 
 def sessions_awaiting_judge(records: Sequence[dict]) -> list[dict]:
@@ -469,6 +521,12 @@ class SectionStat:
     self_report_used: int = 0
     judge_observed: int = 0
     judge_used: int = 0
+    #: Judge verdicts from before the instrument stamp existed. Accumulated so
+    #: the history is not thrown away, kept out of :data:`ESTIMATORS` so it can
+    #: never be summed into the judge column — see
+    #: :data:`JUDGE_INSTRUMENT_CHANGED_AT`.
+    legacy_judge_observed: int = 0
+    legacy_judge_used: int = 0
 
     # --- derived ---
 
@@ -574,6 +632,17 @@ class SectionStat:
                 "used": self.judge_used,
                 "rate": self.rate("judge"),
             },
+            # Deliberately NOT an entry in ESTIMATORS: a different instrument
+            # produced it, so it is shown beside the judge column and never
+            # added to it. Consumers must not merge these two.
+            "legacy_judge": {
+                "observed": self.legacy_judge_observed,
+                "used": self.legacy_judge_used,
+                "rate": (self.legacy_judge_used / self.legacy_judge_observed
+                         if self.legacy_judge_observed else None),
+                "instrument": "unknown (pre-%s stamp)" % JUDGE_INSTRUMENT_CHANGED_AT,
+                "comparable_to_judge": False,
+            },
             "estimated_uses": {e: self.estimated_uses(e) for e in ESTIMATORS},
             "bytes_per_estimated_use": {
                 e: self.bytes_per_estimated_use(e) for e in ESTIMATORS
@@ -595,6 +664,8 @@ class Aggregate:
     sessions: int = 0
     sessions_self_reported: int = 0
     sessions_judged: int = 0
+    #: Sessions whose judge verdicts predate the instrument stamp.
+    sessions_judged_legacy: int = 0
     compacted_sessions: int = 0
 
     def stat(self, key: str) -> SectionStat:
@@ -674,7 +745,15 @@ def aggregate(records: Iterable[dict]) -> Aggregate:
 
         judge = record.get("judge")
         if isinstance(judge, list):
-            agg.sessions_judged += 1
+            # Stamped or not decides which pair of counters this lands in. It
+            # is never a reason to discard the verdict, and never a reason to
+            # merge it — see JUDGE_INSTRUMENT_CHANGED_AT.
+            stamped = isinstance(record.get(JUDGE_INSTRUMENT_KEY), dict)
+            if stamped:
+                agg.sessions_judged += 1
+            else:
+                agg.sessions_judged_legacy += 1
+            prefix = "judge" if stamped else "legacy_judge"
             for entry in judge:
                 key = _entry_key(entry)
                 if key is None or key not in per_key:
@@ -682,9 +761,11 @@ def aggregate(records: Iterable[dict]) -> Aggregate:
                     # injected in this session.
                     continue
                 stat = agg.stat(key)
-                stat.judge_observed += 1
+                setattr(stat, f"{prefix}_observed",
+                        getattr(stat, f"{prefix}_observed") + 1)
                 if entry.get("used"):
-                    stat.judge_used += 1
+                    setattr(stat, f"{prefix}_used",
+                            getattr(stat, f"{prefix}_used") + 1)
     return agg
 
 
@@ -692,10 +773,23 @@ _TOTALS_FIELDS = (
     "retrieved", "sessions", "bytes",
     "self_report_observed", "self_report_used",
     "judge_observed", "judge_used",
+    "legacy_judge_observed", "legacy_judge_used",
 )
+
+#: Judge counters, and where they go when a totals record is not stamped. A
+#: totals record written before :data:`TOTALS_JUDGE_STAMPED_KEY` existed folded
+#: verdicts from both instruments into one pair of counters and cannot say
+#: which; the whole pair therefore reads as legacy. Anything else would let a
+#: pre-stamp average back into the judge column through the compaction path,
+#: which is the one route that survives the 90-day retention window.
+_LEGACY_JUDGE_REMAP = {
+    "judge_observed": "legacy_judge_observed",
+    "judge_used": "legacy_judge_used",
+}
 
 
 def _fold_totals(agg: Aggregate, record: dict) -> None:
+    stamped = bool(record.get(TOTALS_JUDGE_STAMPED_KEY))
     sections = record.get("sections")
     if isinstance(sections, dict):
         for key, counters in sections.items():
@@ -703,14 +797,18 @@ def _fold_totals(agg: Aggregate, record: dict) -> None:
                 continue
             stat = agg.stat(key)
             for name in _TOTALS_FIELDS:
+                target = name if stamped else _LEGACY_JUDGE_REMAP.get(name, name)
                 try:
-                    setattr(stat, name, getattr(stat, name) + int(counters.get(name) or 0))
+                    value = int(counters.get(name) or 0)
                 except (TypeError, ValueError):
                     continue
+                setattr(stat, target, getattr(stat, target) + value)
     for attr, name in (
         ("sessions", "sessions"),
         ("sessions_self_reported", "sessions_self_reported"),
-        ("sessions_judged", "sessions_judged"),
+        ("sessions_judged" if stamped else "sessions_judged_legacy",
+         "sessions_judged"),
+        ("sessions_judged_legacy", "sessions_judged_legacy"),
     ):
         try:
             setattr(agg, attr, getattr(agg, attr) + int(record.get(name) or 0))
@@ -855,7 +953,22 @@ def build_table(
             "sessions": agg.sessions,
             "sessions_self_reported": agg.sessions_self_reported,
             "sessions_judged": agg.sessions_judged,
+            "sessions_judged_legacy_instrument": agg.sessions_judged_legacy,
             "sessions_compacted": agg.compacted_sessions,
+        },
+        "judge_instrument": {
+            "changed_at": JUDGE_INSTRUMENT_CHANGED_AT,
+            "legacy_sessions_excluded": agg.sessions_judged_legacy,
+            "note": (
+                "The judge column counts ONLY verdicts stamped with the "
+                "instrument that produced them. Verdicts written before that "
+                "stamp existed are carried separately as `legacy_judge` on "
+                f"each row and are NOT comparable: on {JUDGE_INSTRUMENT_CHANGED_AT} "
+                "the judge's extended thinking silently switched off, which "
+                "moved per-section credit from 2.8% to 14.5% on a fixed subset "
+                "with the prompt unchanged. Do not sum, average or otherwise "
+                "reconcile `judge` and `legacy_judge`."
+            ),
         },
         "sections": ranked,
         "insufficient_data": insufficient,
@@ -929,6 +1042,22 @@ def render_table(table: dict, *, limit: int = 25) -> str:
         + (f" · {cov['sessions_compacted']} compacted into totals"
            if cov.get("sessions_compacted") else "")
     )
+    instrument = table.get("judge_instrument") or {}
+    legacy = int(instrument.get("legacy_sessions_excluded") or 0)
+    if legacy:
+        out.append("")
+        out.append(
+            f"⚠ **{legacy} judged session(s) are NOT in the judge column.** "
+            f"They were judged before the verdict carried a stamp saying what "
+            f"produced it, and the instrument changed on "
+            f"{instrument.get('changed_at')}: the judge's extended thinking "
+            f"switched off there, moving per-section credit from 2.8% to 14.5% "
+            f"on a fixed subset with the prompt unchanged. Those verdicts are "
+            f"kept per row as `legacy_judge` in the JSON. They are a different "
+            f"measurement, not more of this one — do not average them in. The "
+            f"judge column rebuilds as the nightly sampled pass accumulates "
+            f"stamped verdicts."
+        )
     thresholds = table["thresholds"]
     out.append(
         f"Rows with fewer than {thresholds['min_observations']} estimator "
@@ -1112,9 +1241,17 @@ def _compact_locked(
         "v": SCHEMA_VERSION,
         "kind": "totals",
         "through": through,
+        # `aggregate` has already split stamped verdicts from unstamped ones
+        # into separate counters, so this record's `judge_*` fields contain
+        # only stamped verdicts — which is what this flag asserts, and what
+        # lets `_fold_totals` read them back as the judge estimator rather than
+        # as legacy. Without the flag an old totals record stays legacy, which
+        # is the correct reading of one written before the stamp existed.
+        TOTALS_JUDGE_STAMPED_KEY: True,
         "sessions": folded.sessions,
         "sessions_self_reported": folded.sessions_self_reported,
         "sessions_judged": folded.sessions_judged,
+        "sessions_judged_legacy": folded.sessions_judged_legacy,
         "sections": {
             key: {name: getattr(stat, name) for name in _TOTALS_FIELDS}
             for key, stat in sorted(folded.sections.items())
