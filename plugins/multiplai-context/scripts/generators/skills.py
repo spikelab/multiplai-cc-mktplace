@@ -32,6 +32,9 @@ class SkillsGenerator(GeneratorBase):
 
     name = "skills"
     catalog_filename = "skills.json"
+    # Guarded by GeneratorBase.hand_field_losses — same contract as memory:
+    # merge_entry promises to carry these, so losing one is a defect.
+    preserved_fields = _HAND_AUTHORED_FIELDS
 
     def discover_sources(self) -> dict[str, Any]:
         """Find all SKILL.md files, from two places:

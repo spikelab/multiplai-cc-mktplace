@@ -41,11 +41,32 @@ _HAND_AUTHORED_FIELDS = (
     "anti_domains",
 )
 
-# Anchoring thresholds. Below either bar the whole file is roughly one
-# router pick's worth of context, so a per-section index costs catalog
-# tokens (and router attention) to save nothing.
+# Anchoring thresholds. Below either bar a per-section index costs more
+# in the router prompt than a slice could save, so the whole file is the
+# honest answer.
+#
+# MIN_FILE_BYTES was 8 KB and that bar was set too high. Measured over
+# ``.multiplai/data/utilisation.jsonl`` (2026-08-22): 76.6% of all
+# injected memory bytes were whole-file loads, and seven of 28 memory
+# files carried no anchors at all. Every one of the seven cleared
+# MIN_H2_SECTIONS and failed *only* the size bar — ``personal-projects.md``
+# by 162 bytes, while being injected whole 57 times for 399 KB. Its 23
+# section-shaped picks averaged 6866 bytes against a 7003-byte whole-file
+# average, i.e. they were ``section_loader`` falling back to the full file.
+#
+# The two sides of the trade are not the same currency, which is what the
+# old bar got wrong. Anchor lines are ~75 bytes each in the *router*
+# prompt: a small, stable, cheap-model input. A whole-file injection lands
+# in the main session's own context window. Paying router bytes to save
+# session bytes is a good trade well below 8 KB.
+#
+# What the floor is still for: a 300-byte file with three one-line
+# sections, where the anchor block would be larger than the file it
+# indexes. 2 KB (~500 tokens) is where a whole-file load really is one
+# router pick's worth of context. The smallest current memory file clears
+# it by ~200 bytes, so this is a floor, not a fit to today's corpus.
 MIN_H2_SECTIONS = 3
-MIN_FILE_BYTES = 8 * 1024
+MIN_FILE_BYTES = 2 * 1024
 
 
 def _anchor_prompt_block(sections: list[str]) -> str:
@@ -82,6 +103,9 @@ class MemoryGenerator(GeneratorBase):
 
     name = "memory"
     catalog_filename = "memory.json"
+    # Guarded by GeneratorBase.hand_field_losses: these are the fields
+    # merge_entry promises to carry forward, so losing one is a defect.
+    preserved_fields = _HAND_AUTHORED_FIELDS
 
     def __init__(self, *, config, model_client):
         super().__init__(config=config, model_client=model_client)

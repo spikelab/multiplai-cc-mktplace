@@ -752,10 +752,36 @@ Three things keep it safe:
   `co_retrieve_for`, they are re-derived whenever the file's content changes.
   Hand-editing them is pointless: your edit is replaced on the next rebuild of
   that file.
+- **The fields that *are* remembered now say so when they are lost.** `sections`,
+  `bundle`, `co_retrieve_for`, `intent_domains` and `anti_domains` have no source
+  outside the catalog — no model emits them and no memory file contains them — so
+  a value that disappears is gone until someone retypes it. Each generator
+  declares its `preserved_fields`, and a regeneration that empties one logs
+  `HAND_FIELD_LOST` and returns it in `GenerationResult.errors` instead of
+  finishing quietly.
 
-Files under either threshold get no anchors at all. That is the intended
-outcome, not a failure — a 4 KB file is already about one section's worth of
-context, so indexing it costs catalog tokens to save nothing.
+### Bundles and co-retrieval pull *whole* files
+
+`expand_bundles` and `expand_co_retrieve` add a companion by bare filename, so a
+companion is injected whole even when it has anchors of its own. On a corpus
+where the largest companion is 140 KB with 38 sections, that undoes anchoring for
+every turn it fires. Measure before you author these fields: on one 514-turn
+sample, the four documented `bundle: writing` members plus three `co_retrieve_for`
+pairs would have added **3.7 MB** of whole-file injections — against 32.8 MB of
+whole-file bytes in the same window. Bundle a set of *small* files, or leave the
+fields unset and let the router pick sections.
+
+Files under either threshold — fewer than 3 `##` sections, or smaller than
+2 KB — get no anchors at all. That is the intended outcome, not a failure: the
+floor exists so a file smaller than its own anchor block does not get indexed.
+
+**That floor was 8 KB and it was too high.** On a real 28-file corpus it left
+seven files with no anchors, every one of which had 3–10 sections and failed
+*only* the size bar — the largest by 162 bytes, while being injected whole 57
+times. The two sides of the trade are not the same currency: an anchor line is
+~75 bytes in the *router's* prompt (small, stable, cheap-model input), while a
+whole-file injection lands in the main session's own context window. Paying
+router bytes to save session bytes stays a good trade well below 8 KB.
 
 **One thing you have to get right yourself:** `##` section names must be unique
 across *all* your memory files. Two files both headed `## Overview` make
