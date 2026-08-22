@@ -41,7 +41,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Big enough to clear MIN_FILE_BYTES (8 KB) with three H2 sections.
+# Comfortably over MIN_FILE_BYTES, with three H2 sections.
 _FILLER = "Body text that exists only to push this file over the size bar. " * 60
 
 
@@ -689,7 +689,7 @@ class TestAnchoringThresholds:
 
     @pytest.mark.asyncio
     async def test_tiny_file_with_many_sections_gets_no_anchors(self, tmp_path, monkeypatch):
-        """Under ~8 KB the whole file is already one pick's worth of context."""
+        """A file smaller than its own anchor block is not worth indexing."""
         gen, memory_dir, catalogs_dir = _make_generator(
             tmp_path, monkeypatch,
             {"summary": "s", "section_anchors": [{"name": "One", "gloss": "1"}]},
@@ -710,6 +710,30 @@ class TestAnchoringThresholds:
         path.write_text("# Tiny\n\n## One\n\nx\n\n## Two\n\ny\n\n## Three\n\nz\n")
 
         assert "section_anchors" not in gen.build_prompt(path)
+
+    def test_a_mid_sized_file_with_enough_sections_is_anchorable(self):
+        """The bar that left 7 of 28 memory files with no anchors at all.
+
+        Every one of those seven cleared MIN_H2_SECTIONS and failed only the
+        size bar — the largest, ``personal-projects.md``, by 162 bytes while
+        being injected whole 57 times. A file in this band is exactly the case
+        anchoring exists for, so it must not be excluded again by accident.
+        """
+        from generators.memory import (
+            MIN_FILE_BYTES,
+            MIN_H2_SECTIONS,
+            MemoryGenerator,
+        )
+
+        assert MIN_H2_SECTIONS == 3
+        assert MIN_FILE_BYTES == 2 * 1024
+
+        text = "# Mid\n\n" + "\n\n".join(
+            f"## S{i}\n\n{'filler words here. ' * 60}" for i in range(6)
+        )
+        size = len(text.encode("utf-8"))
+        assert 2 * 1024 < size < 8 * 1024, f"fixture left the target band: {size}"
+        assert len(MemoryGenerator.anchorable_sections(text)) == 6
 
     def test_anchorable_sections_uses_the_shared_h2_parser(self, tmp_path):
         from generators.memory import MemoryGenerator
