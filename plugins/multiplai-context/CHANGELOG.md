@@ -16,7 +16,28 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Seven of 28 memory files had no section anchors, so the router had nothing
+  to pick but the whole file.** The size floor for anchoring was 8 KB; every one
+  of the seven had 3–10 `##` sections and failed only that bar — the largest by
+  162 bytes, while being injected whole 57 times. The floor is now 2 KB, which
+  is what it was actually for: not indexing a file smaller than its own anchor
+  block. Measured on the corpus that prompted this, anchor coverage went from
+  21/28 entries to 28/28. Expect a slightly larger router catalog (~37 extra
+  anchor lines there) in exchange; the injected side is where the saving lands.
+
+### Added
+
+- **A regeneration that loses a hand-authored catalog field now says so.**
+  `bundle` and `co_retrieve_for` are documented, consumed by the routing layer,
+  and were absent from all 29 memory entries with nothing logged — these fields
+  have no source outside the catalog, so a value that vanishes cannot come back.
+  Each generator now declares its `preserved_fields`, and the run compares the
+  catalog on disk against the one about to replace it: a field populated before
+  and absent (or emptied) after is logged as `HAND_FIELD_LOST` and returned in
+  `GenerationResult.errors`. `section_anchors` is deliberately outside the guard
+  — it is derived from the file's headers, so losing it can be correct.
 
 ## [0.52.2] - 2026-08-18
 
