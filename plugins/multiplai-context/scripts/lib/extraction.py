@@ -411,9 +411,9 @@ concrete statement of what it informed</used>
 - List ONLY sections the session demonstrably RELIED ON. Judge dependence, not \
 topical similarity: a section about the same subject the session touched was \
 not used unless the work actually leaned on what it said.
-- **"None of them" is a normal and expected answer.** Most injected memory goes \
-unused. Emit an empty <utilisation></utilisation> block and move on — do not \
-look for a reason to name one.
+- **An empty answer is valid.** List only what you can evidence: do not \
+stretch to fill the list, and do not withhold a section you can point at. If \
+nothing qualifies, emit an empty <utilisation></utilisation> block.
 - Every <used> MUST carry evidence in its body. A <used> with an empty body is \
 recorded as unsupported and does not count. If you cannot point at anything, \
 leave the section out.

@@ -18,6 +18,23 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.52.3] - 2026-08-22
+
+### Changed
+
+- **The two memory-utilisation prompts no longer tell the model the answer
+  before asking the question.** Both the extraction pass and the sampling judge
+  opened their instructions by stating the conclusion as fact — "Most injected
+  memory goes unused" / "Most injected memory is not used" — and then told the
+  model not to look for a reason to disagree. The metric those prompts produce
+  is the evidence for that claim, so the claim was making itself true: a low
+  utilisation number could equally be a real finding or an artefact of the
+  prompt. Both lines are now neutral — an empty answer is explicitly permitted
+  without being predicted, in either direction. Everything that made the
+  measurement rigorous is untouched: the evidence requirement, "judge
+  dependence, not topical similarity", the untrusted-content fencing, and the
+  output tags the parsers match on.
+
 ## [0.52.2] - 2026-08-18
 
 ### Changed

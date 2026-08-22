@@ -88,8 +88,9 @@ not in the list, and never omit one that is.
 - `used="yes"` REQUIRES evidence: a short quote from the transcript, or a \
 concrete statement of what in the session it informed. A yes with no evidence \
 will be discarded, so rule `no` when you cannot point at anything.
-- **"No" for every section is a normal and expected answer.** Most injected \
-memory is not used. Do not look for a reason to say yes.
+- **An empty answer is valid, and so is a full one.** Rule on each section \
+against its own evidence: do not stretch to say yes, and do not withhold a yes \
+you can point at.
 - Judge dependence, not topical similarity. A section covering the same subject \
 the session happened to touch was NOT used unless the work relied on what it said.
 

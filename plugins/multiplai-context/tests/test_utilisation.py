@@ -652,8 +652,10 @@ class TestPromptShape:
     def test_the_empty_answer_is_offered_explicitly(self):
         from lib.extraction import EXTRACTION_SYSTEM
 
-        assert "None of them" in EXTRACTION_SYSTEM
+        assert "An empty answer is valid" in EXTRACTION_SYSTEM
         assert "evidence" in EXTRACTION_SYSTEM
+        # The prompt must NOT predict the answer it is asking for.
+        assert "Most injected" not in EXTRACTION_SYSTEM
 
     def test_the_injected_list_is_fenced_as_untrusted(self):
         from lib.extraction import render_injected_sections
@@ -813,7 +815,9 @@ class TestJudgePrompt:
 
     def test_the_system_prompt_states_the_fence_rule_and_offers_no(self):
         assert "untrusted" in judge.JUDGE_SYSTEM.lower()
-        assert "normal and expected answer" in judge.JUDGE_SYSTEM
+        assert "An empty answer is valid" in judge.JUDGE_SYSTEM
+        # The prompt must NOT predict the answer it is asking for.
+        assert "Most injected" not in judge.JUDGE_SYSTEM
 
     def test_transcript_is_bounded(self):
         prompt = judge.build_prompt(["a.md"], "x" * (judge.TRANSCRIPT_CHAR_BUDGET * 2))
