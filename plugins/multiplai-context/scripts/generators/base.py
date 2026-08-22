@@ -204,6 +204,63 @@ class GeneratorBase:
         """
         return new
 
+    # ---- Hand-authored field protection ----
+
+    #: Fields this generator promises to carry across a regeneration.
+    #: Subclasses that override ``merge_entry`` to preserve editorial fields
+    #: must list them here too, or the loss guard below has nothing to check.
+    #:
+    #: These fields have no source outside the catalog: no LLM emits them and
+    #: no source file contains them, so a value that disappears cannot come
+    #: back on the next run — it is gone until a human notices and retypes it.
+    #: That is how ``bundle`` and ``co_retrieve_for`` sat empty in all 29
+    #: memory entries for weeks while the code consuming them
+    #: (``lib/routing_logic.py``) stayed wired and waiting.
+    preserved_fields: tuple[str, ...] = ()
+
+    @staticmethod
+    def _is_populated(value: Any) -> bool:
+        """Does *value* count as a written-in hand field?
+
+        Empty string, empty list and empty dict are "not written in" —
+        losing a field to ``[]`` is the same data loss as losing the key,
+        and a guard that only checked key presence would miss it.
+        """
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, (list, tuple, set, dict)):
+            return bool(value)
+        return True
+
+    def hand_field_losses(
+        self, before: dict[str, dict], after: dict[str, dict]
+    ) -> list[str]:
+        """Preserved fields populated in *before* and gone from *after*.
+
+        Compares only keys present on both sides: an entry pruned because its
+        source file was deleted is a normal outcome, not a lost field.
+        """
+        losses: list[str] = []
+        if not self.preserved_fields:
+            return losses
+        for key in sorted(before):
+            old_entry = before.get(key)
+            new_entry = after.get(key)
+            if not isinstance(old_entry, dict) or not isinstance(new_entry, dict):
+                continue
+            for field_name in self.preserved_fields:
+                if self._is_populated(old_entry.get(field_name)) and not (
+                    self._is_populated(new_entry.get(field_name))
+                ):
+                    losses.append(
+                        f"{key}: hand-authored field '{field_name}' was "
+                        "populated in the previous catalog and is absent after "
+                        "regeneration"
+                    )
+        return losses
+
     @staticmethod
     def _parse_json_response(raw: str) -> dict:
         """Parse JSON from an LLM response, stripping markdown code fences.
@@ -256,8 +313,15 @@ class GeneratorBase:
         # "skip unchanged" and lock the catalog permanently empty.
         # `is True` (not just truthy): a MagicMock test client would
         # auto-create a truthy .is_stub attribute and wrongly skip writes.
+        # A preserved field that vanished is silent, unrecoverable data loss
+        # (see ``preserved_fields``). Report it as an error on the result so
+        # refresh-catalogs surfaces it, and log it so a hook run does too.
+        losses = self.hand_field_losses(existing_by_key, batch.entries)
+        for message in losses:
+            logger.error("HAND_FIELD_LOST %s %s", self.name, message)
+
         stub = getattr(self._model_client, "is_stub", False) is True
-        errors = batch.errors
+        errors = batch.errors + losses
         if stub and not dry_run:
             # A stub on a real run means no client was available, so nothing
             # was generated — surface that. On a dry-run the stub is expected
