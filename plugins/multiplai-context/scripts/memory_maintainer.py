@@ -503,9 +503,12 @@ def run_utilisation_judge(data_dir: Path, *, dry_run: bool = False) -> PassResul
             )
 
         report = asyncio.run(_run())
+        instrument = report.get("instrument") or {}
         detail = (
             f"judged {report['judged']}/{report['sampled']} sampled of "
-            f"{report['eligible']} eligible on {model}"
+            f"{report['eligible']} eligible on {model} "
+            f"(thinking {'on' if instrument.get('thinking') else 'off'}, "
+            f"plugin {instrument.get('plugin_version', '?')})"
         )
         if report["kept_default"]:
             detail += (f"; {report['kept_default']} kept the conservative "

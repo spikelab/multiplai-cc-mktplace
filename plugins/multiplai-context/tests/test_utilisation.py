@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,6 +40,13 @@ def _inject(file: str, section: str | None, size: int, turn: int = 1) -> dict:
             "turn": turn, "co_picks": 1}
 
 
+#: What a judge verdict written today carries. Records without it are the
+#: pre-2026-08-16 corpus, whose instrument is unknown — the tests below cover
+#: both, because "stamped" is what decides whether a verdict reaches the judge
+#: estimator at all.
+_STAMP = {"plugin_version": "0.52.3", "model": "haiku", "thinking": True}
+
+
 def _session(
     name: str,
     injected: list[dict],
@@ -47,11 +55,14 @@ def _session(
     judge_entries=None,
     days_ago: int = 0,
     transcript: str = "",
+    judge_instrument: dict | None = _STAMP,
 ) -> dict:
     record = util.new_session_record(name, ts=_ts(days_ago))
     record["injected"] = injected
     record["self_report"] = self_report
     record["judge"] = judge_entries
+    if judge_entries is not None and judge_instrument is not None:
+        record[util.JUDGE_INSTRUMENT_KEY] = dict(judge_instrument)
     if transcript:
         record["transcript"] = transcript
     return record
@@ -1023,7 +1034,7 @@ class TestTableContract:
             "schema_version", "generated_at", "disclaimer", "estimator_notes",
             "thresholds", "coverage", "sections", "insufficient_data",
             "never_retrieved", "never_retrieved_sufficient",
-            "never_retrieved_reason", "only_as_whole_file",
+            "never_retrieved_reason", "only_as_whole_file", "judge_instrument",
         }
         assert table["schema_version"] == util.SCHEMA_VERSION
         assert set(table["estimator_notes"]) == {"self_report", "judge"}
@@ -1064,7 +1075,8 @@ class TestTableContract:
         row = table["sections"][0]
         assert set(row) == {
             "key", "file", "section", "retrieved", "sessions", "bytes",
-            "bytes_per_injection", "self_report", "judge", "estimated_uses",
+            "bytes_per_injection", "self_report", "judge", "legacy_judge",
+            "estimated_uses",
             "bytes_per_estimated_use", "zero_estimated_use", "rank_basis",
             "cost_per_use", "sufficient", "disagreement", "estimate",
         }
@@ -1338,6 +1350,206 @@ class TestMaintainerPasses:
         assert "run_utilisation_judge" in source
 
 
+class TestJudgeInstrument:
+    """A judge verdict is a reading, and a reading without its instrument
+    cannot be compared to another one.
+
+    The whole class exists because of a real six-day blind spot: plugin 0.48.0
+    switched the judge's extended thinking off as a side effect of an unrelated
+    change, per-section credit moved 2.8% -> 14.5% on a fixed subset, and
+    nothing in the corpus recorded which setting produced which verdict.
+    """
+
+    def _stat(self, table, key="dev.md#Testing"):
+        rows = table["sections"] + table["insufficient_data"]
+        return next(r for r in rows if r["key"] == key)
+
+    def test_a_written_verdict_carries_what_produced_it(self, tmp_path):
+        path = util.utilisation_path(tmp_path)
+        _write(path, [_session("s1", [_inject("dev.md", "Testing", 100)])])
+        stamp = {"plugin_version": "9.9.9", "model": "haiku", "thinking": True}
+        record = util.record_judge(
+            path, "s1",
+            [{"file": "dev.md", "section": "Testing", "used": True,
+              "evidence": "quote"}],
+            instrument=stamp,
+        )
+        assert record[util.JUDGE_INSTRUMENT_KEY] == stamp
+        assert util.read_records(path)[0][util.JUDGE_INSTRUMENT_KEY] == stamp
+
+    def test_the_live_judge_stamps_version_model_and_thinking(self):
+        instrument = judge.current_instrument("claude-haiku-4-5")
+        assert set(instrument) == {"plugin_version", "model", "thinking"}
+        assert instrument["model"] == "claude-haiku-4-5"
+        # Read from the manifest, so it tracks the changelog gate rather than
+        # a constant someone has to remember to bump.
+        assert instrument["plugin_version"] != "unknown"
+        assert instrument["thinking"] is True
+
+    def test_unstamped_verdicts_do_not_reach_the_judge_column(self):
+        verdict = [{"file": "dev.md", "section": "Testing", "used": True,
+                    "evidence": "q"}]
+        table = util.build_table([
+            _session(f"s{i}", [_inject("dev.md", "Testing", 100)],
+                     judge_entries=verdict, judge_instrument=None)
+            for i in range(6)])
+        row = self._stat(table)
+        assert row["judge"]["observed"] == 0
+        assert row["judge"]["rate"] is None, "not estimated, never zero"
+        assert row["legacy_judge"]["observed"] == 6
+        assert row["legacy_judge"]["used"] == 6
+        assert row["legacy_judge"]["comparable_to_judge"] is False
+
+    def test_stamped_verdicts_do(self):
+        verdict = [{"file": "dev.md", "section": "Testing", "used": True,
+                    "evidence": "q"}]
+        table = util.build_table([
+            _session(f"s{i}", [_inject("dev.md", "Testing", 100)],
+                     judge_entries=verdict)
+            for i in range(6)])
+        row = self._stat(table)
+        assert row["judge"]["observed"] == 6
+        assert row["legacy_judge"]["observed"] == 0
+
+    def test_the_two_are_never_summed_into_one_number(self):
+        verdict = [{"file": "dev.md", "section": "Testing", "used": True,
+                    "evidence": "q"}]
+        records = [
+            _session(f"old{i}", [_inject("dev.md", "Testing", 100)],
+                     judge_entries=verdict, judge_instrument=None)
+            for i in range(6)
+        ] + [
+            _session("new1", [_inject("dev.md", "Testing", 100)],
+                     judge_entries=[{"file": "dev.md", "section": "Testing",
+                                     "used": False, "evidence": ""}]),
+        ]
+        table = util.build_table(records)
+        row = self._stat(table)
+        assert row["judge"] == {"observed": 1, "used": 0, "rate": 0.0}
+        assert row["legacy_judge"]["observed"] == 6
+        assert table["coverage"]["sessions_judged"] == 1
+        assert table["coverage"]["sessions_judged_legacy_instrument"] == 6
+
+    def test_the_human_table_warns_instead_of_blending(self):
+        verdict = [{"file": "dev.md", "section": "Testing", "used": True,
+                    "evidence": "q"}]
+        table = util.build_table([
+            _session(f"s{i}", [_inject("dev.md", "Testing", 100)],
+                     judge_entries=verdict, judge_instrument=None)
+            for i in range(6)])
+        rendered = util.render_table(table)
+        assert "6 judged session(s) are NOT in the judge column" in rendered
+        assert util.JUDGE_INSTRUMENT_CHANGED_AT in rendered
+
+    def test_compaction_keeps_the_two_apart(self, tmp_path):
+        """The one path that survives the 90-day window must not merge them."""
+        path = util.utilisation_path(tmp_path)
+        verdict = [{"file": "dev.md", "section": "Testing", "used": True,
+                    "evidence": "q"}]
+        _write(path, [
+            _session("old", [_inject("dev.md", "Testing", 100)],
+                     judge_entries=verdict, judge_instrument=None,
+                     days_ago=200),
+            _session("new", [_inject("dev.md", "Testing", 100)],
+                     judge_entries=verdict, days_ago=200),
+        ])
+        before = util.aggregate(util.read_records(path))
+        util.compact(path)
+        after = util.aggregate(util.read_records(path))
+        stat_before = before.sections["dev.md#Testing"]
+        stat_after = after.sections["dev.md#Testing"]
+        assert (stat_after.judge_observed, stat_after.judge_used) == \
+            (stat_before.judge_observed, stat_before.judge_used) == (1, 1)
+        assert (stat_after.legacy_judge_observed, stat_after.legacy_judge_used) == \
+            (stat_before.legacy_judge_observed, stat_before.legacy_judge_used) == (1, 1)
+        assert after.sessions_judged == 1
+        assert after.sessions_judged_legacy == 1
+
+    def test_a_totals_record_written_before_the_stamp_reads_as_legacy(self):
+        """Old totals folded both instruments together and cannot say which."""
+        totals = {
+            "v": util.SCHEMA_VERSION, "kind": "totals", "through": "2026-05-01",
+            "sessions": 4, "sessions_self_reported": 4, "sessions_judged": 4,
+            "sections": {"dev.md#Testing": {
+                "retrieved": 4, "sessions": 4, "bytes": 400,
+                "self_report_observed": 4, "self_report_used": 2,
+                "judge_observed": 4, "judge_used": 3,
+            }},
+        }
+        agg = util.aggregate([totals])
+        stat = agg.sections["dev.md#Testing"]
+        assert (stat.judge_observed, stat.judge_used) == (0, 0)
+        assert (stat.legacy_judge_observed, stat.legacy_judge_used) == (4, 3)
+        assert agg.sessions_judged == 0
+        assert agg.sessions_judged_legacy == 4
+        # self-report is untouched: only the judge's instrument moved.
+        assert (stat.self_report_observed, stat.self_report_used) == (4, 2)
+
+
+class TestDroppedVerdictsAreVisible:
+    """37 of 595 injected keys vanished across 63 judged sessions with no
+    trace. Dropping is correct — recording a verdict we did not get would be
+    worse — but doing it silently is what made a systematic shortfall
+    invisible."""
+
+    ALLOWED = ["dev.md#Testing", "git.md", "python.md"]
+
+    def test_a_missing_verdict_is_warned_about(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="lib.utilisation_judge"):
+            out = judge.parse_verdicts(
+                '<verdicts><verdict file="git.md" used="no"></verdict></verdicts>',
+                self.ALLOWED, session="s1")
+        assert len(out) == 1
+        assert "2 injected section(s) got no verdict" in caplog.text
+        assert "dev.md#Testing" in caplog.text
+        assert "s1" in caplog.text
+
+    def test_a_verdict_for_something_never_injected_is_warned_about(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="lib.utilisation_judge"):
+            judge.parse_verdicts(
+                '<verdicts>'
+                '<verdict file="invented.md" used="yes">q</verdict>'
+                '</verdicts>',
+                ["invented-not.md"], session="s2")
+        assert "never injected" in caplog.text
+        assert "invented.md" in caplog.text
+
+    def test_duplicates_and_malformed_tags_are_warned_about(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="lib.utilisation_judge"):
+            judge.parse_verdicts(
+                '<verdicts>'
+                '<verdict file="git.md" used="yes">q</verdict>'
+                '<verdict file="git.md" used="no"></verdict>'
+                '<verdict used="yes">no file attribute</verdict>'
+                '</verdicts>',
+                ["git.md"], session="s3")
+        assert "1 duplicate verdict(s)" in caplog.text
+        assert "1 <verdict> tag(s) had no usable file=" in caplog.text
+
+    def test_a_fully_compliant_answer_logs_nothing(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="lib.utilisation_judge"):
+            judge.parse_verdicts(
+                '<verdicts>'
+                '<verdict file="git.md" used="no"></verdict>'
+                '</verdicts>',
+                ["git.md"], session="s4")
+        assert caplog.text == ""
+
+    def test_a_dropped_section_is_not_observed_rather_than_unused(self):
+        """The arithmetic must stay honest whatever the model omits."""
+        table = util.build_table([
+            _session(f"s{i}",
+                     [_inject("dev.md", "Testing", 100),
+                      _inject("git.md", None, 100)],
+                     judge_entries=[{"file": "dev.md", "section": "Testing",
+                                     "used": True, "evidence": "q"}])
+            for i in range(6)])
+        rows = {r["key"]: r for r in
+                table["sections"] + table["insufficient_data"]}
+        assert rows["git.md"]["judge"]["observed"] == 0
+        assert rows["git.md"]["judge"]["rate"] is None
+
+
 class TestSectionKeys:
     @pytest.mark.parametrize("file,section,key", [
         ("dev.md", "Testing", "dev.md#Testing"),
@@ -1350,18 +1562,28 @@ class TestSectionKeys:
 
 
 class TestJudgeThinking:
-    """The judge call is mechanical verdict extraction: it carries the
-    thinking config resolved from ``utilisation_thinking`` (default:
-    disabled — see lib/thinking.py)."""
+    """The judge PINS its thinking setting instead of inheriting one.
 
-    def _run(self, monkeypatch, *, supported):
+    ``lib/thinking.py`` disables thinking for mechanical calls, and when it
+    shipped it swept the judge in — silently moving per-section credit from
+    2.8% to 14.5% on a fixed subset with the prompt unchanged. The judge's
+    output is a measurement, so the setting has to be visible in its own module
+    and asserted here, not inherited from a default that can be re-tuned for
+    latency reasons that have nothing to do with this call.
+    """
+
+    def _run(self, monkeypatch, *, supported, option=None):
         import lib.thinking as th
         from multiplai_core.plugin_options import option_var
 
         monkeypatch.setattr(
             th, "core_supports_thinking", lambda target=None: supported
         )
-        monkeypatch.delenv(option_var(th.UTILISATION_THINKING_OPTION), raising=False)
+        var = option_var(th.UTILISATION_THINKING_OPTION)
+        if option is None:
+            monkeypatch.delenv(var, raising=False)
+        else:
+            monkeypatch.setenv(var, option)
         monkeypatch.setattr(judge, "distilled_transcript", lambda *a, **k: "text")
 
         captured = {}
@@ -1378,12 +1600,28 @@ class TestJudgeThinking:
         assert captured, "the model path must have been taken"
         return captured
 
-    def test_judge_call_receives_thinking_disabled_by_default(self, monkeypatch):
-        assert self._run(monkeypatch, supported=True)["thinking"] == {
+    def test_thinking_is_on_by_default_for_the_judge(self, monkeypatch):
+        """On means the keyword is omitted — that IS the SDK default."""
+        assert judge.JUDGE_THINKING_DEFAULT is True
+        assert "thinking" not in self._run(monkeypatch, supported=True)
+
+    def test_the_pin_does_not_leak_to_the_other_mechanical_call_sites(self):
+        """Only the judge passes default=True; everything else stays off."""
+        import lib.thinking as th
+
+        assert th.resolve_thinking_option(th.EXTRACTION_THINKING_OPTION) == \
+            th.THINKING_DISABLED
+        assert th.resolve_thinking_option(th.NOW_THINKING_OPTION) == \
+            th.THINKING_DISABLED
+
+    def test_the_option_can_still_turn_it_off(self, monkeypatch):
+        """A pin is a default, not a lock."""
+        assert self._run(monkeypatch, supported=True, option="false")["thinking"] == {
             "type": "disabled"
         }
 
     def test_keyword_omitted_entirely_when_unsupported(self, monkeypatch):
         """Routed through thinking_kwargs, so an unsupported dependency is
         handed no keyword rather than `thinking=None`."""
-        assert "thinking" not in self._run(monkeypatch, supported=False)
+        assert "thinking" not in self._run(
+            monkeypatch, supported=False, option="false")

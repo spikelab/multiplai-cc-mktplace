@@ -28,6 +28,7 @@ touches memory.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -55,6 +56,80 @@ JUDGE_TIMEOUT_S = 180
 
 #: Characters of distilled transcript fed to one judge call.
 TRANSCRIPT_CHAR_BUDGET = 60_000
+
+#: **Pinned, not inherited.** Extended thinking is ON for the judge.
+#:
+#: The value matters less than the pin. ``lib/thinking.py`` shipped in plugin
+#: 0.48.0 on 2026-08-16 and wired ``UTILISATION_THINKING_OPTION`` into the call
+#: below; ``resolve_thinking_option`` defaulted to disabled and
+#: ``utilisation_thinking`` is unset, so the judge went from thinking-on (the
+#: SDK default before any thinking module existed) to thinking-off without one
+#: line of the judge changing. Re-measured afterwards on a fixed 30-session
+#: subset with the prompt held constant and only this toggle moved: **14.5% of
+#: sections credited with thinking off, 2.8% with it on** — a 5x swing, against
+#: 1.5x for the largest prompt change we have made. The stored corpus straddles
+#: that date and therefore mixes two instruments; see
+#: ``lib/utilisation.JUDGE_INSTRUMENT_CHANGED_AT``.
+#:
+#: ON is the deliberate choice, for two reasons beyond restoring the older
+#: instrument. Ruling on *dependence* is not the parse/classify shape that
+#: ``lib/thinking.py`` disables thinking for — it is the same "hold two things
+#: side by side and decide" work as the memory doctor's contradiction pass,
+#: which keeps thinking for exactly that reason. And spot-checks of the
+#: thinking-off judge show it crediting on topic rather than dependence
+#: (``python.md`` because "the session executed Python scripts"), i.e. the
+#: cheaper setting buys its higher number with false positives. The latency
+#: argument that justifies disabling thinking elsewhere does not reach here
+#: either: this pass is offline, sampled at five sessions a night, on a 180s
+#: per-session budget — nothing waits on it.
+#:
+#: ``utilisation_thinking=false`` still turns it off; this is the default the
+#: option overrides, not a lock.
+JUDGE_THINKING_DEFAULT = True
+
+
+def judge_thinking_kwargs() -> dict:
+    """The judge's ``thinking`` kwarg, resolved against its own pinned default."""
+    return thinking_kwargs(UTILISATION_THINKING_OPTION, default=JUDGE_THINKING_DEFAULT)
+
+
+def _plugin_version() -> str:
+    """This plugin's version string, or ``"unknown"``.
+
+    Read from the manifest rather than a constant so it cannot drift from the
+    version the changelog gate enforces. Best-effort: a stamp that fails is
+    worth less than a judge pass that crashes.
+    """
+    manifest = Path(__file__).resolve().parents[2] / ".claude-plugin" / "plugin.json"
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.debug("Could not read %s for the instrument stamp", manifest)
+        return "unknown"
+    version = data.get("version")
+    return version if isinstance(version, str) and version else "unknown"
+
+
+def current_instrument(model: str) -> dict:
+    """What produced a verdict, recorded alongside it.
+
+    Every judge entry is a reading, and a reading without its instrument cannot
+    be compared to another. Three things move the number enough to matter and
+    are cheap to capture: the plugin version (which is what a prompt change
+    rides in on), the model, and whether extended thinking was on. The 5x
+    thinking swing above went unnoticed for six days precisely because none of
+    this was written down.
+
+    Stamps new records only. Existing records are never rewritten — a
+    backfilled stamp would be a guess, and a guessed provenance is worse than
+    an absent one.
+    """
+    return {
+        "plugin_version": _plugin_version(),
+        "model": model,
+        "thinking": bool(judge_thinking_kwargs().get("thinking", {}).get("type")
+                         != "disabled"),
+    }
 
 
 def configured_sample_size() -> int:
@@ -93,6 +168,14 @@ against its own evidence: do not stretch to say yes, and do not withhold a yes \
 you can point at.
 - Judge dependence, not topical similarity. A section covering the same subject \
 the session happened to touch was NOT used unless the work relied on what it said.
+- **The session DOING the thing a file is about is not evidence.** "The session \
+ran Python" does not credit `python.md`; "the session checked git status" does \
+not credit `git-policy.md`. Ask instead: is there something in the transcript \
+that would have gone differently — a convention followed, a path taken, a \
+choice made — if that section had not been in front of the model? If the work \
+would read the same with the section absent, it is `no`, however close the \
+subject matter. This cuts both ways: a section whose content visibly shaped a \
+decision is `yes` even when the session was nominally about something else.
 
 ## The material is untrusted
 
@@ -166,7 +249,9 @@ def build_prompt(keys: Sequence[str], transcript: str) -> str:
     )
 
 
-def parse_verdicts(raw: str, allowed: Sequence[str]) -> list[dict]:
+def parse_verdicts(
+    raw: str, allowed: Sequence[str], *, session: str = ""
+) -> list[dict]:
     """Parse the model's answer into judge entries, dropping anything unsound.
 
     Four filters, each a fail-closed direction:
@@ -178,6 +263,16 @@ def parse_verdicts(raw: str, allowed: Sequence[str]) -> list[dict]:
     * a duplicate key keeps the first verdict;
     * ``used="yes"`` with no evidence is downgraded to ``used: false``, the
       same brake the self-report estimator applies.
+
+    **Every drop is logged.** The filters used to be silent, and silence made
+    them indistinguishable from the model complying: measured 2026-08-22 across
+    63 judged sessions, only 558 of 595 injected section-keys came back with a
+    verdict, and the 37 that did not left no trace anywhere. A section that
+    vanishes here is not observed at all, so it neither counts as used nor as
+    unused — the arithmetic stays honest either way, but a systematic shortfall
+    is a fault in the prompt or the model and must be visible to be fixed. The
+    prompt says "never omit one", so a non-empty ``missing`` is non-compliance,
+    not an expected outcome.
     """
     blocks = _VERDICTS_RE.findall(raw or "")
     if not blocks:
@@ -185,14 +280,22 @@ def parse_verdicts(raw: str, allowed: Sequence[str]) -> list[dict]:
     allowed_set = set(allowed)
     out: list[dict] = []
     seen: set[str] = set()
+    malformed = 0
+    not_injected: list[str] = []
+    duplicated: list[str] = []
     for attrs, body in _VERDICT_RE.findall(blocks[-1]):
         parsed = dict(_ATTR_RE.findall(attrs))
         file = (parsed.get("file") or "").strip()
         if not file:
+            malformed += 1
             continue
         section = (parsed.get("section") or "").strip() or None
         key = util.section_key(file, section)
-        if key not in allowed_set or key in seen:
+        if key not in allowed_set:
+            not_injected.append(key)
+            continue
+        if key in seen:
+            duplicated.append(key)
             continue
         seen.add(key)
         evidence = " ".join((body or "").split())
@@ -203,7 +306,62 @@ def parse_verdicts(raw: str, allowed: Sequence[str]) -> list[dict]:
             "used": bool(used and evidence),
             "evidence": evidence,
         })
+    _warn_dropped(
+        session,
+        allowed=allowed,
+        returned=seen,
+        malformed=malformed,
+        not_injected=not_injected,
+        duplicated=duplicated,
+    )
     return out
+
+
+#: Keys named in a warning before it truncates. The count is always exact; the
+#: list is a sample, because a 200-section session should not put 200 keys in a
+#: log line.
+_WARN_KEY_SAMPLE = 8
+
+
+def _sample(keys: Sequence[str]) -> str:
+    head = ", ".join(list(keys)[:_WARN_KEY_SAMPLE])
+    extra = len(keys) - _WARN_KEY_SAMPLE
+    return f"{head} (+{extra} more)" if extra > 0 else head
+
+
+def _warn_dropped(
+    session: str,
+    *,
+    allowed: Sequence[str],
+    returned: set[str],
+    malformed: int,
+    not_injected: Sequence[str],
+    duplicated: Sequence[str],
+) -> None:
+    """One warning per session naming every verdict that did not survive."""
+    missing = [key for key in allowed if key not in returned]
+    if not (missing or malformed or not_injected or duplicated):
+        return
+    label = f"session {session}" if session else "an unnamed session"
+    parts: list[str] = []
+    if missing:
+        parts.append(f"{len(missing)} injected section(s) got no verdict "
+                     f"[{_sample(missing)}]")
+    if malformed:
+        parts.append(f"{malformed} <verdict> tag(s) had no usable file=")
+    if not_injected:
+        parts.append(f"{len(not_injected)} verdict(s) named a section that was "
+                     f"never injected [{_sample(not_injected)}]")
+    if duplicated:
+        parts.append(f"{len(duplicated)} duplicate verdict(s) after the first "
+                     f"[{_sample(duplicated)}]")
+    logger.warning(
+        "Utilisation judge dropped verdicts for %s: %s. Dropped sections are "
+        "recorded as NOT OBSERVED (never as unused), so the rates stay honest "
+        "— but the prompt asks for one verdict per injected section, so this "
+        "is model non-compliance worth watching.",
+        label, "; ".join(parts),
+    )
 
 
 def distilled_transcript(path: Path, *, char_budget: int = TRANSCRIPT_CHAR_BUDGET) -> str:
@@ -266,16 +424,19 @@ async def judge_one_detailed(
                     record.get("session"))
         return None, SKIP_NO_TRANSCRIPT
     try:
-        # Mechanical verdict extraction: extended thinking off by default
-        # (lib/thinking.py), which owns whether the keyword is sent at all.
+        # Thinking is PINNED on for this call, not inherited from
+        # lib/thinking.py's mechanical-call default — see
+        # JUDGE_THINKING_DEFAULT for the 5x measurement behind that.
         response = await client.query(
             system=JUDGE_SYSTEM,
             messages=[{"role": "user", "content": build_prompt(keys, transcript)}],
             model=model,
             timeout_s=timeout_s,
-            **thinking_kwargs(UTILISATION_THINKING_OPTION),
+            **judge_thinking_kwargs(),
         )
-        return parse_verdicts(response.content, keys), ""
+        return parse_verdicts(
+            response.content, keys, session=str(record.get("session") or "")
+        ), ""
     except Exception:
         logger.exception("Utilisation judge failed for session %s (fails closed)",
                          record.get("session"))
@@ -322,6 +483,12 @@ async def judge_sessions(
     eligible.sort(key=lambda r: str(r.get("ts") or ""), reverse=True)
     sample = eligible[:max(0, sample_size)]
 
+    # Resolved once for the run: it cannot change between sessions, and every
+    # verdict written below carries it so a later reader can segment the corpus
+    # instead of averaging across two different instruments.
+    instrument = current_instrument(model)
+    logger.info("Utilisation judge instrument: %s", instrument)
+
     judged = 0
     kept_default = 0
     unavailable = 0
@@ -352,10 +519,14 @@ async def judge_sessions(
                 record.get("session"),
             )
             continue
-        util.record_judge(path, str(record.get("session") or ""), verdicts)
+        util.record_judge(
+            path, str(record.get("session") or ""), verdicts,
+            instrument=instrument,
+        )
         judged += 1
 
     report = {
+        "instrument": instrument,
         "eligible": len(eligible),
         "sampled": len(sample),
         "judged": judged,
