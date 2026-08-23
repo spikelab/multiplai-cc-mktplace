@@ -20,6 +20,15 @@ dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.7.2] - 2026-08-23
+
+### Changed
+
+- **deep-research now resolves `exa-py` 2.18.1** (was 2.17.0). A dependency
+  bump only — no change to how the Exa provider is queried, ranked or cited,
+  and nothing to do differently. Recorded because it ships to installed
+  plugins.
+
 ## [0.7.1] - 2026-08-16
 
 ### Changed
