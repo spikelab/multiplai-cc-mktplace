@@ -16,6 +16,10 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.52.4] - 2026-08-23
+
 ### Fixed
 
 - **Seven of 28 memory files had no section anchors, so the router had nothing
