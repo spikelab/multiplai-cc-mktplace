@@ -13,6 +13,17 @@ contract, not a stylistic choice: see the master plan's decision 9 and
 
 Nothing here prunes, edits, or proposes. The table is evidence; a human
 disposes.
+
+**The judge column is not the whole judge history, on purpose.** On
+2026-08-16 the judge's extended thinking switched off as a side effect of an
+unrelated change, and per-section credit moved from 2.8% to 14.5% on a fixed
+subset with the prompt held constant. Verdicts either side of that are readings
+from two instruments, and no stored record from before the change says which
+one produced it — so only verdicts carrying an instrument stamp count toward
+`judge`, and the rest are reported beside it as `legacy_judge`, never merged.
+`--json` consumers MUST NOT sum or average the two; the human table prints a
+warning naming how many sessions are held aside. See
+`lib/utilisation.JUDGE_INSTRUMENT_CHANGED_AT`.
 """
 
 from __future__ import annotations

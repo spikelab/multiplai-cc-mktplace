@@ -2,16 +2,19 @@
 
 Extended thinking is OFF by default at the mechanical call sites in this
 plugin — extraction, checkpoint writing, the memory doctor's duplication
-confirmation, the utilisation judge, now-summaries, and catalog generation.
+confirmation, now-summaries, and catalog generation.
 Measured 2026-08-09 (see ``lib/memory_router.py``, where the pattern shipped
 first): a cold no-tools SDK call takes 18.4s with thinking on and 2.9s with it
 disabled. These calls are parse/classify/summarise work over input the model can
 see in full — exactly the shape of task that does not need deliberation — so
 disabling thinking is a latency win, not a quality trade.
 
-Calls that *do* reason keep the SDK default and deliberately do not use this
-module: dream proposal generation, and the memory doctor's **contradiction**
-pass. The contradiction pass reads as mechanical from the outside and is not —
+Calls that *do* reason keep thinking on: dream proposal generation and the
+memory doctor's **contradiction** pass keep the SDK default and deliberately do
+not use this module at all; the **utilisation judge** goes through this module
+but pins ``default=True``, because its answer is a measurement and the setting
+must be visible in code rather than inherited (see
+:func:`resolve_thinking_option`). The contradiction pass reads as mechanical from the outside and is not —
 it has to hold two statements side by side and decide whether they can both be
 true, which is why ``doctor_contradiction`` gives it a 600s timeout against the
 180s the duplication pass gets. multiplai-core's own note on this knob is the
@@ -175,18 +178,33 @@ def core_supports_thinking(target: str = QUERY) -> bool:
     return _SUPPORT_CACHE[target]
 
 
-def resolve_thinking_option(option_name: str) -> dict | None:
+def resolve_thinking_option(option_name: str, *, default: bool = False) -> dict | None:
     """Pure option read: disabled unless the option asks for thinking back.
 
     ``None`` is the "send nothing" signal that multiplai-core needs for
-    old-dependency tolerance, so this returns the dict for the *default* case
-    and ``None`` for the opt-back — the inverse of how boolean options usually
+    old-dependency tolerance, so this returns the dict for the *disabled* case
+    and ``None`` for thinking-on — the inverse of how boolean options usually
     read. No support guard here; :func:`resolve_thinking` adds it.
+
+    ``default`` is the value used when the option is unset, and it exists for
+    one reason: a call site whose *output is telemetry* must pin its own
+    setting rather than inherit this module's. When ``lib/thinking.py`` shipped
+    in 0.48.0 it flipped the utilisation judge from thinking-on (the SDK
+    default — no thinking module existed) to thinking-off, and nothing about
+    that call site changed in the diff, so the flip was invisible. Measured
+    afterwards on a fixed 30-session subset with the prompt held constant:
+    14.5% of sections credited with thinking off against 2.8% with it on. An
+    instrument that silently changes sensitivity by 5x is not an instrument.
+    So the judge passes ``default=True`` (see
+    ``lib/utilisation_judge.JUDGE_THINKING_DEFAULT``) and every other call site
+    keeps ``False``, which is the behaviour they already had.
     """
-    return None if option_bool(option_name, False) else THINKING_DISABLED
+    return None if option_bool(option_name, default) else THINKING_DISABLED
 
 
-def resolve_thinking(option_name: str, *, target: str = QUERY) -> dict | None:
+def resolve_thinking(
+    option_name: str, *, target: str = QUERY, default: bool = False
+) -> dict | None:
     """The ``thinking`` config for a mechanical call site, or ``None``.
 
     ``None`` means "do not send the keyword at all" and covers two cases the
@@ -198,7 +216,7 @@ def resolve_thinking(option_name: str, *, target: str = QUERY) -> dict | None:
     loop: the answer cannot change between retries, and re-reading the option
     there only hides that.
     """
-    config = resolve_thinking_option(option_name)
+    config = resolve_thinking_option(option_name, default=default)
     if config is None:
         return None
     if not core_supports_thinking(target):
@@ -206,7 +224,9 @@ def resolve_thinking(option_name: str, *, target: str = QUERY) -> dict | None:
     return config
 
 
-def thinking_kwargs(option_name: str, *, target: str = QUERY) -> dict:
+def thinking_kwargs(
+    option_name: str, *, target: str = QUERY, default: bool = False
+) -> dict:
     """``{"thinking": cfg}`` to splat into a model call, or ``{}``.
 
     The whole point of this module in one function. Every call site does::
@@ -221,5 +241,5 @@ def thinking_kwargs(option_name: str, *, target: str = QUERY) -> dict:
     Returns a fresh dict each call, so no two model calls share one mutable
     thinking config on its way into the SDK.
     """
-    config = resolve_thinking(option_name, target=target)
+    config = resolve_thinking(option_name, target=target, default=default)
     return {} if config is None else {"thinking": dict(config)}
