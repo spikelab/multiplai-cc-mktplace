@@ -18,6 +18,37 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.53.0] - 2026-08-31
+
+### Added
+
+- **Dream proposals now carry a `## Rules Re-learned` section: the rules memory
+  already held that a later session worked out again.** When the judge finds a
+  proposed item already in a memory file it drops it as redundant, which is the
+  right call for the memory line and hides the interesting part. A redundant
+  *rule* is a rule that was written down, that a session did not follow, that
+  you corrected, that extraction captured — and that consolidation then deleted
+  precisely because memory already contained the rule nobody obeyed. The count
+  was the signal, and the drafting prompt says outright not to keep it.
+
+  Each group carries a verdict, because the three ways a rule fails take
+  opposite repairs: **not routed** (its file was never injected on the day —
+  add a routing keyword, or promote it to always-loaded), **routed but unused**
+  (it was in the context window and did not land — reword it, or delete what
+  contradicts it), and **inconclusive** (the file was used, or there is no
+  telemetry — read it yourself). The evidence is a same-day join against
+  session telemetry, never the exact session, and the section says so rather
+  than implying a precision it does not have.
+
+  It reads the rejection log from *previous* runs, so a first run reports
+  nothing and says that in words instead of rendering an empty section.
+
+- **`relearn_report.py` runs the same report on its own**, without a dream:
+  `uv run --project <plugin>/scripts <plugin>/scripts/relearn_report.py`.
+  Read-only, seconds, writes nothing. `--limit 0` for the full list,
+  `--all-kinds` to include re-derived facts, `--json` for the grouping,
+  `--since YYYY-MM-DD` to ignore older drops.
+
 ## [0.52.5] - 2026-08-31
 
 ### Fixed

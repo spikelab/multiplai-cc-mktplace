@@ -488,7 +488,9 @@ def _is_unmodified_generated(text: str) -> bool:
 # nothing left to derive it from. Between that and the strip above, an
 # undecided conflict that leaves the dreams root (folded forward, or archived)
 # is gone for good. Nothing brings it back.
-_REGENERATED_SECTIONS = ("## Routing Warnings", "## Conflict Resolutions")
+_REGENERATED_SECTIONS = (
+    "## Routing Warnings", "## Conflict Resolutions", "## Rules Re-learned",
+)
 
 
 def _strip_regenerated(text: str) -> str:
@@ -1072,7 +1074,7 @@ async def _generate_proposal(
     response = await client.query(system=_PROPOSAL_SYSTEM, messages=messages)
     cleaned = await _critique_proposal(client, response.content, memory_context)
     sourced = _with_repaired_citations(cleaned, get_paths().learnings_dir)
-    validated = _with_routing_warnings(sourced, memory_contents)
+    validated = _with_relearns(_with_routing_warnings(sourced, memory_contents))
     return _with_conflict_resolutions(validated, all_learnings, memory_contents)
 
 
@@ -1354,6 +1356,49 @@ def _with_routing_warnings(proposal: str, memory_contents: dict[str, str]) -> st
     except Exception:
         logger.exception(
             "Routing validation gate failed — proposal written WITHOUT a Routing Warnings section"
+        )
+        return proposal
+
+
+def _with_relearns(proposal: str) -> str:
+    """Append the deterministic ``## Rules Re-learned`` section to a proposal.
+
+    Pure code over two logs this pipeline already writes: the rejections it
+    logged on previous runs, and the router's utilisation telemetry. Fail-open
+    and loud, like the other deterministic sections — a crash in a diagnostic
+    must never lose a generated proposal.
+
+    **It reports on previous runs, by construction.** This runs at draft time,
+    before this run's own triage has rejected anything, so the log it reads ends
+    at the last run. That is the right window rather than a limitation: the
+    question is which rules memory *already held* and a session derived anyway,
+    and this run's proposal has not been judged yet.
+
+    Why this exists at all is in ``lib.relearns``: the drafting prompt tells the
+    model to merge repeats and not annotate the count, which is right for the
+    memory line and throws away the one signal the pipeline produces about
+    whether a written rule is doing any work.
+    """
+    try:
+        from lib import rejections, relearns
+
+        paths = get_paths()
+        data_dir = paths.data_dir()
+        records = rejections.read(rejections.default_path(data_dir))
+        rows = relearns.read_utilisation(data_dir / "utilisation.jsonl")
+        groups = relearns.analyse(records, rows)
+        if groups:
+            logger.info(
+                "Re-learn scan: %d rule(s) memory already held were derived "
+                "again across %d drop(s)",
+                len(groups), sum(g.count for g in groups),
+            )
+        else:
+            logger.info("Re-learn scan clean — no rule was re-derived")
+        return f"{proposal.rstrip()}\n\n---\n\n{relearns.render_section(groups)}"
+    except Exception:
+        logger.exception(
+            "Re-learn scan failed — proposal written WITHOUT a Rules Re-learned section"
         )
         return proposal
 
@@ -1803,7 +1848,7 @@ async def dream_report() -> None:
         # regex only ever sees model-written provenance and cannot rewrite a
         # citation that this code put there itself.
         sourced = _with_repaired_citations(cleaned, learnings_dir)
-        validated = _with_routing_warnings(sourced, memory_contents)
+        validated = _with_relearns(_with_routing_warnings(sourced, memory_contents))
         pending_text = "\n\n".join(b.text for b in pending)
         proposal = _with_conflict_resolutions(validated, pending_text, memory_contents)
     except Exception:

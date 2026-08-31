@@ -18,7 +18,7 @@ The proposal sorts every learning into one of two dispositions:
 Memory updates are numbered `1..N` continuously across every target file, so a reviewer can
 say "skip 14" without naming the file it sits under.
 
-Three deterministic sections wrap the model's own output. Each is pure code, and
+Four deterministic sections wrap the model's own output. Each is pure code, and
 each fails open — a missing section means that gate did not run, which is itself
 worth reporting:
 
@@ -27,8 +27,23 @@ worth reporting:
 - `## Citation Repairs` (near the end, **only when there was something to say**) —
   `**Source:**` citations whose filename was wrong and could be corrected beyond
   doubt, plus any that could not be verified and were left alone.
-- `## Routing Warnings` (**last**) — misrouted sections and cross-file duplicates
+- `## Routing Warnings` — misrouted sections and cross-file duplicates
   (`(none)` when clean).
+- `## Rules Re-learned` (**last**) — rules memory already held that a later
+  session derived again, with a verdict on why each one did not stick. It reads
+  the rejection log from *previous* runs, so it is empty on a first run and says
+  so rather than rendering nothing.
+
+`## Rules Re-learned` also stands alone, and reads the same two logs without
+running a dream — useful when the question is "which of my rules are not
+working" rather than "what is in the backlog":
+
+```
+uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/relearn_report.py"
+```
+
+Read-only, seconds to run, writes nothing. `--limit 0` for every group,
+`--all-kinds` to include re-derived facts, `--json` for the raw grouping.
 
 **No memory files are modified.** The proposal is for review only.
 Run `/multiplai-context:dream-remember` to load the proposal and apply approved changes.
@@ -70,6 +85,12 @@ Run `/multiplai-context:dream-remember` to load the proposal and apply approved 
    - Path to the proposal file in `.multiplai/dreams/`
    - Number of source files and learnings count
    - Counts by disposition: memory updates, action items, filtered out
+   - **The `## Rules Re-learned` headline, if the section has one** — how many
+     rules memory already held were derived again, and the split between "not
+     routed", "routed but unused" and "inconclusive". These are not proposal
+     items and there is nothing to approve; they say which *existing* memory
+     lines are not doing their job, and each verdict names a different repair.
+     Do not fold them into the disposition counts.
    - Remind: run `/multiplai-context:dream-remember` to review and apply
 
    **Surface every `⚠` line from the script's own summary, verbatim.** A run can
