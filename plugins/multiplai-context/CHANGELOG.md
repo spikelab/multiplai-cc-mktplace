@@ -18,6 +18,23 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.52.5] - 2026-08-31
+
+### Fixed
+
+- **A memory section the router asked for that no longer exists injected the
+  whole file — once per pick.** Falling back to the whole file is deliberate
+  and unchanged: better too much context than none. Falling back *twice* was
+  not. Two stale anchors on one file loaded that file twice, and the injection
+  log recorded it as "two sections" rather than "the file, twice", so the cost
+  was invisible in exactly the measurement meant to expose it. Measured on a
+  real corpus: two `ai-agent-patterns.md` section picks logged 64,817 bytes
+  each against a file of roughly 65 KB. The fallback now happens once per file,
+  is recorded as a whole-file load, and logs a warning naming the anchor that
+  did not resolve. This is drift between a memory file and the catalog, so the
+  warning is the cue to run `/multiplai-context:refresh-catalogs --only memory`
+  after renaming a section.
+
 ## [0.52.4] - 2026-08-23
 
 ### Fixed

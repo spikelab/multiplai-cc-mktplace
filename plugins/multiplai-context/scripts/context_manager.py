@@ -396,14 +396,23 @@ def _load_memory_content(
     pre-banks behaviour verbatim — the parameter is additive so existing
     callers and tests need no edit.
 
-    Two things happen per **file** rather than per pick, because both are
-    properties of the file and neither can be decided one pick at a time. They
+    Three things happen per **file** rather than per pick, because each is a
+    property of the file and none can be decided one pick at a time. They
     apply to bank files exactly as they do to personal ones:
 
     * **A whole-file pick absorbs that file's section picks.** The router may
       legitimately emit ``["team/dev.md", "team/dev.md#Testing"]``; loading both
       injected the section twice and made the byte attribution report more bytes
       than the file has.
+    * **An unresolvable anchor absorbs the file's other picks too.** A stale
+      anchor still falls back to the whole file — that is the safety claim
+      ``TestWrongAnchorFallsBackToFullFile`` pins, and it does not change. What
+      changes is that the fallback now happens **once**. Per pick, two stale
+      anchors on one file injected that file twice: measured 2026-08-30 on the
+      real corpus, where two ``ai-agent-patterns.md`` section picks logged
+      64,817 B each against a ~65 KB file. Nothing upstream validates the
+      fragment against ``section_anchors``, so catalog↔file drift reaches here
+      unfiltered and used to be amplified by it rather than caught.
     * **The file's pre-first-H2 preamble is prepended once.** No section slice
       contains it, so without this a section pick silently returns less than the
       whole file would have — including cross-file load instructions. Once per
@@ -446,10 +455,33 @@ def _load_memory_content(
             result[whole] = text
             continue
 
+        # Resolve every section pick first, so an unresolvable one can be seen
+        # before anything is emitted. `load_picked_content` signals its
+        # whole-file fallback by returning the very object it was handed, which
+        # is what `is` tests here — not "the section happens to equal the file".
+        resolved = [
+            (pick, load_picked_content(_strip_bank(pick), text)[1])
+            for pick in ref_picks
+        ]
+        fallbacks = [pick for pick, content in resolved if content is text]
+        if fallbacks:
+            logger.warning(
+                "Memory anchor(s) %s did not resolve in %s — loading the whole "
+                "file once. Regenerate the memory catalog if a section was "
+                "renamed.",
+                ", ".join(fallbacks), path.name,
+            )
+            # The whole file answers every pick of it, so emit it once — under
+            # the **bare** name, bank prefix intact. Keying it on the fragment
+            # pick would make `_section_attribution` log a section list for a
+            # whole-file load, and an empty list there is precisely how a
+            # whole-file load is recorded. That mis-attribution is what let this
+            # hide: the log read as "two sections", not "the file, twice".
+            result[fallbacks[0].split("#", 1)[0]] = text
+            continue
+
         head = section_preamble(text)
-        for index, pick in enumerate(ref_picks):
-            # load_picked_content returns (filename, content_or_section)
-            _, content = load_picked_content(_strip_bank(pick), text)
+        for index, (pick, content) in enumerate(resolved):
             if head and index == 0 and not content.startswith(head):
                 content = f"{head}\n{content}"
             result[pick] = content

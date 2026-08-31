@@ -190,7 +190,11 @@ class TestWrongAnchorFallsBackToFullFile:
         pick = f"{entry['source']}#{entry['section_anchors'][0]['name']}"
 
         loaded = _load_memory_content(tmp_path, [pick])
-        assert loaded[pick] == body
+        # Keyed on the bare filename, not the pick: what was loaded is the
+        # whole file, and `_section_attribution` reads an empty section list
+        # off that key. Keying it on the fragment would log "one section" for
+        # a whole-file load.
+        assert loaded == {"big.md": body}
 
     def test_section_loader_contract_holds_for_a_missing_anchor(self):
         """Unit-level statement of the same contract."""
@@ -200,6 +204,88 @@ class TestWrongAnchorFallsBackToFullFile:
         name, content = load_picked_content("big.md#Ghost Section", text)
         assert name == "big.md"
         assert content == text
+
+
+class TestStaleAnchorsFallBackOnce:
+    """Requirement: N unresolvable anchors on one file load it **once**.
+
+    The fallback above is the safety claim and does not change. What used to
+    happen alongside it is that the fallback ran per *pick*, so two stale
+    anchors on one file injected that file twice — measured 2026-08-30 on the
+    real corpus, where two ``ai-agent-patterns.md`` section picks each logged
+    64,817 B against a file of roughly 65 KB. Nothing upstream checks a
+    fragment against ``section_anchors``, so catalog↔file drift arrives here
+    unfiltered; it must not be amplified on the way in.
+    """
+
+    def test_two_stale_anchors_load_the_file_once(self, tmp_path):
+        from context_manager import _load_memory_content
+
+        body = _big_doc("Alpha", "Beta", "Gamma")
+        (tmp_path / "big.md").write_text(body)
+
+        loaded = _load_memory_content(
+            tmp_path, ["big.md#Gone One", "big.md#Gone Two"]
+        )
+        assert loaded == {"big.md": body}
+        assert sum(len(v) for v in loaded.values()) == len(body)
+
+    def test_attribution_reports_a_whole_file_not_two_sections(self, tmp_path):
+        """The mis-report is what hid this for four days in the real log."""
+        from context_manager import _load_memory_content, _section_attribution
+
+        body = _big_doc("Alpha", "Beta", "Gamma")
+        (tmp_path / "big.md").write_text(body)
+
+        loaded = _load_memory_content(
+            tmp_path, ["big.md#Gone One", "big.md#Gone Two"]
+        )
+        sections, sizes = _section_attribution(loaded)
+        assert sections == {"big.md": []}      # [] means "the whole file"
+        assert sizes["big.md"] == len(body)    # not 2 × len(body)
+
+    def test_a_stale_anchor_absorbs_a_good_one_for_the_same_file(self, tmp_path):
+        """The whole file is a superset of any section of it, so emit it alone."""
+        from context_manager import _load_memory_content
+
+        body = _big_doc("Alpha", "Beta", "Gamma")
+        (tmp_path / "big.md").write_text(body)
+
+        loaded = _load_memory_content(tmp_path, ["big.md#Beta", "big.md#Gone"])
+        assert loaded == {"big.md": body}
+
+    def test_another_file_s_good_sections_are_untouched(self, tmp_path):
+        from context_manager import _load_memory_content
+
+        (tmp_path / "a.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
+        (tmp_path / "b.md").write_text(_big_doc("Delta", "Epsilon", "Zeta"))
+
+        loaded = _load_memory_content(tmp_path, ["a.md#Gone", "b.md#Zeta"])
+        assert set(loaded) == {"a.md", "b.md#Zeta"}
+        assert "Delta content." not in loaded["b.md#Zeta"]
+
+    def test_the_unresolved_anchor_is_logged_by_name(self, tmp_path, caplog):
+        """Silent drift is the failure mode; the warning is the whole remedy."""
+        import logging
+
+        from context_manager import _load_memory_content
+
+        (tmp_path / "big.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
+        with caplog.at_level(logging.WARNING):
+            _load_memory_content(tmp_path, ["big.md#Gone One"])
+
+        assert "big.md#Gone One" in caplog.text
+        assert "big.md" in caplog.text
+
+    def test_a_file_with_no_h2_at_all_is_still_loaded_once(self, tmp_path):
+        """`extract_section` cannot resolve anything here — one copy, no crash."""
+        from context_manager import _load_memory_content
+
+        body = "# Title\n\nNo H2 anywhere in this file.\n"
+        (tmp_path / "flat.md").write_text(body)
+
+        loaded = _load_memory_content(tmp_path, ["flat.md#Anything", "flat.md#Else"])
+        assert loaded == {"flat.md": body}
 
 
 # ---------------------------------------------------------------------------
@@ -576,7 +662,7 @@ class TestPreambleReachesTheInjectedContext:
         from context_manager import _load_memory_content
 
         (tmp_path / "voice.md").write_text(self._doc())
-        content = _load_memory_content(tmp_path, ["voice.md#Renamed"])["voice.md#Renamed"]
+        content = _load_memory_content(tmp_path, ["voice.md#Renamed"])["voice.md"]
         assert content.count(self.PREAMBLE) == 1
         assert "Alpha content." in content   # whole-file fallback
 
