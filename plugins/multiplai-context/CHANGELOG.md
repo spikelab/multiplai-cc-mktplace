@@ -18,6 +18,46 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
+## [0.52.5] - 2026-08-31
+
+### Fixed
+
+- **A memory section the router asked for that no longer exists injected the
+  whole file — once per pick.** Falling back to the whole file is deliberate
+  and unchanged: better too much context than none. Falling back *twice* was
+  not. Two stale anchors on one file loaded that file twice, and the injection
+  log recorded it as "two sections" rather than "the file, twice", so the cost
+  was invisible in exactly the measurement meant to expose it. Measured on a
+  real corpus: two `ai-agent-patterns.md` section picks logged 64,817 bytes
+  each against a file of roughly 65 KB. The fallback now happens once per file
+  and is recorded as a whole-file load.
+- **A renamed section is now named in the log, once, whatever shape the pick
+  took.** The warning fires whether the stale anchor arrives alone or beside a
+  bare pick of the same file, names the file bank-and-all (`team/dev.md`, not
+  just `dev.md`), and — like every other warning this hook emits — is logged
+  once per session rather than on every prompt for as long as the rename
+  stands. It is the cue to run
+  `/multiplai-context:refresh-catalogs --only memory` after renaming a section.
+  A file with no `##` headers at all no longer trips it: nothing drifted
+  there, and regenerating the catalog would fix nothing.
+- **A whole-file fallback no longer defeated the injection cooldown.** Memory
+  already injected is suppressed for a few turns, keyed on the pick the router
+  made. A fallback is keyed on the file, so the absorbed picks were never
+  recorded as injected, the router re-picked them, and the whole file went in
+  again on the very next prompt — every prompt, for the life of the session.
+  Both kinds of absorbed pick, the stale anchor and the section covered by a
+  bare pick of its own file, are now recorded.
+- **Picking the same section twice dropped the file's opening lines.** The
+  second copy overwrote the first, and only the first carries the text above
+  the file's first `##` — the last-updated stamp and instructions such as
+  "load `core-voice.md` first". A repeat is now one pick, both here and where
+  the router's answer is read.
+- **A section name from the router can no longer forge a line in the log.**
+  Only the filename half of `file.md#Section` is checked against the catalog;
+  the rest is free text the routing model wrote, and a newline in it wrote a
+  second, invented record into `context_manager.log` — the file `/log-doctor`
+  reads. Non-printing characters are now stripped where the answer is parsed.
+
 ## [0.52.4] - 2026-08-23
 
 ### Fixed

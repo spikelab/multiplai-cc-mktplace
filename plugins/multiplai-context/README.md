@@ -739,15 +739,21 @@ router gives up at **25 s** and injects nothing for that turn, so on a corpus
 with very large files you may see more of those. The default `token_overlap`
 router makes no model call and is unaffected — anchors simply sit unused.
 
-Three things keep it safe:
+Four things keep it safe:
 
-- **The names are not written by a model.** They are read off your file's `##`
-  headers in code and handed to the model as a fixed list to describe. An
-  anchor therefore cannot drift from the header it points at.
-- **A wrong anchor costs nothing.** If a name matches no header — a stale
-  catalog, a section you renamed — the loader returns the **whole file**, which
-  is what happened before this existed. No prompt can come out with less
-  context than it would have had.
+- **The names in the catalog are not written by a model.** They are read off
+  your file's `##` headers in code and handed to the model as a fixed list to
+  describe. What the router *answers with* is the model's own text, though, and
+  only the filename half of `file.md#Section` is checked against the catalog —
+  so a fragment naming a section that has since been renamed does reach the
+  loader. That is the case the next bullet covers.
+- **A wrong anchor costs one whole-file load, and says so.** If a name matches
+  no header — a stale catalog, a section you renamed — the loader returns the
+  **whole file**, which is what happened before this existed. No prompt comes
+  out with less context than it would have had. Several stale anchors on one
+  file still load it once, and the loader logs a warning naming each anchor
+  that did not resolve; run
+  `/multiplai-context:refresh-catalogs --only memory` after renaming a section.
 - **Anchors are regenerated, not remembered.** Unlike `sections`, `bundle` and
   `co_retrieve_for`, they are re-derived whenever the file's content changes.
   Hand-editing them is pointless: your edit is replaced on the next rebuild of
