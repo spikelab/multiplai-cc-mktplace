@@ -650,6 +650,18 @@ def _parse_llm_multi_selection(
     Section refs (``"file#Section"``) are validated by stripping the
     fragment before checking presence.
 
+    Two things the fragment therefore needs, because nothing checks it:
+
+    * **Non-printing characters are dropped from the whole ref.** Only the part
+      before the ``#`` is matched against the known-name set; the fragment is
+      free text this model wrote. A newline in it forges a second line in
+      ``context_manager.log`` — the file the log-doctor skill parses and
+      reasons over. Stripping is done here, at the boundary, rather than at
+      each of the log sites that interpolate a ref.
+    * **Repeats are dropped.** The same ref twice is one pick, and downstream
+      a duplicate used to overwrite its own loaded content with the copy that
+      omits the file's preamble.
+
     Raises:
         RouterCallFailed: the reply was not a JSON object. This used to return
             empty, which is the same bug :class:`RouterCallFailed` was created
@@ -687,8 +699,9 @@ def _parse_llm_multi_selection(
         for item in raw_list:
             if not isinstance(item, str):
                 continue
+            item = "".join(ch for ch in item if ch.isprintable())
             base = item.split("#", 1)[0]
-            if base in known:
+            if base in known and item not in validated:
                 validated.append(item)
         result[corpus_type] = validated
     return result

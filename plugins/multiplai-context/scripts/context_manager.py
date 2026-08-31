@@ -36,6 +36,7 @@ import json
 import re
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +48,7 @@ from multiplai_core.config import read_session_state, write_session_state
 from multiplai_core.log_utils import HookRun, hook_run, setup_logging, log_event
 from lib.banks import (
     SHARED_BANK_NOTICE,
+    bank_ref,
     configured_banks,
     render_shared_block,
 )
@@ -58,6 +60,7 @@ from lib.plugin_skills import plugin_skill_owners, qualify
 from lib import reference_docs
 from lib.routing_logic import expand_picks
 from lib.section_loader import (
+    h2_names,
     load_picked_content,
     parse_section_ref,
     preamble as section_preamble,
@@ -388,9 +391,12 @@ def _load_memory_content(
 ) -> dict[str, str]:
     """Read picked memory files; honor ``filename#Section`` for partial loads.
 
-    Returns ``{display_name: content}`` where ``display_name`` is the
-    raw pick (e.g., ``"file.md#Section"`` or ``"team/file.md"``) so the
-    assembled context shows which slice, from which bank, was loaded.
+    Returns ``{display_name: content}``. ``display_name`` is the raw pick
+    (``"file.md#Section"``, ``"team/file.md"``) so the assembled context shows
+    which slice, from which bank, was loaded — **except** when the whole file
+    was loaded, where the key is the canonical bare ref from
+    :func:`_whole_file_ref`. Several picks can collapse onto that one key, so
+    the keys are not the picks; :func:`_cooldown_keys` maps back.
 
     *banks* defaults to ``None``, which means "personal only" and is the
     pre-banks behaviour verbatim — the parameter is additive so existing
@@ -418,14 +424,18 @@ def _load_memory_content(
       whole file would have — including cross-file load instructions. Once per
       file, not once per section, since several picks from one file are normal
       for an anchored file.
-
-    (The same fix lands on the section-anchor branch for the personal-only
-    version of this function. Both must have it: whichever merges first, a
-    section pick must not drop the preamble.)
     """
     # Group by the ref the picks address, preserving first-appearance order.
+    # A repeated pick is one pick: `memory_router._parse_llm_multi_selection`
+    # de-duplicates, but this function is called with picks assembled by
+    # `expand_bundles` and by tests too, and a duplicate used to overwrite its
+    # own entry with the copy that skips the preamble.
     by_ref: dict[str, list[str]] = {}
+    seen_picks: set[str] = set()
     for pick in picks:
+        if pick in seen_picks:
+            continue
+        seen_picks.add(pick)
         bank_name, filename, _section = split_bank_pick(pick)
         by_ref.setdefault(f"{bank_name}/{filename}", []).append(pick)
 
@@ -443,49 +453,126 @@ def _load_memory_content(
             logger.warning("Failed to read router-picked memory file: %s", path)
             continue
 
+        whole_ref = _whole_file_ref(ref_picks[0])
         whole = next(
             (p for p in ref_picks if split_bank_pick(p)[2] is None), None
         )
-        if whole is not None:
-            if len(ref_picks) > 1:
+
+        # Which anchors this file can answer is a property of the file, so it
+        # is settled once, here, before either branch decides what to emit —
+        # including the whole-file branch, where a stale anchor riding along
+        # with a bare pick used to be absorbed without ever being named.
+        #
+        # `h2_names` is the single place both the catalog generator and
+        # `extract_section` learn a file's section names, so "the fragment is
+        # not in this list" is exactly what catalog↔file drift means. The
+        # earlier signal — `extract_section` returning the object it was handed
+        # — also fired for an empty file and for a file with no H2 at all,
+        # neither of which is drift and neither of which regenerating a catalog
+        # can fix.
+        names = {n.strip().lower() for n in h2_names(text)}
+        unresolved = [
+            p for p in ref_picks
+            if (frag := split_bank_pick(p)[2]) is not None
+            and frag.strip().lower() not in names
+        ]
+        if unresolved and names:
+            # Once per session per file+anchor set: the drift persists until
+            # someone regenerates the catalog, and this hook runs on every
+            # prompt, so an un-deduped warning is one WARNING per prompt for
+            # as long as the rename stands.
+            joined = ", ".join(_loggable(p) for p in unresolved)
+            _warn_once(
+                f"anchor::{whole_ref}::{joined}",
+                f"Memory anchor(s) {joined} did not resolve in {whole_ref} — "
+                f"loading the whole file once. Run "
+                f"/multiplai-context:refresh-catalogs --only memory if a "
+                f"section was renamed.",
+            )
+        elif unresolved:
+            logger.debug(
+                "Memory file %s has no H2 sections; %d section pick(s) load "
+                "the whole file", whole_ref, len(unresolved),
+            )
+
+        if whole is not None or unresolved:
+            if whole is not None and len(ref_picks) > 1:
                 logger.debug(
                     "Memory pick %s covers %d section pick(s) of the same file — "
-                    "loading the file once", whole, len(ref_picks) - 1,
+                    "loading the file once", _loggable(whole), len(ref_picks) - 1,
                 )
-            result[whole] = text
-            continue
-
-        # Resolve every section pick first, so an unresolvable one can be seen
-        # before anything is emitted. `load_picked_content` signals its
-        # whole-file fallback by returning the very object it was handed, which
-        # is what `is` tests here — not "the section happens to equal the file".
-        resolved = [
-            (pick, load_picked_content(_strip_bank(pick), text)[1])
-            for pick in ref_picks
-        ]
-        fallbacks = [pick for pick, content in resolved if content is text]
-        if fallbacks:
-            logger.warning(
-                "Memory anchor(s) %s did not resolve in %s — loading the whole "
-                "file once. Regenerate the memory catalog if a section was "
-                "renamed.",
-                ", ".join(fallbacks), path.name,
-            )
             # The whole file answers every pick of it, so emit it once — under
-            # the **bare** name, bank prefix intact. Keying it on the fragment
-            # pick would make `_section_attribution` log a section list for a
-            # whole-file load, and an empty list there is precisely how a
-            # whole-file load is recorded. That mis-attribution is what let this
-            # hide: the log read as "two sections", not "the file, twice".
-            result[fallbacks[0].split("#", 1)[0]] = text
+            # the canonical **bare** ref, bank prefix intact. Keying it on a
+            # fragment pick would make `_section_attribution` log a section
+            # list for a whole-file load, and an empty list there is precisely
+            # how a whole-file load is recorded. That mis-attribution is what
+            # let the duplicate hide: the log read as "two sections", not "the
+            # file, twice".
+            result[whole_ref] = text
             continue
 
+        # Only now is extraction worth doing: every anchor resolved, so no
+        # slice built here is about to be discarded for the whole file.
         head = section_preamble(text)
-        for index, (pick, content) in enumerate(resolved):
+        for index, pick in enumerate(ref_picks):
+            # load_picked_content returns (filename, content_or_section)
+            _, content = load_picked_content(_strip_bank(pick), text)
             if head and index == 0 and not content.startswith(head):
                 content = f"{head}\n{content}"
             result[pick] = content
     return result
+
+
+def _whole_file_ref(pick: str) -> str:
+    """The canonical bare-file ref for *pick*: ``"dev.md"``, ``"team/dev.md"``.
+
+    Built through ``split_bank_pick``/``bank_ref`` rather than by cutting the
+    string at its ``#``, so one file cannot reach the cooldown map and the
+    byte attribution under two spellings. ``split_bank_ref`` lower-cases and
+    strips the bank segment, so a hand-cut ``"Team/dev.md#Gone"`` groups under
+    ``"team/dev.md"`` and would then be emitted under ``"Team/dev.md"``.
+    """
+    bank_name, filename, _ = split_bank_pick(pick)
+    return bank_ref(bank_name, filename)
+
+
+# Control characters are stripped, not escaped, and the ref is capped: a
+# section fragment is free text the routing model emitted (only the part
+# before the ``#`` is checked against the known-name set), and a newline in it
+# would write a second, attacker-shaped line into context_manager.log — the
+# file the log-doctor skill parses.
+_LOGGABLE_REF_MAX = 120
+
+
+def _loggable(ref: str) -> str:
+    """*ref* rendered safe to interpolate into a one-line log record."""
+    flat = "".join(ch for ch in str(ref) if ch.isprintable())
+    return flat if len(flat) <= _LOGGABLE_REF_MAX else flat[:_LOGGABLE_REF_MAX] + "…"
+
+
+def _cooldown_keys(picks: list[str], content: dict[str, str]) -> list[str]:
+    """The cooldown keys for what *content* actually injected.
+
+    ``_filter_cooldown`` looks a **raw pick** up in the cooldown map, so the
+    map has to be stamped with raw picks. ``_load_memory_content`` does not
+    return them: a whole-file pick and an unresolvable anchor each collapse
+    several picks onto one bare-filename key. Stamping only the returned keys
+    left every absorbed pick unstamped, so the router re-picked it and the
+    file was re-injected on the very next turn — the fallback that should fire
+    once per cooldown window fired every turn instead, which costs more than
+    the duplicate load it replaced.
+
+    Content keys are stamped as well as picks, because the recency-net
+    fallback (``_read_top_memory_files``) produces content for no pick at all.
+
+    A pick that resolved to nothing — missing file, unsubscribed bank — has no
+    key and is deliberately left unstamped: it was never in the conversation,
+    so it must stay eligible next turn.
+    """
+    keys = set(content)
+    return sorted(
+        keys | {p for p in picks if p in keys or _whole_file_ref(p) in keys}
+    )
 
 
 def _strip_bank(pick: str) -> str:
@@ -737,8 +824,9 @@ def _stamp_memory_dates(
 
     Gives the model a concrete recency signal to weigh memory against
     in-session sources when the conflict preamble fires. Applied at
-    render time only — ``memory_content`` keys (used by the cooldown
-    bookkeeping) are untouched. Section slices (``file.md#Section``)
+    render time only — ``memory_content`` keys (which the attribution and,
+    through ``_cooldown_keys``, the cooldown bookkeeping read) are
+    untouched. Section slices (``file.md#Section``)
     carry the base file's date. Files with no obtainable date are
     passed through unstamped.
     """
@@ -1035,10 +1123,14 @@ def _persist_turn_state(
     session_state: dict,
     turn_index: int,
     recent: dict,
-    injected_by_corpus: dict[str, dict],
+    injected_by_corpus: dict[str, Iterable[str]],
     cooldown: int,
 ) -> None:
     """Stamp this turn's injections into *recent* and write session state.
+
+    Each corpus value is iterated for its **keys**: a mapping of injected
+    content works, and so does the explicit key list ``_cooldown_keys`` builds
+    where the content keys are not the picks.
 
     Records ``turn_index`` for every injected key, prunes entries that
     have aged past the cooldown window (bounds file growth), bumps the
@@ -1575,7 +1667,9 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
     if cooldown_active:
         _persist_turn_state(
             session_state, turn_index, recent,
-            {"memory": memory_content, "skills": skills_content,
+            {"memory": _cooldown_keys(
+                picks_by_corpus.get("memory") or [], memory_content),
+             "skills": skills_content,
              "resources": resources_content},
             cooldown,
         )

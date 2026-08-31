@@ -277,15 +277,254 @@ class TestStaleAnchorsFallBackOnce:
         assert "big.md#Gone One" in caplog.text
         assert "big.md" in caplog.text
 
-    def test_a_file_with_no_h2_at_all_is_still_loaded_once(self, tmp_path):
-        """`extract_section` cannot resolve anything here — one copy, no crash."""
+    def test_a_file_with_no_h2_at_all_is_still_loaded_once(self, tmp_path, caplog):
+        """No H2 to name means no drift — one copy, and no catalog warning.
+
+        A file with no ``##`` at all cannot be section-loaded and never gets
+        anchors generated for it. Telling the reader to regenerate the catalog
+        would name a remedy that fixes nothing.
+        """
+        import logging
+
         from context_manager import _load_memory_content
 
         body = "# Title\n\nNo H2 anywhere in this file.\n"
         (tmp_path / "flat.md").write_text(body)
 
-        loaded = _load_memory_content(tmp_path, ["flat.md#Anything", "flat.md#Else"])
+        with caplog.at_level(logging.WARNING):
+            loaded = _load_memory_content(
+                tmp_path, ["flat.md#Anything", "flat.md#Else"]
+            )
         assert loaded == {"flat.md": body}
+        assert caplog.text == ""
+
+    def test_an_empty_file_does_not_claim_a_renamed_section(self, tmp_path, caplog):
+        """The old signal fired here too, and named a remedy that cannot work."""
+        import logging
+
+        from context_manager import _load_memory_content
+
+        (tmp_path / "empty.md").write_text("")
+
+        with caplog.at_level(logging.WARNING):
+            loaded = _load_memory_content(tmp_path, ["empty.md#Anything"])
+        assert loaded == {"empty.md": ""}
+        assert caplog.text == ""
+
+    def test_a_stale_anchor_beside_a_whole_file_pick_is_still_named(
+        self, tmp_path, caplog
+    ):
+        """The router hedges by picking a file both ways; drift must still show.
+
+        ``["big.md", "big.md#Gone"]`` is a shape the router legitimately
+        emits. The whole-file branch absorbs the section pick — correctly, the
+        file is a superset — but absorbing it silently left the rename
+        invisible, which is the condition the warning exists to surface.
+        """
+        import logging
+
+        from context_manager import _load_memory_content
+
+        body = _big_doc("Alpha", "Beta", "Gamma")
+        (tmp_path / "big.md").write_text(body)
+
+        with caplog.at_level(logging.WARNING):
+            loaded = _load_memory_content(tmp_path, ["big.md", "big.md#Gone"])
+        assert loaded == {"big.md": body}
+        assert "big.md#Gone" in caplog.text
+
+    def test_the_warning_is_emitted_once_per_session(self, tmp_path, caplog):
+        """The hook runs on every prompt; the drift lasts until a regeneration."""
+        import logging
+
+        from context_manager import _load_memory_content
+
+        (tmp_path / "big.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
+        with caplog.at_level(logging.WARNING):
+            for _ in range(5):
+                _load_memory_content(tmp_path, ["big.md#Gone One"])
+
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(warnings) == 1
+
+    def test_a_forged_log_line_in_a_fragment_cannot_reach_the_log(
+        self, tmp_path, caplog
+    ):
+        """Only the part before the ``#`` is checked upstream; the rest is model text."""
+        import logging
+
+        from context_manager import _load_memory_content
+
+        (tmp_path / "big.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
+        forged = "big.md#x\n[2026-08-31T00:00:00Z] [context_manager] ERROR: forged"
+
+        with caplog.at_level(logging.WARNING):
+            _load_memory_content(tmp_path, [forged])
+
+        assert "\n" not in caplog.records[0].getMessage()
+        assert "ERROR: forged" in caplog.text  # neutered, not dropped
+
+    def test_the_router_strips_control_characters_from_a_pick(self):
+        """The boundary fix: a fragment with a newline never becomes a pick."""
+        from lib.memory_router import _parse_llm_multi_selection
+
+        raw = json.dumps({"memory": ["big.md#x\nforged", "big.md#Beta"]})
+        picked = _parse_llm_multi_selection(raw, {"memory": {"big.md"}})
+        assert picked["memory"] == ["big.md#xforged", "big.md#Beta"]
+
+    def test_the_router_does_not_emit_the_same_pick_twice(self):
+        from lib.memory_router import _parse_llm_multi_selection
+
+        raw = json.dumps({"memory": ["big.md#Beta", "big.md#Beta", "big.md"]})
+        picked = _parse_llm_multi_selection(raw, {"memory": {"big.md"}})
+        assert picked["memory"] == ["big.md#Beta", "big.md"]
+
+
+class TestTheFallbackIsKeyedSoCooldownCanFindIt:
+    """Requirement: an absorbed pick is still stamped in the cooldown map.
+
+    ``_filter_cooldown`` looks a raw pick up; ``_load_memory_content`` keys a
+    whole-file load on the bare ref. Stamping only the returned keys therefore
+    never matched the pick, so the fallback re-injected the whole file on
+    *every* turn — strictly worse than the duplicate load this change removed,
+    and unbounded in the length of the session.
+    """
+
+    def test_absorbed_section_picks_are_stamped(self, tmp_path):
+        from context_manager import _cooldown_keys, _load_memory_content
+
+        (tmp_path / "big.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
+        picks = ["big.md#Gone One", "big.md#Gone Two"]
+        loaded = _load_memory_content(tmp_path, picks)
+
+        assert set(_cooldown_keys(picks, loaded)) == {"big.md", *picks}
+
+    def test_a_whole_file_pick_stamps_the_sections_it_absorbed(self, tmp_path):
+        from context_manager import _cooldown_keys, _load_memory_content
+
+        (tmp_path / "big.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
+        picks = ["big.md", "big.md#Beta"]
+        loaded = _load_memory_content(tmp_path, picks)
+
+        assert set(_cooldown_keys(picks, loaded)) == {"big.md", "big.md#Beta"}
+
+    def test_a_pick_that_loaded_nothing_is_not_stamped(self, tmp_path):
+        """A missing file was never in the conversation, so it stays eligible."""
+        from context_manager import _cooldown_keys, _load_memory_content
+
+        picks = ["absent.md#Gone"]
+        loaded = _load_memory_content(tmp_path, picks)
+
+        assert loaded == {}
+        assert _cooldown_keys(picks, loaded) == []
+
+    def test_recency_net_content_is_stamped_without_any_pick(self, tmp_path):
+        """`_read_top_memory_files` produces content for no pick at all."""
+        from context_manager import _cooldown_keys
+
+        assert _cooldown_keys([], {"life.md": "body"}) == ["life.md"]
+
+    def test_the_fallback_is_suppressed_on_the_next_turn(self, tmp_path):
+        """End to end over the two functions the hook actually composes."""
+        from context_manager import (
+            _cooldown_keys, _filter_cooldown, _load_memory_content,
+        )
+
+        body = _big_doc("Alpha", "Beta", "Gamma")
+        (tmp_path / "big.md").write_text(body)
+        picks = ["big.md#Gone One", "big.md#Gone Two"]
+
+        recent: dict[str, int] = {}
+        injected = 0
+        for turn in range(1, 7):
+            kept, _ = _filter_cooldown(picks, recent, turn, cooldown=3)
+            loaded = _load_memory_content(tmp_path, kept)
+            injected += sum(len(v) for v in loaded.values())
+            for key in _cooldown_keys(kept, loaded):
+                recent[key] = turn
+
+        # Turns 1 and 5 load the file; turns 2-4 and 6 are inside the window.
+        assert injected == 2 * len(body)
+
+
+class TestADuplicatePickKeepsThePreamble:
+    """Requirement: the same pick twice is one pick, preamble intact.
+
+    The preamble carries the date stamp and cross-file load instructions, and
+    is prepended to the first slice only. A repeated pick wrote the same key
+    twice, so the second write — which by position skips the preamble —
+    clobbered the first, dropping exactly what the preamble logic protects.
+    """
+
+    PREAMBLE = "**Last Updated:** 2026-01-01\n\n> Load core-voice.md first."
+
+    def _doc(self) -> str:
+        return (
+            f"# Voice\n\n{self.PREAMBLE}\n\n"
+            f"## Alpha\n\nA body. {_FILLER}\n\n"
+            f"## Beta\n\nB body. {_FILLER}\n"
+        )
+
+    def test_a_repeated_pick_still_carries_the_preamble(self, tmp_path):
+        from context_manager import _load_memory_content
+
+        (tmp_path / "voice.md").write_text(self._doc())
+        once = _load_memory_content(tmp_path, ["voice.md#Alpha"])
+        twice = _load_memory_content(tmp_path, ["voice.md#Alpha", "voice.md#Alpha"])
+
+        assert twice == once
+        assert "Load core-voice.md first." in twice["voice.md#Alpha"]
+
+    def test_a_repeated_pick_is_not_charged_twice(self, tmp_path):
+        from context_manager import _load_memory_content, _section_attribution
+
+        (tmp_path / "voice.md").write_text(self._doc())
+        loaded = _load_memory_content(
+            tmp_path, ["voice.md#Alpha", "voice.md#Alpha", "voice.md#Beta"]
+        )
+        sections, _ = _section_attribution(loaded)
+        assert sections == {"voice.md": ["Alpha", "Beta"]}
+
+
+class TestOneFileReachesTheMapsUnderOneSpelling:
+    """Requirement: the bank prefix is normalised before it becomes a key.
+
+    ``split_bank_ref`` lower-cases and strips the bank segment, so picks group
+    under ``"team/dev.md"``. Cutting the emitted key out of the raw pick at
+    its ``#`` skipped that, and the same file then appeared in the cooldown
+    map and the byte attribution under two spellings across turns.
+    """
+
+    def _banks(self, tmp_path):
+        from lib.banks import MemoryBank, personal_bank
+
+        bank_dir = tmp_path / "team"
+        bank_dir.mkdir()
+        (bank_dir / "dev.md").write_text(_big_doc("Alpha", "Beta", "Gamma"))
+        return [
+            personal_bank(tmp_path),
+            MemoryBank(name="team", path=bank_dir, mode="propose"),
+        ]
+
+    def test_a_capitalised_bank_prefix_is_keyed_canonically(self, tmp_path):
+        from context_manager import _load_memory_content
+
+        loaded = _load_memory_content(
+            tmp_path, ["Team/dev.md#Gone"], self._banks(tmp_path)
+        )
+        assert list(loaded) == ["team/dev.md"]
+
+    def test_the_warning_names_the_bank_qualified_file(self, tmp_path, caplog):
+        """``path.name`` alone cannot say which bank's ``dev.md`` drifted."""
+        import logging
+
+        from context_manager import _load_memory_content
+
+        with caplog.at_level(logging.WARNING):
+            _load_memory_content(
+                tmp_path, ["team/dev.md#Gone"], self._banks(tmp_path)
+            )
+        assert "did not resolve in team/dev.md" in caplog.text
 
 
 # ---------------------------------------------------------------------------
