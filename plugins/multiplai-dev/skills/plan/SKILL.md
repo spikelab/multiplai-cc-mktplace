@@ -39,6 +39,14 @@ Ground the plan in reality, not memory:
 - Check repo state (`git status`, current branch) for anything the plan must
   work around (uncommitted WIP, missing remotes, credential scope).
 
+**Stop and ask when recon shows the scope is not homogeneous.** If the
+requested work turns out to span mechanisms with different risk and effort
+profiles — a config change and a protocol rewrite, a no-tools call path and a
+tool-using agent harness — put the split to the user as explicit choices before
+you write scope into the plan. Do not pick which piece is in scope on their
+behalf, and do not silently plan all of it. The user decides what the plan
+covers; recon only tells them what the pieces are.
+
 ### 3. Write the plan file
 
 Plans go to files, never to the console.
