@@ -29,7 +29,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from multiplai_core.log_utils import setup_logging
 from multiplai_core.costing import costs_dir
-from lib.costing_collector import default_config_dir, run_backfill_branches, run_collect
+from lib.costing_collector import (
+    default_config_dir,
+    pricing_age_days,
+    run_backfill_branches,
+    run_collect,
+)
 from lib.runtime import lock_path
 
 logger = setup_logging("costs")
@@ -54,6 +59,9 @@ def main() -> int:
     parser.add_argument("--backfill-branches", action="store_true",
                         help="One-time: add branch/cwd to existing ledger records "
                              "from full transcript re-reads; appends nothing")
+    parser.add_argument("--no-refresh", action="store_true",
+                        help="Skip fetching current list prices from the pricing page "
+                             "before pricing; use the cached or bundled table as-is")
     args = parser.parse_args()
     if args.backfill_branches and args.dry_run:
         parser.error("--backfill-branches has no dry-run mode")
@@ -92,20 +100,36 @@ def main() -> int:
 
     state_path = costs_dir() / "collector-state.json"
     started = time.monotonic()
-    stats = run_collect(config_dir, state_path, dry_run=args.dry_run)
+    stats = run_collect(
+        config_dir, state_path, dry_run=args.dry_run, refresh_pricing=not args.no_refresh,
+    )
     elapsed = time.monotonic() - started
 
     mode = "DRY RUN — " if args.dry_run else ""
     logger.info(
-        "collect pass done: %d/%d files read, %d records, $%.2f, %.1fs",
+        "collect pass done: %d/%d files read, %d records, $%.2f, %d at fallback price, %.1fs",
         stats["files_read"], stats["files_seen"], stats["records"],
-        stats["cost_usd"], elapsed,
+        stats["cost_usd"], stats["fallback_records"], elapsed,
     )
     print(
         f"{mode}{stats['files_read']}/{stats['files_seen']} transcripts read, "
         f"{stats['records']} new records (${stats['cost_usd']:.2f}) in {elapsed:.1f}s\n"
         f"Ledger: {costs_dir()}"
     )
+    # Two things that make the dollar figures untrustworthy, said out loud.
+    if stats["fallback_records"]:
+        models = ", ".join(stats["fallback_models"])
+        print(
+            f"WARNING: {stats['fallback_records']} records priced at the fallback rate "
+            f"(no list price for: {models}). Their cost_usd is a guess and they carry "
+            f"pricing_fallback=true. Re-run without --no-refresh, or add the model to pricing.json."
+        )
+    age = pricing_age_days()
+    if age is not None and age > 30:
+        print(
+            f"WARNING: the active pricing table is {age} days old. The pricing-page fetch "
+            f"failed or was skipped; prices may miss recent launches."
+        )
     return 0
 
 

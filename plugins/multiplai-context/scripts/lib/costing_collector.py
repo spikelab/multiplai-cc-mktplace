@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
+from multiplai_core import costing
 from multiplai_core.costing import (
     TokenCounts,
     append_records,
@@ -54,6 +55,34 @@ from lib.fsio import atomic_write, claude_config_dir
 logger = logging.getLogger(__name__)
 
 STATE_VERSION = 1
+
+
+def refresh_pricing_table() -> bool:
+    """Pull current list prices before pricing anything. Never raises.
+
+    ``multiplai_core.costing.refresh_pricing`` (core ≥ 0.15) fetches the
+    official pricing page and caches it under ``costs_dir()``; it skips the
+    network while the cache is under a day old and logs a WARNING instead of
+    raising when offline. A core without it (older pin) keeps pricing from
+    the bundled table, so this stays a soft dependency.
+
+    Returns True when a refreshed table is in place, False otherwise.
+    """
+    refresh = getattr(costing, "refresh_pricing", None)
+    if refresh is None:
+        logger.info("multiplai_core.costing has no refresh_pricing(); bundled table only")
+        return False
+    try:
+        return refresh() is not None
+    except Exception as exc:  # noqa: BLE001 — pricing refresh must not stop a pass
+        logger.warning("Pricing refresh failed (%s); continuing with the cached/bundled table", exc)
+        return False
+
+
+def pricing_age_days() -> int | None:
+    """Days since the active pricing table was updated; None on an older core."""
+    fn = getattr(costing, "pricing_age_days", None)
+    return fn() if fn is not None else None
 
 # tool_use names that open an attribution span. "Task" is the legacy name of
 # the subagent tool; "Agent" the current one.
@@ -367,8 +396,17 @@ def run_collect(
     state_path: Path,
     *,
     dry_run: bool = False,
+    refresh_pricing: bool = True,
 ) -> dict:
-    """One collection pass over every transcript. Returns summary stats."""
+    """One collection pass over every transcript. Returns summary stats.
+
+    With *refresh_pricing* (the default) the list-price table is refreshed
+    from the official pricing page first, so a model launched since the last
+    core release is priced correctly instead of at the fallback rate. The
+    stats report how many records still fell back and for which models.
+    """
+    if refresh_pricing:
+        refresh_pricing_table()
     state = load_state(state_path)
     files_state: dict[str, dict] = state["files"]
     # Message ids are globally unique — one global dedup set (a resumed or
@@ -376,7 +414,11 @@ def run_collect(
     known: set[str] = set()
     for ids in session_msg_index().values():
         known.update(ids)
-    stats = {"files_seen": 0, "files_read": 0, "records": 0, "cost_usd": 0.0}
+    stats = {
+        "files_seen": 0, "files_read": 0, "records": 0, "cost_usd": 0.0,
+        "fallback_records": 0, "fallback_models": [],
+    }
+    fallback_models: set[str] = set()
 
     for path in find_transcripts(config_dir):
         stats["files_seen"] += 1
@@ -403,11 +445,16 @@ def run_collect(
             append_records(records)
         stats["records"] += len(records)
         stats["cost_usd"] += sum(r["cost_usd"] for r in records)
+        for r in records:
+            if r.get("pricing_fallback"):
+                stats["fallback_records"] += 1
+                fallback_models.add(r["model"])
         files_state[key] = new_state
 
     if not dry_run:
         save_state(state_path, state)
     stats["cost_usd"] = round(stats["cost_usd"], 4)
+    stats["fallback_models"] = sorted(fallback_models)
     return stats
 
 

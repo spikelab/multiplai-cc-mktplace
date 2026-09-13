@@ -578,3 +578,49 @@ def test_backfill_preserves_torn_tail_verbatim(config_dir, tmp_path):
     content = path.read_bytes()
     assert content.endswith(torn)  # verbatim, no newline appended
     assert json.loads(content.splitlines()[0])["branch"] == "main"
+
+
+# ----------------------------------------------------------------------
+# Pricing refresh and fallback reporting
+# ----------------------------------------------------------------------
+
+def test_run_collect_reports_fallback_priced_records(config_dir, tmp_path):
+    proj = config_dir / "projects" / "-Users-x-proj"
+    _write(proj / "sess-1.jsonl", [
+        _user("a"),
+        _assistant("m1"),
+        _assistant("m2", model="gpt-nonsense"),
+        _assistant("m3", model="gpt-nonsense"),
+    ])
+    stats = cc.run_collect(config_dir, tmp_path / "state.json", refresh_pricing=False)
+    assert stats["records"] == 3
+    assert stats["fallback_records"] == 2
+    assert stats["fallback_models"] == ["gpt-nonsense"]
+
+
+def test_run_collect_calls_refresh_once_and_can_opt_out(config_dir, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(cc.costing, "refresh_pricing", lambda: calls.append(1) or None, raising=False)
+    proj = config_dir / "projects" / "-Users-x-proj"
+    _write(proj / "sess-1.jsonl", [_assistant("m1")])
+
+    cc.run_collect(config_dir, tmp_path / "state.json")
+    assert calls == [1]
+    cc.run_collect(config_dir, tmp_path / "state.json", refresh_pricing=False)
+    assert calls == [1]
+
+
+def test_refresh_pricing_table_never_raises(monkeypatch, caplog):
+    def boom():
+        raise OSError("offline")
+    monkeypatch.setattr(cc.costing, "refresh_pricing", boom, raising=False)
+    with caplog.at_level("WARNING"):
+        assert cc.refresh_pricing_table() is False
+    assert "Pricing refresh failed" in caplog.text
+
+
+def test_refresh_pricing_table_tolerates_old_core(monkeypatch):
+    monkeypatch.delattr(cc.costing, "refresh_pricing", raising=False)
+    assert cc.refresh_pricing_table() is False
+    monkeypatch.delattr(cc.costing, "pricing_age_days", raising=False)
+    assert cc.pricing_age_days() is None
