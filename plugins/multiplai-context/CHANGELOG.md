@@ -18,7 +18,7 @@ are the release dates recorded at the time, not derived from a tag.
 
 Nothing yet.
 
-## [0.53.0] - 2026-08-31
+## [0.53.0] - 2026-09-14
 
 ### Added
 
