@@ -60,7 +60,7 @@ STATE_VERSION = 1
 def refresh_pricing_table() -> bool:
     """Pull current list prices before pricing anything. Never raises.
 
-    ``multiplai_core.costing.refresh_pricing`` (core ≥ 0.15) fetches the
+    ``multiplai_core.costing.refresh_pricing`` (when the installed core has it) fetches the
     official pricing page and caches it under ``costs_dir()``; it skips the
     network while the cache is under a day old and logs a WARNING instead of
     raising when offline. A core without it (older pin) keeps pricing from

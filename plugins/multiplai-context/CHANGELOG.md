@@ -16,12 +16,14 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-09-14
+
 ### Changed
 
 - **`collect_costs.py` refreshes list prices from the official pricing page
   before pricing a pass.** Every pass calls `multiplai_core.costing.refresh_pricing()`
-  (core ≥ 0.15; a soft dependency — an older core logs one INFO line and keeps
-  the bundled table). The fetch is skipped while the cached table under
+  (a soft dependency: a core without that function logs one INFO line and
+  keeps the bundled table). The fetch is skipped while the cached table under
   `<data_dir>/costs/pricing.json` is under a day old and never fails the
   pass. `--no-refresh` opts out. Motivation: the bundled table priced
   Sonnet 5 at the Sonnet 4.6 rate for weeks (50% too high), and Opus 5 and

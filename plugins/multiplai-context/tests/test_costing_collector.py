@@ -14,6 +14,13 @@ from lib import costing_collector as cc  # noqa: E402
 from multiplai_core.costing import iter_ledger  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_live_pricing(monkeypatch):
+    """Keep every collect pass off the network: core's refresh_pricing() would
+    otherwise GET the pricing page once per test session."""
+    monkeypatch.setattr(cc.costing, "refresh_pricing", lambda **_: None, raising=False)
+
+
 # ----------------------------------------------------------------------
 # Fixture transcript builders
 # ----------------------------------------------------------------------
