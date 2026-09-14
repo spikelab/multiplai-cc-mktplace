@@ -116,5 +116,17 @@ they re-write prefixes more often than they reuse them.
   components (buildme, deep-research, dream) are exact.
 - Subagent traffic is `sidechain` records; `--session` shows the
   main/subagent split.
+- **Prices come from the official pricing page, fetched at collect time.**
+  `collect_costs.py` refreshes `<data_dir>/costs/pricing.json` from
+  `platform.claude.com/docs/en/about-claude/pricing.md` before pricing
+  (skipped while the cache is under a day old; `--no-refresh` opts out).
+  Offline, the table bundled with `multiplai-core` is used. Records already
+  in the ledger keep the price they were written with — a price correction
+  changes new records only.
 - Unknown models are priced at fallback rates and flagged
-  `pricing_fallback: true` in the ledger.
+  `pricing_fallback: true` in the ledger. The collector prints a WARNING
+  naming them; when you see it, the dollar figures for those models are a
+  guess — say so in the report rather than quoting them as list price.
+- Cache reads on Claude Fable 5.1 / Mythos 5.1 are 0.025× input ($0.25/MTok),
+  not the 0.1× every other model uses. Records collected before 2026-09-13
+  priced them at $1.00/MTok.

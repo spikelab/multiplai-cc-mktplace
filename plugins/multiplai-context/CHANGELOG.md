@@ -16,7 +16,23 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
-Nothing yet.
+## [0.54.0] - 2026-09-14
+
+### Changed
+
+- **`collect_costs.py` refreshes list prices from the official pricing page
+  before pricing a pass.** Every pass calls `multiplai_core.costing.refresh_pricing()`
+  (a soft dependency: a core without that function logs one INFO line and
+  keeps the bundled table). The fetch is skipped while the cached table under
+  `<data_dir>/costs/pricing.json` is under a day old and never fails the
+  pass. `--no-refresh` opts out. Motivation: the bundled table priced
+  Sonnet 5 at the Sonnet 4.6 rate for weeks (50% too high), and Opus 5 and
+  Fable 5.1 at the fallback rate; a hand-copied table goes stale on every
+  model launch, so the collector now reads the source.
+- **The pass summary says when the numbers are untrustworthy.** `run_collect()`
+  stats gain `fallback_records` and `fallback_models`; the CLI prints a
+  WARNING naming the models that had no list price, and another when the
+  active pricing table is more than 30 days old.
 
 ## [0.53.0] - 2026-09-14
 
