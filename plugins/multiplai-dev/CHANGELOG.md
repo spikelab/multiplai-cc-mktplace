@@ -17,6 +17,18 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-14
+
+### Changed
+
+- **The plan skill stops and asks when recon shows a mixed scope.** When the
+  requested work spans mechanisms with different risk and effort profiles (a
+  config change beside a protocol rewrite, a no-tools call path beside a
+  tool-using harness), the planner now puts the split to the user as explicit
+  choices before writing scope into the plan, instead of picking a piece or
+  silently planning all of it. Pieces that can only ship together stay one
+  scope.
+
 ## [0.15.0] - 2026-08-19
 
 ### Changed
