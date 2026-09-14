@@ -28,7 +28,7 @@ Testing** — not Deploying/Deployed (see [Deploy is out of scope](#deploy-is-ou
 | 3 | Shaping | Product | actively spec'ing, consulting eng | spec ready |
 | 4 | Planning | Eng | specs → impl plan, reviewed by another eng | plan approved |
 | 5 | In Development | Author | plan being implemented; may bounce back to Shaping/Planning | branch pushed |
-| 6 | In Review | Reviewer | a real PR into `staging_*`, reviewed there — not a fetch-and-diff of the branch. Decided 2026-08-11 (`DolceBot/ARTIFACTS/dark-factory-2026/plan-agent-collaboration-protocol-2026-08-11.md`), and the rule is for everyone, not only agents: two review surfaces for the same code is worse than either alone. The staging PR merges as a merge commit, never a squash — the ticket sync reads `DB-XXXX` out of the commit message | merged to staging |
+| 6 | In Review | Reviewer | a real PR into `staging_*`, reviewed there — not a fetch-and-diff of the branch. Decided 2026-08-11 (`knowhere/RESOURCES/dark-factory/model/collaboration-protocol.md`, generalized from the DolceBot protocol of that date), and the rule is for everyone, not only agents: two review surfaces for the same code is worse than either alone. The staging PR merges as a merge commit, never a squash — the ticket sync reads `DB-XXXX` out of the commit message | merged to staging |
 | 7 | Testing | Product/QA | on staging; E2E/manual testing not possible in docker | prod PR opened |
 | 8 | Ready for Prod | — | prod PR open, awaiting merge | prod PR merged |
 | 9 | Deploying | Ops | picked up next deployment session | deployed |
