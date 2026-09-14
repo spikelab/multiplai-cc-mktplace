@@ -45,7 +45,9 @@ profiles — a config change and a protocol rewrite, a no-tools call path and a
 tool-using agent harness — put the split to the user as explicit choices before
 you write scope into the plan. Do not pick which piece is in scope on their
 behalf, and do not silently plan all of it. The user decides what the plan
-covers; recon only tells them what the pieces are.
+covers; recon only tells them what the pieces are. Pieces that can only
+ship together are one scope: plan them, and note the risk split under the
+work items instead of asking.
 
 ### 3. Write the plan file
 
