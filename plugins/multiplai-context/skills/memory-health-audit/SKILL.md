@@ -21,6 +21,7 @@ Full cross-source analysis of the memory system. Produces a dated assessment sna
 | Memory corpus | `.multiplai/memory/*.md` | The actual memory files — structure, size, staleness |
 | Memory catalog | `$CLAUDE_PLUGIN_DATA/catalogs/memory.json` | Routing descriptions, intent_domains, anti_domains |
 | Utilisation | `$CLAUDE_PLUGIN_DATA/utilisation.jsonl` | Per-session injected-vs-estimated-used records (two estimators; see Phase 1.5) |
+| Session transcripts | `$CLAUDE_CONFIG_DIR/projects/**/<session>.jsonl` | Skill tool calls and slash commands, joined against `ROUTING` skill suggestions (Phase 1.6) |
 | Previous assessments | `$CLAUDE_PLUGIN_DATA/memory-health/*.md` | Past audit snapshots for delta comparison |
 
 ## Workflow
@@ -149,6 +150,40 @@ Add `--json` when you need the raw numbers for the assessment file.
 If `utilisation.jsonl` does not exist yet, or every row lands under
 "insufficient data", say so plainly and skip the section. A table nobody can
 act on is worse than no table.
+
+### Phase 1.6: Skill routing precision (run directly, do NOT delegate)
+
+Every `ROUTING` line also carries `skills=[...]` — the skills the router
+*suggested* for that prompt. Retrieval frequency says how often each skill was
+suggested; it cannot say whether the suggestion was any use. This step joins
+each suggestion against the session transcript and reports the share of
+suggestion events where one of the suggested skills was then invoked (Skill
+tool or slash command) before the session's next prompt. Why it matters:
+"Demystifying Agent Skills" (arXiv 2608.14036) measured actual-use retrieval
+precision falling from 29.6% to 3.3% as a skill pool grew from 5 to 100, and
+this catalog only grows (derive the current count: `ls -d "${CLAUDE_PLUGIN_ROOT}"/../*/skills/*/ | wc -l`).
+
+```bash
+uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/skill_routing_precision.py" --days 30
+```
+
+Add `--json` for the assessment file. Report three things verbatim:
+
+- **Prompt-level precision** and its denominator (suggestion events with a
+  transcript). Under about 30 events the figure is noise; say so and skip
+  the per-skill rows.
+- **Suggested at least 3 times, never invoked.** These are routing findings:
+  either the skill's catalog description matches prompts it should not, or
+  the skill is right and the session did the work by hand. Decide which per
+  row from the diary; do not propose removing a skill from this number alone.
+- **Per-skill ratio** for the top rows, so a broad description (suggested on
+  many prompts, invoked on few) is visible next to a narrow one.
+
+Limits, so the number is not over-read: a suggestion invoked *after* the
+session's next prompt is a miss for the prompt that suggested it; a skill
+invoked inside a subagent is never credited; a skill used because Claude
+already knew it, with no suggestion, is invisible here. The measure is
+"did the hint precede a use", not "did the hint cause it".
 
 ### Phase 2: Cross-Correlate
 
