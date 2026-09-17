@@ -21,7 +21,7 @@ Full cross-source analysis of the memory system. Produces a dated assessment sna
 | Memory corpus | `.multiplai/memory/*.md` | The actual memory files — structure, size, staleness |
 | Memory catalog | `$CLAUDE_PLUGIN_DATA/catalogs/memory.json` | Routing descriptions, intent_domains, anti_domains |
 | Utilisation | `$CLAUDE_PLUGIN_DATA/utilisation.jsonl` | Per-session injected-vs-estimated-used records (two estimators; see Phase 1.5) |
-| Session transcripts | `$CLAUDE_CONFIG_DIR/projects/**/<session>.jsonl` | Skill tool calls and slash commands, joined against `ROUTING` skill suggestions (Phase 1.6) |
+| Session transcripts | `$CLAUDE_CONFIG_DIR/projects/<proj>/<session>.jsonl` | Per-prompt hook attachments (the skills the model was shown) joined against Skill tool calls and slash commands (Phase 1.6) |
 | Previous assessments | `$CLAUDE_PLUGIN_DATA/memory-health/*.md` | Past audit snapshots for delta comparison |
 
 ## Workflow
@@ -153,24 +153,35 @@ act on is worse than no table.
 
 ### Phase 1.6: Skill routing precision (run directly, do NOT delegate)
 
-Every `ROUTING` line also carries `skills=[...]` — the skills the router
-*suggested* for that prompt. Retrieval frequency says how often each skill was
-suggested; it cannot say whether the suggestion was any use. This step joins
-each suggestion against the session transcript and reports the share of
-suggestion events where one of the suggested skills was then invoked (Skill
-tool or slash command) before the session's next prompt. Why it matters:
-"Demystifying Agent Skills" (arXiv 2608.14036) measured actual-use retrieval
-precision falling from 29.6% to 3.3% as a skill pool grew from 5 to 100, and
-this catalog only grows (derive the current count: `ls -d "${CLAUDE_PLUGIN_ROOT}"/../*/skills/*/ | wc -l`).
+The context hook suggests skills per prompt. Retrieval frequency says how
+often each skill was suggested; it cannot say whether the suggestion was any
+use. This step reads each session transcript: the prompt's `UserPromptSubmit`
+hook attachment records the `=== SKILLS ===` block the model was actually
+shown (after the re-recommendation cooldown), and the Skill tool calls and
+slash commands that follow record what was used. It reports the share of
+suggestion events where one of the suggested skills was then invoked before
+the session's next prompt. Transcripts are kept for a year, so the window is
+not capped by the 7-day log retention; the header prints the earliest prompt
+actually read. Why it matters: "Demystifying Agent Skills" (arXiv 2608.14036)
+measured actual-use retrieval precision falling from 29.6% to 3.3% as a skill
+pool grew from 5 to 100. Derive the current pool from the router's own
+catalog, which is what it chooses from:
 
 ```bash
-uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/skill_routing_precision.py" --days 30
+python3 -c "import json,os; print(len(json.load(open(os.path.join(os.environ['CLAUDE_PLUGIN_DATA'],'catalogs','skills.json')))['entries']))"
 ```
 
-Add `--json` for the assessment file. Report three things verbatim:
+One run gives both outputs:
 
-- **Prompt-level precision** and its denominator (suggestion events with a
-  transcript). Under about 30 events the figure is noise; say so and skip
+```bash
+uv run --project "${CLAUDE_PLUGIN_ROOT}/scripts" "${CLAUDE_PLUGIN_ROOT}/scripts/skill_routing_precision.py" \
+  --days 30 --json-out "${CLAUDE_PLUGIN_DATA}/memory-health/skill-precision-$(date +%Y-%m-%d).json"
+```
+
+Report three things verbatim:
+
+- **Prompt-level precision** and its denominator (prompts with a skill
+  suggestion). Under about 30 events the figure is noise; say so and skip
   the per-skill rows.
 - **Suggested at least 3 times, never invoked.** These are routing findings:
   either the skill's catalog description matches prompts it should not, or

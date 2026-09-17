@@ -16,21 +16,26 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.55.0] - 2026-09-16
+## [0.55.0] - 2026-09-17
 
 ### Added
 
 - **`/multiplai-context:memory-health-audit` now reports skill-routing
-  precision.** New `scripts/skill_routing_precision.py` joins the
-  `ROUTING ... skills=[...]` suggestions the context hook already logs against
-  the Skill tool calls and slash commands in each session's transcript, and
-  reports the share of suggestion events where a suggested skill was then
-  invoked before the session's next prompt, per-skill suggested/invoked
-  counts, and the skills suggested repeatedly but never used. Read-only;
-  `--days N` (default 30, 0 = all logs) and `--json`. Motivation: a skill
-  pool's retrieval precision decays as it grows (arXiv 2608.14036: 29.6% →
-  3.3% from 5 to 100 skills), and until now nothing here measured it. First
-  live reading on 2026-09-16: 33.7% over 83 suggestion events.
+  precision.** New `scripts/skill_routing_precision.py` reads each main
+  session transcript: the prompt's `UserPromptSubmit` hook attachment says
+  which skills the context hook actually showed the model, and the Skill tool
+  calls and slash commands that follow say which were used. It reports the
+  share of suggestion events where a suggested skill was then invoked before
+  the session's next prompt, per-skill suggested/invoked counts, and the
+  skills suggested repeatedly but never used. Read-only; `--days N` (default
+  30, 0 = every transcript), `--json`, and `--json-out FILE` for the
+  assessment copy from the same run. Reading transcripts rather than the
+  `ROUTING` log means cooldown-suppressed suggestions are not counted, slash
+  commands on the suggesting prompt are credited, and the window is not
+  capped by the 7-day log retention. Motivation: a skill pool's retrieval
+  precision decays as it grows (arXiv 2608.14036: 29.6% → 3.3% from 5 to 100
+  skills), and until now nothing here measured it. First live reading on
+  2026-09-17: 24.9% over 277 suggestion events in 30 days.
 
 ## [0.54.0] - 2026-09-14
 

@@ -1,61 +1,65 @@
 """Skill-routing precision: did a suggested skill get invoked?
 
-``context_manager.py`` writes one ``ROUTING memory=[...] skills=[...]
-resources=[...]`` line per prompt to ``<logs_dir>/context_manager-*.log``.
-The skills list is what the router *suggested*. Nothing records whether the
-session then *used* one of them — that lives in the session transcript, as a
-``Skill`` tool_use block (``input.skill``) or a ``<command-name>`` slash
-invocation in a user turn.
+The context hook (``context_manager.py``) suggests skills per prompt. What the
+model actually saw is recorded in the session transcript itself: Claude Code
+stores every ``UserPromptSubmit`` hook's output as an ``attachment`` entry of
+type ``hook_additional_context``, chained by ``parentUuid`` back to the
+``user`` entry it belongs to. The hook's ``=== SKILLS ===`` block lists each
+suggested skill as a ``## <name>`` heading. Large outputs are spilled to a
+``<persisted-output>`` file whose path the attachment names.
 
-This module joins the two. Each ROUTING line with a non-empty skills list is a
-*suggestion event*. Its window runs from its own timestamp to the next ROUTING
-line of the same session (or the end of the transcript), so one invocation
-credits at most one prompt. A suggestion event is a *hit* when at least one
-suggested skill was invoked inside that window.
+That record is the right source for three reasons the ``ROUTING`` log line is
+not: it is written *after* the re-recommendation cooldown, so it holds only
+skills the model was shown; it is keyed to the prompt by uuid, so no
+timestamp join is needed; and transcripts are kept for a year where the logs
+are swept after seven days.
+
+Whether the session then *used* a suggestion is in the same transcript: a
+``Skill`` tool_use block (``input.skill``) in an assistant message, or a
+``<command-name>`` slash invocation in a user turn.
+
+Join rule: a *suggestion event* is a user prompt whose hook attachment names
+at least one skill. Its window runs, in transcript order, from that user
+entry (inclusive — a slash command *is* the prompt) up to the session's next
+real user prompt. The event is a *hit* when at least one suggested skill was
+invoked inside the window. One invocation therefore credits at most one
+prompt.
 
 Why the number matters: "Demystifying Agent Skills: Why They Work — Until They
 Don't" (arXiv 2608.14036) measured actual-use retrieval precision falling from
 29.6% to 3.3% as the skill pool grew from 5 to 100. A catalog that only grows
 needs this figure to notice the decay.
 
-Name matching: the router suggests bare names (``costs``); invocations are
-qualified (``multiplai-context:costs``). Both sides are reduced to the segment
-after the last colon before comparison.
+Name matching: suggestions are bare names (``costs``); invocations may be
+qualified (``multiplai-context:costs``). Both sides reduce to the segment
+after the last colon.
 
-Session matching: the log carries an 8-character session prefix; transcripts
-are named by the full session id. A prefix that matches more than one main
-transcript is reported as ambiguous and skipped, never guessed.
+Scope: main-session transcripts only (``projects/<proj>/<session>.jsonl``, also
+under ``projects_migration_tmp/``). Subagent transcripts live in
+subdirectories and are never read: a Skill call inside a subagent was not a
+response to the parent prompt's suggestion.
 
-Timestamps: log lines are second-precision UTC (``...:34Z``); transcript
-entries carry milliseconds (``...:10.422Z``). Both parse to aware datetimes.
-
-Nothing here writes. It reads logs and transcripts and returns numbers.
+Nothing here writes. It reads transcripts and returns numbers.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, Optional
+from typing import Iterator, Optional
 
-from lib.costing_collector import (
-    _COMMAND_IGNORE,
-    _COMMAND_RE,
-    _user_text,
-    classify_transcript,
-    find_transcripts,
-)
+from lib.costing_collector import _COMMAND_IGNORE, _COMMAND_RE, _user_text
+from lib.timeparse import parse_ts
 
-ROUTING_LINE_RE = re.compile(
-    r"^\[(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z?\]\s+"
-    r"\[context_manager\]\s+"
-    r"\[session:(?P<session>[^\]]*)\]\s+"
-    r"INFO:\s?ROUTING memory=(?P<memory>\[.*?\]) skills=(?P<skills>\[.*?\]) resources="
-)
+SKILLS_HEADER = "=== SKILLS ==="
+_SECTION_HEADER_RE = re.compile(r"^=== .+ ===$", re.MULTILINE)
+_SKILL_HEADING_RE = re.compile(r"^## (\S+)", re.MULTILINE)
+_PERSISTED_PATH_RE = re.compile(r"Full output saved to: (\S+)")
 
 
 # ----------------------------------------------------------------------
@@ -65,87 +69,74 @@ ROUTING_LINE_RE = re.compile(
 
 @dataclass
 class Suggestion:
-    """One ROUTING line with a non-empty skills list."""
+    """One user prompt whose hook attachment named at least one skill."""
 
-    ts: datetime
-    session_prefix: str
+    ts: Optional[datetime]
+    session: str
     skills: list[str]
-    invoked: list[str] = field(default_factory=list)  # suggested names that were invoked
-    transcript: Optional[str] = None  # None: no transcript matched the prefix
-
-
-@dataclass
-class Invocation:
-    ts: datetime
-    name: str  # bare name, after the last colon
-    via: str  # "tool" or "command"
+    invoked: list[str] = field(default_factory=list)  # suggested names invoked in-window
 
 
 def bare_name(name: str) -> str:
-    """``multiplai-context:costs`` → ``costs``; ``costs`` → ``costs``."""
+    """``multiplai-context:costs`` → ``costs``; ``/costs`` → ``costs``."""
     name = name.strip().lstrip("/")
     return name.rsplit(":", 1)[-1].strip()
 
 
-def parse_ts(value: object) -> Optional[datetime]:
-    """Aware UTC datetime from a log or transcript timestamp, else ``None``."""
-    if not isinstance(value, str) or not value:
-        return None
-    raw = value.strip()
-    if raw.endswith("Z"):
-        raw = raw[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(raw)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
 # ----------------------------------------------------------------------
-# Log side
+# Attachment side
 # ----------------------------------------------------------------------
 
 
-def parse_routing_line(line: str) -> Optional[tuple[datetime, str, list[str]]]:
-    """``(ts, session_prefix, skills)`` for a ROUTING line, else ``None``.
+def suggested_skills(text: str) -> list[str]:
+    """Bare skill names under the ``=== SKILLS ===`` block of hook output.
 
-    Lines whose skills list is empty parse to an empty list — the caller
-    decides whether those count (they are prompts, not suggestion events).
+    The block ends at the next ``=== ... ===`` header or at end of text.
     """
-    m = ROUTING_LINE_RE.match(line.rstrip("\n"))
-    if not m:
-        return None
-    ts = parse_ts(m.group("ts") + "Z")
-    if ts is None:
-        return None
-    try:
-        skills = json.loads(m.group("skills"))
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(skills, list):
-        return None
-    return ts, m.group("session"), [bare_name(str(s)) for s in skills if str(s).strip()]
+    start = text.find(SKILLS_HEADER)
+    if start < 0:
+        return []
+    body = text[start + len(SKILLS_HEADER):]
+    nxt = _SECTION_HEADER_RE.search(body)
+    if nxt:
+        body = body[: nxt.start()]
+    seen: list[str] = []
+    for name in _SKILL_HEADING_RE.findall(body):
+        bare = bare_name(name)
+        if bare and bare not in seen:
+            seen.append(bare)
+    return seen
 
 
-def iter_routing_lines(logs_dir: Path) -> Iterator[tuple[datetime, str, list[str]]]:
-    """Every parseable ROUTING line across ``context_manager*.log``, in file order."""
-    logs_dir = Path(logs_dir)
-    if not logs_dir.is_dir():
-        return
-    files = sorted(logs_dir.glob("context_manager-*.log")) + [logs_dir / "context_manager.log"]
-    for path in files:
-        if not path.is_file():
-            continue
+def attachment_text(entry: dict) -> str:
+    """The hook output an attachment carries, following a persisted-output
+    pointer to its file when the harness spilled it. Unreadable → ``""``."""
+    content = (entry.get("attachment") or {}).get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        text = "\n".join(c if isinstance(c, str) else json.dumps(c) for c in content)
+    else:
+        return ""
+    if "<persisted-output>" in text:
+        m = _PERSISTED_PATH_RE.search(text)
+        if not m:
+            return ""
         try:
-            with path.open(encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    parsed = parse_routing_line(line)
-                    if parsed is not None:
-                        yield parsed
+            return Path(m.group(1)).read_text(encoding="utf-8", errors="replace")
         except OSError:
-            continue
+            return ""
+    return text
+
+
+def _is_prompt_hook_attachment(entry: dict) -> bool:
+    att = entry.get("attachment")
+    return (
+        entry.get("type") == "attachment"
+        and isinstance(att, dict)
+        and att.get("type") == "hook_additional_context"
+        and att.get("hookName") == "UserPromptSubmit"
+    )
 
 
 # ----------------------------------------------------------------------
@@ -153,90 +144,182 @@ def iter_routing_lines(logs_dir: Path) -> Iterator[tuple[datetime, str, list[str
 # ----------------------------------------------------------------------
 
 
-def main_transcripts_by_prefix(config_dir: Path) -> dict[str, list[Path]]:
-    """Map every 8-char session prefix to the main-session transcripts it matches.
+def iter_main_transcripts(config_dir: Path, *, modified_since: Optional[datetime] = None) -> Iterator[Path]:
+    """Main-session transcripts under ``projects/``: one directory level down
+    (plus the ``projects_migration_tmp/`` prefix), ``*.jsonl`` files only.
 
-    Subagent and workflow transcripts are excluded: a Skill call inside a
-    subagent was not a response to the parent prompt's suggestion.
+    A single ``scandir`` pass; subagent transcripts sit deeper and are never
+    listed. ``modified_since`` skips files untouched since that instant —
+    a transcript with no writes in the window has no prompts in it.
     """
     projects = Path(config_dir) / "projects"
-    out: dict[str, list[Path]] = defaultdict(list)
-    for path in find_transcripts(Path(config_dir)):
-        info = classify_transcript(projects, path)
-        if info["sidechain"]:
+    if not projects.is_dir():
+        return
+    roots = [projects]
+    tmp = projects / "projects_migration_tmp"
+    if tmp.is_dir():
+        roots.append(tmp)
+    cutoff = modified_since.timestamp() if modified_since else None
+    for root in roots:
+        try:
+            project_dirs = [d for d in os.scandir(root) if d.is_dir() and d.name != "projects_migration_tmp"]
+        except OSError:
             continue
-        session = info["session"]
-        if len(session) >= 8:
-            out[session[:8]].append(path)
-    return dict(out)
-
-
-def skill_invocations(path: Path) -> list[Invocation]:
-    """Skill invocations in one transcript, in file order.
-
-    Two sources: ``Skill`` tool_use blocks in assistant messages, and
-    ``<command-name>`` tags in user turns (a skill typed as a slash command
-    never goes through the Skill tool). Session-mechanics commands
-    (``/clear``, ``/model``, ...) are ignored, matching the cost collector.
-    """
-    found: list[Invocation] = []
-    try:
-        fh = Path(path).open("rb")
-    except OSError:
-        return found
-    with fh:
-        for raw in fh:
+        for proj in sorted(project_dirs, key=lambda d: d.name):
             try:
-                entry = json.loads(raw)
-            except json.JSONDecodeError:
+                files = list(os.scandir(proj.path))
+            except OSError:
                 continue
-            if not isinstance(entry, dict):
-                continue
-            ts = parse_ts(entry.get("timestamp"))
-            if ts is None:
-                continue
-            kind = entry.get("type")
-            if kind == "assistant":
-                content = (entry.get("message") or {}).get("content")
-                if not isinstance(content, list):
+            for f in sorted(files, key=lambda e: e.name):
+                if not f.name.endswith(".jsonl") or not f.is_file():
                     continue
-                for block in content:
-                    if (
-                        isinstance(block, dict)
-                        and block.get("type") == "tool_use"
-                        and block.get("name") == "Skill"
-                    ):
-                        skill = (block.get("input") or {}).get("skill")
-                        if isinstance(skill, str) and skill.strip():
-                            found.append(Invocation(ts, bare_name(skill), "tool"))
-            elif kind == "user":
-                text = _user_text(entry)
-                if text is None:
+                if cutoff is not None:
+                    try:
+                        if f.stat().st_mtime < cutoff:
+                            continue
+                    except OSError:
+                        continue
+                yield Path(f.path)
+
+
+def _load_entries(path: Path) -> list[dict]:
+    out: list[dict] = []
+    try:
+        with Path(path).open("rb") as fh:
+            for raw in fh:
+                try:
+                    entry = json.loads(raw)
+                except json.JSONDecodeError:
                     continue
-                m = _COMMAND_RE.search(text)
-                if m:
-                    name = m.group(1).strip()
-                    if name and name not in _COMMAND_IGNORE:
-                        found.append(Invocation(ts, bare_name(name), "command"))
-    return found
+                if isinstance(entry, dict):
+                    out.append(entry)
+    except OSError:
+        return []
+    return out
+
+
+def _skill_tool_uses(entry: dict) -> list[str]:
+    content = (entry.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        return []
+    names = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "Skill":
+            skill = (block.get("input") or {}).get("skill")
+            if isinstance(skill, str) and skill.strip():
+                names.append(bare_name(skill))
+    return names
+
+
+def _command_in_prompt(text: str) -> Optional[str]:
+    m = _COMMAND_RE.search(text)
+    if not m:
+        return None
+    name = m.group(1).strip()
+    if not name or name in _COMMAND_IGNORE:
+        return None
+    return bare_name(name)
+
+
+def measure_transcript(
+    path: Path, *, since: Optional[datetime] = None
+) -> tuple[int, list[Suggestion], Optional[datetime]]:
+    """``(prompts, suggestions, earliest_prompt_ts)`` for one main transcript.
+
+    ``prompts`` counts real user prompts at or after ``since``; each
+    suggestion's window is resolved by transcript order, not timestamps.
+    """
+    entries = _load_entries(path)
+    session = Path(path).stem
+    by_uuid = {e["uuid"]: e for e in entries if isinstance(e.get("uuid"), str)}
+
+    # Pass 1: real user prompts in order, with their index; invocations by index.
+    prompt_idx: list[int] = []
+    prompt_text: dict[int, str] = {}
+    invocations: list[tuple[int, str]] = []  # (index, bare name)
+    for i, e in enumerate(entries):
+        if e.get("isSidechain"):
+            continue
+        kind = e.get("type")
+        if kind == "user":
+            text = _user_text(e)
+            if text is None:
+                continue
+            prompt_idx.append(i)
+            prompt_text[i] = text
+            cmd = _command_in_prompt(text)
+            if cmd:
+                invocations.append((i, cmd))
+        elif kind == "assistant":
+            for name in _skill_tool_uses(e):
+                invocations.append((i, name))
+
+    # Pass 2: hook attachments → owning user prompt (walk parentUuid).
+    index_of = {id(e): i for i, e in enumerate(entries)}
+    skills_by_prompt: dict[int, list[str]] = {}
+    for e in entries:
+        if not _is_prompt_hook_attachment(e):
+            continue
+        # A slash-command prompt is followed by an ``isMeta`` user entry that
+        # carries the skill body, and the attachment hangs off *that*; keep
+        # walking until the entry is a real prompt.
+        cur: Optional[dict] = e
+        hops = 0
+        pi: Optional[int] = None
+        while cur is not None and hops < 50:
+            if cur.get("type") == "user":
+                idx = index_of.get(id(cur))
+                if idx in prompt_text:
+                    pi = idx
+                    break
+            cur = by_uuid.get(cur.get("parentUuid") or "")
+            hops += 1
+        if pi is None:
+            continue
+        names = suggested_skills(attachment_text(e))
+        if names:
+            skills_by_prompt.setdefault(pi, [])
+            for n in names:
+                if n not in skills_by_prompt[pi]:
+                    skills_by_prompt[pi].append(n)
+
+    # Pass 3: windows and hits.
+    prompts = 0
+    earliest: Optional[datetime] = None
+    suggestions: list[Suggestion] = []
+    for n, pi in enumerate(prompt_idx):
+        ts = parse_ts(entries[pi].get("timestamp"))
+        if since is not None and (ts is None or ts < since):
+            continue
+        prompts += 1
+        if ts is not None and (earliest is None or ts < earliest):
+            earliest = ts
+        skills = skills_by_prompt.get(pi)
+        if not skills:
+            continue
+        end = prompt_idx[n + 1] if n + 1 < len(prompt_idx) else len(entries)
+        wanted = set(skills)
+        hit = sorted({name for idx, name in invocations if pi <= idx < end and name in wanted})
+        suggestions.append(Suggestion(ts, session, list(skills), invoked=hit))
+    return prompts, suggestions, earliest
 
 
 # ----------------------------------------------------------------------
-# Join
+# Report
 # ----------------------------------------------------------------------
 
 
 @dataclass
 class Report:
     since: Optional[datetime]
-    prompts_total: int = 0  # ROUTING lines in window, any skills value
+    earliest_prompt: Optional[datetime] = None  # oldest prompt actually read
+    transcripts_read: int = 0
+    prompts_total: int = 0  # real user prompts in window
     suggestions: list[Suggestion] = field(default_factory=list)
-    unmatched_sessions: int = 0  # suggestion events with no transcript
-    ambiguous_sessions: int = 0  # prefix matched >1 main transcript
 
     @property
     def suggested_prompts(self) -> int:
-        return len([s for s in self.suggestions if s.transcript is not None])
+        return len(self.suggestions)
 
     @property
     def hit_prompts(self) -> int:
@@ -248,13 +331,10 @@ class Report:
         return (self.hit_prompts / n) if n else None
 
     def per_skill(self) -> list[dict]:
-        """One row per skill ever suggested (in a matched session): suggested,
-        invoked-after-suggestion counts, and the ratio."""
+        """One row per suggested skill: suggested, invoked-after-suggestion, ratio."""
         suggested: Counter[str] = Counter()
         invoked: Counter[str] = Counter()
         for s in self.suggestions:
-            if s.transcript is None:
-                continue
             for name in set(s.skills):
                 suggested[name] += 1
             for name in set(s.invoked):
@@ -262,104 +342,50 @@ class Report:
         rows = []
         for name, n in suggested.most_common():
             k = invoked.get(name, 0)
-            rows.append({"skill": name, "suggested": n, "invoked": k,
-                         "ratio": (k / n) if n else None})
+            rows.append({"skill": name, "suggested": n, "invoked": k, "ratio": (k / n) if n else None})
         return rows
 
     def never_invoked(self, *, min_suggested: int = 3) -> list[dict]:
-        return [r for r in self.per_skill()
-                if r["invoked"] == 0 and r["suggested"] >= min_suggested]
+        return [r for r in self.per_skill() if r["invoked"] == 0 and r["suggested"] >= min_suggested]
 
     def to_dict(self) -> dict:
         return {
             "since": self.since.isoformat() if self.since else None,
+            "earliest_prompt": self.earliest_prompt.isoformat() if self.earliest_prompt else None,
+            "transcripts_read": self.transcripts_read,
             "prompts_total": self.prompts_total,
             "suggested_prompts": self.suggested_prompts,
             "hit_prompts": self.hit_prompts,
             "precision": self.precision,
-            "unmatched_sessions": self.unmatched_sessions,
-            "ambiguous_sessions": self.ambiguous_sessions,
             "per_skill": self.per_skill(),
             "never_invoked": self.never_invoked(),
         }
 
 
-def measure(
-    routing: Iterable[tuple[datetime, str, list[str]]],
-    transcripts_by_prefix: dict[str, list[Path]],
-    *,
-    since: Optional[datetime] = None,
-    invocations_for: Optional[Callable[[Path], list[Invocation]]] = None,
-) -> Report:
-    """Join ROUTING events against transcript invocations.
-
-    ``invocations_for(path) -> list[Invocation]`` defaults to
-    :func:`skill_invocations`; tests inject a stub.
-    """
-    read = invocations_for or skill_invocations
-    report = Report(since=since)
-
-    # Group prompts by session, in time order, so each suggestion's window
-    # closes at the session's next prompt.
-    by_session: dict[str, list[tuple[datetime, list[str]]]] = defaultdict(list)
-    for ts, prefix, skills in routing:
-        if since is not None and ts < since:
-            continue
-        report.prompts_total += 1
-        by_session[prefix].append((ts, skills))
-
-    cache: dict[Path, list[Invocation]] = {}
-    for prefix, prompts in by_session.items():
-        prompts.sort(key=lambda p: p[0])
-        events = [(ts, skills) for ts, skills in prompts if skills]
-        if not events:
-            continue
-        paths = transcripts_by_prefix.get(prefix, [])
-        if len(paths) > 1:
-            report.ambiguous_sessions += len(events)
-            for ts, skills in events:
-                report.suggestions.append(Suggestion(ts, prefix, skills, transcript=None))
-            continue
-        if not paths:
-            report.unmatched_sessions += len(events)
-            for ts, skills in events:
-                report.suggestions.append(Suggestion(ts, prefix, skills, transcript=None))
-            continue
-        path = paths[0]
-        if path not in cache:
-            cache[path] = read(path)
-        invocations = cache[path]
-        # Window end = next prompt of the same session (any skills value).
-        for i, (ts, skills) in enumerate(prompts):
-            if not skills:
-                continue
-            end = prompts[i + 1][0] if i + 1 < len(prompts) else None
-            wanted = set(skills)
-            hit = sorted({
-                inv.name for inv in invocations
-                if inv.name in wanted and inv.ts >= ts and (end is None or inv.ts < end)
-            })
-            report.suggestions.append(
-                Suggestion(ts, prefix, skills, invoked=hit, transcript=str(path))
-            )
-    return report
-
-
 def run(
-    logs_dir: Path,
     config_dir: Path,
     *,
     days: Optional[int] = 30,
     now: Optional[datetime] = None,
 ) -> Report:
-    """Measure precision over the last ``days`` days (``None`` = all logs)."""
+    """Measure precision over the last ``days`` days.
+
+    ``days`` of ``None`` or ``0`` means every transcript on disk; a negative
+    value is a caller error.
+    """
+    if days is not None and days < 0:
+        raise ValueError(f"days must be >= 0 or None, got {days}")
     now = now or datetime.now(timezone.utc)
-    since = (now - timedelta(days=days)) if days is not None else None
-    return measure(
-        iter_routing_lines(Path(logs_dir)),
-        main_transcripts_by_prefix(Path(config_dir)),
-        since=since,
-    )
+    since = (now - timedelta(days=days)) if days else None
+    report = Report(since=since)
+    for path in iter_main_transcripts(Path(config_dir), modified_since=since):
+        prompts, suggestions, earliest = measure_transcript(path, since=since)
+        report.transcripts_read += 1
+        report.prompts_total += prompts
+        report.suggestions.extend(suggestions)
+        if earliest is not None and (report.earliest_prompt is None or earliest < report.earliest_prompt):
+            report.earliest_prompt = earliest
+    return report
 
 
 # ----------------------------------------------------------------------
@@ -371,19 +397,22 @@ def _pct(value: Optional[float]) -> str:
     return "n/a" if value is None else f"{value * 100:.1f}%"
 
 
+def _day(dt: Optional[datetime]) -> str:
+    return dt.strftime("%Y-%m-%d") if dt else "n/a"
+
+
 def render(report: Report, *, limit: int = 25) -> str:
     lines = []
-    window = report.since.strftime("%Y-%m-%d") if report.since else "all logs"
-    lines.append(f"# Skill routing precision (since {window})")
+    window = f"since {_day(report.since)}" if report.since else "all transcripts"
+    lines.append(f"# Skill routing precision ({window}; earliest prompt read {_day(report.earliest_prompt)})")
     lines.append("")
     lines.append("| Measure | Value |")
     lines.append("|---|---|")
-    lines.append(f"| Prompts routed | {report.prompts_total} |")
-    lines.append(f"| Prompts with a skill suggestion (transcript found) | {report.suggested_prompts} |")
+    lines.append(f"| Transcripts read | {report.transcripts_read} |")
+    lines.append(f"| Prompts in window | {report.prompts_total} |")
+    lines.append(f"| Prompts with a skill suggestion | {report.suggested_prompts} |")
     lines.append(f"| ... where a suggested skill was then invoked | {report.hit_prompts} |")
     lines.append(f"| **Prompt-level precision** | **{_pct(report.precision)}** |")
-    lines.append(f"| Suggestion events with no transcript | {report.unmatched_sessions} |")
-    lines.append(f"| Suggestion events with an ambiguous session prefix | {report.ambiguous_sessions} |")
     lines.append("")
     rows = report.per_skill()
     if rows:
@@ -408,6 +437,8 @@ def render(report: Report, *, limit: int = 25) -> str:
     lines.append(
         "A suggestion counts as a hit when the session invoked one of the "
         "suggested skills (Skill tool or slash command) before its next prompt. "
+        "Suggestions are read from the prompt's hook attachment in the transcript, "
+        "so only skills the model was actually shown are counted. "
         "Reference: arXiv 2608.14036 measured precision falling 29.6% → 3.3% "
         "as a skill pool grew from 5 to 100."
     )

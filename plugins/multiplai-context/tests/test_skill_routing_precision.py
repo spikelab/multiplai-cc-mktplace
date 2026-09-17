@@ -1,15 +1,19 @@
 """Tests for skill-routing precision (lib/skill_precision.py + the CLI).
 
 The property that must hold: a suggestion is a hit only when one of *its*
-skills was invoked in *its* session, *after* it and *before* the session's
-next prompt. Everything else is bookkeeping around that join.
+skills was invoked in *its* session, in transcript order, at or after the
+prompt that carried it and before the session's next real prompt. The
+suggestion itself is read from the prompt's ``UserPromptSubmit`` hook
+attachment, never from a log.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -22,197 +26,242 @@ import skill_routing_precision as cli  # noqa: E402
 SESS_A = "aaaaaaaa-1111-2222-3333-444444444444"
 SESS_B = "bbbbbbbb-1111-2222-3333-444444444444"
 
-
-def _log_line(ts: str, session: str, skills: list[str], memory: list[str] | None = None) -> str:
-    return (
-        f"[{ts}] [context_manager] [session:{session[:8]}] INFO: "
-        f"ROUTING memory={json.dumps(memory or [])} skills={json.dumps(skills)} resources=[]\n"
-    )
+_N = [0]
 
 
-def _assistant_skill(ts: str, session: str, skill: str) -> str:
-    return json.dumps({
-        "type": "assistant", "timestamp": ts, "sessionId": session, "isSidechain": False,
-        "message": {"role": "assistant", "content": [
-            {"type": "text", "text": "on it"},
-            {"type": "tool_use", "id": "t1", "name": "Skill", "input": {"skill": skill}},
-        ]},
-    }) + "\n"
+def _uuid() -> str:
+    _N[0] += 1
+    return f"{_N[0]:08x}-0000-0000-0000-000000000000"
 
 
-def _user(ts: str, session: str, text: str) -> str:
-    return json.dumps({
-        "type": "user", "timestamp": ts, "sessionId": session, "isSidechain": False,
-        "message": {"role": "user", "content": text},
-    }) + "\n"
+def _entry(kind: str, ts: str, session: str, *, uuid: str | None = None,
+           parent: str | None = None, **extra) -> dict:
+    e = {"type": kind, "timestamp": ts, "sessionId": session, "isSidechain": False,
+         "uuid": uuid or _uuid(), "parentUuid": parent}
+    e.update(extra)
+    return e
 
 
-def _tool_result(ts: str, session: str) -> str:
-    return json.dumps({
-        "type": "user", "timestamp": ts, "sessionId": session,
-        "message": {"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "t1", "content": "done"}]},
-    }) + "\n"
+def _user(ts, session, text, **kw) -> dict:
+    return _entry("user", ts, session, message={"role": "user", "content": text}, **kw)
+
+
+def _meta_user(ts, session, **kw) -> dict:
+    return _entry("user", ts, session, isMeta=True, message={"role": "user", "content": [
+        {"type": "text", "text": "Base directory for this skill: /x"}]}, **kw)
+
+
+def _tool_result(ts, session, **kw) -> dict:
+    return _entry("user", ts, session, message={"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "done"}]}, **kw)
+
+
+def _assistant_skill(ts, session, skill, **kw) -> dict:
+    return _entry("assistant", ts, session, message={"role": "assistant", "content": [
+        {"type": "text", "text": "on it"},
+        {"type": "tool_use", "id": "t1", "name": "Skill", "input": {"skill": skill}}]}, **kw)
+
+
+def _attachment(ts, session, content, **kw) -> dict:
+    return _entry("attachment", ts, session, attachment={
+        "type": "hook_additional_context", "hookName": "UserPromptSubmit", "content": content}, **kw)
+
+
+def _hook_text(skills: list[str], memory: tuple[str, ...] = ("preferences.md",)) -> str:
+    parts = ["=== MEMORY ===", ""]
+    for m in memory:
+        parts.append(f"## {m}\nsome memory")
+    if skills:
+        parts.append("")
+        parts.append("=== SKILLS ===")
+        for s in skills:
+            parts.append(f"\n## {s}\nSummary.\nInvoke with /plugin:{s} when relevant.")
+    return "\n".join(parts)
+
+
+def _write(path: Path, entries: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
 
 
 @pytest.fixture
 def world(tmp_path: Path) -> dict:
-    """A logs dir with ROUTING lines and a config dir with two main transcripts
-    plus one subagent transcript that must be ignored."""
-    logs = tmp_path / "logs"
-    logs.mkdir()
-    (logs / "context_manager-2026-09-14.log").write_text(
-        # Session A: prompt 1 suggests costs+fleet-status; costs is invoked → hit.
-        _log_line("2026-09-14T10:00:00", SESS_A, ["costs", "fleet-status"])
-        # Session A: prompt 2 suggests gmail; nothing invoked → miss.
-        + _log_line("2026-09-14T10:10:00", SESS_A, ["gmail"])
-        # Session A: prompt 3 no suggestion → counts as a prompt only.
-        + _log_line("2026-09-14T10:20:00", SESS_A, [])
-        # Session B: suggests deep-research; invoked via slash command → hit.
-        + _log_line("2026-09-14T11:00:00", SESS_B, ["deep-research"])
-        # Unknown session: suggestion with no transcript.
-        + _log_line("2026-09-14T12:00:00", "cccccccc-0000", ["transcribe"])
-        # Unrelated line, must be ignored.
-        + "[2026-09-14T12:00:01Z] [context_manager] [session:aaaaaaaa] INFO: No context to inject\n",
-        encoding="utf-8",
-    )
-
+    """A config dir with two main transcripts plus one subagent transcript."""
     projects = tmp_path / "config" / "projects" / "-proj"
-    projects.mkdir(parents=True)
-    (projects / f"{SESS_A}.jsonl").write_text(
-        _user("2026-09-14T10:00:01.000Z", SESS_A, "what did this cost")
-        + _assistant_skill("2026-09-14T10:00:05.000Z", SESS_A, "multiplai-context:costs")
-        + _tool_result("2026-09-14T10:00:06.000Z", SESS_A)
-        # gmail invoked only AFTER prompt 3 — outside prompt 2's window → no credit.
-        + _user("2026-09-14T10:20:01.000Z", SESS_A, "check mail")
-        + _assistant_skill("2026-09-14T10:20:05.000Z", SESS_A, "multiplai-messaging:gmail"),
-        encoding="utf-8",
-    )
-    (projects / f"{SESS_B}.jsonl").write_text(
-        _user("2026-09-14T11:00:02.000Z", SESS_B,
-              "<command-message>deep-research</command-message>"
-              "<command-name>/multiplai-research:deep-research</command-name>"),
-        encoding="utf-8",
-    )
-    # Subagent of session A invoking gmail inside prompt 2's window: ignored.
-    sub = projects / SESS_A / "subagents"
-    sub.mkdir(parents=True)
-    (sub / "agent-x.jsonl").write_text(
-        _assistant_skill("2026-09-14T10:11:00.000Z", SESS_A, "multiplai-messaging:gmail"),
-        encoding="utf-8",
-    )
-    return {"logs": logs, "config": tmp_path / "config"}
+    spill_dir = projects / SESS_A / "tool-results"
+    spill_dir.mkdir(parents=True)
+
+    # --- Session A --------------------------------------------------------
+    # Prompt 1 suggests costs + fleet-status (spilled to a persisted file, and
+    # the attachment hangs two hops below the prompt); costs invoked → hit.
+    p1 = _user("2026-09-14T10:00:00.000Z", SESS_A, "what did this cost")
+    spill = spill_dir / "hook-1-additionalContext.txt"
+    spill.write_text(_hook_text(["costs", "fleet-status"]), encoding="utf-8")
+    a1_mid = _entry("attachment", "2026-09-14T10:00:03.000Z", SESS_A, parent=p1["uuid"],
+                    attachment={"type": "queued_command", "content": "x"})
+    a1 = _attachment("2026-09-14T10:00:04.000Z", SESS_A, [
+        f"<persisted-output>\nOutput too large. Full output saved to: {spill}\n\nPreview\n"],
+        parent=a1_mid["uuid"])
+    s1 = _assistant_skill("2026-09-14T10:00:05.000Z", SESS_A, "multiplai-context:costs", parent=a1["uuid"])
+    r1 = _tool_result("2026-09-14T10:00:06.000Z", SESS_A, parent=s1["uuid"])
+    # Prompt 2 suggests gmail (inline attachment); gmail invoked only after
+    # prompt 3 → miss for prompt 2.
+    p2 = _user("2026-09-14T10:10:00.000Z", SESS_A, "anything else?", parent=r1["uuid"])
+    a2 = _attachment("2026-09-14T10:10:03.000Z", SESS_A, _hook_text(["gmail"]), parent=p2["uuid"])
+    # Prompt 3: no skills block → a prompt, not a suggestion event.
+    p3 = _user("2026-09-14T10:20:00.000Z", SESS_A, "check mail", parent=a2["uuid"])
+    a3 = _attachment("2026-09-14T10:20:03.000Z", SESS_A, _hook_text([]), parent=p3["uuid"])
+    s3 = _assistant_skill("2026-09-14T10:20:05.000Z", SESS_A, "multiplai-messaging:gmail", parent=a3["uuid"])
+    _write(projects / f"{SESS_A}.jsonl", [p1, a1_mid, a1, s1, r1, p2, a2, p3, a3, s3])
+
+    # --- Session B: slash command --------------------------------------
+    # The command prompt is followed by the isMeta skill-body entry; the hook
+    # attachment hangs off the meta entry, and its timestamp is *after* the
+    # prompt's (production shape). Must still credit the command.
+    pb = _user("2026-09-14T11:00:00.000Z", SESS_B,
+               "<command-message>deep-research</command-message>"
+               "<command-name>/multiplai-research:deep-research</command-name>")
+    mb = _meta_user("2026-09-14T11:00:00.000Z", SESS_B, parent=pb["uuid"])
+    ab = _attachment("2026-09-14T11:00:04.000Z", SESS_B, _hook_text(["deep-research", "think"]),
+                     parent=mb["uuid"])
+    # A /clear-style mechanics command must not count as an invocation.
+    pb2 = _user("2026-09-14T11:30:00.000Z", SESS_B,
+                "<command-name>/model</command-name>", parent=ab["uuid"])
+    ab2 = _attachment("2026-09-14T11:30:02.000Z", SESS_B, _hook_text(["think"]), parent=pb2["uuid"])
+    _write(projects / f"{SESS_B}.jsonl", [pb, mb, ab, pb2, ab2])
+
+    # --- Subagent of session A invoking gmail inside prompt 2's window ---
+    _write(projects / SESS_A / "subagents" / "agent-x.jsonl",
+           [_assistant_skill("2026-09-14T10:11:00.000Z", SESS_A, "multiplai-messaging:gmail")])
+    return {"config": tmp_path / "config", "projects": projects, "spill": spill}
 
 
-# --- parsing -----------------------------------------------------------------
-
-
-def test_parse_routing_line_reads_ts_session_and_bare_skills():
-    line = _log_line("2026-09-14T18:26:39", SESS_B, ["multiplai-context:costs", "fleet-status"])
-    ts, prefix, skills = sp.parse_routing_line(line)
-    assert ts == datetime(2026, 9, 14, 18, 26, 39, tzinfo=timezone.utc)
-    assert prefix == "bbbbbbbb"
-    assert skills == ["costs", "fleet-status"]
-
-
-def test_parse_routing_line_ignores_other_lines():
-    assert sp.parse_routing_line("[2026-09-14T18:26:39Z] [context_manager] [session:x] INFO: FALLBACK memory=[]") is None
-    assert sp.parse_routing_line("garbage") is None
+# --- names and attachment parsing -------------------------------------------
 
 
 def test_bare_name_strips_plugin_and_slash():
-    assert sp.bare_name("/multiplai-context:costs") == "costs"
-    assert sp.bare_name("costs") == "costs"
+    assert sp.bare_name("multiplai-context:costs") == "costs"
+    assert sp.bare_name("/costs") == "costs"
+    assert sp.bare_name("  plane ") == "plane"
 
 
-def test_skill_invocations_reads_tool_and_command_and_skips_mechanics(tmp_path):
-    p = tmp_path / "s.jsonl"
-    p.write_text(
-        _assistant_skill("2026-09-14T10:00:05.000Z", SESS_A, "multiplai-context:costs")
-        + _user("2026-09-14T10:01:00.000Z", SESS_A, "<command-name>/clear</command-name>")
-        + _user("2026-09-14T10:02:00.000Z", SESS_A, "<command-name>/deep-research</command-name>")
-        + "not json\n",
-        encoding="utf-8",
-    )
-    got = sp.skill_invocations(p)
-    assert [(i.name, i.via) for i in got] == [("costs", "tool"), ("deep-research", "command")]
+def test_suggested_skills_reads_only_the_skills_block_and_dedups():
+    text = _hook_text(["costs", "plugin:fleet-status", "costs"]) + "\n\n=== PROJECT STATE ===\n## not-a-skill\n"
+    assert sp.suggested_skills(text) == ["costs", "fleet-status"]
+    assert sp.suggested_skills(_hook_text([])) == []
+    assert sp.suggested_skills("") == []
 
 
-def test_main_transcripts_by_prefix_excludes_subagents(world):
-    by = sp.main_transcripts_by_prefix(world["config"])
-    assert set(by) == {"aaaaaaaa", "bbbbbbbb"}
-    assert len(by["aaaaaaaa"]) == 1
+def test_attachment_text_follows_persisted_pointer(tmp_path):
+    spill = tmp_path / "hook-x.txt"
+    spill.write_text("=== SKILLS ===\n## costs\n", encoding="utf-8")
+    e = _attachment("t", SESS_A, [f"<persisted-output>\nFull output saved to: {spill}\n"])
+    assert sp.suggested_skills(sp.attachment_text(e)) == ["costs"]
+    gone = _attachment("t", SESS_A, ["<persisted-output>\nFull output saved to: /nope/missing.txt\n"])
+    assert sp.attachment_text(gone) == ""
+    assert sp.attachment_text(_attachment("t", SESS_A, "inline === SKILLS ===\n## slack")) .endswith("## slack")
 
 
-# --- the join ------------------------------------------------------------------
+# --- transcript discovery ----------------------------------------------------
 
 
-def test_measure_credits_only_same_session_same_window(world):
-    report = sp.run(world["logs"], world["config"], days=None)
+def test_iter_main_transcripts_excludes_subagents_and_honours_mtime(world):
+    found = sorted(p.name for p in sp.iter_main_transcripts(world["config"]))
+    assert found == [f"{SESS_A}.jsonl", f"{SESS_B}.jsonl"]
+    old = world["projects"] / f"{SESS_B}.jsonl"
+    stale = time.time() - 40 * 86400
+    os.utime(old, (stale, stale))
+    recent = sorted(p.name for p in sp.iter_main_transcripts(
+        world["config"], modified_since=datetime.now(timezone.utc) - timedelta(days=30)))
+    assert recent == [f"{SESS_A}.jsonl"]
+
+
+def test_iter_main_transcripts_missing_dir_is_empty(tmp_path):
+    assert list(sp.iter_main_transcripts(tmp_path)) == []
+
+
+# --- the join ----------------------------------------------------------------
+
+
+def test_measure_transcript_windows_by_order_not_timestamp(world):
+    prompts, suggestions, earliest = sp.measure_transcript(world["projects"] / f"{SESS_A}.jsonl")
+    assert prompts == 3  # tool_result and meta entries are not prompts
+    assert earliest == datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    by_skills = {tuple(s.skills): s.invoked for s in suggestions}
+    assert by_skills == {("costs", "fleet-status"): ["costs"], ("gmail",): []}
+
+
+def test_measure_transcript_credits_slash_command_via_meta_chain(world):
+    prompts, suggestions, _ = sp.measure_transcript(world["projects"] / f"{SESS_B}.jsonl")
+    assert prompts == 2
+    assert [(s.skills, s.invoked) for s in suggestions] == [
+        (["deep-research", "think"], ["deep-research"]),
+        (["think"], []),  # /model is session mechanics, not a skill use
+    ]
+
+
+def test_run_ignores_subagent_transcripts_and_reports_totals(world):
+    report = sp.run(world["config"], days=None)
+    assert report.transcripts_read == 2
     assert report.prompts_total == 5
-    # Three suggestion events had a transcript (A×2, B×1); one had none.
-    assert report.suggested_prompts == 3
-    assert report.unmatched_sessions == 1
+    assert report.suggested_prompts == 4
     assert report.hit_prompts == 2
-    assert report.precision == pytest.approx(2 / 3)
-
-    per = {r["skill"]: r for r in report.per_skill()}
-    assert per["costs"] == {"skill": "costs", "suggested": 1, "invoked": 1, "ratio": 1.0}
-    assert per["fleet-status"]["invoked"] == 0
-    assert per["gmail"]["invoked"] == 0  # subagent call and later-window call both excluded
-    assert per["deep-research"]["invoked"] == 1
-    assert "transcribe" not in per  # unmatched session contributes no per-skill row
+    assert report.precision == pytest.approx(0.5)
+    rows = {r["skill"]: (r["suggested"], r["invoked"]) for r in report.per_skill()}
+    assert rows["gmail"] == (1, 0)  # subagent's gmail call never credited
+    assert rows["think"] == (2, 0)
+    assert rows["costs"] == (1, 1)
 
 
-def test_window_filter_drops_old_lines(world):
-    now = datetime(2026, 10, 20, tzinfo=timezone.utc)
-    report = sp.run(world["logs"], world["config"], days=30, now=now)
-    assert report.prompts_total == 0
-    assert report.precision is None
+def test_run_window_drops_old_prompts(world):
+    now = datetime(2026, 9, 14, 10, 15, tzinfo=timezone.utc)
+    report = sp.run(world["config"], days=1, now=now)
+    # since = 09-13T10:15 → everything is inside; shrink to 5 minutes via now.
+    assert report.prompts_total == 5
+    later = sp.run(world["config"], days=None, now=now)
+    assert later.prompts_total == 5
+    cut = sp.measure_transcript(world["projects"] / f"{SESS_A}.jsonl",
+                                since=datetime(2026, 9, 14, 10, 5, tzinfo=timezone.utc))
+    assert cut[0] == 2 and [s.skills for s in cut[1]] == [["gmail"]]
+    assert cut[2] == datetime(2026, 9, 14, 10, 10, tzinfo=timezone.utc)
 
 
-def test_ambiguous_prefix_is_skipped_not_guessed(world):
-    # A second main transcript sharing session A's prefix.
-    dup = world["config"] / "projects" / "-other" / f"{SESS_A[:8]}-9999-9999-9999-999999999999.jsonl"
-    dup.parent.mkdir(parents=True)
-    dup.write_text(_assistant_skill("2026-09-14T10:10:01.000Z", SESS_A, "gmail"), encoding="utf-8")
-    report = sp.run(world["logs"], world["config"], days=None)
-    assert report.ambiguous_sessions == 2
-    assert report.suggested_prompts == 1  # only session B counts
-    assert report.hit_prompts == 1
+def test_run_days_zero_means_all_and_negative_rejected(world):
+    assert sp.run(world["config"], days=0).since is None
+    with pytest.raises(ValueError):
+        sp.run(world["config"], days=-1)
 
 
 def test_never_invoked_needs_three_suggestions(world):
-    extra = world["logs"] / "context_manager-2026-09-15.log"
-    extra.write_text(
-        _log_line("2026-09-15T10:00:00", SESS_B, ["fleet-status"])
-        + _log_line("2026-09-15T10:01:00", SESS_B, ["fleet-status"]),
-        encoding="utf-8",
-    )
-    report = sp.run(world["logs"], world["config"], days=None)
-    assert [r["skill"] for r in report.never_invoked()] == ["fleet-status"]
+    report = sp.run(world["config"], days=None)
+    assert report.never_invoked() == []
+    assert [r["skill"] for r in report.never_invoked(min_suggested=2)] == ["think"]
 
 
-# --- CLI -----------------------------------------------------------------------
+# --- CLI ---------------------------------------------------------------------
 
 
-def test_cli_markdown_and_json(world, capsys):
-    rc = cli.main(["--days", "0", "--logs-dir", str(world["logs"]),
-                   "--config-dir", str(world["config"])])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "Prompt-level precision" in out and "66.7%" in out
-    assert "2608.14036" in out
-
-    rc = cli.main(["--days", "0", "--json", "--logs-dir", str(world["logs"]),
-                   "--config-dir", str(world["config"])])
-    assert rc == 0
-    data = json.loads(capsys.readouterr().out)
-    assert data["hit_prompts"] == 2 and data["suggested_prompts"] == 3
-    assert data["since"] is None
+def test_cli_markdown_json_and_json_out(world, tmp_path, capsys):
+    out = tmp_path / "report.json"
+    assert cli.main(["--config-dir", str(world["config"]), "--days", "0", "--json-out", str(out)]) == 0
+    text = capsys.readouterr().out
+    assert "**Prompt-level precision** | **50.0%**" in text
+    assert "all transcripts" in text
+    saved = json.loads(out.read_text())
+    assert saved["precision"] == pytest.approx(0.5)
+    assert saved["earliest_prompt"] == "2026-09-14T10:00:00+00:00"
+    assert cli.main(["--config-dir", str(world["config"]), "--days", "0", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["hit_prompts"] == 2
 
 
-def test_cli_empty_dirs_report_na(tmp_path, capsys):
-    rc = cli.main(["--logs-dir", str(tmp_path / "nologs"), "--config-dir", str(tmp_path / "nocfg")])
-    assert rc == 0
-    assert "n/a" in capsys.readouterr().out
+def test_cli_rejects_negative_days(world):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--config-dir", str(world["config"]), "--days", "-7"])
+    assert exc.value.code == 2
+
+
+def test_cli_empty_dir_reports_na(tmp_path, capsys):
+    assert cli.main(["--config-dir", str(tmp_path)]) == 0
+    text = capsys.readouterr().out
+    assert "**n/a**" in text
+    assert "earliest prompt read n/a" in text
