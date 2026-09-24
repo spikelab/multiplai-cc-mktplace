@@ -235,6 +235,23 @@ jobs:
           uv run --project ../../../../.. --package research-pipeline \
             --extra dev python -m pytest tests/ -q
 
+  review-viewer-tests:
+    name: review-viewer tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # The page-logic tests run under node, which the runner image ships;
+      # they fail rather than skip without it.
+      - name: Run tests
+        working-directory: plugins/multiplai-dev/skills/review-viewer/scripts
+        run: |
+          uv run --project ../../../../.. --package review-viewer \
+            --extra dev python -m pytest tests/ -q
+
   apple-tests:
     name: multiplai-apple tests
     runs-on: ubuntu-latest

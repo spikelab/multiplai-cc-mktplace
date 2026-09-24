@@ -18,6 +18,7 @@ authoring**. Part of the [`multiplai`](../../README.md) marketplace.
 | `buildme` | Full bootstrap conductor — from idea to working code via interview, research, spec generation, and autonomous TDD implementation (deterministic Python pipeline). |
 | `plan` | Author self-contained, executable implementation plans with verifiable "Done means" criteria — hand the file to a fresh session, a goal runner, or buildme. |
 | `deepen` | Find deepening opportunities — collapse shallow modules into deep ones; idiom packs for Python, Swift, TypeScript, React. |
+| `review-viewer` | Local web page showing each code-review finding beside the code at the reviewed commit; questions and accept/reject decisions typed there reach the live session, and its answers appear in the page. |
 | `codebase-walkthrough` | Interactive walkthrough of any codebase — Markdown doc plus self-contained HTML with step-through navigation. |
 | `learn-stack` | Generate an interactive framework learning guide from any codebase. |
 | `e2e-test` | End-to-end testing for web apps — frontend (browser-based) and backend (API) modes. |

@@ -1,0 +1,33 @@
+[project]
+name = "review-viewer"
+version = "0.1.0"
+description = "Local web viewer for code-review findings; carries questions between the page and the live session"
+requires-python = ">=3.12"
+dependencies = [
+    # No [sdk] extra: nothing here calls a model. The server only moves
+    # messages between the page and JSONL files the session watches.
+    "multiplai-core",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "jsonschema>=4"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# multiplai-core is a git direct reference (not on PyPI)
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["review_viewer"]
+
+# Member-local source so this directory also resolves standalone — an
+# installed plugin is a copy of the plugin subtree only (no workspace root
+# above it), so without this the bare multiplai-core name would be looked
+# up on PyPI, where it does not exist. In-repo, uv still resolves through
+# the workspace root and the single uv.lock.
+[tool.uv.sources]
+multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }

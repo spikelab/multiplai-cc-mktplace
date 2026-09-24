@@ -17,6 +17,24 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-24
+
+### Added
+
+- **`review-viewer` shows a code review's findings next to the code, in the
+  browser.** Point it at a `findings.json` and it opens a local page: findings
+  grouped by severity, each one beside its file in full at the reviewed
+  commit, with the diff marked and the cited lines shaded. A question typed
+  under a finding reaches the Claude Code session that started the viewer
+  within about a second, and the answer appears in the page as rendered
+  markdown. Accept, reject and defer buttons record a decision per finding in
+  `decisions.json`. With `serve --repo <path> --range <base>..<head>` it shows
+  a plain diff and takes questions about selected lines. The page needs a
+  per-start token that is never printed, and refuses requests from other web
+  origins. The `findings.json` v1 contract ships as
+  `skills/review-viewer/schema/findings.v1.schema.json`. Ported from the
+  team's diffview tool.
+
 ## [0.16.0] - 2026-09-14
 
 ### Changed

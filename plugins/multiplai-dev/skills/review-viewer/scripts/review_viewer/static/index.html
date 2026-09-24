@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review viewer</title>
+<script src="/static/boot.js"></script>
+<link rel="stylesheet" media="(prefers-color-scheme: light)"
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.2/styles/github.min.css"
+      integrity="sha512-0aPQyyeZrWj9sCA46UlmWgKOP0mUipLQ6OZXu8l4IcAmD2u31EPEy9VcIMvl7SoAaKe8bLXZhYoMaE/in+gcgA=="
+      crossorigin="anonymous">
+<link rel="stylesheet" media="(prefers-color-scheme: dark)"
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.2/styles/github-dark.min.css"
+      integrity="sha512-rO+olRTkcf304DQBxSWxln8JXCzTHlKnIdnMUwYvQa9/Jd4cQaNkItIUj6Z4nvW1dqK0SKXLbn9h4KwZTNtAyw=="
+      crossorigin="anonymous">
+<link rel="stylesheet" href="/static/app.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.2/highlight.min.js"
+        integrity="sha512-VSPLUv/n1Bmn+4zoxBNwpuFAO3//79I0Aax/qHDx24R47vylPcc9PrHDCqlePwHnh3joiM7/YTQhcXyQAAxvPQ=="
+        crossorigin="anonymous"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/marked/18.0.13/lib/marked.umd.min.js"
+        integrity="sha512-kHavuYjOa82OKvUxD8j04s+kMIH84FmETnuIgj0yFyY9LWU10sXNwU54Iozpewat8VxAzH4aXiwTEZMRrpwfBw=="
+        crossorigin="anonymous"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.4.16/purify.min.js"
+        integrity="sha512-flQmhkXNRQ3iUfvtdCobtpMjCb6kE+zLnTiAulAQJ3WykVfy84JvCMOo6vhwWXHTXjR25h9Zj+LyGFRWKjRoag=="
+        crossorigin="anonymous"></script>
+<script defer src="/static/logic.js"></script>
+<script defer src="/static/app.js"></script>
+</head>
+<body>
+<header class="top">
+  <h1 id="title">Review viewer</h1>
+  <span id="who" class="muted"></span>
+</header>
+<div id="banner" class="banner" hidden></div>
+<main class="layout">
+  <nav class="side" aria-label="Findings and files">
+    <select id="target-select" hidden aria-label="Review target"></select>
+    <label class="toggle"><input type="checkbox" id="show-hidden"> <span id="hidden-label">Show refuted and rejected</span></label>
+    <div id="findings"></div>
+    <h2 class="side-h">Changed files</h2>
+    <input id="file-search" type="search" placeholder="Filter files ( / )" aria-label="Filter files">
+    <ul id="files" class="files"></ul>
+  </nav>
+  <section class="centre" aria-label="File">
+    <div class="file-head">
+      <span id="file-path" class="mono"></span>
+      <span id="file-flags" class="muted"></span>
+    </div>
+    <div id="code" class="code" tabindex="0"></div>
+    <button id="ask-lines" class="float-btn" hidden>Ask about these lines</button>
+  </section>
+  <aside class="detail" aria-label="Selected finding">
+    <div id="finding"></div>
+    <section class="thread-box">
+      <h3 id="thread-title">Questions</h3>
+      <div id="anchor-chip" class="chip" hidden></div>
+      <ol id="thread" class="thread"></ol>
+      <textarea id="question" rows="3" placeholder="Ask a question (Ctrl+Enter to send)"></textarea>
+      <div class="row"><button id="send">Send</button></div>
+    </section>
+    <section id="decide" class="decide" hidden>
+      <h3>Decision <span id="decision-now" class="muted"></span></h3>
+      <input id="decision-note" type="text" placeholder="Note (optional)" aria-label="Decision note">
+      <div class="row">
+        <button data-decision="accept">Accept</button>
+        <button data-decision="reject">Reject</button>
+        <button data-decision="defer">Defer</button>
+      </div>
+    </section>
+    <p class="muted keys">Keys: <kbd>j</kbd>/<kbd>k</kbd> next/previous finding · <kbd>/</kbd> filter files · <kbd>Esc</kbd> clear selection</p>
+  </aside>
+</main>
+</body>
+</html>
