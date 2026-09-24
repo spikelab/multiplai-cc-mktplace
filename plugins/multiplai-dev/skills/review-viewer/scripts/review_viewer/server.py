@@ -261,6 +261,8 @@ def make_handler(viewer: Viewer):
                         "findings": state.findings.model_dump(mode="json"),
                         "files": state.findings.target.files_changed,
                         "decisions": state.mailbox.read_decisions(),
+                        "questions": [r for r in state.mailbox.read_inbox()
+                                      if r.get("kind") == "question"],
                     })
             if method == "POST":
                 if route == "/api/ask":

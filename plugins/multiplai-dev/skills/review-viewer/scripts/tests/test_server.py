@@ -234,3 +234,14 @@ def test_token_stays_out_of_stdout_logs_and_server_json(findings_path, tmp_path)
     for p in files:
         assert token not in p.read_text(errors="replace"), p
     assert not (box / "server.token").exists() and not (box / "open.html").exists()
+
+
+def test_static_assets_and_headers(start_live):
+    import urllib.request
+    live = start_live()
+    for name, ctype in (("app.js", "javascript"), ("logic.js", "javascript"),
+                        ("boot.js", "javascript"), ("app.css", "text/css")):
+        with urllib.request.urlopen(f"http://127.0.0.1:{live.port}/static/{name}", timeout=5) as r:
+            assert r.status == 200 and ctype in r.headers["Content-Type"], name
+            assert r.headers["Referrer-Policy"] == "no-referrer"
+            assert "connect-src 'self'" in r.headers["Content-Security-Policy"]
