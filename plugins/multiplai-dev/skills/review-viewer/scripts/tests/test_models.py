@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
+from sys import executable as PYTHON
 
 import jsonschema
 import pytest
@@ -69,7 +69,7 @@ def test_committed_schema_rejects_empty_citations():
 
 
 def _validate_cli(*paths) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, "-m", "review_viewer", "validate", *map(str, paths)],
+    return subprocess.run([PYTHON, "-m", "review_viewer", "validate", *map(str, paths)],
                           capture_output=True, text=True)
 
 

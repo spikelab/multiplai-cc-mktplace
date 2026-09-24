@@ -117,8 +117,7 @@
     const open = [];
     let current = "";
     const re = /(<span[^>]*>)|(<\/span>)|(\n)|([^<\n]+|<)/g;
-    let m;
-    while ((m = re.exec(html)) !== null) {
+    for (const m of String(html).matchAll(re)) {
       if (m[1]) { open.push(m[1]); current += m[1]; }
       else if (m[2]) { open.pop(); current += m[2]; }
       else if (m[3]) {

@@ -5,7 +5,7 @@ import json
 import os
 import stat
 import subprocess
-import sys
+from sys import executable as PYTHON
 import time
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -90,7 +90,7 @@ def test_ask_round_trip(start_live):
     assert rows[-1]["id"] == qid and rows[-1]["kind"] == "question"
     assert rows[-1]["finding_id"] == HIGH and rows[-1]["text"] == "Is qty ever missing?"
 
-    proc = subprocess.run([sys.executable, "-m", "review_viewer", "reply", "--box", str(live.box),
+    proc = subprocess.run([PYTHON, "-m", "review_viewer", "reply", "--box", str(live.box),
                            "--to", qid], input="Yes — the **legacy** checkout.", text=True,
                           capture_output=True)
     assert proc.returncode == 0, proc.stderr
@@ -187,7 +187,7 @@ def test_token_stays_out_of_stdout_logs_and_server_json(findings_path, tmp_path)
     env = dict(os.environ, WORKSPACE=str(ws), PYTHONUNBUFFERED="1", MULTIPLAI_DEBUG="1")
     port = free_port()
     proc = subprocess.Popen(
-        [sys.executable, "-m", "review_viewer", "--session-id", "sess-T", "serve",
+        [PYTHON, "-m", "review_viewer", "--session-id", "sess-T", "serve",
          str(findings_path), "--port", str(port), "--idle", "0"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     lines = []

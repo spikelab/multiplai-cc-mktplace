@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
+from sys import executable as PYTHON
 
 import pytest
 
@@ -56,7 +56,7 @@ def test_decisions_keep_latest(box):
 
 
 def _reply(*args, stdin: str | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, "-m", "review_viewer", "reply", *args],
+    return subprocess.run([PYTHON, "-m", "review_viewer", "reply", *args],
                           input=stdin, capture_output=True, text=True)
 
 
