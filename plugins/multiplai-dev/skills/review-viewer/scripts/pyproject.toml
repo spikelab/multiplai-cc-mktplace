@@ -13,12 +13,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "jsonschema>=4"]
 
-# The same tools as a dependency group, which `uv run` installs by default: the
-# plain `uv run --directory <this dir> python -m pytest tests/` then works
-# without remembering `--extra dev`. The extra stays for pip-style installs.
-[dependency-groups]
-dev = ["pytest", "jsonschema>=4"]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

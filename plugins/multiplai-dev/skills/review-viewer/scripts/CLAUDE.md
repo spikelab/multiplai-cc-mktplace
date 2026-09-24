@@ -8,7 +8,8 @@ Run everything through this member directory:
 
 ```bash
 uv run --directory plugins/multiplai-dev/skills/review-viewer/scripts python -m review_viewer --help
-uv run --directory plugins/multiplai-dev/skills/review-viewer/scripts python -m pytest tests/ -q
+cd plugins/multiplai-dev/skills/review-viewer/scripts && \
+  uv run --project ../../../../.. --package review-viewer --extra dev python -m pytest tests/ -q
 ```
 
 The page-logic tests need `node`; they fail (not skip) without it.
