@@ -8,6 +8,7 @@ reads history, it never changes it.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -78,16 +79,74 @@ class FileView:
 GIT_MISSING = "this skill reads the review's commits with git; install git and run it again"
 
 
+# Settings that would otherwise let the user's or the repo's git config
+# rewrite the output this module parses: colour codes in front of `@@`,
+# quoted non-ASCII paths, an external diff program, a textconv filter.
+_GIT_CONFIG = ("-c", "color.ui=never", "-c", "core.quotepath=off")
+_DIFF_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
+
+
 def git(repo: str | Path, *args: str) -> str:
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_EXTERNAL_DIFF", "GIT_PAGER")}
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo), *args], shell=False, stdin=subprocess.DEVNULL,
-            capture_output=True, encoding="utf-8", errors="replace")
+            ["git", *_GIT_CONFIG, "-C", str(repo), *args], shell=False,
+            stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
+            errors="replace", env=env)
     except FileNotFoundError:
         raise GitError(GIT_MISSING) from None
     if proc.returncode != 0:
         raise GitError(f"git {args[0]} failed: {proc.stderr.strip()}")
     return proc.stdout
+
+
+def split_lines(text: str) -> list[str]:
+    """Split the way git numbers lines: on `\n` only.
+
+    `str.splitlines()` also splits on form feeds, U+2028 and other
+    separators, which shifts every later line number away from git's.
+    A trailing `\r` (CRLF files) is dropped for display.
+    """
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return [line[:-1] if line.endswith("\r") else line for line in lines]
+
+
+_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def _walk(text: str):
+    """Yield ("hunk", header, old_start, old_len, new_start, new_len) at each
+    `@@`, then ("-"|"+"|" ", body) for each line inside the hunk.
+
+    Hunk bodies are counted from the header's lengths, never recognised by
+    their first characters: a deleted line `-- comment` reads `--- comment` in
+    the diff and an added `++x;` reads `+++x;`, which look like file headers.
+    Everything outside a hunk (file headers included) is skipped.
+    """
+    old_left = new_left = 0
+    for raw in split_lines(text):
+        if old_left <= 0 and new_left <= 0:
+            m = _HUNK_RE.match(raw)
+            if m:
+                old_len = int(m.group(2)) if m.group(2) is not None else 1
+                new_len = int(m.group(4)) if m.group(4) is not None else 1
+                old_left, new_left = old_len, new_len
+                yield ("hunk", raw, int(m.group(1)), old_len, int(m.group(3)), new_len)
+            continue
+        if raw.startswith("\\"):  # "\ No newline at end of file"
+            continue
+        marker, body = raw[:1], raw[1:]
+        if marker == "-":
+            old_left -= 1
+        elif marker == "+":
+            new_left -= 1
+        else:
+            marker = " "
+            old_left -= 1
+            new_left -= 1
+        yield (marker, body)
 
 
 def parse_unified(text: str) -> list[Row]:
@@ -98,25 +157,13 @@ def parse_unified(text: str) -> list[Row]:
     """
     rows: list[Row] = []
     old_no = new_no = 0
-    in_body = False
-    for raw in text.splitlines():
-        if raw.startswith("@@"):
-            in_body = True
-            head = raw.split("@@")[1].strip()
-            try:
-                old_part, new_part = head.split(" ")
-                old_no = int(old_part[1:].split(",")[0])
-                new_no = int(new_part[1:].split(",")[0])
-            except (ValueError, IndexError):
-                old_no = new_no = 0
+    for item in _walk(text):
+        if item[0] == "hunk":
+            _, header, old_no, _, new_no, _ = item
             if rows:
-                rows.append(Row("gap", None, None, raw))
+                rows.append(Row("gap", None, None, header))
             continue
-        if not in_body:
-            continue
-        if raw.startswith("\\"):  # "\ No newline at end of file"
-            continue
-        marker, body = raw[:1], raw[1:]
+        marker, body = item
         if marker == "+":
             rows.append(Row("add", None, new_no, body))
             new_no += 1
@@ -130,32 +177,25 @@ def parse_unified(text: str) -> list[Row]:
     return rows
 
 
-_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
-
-
 def _hunks(diff_text: str) -> tuple[set[int], dict[int, list[Row]]]:
     """Added new-side line numbers, and deleted rows keyed by the new-side line
     they appear before. Expects a `--unified=0` diff."""
     added: set[int] = set()
     deleted_before: dict[int, list[Row]] = {}
     anchor = old_no = new_no = 0
-    for raw in diff_text.splitlines():
-        m = _HUNK_RE.match(raw)
-        if m:
-            new_start = int(m.group(3))
-            new_len = int(m.group(4)) if m.group(4) is not None else 1
+    for item in _walk(diff_text):
+        if item[0] == "hunk":
+            _, _, old_no, _, new_start, new_len = item
             # A pure deletion reports the new-side line *after which* the lines
             # went; any other hunk reports the first line it touches.
             anchor = new_start + 1 if new_len == 0 else new_start
-            old_no = int(m.group(1))
             new_no = new_start
             continue
-        if not anchor:
-            continue
-        if raw.startswith("-") and not raw.startswith("---"):
-            deleted_before.setdefault(anchor, []).append(Row("del", old_no, None, raw[1:]))
+        marker, body = item
+        if marker == "-":
+            deleted_before.setdefault(anchor, []).append(Row("del", old_no, None, body))
             old_no += 1
-        elif raw.startswith("+") and not raw.startswith("+++"):
+        elif marker == "+":
             added.add(new_no)
             new_no += 1
     return added, deleted_before
@@ -191,8 +231,8 @@ def _cited_ranges(path: str, findings: FindingsFile | None) -> list[tuple[int, i
 
 
 def _is_binary(repo: str, base: str, head: str, path: str) -> bool:
-    out = git(repo, "diff", "--numstat", base, head, "--", path)
-    return any(line.startswith("-\t-\t") for line in out.splitlines())
+    out = git(repo, "diff", *_DIFF_FLAGS, "--numstat", base, head, "--", path)
+    return any(line.startswith("-\t-\t") for line in split_lines(out))
 
 
 def _exists_at(repo: str, sha: str, path: str) -> bool:
@@ -223,16 +263,16 @@ def file_view(target: Target, path: str, findings: FindingsFile | None = None,
     if not _exists_at(repo, head, path):
         if not _exists_at(repo, base, path):
             raise GitError(f"{path} exists at neither {base[:8]} nor {head[:8]}")
-        old = git(repo, "show", f"{base}:{path}").splitlines()
+        old = split_lines(git(repo, "show", f"{base}:{path}"))
         view.deleted = True
         view.truncated = len(old) > DELETED_PREVIEW_LINES
         view.rows = [Row("del", i, None, t)
                      for i, t in enumerate(old[:DELETED_PREVIEW_LINES], 1)]
         return view
 
-    lines = git(repo, "show", f"{head}:{path}").splitlines()
+    lines = split_lines(git(repo, "show", f"{head}:{path}"))
     added, deleted_before = _hunks(
-        git(repo, "diff", "--unified=0", base, head, "--", path))
+        git(repo, "diff", *_DIFF_FLAGS, "--unified=0", base, head, "--", path))
 
     keep: set[int] | None = None
     if len(lines) > MAX_FULL_LINES:
@@ -259,6 +299,11 @@ def file_view(target: Target, path: str, findings: FindingsFile | None = None,
     return view
 
 
+def slug_part(name: str) -> str:
+    """A repo directory name reduced to the characters a target slug allows."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.") or "repo"
+
+
 def diff_target(repo: str | Path, rev_range: str) -> Target:
     """A Target for plain-diff mode: `<base>..<head>` resolved to full shas."""
     if ".." not in rev_range:
@@ -267,9 +312,10 @@ def diff_target(repo: str | Path, rev_range: str) -> Target:
     repo_path = Path(repo).resolve()
     base = git(repo_path, "rev-parse", "--verify", f"{base_ref or 'HEAD'}^{{commit}}").strip()
     head = git(repo_path, "rev-parse", "--verify", f"{head_ref or 'HEAD'}^{{commit}}").strip()
-    files = [f for f in git(repo_path, "diff", "--name-only", base, head).splitlines() if f]
+    files = [f for f in git(repo_path, "diff", *_DIFF_FLAGS, "--name-only", "-z", base,
+                            head).split("\0") if f]
     return Target(
-        slug=f"{repo_path.name}--{base[:8]}..{head[:8]}",
+        slug=f"{slug_part(repo_path.name)}--{base[:8]}..{head[:8]}",
         label=f"{repo_path.name} {rev_range}",
         repo_path=str(repo_path), remote_url=None,
         base_sha=base, head_sha=head, files_changed=files)

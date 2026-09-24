@@ -103,3 +103,78 @@ def test_missing_git_names_git(monkeypatch, fixture_repo):
     repo, _, _ = fixture_repo
     with pytest.raises(gitdata.GitError, match="install git"):
         diff_target(repo, "main~1..main")
+
+
+# --- regressions from the PR 243 review --------------------------------------------
+
+import subprocess  # noqa: E402
+
+from review_viewer.gitdata import split_lines  # noqa: E402
+from review_viewer.models import Target  # noqa: E402
+
+
+def _repo(path, base_files: dict, head_files: dict, config: dict | None = None):
+    """A two-commit repo; returns a Target for base..head over every file."""
+    def run(*args):
+        return subprocess.run(["git", "-C", str(path), "-c", "commit.gpgsign=false",
+                               "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+                              check=True, capture_output=True, text=True).stdout.strip()
+    path.mkdir(parents=True)
+    run("init", "-q", "-b", "main")
+    for k, v in (config or {}).items():
+        run("config", k, v)
+    for rel, text in base_files.items():
+        (path / rel).write_text(text, encoding="utf-8", newline="")
+    run("add", "-A")
+    run("commit", "-q", "-m", "base")
+    base = run("rev-parse", "HEAD")
+    for rel, text in head_files.items():
+        (path / rel).write_text(text, encoding="utf-8", newline="")
+    run("add", "-A")
+    run("commit", "-q", "-m", "head")
+    head = run("rev-parse", "HEAD")
+    return Target(slug="t", label="t", repo_path=str(path), base_sha=base, head_sha=head,
+                  files_changed=sorted(set(base_files) | set(head_files)))
+
+
+def test_lines_that_look_like_file_headers(tmp_path):
+    target = _repo(tmp_path / "r",
+                   {"q.sql": "select 1;\n-- old comment\nselect 2;\n", "c.c": "a;\n"},
+                   {"q.sql": "select 1;\nselect 2;\n", "c.c": "a;\n++x;\nx++;\n"})
+    sql = file_view(target, "q.sql")
+    assert [r.t for r in sql.rows if r.k == "del"] == ["-- old comment"]
+    c = file_view(target, "c.c")
+    assert {r.n for r in c.rows if r.k == "add"} == {2, 3}
+    rows = parse_unified(subprocess.run(
+        ["git", "-C", target.repo_path, "diff", target.base_sha, target.head_sha, "--", "c.c"],
+        capture_output=True, text=True).stdout)
+    assert [(r.k, r.n, r.t) for r in rows if r.k == "add"] == [("add", 2, "++x;"), ("add", 3, "x++;")]
+
+
+def test_git_config_cannot_rewrite_the_diff(tmp_path, monkeypatch):
+    target = _repo(tmp_path / "r", {"a.py": "a = 1\n"}, {"a.py": "a = 1\nb = 2\n"},
+                   config={"color.ui": "always", "color.diff": "always",
+                           "diff.external": "false"})
+    monkeypatch.setenv("GIT_EXTERNAL_DIFF", "false")
+    view = file_view(target, "a.py")
+    assert [(r.k, r.n) for r in view.rows] == [("ctx", 1), ("add", 2)]
+
+
+def test_form_feed_does_not_shift_line_numbers(tmp_path):
+    base = "a = 1\n\x0c\nb = 2\nc = 3\n"
+    head = "a = 1\n\x0c\nb = 2\nc = 3\nd = 4\n"
+    target = _repo(tmp_path / "r", {"f.py": base}, {"f.py": head})
+    view = file_view(target, "f.py")
+    assert [(r.k, r.n, r.t) for r in view.rows if r.k == "add"] == [("add", 5, "d = 4")]
+    assert split_lines("x y\n\x85z\r\n") == ["x y", "\x85z"]
+
+
+def test_plain_diff_slug_from_awkward_repo_name(tmp_path):
+    target = _repo(tmp_path / "my repo+été", {"a": "1\n"}, {"a": "2\n"})
+    t = diff_target(target.repo_path, "main~1..main")
+    assert t.slug.startswith("my-repo-") and t.files_changed == ["a"]
+
+
+def test_non_ascii_path_is_listed_unquoted(tmp_path):
+    target = _repo(tmp_path / "r", {"é.txt": "1\n"}, {"é.txt": "2\n"})
+    assert diff_target(target.repo_path, "main~1..main").files_changed == ["é.txt"]
