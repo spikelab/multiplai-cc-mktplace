@@ -95,3 +95,11 @@ def test_diff_target_resolves_range(fixture_repo):
     assert sorted(target.files_changed) == [
         "app/big.py", "app/new_feature.py", "app/old_module.py", "app/service.py",
         "assets/logo.bin"]
+
+
+def test_missing_git_names_git(monkeypatch, fixture_repo):
+    from review_viewer import gitdata
+    monkeypatch.setenv("PATH", "/nonexistent")
+    repo, _, _ = fixture_repo
+    with pytest.raises(gitdata.GitError, match="install git"):
+        diff_target(repo, "main~1..main")

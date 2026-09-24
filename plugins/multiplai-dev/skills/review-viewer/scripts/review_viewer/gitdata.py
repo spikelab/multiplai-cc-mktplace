@@ -75,10 +75,16 @@ class FileView:
         return asdict(self)
 
 
+GIT_MISSING = "this skill reads the review's commits with git; install git and run it again"
+
+
 def git(repo: str | Path, *args: str) -> str:
-    proc = subprocess.run(
-        ["git", "-C", str(repo), *args], shell=False, stdin=subprocess.DEVNULL,
-        capture_output=True, encoding="utf-8", errors="replace")
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), *args], shell=False, stdin=subprocess.DEVNULL,
+            capture_output=True, encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        raise GitError(GIT_MISSING) from None
     if proc.returncode != 0:
         raise GitError(f"git {args[0]} failed: {proc.stderr.strip()}")
     return proc.stdout
@@ -190,10 +196,13 @@ def _is_binary(repo: str, base: str, head: str, path: str) -> bool:
 
 
 def _exists_at(repo: str, sha: str, path: str) -> bool:
-    proc = subprocess.run(
-        ["git", "-C", repo, "cat-file", "-e", f"{sha}:{path}"], shell=False,
-        stdin=subprocess.DEVNULL, capture_output=True)
-    return proc.returncode == 0
+    try:
+        git(repo, "cat-file", "-e", f"{sha}:{path}")
+    except GitError as exc:
+        if str(exc) == GIT_MISSING:
+            raise
+        return False
+    return True
 
 
 def file_view(target: Target, path: str, findings: FindingsFile | None = None,
