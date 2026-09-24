@@ -47,6 +47,24 @@
     return !t || !t.done;
   }
 
+  /* Fold one /api/poll response into what the page already holds.
+   * `current` is {rows, since}; `askedSince` is the `since` the request was
+   * sent with. A response to an older request is ignored, so two overlapping
+   * polls can never append the same rows twice. Returns the new {rows, since,
+   * changed, reset}; `reset` means the outbox shrank and must be read again
+   * from the start. */
+  function applyPoll(current, askedSince, res) {
+    if (askedSince !== current.since) return { rows: current.rows, since: current.since, changed: false, reset: false };
+    if (res.n < askedSince) return { rows: [], since: 0, changed: true, reset: true };
+    const answers = res.answers || [];
+    return {
+      rows: answers.length ? current.rows.concat(answers) : current.rows,
+      since: res.n,
+      changed: answers.length > 0,
+      reset: false,
+    };
+  }
+
   /* Milliseconds until the next poll. */
   function pollDelay(pendingCount) {
     return pendingCount > 0 ? 2000 : 10000;
@@ -136,7 +154,7 @@
 
   const api = {
     SEVERITIES: SEVERITIES, joinParts: joinParts, groupReplies: groupReplies,
-    isPending: isPending, pollDelay: pollDelay, citationRows: citationRows,
+    isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
     isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder,
     stepFinding: stepFinding, anchorLabel: anchorLabel, escapeHtml: escapeHtml,
     splitHighlighted: splitHighlighted, lineRange: lineRange,

@@ -103,6 +103,23 @@ test("highlighted HTML splits into balanced lines", () => {
   ]);
 });
 
+test("overlapping polls never append the same rows twice", () => {
+  const rows = [{ reply_to: "q", text: "a", done: false }, { reply_to: "q", text: "b", done: true }];
+  let cur = { rows: [], since: 0 };
+  // Two polls were sent with since=0; both come back with the same rows.
+  const first = L.applyPoll(cur, 0, { answers: rows, n: 2 });
+  cur = { rows: first.rows, since: first.since };
+  const second = L.applyPoll(cur, 0, { answers: rows, n: 2 });
+  assert.equal(second.changed, false);
+  assert.equal(second.rows.length, 2);
+  assert.equal(L.groupReplies(second.rows).get("q").text, "a\n\nb");
+});
+
+test("a shrunken outbox resets the read position", () => {
+  const next = L.applyPoll({ rows: [{}, {}, {}], since: 3 }, 3, { answers: [], n: 1 });
+  assert.deepEqual([next.rows.length, next.since, next.reset], [0, 0, true]);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

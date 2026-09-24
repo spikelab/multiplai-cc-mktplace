@@ -35,6 +35,9 @@
     pick: null,
     pickAnchor: null,
     pollTimer: null,
+    polling: null,
+    pollAgain: false,
+    pollGen: 0,
   };
 
   // --- small helpers ---------------------------------------------------------
@@ -138,6 +141,7 @@
   }
 
   async function loadTarget(slug) {
+    state.pollGen += 1;
     state.slug = slug;
     state.detail = await api(targetUrl());
     state.findingsById = new Map(state.detail.findings.findings.map((f) => [f.id, f]));
@@ -359,20 +363,43 @@
     }
   }
 
-  async function pollOnce() {
-    const res = await api("/api/poll?target=" + encodeURIComponent(state.slug) +
-      "&since=" + state.since);
-    if (res.n < state.since) {  // the outbox was replaced: read it again from the start
-      state.replyRows = [];
-      state.since = 0;
-      return pollOnce();
+  /* At most one poll runs at a time. A poll asked for while one is in
+   * flight runs once after it; a response that arrives after the target
+   * changed is dropped (its generation no longer matches). */
+  function pollOnce() {
+    if (state.polling) {
+      state.pollAgain = true;
+      return state.polling;
     }
-    if (res.answers.length) {
-      state.replyRows = state.replyRows.concat(res.answers);
+    state.polling = (async () => {
+      try {
+        do {
+          state.pollAgain = false;
+          await pollRequest();
+        } while (state.pollAgain);
+      } finally {
+        state.polling = null;
+      }
+    })();
+    return state.polling;
+  }
+
+  async function pollRequest() {
+    const gen = state.pollGen;
+    const asked = state.since;
+    const res = await api("/api/poll?target=" + encodeURIComponent(state.slug) + "&since=" + asked);
+    if (gen !== state.pollGen) return;
+    const next = L.applyPoll({ rows: state.replyRows, since: state.since }, asked, res);
+    state.replyRows = next.rows;
+    state.since = next.since;
+    if (next.reset) {
+      state.pollAgain = true;
+      return;
+    }
+    if (next.changed) {
       state.replies = L.groupReplies(state.replyRows);
       renderThread();
     }
-    state.since = res.n;
   }
 
   function schedulePoll(delay) {
