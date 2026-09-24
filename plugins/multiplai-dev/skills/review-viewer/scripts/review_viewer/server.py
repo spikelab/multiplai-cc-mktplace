@@ -376,8 +376,7 @@ def publish(viewer: Viewer, urls: list[tuple[str, str]]) -> None:
         box = state.mailbox
         write_private(box.token_file, viewer.token + "\n")
         write_private(box.open_html, open_page_html(urls[0][0], viewer.token))
-        box.server_json.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
-        box.inbox.touch(exist_ok=True)
+        write_private(box.server_json, json.dumps(record, indent=2) + "\n")
     registry.register(os.getpid(), [s.mailbox.dir.resolve() for s in viewer.targets.values()])
 
 

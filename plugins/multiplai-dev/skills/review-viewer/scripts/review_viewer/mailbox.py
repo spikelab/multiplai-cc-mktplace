@@ -45,7 +45,7 @@ def _append(path: Path, row: dict) -> None:
     data = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
     if len(data) > MAX_ROW_BYTES:
         raise MailboxError(f"row is {len(data)} bytes; the limit is {MAX_ROW_BYTES}")
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     try:
         os.write(fd, data)
     finally:
@@ -56,7 +56,10 @@ def read_rows(path: Path) -> list[dict]:
     if not path.exists():
         return []
     rows = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    # Split on "\n" only: rows are written with ensure_ascii=False, so U+2028
+    # and friends appear raw inside strings, and splitlines() would cut a row
+    # in two.
+    for line in path.read_text(encoding="utf-8", errors="replace").split("\n"):
         line = line.strip()
         if not line:
             continue
@@ -99,7 +102,15 @@ class Mailbox:
         return self.dir / "open.html"
 
     def create(self) -> None:
-        self.dir.mkdir(parents=True, exist_ok=True)
+        """Create the mailbox, readable only by its owner: questions and
+        answers about a private codebase live here."""
+        self.dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.dir, 0o700)
+        for path in (self.inbox, self.outbox):
+            os.close(os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600))
+        for path in (self.inbox, self.outbox, self.decisions, self.server_json):
+            if path.exists():  # left by an earlier version with wider modes
+                os.chmod(path, 0o600)
 
     def append_inbox(self, row: InboxRow) -> None:
         _append(self.inbox, row.model_dump(mode="json"))
@@ -132,7 +143,7 @@ class Mailbox:
         return entry
 
 
-def atomic_write(path: Path, text: str, mode: int = 0o644) -> None:
+def atomic_write(path: Path, text: str, mode: int = 0o600) -> None:
     """Write via a temp file in the same directory, then `os.replace`."""
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:

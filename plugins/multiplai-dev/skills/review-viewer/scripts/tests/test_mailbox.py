@@ -99,10 +99,41 @@ def test_reply_unknown_id_refused(box):
     proc = _reply("--box", str(box.dir), "--to", "q-nope", stdin="hi")
     assert proc.returncode == 2
     assert "no question 'q-nope'" in proc.stderr
-    assert not box.outbox.exists()
+    assert box.read_outbox(0) == ([], 0)
 
 
 def test_reply_missing_box_refused(tmp_path):
     proc = _reply("--box", str(tmp_path / "typo"), "--to", "q-1", stdin="hi")
     assert proc.returncode == 2
     assert not (tmp_path / "typo").exists()
+
+
+def test_rows_survive_unicode_line_separators(box):
+    text = "first\u2028second\u2029third\x85fourth\x0cfifth"
+    box.append_outbox(OutboxRow(reply_to="q", ts=utc_now(), text=text, done=True))
+    rows, n = box.read_outbox(0)
+    assert n == 1 and rows[0]["text"] == text
+    q = _question(box, "why\u2028this?")
+    proc = _reply("--box", str(box.dir), "--to", q.id, stdin="because")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_mailbox_is_private(box):
+    import stat
+    box.append_outbox(OutboxRow(reply_to="q", ts=utc_now(), text="a", done=True))
+    _question(box)
+    box.write_decision("abc", "accept")
+    assert stat.S_IMODE(box.dir.stat().st_mode) == 0o700
+    for path in (box.inbox, box.outbox, box.decisions):
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600, path.name
+
+
+def test_create_tightens_existing_files(tmp_path):
+    import stat
+    d = tmp_path / "old"
+    d.mkdir(mode=0o755)
+    (d / "outbox.jsonl").write_text("")
+    (d / "outbox.jsonl").chmod(0o644)
+    Mailbox(d).create()
+    assert stat.S_IMODE((d / "outbox.jsonl").stat().st_mode) == 0o600
+    assert stat.S_IMODE(d.stat().st_mode) == 0o700
