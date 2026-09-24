@@ -2,11 +2,12 @@
 
 A leftover `server.json` proves nothing — a killed process never deletes it,
 and its port may now belong to someone else. So every claim is checked by
-asking whoever answers on that port who it is (`/api/whoami`), authenticated
-with the token from the mailbox's `server.token`.
+asking the recorded port who it is (`/api/whoami`), authenticated with the
+token from the same mailbox's `server.token`.
 
-Ports are probed in parallel. Probed one by one, nineteen idle ports that let
-the connection time out instead of refusing it took a measured 18 s.
+A token is only ever sent to the port its own mailbox records. Probing a port
+range with every known token would hand each token to whatever else happens to
+listen there.
 """
 
 from __future__ import annotations
@@ -19,11 +20,13 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from . import netinfo
+
 log = logging.getLogger(__name__)
 
 PORT_START = 8765
 PORT_SPAN = 20
-PROBE_TIMEOUT = 1.5
+PROBE_TIMEOUTS = (1.5, 4.0)
 
 
 def state_dir() -> Path:
@@ -38,7 +41,7 @@ def state_dir() -> Path:
 
 def register(pid: int, boxes: list[Path]) -> Path:
     d = state_dir()
-    d.mkdir(parents=True, exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
     entry = d / f"{pid}.json"
     entry.write_text(json.dumps({"mailboxes": [str(b) for b in boxes]}), encoding="utf-8")
     return entry
@@ -61,13 +64,33 @@ def registered_boxes() -> list[Path]:
             data = json.loads(entry.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        for b in data.get("mailboxes", []):
-            path = Path(b)
-            if (path / "server.token").exists():
-                boxes.append(path)
-    if not boxes:
-        return boxes
+        if not pid_alive(_int(entry.stem)):
+            try:
+                entry.unlink()
+            except OSError:
+                pass
+            continue
+        boxes.extend(Path(b) for b in data.get("mailboxes", []))
     return list(dict.fromkeys(boxes))
+
+
+def _int(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def pid_alive(pid: int | None) -> bool:
+    if not pid or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def read_token(box: Path) -> str | None:
@@ -77,44 +100,60 @@ def read_token(box: Path) -> str | None:
         return None
 
 
-def _request(port: int, route: str, token: str, *, method: str = "GET",
-             timeout: float = PROBE_TIMEOUT) -> dict | None:
-    data = b"{}" if method == "POST" else None
-    req = Request(f"http://127.0.0.1:{port}{route}", data=data, method=method,
+def read_record(box: Path) -> dict | None:
+    try:
+        data = json.loads((box / "server.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _request(port: int, route: str, token: str, *, body: dict | None = None,
+             timeout: float = PROBE_TIMEOUTS[0]) -> dict | None:
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = Request(f"http://{netinfo.probe_host()}:{port}{route}", data=data,
+                  method="POST" if data is not None else "GET",
                   headers={"X-Review-Token": token, "Content-Type": "application/json"})
     try:
         with urlopen(req, timeout=timeout) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+            parsed = json.loads(resp.read().decode("utf-8"))
     except (HTTPError, URLError, OSError, ValueError):
         return None
-    return body if isinstance(body, dict) else None
+    return parsed if isinstance(parsed, dict) else None
 
 
-def probe(port: int, token: str, timeout: float = PROBE_TIMEOUT) -> dict | None:
-    """What a review-viewer on `port` says about itself, if it accepts `token`."""
-    who = _request(port, "/api/whoami", token, timeout=timeout)
-    if not who or "targets" not in who or "mailboxes" not in who:
+def probe(port: int, token: str) -> dict | None:
+    """What the review-viewer on `port` says about itself, if it accepts
+    `token`. A slow server gets a second, longer try."""
+    for timeout in PROBE_TIMEOUTS:
+        who = _request(port, "/api/whoami", token, timeout=timeout)
+        if who and "targets" in who and "mailboxes" in who:
+            who["port"] = port
+            return who
+    return None
+
+
+def _probe_box(box: Path) -> dict | None:
+    token = read_token(box)
+    record = read_record(box)
+    port = _int(record.get("port")) if record else None
+    if not token or not port:
         return None
-    who["port"] = port
-    return who
+    who = probe(port, token)
+    if who and str(box.resolve()) in who.get("mailboxes", []):
+        return who
+    return None
 
 
-def scan(first: int = PORT_START, span: int = PORT_SPAN,
-         boxes: list[Path] | None = None) -> list[dict]:
-    """Every live viewer in the port range whose token we can read.
-
-    A token is readable only from a mailbox on this machine, so `boxes` lists
-    the mailboxes to try (default: every registered one). Each port is probed
-    with each token, in parallel.
-    """
+def scan(boxes: list[Path] | None = None) -> list[dict]:
+    """Every live viewer serving one of `boxes` (default: every registered
+    mailbox), found by probing each mailbox's own recorded port."""
     if boxes is None:
         boxes = registered_boxes()
-    tokens = list(dict.fromkeys(t for t in (read_token(b) for b in boxes) if t))
-    if not tokens:
+    if not boxes:
         return []
-    jobs = [(p, t) for p in range(first, first + span) for t in tokens]
-    with ThreadPoolExecutor(max_workers=min(64, len(jobs))) as pool:
-        found = list(pool.map(lambda job: probe(*job), jobs))
+    with ThreadPoolExecutor(max_workers=min(16, len(boxes))) as pool:
+        found = list(pool.map(_probe_box, boxes))
     seen: dict[int, dict] = {}
     for who in found:
         if who:
@@ -122,29 +161,21 @@ def scan(first: int = PORT_START, span: int = PORT_SPAN,
     return [seen[p] for p in sorted(seen)]
 
 
-def existing(box: Path, first: int = PORT_START, span: int = PORT_SPAN) -> dict | None:
+def existing(box: Path) -> dict | None:
     """The live server for this mailbox, if there is one.
 
-    `server.json` names the port to try first; a range scan covers a server
-    whose file was lost. A `server.json` no live server confirms is deleted,
-    so the next reader does not trust it either.
+    Returns `{"unresponsive": True, "pid", "port"}` when the recorded process
+    is still alive but did not answer: its files are left alone, because
+    deleting them would orphan a running server. Files whose process is gone
+    are deleted, so the next reader does not trust them either.
     """
     box = box.resolve()
-    token = read_token(box)
-    record = box / "server.json"
-    if token and record.exists():
-        try:
-            port = int(json.loads(record.read_text(encoding="utf-8"))["port"])
-        except (OSError, ValueError, KeyError, TypeError):
-            port = None
-        who = probe(port, token) if port else None
-        if who and str(box) in who.get("mailboxes", []):
-            return who
-    if token:
-        for who in scan(first, span, [box]):
-            if str(box) in who.get("mailboxes", []):
-                return who
-    # Nothing confirmed it: the files are left over from a dead server.
+    who = _probe_box(box)
+    if who:
+        return who
+    record = read_record(box)
+    if record and pid_alive(_int(record.get("pid"))):
+        return {"unresponsive": True, "pid": record.get("pid"), "port": record.get("port")}
     for leftover in ("server.json", "server.token", "open.html"):
         try:
             (box / leftover).unlink()
@@ -153,8 +184,9 @@ def existing(box: Path, first: int = PORT_START, span: int = PORT_SPAN) -> dict 
     return None
 
 
-def shutdown(port: int, token: str) -> bool:
-    return _request(port, "/api/shutdown", token, method="POST", timeout=3) is not None
+def shutdown(who: dict, token: str, reason: str = "stop") -> bool:
+    return _request(who["port"], "/api/shutdown", token, body={"reason": reason},
+                    timeout=4.0) is not None
 
 
 def describe(who: dict) -> str:

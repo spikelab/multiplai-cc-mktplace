@@ -85,6 +85,11 @@ def finding_id(file: str, line_start: int, claim: str) -> str:
     return hashlib.sha1(raw).hexdigest()[:10]
 
 
+def findings_digest(ff: "FindingsFile") -> str:
+    """Identifies one version of a findings file's content."""
+    return hashlib.sha256(ff.model_dump_json().encode("utf-8")).hexdigest()
+
+
 def load_findings(path: str | Path) -> FindingsFile:
     """Parse and validate a findings file. Raises pydantic.ValidationError."""
     text = Path(path).read_text(encoding="utf-8")

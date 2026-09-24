@@ -32,7 +32,7 @@ from pydantic import ValidationError
 from . import netinfo, registry
 from .gitdata import GitError, PathNotInReview, allowed_paths, file_view
 from .mailbox import Mailbox, new_question_id, utc_now, write_private
-from .models import Anchor, FindingsFile, InboxRow
+from .models import Anchor, FindingsFile, InboxRow, findings_digest
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +41,10 @@ COMPONENT = "review-viewer"
 MAX_QUESTION_CHARS = 8000
 MAX_BODY_BYTES = 64 * 1024
 REJECT_LOG_INTERVAL = 60.0
+STOP_MESSAGES = {
+    "stop": "viewer stopped by stop --box",
+    "findings_changed": "viewer restarted because a findings file changed",
+}
 
 CSP = ("default-src 'none'; script-src 'self' https://cdnjs.cloudflare.com; "
        "style-src 'self' https://cdnjs.cloudflare.com; img-src 'self' data:; "
@@ -93,7 +97,9 @@ class Viewer:
     def whoami(self) -> dict:
         return {"agent": self.agent, "session_id": self.session_id, "pid": os.getpid(),
                 "started": self.started, "targets": list(self.targets),
-                "mailboxes": [str(t.mailbox.dir.resolve()) for t in self.targets.values()]}
+                "mailboxes": [str(t.mailbox.dir.resolve()) for t in self.targets.values()],
+                "digests": {str(t.mailbox.dir.resolve()): findings_digest(t.findings)
+                            for t in self.targets.values()}}
 
     def note_reject(self, status: int, route: str, reason: str) -> None:
         """Log a refused request, at most once a minute per status code, so a
@@ -172,6 +178,8 @@ def make_handler(viewer: Viewer):
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
                 raise _Reject(400, "bad content length")
+            if length < 0:
+                raise _Reject(400, "bad content length")
             if length > MAX_BODY_BYTES:
                 raise _Reject(413, "body too large")
             try:
@@ -203,7 +211,11 @@ def make_handler(viewer: Viewer):
                 self._check_origin()
                 if route.startswith("/api/"):
                     self._check_token()
-                    viewer.last_seen = time.monotonic()
+                    # whoami is how `list`, `serve` and `stop` probe the server;
+                    # counting it as activity would keep a server with no open
+                    # page alive for as long as the session keeps checking.
+                    if route != "/api/whoami":
+                        viewer.last_seen = time.monotonic()
                     body = self._body() if method == "POST" else {}
                     return self._api(method, route, parse_qs(url.query), body)
                 if method == "GET":
@@ -270,10 +282,12 @@ def make_handler(viewer: Viewer):
                 if route == "/api/decision":
                     return self._decision(body)
                 if route == "/api/shutdown":
-                    viewer.stop_reason = "stop"
+                    reason = body.get("reason")
+                    reason = reason if reason in STOP_MESSAGES else "stop"
+                    viewer.stop_reason = reason
                     self._json({"ok": True})
-                    log_event(COMPONENT, "stop", "viewer stopped by stop --box",
-                              session_id=viewer.session_id, reason="shutdown request")
+                    log_event(COMPONENT, "stop", STOP_MESSAGES[reason],
+                              session_id=viewer.session_id, reason=reason)
                     threading.Thread(target=viewer.httpd.shutdown, daemon=True).start()
                     return
             raise _Reject(404, "not found")

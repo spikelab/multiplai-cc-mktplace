@@ -4,22 +4,27 @@
 
     serve          start (or reuse) the viewer for findings files or a diff
     reply          send the session's answer to a question from the page
+    pending        print questions and decisions that have no final reply yet
     list           show the live viewers this user can reach
     stop           stop one viewer (--box) or all of them (--all)
     validate       check findings files against the v1 contract
     export-schema  write the v1 JSON Schema
 
 stdout is a contract: `serve` prints the `open:` line, the reference URLs, the
-mailboxes and the Monitor command, then nothing per request. Diagnostics go to
+mailboxes, the Monitor command and the pending command, then nothing per
+request. Diagnostics go to
 the logger, never to print().
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import shlex
 import signal
 import sys
+import time
 from pathlib import Path
 
 from multiplai_core.log_utils import log_event, setup_logging
@@ -28,7 +33,8 @@ from pydantic import ValidationError
 from . import netinfo, registry, server
 from .gitdata import GitError, diff_findings, diff_target
 from .mailbox import MAX_ROW_BYTES, Mailbox, MailboxError, utc_now
-from .models import SCHEMA_PATH, FindingsFile, OutboxRow, load_findings, schema_text
+from .models import (SCHEMA_PATH, FindingsFile, OutboxRow, findings_digest, load_findings,
+                     schema_text)
 
 COMPONENT = "review-viewer"
 EXIT_USAGE = 2
@@ -113,10 +119,18 @@ def _load_targets(args) -> list[tuple[FindingsFile, Path]] | int:
 
 
 def _monitor_command(boxes: list[Path], label: str) -> str:
-    files = " ".join(str(b / "inbox.jsonl") for b in boxes)
-    return (f'Monitor(command="tail -n 0 -q -F {files}", '
-            f'description="review-viewer questions and decisions for {label}", '
-            f"timeout_ms={MONITOR_TIMEOUT_MS})")
+    """The Monitor call, with each path shell-quoted and each argument a JSON
+    string, so spaces in paths and quotes in labels survive."""
+    files = " ".join(shlex.quote(str(b / "inbox.jsonl")) for b in boxes)
+    command = json.dumps(f"tail -n 0 -q -F {files}", ensure_ascii=False)
+    description = json.dumps(f"review-viewer questions and decisions for {label}",
+                             ensure_ascii=False)
+    return f"Monitor(command={command}, description={description}, timeout_ms={MONITOR_TIMEOUT_MS})"
+
+
+def _pending_command(boxes: list[Path]) -> str:
+    return "python -m review_viewer pending " + " ".join(
+        f"--box {shlex.quote(str(b))}" for b in boxes)
 
 
 def _print_contract(open_html: Path, urls: list[tuple[str, str]], boxes: list[Path],
@@ -126,7 +140,71 @@ def _print_contract(open_html: Path, urls: list[tuple[str, str]], boxes: list[Pa
         print(f"url: {url}  ({why}; reference only, needs the link above to authorise)")
     for box in boxes:
         print(f"mailbox: {box}")
-    print(f"monitor: {_monitor_command(boxes, label)}", flush=True)
+    print(f"monitor: {_monitor_command(boxes, label)}")
+    print(f"pending: {_pending_command(boxes)}", flush=True)
+
+
+def _wait_for_cleanup(boxes: list[str], timeout: float = 10.0) -> bool:
+    """Wait until a stopping server has removed its files. Starting the new
+    server earlier would let the old one's cleanup delete the new token."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not any((Path(b) / "server.json").exists() for b in boxes):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def _reuse_or_replace(args, loaded, boxes: list[Path], label: str) -> int | None:
+    """Deal with a viewer already serving one of these mailboxes.
+
+    Returns an exit code when this call is finished (reused, or refused), and
+    None when a new server should start (none running, or the old one was
+    stopped because a findings file changed).
+    """
+    for box in boxes:
+        live = registry.existing(box)
+        if not live:
+            continue
+        if live.get("unresponsive"):
+            print(f"a viewer process (pid {live['pid']}) owns {box} but did not answer on port "
+                  f"{live['port']}. Wait a moment and retry, or end that process.",
+                  file=sys.stderr)
+            return EXIT_USAGE
+        owner = live.get("session_id") or ""
+        if not args.session_id or owner != args.session_id:
+            who = (f"owned by another session ({owner[:8]})" if owner and args.session_id
+                   else "owned by a session this command cannot identify (no session id)")
+            print(f"a viewer for {box} is already running, {who}: {registry.describe(live)}\n"
+                  f"to take it over: python -m review_viewer stop --box {shlex.quote(str(box))}",
+                  flush=True)
+            return EXIT_OTHER_SESSION
+        served = set(live.get("mailboxes", []))
+        missing = [b for b in boxes if str(b) not in served]
+        if missing:
+            print(f"a viewer is already running for {box} but not for {missing[0]}; stop it "
+                  f"first: python -m review_viewer stop --box {shlex.quote(str(box))}",
+                  file=sys.stderr)
+            return EXIT_USAGE
+        wanted = {str(b.resolve()): findings_digest(ff) for ff, b in loaded}
+        served_digests = live.get("digests", {})
+        if any(served_digests.get(b) != d for b, d in wanted.items()):
+            token = registry.read_token(box)
+            if not token or not registry.shutdown(live, token, reason="findings_changed") \
+                    or not _wait_for_cleanup(live.get("mailboxes", [])):
+                print(f"a findings file changed, but the running viewer for {box} did not "
+                      f"stop; run: python -m review_viewer stop --box {shlex.quote(str(box))}",
+                      file=sys.stderr)
+                return EXIT_USAGE
+            print("a findings file changed; restarted the viewer", flush=True)
+            return None
+        log_event(COMPONENT, "reuse", f"viewer already running for {', '.join(live['targets'])}; "
+                  "reused it", session_id=args.session_id, port=live["port"],
+                  owner_session=owner[:8])
+        print("viewer already running for this session; reusing it", flush=True)
+        _print_contract(box / "open.html", netinfo.display_urls(live["port"]), boxes, label)
+        return 0
+    return None
 
 
 def cmd_serve(args) -> int:
@@ -135,29 +213,9 @@ def cmd_serve(args) -> int:
         return loaded
     boxes = [b.resolve() for _, b in loaded]
     label = ", ".join(ff.target.label for ff, _ in loaded)
-
-    for box in boxes:
-        live = registry.existing(box, args.port, registry.PORT_SPAN)
-        if not live:
-            continue
-        owner = live.get("session_id") or ""
-        if owner != args.session_id:
-            print(f"a viewer for {box} is already running, owned by another session "
-                  f"({owner[:8] or 'none'}): {registry.describe(live)}\n"
-                  f"to take it over: python -m review_viewer stop --box {box}", flush=True)
-            return EXIT_OTHER_SESSION
-        served = set(live.get("mailboxes", []))
-        missing = [b for b in boxes if str(b) not in served]
-        if missing:
-            print(f"a viewer is already running for {box} but not for {missing[0]}; "
-                  f"stop it first: python -m review_viewer stop --box {box}", file=sys.stderr)
-            return EXIT_USAGE
-        log_event(COMPONENT, "reuse", f"viewer already running for {', '.join(live['targets'])}; "
-                  "reused it", session_id=args.session_id, port=live["port"],
-                  owner_session=owner[:8])
-        print("viewer already running for this session; reusing it", flush=True)
-        _print_contract(box / "open.html", netinfo.display_urls(live["port"]), boxes, label)
-        return 0
+    done = _reuse_or_replace(args, loaded, boxes, label)
+    if done is not None:
+        return done
 
     viewer = server.build_viewer(loaded, agent=args.agent, session_id=args.session_id,
                                  idle_minutes=args.idle)
@@ -253,9 +311,9 @@ def cmd_reply(args) -> int:
 
 
 def cmd_list(args) -> int:
-    live = registry.scan(args.port, args.span)
+    live = registry.scan()
     if not live:
-        print(f"no live review-viewer found on ports {args.port}-{args.port + args.span - 1}")
+        print("no live review-viewer found")
         return 0
     print(f"{len(live)} live viewer(s):")
     for who in live:
@@ -268,13 +326,12 @@ def cmd_list(args) -> int:
 def cmd_stop(args) -> int:
     if args.box:
         box = invocation_path(args.box).resolve()
-        live = [w for w in registry.scan(args.port, args.span, [box])
-                if str(box) in w.get("mailboxes", [])]
-        if not live and not registry.read_token(box):
-            print(f"no viewer running for {box} (or its token file is not readable)")
+        live = [w for w in registry.scan([box]) if str(box) in w.get("mailboxes", [])]
+        if not live:
+            print(f"no viewer answering for {box} (or its token file is not readable)")
             return 0
     elif args.all:
-        live = registry.scan(args.port, args.span)
+        live = registry.scan()
     else:
         print("stop needs --box <mailbox> or --all", file=sys.stderr)
         return EXIT_USAGE
@@ -283,14 +340,32 @@ def cmd_stop(args) -> int:
         return 0
     failed = 0
     for who in live:
-        token = next((registry.read_token(Path(b)) for b in who.get("mailboxes", [])
-                      if registry.read_token(Path(b))), None)
-        if token and registry.shutdown(who["port"], token):
+        token = next((t for t in (registry.read_token(Path(b)) for b in who.get("mailboxes", []))
+                      if t), None)
+        if token and registry.shutdown(who, token):
             print("stopped: " + registry.describe(who))
         else:
             failed += 1
             print("NOT stopped: " + registry.describe(who))
     return 1 if failed else 0
+
+
+def cmd_pending(args) -> int:
+    """Print the inbox rows that have no final reply yet, one JSON row per
+    line, in the same form the Monitor delivers. Run it after (re-)arming the
+    Monitor: rows written while no watch was running are otherwise missed."""
+    for raw in args.box:
+        box = Mailbox(invocation_path(raw))
+        if not box.dir.is_dir():
+            print(f"no mailbox at {box.dir}", file=sys.stderr)
+            return EXIT_USAGE
+        last_done: dict[str, bool] = {}
+        for row in box.read_outbox(0)[0]:
+            last_done[row.get("reply_to")] = row.get("done") is True
+        for row in box.read_inbox():
+            if not last_done.get(row.get("id")):
+                print(json.dumps(row, ensure_ascii=False))
+    return 0
 
 
 # --- validate / export-schema -------------------------------------------------------
@@ -354,15 +429,17 @@ def build_parser() -> argparse.ArgumentParser:
     r.set_defaults(func=cmd_reply)
 
     ls = sub.add_parser("list", parents=[common], help="list live viewers")
-    ls.add_argument("--port", type=int, default=registry.PORT_START)
-    ls.add_argument("--span", type=int, default=registry.PORT_SPAN)
     ls.set_defaults(func=cmd_list)
+
+    pe = sub.add_parser("pending", parents=[common],
+                        help="print questions and decisions that have no final reply yet")
+    pe.add_argument("--box", required=True, action="append",
+                    help="a mailbox directory (repeat for several)")
+    pe.set_defaults(func=cmd_pending)
 
     st = sub.add_parser("stop", parents=[common], help="stop a viewer")
     st.add_argument("--box", help="the mailbox of the viewer to stop")
     st.add_argument("--all", action="store_true", help="stop every live viewer")
-    st.add_argument("--port", type=int, default=registry.PORT_START)
-    st.add_argument("--span", type=int, default=registry.PORT_SPAN)
     st.set_defaults(func=cmd_stop)
 
     v = sub.add_parser("validate", parents=[common], help="validate findings.json files")
@@ -378,6 +455,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     args.session_id = getattr(args, "session_id", "")
+    if args.session_id in ("", "{session_id}"):
+        # Claude Code exports the session id to the commands it runs; a
+        # SKILL.md placeholder that was not substituted must not become an id
+        # every session shares.
+        args.session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     args.agent = getattr(args, "agent", "Claude")
     setup_logging(COMPONENT, session_id=args.session_id,
                   propagate_loggers=("review_viewer", "multiplai_core"))

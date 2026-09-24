@@ -33,6 +33,15 @@ def bind_host() -> str:
     return "0.0.0.0" if detect_container() else "127.0.0.1"
 
 
+def probe_host() -> str:
+    """Where this machine's own tools reach the server: the bound address when
+    REVIEW_VIEWER_HOST names one interface, loopback otherwise."""
+    override = os.environ.get("REVIEW_VIEWER_HOST")
+    if override and override not in ("0.0.0.0", "::", ""):
+        return override
+    return "127.0.0.1"
+
+
 def _first_address() -> str | None:
     try:
         out = subprocess.run(["hostname", "-I"], shell=False, stdin=subprocess.DEVNULL,

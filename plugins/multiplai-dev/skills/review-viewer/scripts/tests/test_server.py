@@ -177,7 +177,7 @@ def test_stale_server_json_is_not_trusted(findings_path):
     (box / "server.json").write_text(json.dumps({"port": 1, "session_id": "x"}))
     (box / "server.token").write_text("stale")
     from review_viewer import registry
-    assert registry.existing(box, 1, 1) is None
+    assert registry.existing(box) is None
     assert not (box / "server.json").exists()
 
 
@@ -245,3 +245,137 @@ def test_static_assets_and_headers(start_live):
             assert r.status == 200 and ctype in r.headers["Content-Type"], name
             assert r.headers["Referrer-Policy"] == "no-referrer"
             assert "connect-src 'self'" in r.headers["Content-Security-Policy"]
+
+
+# --- regressions from the PR 243 review --------------------------------------------
+
+
+def test_changed_findings_restart_the_viewer(start_live):
+    live = start_live(session_id="sess-A")
+    data = json.loads(live.findings.read_text())
+    data["findings"][0]["verdict_reason"] = "re-reviewed"
+    live.findings.write_text(json.dumps(data))
+    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    proc = subprocess.Popen([PYTHON, "-m", "review_viewer", "--session-id", "sess-A", "serve",
+                             str(live.findings), "--idle", "0"],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+    try:
+        out = []
+        for line in proc.stdout:
+            out.append(line)
+            if line.startswith("pending:"):
+                break
+        assert "a findings file changed; restarted the viewer\n" in out
+        live.thread.join(5)
+        assert not live.thread.is_alive()
+        token = (live.box / "server.token").read_text().strip()
+        port = json.loads((live.box / "server.json").read_text())["port"]
+        import urllib.request
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/targets/{live.slug}",
+                                     headers={"X-Review-Token": token})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            served = json.loads(r.read())
+        assert served["findings"]["findings"][0]["verdict_reason"] == "re-reviewed"
+        from review_viewer import registry
+        who = registry.existing(live.box)
+        assert registry.shutdown(who, token)
+        proc.wait(10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+def test_monitor_command_survives_spaces_and_quotes(tmp_path):
+    import shlex
+    from review_viewer.__main__ import _monitor_command
+    box = tmp_path / "My Reviews" / "pr 12" / "viewer"
+    text = _monitor_command([box], 'label with "quotes"')
+    command = json.loads(text[len("Monitor(command="):text.index(", description=")])
+    assert shlex.split(command)[-1] == str(box / "inbox.jsonl")
+    desc = text[text.index("description=") + len("description="):text.index(", timeout_ms")]
+    assert json.loads(desc).endswith('label with "quotes"')
+
+
+def test_pending_lists_rows_without_a_final_reply(tmp_path):
+    from review_viewer.mailbox import Mailbox, utc_now
+    from review_viewer.models import InboxRow, OutboxRow
+    box = Mailbox(tmp_path / "viewer")
+    box.create()
+    ids = {}
+    for name, kind in (("done", "question"), ("partial", "question"), ("none", "question"),
+                       ("decided", "decision")):
+        row = InboxRow(id=f"q-{name}", ts=utc_now(), target="t", kind=kind, text=name,
+                       decision="accept" if kind == "decision" else None)
+        box.append_inbox(row)
+        ids[name] = row.id
+    box.append_outbox(OutboxRow(reply_to="q-done", ts=utc_now(), text="a", done=True))
+    box.append_outbox(OutboxRow(reply_to="q-partial", ts=utc_now(), text="b", done=False))
+    code, out = _serve_in_process("pending", "--box", str(box.dir))
+    assert code == 0
+    assert [json.loads(line)["id"] for line in out.splitlines()] == [
+        "q-partial", "q-none", "q-decided"]
+
+
+def test_unanswering_live_process_keeps_its_files(findings_path):
+    from conftest import free_port
+    from review_viewer import registry
+    box = findings_path.parent / "viewer"
+    box.mkdir()
+    (box / "server.json").write_text(json.dumps({"port": free_port(), "pid": os.getpid()}))
+    (box / "server.token").write_text("tok")
+    who = registry.existing(box)
+    assert who and who["unresponsive"]
+    assert (box / "server.json").exists() and (box / "server.token").exists()
+
+
+def test_whoami_probes_do_not_keep_the_server_alive(start_live):
+    live = start_live(idle=0.03)  # 1.8 s
+    deadline = time.monotonic() + 8
+    while live.thread.is_alive() and time.monotonic() < deadline:
+        live.request("GET", "/api/whoami")
+        time.sleep(0.2)
+    assert not live.thread.is_alive()
+    assert live.viewer.stop_reason == "idle"
+
+
+def test_tokens_go_only_to_their_own_port(start_live, findings_path, tmp_path, monkeypatch):
+    from review_viewer import registry
+    live = start_live()
+    registry.register(os.getpid(), [live.box])
+    other = tmp_path / "other" / "viewer"
+    other.mkdir(parents=True)
+    (other / "server.token").write_text("other-token")
+    (other / "server.json").write_text(json.dumps({"port": 1, "pid": os.getpid()}))
+    registry.register(os.getpid() + 100000, [other])
+    calls = []
+    real = registry._request
+
+    def spy(port, route, token, **kw):
+        calls.append((port, token))
+        return real(port, route, token, **kw)
+
+    monkeypatch.setattr(registry, "_request", spy)
+    found = registry.scan([live.box, other])
+    assert [w["port"] for w in found] == [live.port]
+    assert all((port, tok) in {(live.port, live.token), (1, "other-token")}
+               for port, tok in calls), calls
+
+
+def test_session_id_falls_back_to_claude_code_env(start_live, monkeypatch):
+    live = start_live(session_id="sess-env")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-env")
+    code, out = _serve_in_process("--session-id", "{session_id}", "serve", str(live.findings))
+    assert code == 0 and "reusing" in out
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
+    code, out = _serve_in_process("serve", str(live.findings))
+    assert code == 3 and "cannot identify" in out
+
+
+def test_negative_content_length_is_refused(start_live):
+    import socket
+    live = start_live()
+    with socket.create_connection(("127.0.0.1", live.port), timeout=5) as s:
+        s.sendall((f"POST /api/ask HTTP/1.1\r\nHost: 127.0.0.1:{live.port}\r\n"
+                   f"X-Review-Token: {live.token}\r\nContent-Type: application/json\r\n"
+                   "Content-Length: -1\r\n\r\n").encode())
+        assert s.recv(64).startswith(b"HTTP/1.0 400")
