@@ -15,6 +15,7 @@ members = [
     "multiplai-context-scripts",
     "multiplai-marketplace",
     "research-pipeline",
+    "review-viewer",
     "screen-demo-scripts",
     "skill-creator-scripts",
     "slack-scripts",
@@ -1701,6 +1702,42 @@ requires-dist = [
     { name = "trafilatura", specifier = ">=1.6" },
 ]
 provides-extras = ["browser", "dev"]
+
+[[package]]
+name = "review-viewer"
+version = "0.1.0"
+source = { editable = "plugins/multiplai-dev/skills/review-viewer/scripts" }
+dependencies = [
+    { name = "multiplai-core" },
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "jsonschema" },
+    { name = "pytest" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "jsonschema" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4" },
+    { name = "multiplai-core", git = "https://github.com/spikelab/multiplai-core?branch=main" },
+    { name = "pydantic", specifier = ">=2" },
+    { name = "pytest", marker = "extra == 'dev'" },
+]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "jsonschema", specifier = ">=4" },
+    { name = "pytest" },
+]
 
 [[package]]
 name = "rpds-py"
