@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-24T12:00:00Z",
+  "producer": "hand-written test fixture",
+  "target": {
+    "slug": "fixture-repo--6f9336af..9758b094",
+    "label": "fixture-repo main~1..main",
+    "repo_path": "/tmp/review-viewer-fixture",
+    "remote_url": null,
+    "base_sha": "6f9336af7e1eb4695063d6d319ee8af567b4e8b1",
+    "head_sha": "9758b094b37d97b0db1c7b3f4d1ad2534ff2b6d5",
+    "files_changed": [
+      "app/big.py",
+      "app/new_feature.py",
+      "app/old_module.py",
+      "app/service.py",
+      "assets/logo.bin"
+    ]
+  },
+  "findings": [
+    {
+      "id": "b561bd34ce",
+      "severity": "HIGH",
+      "status": "confirmed",
+      "claim": "total() now raises KeyError for line items without a qty field",
+      "file": "app/service.py",
+      "line_start": 9,
+      "line_end": 9,
+      "failure_scenario": "A cart built by the legacy checkout sends items as {\"price\": 10}. total() evaluates i[\"qty\"] and raises KeyError, so the order page returns 500.",
+      "citations": [
+        {
+          "path": "app/service.py",
+          "line_start": 9,
+          "line_end": 9,
+          "quote": "return sum(i[\"price\"] * i[\"qty\"] for i in items)"
+        },
+        {
+          "path": "app/new_feature.py",
+          "line_start": 4,
+          "line_end": 5,
+          "quote": "def points_for(amount):\n    return int(amount // 10)"
+        }
+      ],
+      "verdict_reason": "The base commit summed prices only; nothing in the diff adds qty to older callers.",
+      "fix": {
+        "description": "Default the quantity to 1 when it is missing.",
+        "patch_sketch": "return sum(i[\"price\"] * i.get(\"qty\", 1) for i in items)",
+        "premises": [
+          {
+            "statement": "Items without qty mean a quantity of one",
+            "kind": "external",
+            "citation": null
+          },
+          {
+            "statement": "total() is the only caller that reads qty",
+            "kind": "in_repo",
+            "citation": {
+              "path": "app/service.py",
+              "line_start": 8,
+              "line_end": 9,
+              "quote": "def total(items):"
+            }
+          }
+        ],
+        "open_questions": [
+          "Does the legacy checkout still exist in production?"
+        ]
+      }
+    },
+    {
+      "id": "7ca6553fd7",
+      "severity": "MEDIUM",
+      "status": "unverifiable",
+      "claim": "refund() logs order[\"id\"], which may be absent",
+      "file": "app/service.py",
+      "line_start": 20,
+      "line_end": 20,
+      "failure_scenario": "An order dict created without an id is refunded; the log call raises KeyError after the status was already changed.",
+      "citations": [
+        {
+          "path": "app/service.py",
+          "line_start": 19,
+          "line_end": 20,
+          "quote": "order[\"status\"] = \"refunded\"\n    log.info(\"refunded %s\", order[\"id\"])"
+        }
+      ],
+      "verdict_reason": "The repository has no order constructor, so whether id is always set cannot be checked here.",
+      "fix": null
+    },
+    {
+      "id": "cebb020bdb",
+      "severity": "LOW",
+      "status": "refuted",
+      "claim": "apply_discount() accepts negative percentages",
+      "file": "app/service.py",
+      "line_start": 12,
+      "line_end": 15,
+      "failure_scenario": "pct=-10 would increase the amount.",
+      "citations": [
+        {
+          "path": "app/service.py",
+          "line_start": 12,
+          "line_end": 15,
+          "quote": "def apply_discount(amount, pct):"
+        }
+      ],
+      "verdict_reason": "A negative discount as a surcharge is how the caller in the spec uses it; not a defect.",
+      "fix": null
+    }
+  ]
+}
