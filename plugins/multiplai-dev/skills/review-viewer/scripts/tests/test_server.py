@@ -332,8 +332,12 @@ def test_whoami_probes_do_not_keep_the_server_alive(start_live):
     live = start_live(idle=0.03)  # 1.8 s
     deadline = time.monotonic() + 8
     while live.thread.is_alive() and time.monotonic() < deadline:
-        live.request("GET", "/api/whoami")
+        try:
+            live.request("GET", "/api/whoami")
+        except OSError:  # the server stopping mid-probe is the expected outcome
+            break
         time.sleep(0.2)
+    live.thread.join(5)
     assert not live.thread.is_alive()
     assert live.viewer.stop_reason == "idle"
 

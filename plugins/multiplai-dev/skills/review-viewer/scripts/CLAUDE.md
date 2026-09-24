@@ -17,12 +17,12 @@ The page-logic tests need `node`; they fail (not skip) without it.
 
 | Module | Does |
 |---|---|
-| `__main__.py` | CLI: `serve`, `reply`, `list`, `stop`, `validate`, `export-schema`. Calls `setup_logging` once. Owns the stdout contract. |
+| `__main__.py` | CLI: `serve`, `reply`, `pending`, `list`, `stop`, `validate`, `export-schema`. Calls `setup_logging` once. Owns the stdout contract. |
 | `models.py` | The `findings.json` v1 pydantic models (source of truth for `../schema/findings.v1.schema.json`), `finding_id()`, and the mailbox row models. |
 | `gitdata.py` | Read-only git: `parse_unified()`, `file_view()`, `allowed_paths()`, `diff_target()`. Fixed argv, no shell, stdin closed. |
-| `mailbox.py` | Append-only JSONL rows, `decisions.json` by atomic replace, 0600 files. |
+| `mailbox.py` | Append-only JSONL rows, `decisions.json` by atomic replace; the directory is 0700 and every file 0600. |
 | `server.py` | `ThreadingHTTPServer` subclass (`allow_reuse_address = False`), request checks, routes, idle watchdog. |
-| `registry.py` | Finds live viewers: `/api/whoami` probes in parallel over 8765–8784, authenticated with the token from each mailbox. |
+| `registry.py` | Finds live viewers: probes each mailbox's recorded port with that mailbox's token, in parallel. A token is never sent to any other port. |
 | `netinfo.py` | Container detection (degradation contract rule 2), bind host, URLs to print. |
 | `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `logic.js` (pure functions, tested under node), `app.js`, `app.css`. |
 
@@ -67,7 +67,28 @@ hex of `sha1(f"{file}\0{line_start}\0{claim}")`.
 One writer per file; each row is one `write()` under 64 KiB on an `O_APPEND`
 descriptor. Readers skip lines that do not parse. `reply` splits answers that
 would exceed the row limit into several rows; only the last one can carry
-`done: true`.
+`done: true`. Rows are split on `\n` only: they are written with
+`ensure_ascii=False`, so U+2028 can appear raw inside a string.
+
+`pending` prints the inbox rows whose latest reply is missing or not
+`done`. The session runs it after arming (or re-arming) the Monitor.
+
+## Git output
+
+Every git call runs with `-c color.ui=never -c core.quotepath=off`, and every
+`git diff` with `--no-color --no-ext-diff --no-textconv`, with
+`GIT_EXTERNAL_DIFF` removed from the environment: user or repo config must
+not change what `_walk()` parses. Hunk bodies are counted from the `@@`
+lengths, never recognised by their first characters (`--- comment` is a
+deleted line, not a file header). File text is split on `\n` only, which
+is how git numbers lines.
+
+## Idle and reuse
+
+Only page activity resets the idle timer; `/api/whoami` (used by `list`,
+`serve` and `stop`) does not. `serve` on a mailbox whose server is alive
+reuses it when the session and the findings digests match, restarts it when a
+findings file changed, and exits 3 for another or an unidentified session.
 
 Plain-diff mode puts the mailbox under `<workspace INBOX or cwd>/review-viewer/<slug>/viewer/`.
 

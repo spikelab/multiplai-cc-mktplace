@@ -61,15 +61,21 @@ Its mailbox goes under the workspace `INBOX/review-viewer/<slug>/viewer/` when
 a workspace with an `INBOX/` exists, otherwise under the current directory.
 Tell the user where it went.
 
+`{session_id}` identifies this session as the viewer's owner. If it reaches
+the command unsubstituted, the CLI uses `$CLAUDE_CODE_SESSION_ID` instead.
+
 Read the background task's output. It prints, in order: `open: file://…`,
-one or more `url:` lines, one `mailbox:` line per findings file, and a
-`monitor:` line.
+one or more `url:` lines, one `mailbox:` line per findings file, a
+`monitor:` line and a `pending:` line.
 
 - Exit 2: bad input (the message says which file and why).
-- Exit 3: another session owns the viewer for that mailbox. Tell the user; the
-  message names `stop --box <dir>` to take it over.
+- Exit 3: another session owns the viewer for that mailbox, or this command
+  could not tell which session it is. Tell the user; the message names
+  `stop --box <dir>` to take it over.
 - `viewer already running for this session; reusing it`: a viewer you started
   earlier is still up. Do not arm a second watch if one is still running.
+- `a findings file changed; restarted the viewer`: the review was re-run; the
+  page must be reopened from the new `open:` line.
 
 ### 2. Give the user the `open:` line exactly as printed
 
@@ -81,17 +87,25 @@ authorised" banner. Report nothing else about the review in chat.
 
 ### 3. Arm the watch
 
-Run the command from the `monitor:` line, for example:
+Run the call from the `monitor:` line exactly as printed. Its arguments are
+JSON strings with the paths already shell-quoted, for example:
 
 ```
-Monitor(command="tail -n 0 -q -F <mailbox>/inbox.jsonl [<mailbox2>/inbox.jsonl ...]",
+Monitor(command="tail -n 0 -q -F '/path/My Reviews/viewer/inbox.jsonl'",
         description="review-viewer questions and decisions for <label>",
         timeout_ms=1800000)
 ```
 
-A monitor expires after 30 minutes. When it does, re-arm it while
-`python -m review_viewer list` still shows the server; stop re-arming once it
-does not.
+**Then** run the `pending:` command (through the same `uv run --directory …`
+prefix as every other command here). It prints every question and decision
+that has no final reply yet, in the same row form the monitor delivers.
+Handle those rows as in step 4. The monitor only shows rows written while it
+runs, so `pending` covers anything written before it started.
+
+A monitor expires after 30 minutes. When it does, and `python -m review_viewer
+list` still shows the server: re-arm the monitor first, then run `pending`
+again. A row can show up in both; answer it once. Stop re-arming once `list`
+no longer shows the server.
 
 ### 4. Handle each event row
 
