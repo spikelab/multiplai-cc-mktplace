@@ -34,6 +34,7 @@ members = [
     "plugins/multiplai-dev/skills/buildme/scripts",
     "plugins/multiplai-dev/skills/deepen/scripts",
     "plugins/multiplai-dev/skills/review-viewer/scripts",
+    "plugins/multiplai-dev/skills/review/scripts",
     "plugins/multiplai-dev/skills/skill-creator/scripts",
     "plugins/multiplai-media/skills/screen-demo/scripts",
     "plugins/multiplai-messaging/skills/gmail/scripts",
