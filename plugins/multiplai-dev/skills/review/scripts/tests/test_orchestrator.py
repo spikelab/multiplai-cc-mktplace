@@ -174,3 +174,21 @@ def test_rollup_subcommand(fixture_repo, tmp_path, agents, capsys):
     assert main(["--out", str(out), "rollup"]) == 0
     assert (out / "HIGH-only.md").is_file()
     assert capsys.readouterr().out.startswith("rollups: ")
+
+
+def test_out_and_session_id_are_accepted_after_the_subcommand(fixture_repo, tmp_path, agents, capsys):
+    """The plan's acceptance command passes --out after `review`."""
+    repo, base, head = fixture_repo
+    out = tmp_path / "late-out"
+    agents()
+    assert main(["review", "--repo", str(repo), "--range", f"{base}..{head}", "--trust-repo",
+                 "--out", str(out), "--session-id", "sess-late"]) == 0
+    (path,) = _findings_line(capsys.readouterr().out)
+    assert path.parent.parent == out
+
+
+def test_global_flags_are_not_overwritten_when_absent_after_the_subcommand():
+    from review_pipeline.__main__ import build_parser
+
+    args = build_parser().parse_args(["--out", "/x", "--session-id", "s", "rollup"])
+    assert (args.out, args.session_id) == ("/x", "s")

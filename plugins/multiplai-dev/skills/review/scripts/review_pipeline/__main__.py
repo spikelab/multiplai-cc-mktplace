@@ -61,9 +61,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--session-id", default="", help="Claude Code session id, for log correlation")
     parser.add_argument("--out", default=None,
                         help="Output directory (default: <workspace>/INBOX/reviews if it exists, else ./reviews)")
+    # The same two flags are accepted after the subcommand too
+    # (`review --out DIR`). SUPPRESS keeps an absent one from overwriting the
+    # value given before the subcommand.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--session-id", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    common.add_argument("--out", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="command", required=True, metavar="{" + ",".join(SUBCOMMANDS) + "}")
 
-    rv = sub.add_parser("review", help="Review one branch, PR or commit range")
+    rv = sub.add_parser("review", parents=[common], help="Review one branch, PR or commit range")
     rv.add_argument("--repo", required=True, help="Path to the repository")
     which = rv.add_mutually_exclusive_group(required=True)
     which.add_argument("--branch", help="Review origin/<branch> against its merge-base with the default branch")
@@ -76,21 +82,21 @@ def build_parser() -> argparse.ArgumentParser:
     _trust_flag(rv)
     _budget_flag(rv)
 
-    bt = sub.add_parser("batch", help="Review a YAML list of targets, then write rollups")
+    bt = sub.add_parser("batch", parents=[common], help="Review a YAML list of targets, then write rollups")
     bt.add_argument("file", help="YAML list of {repo, branch|pr|range, tickets, deployed_in}")
     bt.add_argument("--parallel", type=int, default=2, help="Targets reviewed at once (default 2)")
     _trust_flag(bt)
     _budget_flag(bt)
 
-    ru = sub.add_parser("rollup", help="Regenerate HIGH/MEDIUM/LOW-only.md from findings.json files")
+    ru = sub.add_parser("rollup", parents=[common], help="Regenerate HIGH/MEDIUM/LOW-only.md from findings.json files")
     ru.add_argument("paths", nargs="*", help="findings.json files in order (default: <out>/*/findings.json)")
 
-    rs = sub.add_parser("resume", help="Continue a review from <out>/<slug>/review-state.json")
+    rs = sub.add_parser("resume", parents=[common], help="Continue a review from <out>/<slug>/review-state.json")
     rs.add_argument("target_dir", help="The review's directory, <out>/<slug>")
     _trust_flag(rs)
     _budget_flag(rs)
 
-    po = sub.add_parser("post", help="Post the HIGH and MEDIUM findings as one PR comment")
+    po = sub.add_parser("post", parents=[common], help="Post the HIGH and MEDIUM findings as one PR comment")
     po.add_argument("target_dir", help="The review's directory, <out>/<slug>")
     po.add_argument("--decisions", help="The viewer's decisions.json; only accepted findings are posted")
     return parser
