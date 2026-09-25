@@ -18,6 +18,7 @@ authoring**. Part of the [`multiplai`](../../README.md) marketplace.
 | `buildme` | Full bootstrap conductor — from idea to working code via interview, research, spec generation, and autonomous TDD implementation (deterministic Python pipeline). |
 | `plan` | Author self-contained, executable implementation plans with verifiable "Done means" criteria — hand the file to a fresh session, a goal runner, or buildme. |
 | `deepen` | Find deepening opportunities — collapse shallow modules into deep ones; idiom packs for Python, Swift, TypeScript, React. |
+| `review` | Code review as a pipeline of separate agents (find, verify, prescribe, check) with gates in code that reject any finding or fix whose cited lines are not at the reviewed commit; writes a markdown review, a short summary it pastes into chat, rollups and a `findings.json`, then opens it in `review-viewer`. |
 | `review-viewer` | Local web page showing each code-review finding beside the code at the reviewed commit; questions and accept/reject decisions typed there reach the live session, and its answers appear in the page. |
 | `codebase-walkthrough` | Interactive walkthrough of any codebase — Markdown doc plus self-contained HTML with step-through navigation. |
 | `learn-stack` | Generate an interactive framework learning guide from any codebase. |
@@ -44,6 +45,7 @@ Runs on vanilla Claude Code, any OS, with these exceptions:
   `gcloud` auth.
 - `e2e-test` — frontend mode needs `agent-browser` (npm); backend mode is plain HTTP.
 - `buildme` — needs `uv` + network.
+- `review` — needs `uv` + network; `gh` for `--pr` and `post`.
 
 Full details: [compatibility matrix](../../README.md#compatibility-matrix) and
 the [degradation contract](../../docs/degradation-contract.md).

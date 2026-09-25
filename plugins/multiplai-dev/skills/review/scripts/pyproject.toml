@@ -1,0 +1,45 @@
+[project]
+name = "review-pipeline"
+version = "0.1.0"
+description = "Code-review pipeline for the review skill: find, verify, prescribe, check, render — with citation gates enforced in code"
+requires-python = ">=3.12"
+dependencies = [
+    # The [sdk] extra, not a bare pin: every model call goes through
+    # multiplai_core.run_agent(), so core owns the SDK version floor.
+    "multiplai-core[sdk]",
+    "pydantic>=2",
+    "pyyaml>=6",
+    "python-dotenv>=1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "jsonschema>=4"]
+
+# The same three as the `dev` extra, as a dependency group: `uv run` installs
+# the default group without being asked, so the bare
+# `uv run --directory <this dir> python -m pytest tests/` works too. CI keeps
+# using `--package review-pipeline --extra dev` like the other members.
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio", "jsonschema>=4"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# multiplai-core is a git direct reference (not on PyPI)
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["review_pipeline"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+# Member-local source so this directory also resolves standalone — an
+# installed plugin is a copy of the plugin subtree only (no workspace root
+# above it), so without this the bare multiplai-core name would be looked
+# up on PyPI, where it does not exist. In-repo, uv still resolves through
+# the workspace root and the single uv.lock.
+[tool.uv.sources]
+multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }

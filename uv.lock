@@ -15,6 +15,7 @@ members = [
     "multiplai-context-scripts",
     "multiplai-marketplace",
     "research-pipeline",
+    "review-pipeline",
     "review-viewer",
     "screen-demo-scripts",
     "skill-creator-scripts",
@@ -1702,6 +1703,50 @@ requires-dist = [
     { name = "trafilatura", specifier = ">=1.6" },
 ]
 provides-extras = ["browser", "dev"]
+
+[[package]]
+name = "review-pipeline"
+version = "0.1.0"
+source = { editable = "plugins/multiplai-dev/skills/review/scripts" }
+dependencies = [
+    { name = "multiplai-core", extra = ["sdk"] },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "pyyaml" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "jsonschema" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "jsonschema" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4" },
+    { name = "multiplai-core", extras = ["sdk"], git = "https://github.com/spikelab/multiplai-core?branch=main" },
+    { name = "pydantic", specifier = ">=2" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'" },
+    { name = "python-dotenv", specifier = ">=1" },
+    { name = "pyyaml", specifier = ">=6" },
+]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "jsonschema", specifier = ">=4" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
 
 [[package]]
 name = "review-viewer"
