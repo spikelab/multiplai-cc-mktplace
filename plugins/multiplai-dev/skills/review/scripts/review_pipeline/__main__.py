@@ -6,8 +6,9 @@
   resume  — continue a review from its review-state.json
   post    — one PR comment with the HIGH and MEDIUM findings
 
-stdout contract: progress summary lines, then for review/batch/resume a final
-`findings: <path>[ <path>...]` line listing every findings.json written.
+stdout contract: progress summary lines, a `summary: <path>` line per finished
+target, then for review/batch/resume a final `findings: <path>[ <path>...]`
+line listing every findings.json written.
 
 Exit codes: 0 done; 1 a target failed; 2 bad input, unresolvable target, or
 post refused; 3 repository not trusted; 4 the budget circuit breaker stopped

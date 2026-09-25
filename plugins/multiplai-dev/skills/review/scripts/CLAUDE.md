@@ -28,7 +28,7 @@ cd plugins/multiplai-dev/skills/review/scripts && \
 | `stages/` | `find`, `verify`, `prescribe`, `check_fix`. Each `run_<stage>(state, ctx)` returns at once when the state is past it and skips items it already has. |
 | `prompts/` | One module per stage; shared blocks in `__init__.py`. `prescribe.PREMISE_CONTRACT` is the text the gates enforce. |
 | `export.py` | `ReviewState` → `findings.json` v1, key by key (the contract rejects unknown keys). |
-| `render.py` | `review-<slug>.md` and the `<SEV>-only.md` rollups, both from v1 dicts. |
+| `render.py` | `review-<slug>.md`, the short `summary-<slug>.md` the session pastes into chat, and the `<SEV>-only.md` rollups, all from v1 dicts. |
 | `post.py` | One `gh pr comment`; with `--decisions`, only findings whose decision is `accept`. |
 | `orchestrator.py` | target → find → verify → prescribe → check_fix → export → render, saving `review-state.json` after each; `resume`; `batch`. |
 | `state.py`, `progress.py` | Atomic checkpoint; the tailable `progress.log` (`STARTED`, `STAGE`, `DONE`, `FAILED`). |

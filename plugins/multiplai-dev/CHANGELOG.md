@@ -29,8 +29,10 @@ time, not derived from a tag.
   line range with `git show` and drops what is not there. A fix premise about
   what a setting means must cite a line that *uses* the setting, not the line
   that defines it; a premise about anything outside the repo is shown as
-  "Assumption: … Ask: …". Output is a markdown review per target, HIGH / MEDIUM
-  / LOW rollups across targets, and a `findings.json` that opens in
+  "Assumption: … Ask: …". Output is a markdown review per target, a short
+  summary per target that the session pastes into chat when the run ends (one
+  line per HIGH and MEDIUM finding with its fix status, one line per dropped
+  finding), HIGH / MEDIUM / LOW rollups across targets, and a `findings.json` that opens in
   `review-viewer`, where questions go to the session that ran the review.
   `post` puts the findings you accepted in the viewer into one PR comment,
   only when you say yes in the terminal. Agents get `Read`, `Grep` and `Glob`

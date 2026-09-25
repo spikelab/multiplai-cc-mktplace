@@ -21,7 +21,7 @@ from .config import ReviewConfig
 from .export import write_findings_file
 from .models import SEVERITIES, ReviewState
 from .progress import ProgressWriter
-from .render import write_review, write_rollups
+from .render import summary_path, write_review, write_rollups
 from .stages import RunContext
 from .stages.check_fix import run_check_fix
 from .stages.find import run_find
@@ -138,6 +138,7 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
     message = f"review finished: {counts['HIGH']} HIGH, {counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW"
     progress.done(f"{message} (${ledger.cost_usd:.2f})")
     print(f"{t.slug}: {message}; output in {target_dir}", flush=True)
+    print(f"summary: {summary_path(state, target_dir)}", flush=True)
     log_event("review", "done", message, session_id=session_id, target=t.slug, counts=counts,
               cost_usd=round(ledger.cost_usd, 4), findings_path=str(findings_path))
     return findings_path

@@ -108,9 +108,11 @@ and the partial state; resume only if the user raises the ceiling:
 
 ### 2. Report
 
-In one line each: the output directory, and the severity counts per target
-(the `review finished:` lines on stdout). Do not paste the findings into chat;
-the viewer shows them.
+Each finished target prints a `summary: <path>` line. Read each
+`summary-<slug>.md` and paste it into chat as it is: it is about 20 lines, with
+the cost, the severity counts, one line per HIGH and MEDIUM finding with its fix
+status, and one line per finding that was dropped and why. Then give the output
+directory. Do not paste `review-<slug>.md`; the viewer shows the full findings.
 
 ### 3. Hand the findings to review-viewer
 

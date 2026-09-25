@@ -10,7 +10,7 @@ from review_pipeline import post as post_mod
 from review_pipeline.__main__ import main
 from review_pipeline.export import write_findings_file
 from review_pipeline.models import Fix, Premise
-from review_pipeline.render import render_review, write_rollups
+from review_pipeline.render import render_review, render_summary, write_review, write_rollups
 from review_pipeline.state import save_state
 
 
@@ -59,6 +59,38 @@ def test_appendix_lists_rejected_and_refuted_with_reasons(canned_state):
     assert CLAIM_REFUTED in appendix and "line 5 sets the id" in appendix
     assert CLAIM_REJECTED in appendix and "quote not at cited lines" in appendix
     assert CLAIM_HIGH not in appendix
+
+
+def test_summary_is_short_and_says_how_the_review_went(canned_state):
+    text = render_summary(canned_state)
+    lines = text.splitlines()
+    assert len(lines) <= 25
+    assert "Cost $1.25 over 9 agent calls." in text
+    assert "Findings: 1 HIGH, 0 MEDIUM, 1 LOW; 1 with a verified fix." in text
+    assert "1 refuted by the verifier, 1 rejected by the gates" in text
+    (high_line,) = [l for l in lines if l.startswith("- `rateplan_service.py")]
+    assert high_line.endswith("(verified fix)")
+    assert "1 LOW findings are in the full review." in text
+    dropped = text.split("## Dropped", 1)[1]
+    assert "refuted:" in dropped and CLAIM_REFUTED.split(". ")[0][:40] in dropped
+    assert "line 5 sets the id" not in dropped  # the verifier's reason stays in the full review
+    assert "rejected by a gate:" in dropped and "quote not at cited lines" in dropped
+    assert CLAIM_MEDIUM not in text  # lowered to LOW: counted, not listed
+    assert lines[-1] == f"Full review, with every reason: `review-{canned_state.target.slug}.md`"
+
+
+def test_summary_truncates_long_claims_and_lists_agent_failures(canned_state):
+    high = canned_state.findings[0]
+    canned_state.findings[0] = high.model_copy(update={"claim": "x" * 500})
+    canned_state.errors = ["verify: timeout on finding abc"]
+    text = render_summary(canned_state)
+    assert "x" * 119 + "…" in text and "x" * 121 not in text
+    assert "Agent failures: verify: timeout on finding abc" in text
+
+
+def test_write_review_also_writes_the_summary(canned_state, tmp_path):
+    write_review(canned_state, tmp_path)
+    assert (tmp_path / f"summary-{canned_state.target.slug}.md").read_text() == render_summary(canned_state)
 
 
 def test_deployed_line(canned_state):

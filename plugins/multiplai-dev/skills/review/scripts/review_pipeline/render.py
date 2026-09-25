@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from .export import to_findings_file
@@ -164,9 +165,85 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
 
 
 def write_review(state: ReviewState, target_dir: Path, *, deployed: str | None = None) -> Path:
+    """Write the full review and its short summary; return the full review's path."""
     path = target_dir / f"review-{state.target.slug}.md"
     path.write_text(render_review(state, deployed=deployed), encoding="utf-8")
+    summary_path(state, target_dir).write_text(render_summary(state), encoding="utf-8")
     return path
+
+
+# --- summary -------------------------------------------------------------------
+
+SUMMARY_CLAIM_CHARS = 120
+
+
+def _short(text: str, limit: int = SUMMARY_CLAIM_CHARS) -> str:
+    """The first sentence of `text`, cut to `limit` characters."""
+    text = _one_line(text)
+    end = re.search(r"\. (?=[A-Z])", text)
+    if end:
+        text = text[:end.start() + 1]
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def summary_path(state: ReviewState, target_dir: Path) -> Path:
+    return target_dir / f"summary-{state.target.slug}.md"
+
+
+def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> str:
+    """How the review went, short enough to read in chat.
+
+    One line per HIGH and MEDIUM finding, a count for LOW, and one line per
+    finding the verifier refuted or a gate rejected.
+    """
+    data = findings_file or to_findings_file(state)
+    t = state.target
+    findings = data["findings"]
+    counts = _counts(findings)
+    shown = [f for f in findings if f["status"] in SHOWN_STATUSES]
+    dropped = [f for f in findings if f["status"] in ("refuted", "rejected")]
+    fixes = [f for f in shown if f.get("fix") and f["fix"]["description"] != NO_VERIFIED_FIX]
+
+    out = [f"# Review summary — {t.label or t.slug}", ""]
+    out.append(f"{len(t.commits)} commits, {len(t.files)} files, {t.base_sha[:10]}..{t.head_sha[:10]}.")
+    if state.budget.get("cost_usd") is not None:
+        out.append(f"Cost ${float(state.budget['cost_usd']):.2f} over {state.budget.get('calls', 0)} agent calls.")
+    out.append(f"Findings: {counts['HIGH']} HIGH, {counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW; "
+               f"{len(fixes)} with a verified fix. Dropped: "
+               f"{sum(1 for f in dropped if f['status'] == 'refuted')} refuted by the verifier, "
+               f"{sum(1 for f in dropped if f['status'] == 'rejected')} rejected by the gates.")
+    if state.errors:
+        out.append("Agent failures: " + "; ".join(_short(e) for e in state.errors))
+
+    def fix_label(fd: dict) -> str:
+        if fd["status"] == "unverifiable":
+            return "unverifiable, no fix"
+        fix = fd.get("fix")
+        if not fix:
+            return "no fix"
+        return "no verified fix" if fix["description"] == NO_VERIFIED_FIX else "verified fix"
+
+    for severity in ("HIGH", "MEDIUM"):
+        group = [f for f in shown if f["severity"] == severity]
+        if not group:
+            continue
+        out += ["", f"## {severity}", ""]
+        for fd in group:
+            lines_ = f"{fd['line_start']}" if fd["line_start"] == fd["line_end"] else f"{fd['line_start']}-{fd['line_end']}"
+            out.append(f"- `{fd['file']}:{lines_}` — {_short(fd['claim'])} ({fix_label(fd)})")
+    if counts["LOW"]:
+        out += ["", f"{counts['LOW']} LOW findings are in the full review."]
+    if dropped:
+        out += ["", "## Dropped", ""]
+        for fd in dropped:
+            # A verifier's reason often opens by conceding part of the claim, so
+            # its first sentence misleads; the full reason is in the review's appendix.
+            # A gate's reason is one mechanical sentence and fits.
+            why = "" if fd["status"] == "refuted" else f" ({_one_line(fd.get('verdict_reason') or '')})"
+            who = "refuted" if fd["status"] == "refuted" else "rejected by a gate"
+            out.append(f"- {who}: `{fd['file']}:{fd['line_start']}` — {_short(fd['claim'], 90)}{why}")
+    out += ["", f"Full review, with every reason: `review-{t.slug}.md`", ""]
+    return "\n".join(out)
 
 
 # --- rollups -------------------------------------------------------------------

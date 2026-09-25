@@ -79,7 +79,9 @@ def test_review_end_to_end(fixture_repo, tmp_path, agents, capsys):
     data = json.loads(path.read_text())
     jsonschema.validate(data, json.loads(SCHEMA.read_text()))
     assert [f["status"] for f in data["findings"]] == ["confirmed"]
-    for name in (f"review-booking-engine--{base}..{head}.md", "review-state.json", "progress.log", "diff.patch"):
+    assert f"summary: {target_dir / f'summary-booking-engine--{base}..{head}.md'}" in stdout.splitlines()
+    for name in (f"review-booking-engine--{base}..{head}.md", f"summary-booking-engine--{base}..{head}.md",
+                 "review-state.json", "progress.log", "diff.patch"):
         assert (target_dir / name).is_file(), name
     assert not (target_dir / "tree").exists()  # the snapshot is removed when done
     for rollup in ("HIGH-only.md", "MEDIUM-only.md", "LOW-only.md"):
