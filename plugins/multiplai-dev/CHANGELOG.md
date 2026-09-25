@@ -17,6 +17,26 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-25
+
+### Added
+
+- **`review` reviews a branch, PR or commit range, and rejects in code any
+  finding or fix it cannot ground in the reviewed commit.** Five finders look
+  at the change from different angles; a fresh agent verifies each finding;
+  another proposes a fix; a last one checks the fix against the code that
+  consumes what it touches. Between the stages, Python re-reads every cited
+  line range with `git show` and drops what is not there. A fix premise about
+  what a setting means must cite a line that *uses* the setting, not the line
+  that defines it; a premise about anything outside the repo is shown as
+  "Assumption: … Ask: …". Output is a markdown review per target, HIGH / MEDIUM
+  / LOW rollups across targets, and a `findings.json` that opens in
+  `review-viewer`, where questions go to the session that ran the review.
+  `post` puts the findings you accepted in the viewer into one PR comment,
+  only when you say yes in the terminal. Agents get `Read`, `Grep` and `Glob`
+  only, and the run stops at a per-target cost ceiling (`--max-cost-usd`,
+  default 10).
+
 ## [0.17.0] - 2026-09-24
 
 ### Added
