@@ -1,0 +1,72 @@
+"""Finder prompt: one per dimension."""
+
+from __future__ import annotations
+
+from ..models import TargetInfo
+from . import CITATION_RULES, JSON_ONLY, commits_block, diff_block, files_block, workspace_block
+
+DIMENSION_TASKS = {
+    "diff-bugs": (
+        "Read the diff and the changed files, and nothing else. Find correctness bugs the change "
+        "introduces: wrong conditions, wrong values, missed cases, broken error handling, data loss."
+    ),
+    "callers": (
+        "For the changed functions, methods and settings, open what the changed lines call and what "
+        "calls them (use Grep to find callers). Find breakages at those boundaries: changed "
+        "signatures or return shapes, callers relying on behaviour the change removed, values used "
+        "in a way the change did not expect."
+    ),
+    "history": (
+        "The commit subjects say what the change is meant to do. Read the changed files and the diff. "
+        "Find places where the code does not do what its commits say, and behaviour the removed lines "
+        "had that nothing replaces."
+    ),
+    "conventions": (
+        "The repository's own rules (its CLAUDE.md files) are below. Find places where the changed "
+        "lines break a rule that has a concrete consequence. Cite the changed line, and cite the rule "
+        "as a second citation."
+    ),
+    "tests": (
+        "Find what the change's tests cover and what they leave untested. Report an untested path "
+        "only when you can name a concrete input that fails on it."
+    ),
+}
+
+SEVERITY_GUIDE = """\
+Severity: HIGH = breaks production behaviour, loses or corrupts data, or opens a security hole on a
+realistic path. MEDIUM = wrong in a realistic case that is not the main path. LOW = wrong in an edge
+case, or a trap for the next change."""
+
+SCHEMA = """\
+{"findings": [{"claim": "one sentence: what is wrong",
+               "severity": "HIGH" | "MEDIUM" | "LOW",
+               "file": "path of the changed file the bug is in",
+               "line_start": 1, "line_end": 1,
+               "failure_scenario": "concrete inputs or state -> the wrong output or crash",
+               "citations": [{"path": "...", "line_start": 1, "line_end": 1, "quote": "exact text"}],
+               "dimension": "" }]}"""
+
+
+def build(target: TargetInfo, dimension: str, diff: str, conventions: str = "") -> str:
+    parts = [
+        f"You are one reviewer in a code review, looking at one aspect: {dimension}.",
+        workspace_block(target),
+        DIMENSION_TASKS[dimension],
+        commits_block(target),
+        files_block(target),
+        diff_block(target, diff),
+    ]
+    if dimension == "conventions":
+        parts.append("The repository's rules:\n\n" + (conventions or "(no CLAUDE.md files found)"))
+    parts += [
+        SEVERITY_GUIDE,
+        CITATION_RULES,
+        "Every finding cites the lines that show the problem, with the exact quote. A finding "
+        "without a quote is discarded by a program, not a person. `file` must be one of the changed "
+        "files. If the bug is in unchanged code that the change makes reachable, set `dimension` to "
+        "\"pre-existing\"; otherwise leave it empty. Report only what you can show from the code; "
+        "an empty list is a valid answer.",
+        f"Schema:\n{SCHEMA}",
+        JSON_ONLY,
+    ]
+    return "\n\n".join(parts)
