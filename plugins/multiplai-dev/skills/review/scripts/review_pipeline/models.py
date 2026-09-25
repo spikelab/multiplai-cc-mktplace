@@ -29,7 +29,7 @@ STAGES: tuple[str, ...] = (
 def finding_id(file: str, line_start: int, claim: str) -> str:
     """The v1 finding id: first 10 hex of sha1(f"{file}\\0{line_start}\\0{claim}").
 
-    Reimplemented rather than imported from review_viewer; `test_models.py`
+    Reimplemented rather than imported from the viewer skill; `test_models.py`
     pins both to the same value for a fixed input.
     """
     return hashlib.sha1(f"{file}\0{line_start}\0{claim}".encode("utf-8")).hexdigest()[:10]
