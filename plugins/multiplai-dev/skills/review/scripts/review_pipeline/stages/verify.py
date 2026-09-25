@@ -24,7 +24,7 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
     target, cfg = state.target, ctx.config
     todo = [f for f in state.findings if f.id not in state.verdicts]
 
-    async def one(finding: Finding) -> Verdict:
+    async def _one(finding: Finding) -> Verdict:
         try:
             verdict = await sdk.agent_call_structured(
                 prompt.build(target, finding), Verdict,
@@ -50,8 +50,14 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
             })
         return verdict
 
-    for verdict in await bounded(todo, one, cfg.concurrency):
+    async def one(finding: Finding) -> Verdict:
+        # Stored as each answer arrives: a budget stop mid-stage keeps what
+        # was already paid for, and the checkpoint saved then carries it.
+        verdict = await _one(finding)
         state.verdicts[verdict.finding_id] = verdict
+        return verdict
+
+    await bounded(todo, one, cfg.concurrency)
 
     lowered = []
     for i, finding in enumerate(state.findings):

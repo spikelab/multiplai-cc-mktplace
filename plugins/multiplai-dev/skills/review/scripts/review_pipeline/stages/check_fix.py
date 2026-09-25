@@ -29,7 +29,7 @@ async def run_check_fix(state: ReviewState, ctx: RunContext) -> ReviewState:
     todo = [by_id[fid] for fid, fix in state.fixes.items()
             if fix.description != NO_VERIFIED_FIX and fid not in state.fix_checks and fid in by_id]
 
-    async def one(finding: Finding) -> FixCheck:
+    async def _one(finding: Finding) -> FixCheck:
         fix = state.fixes[finding.id]
         consumers: dict[str, list[str]] = {}
         for premise in fix.premises:
@@ -53,7 +53,9 @@ async def run_check_fix(state: ReviewState, ctx: RunContext) -> ReviewState:
                             reason=f"the fix could not be checked: {str(e).splitlines()[0][:200]}")
         return check.model_copy(update={"finding_id": finding.id})
 
-    for check in await bounded(todo, one, cfg.concurrency):
+    async def one(finding: Finding) -> FixCheck:
+        # Stored as each check arrives, so a budget stop mid-stage keeps it.
+        check = await _one(finding)
         state.fix_checks[check.finding_id] = check
         if check.status == "refuted":
             old = state.fixes[check.finding_id]
@@ -61,6 +63,9 @@ async def run_check_fix(state: ReviewState, ctx: RunContext) -> ReviewState:
                 check.finding_id,
                 f"A proposed fix ({old.description[:300]}) was refuted by a check: {check.reason}",
             )
+        return check
+
+    await bounded(todo, one, cfg.concurrency)
 
     statuses = [c.status for c in state.fix_checks.values()]
     ctx.counts = {"confirmed": statuses.count("confirmed"), "refuted": statuses.count("refuted")}

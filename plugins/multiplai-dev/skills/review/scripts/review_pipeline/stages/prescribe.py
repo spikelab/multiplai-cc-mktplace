@@ -29,7 +29,7 @@ async def run_prescribe(state: ReviewState, ctx: RunContext) -> ReviewState:
             if f.id not in state.fixes and getattr(state.verdicts.get(f.id), "status", "") == "confirmed"]
     rejected = 0
 
-    async def one(finding: Finding) -> Fix:
+    async def _one(finding: Finding) -> Fix:
         nonlocal rejected
         reason = ""
         for _attempt in (1, 2):
@@ -57,8 +57,13 @@ async def run_prescribe(state: ReviewState, ctx: RunContext) -> ReviewState:
             reason = result.reason
         return no_fix(finding.id, f"the proposed fix failed the citation gates twice: {reason}")
 
-    for fix in await bounded(todo, one, cfg.concurrency):
+    async def one(finding: Finding) -> Fix:
+        # Stored as each fix arrives, so a budget stop mid-stage keeps it.
+        fix = await _one(finding)
         state.fixes[fix.finding_id] = fix
+        return fix
+
+    await bounded(todo, one, cfg.concurrency)
 
     verified = sum(1 for f in state.fixes.values() if f.description != NO_VERIFIED_FIX)
     ctx.counts = {"fixes": verified, "no_verified_fix": len(state.fixes) - verified, "gate_rejects": rejected}

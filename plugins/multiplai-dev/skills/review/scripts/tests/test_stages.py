@@ -219,3 +219,17 @@ async def test_premise_paths_are_normalised(target_info, ctx, monkeypatch):
     use(monkeypatch, {"prescribe": [fix]})
     state = await run_prescribe(state, ctx)
     assert state.fixes[fid].premises[0].citation.path == "direct_booking.py"
+
+
+async def test_a_budget_stop_keeps_the_fixes_already_paid_for(target_info, ctx, monkeypatch):
+    from review_pipeline import budget
+
+    high, medium = high_finding(), medium_finding()
+    state = ReviewState(target=target_info, stage="verify", findings=[high, medium], verdicts={
+        f.id: Verdict(finding_id=f.id, status="confirmed", reason="r", citations=[KEYWORD_CITATION])
+        for f in (high, medium)})
+    ctx.config.concurrency = 1
+    use(monkeypatch, {"prescribe": [verified_fix(high.id), budget.BudgetExceededError("stop")]})
+    with pytest.raises(budget.BudgetExceededError):
+        await run_prescribe(state, ctx)
+    assert list(state.fixes) == [high.id] and state.stage == "verify"
