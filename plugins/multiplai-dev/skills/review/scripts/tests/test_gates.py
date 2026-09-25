@@ -161,3 +161,12 @@ def test_verdict_gate(target_info):
 
 def test_no_gate_name_starts_with_test():
     assert not [n for n in dir(gates) if n.startswith("test")]
+
+
+def test_explicit_symbol_that_is_not_upper_case_is_not_held_to_consumers(target_info):
+    """Functions and variables are not settings: citing a function's definition
+    to say what it does is correct."""
+    premise = Premise(kind="in_repo", statement="build_payload stamps ota_name", symbol="build_payload",
+                      citation=cite("direct_booking.py", 4, "def build_payload(booking):"))
+    assert gates.premise_symbols(target_info, premise) == []
+    assert gates.symbol_consumer_gate(target_info, premise).passed

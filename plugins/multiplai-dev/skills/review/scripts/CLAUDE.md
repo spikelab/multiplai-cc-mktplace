@@ -53,7 +53,8 @@ when the run finishes.
 | `symbol_consumer_gate` | the citation covers a line that *uses* the symbol | fix re-asked |
 | `fix_gate` | at least one premise, and every premise passes the two above | re-asked once, then "no verified fix" |
 
-`symbol_consumer_gate` takes `premise.symbol`, or the all-caps names in the
+`symbol_consumer_gate` takes `premise.symbol` when it is UPPER_CASE (a function or
+variable name is exempt), or the all-caps names in the
 statement (`\b[A-Z][A-Z0-9_]{3,}\b`) that the repo defines. A hit is a
 definition when the line matches `^\s*SYMBOL\s*[:=]` or contains
 `config('SYMBOL'` / `getenv('SYMBOL'`; every other `git grep -w` hit is a use.

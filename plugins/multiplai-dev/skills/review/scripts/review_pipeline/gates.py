@@ -167,15 +167,19 @@ def symbol_hits(target: TargetInfo, symbol: str) -> tuple[list[tuple[str, int]],
 
 
 def premise_symbols(target: TargetInfo, premise: Premise) -> list[str]:
-    """The symbols the consumer gate applies to.
+    """The symbols the consumer gate applies to: settings keys, constants, env vars.
 
-    An explicit `premise.symbol` always applies. Symbols pulled out of the
-    statement by `SYMBOL_RE` apply only when the repo defines them: an
-    all-caps word like `JSON` or `HTTP` that nothing defines is not a settings
-    key, and holding the premise to it would reject it for nothing.
+    Those are UPPER_CASE (`SYMBOL_RE`). An explicit `premise.symbol` in any
+    other shape — a function, a variable, a field — is not one: a premise
+    about what a function does rightly cites its definition, and in the
+    2026-09-25 acceptance run every one of 16 consumer-gate rejections was
+    such a name. Symbols pulled out of the statement apply only when the repo
+    defines them: an all-caps word like `JSON` that nothing defines is not a
+    settings key either.
     """
-    if premise.symbol and premise.symbol.strip():
-        return [premise.symbol.strip()]
+    explicit = (premise.symbol or "").strip()
+    if explicit:
+        return [explicit] if SYMBOL_RE.fullmatch(explicit) else []
     found = []
     for symbol in dict.fromkeys(SYMBOL_RE.findall(premise.statement)):
         definitions, _ = symbol_hits(target, symbol)

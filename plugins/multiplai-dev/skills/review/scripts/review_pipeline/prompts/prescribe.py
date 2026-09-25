@@ -41,7 +41,9 @@ def build(target: TargetInfo, finding: Finding, verdict: Verdict | None, gate_re
         PREMISE_CONTRACT,
         "Before you rely on what a setting, constant or environment variable means, Grep for it and "
         "read the lines that use it, not just the line that defines it. Its name is not evidence of "
-        "its meaning. Set `symbol` on every premise that names one. When the right value lives "
+        "its meaning. Set `symbol` on every premise that names one (an UPPER_CASE name such as a "
+        "Django setting, a module constant or an environment variable); leave it null for functions, "
+        "variables and fields. When the right value lives "
         "outside this repository, say so with an external premise and a `question`, and do not "
         "pick a value from inside the repo that merely looks related.",
         CITATION_RULES,
