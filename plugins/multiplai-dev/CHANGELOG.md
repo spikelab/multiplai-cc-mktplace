@@ -48,6 +48,12 @@ time, not derived from a tag.
   origin` first. Other targets still make no network call; the page also
   loads mermaid from cdnjs.
 
+### Fixed
+
+- **`review-viewer`'s three panes now scroll on their own.** On a long file the
+  whole page scrolled instead, so jumping to a finding or a step's lines could
+  leave them off screen.
+
 ## [0.18.0] - 2026-09-25
 
 ### Added

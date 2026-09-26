@@ -158,7 +158,7 @@ as a JSON file following `schema/walkthrough.v1.schema.json`:
  "overview_md": "What the change is for, in a few sentences.",
  "steps": [{"id": "core-change", "title": "…", "body_md": "…",
             "anchors": [{"path": "app/x.py", "side": "head", "line_start": 10, "line_end": 24}],
-            "diagram": {"kind": "mermaid", "source": "flowchart LR\n  A --> B"},
+            "diagram": {"kind": "mermaid", "source": "flowchart TD\n  A --> B"},
             "finding_ids": ["3fa2c91b0e"]}],
  "skipped": [{"path": "uv.lock", "reason": "regenerated lock file"}],
  "complete": false}
@@ -181,7 +181,9 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   joined by `-`.
 - Add a mermaid diagram only when the change alters a flow, a data shape, or
   how components call each other. Use plain labels; the page renders it as
-  an image.
+  an image in a 380 px panel, at full size, scrolling sideways when wider.
+  Draw top to bottom (`flowchart TD`) and keep it under about 8 nodes, so it
+  fits without scrolling.
 - When findings are loaded, link each finding from the step where its code is
   explained, and say in that step's text what is wrong and why.
 - Publish early, then finish: `put` the overview and first steps with
