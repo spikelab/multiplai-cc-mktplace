@@ -1,8 +1,9 @@
 # review-viewer scripts — orientation
 
 A stdlib HTTP server and a static page. The server never calls a model: it
-serves the page, answers read-only questions about one review, and carries
-messages between the page and the Claude Code session through JSONL files.
+serves the page, answers read-only questions about one review, serves the
+walkthrough the session wrote, and carries messages between the page and the
+Claude Code session through JSONL files.
 
 Run everything through this member directory:
 
@@ -18,9 +19,10 @@ The page-logic tests need `node`; they fail (not skip) without it.
 
 | Module | Does |
 |---|---|
-| `__main__.py` | CLI: `serve`, `reply`, `pending`, `list`, `stop`, `validate`, `export-schema`. Calls `setup_logging` once. Owns the stdout contract. |
-| `models.py` | The `findings.json` v1 pydantic models (source of truth for `../schema/findings.v1.schema.json`), `finding_id()`, and the mailbox row models. |
-| `gitdata.py` | Read-only git: `parse_unified()`, `file_view()`, `allowed_paths()`, `diff_target()`. Fixed argv, no shell, stdin closed. |
+| `__main__.py` | CLI: `serve` (findings files, or `--target`), `reply`, `pending`, `list`, `stop`, `walkthrough put\|status`, `validate`, `export-schema`. Calls `setup_logging` once. Owns the stdout contract. `find_review()` looks for a review of the same commits. |
+| `models.py` | The `findings.json` v1 and `walkthrough.json` v1 pydantic models (source of truth for both files in `../schema/`), `finding_id()`, and the mailbox row models. |
+| `gitdata.py` | Git: `parse_target()` / `resolve_target()` (PR, branch, worktree, `a..b`, `a...b`; same base/head rules as `review_pipeline/target.py`, restated because that member is not importable here), `parse_unified()`, `file_view()`, `allowed_paths()`, `diff_target()`. Fixed argv, no shell, stdin closed. The only writes to a repo are the fetches named in `../SKILL.md`. |
+| `walkthrough.py` | `check()` a walkthrough against the served target, `coverage()`, `put()` by atomic replace. |
 | `mailbox.py` | Append-only JSONL rows, `decisions.json` by atomic replace; the directory is 0700 and every file 0600. |
 | `server.py` | `ThreadingHTTPServer` subclass (`allow_reuse_address = False`), request checks, routes, idle watchdog. |
 | `registry.py` | Finds live viewers: probes each mailbox's recorded port with that mailbox's token, in parallel. A token is never sent to any other port. |
@@ -28,7 +30,7 @@ The page-logic tests need `node`; they fail (not skip) without it.
 | `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `logic.js` (pure functions, tested under node), `app.js`, `app.css`. |
 
 After changing `models.py`, run `python -m review_viewer export-schema` and
-commit the schema; `test_models.py` fails while they differ.
+commit both schemas; `test_models.py` fails while either differs.
 
 ## The token rule
 
@@ -78,6 +80,31 @@ session answers in the context of that step.
 `pending` prints the inbox rows whose latest reply is missing or not
 `done`. The session runs it after arming (or re-arming) the Monitor.
 
+## Protocol 3: the walkthrough (`<mailbox>/../walkthrough.json`)
+
+The session writes it; the server never calls a model. `walkthrough put
+--box <mailbox> --file <f>` parses it against `Walkthrough` and checks, in
+code, against `<mailbox>/target.json` (the served target, written by `serve`
+at publish time and left in place — it holds no secret):
+
+1. `base_sha`/`head_sha` equal the served target's.
+2. Every anchor path is a changed file, not binary, and its line range exists
+   at `head_sha` (`side: head`) or `base_sha` (`side: base`).
+3. Every `finding_ids` entry is a loaded finding.
+4. With `complete: true`: every changed file is anchored or in `skipped`, and
+   every `confirmed` or `unverifiable` finding is linked from a step.
+5. Step ids are unique. (`skipped` paths must be changed files too.)
+
+Any failure → exit 2, every problem listed with its step id, nothing written.
+Otherwise the file is replaced atomically (0600). `GET
+/api/targets/<slug>/walkthrough` returns it (404 while absent); the page polls
+it, so a new walkthrough never restarts the server. `walkthrough status`
+prints the target's shas and what is not yet covered.
+
+`/api/targets/<slug>` also returns `pr` (number, title, author, url, body,
+head/base ref — from `gh pr view`, in memory and `target.json` only, never in
+`findings.json`) and `notice` (a review exists for other commits).
+
 ## Git output
 
 Every git call runs with `-c color.ui=never -c core.quotepath=off`, and every
@@ -95,7 +122,11 @@ Only page activity resets the idle timer; `/api/whoami` (used by `list`,
 reuses it when the session and the findings digests match, restarts it when a
 findings file changed, and exits 3 for another or an unidentified session.
 
-Plain-diff mode puts the mailbox under `<workspace INBOX or cwd>/review-viewer/<slug>/viewer/`.
+Plain-diff mode (a `--target` with no review of the same commits) puts the
+mailbox under `<workspace INBOX or cwd>/review-viewer/<slug>/viewer/`. A
+target whose review is found uses that review's `viewer/`. `serve` looks in
+`--reviews-dir` (default: `<workspace INBOX or cwd>/reviews`, where the
+review skill writes) for `*/findings.json` with the same base and head.
 
 ## Logging
 
@@ -106,7 +137,7 @@ Request lines go to DEBUG. Unexpected handler errors log at ERROR with
 {"error": "internal"}`.
 
 `log_event("review-viewer", …)` fires for exactly these events. No field ever
-holds question or answer text.
+holds question, answer or walkthrough text.
 
 | event | message (example) | fields |
 |---|---|---|
@@ -115,6 +146,7 @@ holds question or answer text.
 | `question` | `question q-… on finding 3fa2c91b0e` | `target, finding_id, chars` |
 | `decision` | `finding 3fa2c91b0e rejected` | `target, finding_id, decision` |
 | `reply` | `reply to q-… (final)` | `target, reply_to, chars, done` |
+| `walkthrough` | `walkthrough for <slug>: 5 steps (complete)` | `target, steps, complete` |
 | `idle_stop` | `viewer stopped after 30 min with no open page` | `idle_minutes` |
 | `stop` | `viewer stopped by stop --box` | `reason` |
 | `rejected_request` | `refused request: bad token` (WARNING, at most once a minute per status) | `status, route` |
@@ -124,3 +156,14 @@ holds question or answer text.
 `tests/fixture_repo.py` builds the two-commit repository the tests review
 (fixed author and dates, so the shas in `fixtures/findings.example.json` are
 stable). `python tests/fixture_repo.py <dir>` builds it anywhere.
+`build_remote()` adds a bare origin, a branch `main` moved past, an unpushed
+commit and a PR head under `refs/pull/7/head`, for target resolution;
+`test_gitdata.py` fakes `gh` with a script first on `PATH`.
+
+| File | Covers |
+|---|---|
+| `test_gitdata.py` | diff parsing, file views, `parse_target`/`resolve_target` |
+| `test_walkthrough.py` | each `walkthrough put` rule, the CLI, the route, `step_id` questions |
+| `test_serve_targets.py` | review lookup (match, stale, none) and the `walkthrough:` stdout line |
+| `test_server.py`, `test_mailbox.py`, `test_models.py`, `test_logging.py`, `test_netinfo.py` | the server, mailbox, contracts, logs, container detection |
+| `logic.test.js` (via `test_logic_js.py`) | the page's pure functions, under node |

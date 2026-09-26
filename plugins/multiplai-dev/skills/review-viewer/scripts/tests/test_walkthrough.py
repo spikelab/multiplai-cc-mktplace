@@ -146,6 +146,7 @@ def test_put_publishes_and_the_route_serves_it(start_live, complete, tmp_path):
 
     status_out = _cli("walkthrough", "status", "--box", live.box)
     assert status_out.returncode == 0
+    assert f"head_sha: {live.viewer.targets[live.slug].findings.target.head_sha}\n" in status_out.stdout
     assert "  assets/logo.bin" in status_out.stdout and f"  {MEDIUM} " in status_out.stdout
 
     src.write_text(json.dumps(complete))

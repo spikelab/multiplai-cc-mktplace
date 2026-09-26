@@ -527,8 +527,10 @@ def cmd_walkthrough_status(args) -> int:
     state = "absent" if wt is None else (
         f"{len(wt.steps)} steps, {'complete' if wt.complete else 'in progress'}")
     print(f"walkthrough: {walkthrough.walkthrough_path(box)} ({state})")
-    print(f"target: {t.label} {t.base_sha[:12]}..{t.head_sha[:12]}, "
-          f"{len(t.files_changed)} changed files, {len(ff.findings)} findings")
+    print(f"target: {t.label}, {len(t.files_changed)} changed files, "
+          f"{len(ff.findings)} findings")
+    print(f"base_sha: {t.base_sha}")
+    print(f"head_sha: {t.head_sha}")
     print(f"changed files not covered ({len(uncovered)}):")
     for path in uncovered:
         print(f"  {path}")
