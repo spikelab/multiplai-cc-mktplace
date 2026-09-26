@@ -7,6 +7,7 @@
     pending        print questions and decisions that have no final reply yet
     list           show the live viewers this user can reach
     stop           stop one viewer (--box) or all of them (--all)
+    walkthrough    put: check and publish the session's walkthrough; status: what is uncovered
     validate       check findings files against the v1 contract
     export-schema  write the findings and walkthrough v1 JSON Schemas
 
@@ -30,7 +31,7 @@ from pathlib import Path
 from multiplai_core.log_utils import log_event, setup_logging
 from pydantic import ValidationError
 
-from . import netinfo, registry, server
+from . import netinfo, registry, server, walkthrough
 from .gitdata import GitError, diff_findings, diff_target
 from .mailbox import MAX_ROW_BYTES, Mailbox, MailboxError, utc_now
 from .models import (SCHEMA_PATH, WALKTHROUGH_SCHEMA_PATH, FindingsFile, OutboxRow,
@@ -368,6 +369,83 @@ def cmd_pending(args) -> int:
     return 0
 
 
+# --- walkthrough ----------------------------------------------------------------------
+
+
+def _served(args):
+    box = invocation_path(args.box).resolve()
+    try:
+        return box, walkthrough.load_served(box)
+    except FileNotFoundError:
+        print(f"no served target in {box} (it is the mailbox: directory `serve` printed; "
+              "start the viewer first)", file=sys.stderr)
+    except (OSError, ValueError) as exc:
+        print(f"cannot read {walkthrough.served_path(box)}: {exc}", file=sys.stderr)
+    return box, None
+
+
+def cmd_walkthrough_put(args) -> int:
+    box, served = _served(args)
+    if served is None:
+        return EXIT_USAGE
+    path = invocation_path(args.file)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"cannot read {path}: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        wt, errors = walkthrough.put(box, text, served.findings)
+    except GitError as exc:
+        print(f"cannot check the walkthrough: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    if errors:
+        print(f"walkthrough rejected ({len(errors)} problem{'s' if len(errors) > 1 else ''}); "
+              "nothing was published:", file=sys.stderr)
+        for e in errors:
+            print(f"  - {e}", file=sys.stderr)
+        return EXIT_USAGE
+    slug = served.findings.target.slug
+    log_event(COMPONENT, "walkthrough",
+              f"walkthrough for {slug}: {len(wt.steps)} steps"
+              f"{' (complete)' if wt.complete else ' (in progress)'}",
+              session_id=args.session_id, target=slug, steps=len(wt.steps),
+              complete=wt.complete)
+    uncovered, unlinked = walkthrough.coverage(wt, served.findings)
+    print(f"published {walkthrough.walkthrough_path(box)}: {len(wt.steps)} steps, "
+          f"{'complete' if wt.complete else 'in progress'}; "
+          f"{len(uncovered)} changed files and {len(unlinked)} findings not covered yet")
+    return 0
+
+
+def cmd_walkthrough_status(args) -> int:
+    box, served = _served(args)
+    if served is None:
+        return EXIT_USAGE
+    try:
+        wt = walkthrough.load_walkthrough(box)
+    except (OSError, ValueError) as exc:
+        print(f"cannot read {walkthrough.walkthrough_path(box)}: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    ff = served.findings
+    t = ff.target
+    uncovered, unlinked = walkthrough.coverage(wt, ff)
+    state = "absent" if wt is None else (
+        f"{len(wt.steps)} steps, {'complete' if wt.complete else 'in progress'}")
+    print(f"walkthrough: {walkthrough.walkthrough_path(box)} ({state})")
+    print(f"target: {t.label} {t.base_sha[:12]}..{t.head_sha[:12]}, "
+          f"{len(t.files_changed)} changed files, {len(ff.findings)} findings")
+    print(f"changed files not covered ({len(uncovered)}):")
+    for path in uncovered:
+        print(f"  {path}")
+    by_id = {f.id: f for f in ff.findings}
+    print(f"findings not linked ({len(unlinked)}):")
+    for fid in unlinked:
+        f = by_id[fid]
+        print(f"  {fid} {f.severity} {f.status} {f.file}:{f.line_start} {f.claim}")
+    return 0
+
+
 # --- validate / export-schema -------------------------------------------------------
 
 
@@ -444,6 +522,19 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--box", help="the mailbox of the viewer to stop")
     st.add_argument("--all", action="store_true", help="stop every live viewer")
     st.set_defaults(func=cmd_stop)
+
+    w = sub.add_parser("walkthrough", parents=[common],
+                       help="publish or inspect the walkthrough the page shows")
+    wsub = w.add_subparsers(dest="wcmd", required=True, metavar="action")
+    wp = wsub.add_parser("put", parents=[common],
+                         help="check a walkthrough.json and publish it to the page")
+    wp.add_argument("--box", required=True, help="the mailbox directory the server printed")
+    wp.add_argument("--file", required=True, help="the walkthrough.json the session wrote")
+    wp.set_defaults(func=cmd_walkthrough_put)
+    ws = wsub.add_parser("status", parents=[common],
+                         help="list changed files and findings the walkthrough does not cover")
+    ws.add_argument("--box", required=True, help="the mailbox directory the server printed")
+    ws.set_defaults(func=cmd_walkthrough_status)
 
     v = sub.add_parser("validate", parents=[common], help="validate findings.json files")
     v.add_argument("files", nargs="+")
