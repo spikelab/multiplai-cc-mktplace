@@ -99,6 +99,8 @@ kbd {
   min-height: 0;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr) 380px;
+  /* One row the height of the window, so each pane scrolls on its own. */
+  grid-template-rows: minmax(0, 1fr);
 }
 .side, .detail {
   overflow: auto;
@@ -107,10 +109,10 @@ kbd {
 }
 .side { border-right: 1px solid var(--border); }
 .detail { border-left: 1px solid var(--border); }
-.centre { position: relative; display: flex; flex-direction: column; min-width: 0; }
+.centre { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
 @media (max-width: 1000px) {
-  .layout { grid-template-columns: 1fr; grid-auto-rows: auto; overflow: auto; }
+  .layout { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: auto; overflow: auto; }
   .side, .detail { border: 0; border-bottom: 1px solid var(--border); }
   .code { max-height: 70vh; }
 }
@@ -284,3 +286,30 @@ pre.sketch {
 .row { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .decide input { margin-top: 4px; }
 .keys { margin-top: 20px; font-size: 12px; }
+
+/* --- walkthrough ------------------------------------------------------------ */
+.pr-info { margin-left: 12px; }
+.pr-info .pr-title { font-weight: 600; }
+.pr-info a { color: var(--accent); margin-left: 6px; }
+.banner.notice { background: var(--gap-bg); color: var(--text); }
+.tabs { display: flex; gap: 4px; margin-bottom: 10px; border-bottom: 1px solid var(--border); }
+.tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 6px 10px; }
+.tabs button.active { border-bottom-color: var(--accent); font-weight: 600; }
+.walk-status { font-style: italic; }
+.walk-steps { list-style: none; padding: 0; margin: 10px 0; }
+.walk-steps li { margin: 2px 0; }
+.step-item { display: flex; gap: 8px; width: 100%; text-align: left; background: none; border-color: transparent; }
+.step-item.selected { border-color: var(--accent); background: var(--panel); }
+.step-n { color: var(--muted); min-width: 1.5em; text-align: right; }
+.skipped { margin: 4px 0 0; padding-left: 18px; color: var(--muted); }
+.step-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; }
+.step-anchors { display: flex; flex-wrap: wrap; gap: 4px; }
+.step-anchors .walk-anchor { max-width: 100%; text-align: left; overflow-wrap: anywhere; }
+.diagram-box { margin: 10px 0; overflow-x: auto; }
+/* Full size: a wide diagram scaled to the panel is unreadable, so the box scrolls. */
+img.diagram { display: block; max-width: none; background: var(--bg); }
+.finding-card { margin-top: 4px; }
+.small { font-size: 12px; }
+.md pre { overflow-x: auto; }
+.code tr.walk-focus td.src { background: var(--focus-bg); }
+.code tr.walk-focus td.mark:last-of-type { box-shadow: inset 3px 0 var(--accent); }

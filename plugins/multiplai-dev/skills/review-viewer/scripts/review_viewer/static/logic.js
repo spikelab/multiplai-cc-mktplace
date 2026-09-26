@@ -152,12 +152,99 @@
     return a <= b ? [a, b] : [b, a];
   }
 
+  // --- walkthrough ------------------------------------------------------------
+
+  /* Step ids in the order the walkthrough lists them: that order is the
+   * session's reading order (purpose, core change, callers, tests, config). */
+  function stepOrder(walk) {
+    return ((walk && walk.steps) || []).map(function (s) { return s.id; });
+  }
+
+  /* The step id `delta` steps from `current`, clamped ([ and ]). With no
+   * current step, ] starts at the first and [ at the last. */
+  function moveStep(walk, current, delta) {
+    return stepFinding(stepOrder(walk), current, delta);
+  }
+
+  /* 1-based position of a step and the total, for "Step 2 of 5". */
+  function stepPosition(walk, id) {
+    const order = stepOrder(walk);
+    return { index: order.indexOf(id) + 1, total: order.length };
+  }
+
+  /* Changed files an anchor or a skip covers, and findings that must be
+   * linked (confirmed, unverifiable) that a step links. */
+  function walkCoverage(walk, files, findings) {
+    const covered = new Set();
+    const linked = new Set();
+    for (const s of (walk && walk.steps) || []) {
+      for (const a of s.anchors || []) covered.add(a.path);
+      for (const id of s.finding_ids || []) linked.add(id);
+    }
+    for (const k of (walk && walk.skipped) || []) covered.add(k.path);
+    const must = (findings || []).filter(function (f) {
+      return f.status === "confirmed" || f.status === "unverifiable";
+    });
+    return {
+      files: (files || []).filter(function (f) { return covered.has(f); }).length,
+      filesTotal: (files || []).length,
+      findings: must.filter(function (f) { return linked.has(f.id); }).length,
+      findingsTotal: must.length,
+    };
+  }
+
+  /* What the walkthrough tab says about its state. */
+  function walkStatus(walk) {
+    if (!walk) return "Waiting for the walkthrough";
+    if (!walk.complete) return "Walkthrough in progress";
+    return "";
+  }
+
+  /* Indices of the file-view rows an anchor covers: head-side anchors match
+   * the new line number, base-side ones the old line number. */
+  function anchorRows(rows, anchor) {
+    const key = anchor && anchor.side === "base" ? "o" : "n";
+    const out = [];
+    (rows || []).forEach(function (row, i) {
+      const v = row[key];
+      if (v != null && v >= anchor.line_start && v <= anchor.line_end) out.push(i);
+    });
+    return out;
+  }
+
+  /* "path:3–5" plus " (base)" for a base-side anchor. */
+  function walkAnchorLabel(anchor) {
+    return anchorLabel(anchor) + (anchor.side === "base" ? " (base)" : "");
+  }
+
+  /* Steps that link a finding, in walkthrough order. */
+  function stepsForFinding(walk, id) {
+    return ((walk && walk.steps) || []).filter(function (s) {
+      return (s.finding_ids || []).indexOf(id) >= 0;
+    });
+  }
+
+  /* An SVG document as an <img> source. The page's CSP allows `data:` images
+   * and no inline styles, so a diagram is shown as an image, never inlined. */
+  function svgDataUrl(svg) {
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  }
+
+  /* Only GitHub PR links get an <a> in the header. */
+  function safePrUrl(url) {
+    return typeof url === "string" && /^https:\/\/github\.com\/[^\s"'<>]+$/.test(url) ? url : null;
+  }
+
   const api = {
     SEVERITIES: SEVERITIES, joinParts: joinParts, groupReplies: groupReplies,
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
     isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder,
     stepFinding: stepFinding, anchorLabel: anchorLabel, escapeHtml: escapeHtml,
     splitHighlighted: splitHighlighted, lineRange: lineRange,
+    stepOrder: stepOrder, moveStep: moveStep, stepPosition: stepPosition,
+    walkCoverage: walkCoverage, walkStatus: walkStatus, anchorRows: anchorRows,
+    walkAnchorLabel: walkAnchorLabel, stepsForFinding: stepsForFinding,
+    svgDataUrl: svgDataUrl, safePrUrl: safePrUrl,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;

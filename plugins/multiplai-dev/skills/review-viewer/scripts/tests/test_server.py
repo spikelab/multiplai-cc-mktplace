@@ -383,3 +383,19 @@ def test_negative_content_length_is_refused(start_live):
                    f"X-Review-Token: {live.token}\r\nContent-Type: application/json\r\n"
                    "Content-Length: -1\r\n\r\n").encode())
         assert s.recv(64).startswith(b"HTTP/1.0 400")
+
+
+def test_walkthrough_route_needs_the_token_and_serves_the_file(start_live):
+    from review_viewer.walkthrough import walkthrough_path
+    live = start_live()
+    route = f"/api/targets/{live.slug}/walkthrough"
+    assert live.request("GET", route)[0] == 404
+    data = json.loads(live.findings.read_text())["target"]
+    walkthrough_path(live.box).write_text(json.dumps({
+        "schema_version": 1, "generated_at": "2026-09-26T10:00:00Z",
+        "base_sha": data["base_sha"], "head_sha": data["head_sha"], "overview_md": "o",
+        "steps": [], "skipped": [], "complete": False}))
+    assert live.request("GET", route, token=None)[0] == 401
+    status, body = live.request("GET", route)
+    assert status == 200 and body["overview_md"] == "o" and body["steps"] == []
+    assert live.request("GET", "/api/targets/nope/walkthrough")[0] == 404

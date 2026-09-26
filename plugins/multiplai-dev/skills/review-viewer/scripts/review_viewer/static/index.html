@@ -24,15 +24,20 @@
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.4.16/purify.min.js"
         integrity="sha512-flQmhkXNRQ3iUfvtdCobtpMjCb6kE+zLnTiAulAQJ3WykVfy84JvCMOo6vhwWXHTXjR25h9Zj+LyGFRWKjRoag=="
         crossorigin="anonymous"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.15.0/mermaid.min.js"
+        integrity="sha512-HH52omhHpZF6RfVnGiQwYgYm4H/ya2xsZYLl5xJ4+tLfX+rN4+8zF7V/H/KLeicPrKZYi1g6iBmVkk2AhXTGlg=="
+        crossorigin="anonymous"></script>
 <script defer src="/static/logic.js"></script>
 <script defer src="/static/app.js"></script>
 </head>
 <body>
 <header class="top">
   <h1 id="title">Review viewer</h1>
+  <span id="pr-info" class="pr-info" hidden></span>
   <span id="who" class="muted"></span>
 </header>
 <div id="banner" class="banner" hidden></div>
+<div id="notice" class="banner notice" hidden></div>
 <main class="layout">
   <nav class="side" aria-label="Findings and files">
     <select id="target-select" hidden aria-label="Review target"></select>
@@ -50,8 +55,18 @@
     <div id="code" class="code" tabindex="0"></div>
     <button id="ask-lines" class="float-btn" hidden>Ask about these lines</button>
   </section>
-  <aside class="detail" aria-label="Selected finding">
-    <div id="finding"></div>
+  <aside class="detail" aria-label="Selected finding or walkthrough step">
+    <div class="tabs" role="tablist">
+      <button id="tab-finding" role="tab" aria-controls="finding">Finding</button>
+      <button id="tab-walk" role="tab" aria-controls="walkthrough">Walkthrough <span id="walk-count" class="muted"></span></button>
+    </div>
+    <div id="finding" role="tabpanel"></div>
+    <div id="walkthrough" role="tabpanel" hidden>
+      <p id="walk-status" class="muted walk-status"></p>
+      <div id="walk-overview" class="md"></div>
+      <ol id="walk-steps" class="walk-steps"></ol>
+      <div id="walk-step" class="walk-step"></div>
+    </div>
     <section class="thread-box">
       <h3 id="thread-title">Questions</h3>
       <div id="anchor-chip" class="chip" hidden></div>
@@ -68,7 +83,7 @@
         <button data-decision="defer">Defer</button>
       </div>
     </section>
-    <p class="muted keys">Keys: <kbd>j</kbd>/<kbd>k</kbd> next/previous finding · <kbd>/</kbd> filter files · <kbd>Esc</kbd> clear selection</p>
+    <p class="muted keys">Keys: <kbd>j</kbd>/<kbd>k</kbd> next/previous finding · <kbd>]</kbd>/<kbd>[</kbd> next/previous step · <kbd>/</kbd> filter files · <kbd>Esc</kbd> clear selection</p>
   </aside>
 </main>
 </body>

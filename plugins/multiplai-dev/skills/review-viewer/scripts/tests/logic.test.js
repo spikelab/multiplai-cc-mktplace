@@ -120,6 +120,73 @@ test("a shrunken outbox resets the read position", () => {
   assert.deepEqual([next.rows.length, next.since, next.reset], [0, 0, true]);
 });
 
+// --- walkthrough -------------------------------------------------------------
+
+const WALK = {
+  complete: false,
+  steps: [
+    { id: "purpose", anchors: [{ path: "a.py", side: "head", line_start: 1, line_end: 2 }], finding_ids: [] },
+    { id: "core", anchors: [{ path: "b.py", side: "head", line_start: 5, line_end: 9 }], finding_ids: ["f1"] },
+    { id: "tests", anchors: [{ path: "old.py", side: "base", line_start: 3, line_end: 4 }], finding_ids: ["f1", "f2"] },
+  ],
+  skipped: [{ path: "uv.lock", reason: "generated" }],
+};
+
+test("steps keep the walkthrough's order", () => {
+  assert.deepEqual(L.stepOrder(WALK), ["purpose", "core", "tests"]);
+  assert.deepEqual(L.stepOrder(null), []);
+});
+
+test("[ and ] move one step and stop at the ends", () => {
+  assert.equal(L.moveStep(WALK, "purpose", 1), "core");
+  assert.equal(L.moveStep(WALK, "tests", 1), "tests");
+  assert.equal(L.moveStep(WALK, "purpose", -1), "purpose");
+  assert.equal(L.moveStep(WALK, null, 1), "purpose");
+  assert.equal(L.moveStep(WALK, null, -1), "tests");
+  assert.equal(L.moveStep({ steps: [] }, null, 1), null);
+  assert.deepEqual(L.stepPosition(WALK, "core"), { index: 2, total: 3 });
+});
+
+test("coverage counts anchored or skipped files and linked findings", () => {
+  const cov = L.walkCoverage(WALK, ["a.py", "b.py", "c.py", "uv.lock"], [
+    { id: "f1", status: "confirmed" }, { id: "f3", status: "unverifiable" },
+    { id: "f2", status: "refuted" },
+  ]);
+  assert.deepEqual(cov, { files: 3, filesTotal: 4, findings: 1, findingsTotal: 2 });
+  assert.deepEqual(L.walkCoverage(null, ["a"], []), { files: 0, filesTotal: 1, findings: 0, findingsTotal: 0 });
+});
+
+test("walkthrough status text", () => {
+  assert.equal(L.walkStatus(null), "Waiting for the walkthrough");
+  assert.equal(L.walkStatus(WALK), "Walkthrough in progress");
+  assert.equal(L.walkStatus({ complete: true, steps: [] }), "");
+});
+
+test("anchors map to rows by new or old line number", () => {
+  const rows = [
+    { k: "ctx", o: null, n: 1 }, { k: "del", o: 3, n: null }, { k: "del", o: 4, n: null },
+    { k: "add", o: null, n: 2 }, { k: "gap", o: null, n: null }, { k: "ctx", o: null, n: 3 },
+  ];
+  assert.deepEqual(L.anchorRows(rows, { side: "head", line_start: 2, line_end: 3 }), [3, 5]);
+  assert.deepEqual(L.anchorRows(rows, { side: "base", line_start: 3, line_end: 4 }), [1, 2]);
+  assert.equal(L.walkAnchorLabel({ path: "x", side: "base", line_start: 3, line_end: 4 }), "x:3–4 (base)");
+});
+
+test("a finding's steps, and the diagram image source", () => {
+  assert.deepEqual(L.stepsForFinding(WALK, "f1").map((s) => s.id), ["core", "tests"]);
+  assert.deepEqual(L.stepsForFinding(WALK, "zz"), []);
+  const url = L.svgDataUrl('<svg xmlns="http://www.w3.org/2000/svg"><text>a & "b"</text></svg>');
+  assert.ok(url.startsWith("data:image/svg+xml;charset=utf-8,%3Csvg"));
+  assert.ok(!/[<>"&# ]/.test(url.slice(url.indexOf(",") + 1)));
+});
+
+test("only github.com links become PR links", () => {
+  assert.equal(L.safePrUrl("https://github.com/o/r/pull/7"), "https://github.com/o/r/pull/7");
+  assert.equal(L.safePrUrl("javascript:alert(1)"), null);
+  assert.equal(L.safePrUrl("https://evil.example/o/r/pull/7"), null);
+  assert.equal(L.safePrUrl(undefined), null);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {
