@@ -59,7 +59,7 @@ hex of `sha1(f"{file}\0{line_start}\0{claim}")`.
 
 | File | Writer | Row |
 |---|---|---|
-| `inbox.jsonl` | server | `{"v":1,"id":"q-<utc>-<4 hex>","ts","target","kind":"question"\|"decision","finding_id","anchor":{"path","line_start","line_end"}\|null,"text","decision"}` |
+| `inbox.jsonl` | server | `{"v":1,"id":"q-<utc>-<4 hex>","ts","target","kind":"question"\|"decision","finding_id","anchor":{"path","line_start","line_end"}\|null,"text","decision","step_id"}` |
 | `outbox.jsonl` | `reply` | `{"v":1,"reply_to","ts","text","done"}` |
 | `decisions.json` | server | `{finding_id: {"decision","note","ts"}}` |
 | `server.json` | server | `{"url_path_only","port","pid","session_id","started","targets"}` |
@@ -70,6 +70,10 @@ descriptor. Readers skip lines that do not parse. `reply` splits answers that
 would exceed the row limit into several rows; only the last one can carry
 `done: true`. Rows are split on `\n` only: they are written with
 `ensure_ascii=False`, so U+2028 can appear raw inside a string.
+
+`step_id` is null unless the question was asked while a walkthrough step was
+open in the page; then it names that step (`^[a-z0-9-]{1,40}$`), and the
+session answers in the context of that step.
 
 `pending` prints the inbox rows whose latest reply is missing or not
 `done`. The session runs it after arming (or re-arming) the Monitor.

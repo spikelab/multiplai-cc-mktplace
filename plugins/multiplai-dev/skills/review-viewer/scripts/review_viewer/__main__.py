@@ -8,7 +8,7 @@
     list           show the live viewers this user can reach
     stop           stop one viewer (--box) or all of them (--all)
     validate       check findings files against the v1 contract
-    export-schema  write the v1 JSON Schema
+    export-schema  write the findings and walkthrough v1 JSON Schemas
 
 stdout is a contract: `serve` prints the `open:` line, the reference URLs, the
 mailboxes, the Monitor command and the pending command, then nothing per
@@ -33,8 +33,8 @@ from pydantic import ValidationError
 from . import netinfo, registry, server
 from .gitdata import GitError, diff_findings, diff_target
 from .mailbox import MAX_ROW_BYTES, Mailbox, MailboxError, utc_now
-from .models import (SCHEMA_PATH, FindingsFile, OutboxRow, findings_digest, load_findings,
-                     schema_text)
+from .models import (SCHEMA_PATH, WALKTHROUGH_SCHEMA_PATH, FindingsFile, OutboxRow,
+                     findings_digest, load_findings, schema_text, walkthrough_schema_text)
 
 COMPONENT = "review-viewer"
 EXIT_USAGE = 2
@@ -386,10 +386,13 @@ def cmd_validate(args) -> int:
 
 
 def cmd_export_schema(args) -> int:
-    out = invocation_path(args.out) if args.out else SCHEMA_PATH
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(schema_text(), encoding="utf-8")
-    print(f"wrote {out}")
+    for given, default, text in ((args.out, SCHEMA_PATH, schema_text()),
+                                 (args.walkthrough_out, WALKTHROUGH_SCHEMA_PATH,
+                                  walkthrough_schema_text())):
+        out = invocation_path(given) if given else default
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        print(f"wrote {out}")
     return 0
 
 
@@ -446,8 +449,12 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("files", nargs="+")
     v.set_defaults(func=cmd_validate)
 
-    e = sub.add_parser("export-schema", parents=[common], help="write the v1 JSON Schema")
-    e.add_argument("--out", help=f"output path (default: {SCHEMA_PATH.name} in schema/)")
+    e = sub.add_parser("export-schema", parents=[common],
+                       help="write the findings and walkthrough v1 JSON Schemas")
+    e.add_argument("--out", help=f"findings schema path (default: {SCHEMA_PATH.name} in schema/)")
+    e.add_argument("--walkthrough-out",
+                   help=f"walkthrough schema path (default: {WALKTHROUGH_SCHEMA_PATH.name} in "
+                        "schema/)")
     e.set_defaults(func=cmd_export_schema)
     return ap
 
