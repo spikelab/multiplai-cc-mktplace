@@ -17,6 +17,37 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-26
+
+### Added
+
+- **`review-viewer` opens a PR, a branch, your unpushed commits or a commit
+  range, and walks you through the change.** Give it a PR number or URL,
+  `owner/repo#N`, a branch name, a worktree path, `a..b` or `a...b`. A PR or
+  branch is shown against its merge-base, the same commits
+  `/multiplai-dev:review` would review. A worktree shows only the commits not
+  yet pushed to its upstream.
+- **A walkthrough tab.** The Claude Code session reads the diff and writes an
+  overview and ordered steps: what the change is for, the core change, its
+  callers, tests, then config and generated files. Each step points at the
+  lines it explains; clicking it jumps the code there, and `[` / `]` move
+  between steps. Steps appear while the session is still writing them. A step
+  can carry a mermaid diagram when the change alters a flow or a data shape.
+- **Review findings load when a review of the same commits exists**, and each
+  step shows the findings in its code. A review of an older head of the same
+  PR or branch is named in a banner and not loaded.
+- **Questions can be asked about a walkthrough step**, as well as about the
+  whole diff, selected lines or a finding.
+- The page header shows a PR's title, author and GitHub link.
+
+### Changed
+
+- For a PR target, `review-viewer` now runs `gh pr view`, and fetches the
+  PR's commits from `origin` when the clone does not have them (objects only;
+  no branch or remote-tracking ref is created). `--fetch` runs `git fetch
+  origin` first. Other targets still make no network call; the page also
+  loads mermaid from cdnjs.
+
 ## [0.18.0] - 2026-09-25
 
 ### Added
