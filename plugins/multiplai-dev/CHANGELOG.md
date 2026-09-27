@@ -27,17 +27,16 @@ time, not derived from a tag.
   branch is shown against its merge-base, the same commits
   `/multiplai-dev:review` would review. A worktree shows only the commits not
   yet pushed to its upstream.
-- **A walkthrough tab.** The Claude Code session reads the diff and writes an
-  overview and ordered steps: what the change is for, the core change, its
-  callers, tests, then config and generated files. Each step points at the
+- **A written walkthrough of the change.** The Claude Code session reads the
+  commits and the whole diff and writes an overview and ordered reviews: what the change is for, the core change, its
+  callers, tests, then config and generated files. Each review points at the
   lines it explains; clicking it jumps the code there, and `[` / `]` move
-  between steps. Steps appear while the session is still writing them. A step
-  can carry a mermaid diagram when the change alters a flow or a data shape.
+  between reviews. Reviews appear while the session is still writing them. A
+  review can carry a mermaid diagram when the change alters a flow or a data
+  shape.
 - **Review findings load when a review of the same commits exists**, and each
-  step shows the findings in its code. A review of an older head of the same
+  entry on the Reviews tab shows the findings in its code. A review of an older head of the same
   PR or branch is named in a banner and not loaded.
-- **Questions can be asked about a walkthrough step**, as well as about the
-  whole diff, selected lines or a finding.
 - The page header shows a PR's title, author and GitHub link.
 - **The sidebar can be resized.** Drag the line between it and the code, or
   focus it and use the arrow keys; double-click resets it. The width is
@@ -57,27 +56,25 @@ time, not derived from a tag.
   explain just that block. The answer appears in a strip above the block and
   is still there after a reload. Nothing is explained until you ask, so no
   tokens are spent on blocks you already understand. "Follow up" puts the
-  block into the question box. These explanations stay out of the Questions
-  list. The blue bar that marked a review's lines is gone; its lines still
-  flash when you jump to them.
+  block into the message box. These explanations stay out of the chat.
 - **Questions and answers are a chat in the footer.** Collapsed, it is a
   one-line message box. A spinner beside it shows while the session is
   answering, and a dot marks answers you have not read. Clicking the box
   opens the whole conversation above it, oldest first. Each message is
-  labelled with what it was about (a finding, a review, `@lines` or the
-  whole change). Esc or clicking elsewhere collapses it. Clicking a code
+  labelled with what it was about: a finding, a review, lines, or the whole
+  change. Esc or clicking elsewhere collapses it. Clicking a code
   line adds its reference without opening the chat, so more lines can be
   picked; typing opens it. Answers no longer appear in the right-hand panel.
 - Clicking a line or block adds a reference only once. A reference to lines
   that overlap or touch one already in the box widens it: a line and then its
   block leave one reference. The label above the box appears only when the
   message will be linked to the open review or finding.
-- **The question box is a footer, always in view.** Type `@` for a list of
+- **The message box is a footer, always in view.** Type `@` for a list of
   the changed files, and add `:12` or `:12-20` for lines. Clicking an added,
   removed or changed line adds its whole block of changed lines as a
   reference, which you can edit. A block that only removes lines is written
   `@path:base:40-52`. The first reference with lines is sent with the
-  question. The footer says what the question will be about.
+  question.
 - **Unchanged lines fold away, as on GitHub.** A file opens showing its
   changes with three lines around each, plus any cited or picked lines; the
   rest folds into a bar that shows all of it, or 20 lines at a time from
@@ -97,9 +94,9 @@ time, not derived from a tag.
   loads mermaid from cdnjs.
 - Diff colours follow GitHub's. Added lines are green and removed lines red,
   with a darker line-number cell, and removed lines are no longer struck
-  through. Lines a finding cites, or that a review explains, get a blue bar
-  in the margin (and a light blue tint when unchanged). They are never
-  recoloured, so a highlighted added line stays green.
+  through. Lines a finding cites get a blue bar in the margin and are never
+  recoloured, so a cited added line stays green. Lines a review points at
+  flash when you jump to them.
 - The changed-files list groups files under their directory and shows each
   file by name; a long directory is shortened to `…/<last two folders>/`. Hover
   a name or a directory for its full path. The filter still matches full
