@@ -95,6 +95,8 @@ time, not derived from a tag.
   long code span in a PR description could push the whole panel's text out
   of view. Wide tables and images now scroll inside their own box, and long
   words wrap.
+- The Summary, Reviews and Findings tabs stay at the top of the right-hand
+  panel while it scrolls.
 
 ## [0.18.0] - 2026-09-25
 
