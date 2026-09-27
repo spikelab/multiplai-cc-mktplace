@@ -220,3 +220,7 @@
 :root[data-theme="onebit"] .qbadge.good, :root[data-theme="gameboy"] .qbadge.good { border: 2px solid var(--text); color: var(--text); }
 :root[data-theme="onebit"] .qbadge.note, :root[data-theme="gameboy"] .qbadge.note { border: 1px dashed var(--text); color: var(--text); }
 :root[data-theme="onebit"] .qbadge.concern, :root[data-theme="gameboy"] .qbadge.concern { background: var(--text); color: var(--bg); border-color: var(--text); }
+
+/* The theme menu's list (where the browser lets the page draw it). */
+:root[data-theme] .theme-pick select::picker(select) { border-width: 2px; box-shadow: 3px 3px 0 var(--shadow); }
+:root[data-theme] .theme-pick option:hover, :root[data-theme] .theme-pick option:focus-visible { background: var(--sel-bg); color: var(--sel-text); }
