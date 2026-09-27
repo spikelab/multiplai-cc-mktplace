@@ -17,6 +17,22 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-09-27
+
+### Changed
+
+- **`review-viewer`: the left column lists only the changed files.** The
+  findings list moved into the Findings tab, above the finding it opens, with
+  the "Show refuted and rejected" switch. The review picker (shown when the
+  viewer has more than one review) moved to the page header.
+- **`review-viewer`: the right column can be resized** by dragging its left
+  edge, like the left column; the code in the middle takes what is left. The
+  width is remembered, and a double-click on the edge resets it.
+- **`review-viewer`: the line above the chat box says what a message will be
+  about.** "Linked to review: …" now reads "Asking about the open review: …"
+  (or "…the open finding: …"): a message sent without an `@` reference
+  reaches the session together with the review or finding open on the right.
+
 ## [0.19.0] - 2026-09-26
 
 ### Added

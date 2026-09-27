@@ -104,7 +104,7 @@ kbd {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: var(--side-w, 280px) 6px minmax(0, 1fr) 380px;
+  grid-template-columns: var(--side-w, 280px) 6px minmax(0, 1fr) 6px var(--detail-w, 380px);
   /* One row the height of the window, so each pane scrolls on its own. */
   grid-template-rows: minmax(0, 1fr);
 }
@@ -116,7 +116,7 @@ kbd {
 .resizer { cursor: col-resize; background: transparent; border-left: 1px solid var(--border); touch-action: none; }
 .resizer:hover, .resizer:focus-visible, body.resizing .resizer { background: var(--accent); outline: none; }
 body.resizing { cursor: col-resize; user-select: none; }
-.detail { border-left: 1px solid var(--border); }
+
 .centre { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
 @media (max-width: 1000px) {
@@ -148,6 +148,11 @@ body.resizing { cursor: col-resize; user-select: none; }
 .finding-item.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .finding-item.hidden-finding { opacity: .6; }
 .finding-item .claim { display: block; }
+/* In the list the claim is cut to two lines; the full text is below it. */
+.finding-list .finding-item .claim { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.finding-detail { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 8px; scroll-margin-top: 48px; }
+.finding-list .sev-h:first-child { margin-top: 4px; }
+.target-select { width: auto; max-width: 40ch; padding: 2px 6px; }
 .finding-item .where { display: block; font: 12px var(--mono); color: var(--muted); }
 .badge {
   display: inline-block;
