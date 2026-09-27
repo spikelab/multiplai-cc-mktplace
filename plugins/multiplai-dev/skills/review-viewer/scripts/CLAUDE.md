@@ -130,10 +130,11 @@ reuses it when the session and the findings digests match, restarts it when a
 findings file changed, and exits 3 for another or an unidentified session.
 
 Plain-diff mode (a `--target` with no review of the same commits) puts the
-mailbox under `<workspace INBOX or cwd>/review-viewer/<slug>/viewer/`. A
+mailbox under `<workspace INBOX or ~/.multiplai>/review-viewer/<slug>/viewer/`. A
 target whose review is found uses that review's `viewer/`. `serve` looks in
-`--reviews-dir` (default: `<workspace INBOX or cwd>/reviews`, where the
-review skill writes) for `*/findings.json` with the same base and head.
+`--reviews-dir` (default: `<workspace INBOX or ~/.multiplai>/reviews`, where
+the review skill writes — `output_root()` and the review skill's
+`default_out()` must agree) for `*/findings.json` with the same base and head.
 
 ## Logging
 

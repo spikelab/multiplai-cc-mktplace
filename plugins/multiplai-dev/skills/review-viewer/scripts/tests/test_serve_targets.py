@@ -12,14 +12,18 @@ from review_viewer.__main__ import _load_targets, build_parser, find_review
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """No workspace: output goes under the directory the user ran from."""
+    """No workspace: output goes under ~/.multiplai, never the directory the
+    user ran from."""
     cfg = tmp_path / "cfg"
     cfg.mkdir()
     ran_from = tmp_path / "ran-from"
     ran_from.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
     monkeypatch.setenv("PWD", str(ran_from))
-    return ran_from
+    monkeypatch.setenv("HOME", str(home))
+    return home / ".multiplai"
 
 
 def _review(reviews, findings_path, name="fixture-review", **target_changes):
@@ -70,6 +74,18 @@ def test_no_review_is_plain_diff_under_the_output_root(env, fixture_repo, tmp_pa
     (ff, box), = loaded
     assert ff.findings == [] and meta[ff.target.slug]["review"] == "none"
     assert box == env / "review-viewer" / ff.target.slug / "viewer"
+    assert not (tmp_path / "ran-from" / "review-viewer").exists()
+
+
+def test_workspace_inbox_wins_when_there_is_one(env, fixture_repo, tmp_path, monkeypatch):
+    repo, _, _ = fixture_repo
+    ws = tmp_path / "ws"
+    (ws / "INBOX").mkdir(parents=True)
+    (tmp_path / "cfg" / ".workspace").write_text(str(ws))
+    loaded, _ = _load("--target", "main~1..main", "--repo", str(repo),
+                      "--reviews-dir", str(tmp_path / "empty"))
+    (ff, box), = loaded
+    assert box == ws / "INBOX" / "review-viewer" / ff.target.slug / "viewer"
 
 
 def test_default_reviews_dir_is_the_review_skills(env, fixture_repo, findings_path):

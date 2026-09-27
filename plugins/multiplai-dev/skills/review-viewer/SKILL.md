@@ -31,7 +31,8 @@ watches; you answer with one command and the answer appears in the page.
   objects and `FETCH_HEAD`. With `--fetch` it runs `git fetch origin` first.
   Branch, worktree and range targets make no network call otherwise.
 - **Writes files** only in the mailbox directory (`viewer/` beside the
-  findings file, or under `INBOX/review-viewer/<slug>/`), the
+  findings file, or under `INBOX/review-viewer/<slug>/` or
+  `~/.multiplai/review-viewer/<slug>/`), the
   `walkthrough.json` beside it, a per-user index of live viewers under
   `~/.local/state/review-viewer/` (mailbox paths only), and the log files.
 - **Never calls a model.** You, the session, write the walkthrough; the
@@ -87,8 +88,8 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review-viewer/scripts \
 When a review with the same base and head exists, its findings load and its
 mailbox (`viewer/` beside it) is used. Otherwise the mailbox goes under the
 workspace `INBOX/review-viewer/<slug>/viewer/` when a workspace with an
-`INBOX/` exists, else under the current directory. Tell the user where it
-went.
+`INBOX/` exists, else under `~/.multiplai/review-viewer/<slug>/viewer/`.
+Tell the user where it went.
 
 `{session_id}` identifies this session as the viewer's owner. If it reaches
 the command unsubstituted, the CLI uses `$CLAUDE_CODE_SESSION_ID` instead.

@@ -77,6 +77,12 @@ time, not derived from a tag.
 
 ### Fixed
 
+- **`review` and `review-viewer` no longer write into the repository you run
+  them from.** Without a workspace `INBOX/`, a review went to `./reviews/`
+  and a viewer's files to `./review-viewer/`, which is usually the working
+  tree of the repository under review. Both now go under `~/.multiplai/`
+  (`reviews/`, `review-viewer/`). `--out` and `--reviews-dir` still override
+  it.
 - **`review-viewer`'s three panes now scroll on their own.** On a long file the
   whole page scrolled instead, so jumping to a finding or a step's lines could
   leave them off screen.

@@ -62,7 +62,12 @@ def invocation_path(value: str) -> Path:
 
 
 def output_root() -> Path:
-    """Workspace INBOX/ if there is one, else the directory the user ran from."""
+    """Workspace INBOX/ if there is one, else `~/.multiplai`.
+
+    Never the directory the user ran from: that is usually the repository
+    being reviewed, and the output would land in its working tree. The
+    review skill's `default_out()` makes the same choice; they must agree,
+    because `find_review()` looks where the review skill writes."""
     cfg = os.environ.get("CLAUDE_CONFIG_DIR")
     if cfg:
         marker = Path(cfg) / ".workspace"
@@ -72,7 +77,7 @@ def output_root() -> Path:
             root = None
         if root and (root / "INBOX").is_dir():
             return root / "INBOX"
-    return invocation_path(".")
+    return Path.home() / ".multiplai"
 
 
 # --- serve --------------------------------------------------------------------
@@ -80,7 +85,7 @@ def output_root() -> Path:
 
 def default_reviews_dir() -> Path:
     """Where the review skill writes by default: the workspace `INBOX/reviews`,
-    else `reviews/` in the directory the user ran from."""
+    else `~/.multiplai/reviews`."""
     return output_root() / "reviews"
 
 
