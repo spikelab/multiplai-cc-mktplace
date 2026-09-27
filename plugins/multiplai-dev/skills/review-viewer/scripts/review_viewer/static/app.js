@@ -344,6 +344,14 @@
       const cov = L.walkCoverage(state.walk, state.detail.files, state.detail.findings.findings);
       overview.appendChild(el("p", { class: "muted small", text: "The reviews cover " + cov.files + " of " + cov.filesTotal +
         " changed files" + (cov.findingsTotal ? " and link " + cov.findings + " of " + cov.findingsTotal + " findings" : "") + "." }));
+      if (state.walk.skipped.length) {
+        const ul = el("ul", { class: "skipped" });
+        for (const k of state.walk.skipped) {
+          ul.appendChild(el("li", {}, [el("span", { class: "mono", text: k.path }), " — " + k.reason]));
+        }
+        overview.appendChild(el("div", { class: "label", text: "Files no review explains, and why" }));
+        overview.appendChild(ul);
+      }
     }
     const pr = state.detail.pr;
     const desc = $("pr-desc");
@@ -397,16 +405,12 @@
       list.appendChild(el("li", {}, [el("button", {
         class: "step-item" + (s.id === state.stepId ? " selected" : ""),
         "data-step": s.id,
-        onclick: () => selectStep(s.id, { open: true }),
+        onclick: async () => {
+          await selectStep(s.id, { open: true });
+          $("walk-step").scrollIntoView({ block: "start", behavior: "smooth" });
+        },
       }, [el("span", { class: "step-n", text: String(i + 1) }), el("span", { text: s.title })])]));
     });
-    if (state.walk.skipped.length) {
-      const ul = el("ul", { class: "skipped" });
-      for (const k of state.walk.skipped) {
-        ul.appendChild(el("li", {}, [el("span", { class: "mono", text: k.path }), " — " + k.reason]));
-      }
-      list.appendChild(el("li", { class: "skipped-li" }, [el("div", { class: "label", text: "Not explained" }), ul]));
-    }
     renderStep();
   }
 

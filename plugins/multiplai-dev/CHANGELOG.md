@@ -101,6 +101,10 @@ time, not derived from a tag.
   long code span in a PR description could push the whole panel's text out
   of view. Wide tables and images now scroll inside their own box, and long
   words wrap.
+- The files no review explains are listed on the Summary tab. On the
+  Reviews tab they sat between the list of reviews and the one you clicked,
+  so every review looked like it said "Not explained". Clicking a review now
+  scrolls its text into view.
 - The Summary, Reviews and Findings tabs stay at the top of the right-hand
   panel while it scrolls.
 

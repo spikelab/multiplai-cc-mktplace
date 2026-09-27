@@ -379,3 +379,5 @@ img.diagram { display: block; max-width: none; background: var(--bg); }
 .md img, .a img { max-width: 100%; height: auto; }
 /* The right column only ever scrolls up and down; wide content scrolls in place. */
 .detail { overflow-x: hidden; }
+/* Scrolled to on a click, below the pinned tab bar rather than under it. */
+.walk-step { scroll-margin-top: 48px; }
