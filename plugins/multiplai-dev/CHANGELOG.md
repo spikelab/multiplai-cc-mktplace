@@ -60,6 +60,13 @@ time, not derived from a tag.
   block into the question box. These explanations stay out of the Questions
   list. The blue bar that marked a review's lines is gone; its lines still
   flash when you jump to them.
+- **Questions and answers are a chat in the footer.** Collapsed, it is a
+  one-line message box. A spinner beside it shows while the session is
+  answering, and a dot marks answers you have not read. Clicking the box
+  opens the whole conversation above it, oldest first. Each message is
+  labelled with what it was about (a finding, a review, `@lines` or the
+  whole change). Esc or clicking elsewhere collapses it. Answers no longer
+  appear in the right-hand panel.
 - **The question box is a footer, always in view.** Type `@` for a list of
   the changed files, and add `:12` or `:12-20` for lines. Clicking an added,
   removed or changed line adds its whole block of changed lines as a

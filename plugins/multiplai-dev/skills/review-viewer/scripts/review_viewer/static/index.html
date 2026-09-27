@@ -79,10 +79,6 @@
       <div id="walk-step" class="walk-step"></div>
     </div>
     <div id="finding" role="tabpanel" hidden></div>
-    <section class="thread-box">
-      <h3 id="thread-title">Questions</h3>
-      <ol id="thread" class="thread"></ol>
-    </section>
     <section id="decide" class="decide" hidden>
       <h3>Decision <span id="decision-now" class="muted"></span></h3>
       <input id="decision-note" type="text" placeholder="Note (optional)" aria-label="Decision note">
@@ -95,14 +91,22 @@
     <p class="muted keys">Keys: <kbd>j</kbd>/<kbd>k</kbd> next/previous finding · <kbd>]</kbd>/<kbd>[</kbd> next/previous step · <kbd>/</kbd> filter files · <kbd>Esc</kbd> clear selection</p>
   </aside>
 </main>
-<footer class="composer" aria-label="Ask a question">
+<footer id="composer" class="composer" aria-label="Chat with the session">
+  <section id="chat" class="chat" tabindex="-1" aria-label="Conversation" hidden>
+    <div class="chat-head">
+      <strong id="chat-title">Chat</strong>
+      <button id="chat-close" class="cite-link" title="Collapse (Esc)">Collapse</button>
+    </div>
+    <ol id="thread" class="thread"></ol>
+  </section>
   <div class="composer-head">
+    <span id="chat-status" class="chat-status" role="status" aria-live="polite"></span>
     <span id="ask-about" class="ask-about"></span>
     <span class="muted small">Type <kbd>@</kbd> for a changed file, then <code>:12</code> or <code>:12-20</code> for lines · click a changed line to add its block · <kbd>Ctrl</kbd>+<kbd>Enter</kbd> sends</span>
   </div>
   <div class="composer-row">
     <div class="composer-input">
-      <textarea id="question" rows="2" placeholder="Ask a question about the change" aria-label="Question"
+      <textarea id="question" rows="1" placeholder="Message the session about the change (click to open the chat)" aria-label="Message"
                 aria-autocomplete="list" aria-controls="ac"></textarea>
       <ul id="ac" class="ac" role="listbox" aria-label="Changed files" hidden></ul>
     </div>

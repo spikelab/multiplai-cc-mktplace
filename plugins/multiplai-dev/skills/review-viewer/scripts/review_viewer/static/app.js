@@ -43,6 +43,9 @@
     tab: "summary",
     fileNote: null,
     ac: null,
+    chatOpen: false,
+    chatJustOpened: false,
+    seen: new Set(),
     badgeOpen: null,
     tabChosen: false,
     walk: null,
@@ -763,25 +766,42 @@
     return state.tab === "walk" && !!currentStep();
   }
 
-  function threadQuestions() {
-    return threadCandidates().filter((q) => !q.explain);
+  /* What a chat message was about, for its label. */
+  function chatContext(q) {
+    if (q.anchor) return L.walkAnchorLabel(q.anchor);
+    if (q.step_id) {
+      const st = state.walk && state.walk.steps.find((x) => x.id === q.step_id);
+      return "Review: " + (st ? st.title : q.step_id);
+    }
+    if (q.finding_id) {
+      const f = state.findingsById.get(q.finding_id);
+      return "Finding: " + (f ? f.claim : q.finding_id);
+    }
+    return "The whole change";
   }
 
-  function threadCandidates() {
-    if (askingAboutStep()) return state.questions.filter((q) => q.step_id === state.stepId);
-    if (state.tab === "summary" || !state.selected) return state.questions.filter((q) => !q.finding_id && !q.step_id);
-    return state.questions.filter((q) => q.finding_id === state.selected);
-  }
-
+  /* The chat in the footer, and the one-line status beside the message box. */
   function renderThread() {
     renderAskAbout();
-    $("thread-title").textContent = askingAboutStep() ? "Questions about this step"
-      : (state.tab === "summary" || !state.selected ? "Questions about the diff or selected lines"
-        : "Questions about this finding");
-    const list = $("thread");
-    list.replaceChildren();
     const agent = state.who ? state.who.agent : "the session";
-    for (const q of threadQuestions()) {
+    const open = state.chatOpen;
+    if (open) for (const q of state.questions) if (state.replies.has(q.id) && !L.isPending(q.id, state.replies)) state.seen.add(q.id);
+    const st = L.chatStatus(state.questions, state.replies, state.seen);
+    const status = $("chat-status");
+    status.replaceChildren();
+    if (st.pending) status.append(el("span", { class: "spinner" }), agent + " is answering" + (st.pending > 1 ? " " + st.pending + " messages" : "") + "…");
+    else if (st.unread) status.append(el("span", { class: "unread-dot" }), st.unread + " new answer" + (st.unread > 1 ? "s" : "") + " — click the box to read");
+    $("chat-title").textContent = "Chat with " + agent;
+    if (!open) return;
+    const list = $("thread");
+    const chat = $("chat");
+    const atBottom = chat.scrollTop + chat.clientHeight >= chat.scrollHeight - 4;
+    list.replaceChildren();
+    const msgs = L.chatQuestions(state.questions);
+    if (!msgs.length) {
+      list.appendChild(el("li", { class: "muted" , text: "No messages yet. Ask about the whole change, or type @ to point at a file and lines." }));
+    }
+    for (const q of msgs) {
       const reply = state.replies.get(q.id);
       const answer = el("div", { class: "a" });
       if (reply && reply.text) renderMarkdown(answer, reply.text);
@@ -789,13 +809,39 @@
         answer.appendChild(el("div", { class: "muted" }, [el("span", { class: "spinner" }), agent + " is answering…"]));
       }
       list.appendChild(el("li", {}, [
-        el("div", { class: "q" }, [
-          q.anchor ? el("span", { class: "anchor", text: L.anchorLabel(q.anchor) }) : null,
-          q.text,
-        ]),
+        el("div", { class: "q" }, [el("span", { class: "anchor", text: chatContext(q) }), q.text]),
         answer,
       ]));
     }
+    if (atBottom || state.chatJustOpened) chat.scrollTop = chat.scrollHeight;
+    state.chatJustOpened = false;
+  }
+
+  function setChatOpen(open) {
+    if (state.chatOpen === open) return;
+    state.chatOpen = open;
+    state.chatJustOpened = open;
+    $("chat").hidden = !open;
+    $("composer").classList.toggle("open", open);
+    $("question").rows = open ? 3 : 1;
+    renderThread();
+  }
+
+  function bindChat() {
+    const footer = $("composer");
+    footer.addEventListener("focusin", () => setChatOpen(true));
+    footer.addEventListener("focusout", () => {
+      // Focus moving within the footer (the chat, its links) keeps it open.
+      setTimeout(() => { if (!footer.contains(document.activeElement)) setChatOpen(false); }, 0);
+    });
+    $("chat-close").addEventListener("click", () => { document.activeElement.blur(); setChatOpen(false); });
+    footer.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && !state.ac) {
+        ev.stopPropagation();
+        document.activeElement.blur();
+        setChatOpen(false);
+      }
+    });
   }
 
   async function send() {
@@ -809,8 +855,9 @@
     $("send").disabled = true;
     try {
       const res = await api("/api/ask", body);
-      state.questions.push({ id: res.id, kind: "question", text: text, finding_id: body.finding_id,
-        anchor: anchor, step_id: stepId });
+      state.questions.push({ id: res.id, ts: new Date().toISOString(), kind: "question", text: text,
+        finding_id: body.finding_id, anchor: anchor, step_id: stepId });
+      state.chatJustOpened = true;
       box.value = "";
       closeAc();
       renderThread();
@@ -1341,6 +1388,7 @@
 
   function bindEvents() {
     bindResize();
+    bindChat();
     $("send").addEventListener("click", send);
     $("question").addEventListener("keydown", onQuestionKey);
     $("question").addEventListener("input", () => { updateAc(); renderAskAbout(); });

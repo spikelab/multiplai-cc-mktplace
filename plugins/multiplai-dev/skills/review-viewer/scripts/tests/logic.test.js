@@ -377,6 +377,24 @@ test("block explanations: the latest light-bulb question per block of a file", (
   assert.equal(m.get("head:2-3").id, "q4");
 });
 
+test("the chat holds every question but block explanations, oldest first", () => {
+  const qs = [
+    { id: "b", ts: "2026-09-27T10:00:05Z" },
+    { id: "x", ts: "2026-09-27T10:00:01Z", explain: true },
+    { id: "new" },
+    { id: "a", ts: "2026-09-27T10:00:01Z" },
+  ];
+  assert.deepEqual(L.chatQuestions(qs).map((q) => q.id), ["a", "b", "new"]);
+});
+
+test("chat status counts answers being written and finished ones not yet seen", () => {
+  const qs = [{ id: "q1", ts: "1" }, { id: "q2", ts: "2" }, { id: "q3", ts: "3" }, { id: "q4", ts: "4", explain: true }];
+  const replies = new Map([["q1", { text: "done", done: true }], ["q2", { text: "part", done: false }]]);
+  // q3 has no reply at all yet: pending too. q4 is a block explanation: not counted.
+  assert.deepEqual(L.chatStatus(qs, replies, new Set()), { pending: 2, unread: 1 });
+  assert.deepEqual(L.chatStatus(qs, replies, new Set(["q1"])), { pending: 2, unread: 0 });
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

@@ -322,13 +322,24 @@ pre.sketch {
 .keys { margin-top: 20px; font-size: 12px; }
 
 /* --- question box: a footer, always visible ------------------------------- */
-.composer { border-top: 1px solid var(--border); background: var(--panel); padding: 6px 12px 8px; }
+.composer { position: relative; border-top: 1px solid var(--border); background: var(--panel); padding: 6px 12px 8px; }
+/* The chat opens upward over the page while the footer has focus. */
+.chat { position: absolute; left: 0; right: 0; bottom: 100%; z-index: 20; max-height: 65vh; overflow: auto;
+  background: var(--panel); border-top: 1px solid var(--border); box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.3);
+  padding: 8px 12px 4px; outline: none; }
+.chat-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;
+  position: sticky; top: -8px; background: var(--panel); padding: 4px 0; }
+.chat .thread { max-width: 110ch; margin: 0 auto 4px; }
+.chat .a { overflow-wrap: anywhere; }
+.chat-status { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); }
+.chat-status:empty { display: none; }
+.unread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: inline-block; }
 .composer-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin-bottom: 4px; font-size: 12px; }
 .ask-about { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60ch; }
 .composer-row { display: flex; gap: 8px; align-items: flex-end; }
 .composer-input { position: relative; flex: 1; min-width: 0; }
 .composer textarea { width: 100%; max-height: 30vh; resize: vertical; display: block; }
-.ac { position: absolute; bottom: 100%; left: 0; z-index: 10; margin: 0 0 4px; padding: 4px 0; list-style: none;
+.ac { position: absolute; bottom: 100%; left: 0; z-index: 30; margin: 0 0 4px; padding: 4px 0; list-style: none;
   min-width: 280px; max-width: 100%; max-height: 260px; overflow: auto;
   background: var(--bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); }
 .ac li { display: flex; gap: 8px; align-items: baseline; padding: 3px 10px; cursor: pointer; white-space: nowrap; }

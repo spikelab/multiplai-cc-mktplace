@@ -425,6 +425,32 @@
     return out;
   }
 
+  /* The chat: every question except block explanations (those live in
+   * strips above their blocks), oldest first. A question without a
+   * timestamp (just sent) sorts last. */
+  function chatQuestions(questions) {
+    return (questions || []).filter(function (q) { return !q.explain; })
+      .map(function (q, i) { return [q, i]; })
+      .sort(function (x, y) {
+        const a = x[0].ts || "\uffff";
+        const b = y[0].ts || "\uffff";
+        return a < b ? -1 : a > b ? 1 : x[1] - y[1];
+      })
+      .map(function (x) { return x[0]; });
+  }
+
+  /* For the collapsed chat line: how many answers are still being written,
+   * and how many finished answers the reader has not opened the chat to see. */
+  function chatStatus(questions, replies, seen) {
+    let pending = 0;
+    let unread = 0;
+    for (const q of chatQuestions(questions)) {
+      if (isPending(q.id, replies)) pending += 1;
+      else if (replies && replies.has(q.id) && !(seen && seen.has(q.id))) unread += 1;
+    }
+    return { pending: pending, unread: unread };
+  }
+
   /* "@path", "@path:12", "@path:12-20", "@path:base:40-52". */
   function formatRef(path, ref) {
     let out = "@" + path;
@@ -508,6 +534,7 @@
     diffBlock: diffBlock, formatRef: formatRef, parseRefs: parseRefs, refAnchor: refAnchor,
     completion: completion, matchFiles: matchFiles,
     blockStarts: blockStarts, blockKey: blockKey, explainByBlock: explainByBlock,
+    chatQuestions: chatQuestions, chatStatus: chatStatus,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;
