@@ -181,7 +181,7 @@ body.resizing { cursor: col-resize; user-select: none; }
   text-overflow: ellipsis;
 }
 .files li.dir-h:first-child { margin-top: 0; }
-.files li button.selected { color: var(--accent); font-weight: 600; }
+.files li button.selected { color: var(--accent); font-weight: 600; background: var(--focus-bg); box-shadow: inset 3px 0 var(--accent); }
 .empty { color: var(--muted); font-style: italic; }
 
 .file-head {
@@ -212,6 +212,14 @@ body.resizing { cursor: col-resize; user-select: none; }
 .code tr.del td.src { background: var(--del-bg); text-decoration: line-through; text-decoration-color: var(--del-mark); }
 .code tr.del td.mark::before { content: "−"; color: var(--del-mark); }
 .code tr.gap td { background: var(--gap-bg); color: var(--muted); font-style: italic; }
+.code tr.fold td { background: var(--gap-bg); color: var(--muted); padding: 2px 8px; font-family: var(--sans, sans-serif); font-size: 12px; }
+.fold-label { margin-right: 10px; }
+.fold-btn { font-size: 11px; padding: 0 6px; margin-right: 4px; }
+.file-nav { padding: 6px 12px; font-size: 12px; font-family: var(--sans, sans-serif); }
+.file-nav.next { border-top: 1px solid var(--border); margin-top: 8px; }
+.file-nav.prev:empty { display: none; }
+.file-nav-btn { border: 0; background: none; color: var(--accent); padding: 2px 0; }
+.overscroll-bar { height: 3px; width: 0; background: var(--accent); transition: width 0.1s linear; }
 .code tr.cited td.src { box-shadow: inset 3px 0 0 var(--medium); }
 .code tr.cited:not(.add):not(.del) td.src { background: var(--cited-bg); }
 .code tr.focus td.src { background: var(--focus-bg); }

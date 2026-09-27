@@ -26,6 +26,9 @@
     filePath: null,
     view: null,
     views: new Map(),
+    openRows: new Map(),
+    shownRows: new Set(),
+    overscroll: null,
     showHidden: false,
     fileFilter: "",
     questions: [],
@@ -224,6 +227,7 @@
     state.replies = new Map();
     state.since = 0;
     state.views = new Map();
+    state.openRows = new Map();
     state.selected = null;
     state.pick = null;
     state.pickAnchor = null;
@@ -479,6 +483,8 @@
         })]));
       }
     }
+    const current = list.querySelector("button.selected");
+    if (current) current.scrollIntoView({ block: "nearest" });
   }
 
   // --- sidebar width ---------------------------------------------------------
@@ -806,8 +812,12 @@
     const delRows = view.rows.filter((r) => r.k === "del");
     const textHtml = highlight(textRows.map((r) => r.t).join("\n"), view.language);
     const delHtml = highlight(delRows.map((r) => r.t).join("\n"), view.language);
+    // Highlighting runs over the whole file so folds do not break a token's
+    // context; each row keeps its own html whether it is shown or folded.
     let ti = 0;
     let di = 0;
+    const rowHtml = view.rows.map((r) => (r.k === "gap" ? L.escapeHtml(r.t)
+      : r.k === "del" ? delHtml[di++] || "" : textHtml[ti++] || ""));
     const cited = view.cited_ranges || [];
     const selected = state.selected && state.findingsById.get(state.selected);
     const dots = new Map();
@@ -817,12 +827,28 @@
     }
     const wf = state.tab === "walk" && state.walkFocus && state.walkFocus.path === view.path ? state.walkFocus : null;
     const walkRows = new Set(wf ? L.anchorRows(view.rows, wf) : []);
+    // Rows that must never be folded away: cited lines, the selected finding,
+    // finding dots, the lines picked for a question, the walkthrough anchor.
+    const keep = new Set(walkRows);
+    for (const [a, b] of cited) for (const i of L.citationRows(view.rows, a, b)) keep.add(i);
+    if (selected && selected.file === view.path) {
+      for (const i of L.citationRows(view.rows, selected.line_start, selected.line_end)) keep.add(i);
+    }
+    for (const n of dots.keys()) for (const i of L.citationRows(view.rows, n, n)) keep.add(i);
+    if (state.pick && state.pick.path === view.path) {
+      for (const i of L.citationRows(view.rows, state.pick.start, state.pick.end)) keep.add(i);
+    }
+    const open = openRows(view.path);
+    const items = L.foldRows(view.rows, keep, open, FOLD_CONTEXT, FOLD_MIN);
+    state.shownRows = new Set(items.filter((it) => it.row != null).map((it) => it.row));
     const tbody = el("tbody");
-    view.rows.forEach((r, ri) => {
-      let html;
-      if (r.k === "gap") html = L.escapeHtml(r.t);
-      else if (r.k === "del") html = delHtml[di++] || "";
-      else html = textHtml[ti++] || "";
+    for (const it of items) {
+      if (it.fold) {
+        tbody.appendChild(foldRow(view, it.fold));
+        continue;
+      }
+      const ri = it.row;
+      const r = view.rows[ri];
       const classes = [r.k];
       if (r.n != null && cited.some(([a, b]) => r.n >= a && r.n <= b)) classes.push("cited");
       if (selected && selected.file === view.path && r.n != null &&
@@ -838,17 +864,111 @@
         }));
       }
       const src = el("td", { class: "src" });
-      src.innerHTML = html;
-      tbody.appendChild(el("tr", { class: classes.join(" "), "data-n": r.n == null ? null : String(r.n),
-        "data-o": r.o == null ? null : String(r.o) }, [
+      src.innerHTML = rowHtml[ri];
+      tbody.appendChild(el("tr", { class: classes.join(" "), "data-ri": String(ri),
+        "data-n": r.n == null ? null : String(r.n), "data-o": r.o == null ? null : String(r.o) }, [
         dotCell,
         el("td", { class: "ln", text: r.o == null ? "" : String(r.o) }),
         el("td", { class: "ln new", text: r.n == null ? "" : String(r.n) }),
         el("td", { class: "mark" }),
         src,
       ]));
-    });
-    code.replaceChildren(el("table", {}, [tbody]));
+    }
+    code.replaceChildren(fileNav(-1), el("table", {}, [tbody]), fileNav(1));
+  }
+
+  // --- folds -------------------------------------------------------------------
+
+  const FOLD_CONTEXT = 3;
+  const FOLD_MIN = 4;
+  const FOLD_STEP = 20;
+
+  function openRows(path) {
+    if (!state.openRows.has(path)) state.openRows.set(path, new Set());
+    return state.openRows.get(path);
+  }
+
+  function foldLabel(view, fold) {
+    const [from, to] = fold;
+    const a = view.rows[from];
+    const b = view.rows[to];
+    const count = to - from + 1;
+    const lines = a.n != null && b.n != null ? "lines " + a.n + "–" + b.n : count + " lines";
+    return "⋯ " + lines + " unchanged (" + count + ")";
+  }
+
+  function foldRow(view, fold) {
+    const count = fold[1] - fold[0] + 1;
+    const expand = (how) => {
+      const open = openRows(view.path);
+      for (const i of L.expandFold(fold, how, FOLD_STEP)) open.add(i);
+      const keepTop = $("code").scrollTop;
+      renderCode();
+      $("code").scrollTop = keepTop;
+    };
+    const buttons = [];
+    if (count > FOLD_STEP) {
+      buttons.push(el("button", { class: "fold-btn", title: "Show " + FOLD_STEP + " more lines above", text: "↑ " + FOLD_STEP, onclick: () => expand("up") }));
+      buttons.push(el("button", { class: "fold-btn", title: "Show " + FOLD_STEP + " more lines below", text: "↓ " + FOLD_STEP, onclick: () => expand("down") }));
+    }
+    buttons.push(el("button", { class: "fold-btn", text: "Show all", onclick: () => expand("all") }));
+    return el("tr", { class: "fold" }, [
+      el("td", { colspan: "5" }, [el("span", { class: "fold-label", text: foldLabel(view, fold) }), ...buttons]),
+    ]);
+  }
+
+  // --- moving between files --------------------------------------------------
+
+  function neighbour(delta) {
+    const order = L.fileOrder(state.detail.files, state.fileFilter);
+    return L.neighbourFile(order, state.filePath, delta);
+  }
+
+  /* The bar above (delta -1) or below (delta 1) a file, naming the file
+   * that scrolling on past this edge opens. */
+  function fileNav(delta) {
+    const path = neighbour(delta);
+    const box = el("div", { class: "file-nav " + (delta > 0 ? "next" : "prev") });
+    if (!path) {
+      if (delta > 0) box.appendChild(el("span", { class: "muted", text: "End of the last changed file." }));
+      return box;
+    }
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    box.appendChild(el("button", {
+      class: "file-nav-btn", title: path,
+      text: delta > 0 ? "Keep scrolling for the next file: " + name + " ▼" : "▲ Previous file: " + name,
+      onclick: () => goFile(delta),
+    }));
+    box.appendChild(el("div", { class: "overscroll-bar" }));
+    return box;
+  }
+
+  async function goFile(delta) {
+    const path = neighbour(delta);
+    if (!path) return;
+    clearPickState();
+    await openFile(path);
+    const code = $("code");
+    code.scrollTop = delta > 0 ? 0 : code.scrollHeight;
+  }
+
+  function showOverscroll(dir, progress) {
+    for (const bar of $("code").querySelectorAll(".overscroll-bar")) bar.style.width = "0";
+    if (!dir) return;
+    const bar = $("code").querySelector(".file-nav." + (dir > 0 ? "next" : "prev") + " .overscroll-bar");
+    if (bar) bar.style.width = Math.round(Math.min(1, progress) * 100) + "%";
+  }
+
+  function onCodeWheel(ev) {
+    if (!state.view || ev.ctrlKey) return;
+    const code = $("code");
+    const atTop = code.scrollTop <= 0;
+    const atBottom = code.scrollTop + code.clientHeight >= code.scrollHeight - 1;
+    const edge = ev.deltaY > 0 && atBottom ? 1 : ev.deltaY < 0 && atTop ? -1 : 0;
+    const res = L.overscroll(state.overscroll, edge, ev.deltaY, performance.now());
+    state.overscroll = res.acc;
+    showOverscroll(res.move ? 0 : res.acc.dir, res.progress || 0);
+    if (res.move) goFile(ev.deltaY > 0 ? 1 : -1);
   }
 
   function scrollToLines(start, end) {
@@ -857,12 +977,18 @@
   }
 
   function flashRows(idx) {
-    if (!idx.length) return;
-    const trs = $("code").querySelectorAll("tr");
-    const first = trs[idx[0]];
+    if (!idx.length || !state.view) return;
+    if (idx.some((i) => !state.shownRows.has(i))) {
+      // The lines to show are inside a fold: open them, with some context.
+      const open = openRows(state.view.path);
+      for (const i of idx) for (let j = i - FOLD_CONTEXT; j <= i + FOLD_CONTEXT; j++) open.add(j);
+      renderCode();
+    }
+    const code = $("code");
+    const first = code.querySelector('tr[data-ri="' + idx[0] + '"]');
     if (first) first.scrollIntoView({ block: "center" });
     for (const i of idx) {
-      const tr = trs[i];
+      const tr = code.querySelector('tr[data-ri="' + i + '"]');
       if (!tr) continue;
       tr.classList.remove("flash");
       void tr.offsetWidth;  // restart the animation
@@ -883,12 +1009,16 @@
     btn.hidden = false;
   }
 
-  function clearPick() {
+  function clearPickState() {
     state.pick = null;
     state.pickAnchor = null;
     $("ask-lines").hidden = true;
     const sel = window.getSelection();
     if (sel) sel.removeAllRanges();
+  }
+
+  function clearPick() {
+    clearPickState();
     if (state.view) renderCode();
     if (state.detail) renderThread();
   }
@@ -947,6 +1077,7 @@
       renderFiles();
     });
     $("code").addEventListener("mouseup", onCodeMouseUp);
+    $("code").addEventListener("wheel", onCodeWheel, { passive: true });
     $("code").addEventListener("click", onCodeClick);
     $("ask-lines").addEventListener("click", askAboutPick);
     $("tab-finding").addEventListener("click", () => setTab("finding"));

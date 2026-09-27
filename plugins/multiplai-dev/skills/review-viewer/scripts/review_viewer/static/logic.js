@@ -259,6 +259,88 @@
     return Math.round(Math.max(min, Math.min(max, n)));
   }
 
+  /* Which rows of a file view to show, and where to fold the rest, as
+   * GitHub does. Changed rows (add, del) and the rows in `keep` show with
+   * `context` unchanged rows around them; rows in `open` (expanded by the
+   * user) show as they are; server gap rows always show. A hidden run
+   * shorter than `minFold` is shown instead of folded, since a fold row
+   * would take as much room. Returns [{row: i}] and [{fold: [from, to]}]. */
+  function foldRows(rows, keep, open, context, minFold) {
+    const n = (rows || []).length;
+    const show = new Array(n).fill(false);
+    const pad = function (i) {
+      for (let j = Math.max(0, i - context); j <= Math.min(n - 1, i + context); j++) show[j] = true;
+    };
+    rows.forEach(function (r, i) {
+      if (r.k === "add" || r.k === "del") pad(i);
+      else if (r.k === "gap") show[i] = true;
+    });
+    for (const i of keep || []) if (i >= 0 && i < n) pad(i);
+    for (const i of open || []) if (i >= 0 && i < n) show[i] = true;
+    const out = [];
+    let i = 0;
+    while (i < n) {
+      if (show[i]) { out.push({ row: i }); i++; continue; }
+      let j = i;
+      while (j < n && !show[j]) j++;
+      if (j - i < minFold) for (let k = i; k < j; k++) out.push({ row: k });
+      else out.push({ fold: [i, j - 1] });
+      i = j;
+    }
+    return out;
+  }
+
+  /* Row indices to open when a fold is expanded: all of it, or `count`
+   * rows from its top ("down": continuing the block above) or its bottom. */
+  function expandFold(fold, how, count) {
+    const [from, to] = fold;
+    let a = from;
+    let b = to;
+    if (how === "down") b = Math.min(to, from + count - 1);
+    else if (how === "up") a = Math.max(from, to - count + 1);
+    const out = [];
+    for (let i = a; i <= b; i++) out.push(i);
+    return out;
+  }
+
+  /* The changed files in the order the sidebar lists them (grouped by
+   * directory, filtered), which is the order scrolling moves through. */
+  function fileOrder(files, filter) {
+    const f = (filter || "").toLowerCase();
+    const shown = (files || []).filter(function (p) { return !f || p.toLowerCase().includes(f); });
+    const out = [];
+    for (const g of groupFilesByDir(shown)) for (const x of g.files) out.push(x.path);
+    return out;
+  }
+
+  /* The file `delta` places from `current` in `order`, or null at either end. */
+  function neighbourFile(order, current, delta) {
+    const i = order.indexOf(current);
+    if (i < 0) return null;
+    const j = i + delta;
+    return j >= 0 && j < order.length ? order[j] : null;
+  }
+
+  /* Scrolling past the top or bottom of a file moves to the previous or next
+   * file, but only on a fresh push: wheel events that arrive while the pane is
+   * already at its edge count only after a pause of `pauseMs`, so the momentum
+   * of a fling that reached the edge never turns the page. Returns the new
+   * accumulator and whether to move. `edge` is -1 (top), 1 (bottom) or 0. */
+  function overscroll(acc, edge, delta, now, opts) {
+    const o = opts || {};
+    const pauseMs = o.pauseMs == null ? 200 : o.pauseMs;
+    const need = o.need == null ? 300 : o.need;
+    const dir = delta > 0 ? 1 : delta < 0 ? -1 : 0;
+    const last = acc ? acc.last : -Infinity;
+    if (!dir || edge !== dir) return { move: false, acc: { armed: false, total: 0, dir: 0, last: now } };
+    let armed = acc && acc.armed && acc.dir === dir;
+    let total = armed ? acc.total : 0;
+    if (!armed && now - last >= pauseMs) armed = true;
+    if (armed) total += Math.abs(delta);
+    if (armed && total >= need) return { move: true, acc: { armed: false, total: 0, dir: 0, last: now } };
+    return { move: false, acc: { armed: armed, total: total, dir: dir, last: now }, progress: armed ? total / need : 0 };
+  }
+
   /* Only GitHub PR links get an <a> in the header. */
   function safePrUrl(url) {
     return typeof url === "string" && /^https:\/\/github\.com\/[^\s"'<>]+$/.test(url) ? url : null;
@@ -275,6 +357,8 @@
     walkAnchorLabel: walkAnchorLabel, stepsForFinding: stepsForFinding,
     svgDataUrl: svgDataUrl, safePrUrl: safePrUrl,
     groupFilesByDir: groupFilesByDir, shortDir: shortDir, clampWidth: clampWidth,
+    foldRows: foldRows, expandFold: expandFold, fileOrder: fileOrder,
+    neighbourFile: neighbourFile, overscroll: overscroll,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;

@@ -211,6 +211,75 @@ test("the sidebar width is clamped, and junk is refused", () => {
   assert.equal(L.clampWidth(null, 160, 700), 160);
 });
 
+const R = (ks) => ks.split("").map((k, i) => ({ k: { c: "ctx", a: "add", d: "del", g: "gap" }[k], n: i + 1 }));
+
+test("unchanged runs fold, keeping context around changes and kept rows", () => {
+  //            0123456789012345
+  const rows = R("cccccccccaccccccccccc");
+  const items = L.foldRows(rows, [], [], 2, 3);
+  assert.deepEqual(items[0], { fold: [0, 6] });
+  assert.deepEqual(items.slice(1, 6).map((x) => x.row), [7, 8, 9, 10, 11]);
+  assert.deepEqual(items[6], { fold: [12, 20] });
+  assert.equal(items.length, 7);
+});
+
+test("a short hidden run is shown, not folded; kept and opened rows show", () => {
+  const rows = R("ccccacccc");
+  assert.ok(L.foldRows(rows, [], [], 2, 3).every((x) => x.row != null));
+  const kept = L.foldRows(R("cccccccccccccccc"), [8], [], 1, 3);
+  assert.deepEqual(kept.filter((x) => x.row != null).map((x) => x.row), [7, 8, 9]);
+  const opened = L.foldRows(R("cccccccccccc"), [], [0, 1], 3, 3);
+  assert.deepEqual(opened, [{ row: 0 }, { row: 1 }, { fold: [2, 11] }]);
+});
+
+test("gap rows always show; an all-added file has no folds", () => {
+  assert.ok(L.foldRows(R("aaaaaaaa"), [], [], 3, 4).every((x) => x.row != null));
+  assert.deepEqual(L.foldRows(R("cccccgccccc"), [], [], 3, 4), [{ fold: [0, 4] }, { row: 5 }, { fold: [6, 10] }]);
+});
+
+test("expanding a fold opens all of it, or a step from its top or bottom", () => {
+  assert.deepEqual(L.expandFold([10, 50], "down", 3), [10, 11, 12]);
+  assert.deepEqual(L.expandFold([10, 50], "up", 3), [48, 49, 50]);
+  assert.equal(L.expandFold([10, 50], "all", 3).length, 41);
+  assert.deepEqual(L.expandFold([10, 11], "down", 20), [10, 11]);
+});
+
+test("files move in sidebar order, filtered, stopping at both ends", () => {
+  const files = ["a/b.txt", "a/c/d.txt", "a/e.txt", "top.md"];
+  assert.deepEqual(L.fileOrder(files, ""), ["a/b.txt", "a/e.txt", "a/c/d.txt", "top.md"]);
+  assert.deepEqual(L.fileOrder(files, "TXT"), ["a/b.txt", "a/e.txt", "a/c/d.txt"]);
+  const order = L.fileOrder(files, "");
+  assert.equal(L.neighbourFile(order, "a/e.txt", 1), "a/c/d.txt");
+  assert.equal(L.neighbourFile(order, "a/b.txt", -1), null);
+  assert.equal(L.neighbourFile(order, "top.md", 1), null);
+  assert.equal(L.neighbourFile(order, "gone.md", 1), null);
+});
+
+test("overscroll moves only on a fresh push past the edge", () => {
+  const opts = { pauseMs: 200, need: 300 };
+  // A fling reaches the bottom: its momentum events (16 ms apart) never count.
+  let r = L.overscroll(null, 0, 100, 0, opts);
+  for (let t = 16; t < 600; t += 16) {
+    r = L.overscroll(r.acc, 1, 50, t, opts);
+    assert.equal(r.move, false);
+  }
+  // A pause, then a deliberate push: counts, and moves once 300 px add up.
+  r = L.overscroll(r.acc, 1, 120, 1000, opts);
+  assert.equal(r.move, false);
+  assert.ok(r.progress > 0);
+  r = L.overscroll(r.acc, 1, 120, 1016, opts);
+  assert.equal(r.move, false);
+  r = L.overscroll(r.acc, 1, 120, 1032, opts);
+  assert.equal(r.move, true);
+  // Leaving the edge, or pushing the other way, resets.
+  r = L.overscroll(null, 1, 200, 5000, opts);
+  r = L.overscroll(r.acc, 0, 200, 5016, opts);
+  assert.equal(r.acc.total, 0);
+  r = L.overscroll(r.acc, -1, 200, 6000, opts);
+  assert.equal(r.move, false);
+  assert.equal(L.overscroll(r.acc, -1, -200, 6016, opts).move, false);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

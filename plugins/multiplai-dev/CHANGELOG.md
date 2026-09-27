@@ -42,6 +42,15 @@ time, not derived from a tag.
 - **The sidebar can be resized.** Drag the line between it and the code, or
   focus it and use the arrow keys; double-click resets it. The width is
   remembered in that browser.
+- **Unchanged lines fold away, as on GitHub.** A file opens showing its
+  changes with three lines around each, plus any cited or picked lines; the
+  rest folds into a bar that shows all of it, or 20 lines at a time from
+  either end. Jumping to lines inside a fold opens it.
+- **Scrolling past the end of a file opens the next one**, and past the top
+  the previous one, in the sidebar's order; a bar at the bottom names the
+  next file and can be clicked. The fling that reaches the end does not count:
+  it takes a fresh push. The open file is highlighted in the sidebar and kept
+  in view there.
 
 ### Changed
 
