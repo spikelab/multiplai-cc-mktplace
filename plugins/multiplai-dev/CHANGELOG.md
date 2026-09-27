@@ -65,8 +65,9 @@ time, not derived from a tag.
   answering, and a dot marks answers you have not read. Clicking the box
   opens the whole conversation above it, oldest first. Each message is
   labelled with what it was about (a finding, a review, `@lines` or the
-  whole change). Esc or clicking elsewhere collapses it. Answers no longer
-  appear in the right-hand panel.
+  whole change). Esc or clicking elsewhere collapses it. Clicking a code
+  line adds its reference without opening the chat, so more lines can be
+  picked; typing opens it. Answers no longer appear in the right-hand panel.
 - Clicking a line or block adds a reference only once. A reference to lines
   that overlap or touch one already in the box widens it: a line and then its
   block leave one reference. The label above the box appears only when the

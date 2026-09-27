@@ -44,6 +44,7 @@
     fileNote: null,
     ac: null,
     chatOpen: false,
+    quietFocus: false,
     chatJustOpened: false,
     seen: new Set(),
     badgeOpen: null,
@@ -829,7 +830,15 @@
 
   function bindChat() {
     const footer = $("composer");
-    footer.addEventListener("focusin", () => setChatOpen(true));
+    // Focus from a click into the box opens the chat. Focus that insertRef
+    // gives the box (a line clicked in the code) does not, so the chat does
+    // not cover the code while more lines are being picked; typing opens it.
+    footer.addEventListener("focusin", () => {
+      if (state.quietFocus) { state.quietFocus = false; return; }
+      setChatOpen(true);
+    });
+    $("question").addEventListener("mousedown", () => setChatOpen(true));
+    $("question").addEventListener("input", () => setChatOpen(true));
     footer.addEventListener("focusout", () => {
       // Focus moving within the footer (the chat, its links) keeps it open.
       setTimeout(() => { if (!footer.contains(document.activeElement)) setChatOpen(false); }, 0);
@@ -1298,7 +1307,9 @@
     const merged = L.mergeRef(box.value, state.detail.files, path, ref, at);
     box.value = merged.text;
     const caret = merged.caret;
+    if (document.activeElement !== box) state.quietFocus = true;
     box.focus();
+    state.quietFocus = false;  // focusin already ran, or never will (window not focused)
     box.setSelectionRange(caret, caret);
     closeAc();
     renderAskAbout();
