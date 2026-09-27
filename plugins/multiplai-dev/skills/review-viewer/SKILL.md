@@ -161,6 +161,10 @@ as a JSON file following `schema/walkthrough.v1.schema.json`:
             "diagram": {"kind": "mermaid", "source": "flowchart TD\n  A --> B"},
             "finding_ids": ["3fa2c91b0e"]}],
  "skipped": [{"path": "uv.lock", "reason": "regenerated lock file"}],
+ "assessments": [{"topic": "commits", "verdict": "good", "title": "Messages explain the why",
+                  "detail_md": "…"},
+                 {"topic": "tests", "verdict": "concern", "title": "refund() untested",
+                  "detail_md": "…"}],
  "complete": false}
 ```
 
@@ -186,6 +190,20 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   fits without scrolling.
 - When findings are loaded, link each finding from the step where its code is
   explained, and say in that step's text what is wrong and why.
+- The page shows the overview and, for a PR, its description on a
+  **Summary** tab, under badges. The server measures some badges from git and
+  GitHub: size, tests changed, commit hygiene, TODOs, lock files, and for a
+  PR its checks, conflicts and review state. `walkthrough status` prints
+  them, with each commit's subject. You add **assessments**, your judgment
+  as badges beside them. `commits` is required: do the commit messages and
+  the PR description say what changed and why? `tests` is also required: is
+  the new code tested, and what isn't? `size`, `design`, `risk` and `other`
+  are optional. `verdict` is `good`, `note` or `concern`. Keep `title`
+  under 60 characters and put the reasoning, with `path:line` citations, in
+  `detail_md`. The measured test badge counts lines, not coverage, so say
+  what the tests actually exercise.
+- The steps show on a **Reviews** tab. Clicking a file opens the first step
+  that anchors it, so anchor each step on every file it explains.
 - Publish early, then finish: `put` the overview and first steps with
   `"complete": false`, then the rest, and finally `"complete": true`.
 
@@ -200,7 +218,8 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review-viewer/scripts \
 findings no step links. `put` exits 2 and publishes nothing when a step
 anchors a file outside the diff, a line range past the end of the file, an
 unknown finding id, a duplicate step id, or — with `complete: true` — leaves
-a changed file uncovered or a confirmed or unverifiable finding unlinked.
+a changed file uncovered, a confirmed or unverifiable finding unlinked, or
+the `commits` or `tests` assessment missing.
 Each message names the step; fix the file and `put` again. The page picks up
 each `put` within seconds; the server is not restarted.
 

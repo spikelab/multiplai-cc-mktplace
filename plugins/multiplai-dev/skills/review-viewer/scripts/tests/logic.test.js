@@ -280,6 +280,34 @@ test("overscroll moves only on a fresh push past the edge", () => {
   assert.equal(L.overscroll(r.acc, -1, -200, 6016, opts).move, false);
 });
 
+test("a file's reviews: steps anchoring it, in order, with the matching anchor", () => {
+  const walk = {
+    steps: [
+      { id: "a", anchors: [{ path: "x.py", line_start: 1, line_end: 2 }] },
+      { id: "b", anchors: [{ path: "y.py", line_start: 3, line_end: 4 }, { path: "x.py", line_start: 9, line_end: 9 }] },
+    ],
+    skipped: [{ path: "uv.lock", reason: "lock file" }],
+  };
+  const hits = L.stepsForFile(walk, "x.py");
+  assert.deepEqual(hits.map((h) => [h.step.id, h.anchor.line_start]), [["a", 1], ["b", 9]]);
+  assert.deepEqual(L.stepsForFile(walk, "z.py"), []);
+  assert.deepEqual(L.stepsForFile(null, "x.py"), []);
+  assert.equal(L.skippedReason(walk, "uv.lock"), "lock file");
+  assert.equal(L.skippedReason(walk, "x.py"), null);
+  assert.deepEqual([...L.stepFiles(walk.steps[1])], ["y.py", "x.py"]);
+  assert.equal(L.stepFiles(null).size, 0);
+});
+
+test("summary badges: measured first, then the session's assessments", () => {
+  const stats = { badges: [{ id: "size", label: "Small: 10 lines", level: "good", detail: "d" }] };
+  const walk = { assessments: [{ topic: "tests", verdict: "concern", title: "Thin tests", detail_md: "**why**" }] };
+  const b = L.summaryBadges(stats, walk);
+  assert.deepEqual(b.map((x) => [x.source, x.label, x.level]),
+    [["measured", "Small: 10 lines", "good"], ["assessed", "Thin tests", "concern"]]);
+  assert.notEqual(b[0].key, b[1].key);
+  assert.deepEqual(L.summaryBadges(null, null), []);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

@@ -32,7 +32,7 @@ from pathlib import Path
 from multiplai_core.log_utils import log_event, setup_logging
 from pydantic import ValidationError
 
-from . import netinfo, registry, server, walkthrough
+from . import netinfo, registry, server, stats, walkthrough
 from .gitdata import (GitError, Resolved, TargetError, TargetSpec, diff_findings, parse_target,
                       resolve_target)
 from .mailbox import MAX_ROW_BYTES, Mailbox, MailboxError, utc_now
@@ -305,6 +305,9 @@ def cmd_serve(args) -> int:
     if isinstance(result, int):
         return result
     loaded, meta = result
+    for ff, _ in loaded:
+        extra = meta.setdefault(ff.target.slug, {})
+        extra["stats"] = stats.safe_change_stats(ff.target, extra.get("pr"))
     boxes = [b.resolve() for _, b in loaded]
     label = ", ".join(ff.target.label for ff, _ in loaded)
     reviews = [meta[ff.target.slug]["review"] for ff, _ in loaded]
@@ -539,6 +542,15 @@ def cmd_walkthrough_status(args) -> int:
     for fid in unlinked:
         f = by_id[fid]
         print(f"  {fid} {f.severity} {f.status} {f.file}:{f.line_start} {f.claim}")
+    have = {a.topic for a in wt.assessments} if wt else set()
+    missing = [t for t in walkthrough.MUST_ASSESS if t not in have]
+    print(f"assessments missing ({len(missing)}): {', '.join(missing)}")
+    badges = (served.stats or {}).get("badges") or []
+    print(f"measured ({len(badges)}):" if served.stats else "measured: not available")
+    for b in badges:
+        print(f"  [{b['level']}] {b['label']}: {b['detail']}")
+    for c in (served.stats or {}).get("commits") or []:
+        print(f"  commit {c['sha'][:8]} {c['subject']}" + ("" if c["body"] else " (no body)"))
     return 0
 
 

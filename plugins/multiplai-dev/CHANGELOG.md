@@ -42,6 +42,17 @@ time, not derived from a tag.
 - **The sidebar can be resized.** Drag the line between it and the code, or
   focus it and use the arrow keys; double-click resets it. The width is
   remembered in that browser.
+- **Summary, Reviews and Findings tabs.** Summary shows the overview, the
+  PR description, and badges for judging the change at a glance. Some badges
+  are measured from git and GitHub: files and lines changed, size (small up
+  to 400 lines, large past 1000 or 30 files, not counting lock files), tests
+  changed against code, commit hygiene, TODOs and lock files added, and for
+  a PR its checks, merge conflicts, draft and review state. The rest are
+  the session's own assessments: whether the commit messages explain the
+  change, and whether the new code is tested. Click a badge for its
+  reasoning. Reviews holds the walkthrough steps. Clicking a file there
+  opens the review that explains it, and a review's files are marked in the
+  sidebar.
 - **Unchanged lines fold away, as on GitHub.** A file opens showing its
   changes with three lines around each, plus any cited or picked lines; the
   rest folds into a bar that shows all of it, or 20 lines at a time from

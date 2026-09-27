@@ -73,6 +73,7 @@ class TargetState:
     allowed: set[str]
     pr: dict | None = None
     notice: str | None = None
+    stats: dict | None = None
 
     @property
     def slug(self) -> str:
@@ -301,6 +302,7 @@ def make_handler(viewer: Viewer):
                                       if r.get("kind") == "question"],
                         "pr": state.pr,
                         "notice": state.notice,
+                        "stats": state.stats,
                     })
             if method == "POST":
                 if route == "/api/ask":
@@ -386,16 +388,17 @@ def make_handler(viewer: Viewer):
 
 def build_viewer(findings: list[tuple[FindingsFile, Path]], *, agent: str, session_id: str,
                  idle_minutes: float, meta: dict[str, dict] | None = None) -> Viewer:
-    """`meta` maps a target slug to `{"pr": {...} | None, "notice": str | None}`:
-    PR metadata for the page header, and the note that a review exists for
-    other commits. Neither goes into findings.json."""
+    """`meta` maps a target slug to `{"pr", "notice", "stats"}`: PR metadata
+    for the page header, the note that a review exists for other commits, and
+    the measured badges (`stats.change_stats`). None goes into findings.json."""
     targets: dict[str, TargetState] = {}
     for ff, box in findings:
         mailbox = Mailbox(box)
         mailbox.create()
         extra = (meta or {}).get(ff.target.slug, {})
         targets[ff.target.slug] = TargetState(ff, mailbox, allowed_paths(ff.target, ff),
-                                              pr=extra.get("pr"), notice=extra.get("notice"))
+                                              pr=extra.get("pr"), notice=extra.get("notice"),
+                                              stats=extra.get("stats"))
     return Viewer(targets=targets, token=secrets.token_urlsafe(32), agent=agent,
                   session_id=session_id, idle_minutes=idle_minutes)
 
@@ -433,7 +436,7 @@ def publish(viewer: Viewer, urls: list[tuple[str, str]]) -> None:
         write_private(box.server_json, json.dumps(record, indent=2) + "\n")
         # What `walkthrough put` checks against. Kept after exit: no secret.
         write_private(served_path(box.dir),
-                      Served(state.findings, state.pr, state.notice).to_json())
+                      Served(state.findings, state.pr, state.notice, state.stats).to_json())
     registry.register(os.getpid(), [s.mailbox.dir.resolve() for s in viewer.targets.values()])
 
 

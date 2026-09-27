@@ -41,7 +41,9 @@
     polling: null,
     pollAgain: false,
     pollGen: 0,
-    tab: "finding",
+    tab: "summary",
+    fileNote: null,
+    badgeOpen: null,
     tabChosen: false,
     walk: null,
     walkKey: "",
@@ -235,7 +237,9 @@
     state.walkKey = "";
     state.stepId = null;
     state.walkFocus = null;
-    if (!state.tabChosen) state.tab = state.detail.findings.findings.length ? "finding" : "walk";
+    state.fileNote = null;
+    state.badgeOpen = null;
+    if (!state.tabChosen) state.tab = "summary";
     const target = state.detail.findings.target;
     $("title").textContent = target.label;
     document.title = target.label + " · review";
@@ -243,10 +247,11 @@
     renderSidebar();
     renderTabs();
     renderWalk();
+    renderSummary();
     await Promise.all([pollOnce(), pollWalk()]);
     const first = L.findingOrder(L.groupFindings(state.detail.findings.findings,
       state.detail.decisions, state.showHidden))[0];
-    if (first) await selectFinding(first);
+    if (first) await selectFinding(first, { stay: true });
     else {
       renderDetail();
       if (state.detail.files.length) await openFile(state.detail.files[0]);
@@ -279,17 +284,77 @@
     renderThread();
   }
 
+  const TABS = { summary: ["tab-summary", "summary"], walk: ["tab-walk", "walkthrough"], finding: ["tab-finding", "finding"] };
+
   function renderTabs() {
-    const walk = state.tab === "walk";
-    $("tab-finding").setAttribute("aria-selected", String(!walk));
-    $("tab-walk").setAttribute("aria-selected", String(walk));
-    $("tab-finding").classList.toggle("active", !walk);
-    $("tab-walk").classList.toggle("active", walk);
-    $("finding").hidden = walk;
-    $("walkthrough").hidden = !walk;
-    $("decide").hidden = walk || !(state.selected && state.findingsById.get(state.selected));
+    for (const [name, [tab, panel]] of Object.entries(TABS)) {
+      const on = state.tab === name;
+      $(tab).setAttribute("aria-selected", String(on));
+      $(tab).classList.toggle("active", on);
+      $(panel).hidden = !on;
+    }
+    $("decide").hidden = state.tab !== "finding" || !(state.selected && state.findingsById.get(state.selected));
     const n = state.walk ? state.walk.steps.length : 0;
     $("walk-count").textContent = !state.walk ? "(waiting)" : (state.walk.complete ? "(" + n + ")" : "(" + n + ", in progress)");
+    const nf = state.detail ? state.detail.findings.findings.length : 0;
+    $("finding-count").textContent = nf ? "(" + nf + ")" : "";
+  }
+
+  // --- summary ---------------------------------------------------------------------
+
+  function renderSummary() {
+    const agent = state.who ? state.who.agent : "the session";
+    const badges = L.summaryBadges(state.detail.stats, state.walk);
+    const box = $("badges");
+    box.replaceChildren();
+    const groups = [["measured", "Measured from git" + (state.detail.pr ? " and GitHub" : "")],
+      ["assessed", "Assessed by " + agent]];
+    for (const [source, title] of groups) {
+      const mine = badges.filter((b) => b.source === source);
+      const row = el("div", { class: "badge-row" }, [el("div", { class: "label", text: title })]);
+      if (!mine.length) {
+        row.appendChild(el("span", { class: "muted small", text: source === "measured"
+          ? "Not available: git could not read these commits."
+          : (state.walk ? "None yet." : "Written with the walkthrough.") }));
+      }
+      for (const b of mine) {
+        row.appendChild(el("button", {
+          class: "qbadge " + b.level + (state.badgeOpen === b.key ? " open" : ""),
+          title: source === "measured" ? b.detail : "Click for " + agent + "'s reasoning",
+          "aria-expanded": String(state.badgeOpen === b.key),
+          text: b.label,
+          onclick: () => { state.badgeOpen = state.badgeOpen === b.key ? null : b.key; renderSummary(); },
+        }));
+      }
+      box.appendChild(row);
+    }
+    const open = badges.find((b) => b.key === state.badgeOpen);
+    const detail = $("badge-detail");
+    detail.hidden = !open;
+    if (open) {
+      if (open.source === "assessed") renderMarkdown(detail, open.detail);
+      else detail.replaceChildren(el("p", { text: open.detail }));
+    }
+    $("walk-status").textContent = L.walkStatus(state.walk);
+    $("walk-status").hidden = !L.walkStatus(state.walk);
+    const overview = $("walk-overview");
+    if (!state.walk) {
+      overview.replaceChildren(el("p", { class: "muted", text: "The session writes an overview and the reviews after it reads the diff; they appear here as they are written." }));
+    } else {
+      renderMarkdown(overview, state.walk.overview_md);
+      const cov = L.walkCoverage(state.walk, state.detail.files, state.detail.findings.findings);
+      overview.appendChild(el("p", { class: "muted small", text: "The reviews cover " + cov.files + " of " + cov.filesTotal +
+        " changed files" + (cov.findingsTotal ? " and link " + cov.findings + " of " + cov.findingsTotal + " findings" : "") + "." }));
+    }
+    const pr = state.detail.pr;
+    const desc = $("pr-desc");
+    desc.hidden = !pr;
+    if (pr) {
+      // The PR body is text from GitHub, written by whoever opened the PR:
+      // it goes through the same marked + DOMPurify path as everything else.
+      if ((pr.body || "").trim()) renderMarkdown($("pr-body"), pr.body);
+      else $("pr-body").replaceChildren(el("p", { class: "muted", text: "The PR has no description." }));
+    }
   }
 
   // --- walkthrough -----------------------------------------------------------------
@@ -310,6 +375,7 @@
     if (state.stepId && !L.stepOrder(walk).includes(state.stepId)) state.stepId = null;
     renderTabs();
     renderWalk();
+    renderSummary();
     if (!state.tabChosen && walk && state.tab === "walk" && !state.stepId && walk.steps.length) {
       await selectStep(walk.steps[0].id, { open: !state.filePath || !state.detail.findings.findings.length });
     }
@@ -321,20 +387,13 @@
   }
 
   function renderWalk() {
-    $("walk-status").textContent = L.walkStatus(state.walk);
-    $("walk-status").hidden = !L.walkStatus(state.walk);
-    const overview = $("walk-overview");
     const list = $("walk-steps");
     list.replaceChildren();
     if (!state.walk) {
-      overview.replaceChildren(el("p", { class: "muted", text: "The session writes the walkthrough after it reads the diff; it appears here as it is written." }));
+      list.appendChild(el("li", { class: "muted", text: "Waiting for the session to write the reviews." }));
       $("walk-step").replaceChildren();
       return;
     }
-    renderMarkdown(overview, state.walk.overview_md);
-    const cov = L.walkCoverage(state.walk, state.detail.files, state.detail.findings.findings);
-    overview.appendChild(el("p", { class: "muted small", text: "Covers " + cov.files + " of " + cov.filesTotal +
-      " changed files" + (cov.findingsTotal ? " and links " + cov.findings + " of " + cov.findingsTotal + " findings" : "") + "." }));
     state.walk.steps.forEach((s, i) => {
       list.appendChild(el("li", {}, [el("button", {
         class: "step-item" + (s.id === state.stepId ? " selected" : ""),
@@ -357,11 +416,16 @@
     box.replaceChildren();
     const step = currentStep();
     if (!step) {
-      if (state.walk && state.walk.steps.length) {
-        box.appendChild(el("p", { class: "muted", text: "Pick a step, or press ] to start." }));
+      if (state.fileNote) {
+        const reason = L.skippedReason(state.walk, state.fileNote);
+        box.appendChild(el("p", {}, [el("span", { class: "mono", text: state.fileNote }),
+          reason ? " is not explained: " + reason + "." : " is not explained by any review yet."]));
+      } else if (state.walk && state.walk.steps.length) {
+        box.appendChild(el("p", { class: "muted", text: "Pick a review, click a file, or press ] to start." }));
       }
       return;
     }
+    const others = state.fileNote ? L.stepsForFile(state.walk, state.fileNote).filter((x) => x.step.id !== step.id) : [];
     const pos = L.stepPosition(state.walk, step.id);
     box.appendChild(el("div", { class: "step-nav" }, [
       el("button", { text: "◀ Previous", disabled: pos.index <= 1, onclick: () => moveStep(-1) }),
@@ -369,6 +433,11 @@
       el("button", { text: "Next ▶", disabled: pos.index >= pos.total, onclick: () => moveStep(1) }),
     ]));
     box.appendChild(el("h2", { text: step.title }));
+    if (others.length) {
+      box.appendChild(el("p", { class: "muted small" }, ["Also about this file: ",
+        ...others.map((x, i) => el("button", { class: "cite-link", text: (i ? ", " : "") + x.step.title,
+          onclick: () => showStepAt(x.step.id, x.anchor) }))]));
+    }
     const anchors = el("div", { class: "step-anchors" });
     for (const a of step.anchors) {
       anchors.appendChild(el("button", {
@@ -404,6 +473,7 @@
 
   async function selectStep(id, opts) {
     state.stepId = id;
+    state.fileNote = null;
     if (state.tab !== "walk") {
       state.tab = "walk";
       renderTabs();
@@ -413,6 +483,40 @@
     const step = currentStep();
     if (step && (!opts || opts.open !== false)) await openAnchor(step.anchors[0]);
     else if (state.view) renderCode();
+    renderFiles();
+    renderThread();
+  }
+
+  /* Show a step with one of its anchors (not necessarily the first). */
+  async function showStepAt(id, anchor) {
+    const note = state.fileNote;
+    await selectStep(id, { open: false });
+    state.fileNote = note;
+    renderWalk();
+    await openAnchor(anchor);
+    renderFiles();
+  }
+
+  /* A file was picked in the sidebar (or scrolled to): show the review that
+   * explains it, or say that none does. */
+  async function showFileReview(path) {
+    const hits = L.stepsForFile(state.walk, path);
+    state.fileNote = path;
+    if (state.tab !== "walk") {
+      state.tab = "walk";
+      state.tabChosen = true;
+      renderTabs();
+    }
+    if (hits.length) {
+      if (state.stepId !== hits[0].step.id) await showStepAt(hits[0].step.id, hits[0].anchor);
+      else { renderWalk(); await openAnchor(hits[0].anchor); }
+    } else {
+      state.stepId = null;
+      state.walkFocus = null;
+      renderWalk();
+      if (state.view) renderCode();
+      renderFiles();
+    }
     renderThread();
   }
 
@@ -472,14 +576,15 @@
     list.replaceChildren();
     const filter = state.fileFilter.toLowerCase();
     const shown = state.detail.files.filter((p) => !filter || p.toLowerCase().includes(filter));
+    const inStep = state.tab === "walk" ? L.stepFiles(currentStep()) : new Set();
     for (const group of L.groupFilesByDir(shown)) {
       list.appendChild(el("li", { class: "dir-h", title: group.dir || "(repository root)", text: L.shortDir(group.dir) }));
       for (const f of group.files) {
         list.appendChild(el("li", {}, [el("button", {
-          class: f.path === state.filePath ? "selected" : "",
+          class: (f.path === state.filePath ? "selected" : "") + (inStep.has(f.path) ? " in-step" : ""),
           title: f.path,
           text: f.name,
-          onclick: () => { clearPick(); openFile(f.path); },
+          onclick: async () => { clearPick(); await openFile(f.path); await showFileReview(f.path); },
         })]));
       }
     }
@@ -547,9 +652,9 @@
 
   // --- finding detail ----------------------------------------------------------
 
-  async function selectFinding(id) {
+  async function selectFinding(id, opts) {
     state.selected = id;
-    if (state.tab !== "finding") {
+    if (state.tab !== "finding" && !(opts && opts.stay)) {
       state.tab = "finding";
       renderTabs();
     }
@@ -572,7 +677,7 @@
     const box = $("finding");
     box.replaceChildren();
     const f = state.selected && state.findingsById.get(state.selected);
-    $("decide").hidden = !f || state.tab === "walk";
+    $("decide").hidden = !f || state.tab !== "finding";
     if (!f) {
       box.appendChild(el("p", { class: "muted", text: state.detail.findings.findings.length
         ? "Pick a finding on the left, or select lines in the code to ask about them."
@@ -657,7 +762,7 @@
 
   function threadQuestions() {
     if (askingAboutStep()) return state.questions.filter((q) => q.step_id === state.stepId);
-    if (state.pickAnchor || !state.selected) return state.questions.filter((q) => !q.finding_id && !q.step_id);
+    if (state.tab === "summary" || state.pickAnchor || !state.selected) return state.questions.filter((q) => !q.finding_id && !q.step_id);
     return state.questions.filter((q) => q.finding_id === state.selected);
   }
 
@@ -669,7 +774,7 @@
         el("button", { class: "cite-link", text: "×", "aria-label": "Clear line selection", onclick: clearPick }));
     }
     $("thread-title").textContent = askingAboutStep() ? "Questions about this step"
-      : (state.pickAnchor || !state.selected ? "Questions about the diff or selected lines"
+      : (state.tab === "summary" || state.pickAnchor || !state.selected ? "Questions about the diff or selected lines"
         : "Questions about this finding");
     const list = $("thread");
     list.replaceChildren();
@@ -697,7 +802,7 @@
     if (!text) return;
     const anchor = state.pickAnchor;
     const stepId = askingAboutStep() ? state.stepId : null;
-    const body = { target: state.slug, text: text, finding_id: anchor || stepId ? null : state.selected,
+    const body = { target: state.slug, text: text, finding_id: anchor || stepId || state.tab === "summary" ? null : state.selected,
       anchor: anchor, step_id: stepId };
     $("send").disabled = true;
     try {
@@ -948,6 +1053,7 @@
     if (!path) return;
     clearPickState();
     await openFile(path);
+    if (state.tab === "walk") await showFileReview(path);
     const code = $("code");
     code.scrollTop = delta > 0 ? 0 : code.scrollHeight;
   }
@@ -1081,6 +1187,7 @@
     $("code").addEventListener("click", onCodeClick);
     $("ask-lines").addEventListener("click", askAboutPick);
     $("tab-finding").addEventListener("click", () => setTab("finding"));
+    $("tab-summary").addEventListener("click", () => setTab("summary"));
     $("tab-walk").addEventListener("click", () => setTab("walk"));
     document.addEventListener("keydown", (ev) => {
       const typing = ev.target.closest && ev.target.closest("input, textarea, select");

@@ -341,6 +341,42 @@
     return { move: false, acc: { armed: armed, total: total, dir: dir, last: now }, progress: armed ? total / need : 0 };
   }
 
+  /* Steps with an anchor on `path`, in walkthrough order, each with the
+   * first such anchor: [{step, anchor}]. */
+  function stepsForFile(walk, path) {
+    const out = [];
+    for (const s of (walk && walk.steps) || []) {
+      const a = (s.anchors || []).find(function (x) { return x.path === path; });
+      if (a) out.push({ step: s, anchor: a });
+    }
+    return out;
+  }
+
+  /* The reason a walkthrough gives for not explaining `path`, or null. */
+  function skippedReason(walk, path) {
+    const k = ((walk && walk.skipped) || []).find(function (x) { return x.path === path; });
+    return k ? k.reason : null;
+  }
+
+  /* The files a step's anchors point at. */
+  function stepFiles(step) {
+    return new Set(((step && step.anchors) || []).map(function (a) { return a.path; }));
+  }
+
+  /* Badges for the Summary tab: measured ones from the server, then the
+   * session's assessments, each tagged with where it came from. */
+  function summaryBadges(stats, walk) {
+    const out = [];
+    for (const b of (stats && stats.badges) || []) {
+      out.push({ key: "m:" + b.id, label: b.label, level: b.level, detail: b.detail, source: "measured" });
+    }
+    for (const a of (walk && walk.assessments) || []) {
+      out.push({ key: "a:" + a.topic + ":" + a.title, label: a.title, level: a.verdict,
+        detail: a.detail_md, source: "assessed", topic: a.topic });
+    }
+    return out;
+  }
+
   /* Only GitHub PR links get an <a> in the header. */
   function safePrUrl(url) {
     return typeof url === "string" && /^https:\/\/github\.com\/[^\s"'<>]+$/.test(url) ? url : null;
@@ -359,6 +395,8 @@
     groupFilesByDir: groupFilesByDir, shortDir: shortDir, clampWidth: clampWidth,
     foldRows: foldRows, expandFold: expandFold, fileOrder: fileOrder,
     neighbourFile: neighbourFile, overscroll: overscroll,
+    stepsForFile: stepsForFile, skippedReason: skippedReason, stepFiles: stepFiles,
+    summaryBadges: summaryBadges,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;

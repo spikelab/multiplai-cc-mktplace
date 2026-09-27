@@ -22,6 +22,8 @@ from .models import FindingsFile, Walkthrough
 
 # Findings a walkthrough must link when it says it is complete.
 MUST_LINK = ("confirmed", "unverifiable")
+# Assessments a walkthrough must carry when it says it is complete.
+MUST_ASSESS = ("commits", "tests")
 
 
 def walkthrough_path(box: Path) -> Path:
@@ -37,17 +39,19 @@ class Served:
     findings: FindingsFile
     pr: dict | None = None
     notice: str | None = None
+    stats: dict | None = None
 
     def to_json(self) -> str:
         return json.dumps({"findings": self.findings.model_dump(mode="json"), "pr": self.pr,
-                           "notice": self.notice}, indent=2, ensure_ascii=False) + "\n"
+                           "notice": self.notice, "stats": self.stats},
+                          indent=2, ensure_ascii=False) + "\n"
 
 
 def load_served(box: Path) -> Served:
     """The target `serve` wrote for this mailbox. Raises OSError or ValueError."""
     data = json.loads(served_path(box).read_text(encoding="utf-8"))
     return Served(FindingsFile.model_validate(data["findings"]), data.get("pr"),
-                  data.get("notice"))
+                  data.get("notice"), data.get("stats"))
 
 
 def load_walkthrough(box: Path) -> Walkthrough | None:
@@ -143,7 +147,14 @@ def check(wt: Walkthrough, ff: FindingsFile) -> list[str]:
     for k in wt.skipped:
         if k.path not in changed:
             errors.append(f"skipped {k.path}: not a changed file in this diff")
+    topics = [a.topic for a in wt.assessments]
+    for topic in sorted({t for t in topics if t != "other" and topics.count(t) > 1}):
+        errors.append(f"assessment {topic}: more than one assessment has this topic")
     if wt.complete:
+        for topic in MUST_ASSESS:
+            if topic not in topics:
+                errors.append(f"walkthrough: complete is true but there is no {topic!r} "
+                              "assessment")
         uncovered, unlinked = coverage(wt, ff)
         for path in uncovered:
             errors.append(f"walkthrough: complete is true but changed file {path} has no "

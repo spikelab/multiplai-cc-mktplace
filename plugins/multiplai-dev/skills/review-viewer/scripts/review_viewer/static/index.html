@@ -58,18 +58,27 @@
     <div id="code" class="code" tabindex="0"></div>
     <button id="ask-lines" class="float-btn" hidden>Ask about these lines</button>
   </section>
-  <aside class="detail" aria-label="Selected finding or walkthrough step">
+  <aside class="detail" aria-label="Summary, reviews and findings">
     <div class="tabs" role="tablist">
-      <button id="tab-finding" role="tab" aria-controls="finding">Finding</button>
-      <button id="tab-walk" role="tab" aria-controls="walkthrough">Walkthrough <span id="walk-count" class="muted"></span></button>
+      <button id="tab-summary" role="tab" aria-controls="summary">Summary</button>
+      <button id="tab-walk" role="tab" aria-controls="walkthrough">Reviews <span id="walk-count" class="muted"></span></button>
+      <button id="tab-finding" role="tab" aria-controls="finding">Findings <span id="finding-count" class="muted"></span></button>
     </div>
-    <div id="finding" role="tabpanel"></div>
-    <div id="walkthrough" role="tabpanel" hidden>
+    <div id="summary" role="tabpanel">
+      <div id="badges" class="badges"></div>
+      <div id="badge-detail" class="badge-detail" hidden></div>
       <p id="walk-status" class="muted walk-status"></p>
       <div id="walk-overview" class="md"></div>
+      <details id="pr-desc" class="pr-desc" open hidden>
+        <summary>PR description</summary>
+        <div id="pr-body" class="md"></div>
+      </details>
+    </div>
+    <div id="walkthrough" role="tabpanel" hidden>
       <ol id="walk-steps" class="walk-steps"></ol>
       <div id="walk-step" class="walk-step"></div>
     </div>
+    <div id="finding" role="tabpanel" hidden></div>
     <section class="thread-box">
       <h3 id="thread-title">Questions</h3>
       <div id="anchor-chip" class="chip" hidden></div>

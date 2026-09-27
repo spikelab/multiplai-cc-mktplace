@@ -22,6 +22,7 @@ The page-logic tests need `node`; they fail (not skip) without it.
 | `__main__.py` | CLI: `serve` (findings files, or `--target`), `reply`, `pending`, `list`, `stop`, `walkthrough put\|status`, `validate`, `export-schema`. Calls `setup_logging` once. Owns the stdout contract. `find_review()` looks for a review of the same commits. |
 | `models.py` | The `findings.json` v1 and `walkthrough.json` v1 pydantic models (source of truth for both files in `../schema/`), `finding_id()`, and the mailbox row models. |
 | `gitdata.py` | Git: `parse_target()` / `resolve_target()` (PR, branch, worktree, `a..b`, `a...b`; same base/head rules as `review_pipeline/target.py`, restated because that member is not importable here), `parse_unified()`, `file_view()`, `allowed_paths()`, `diff_target()`. Fixed argv, no shell, stdin closed. The only writes to a repo are the fetches named in `../SKILL.md`. |
+| `stats.py` | measured badges: `classify()` a path (lock, generated, test, docs, code), `change_stats()` from `git diff --numstat` and `git log`, the size/tests/commits thresholds, PR badges. |
 | `walkthrough.py` | `check()` a walkthrough against the served target, `coverage()`, `put()` by atomic replace. |
 | `mailbox.py` | Append-only JSONL rows, `decisions.json` by atomic replace; the directory is 0700 and every file 0600. |
 | `server.py` | `ThreadingHTTPServer` subclass (`allow_reuse_address = False`), request checks, routes, idle watchdog. |
@@ -94,16 +95,22 @@ at publish time and left in place — it holds no secret):
 4. With `complete: true`: every changed file is anchored or in `skipped`, and
    every `confirmed` or `unverifiable` finding is linked from a step.
 5. Step ids are unique. (`skipped` paths must be changed files too.)
+6. At most one assessment per topic (except `other`); with `complete: true`,
+   the `commits` and `tests` assessments exist.
 
 Any failure → exit 2, every problem listed with its step id, nothing written.
 Otherwise the file is replaced atomically (0600). `GET
 /api/targets/<slug>/walkthrough` returns it (404 while absent); the page polls
 it, so a new walkthrough never restarts the server. `walkthrough status`
-prints the target's shas and what is not yet covered.
+prints the target's shas, what is not yet covered, the missing assessments,
+the measured badges and each commit's subject.
 
 `/api/targets/<slug>` also returns `pr` (number, title, author, url, body,
-head/base ref — from `gh pr view`, in memory and `target.json` only, never in
-`findings.json`) and `notice` (a review exists for other commits).
+head/base ref, check counts, mergeable, draft, review decision — from the one
+`gh pr view` call, in memory and `target.json` only, never in
+`findings.json`), `notice` (a review exists for other commits) and `stats`
+(`stats.change_stats`: line counts by file kind, commits, and the measured
+badges with their thresholds; null when git cannot read the range).
 
 ## Git output
 
@@ -163,6 +170,7 @@ commit and a PR head under `refs/pull/7/head`, for target resolution;
 | File | Covers |
 |---|---|
 | `test_gitdata.py` | diff parsing, file views, `parse_target`/`resolve_target` |
+| `test_stats.py` | path classes, numstat parsing (renames, binary), each badge's thresholds, check counts, stats on the fixture repo |
 | `test_walkthrough.py` | each `walkthrough put` rule, the CLI, the route, `step_id` questions |
 | `test_serve_targets.py` | review lookup (match, stale, none) and the `walkthrough:` stdout line |
 | `test_server.py`, `test_mailbox.py`, `test_models.py`, `test_logging.py`, `test_netinfo.py` | the server, mailbox, contracts, logs, container detection |

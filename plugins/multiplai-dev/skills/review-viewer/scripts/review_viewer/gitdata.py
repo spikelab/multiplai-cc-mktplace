@@ -374,9 +374,38 @@ class PrInfo:
     body: str
     head_ref: str
     base_ref: str
+    checks: dict = field(default_factory=dict)
+    mergeable: str = ""
+    draft: bool = False
+    review_decision: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+_CHECK_PASS = {"SUCCESS", "NEUTRAL", "SKIPPED"}
+_CHECK_FAIL = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE",
+               "STALE"}
+
+
+def summarize_checks(rollup) -> dict:
+    """Counts from `gh pr view --json statusCheckRollup`: CheckRuns carry
+    status/conclusion, StatusContexts carry state."""
+    counts = {"total": 0, "passed": 0, "failed": 0, "pending": 0}
+    for item in rollup if isinstance(rollup, list) else []:
+        if not isinstance(item, dict):
+            continue
+        result = str(item.get("conclusion") or item.get("state") or "").upper()
+        if item.get("status") and str(item["status"]).upper() != "COMPLETED":
+            result = "PENDING"
+        counts["total"] += 1
+        if result in _CHECK_PASS:
+            counts["passed"] += 1
+        elif result in _CHECK_FAIL:
+            counts["failed"] += 1
+        else:
+            counts["pending"] += 1
+    return counts
 
 
 @dataclass
@@ -489,7 +518,7 @@ def _gh_pr_view(repo: Path, number: int, owner_repo: str | None) -> dict:
     if owner_repo:
         argv += ["--repo", owner_repo]
     argv += ["--json", "number,title,author,url,headRefOid,baseRefOid,headRefName,"
-                       "baseRefName,body"]
+                       "baseRefName,body,statusCheckRollup,mergeable,isDraft,reviewDecision"]
     env = dict(os.environ, GH_PROMPT_DISABLED="1", GIT_TERMINAL_PROMPT="0")
     try:
         proc = subprocess.run(argv, cwd=repo, shell=False, stdin=subprocess.DEVNULL,
@@ -575,7 +604,10 @@ def _resolve_pr(spec: TargetSpec, repo: Path) -> Resolved:
     pr = PrInfo(number=n, title=str(info.get("title") or ""),
                 author=str(author.get("login") or "") if isinstance(author, dict) else "",
                 url=str(info.get("url") or ""), body=str(info.get("body") or ""),
-                head_ref=str(info.get("headRefName") or ""), base_ref=str(info["baseRefName"]))
+                head_ref=str(info.get("headRefName") or ""), base_ref=str(info["baseRefName"]),
+                checks=summarize_checks(info.get("statusCheckRollup")),
+                mergeable=str(info.get("mergeable") or ""), draft=bool(info.get("isDraft")),
+                review_decision=str(info.get("reviewDecision") or ""))
     slug = sanitize_slug(f"{repo.name}--pr-{n}")
     return Resolved(_make_target(repo, slug, f"{repo.name} PR #{n}", base, head), pr)
 

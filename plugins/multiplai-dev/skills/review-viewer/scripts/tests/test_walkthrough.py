@@ -43,6 +43,12 @@ def complete(ff) -> dict:
             _step("big-value", path="app/big.py", start=2000, end=2000),
         ],
         "skipped": [{"path": "assets/logo.bin", "reason": "binary logo swap"}],
+        "assessments": [
+            {"topic": "commits", "verdict": "good", "title": "Messages explain it",
+             "detail_md": "Each commit says why."},
+            {"topic": "tests", "verdict": "concern", "title": "Refunds untested",
+             "detail_md": "`refund()` has no test."},
+        ],
         "complete": True,
     }
 
@@ -111,6 +117,34 @@ def test_rule5_step_ids_are_unique(complete, ff):
     complete["steps"][1]["id"] = "totals"
     errs = errors_for(complete, ff)
     assert errs == ["step totals: the id is used by more than one step"]
+
+
+def test_rule6_complete_needs_commits_and_tests_assessments(complete, ff):
+    complete["assessments"] = [a for a in complete["assessments"] if a["topic"] != "tests"]
+    assert errors_for(complete, ff) == [
+        "walkthrough: complete is true but there is no 'tests' assessment"]
+    complete["complete"] = False
+    assert errors_for(complete, ff) == []
+
+
+def test_rule6_one_assessment_per_topic_except_other(complete, ff):
+    extra = {"topic": "other", "verdict": "note", "title": "x", "detail_md": "y"}
+    complete["assessments"] += [extra, dict(extra)]
+    assert errors_for(complete, ff) == []
+    complete["assessments"].append(dict(complete["assessments"][0]))
+    assert errors_for(complete, ff) == [
+        "assessment commits: more than one assessment has this topic"]
+
+
+def test_assessment_verdicts_and_topics_are_closed_sets(complete):
+    bad = copy.deepcopy(complete)
+    bad["assessments"][0]["verdict"] = "great"
+    with pytest.raises(ValueError):
+        Walkthrough.model_validate(bad)
+    bad = copy.deepcopy(complete)
+    bad["assessments"][0]["topic"] = "vibes"
+    with pytest.raises(ValueError):
+        Walkthrough.model_validate(bad)
 
 
 def test_skipped_path_must_be_changed(complete, ff):

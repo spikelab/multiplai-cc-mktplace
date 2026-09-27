@@ -1,5 +1,50 @@
 {
   "$defs": {
+    "Assessment": {
+      "additionalProperties": false,
+      "description": "The session's judgment on one quality question, shown as a badge beside\nthe measured ones. `commits` (do the messages and the PR description\nexplain the change?) and `tests` (is the new code tested?) are required\nonce the walkthrough is complete.",
+      "properties": {
+        "detail_md": {
+          "title": "Detail Md",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "topic": {
+          "enum": [
+            "commits",
+            "tests",
+            "size",
+            "design",
+            "risk",
+            "other"
+          ],
+          "title": "Topic",
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "good",
+            "note",
+            "concern"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "topic",
+        "verdict",
+        "title",
+        "detail_md"
+      ],
+      "title": "Assessment",
+      "type": "object"
+    },
     "Diagram": {
       "additionalProperties": false,
       "properties": {
@@ -133,6 +178,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "assessments": {
+      "items": {
+        "$ref": "#/$defs/Assessment"
+      },
+      "title": "Assessments",
+      "type": "array"
+    },
     "base_sha": {
       "pattern": "^[0-9a-f]{40}$",
       "title": "Base Sha",

@@ -148,6 +148,20 @@ class Skipped(_Strict):
     reason: str
 
 
+AssessmentTopic = Literal["commits", "tests", "size", "design", "risk", "other"]
+
+
+class Assessment(_Strict):
+    """The session's judgment on one quality question, shown as a badge beside
+    the measured ones. `commits` (do the messages and the PR description
+    explain the change?) and `tests` (is the new code tested?) are required
+    once the walkthrough is complete."""
+    topic: AssessmentTopic
+    verdict: Literal["good", "note", "concern"]
+    title: str = Field(min_length=1, max_length=60)
+    detail_md: str
+
+
 class Walkthrough(_Strict):
     schema_version: Literal[1]
     generated_at: datetime
@@ -156,6 +170,7 @@ class Walkthrough(_Strict):
     overview_md: str
     steps: list[Step]
     skipped: list[Skipped] = Field(default_factory=list)
+    assessments: list[Assessment] = Field(default_factory=list)
     complete: bool
 
 
