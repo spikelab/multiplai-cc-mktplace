@@ -395,6 +395,31 @@ test("chat status counts answers being written and finished ones not yet seen", 
   assert.deepEqual(L.chatStatus(qs, replies, new Set(["q1"])), { pending: 2, unread: 0 });
 });
 
+test("adding a reference never repeats one; overlapping ones merge", () => {
+  const files = ["a.py", "b.py"];
+  const blk = { side: "head", line_start: 10, line_end: 14 };
+  let r = L.mergeRef("", files, "a.py", blk);
+  assert.equal(r.text, "@a.py:10-14 ");
+  // The same block again: unchanged.
+  assert.equal(L.mergeRef(r.text, files, "a.py", blk).text, "@a.py:10-14 ");
+  // A line inside it: unchanged.
+  assert.equal(L.mergeRef("why @a.py:10-14 here", files, "a.py", { side: "head", line_start: 12, line_end: 12 }).text,
+    "why @a.py:10-14 here");
+  // A line first, then its block: one reference, widened.
+  r = L.mergeRef("why @a.py:12?", files, "a.py", blk);
+  assert.equal(r.text, "why @a.py:10-14?");
+  assert.equal(r.caret, "why @a.py:10-14".length);
+  // Two references a new block bridges: merged into one.
+  assert.equal(L.mergeRef("@a.py:3 and @a.py:20", files, "a.py", { side: "head", line_start: 4, line_end: 19 }).text,
+    "@a.py:3-20 and");
+  // Another file, another side, or a gap: added, not merged.
+  assert.equal(L.mergeRef("@a.py:3", files, "b.py", blk).text, "@a.py:3 @b.py:10-14 ");
+  assert.equal(L.mergeRef("@a.py:12", files, "a.py", { side: "base", line_start: 12, line_end: 12 }).text,
+    "@a.py:12 @a.py:base:12 ");
+  assert.equal(L.mergeRef("@a.py:1", files, "a.py", { side: "head", line_start: 5, line_end: 6 }, 0).text,
+    "@a.py:5-6 @a.py:1");
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

@@ -67,6 +67,10 @@ time, not derived from a tag.
   labelled with what it was about (a finding, a review, `@lines` or the
   whole change). Esc or clicking elsewhere collapses it. Answers no longer
   appear in the right-hand panel.
+- Clicking a line or block adds a reference only once. A reference to lines
+  that overlap or touch one already in the box widens it: a line and then its
+  block leave one reference. The label above the box appears only when the
+  message will be linked to the open review or finding.
 - **The question box is a footer, always in view.** Type `@` for a list of
   the changed files, and add `:12` or `:12-20` for lines. Clicking an added,
   removed or changed line adds its whole block of changed lines as a

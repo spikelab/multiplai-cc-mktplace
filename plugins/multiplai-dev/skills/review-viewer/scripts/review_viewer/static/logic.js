@@ -483,6 +483,62 @@
     return out;
   }
 
+  /* Where each @reference to a changed file sits in `text`:
+   * [{start, end, ref}], `end` exclusive, trailing punctuation left out. */
+  function refSpans(text, files) {
+    const known = new Set(files || []);
+    const out = [];
+    const re = /(^|\s)@([^\s@]+)/g;
+    let m;
+    while ((m = re.exec(text || "")) !== null) {
+      const token = m[2].replace(/[.,;:!?)\]]+$/, "");
+      const parts = /^(.*?)(:base)?(?::(\d+)(?:-(\d+))?)?$/.exec(token);
+      if (!parts || !known.has(parts[1])) continue;
+      const start = m.index + m[1].length;
+      let a = parts[3] != null ? Number(parts[3]) : null;
+      let b = parts[4] != null ? Number(parts[4]) : a;
+      if (a != null && b < a) { const t = a; a = b; b = t; }
+      out.push({ start: start, end: start + 1 + token.length,
+        ref: { path: parts[1], side: parts[2] ? "base" : "head", line_start: a, line_end: b } });
+    }
+    return out;
+  }
+
+  /* Add a reference to `text` without repeating one already there. A
+   * reference to the same file and side whose lines overlap or touch the new
+   * ones is widened to cover both (a line, then its whole block, leaves one
+   * reference); one that already covers the new lines is left alone.
+   * Otherwise the reference goes at `at`, spaced from its neighbours.
+   * Returns {text, caret}. */
+  function mergeRef(text, files, path, ref, at) {
+    const spans = refSpans(text, files).filter(function (s) {
+      const r = s.ref;
+      return r.path === path && r.side === (ref.side || "head") && r.line_start != null &&
+        r.line_start <= ref.line_end + 1 && ref.line_start <= r.line_end + 1;
+    });
+    if (spans.length) {
+      let lo = ref.line_start;
+      let hi = ref.line_end;
+      for (const s of spans) { lo = Math.min(lo, s.ref.line_start); hi = Math.max(hi, s.ref.line_end); }
+      const token = formatRef(path, { side: ref.side, line_start: lo, line_end: hi });
+      let out = text;
+      // Rewrite the first overlapping reference; drop the rest (right to left).
+      for (let i = spans.length - 1; i >= 1; i--) {
+        const s = spans[i];
+        out = out.slice(0, s.start).replace(/[ \t]+$/, "") + out.slice(s.end);
+      }
+      out = out.slice(0, spans[0].start) + token + out.slice(spans[0].end);
+      return { text: out, caret: spans[0].start + token.length };
+    }
+    const pos = at == null ? text.length : at;
+    const before = text.slice(0, pos);
+    const after = text.slice(pos);
+    const lead = before && !/\s$/.test(before) ? " " : "";
+    const trail = after && /^\s/.test(after) ? "" : " ";
+    const token = formatRef(path, ref);
+    return { text: before + lead + token + trail + after, caret: (before + lead + token + trail).length };
+  }
+
   /* The anchor a question is sent with: its first reference that has lines. */
   function refAnchor(refs) {
     const r = (refs || []).find(function (x) { return x.line_start != null; });
@@ -534,7 +590,7 @@
     diffBlock: diffBlock, formatRef: formatRef, parseRefs: parseRefs, refAnchor: refAnchor,
     completion: completion, matchFiles: matchFiles,
     blockStarts: blockStarts, blockKey: blockKey, explainByBlock: explainByBlock,
-    chatQuestions: chatQuestions, chatStatus: chatStatus,
+    chatQuestions: chatQuestions, chatStatus: chatStatus, refSpans: refSpans, mergeRef: mergeRef,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;

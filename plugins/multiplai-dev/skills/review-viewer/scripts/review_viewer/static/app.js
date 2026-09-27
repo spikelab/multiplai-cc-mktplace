@@ -850,7 +850,7 @@
     if (!text) return;
     const anchor = L.refAnchor(L.parseRefs(text, state.detail.files));
     const stepId = anchor ? null : (askingAboutStep() ? state.stepId : null);
-    const body = { target: state.slug, text: text, finding_id: anchor || stepId || state.tab === "summary" ? null : state.selected,
+    const body = { target: state.slug, text: text, finding_id: anchor || stepId || state.tab !== "finding" ? null : state.selected,
       anchor: anchor, step_id: stepId };
     $("send").disabled = true;
     try {
@@ -1277,33 +1277,27 @@
 
   // --- the question box (footer) ---------------------------------------------
 
-  /* What a question sent now would be about: its first @reference with
-   * lines, else the open review step or finding, else the whole diff. */
+  /* Say so when a message will be filed under the open review or finding
+   * (the chat labels it that way); say nothing otherwise, including when
+   * the text holds @references, which speak for themselves. */
   function renderAskAbout() {
     const box = $("ask-about");
     if (!box || !state.detail) return;
     const anchor = L.refAnchor(L.parseRefs($("question").value, state.detail.files));
     const f = state.selected && state.findingsById.get(state.selected);
     const step = askingAboutStep() ? currentStep() : null;
-    box.textContent = anchor ? "About " + L.walkAnchorLabel(anchor)
-      : step ? "About review: " + step.title
-        : state.tab === "finding" && f ? "About finding: " + f.claim
-          : "About the whole change";
+    box.textContent = anchor ? ""
+      : step ? "Linked to review: " + step.title
+        : state.tab === "finding" && f ? "Linked to finding: " + f.claim : "";
   }
 
   /* Put "@path:lines" into the question at the caret, with spaces around it. */
   function insertRef(path, ref) {
     const box = $("question");
-    const token = L.formatRef(path, ref);
-    const focused = document.activeElement === box;
-    const at = focused ? box.selectionStart : box.value.length;
-    const end = focused ? box.selectionEnd : box.value.length;
-    const before = box.value.slice(0, at);
-    const after = box.value.slice(end);
-    const lead = before && !/\s$/.test(before) ? " " : "";
-    const trail = after && /^\s/.test(after) ? "" : " ";
-    box.value = before + lead + token + trail + after;
-    const caret = (before + lead + token + trail).length;
+    const at = document.activeElement === box ? box.selectionStart : null;
+    const merged = L.mergeRef(box.value, state.detail.files, path, ref, at);
+    box.value = merged.text;
+    const caret = merged.caret;
     box.focus();
     box.setSelectionRange(caret, caret);
     closeAc();
