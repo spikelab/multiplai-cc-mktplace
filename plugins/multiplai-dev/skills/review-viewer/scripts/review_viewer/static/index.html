@@ -39,7 +39,7 @@
 <div id="banner" class="banner" hidden></div>
 <div id="notice" class="banner notice" hidden></div>
 <main class="layout">
-  <nav class="side" aria-label="Findings and files">
+  <nav id="side" class="side" aria-label="Findings and files">
     <select id="target-select" hidden aria-label="Review target"></select>
     <label class="toggle"><input type="checkbox" id="show-hidden"> <span id="hidden-label">Show refuted and rejected</span></label>
     <div id="findings"></div>
@@ -47,6 +47,9 @@
     <input id="file-search" type="search" placeholder="Filter files ( / )" aria-label="Filter files">
     <ul id="files" class="files"></ul>
   </nav>
+  <div id="side-resize" class="resizer" role="separator" aria-orientation="vertical"
+       aria-controls="side" aria-label="Resize the sidebar (arrow keys; double-click resets)"
+       aria-valuemin="160" tabindex="0" title="Drag to resize; double-click to reset"></div>
   <section class="centre" aria-label="File">
     <div class="file-head">
       <span id="file-path" class="mono"></span>

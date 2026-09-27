@@ -230,6 +230,35 @@
     return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
   }
 
+  /* Changed files grouped by directory, in the order each directory first
+   * appears: [{dir, files: [{path, name}]}]. A root file has dir "". */
+  function groupFilesByDir(paths) {
+    const groups = new Map();
+    for (const path of paths || []) {
+      const cut = path.lastIndexOf("/");
+      const dir = cut < 0 ? "" : path.slice(0, cut);
+      if (!groups.has(dir)) groups.set(dir, { dir: dir, files: [] });
+      groups.get(dir).files.push({ path: path, name: path.slice(cut + 1) });
+    }
+    return [...groups.values()];
+  }
+
+  /* A directory as its last `keep` folders after "…/", for the file list's
+   * group headings; the full directory goes in the tooltip. */
+  function shortDir(dir, keep) {
+    if (!dir) return "/";
+    const parts = dir.split("/");
+    const n = keep || 2;
+    return parts.length <= n ? dir + "/" : "…/" + parts.slice(-n).join("/") + "/";
+  }
+
+  /* The sidebar width in px, kept between `min` and `max` (resize handle). */
+  function clampWidth(px, min, max) {
+    const n = Number(px);
+    if (!Number.isFinite(n)) return null;
+    return Math.round(Math.max(min, Math.min(max, n)));
+  }
+
   /* Only GitHub PR links get an <a> in the header. */
   function safePrUrl(url) {
     return typeof url === "string" && /^https:\/\/github\.com\/[^\s"'<>]+$/.test(url) ? url : null;
@@ -245,6 +274,7 @@
     walkCoverage: walkCoverage, walkStatus: walkStatus, anchorRows: anchorRows,
     walkAnchorLabel: walkAnchorLabel, stepsForFinding: stepsForFinding,
     svgDataUrl: svgDataUrl, safePrUrl: safePrUrl,
+    groupFilesByDir: groupFilesByDir, shortDir: shortDir, clampWidth: clampWidth,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;

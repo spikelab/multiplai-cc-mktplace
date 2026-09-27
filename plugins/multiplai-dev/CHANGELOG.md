@@ -39,6 +39,9 @@ time, not derived from a tag.
 - **Questions can be asked about a walkthrough step**, as well as about the
   whole diff, selected lines or a finding.
 - The page header shows a PR's title, author and GitHub link.
+- **The sidebar can be resized.** Drag the line between it and the code, or
+  focus it and use the arrow keys; double-click resets it. The width is
+  remembered in that browser.
 
 ### Changed
 
@@ -47,6 +50,10 @@ time, not derived from a tag.
   no branch or remote-tracking ref is created). `--fetch` runs `git fetch
   origin` first. Other targets still make no network call; the page also
   loads mermaid from cdnjs.
+- The changed-files list groups files under their directory and shows each
+  file by name; a long directory is shortened to `…/<last two folders>/`. Hover
+  a name or a directory for its full path. The filter still matches full
+  paths.
 
 ### Fixed
 

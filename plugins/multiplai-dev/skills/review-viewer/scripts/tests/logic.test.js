@@ -187,6 +187,30 @@ test("only github.com links become PR links", () => {
   assert.equal(L.safePrUrl(undefined), null);
 });
 
+test("files group by directory in first-seen order; root files have dir ''", () => {
+  const g = L.groupFilesByDir(["a/b.txt", "a/c/d.txt", "a/e.txt", "top.md"]);
+  assert.deepEqual(g.map((x) => x.dir), ["a", "a/c", ""]);
+  assert.deepEqual(g[0].files, [{ path: "a/b.txt", name: "b.txt" }, { path: "a/e.txt", name: "e.txt" }]);
+  assert.deepEqual(g[2].files, [{ path: "top.md", name: "top.md" }]);
+  assert.deepEqual(L.groupFilesByDir([]), []);
+});
+
+test("a long directory keeps its last two folders after an ellipsis", () => {
+  assert.equal(L.shortDir("plugins/multiplai-dev/skills/review-viewer/scripts"), "…/review-viewer/scripts/");
+  assert.equal(L.shortDir("plugins/multiplai-dev"), "plugins/multiplai-dev/");
+  assert.equal(L.shortDir(".claude-plugin"), ".claude-plugin/");
+  assert.equal(L.shortDir(""), "/");
+  assert.equal(L.shortDir("a/b/c/d", 3), "…/b/c/d/");
+});
+
+test("the sidebar width is clamped, and junk is refused", () => {
+  assert.equal(L.clampWidth(100, 160, 700), 160);
+  assert.equal(L.clampWidth(900, 160, 700), 700);
+  assert.equal(L.clampWidth("321.6", 160, 700), 322);
+  assert.equal(L.clampWidth("wide", 160, 700), null);
+  assert.equal(L.clampWidth(null, 160, 700), 160);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

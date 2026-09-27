@@ -467,14 +467,76 @@
     const list = $("files");
     list.replaceChildren();
     const filter = state.fileFilter.toLowerCase();
-    for (const path of state.detail.files) {
-      if (filter && !path.toLowerCase().includes(filter)) continue;
-      list.appendChild(el("li", {}, [el("button", {
-        class: path === state.filePath ? "selected" : "",
-        text: path,
-        onclick: () => { clearPick(); openFile(path); },
-      })]));
+    const shown = state.detail.files.filter((p) => !filter || p.toLowerCase().includes(filter));
+    for (const group of L.groupFilesByDir(shown)) {
+      list.appendChild(el("li", { class: "dir-h", title: group.dir || "(repository root)", text: L.shortDir(group.dir) }));
+      for (const f of group.files) {
+        list.appendChild(el("li", {}, [el("button", {
+          class: f.path === state.filePath ? "selected" : "",
+          title: f.path,
+          text: f.name,
+          onclick: () => { clearPick(); openFile(f.path); },
+        })]));
+      }
     }
+  }
+
+  // --- sidebar width ---------------------------------------------------------
+
+  const SIDE_KEY = "review-viewer.side-width";
+  const SIDE_DEFAULT = 280;
+
+  function sideLimits() {
+    return [160, Math.max(200, Math.round(window.innerWidth * 0.5))];
+  }
+
+  /* Sets the width through the CSSOM: the CSP forbids style attributes, not this. */
+  function setSideWidth(px, save) {
+    const [min, max] = sideLimits();
+    const w = L.clampWidth(px, min, max);
+    if (w == null) return;
+    document.documentElement.style.setProperty("--side-w", w + "px");
+    $("side-resize").setAttribute("aria-valuenow", String(w));
+    if (save) {
+      try { localStorage.setItem(SIDE_KEY, String(w)); } catch (err) { /* private window */ }
+    }
+  }
+
+  function sideWidth() {
+    return $("side").getBoundingClientRect().width;
+  }
+
+  function bindResize() {
+    const handle = $("side-resize");
+    let saved = null;
+    try { saved = localStorage.getItem(SIDE_KEY); } catch (err) { /* private window */ }
+    if (saved) setSideWidth(saved, false);
+    handle.addEventListener("pointerdown", (ev) => {
+      ev.preventDefault();
+      handle.setPointerCapture(ev.pointerId);
+      const startX = ev.clientX;
+      const startW = sideWidth();
+      document.body.classList.add("resizing");
+      const move = (e) => setSideWidth(startW + e.clientX - startX, false);
+      const up = () => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        handle.removeEventListener("pointercancel", up);
+        document.body.classList.remove("resizing");
+        setSideWidth(sideWidth(), true);
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+      handle.addEventListener("pointercancel", up);
+    });
+    handle.addEventListener("keydown", (ev) => {
+      const step = ev.shiftKey ? 64 : 16;
+      if (ev.key === "ArrowLeft") setSideWidth(sideWidth() - step, true);
+      else if (ev.key === "ArrowRight") setSideWidth(sideWidth() + step, true);
+      else return;
+      ev.preventDefault();
+    });
+    handle.addEventListener("dblclick", () => setSideWidth(SIDE_DEFAULT, true));
   }
 
   // --- finding detail ----------------------------------------------------------
@@ -867,6 +929,7 @@
   // --- events ------------------------------------------------------------------
 
   function bindEvents() {
+    bindResize();
     $("send").addEventListener("click", send);
     $("question").addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); send(); }
