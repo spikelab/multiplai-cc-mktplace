@@ -17,7 +17,17 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.19.1] - 2026-09-27
+## [0.20.0] - 2026-09-27
+
+### Added
+
+- **`review-viewer` has five themes**, picked from a Theme menu in the page
+  header: Phosphor (green CRT), Amber (amber CRT), Turbo (DOS text-mode IDE),
+  1-bit (black and white) and Game Boy (four greens). They change colours,
+  fonts and edges, not the layout; Default is the previous look. The choice
+  is remembered per browser. Pixel fonts are used for headings and tabs;
+  code and prose use IBM Plex Mono. All fonts ship with the viewer, and the
+  page's content security policy now allows fonts from the viewer itself.
 
 ### Changed
 

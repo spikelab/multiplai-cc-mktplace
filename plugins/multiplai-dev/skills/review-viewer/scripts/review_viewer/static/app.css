@@ -405,3 +405,5 @@ img.diagram { display: block; max-width: none; background: var(--bg); }
 .detail { overflow-x: hidden; }
 /* Scrolled to on a click, below the pinned tab bar rather than under it. */
 .walk-step { scroll-margin-top: 48px; }
+.theme-pick { margin-left: auto; font-size: 12px; white-space: nowrap; }
+.theme-pick select { width: auto; padding: 2px 6px; margin-left: 4px; }
