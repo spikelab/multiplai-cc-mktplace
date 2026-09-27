@@ -70,6 +70,11 @@ time, not derived from a tag.
   no branch or remote-tracking ref is created). `--fetch` runs `git fetch
   origin` first. Other targets still make no network call; the page also
   loads mermaid from cdnjs.
+- Diff colours follow GitHub's. Added lines are green and removed lines red,
+  with a darker line-number cell, and removed lines are no longer struck
+  through. Lines a finding cites, or that a review explains, get a blue bar
+  in the margin (and a light blue tint when unchanged). They are never
+  recoloured, so a highlighted added line stays green.
 - The changed-files list groups files under their directory and shows each
   file by name; a long directory is shortened to `…/<last two folders>/`. Hover
   a name or a directory for its full path. The filter still matches full
