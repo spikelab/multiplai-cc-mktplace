@@ -91,6 +91,10 @@ time, not derived from a tag.
 - **`review-viewer`'s three panes now scroll on their own.** On a long file the
   whole page scrolled instead, so jumping to a finding or a step's lines could
   leave them off screen.
+- **The right-hand panel no longer scrolls sideways.** A wide table or a
+  long code span in a PR description could push the whole panel's text out
+  of view. Wide tables and images now scroll inside their own box, and long
+  words wrap.
 
 ## [0.18.0] - 2026-09-25
 

@@ -357,3 +357,12 @@ img.diagram { display: block; max-width: none; background: var(--bg); }
 .files li button.in-step:not(.selected) { box-shadow: inset 3px 0 var(--border); color: var(--text); }
 .small { font-size: 12px; }
 .md pre { overflow-x: auto; }
+/* Markdown in the side panels (the overview, reviews, the PR description,
+   answers) must fit the column: long words wrap, and a table or image wider
+   than the column scrolls inside its own box instead of the whole panel. */
+.md, .a { overflow-wrap: anywhere; min-width: 0; }
+.md table, .a table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.md th, .md td, .a th, .a td { border: 1px solid var(--border); padding: 2px 6px; vertical-align: top; }
+.md img, .a img { max-width: 100%; height: auto; }
+/* The right column only ever scrolls up and down; wide content scrolls in place. */
+.detail { overflow-x: hidden; }
