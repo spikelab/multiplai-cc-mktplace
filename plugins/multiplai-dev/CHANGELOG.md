@@ -21,9 +21,9 @@ time, not derived from a tag.
 
 ### Added
 
-- **`review-viewer` has five themes**, picked from a Theme menu in the page
+- **`review-viewer` has six themes**, picked from a Theme menu in the page
   header: Phosphor (green CRT), Amber (amber CRT), Turbo (DOS text-mode IDE),
-  1-bit (black and white) and Game Boy (four greens). They change colours,
+  1-bit (black and white), Game Boy (four greens) and Solarized dark. They change colours,
   fonts and edges, not the layout; Default is the previous look. The choice
   is remembered per browser. Pixel fonts are used for headings and tabs;
   code and prose use IBM Plex Mono. All fonts ship with the viewer, and the

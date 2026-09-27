@@ -5,7 +5,7 @@
   const KEY = "review-viewer.theme";
   const THEMES = [
     ["", "Default"], ["phosphor", "Phosphor"], ["amber", "Amber"],
-    ["turbo", "Turbo"], ["onebit", "1-bit"], ["gameboy", "Game Boy"],
+    ["turbo", "Turbo"], ["onebit", "1-bit"], ["gameboy", "Game Boy"], ["solarized", "Solarized dark"],
   ];
   const root = document.documentElement;
   let current = "";

@@ -45,7 +45,8 @@ code there; `]` and `[` move between steps, `j` and `k` between findings.
 The **Theme** menu in the header changes colours and type without moving
 anything: Default follows the system's light or dark setting; Phosphor and
 Amber are CRT terminals; Turbo is a DOS text-mode IDE; 1-bit is black and
-white; Game Boy uses the handheld's four greens. The choice is kept per
+white; Game Boy uses the handheld's four greens; Solarized dark is
+Ethan Schoonover's palette. The choice is kept per
 browser. The fonts ship with the viewer (`static/FONTS-LICENSE.txt`, all
 SIL Open Font License), so themes load nothing from the network.
 

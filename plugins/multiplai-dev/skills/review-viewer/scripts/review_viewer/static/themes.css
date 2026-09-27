@@ -10,7 +10,7 @@
 @font-face { font-family: "RV Press Start"; font-display: swap; src: url(/static/font-pressstart2p.woff2) format("woff2"); }
 @font-face { font-family: "RV Silkscreen"; font-display: swap; src: url(/static/font-silkscreen.woff2) format("woff2"); }
 
-/* --- the five palettes ------------------------------------------------------ */
+/* --- the palettes ------------------------------------------------------ */
 
 /* Green phosphor CRT. Body text is a softer green than the accent, so long
  * reading does not glare. */
@@ -92,6 +92,25 @@
   --display: "RV Press Start", monospace; --d-lg: 13px; --d-md: 8px; --d-sm: 9px;
   --shadow: #0f380f; --glow: transparent; --scan: 0;
 }
+
+/* Solarized dark (Ethan Schoonover's palette). Body text is base1 rather
+ * than base0: base0 on base03 is the palette's intent but reads dim for
+ * long prose. */
+:root[data-theme="solarized"] {
+  color-scheme: dark;
+  --bg: #002b36; --panel: #073642; --text: #93a1a1; --muted: #657b83; --border: #1c4f5c;
+  --accent: #268bd2; --sel-bg: #268bd2; --sel-text: #fdf6e3;
+  --head-bg: #073642; --head-text: #93a1a1; --foot-bg: #073642; --foot-text: #93a1a1;
+  --add-bg: rgba(133, 153, 0, 0.16); --add-num: rgba(133, 153, 0, 0.30); --add-mark: #859900;
+  --del-bg: rgba(220, 50, 47, 0.16); --del-num: rgba(220, 50, 47, 0.30); --del-mark: #dc322f;
+  --hl-bg: rgba(38, 139, 210, 0.14); --hl-bar: #268bd2; --gap-bg: #04313c;
+  --high: #dc322f; --medium: #cb4b16; --low: #657b83;
+  --syn-kw: #859900; --syn-str: #2aa198; --syn-num: #d33682; --syn-com: #586e75; --syn-fn: #268bd2; --syn-type: #b58900;
+  --display: "RV VT323", monospace; --d-lg: 24px; --d-md: 20px; --d-sm: 18px;
+  --shadow: #001e26; --glow: transparent; --scan: 0;
+}
+:root[data-theme="solarized"] .top h1, :root[data-theme="solarized"] .sev-h.MEDIUM { color: #b58900; }
+:root[data-theme="solarized"] .side-h, :root[data-theme="solarized"] .detail .label { color: #2aa198; }
 
 /* --- shared by every theme -------------------------------------------------- */
 
