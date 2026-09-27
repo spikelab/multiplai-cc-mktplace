@@ -53,6 +53,12 @@ time, not derived from a tag.
   reasoning. Reviews holds the walkthrough steps. Clicking a file there
   opens the review that explains it, and a review's files are marked in the
   sidebar.
+- **The question box is a footer, always in view.** Type `@` for a list of
+  the changed files, and add `:12` or `:12-20` for lines. Clicking an added,
+  removed or changed line adds its whole block of changed lines as a
+  reference, which you can edit. A block that only removes lines is written
+  `@path:base:40-52`. The first reference with lines is sent with the
+  question. The footer says what the question will be about.
 - **Unchanged lines fold away, as on GitHub.** A file opens showing its
   changes with three lines around each, plus any cited or picked lines; the
   rest folds into a bar that shows all of it, or 20 lines at a time from

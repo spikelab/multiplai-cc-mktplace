@@ -377,6 +377,85 @@
     return out;
   }
 
+  // --- @ references in questions ------------------------------------------------
+
+  /* The contiguous run of added and deleted rows around row `ri`, as a line
+   * range: the head line numbers of its added rows, or, for a run that only
+   * deletes, the base line numbers of its deleted rows. Null on other rows. */
+  function diffBlock(rows, ri) {
+    const changed = function (r) { return !!r && (r.k === "add" || r.k === "del"); };
+    if (!changed(rows[ri])) return null;
+    let a = ri;
+    let b = ri;
+    while (changed(rows[a - 1])) a--;
+    while (changed(rows[b + 1])) b++;
+    const block = rows.slice(a, b + 1);
+    const adds = block.filter(function (r) { return r.k === "add" && r.n != null; }).map(function (r) { return r.n; });
+    const nums = adds.length ? adds : block.map(function (r) { return r.o; }).filter(function (v) { return v != null; });
+    if (!nums.length) return null;
+    return { side: adds.length ? "head" : "base", line_start: Math.min.apply(null, nums), line_end: Math.max.apply(null, nums) };
+  }
+
+  /* "@path", "@path:12", "@path:12-20", "@path:base:40-52". */
+  function formatRef(path, ref) {
+    let out = "@" + path;
+    if (!ref || ref.line_start == null) return out;
+    if (ref.side === "base") out += ":base";
+    out += ":" + ref.line_start;
+    if (ref.line_end != null && ref.line_end !== ref.line_start) out += "-" + ref.line_end;
+    return out;
+  }
+
+  /* Every @reference in `text` that names a changed file, in order:
+   * [{path, side, line_start, line_end}], lines null for a bare file. A
+   * range written backwards is put in order; trailing punctuation is
+   * ignored, so "see @a.py:3." works. */
+  function parseRefs(text, files) {
+    const known = new Set(files || []);
+    const out = [];
+    const re = /(^|\s)@([^\s@]+)/g;
+    let m;
+    while ((m = re.exec(text || "")) !== null) {
+      const token = m[2].replace(/[.,;:!?)\]]+$/, "");
+      const parts = /^(.*?)(:base)?(?::(\d+)(?:-(\d+))?)?$/.exec(token);
+      if (!parts || !known.has(parts[1])) continue;
+      let a = parts[3] != null ? Number(parts[3]) : null;
+      let b = parts[4] != null ? Number(parts[4]) : a;
+      if (a != null && (a < 1 || b < 1)) continue;
+      if (a != null && b < a) { const t = a; a = b; b = t; }
+      out.push({ path: parts[1], side: parts[2] ? "base" : "head", line_start: a, line_end: b });
+    }
+    return out;
+  }
+
+  /* The anchor a question is sent with: its first reference that has lines. */
+  function refAnchor(refs) {
+    const r = (refs || []).find(function (x) { return x.line_start != null; });
+    return r ? { path: r.path, side: r.side, line_start: r.line_start, line_end: r.line_end } : null;
+  }
+
+  /* The @word being typed just before the caret, for autocomplete:
+   * {start, query} (start is the index of "@"), or null. */
+  function completion(text, caret) {
+    const m = /(^|\s)@([^\s@:]*)$/.exec((text || "").slice(0, caret));
+    return m ? { start: caret - m[2].length - 1, query: m[2] } : null;
+  }
+
+  /* Changed files matching `query`, best first: file names that start with
+   * it, then file names that contain it, then paths that contain it. */
+  function matchFiles(files, query, limit) {
+    const q = (query || "").toLowerCase();
+    const scored = [];
+    for (const path of files || []) {
+      const lower = path.toLowerCase();
+      const name = lower.slice(lower.lastIndexOf("/") + 1);
+      const rank = !q ? 2 : name.startsWith(q) ? 0 : name.includes(q) ? 1 : lower.includes(q) ? 2 : -1;
+      if (rank >= 0) scored.push([rank, path]);
+    }
+    scored.sort(function (x, y) { return x[0] - y[0]; });
+    return scored.slice(0, limit || 8).map(function (x) { return x[1]; });
+  }
+
   /* Only GitHub PR links get an <a> in the header. */
   function safePrUrl(url) {
     return typeof url === "string" && /^https:\/\/github\.com\/[^\s"'<>]+$/.test(url) ? url : null;
@@ -397,6 +476,8 @@
     neighbourFile: neighbourFile, overscroll: overscroll,
     stepsForFile: stepsForFile, skippedReason: skippedReason, stepFiles: stepFiles,
     summaryBadges: summaryBadges,
+    diffBlock: diffBlock, formatRef: formatRef, parseRefs: parseRefs, refAnchor: refAnchor,
+    completion: completion, matchFiles: matchFiles,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;

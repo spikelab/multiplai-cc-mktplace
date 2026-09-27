@@ -278,14 +278,6 @@ pre.sketch {
   overflow: auto;
 }
 .assumption { color: var(--medium); font-weight: 600; }
-.chip {
-  display: inline-block;
-  font: 12px var(--mono);
-  border: 1px solid var(--accent);
-  border-radius: 10px;
-  padding: 0 8px;
-  margin-bottom: 6px;
-}
 .thread { list-style: none; padding: 0; margin: 0 0 8px; }
 .thread li { margin-bottom: 10px; }
 .q {
@@ -320,6 +312,22 @@ pre.sketch {
 .row { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .decide input { margin-top: 4px; }
 .keys { margin-top: 20px; font-size: 12px; }
+
+/* --- question box: a footer, always visible ------------------------------- */
+.composer { border-top: 1px solid var(--border); background: var(--panel); padding: 6px 12px 8px; }
+.composer-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin-bottom: 4px; font-size: 12px; }
+.ask-about { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60ch; }
+.composer-row { display: flex; gap: 8px; align-items: flex-end; }
+.composer-input { position: relative; flex: 1; min-width: 0; }
+.composer textarea { width: 100%; max-height: 30vh; resize: vertical; display: block; }
+.ac { position: absolute; bottom: 100%; left: 0; z-index: 10; margin: 0 0 4px; padding: 4px 0; list-style: none;
+  min-width: 280px; max-width: 100%; max-height: 260px; overflow: auto;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); }
+.ac li { display: flex; gap: 8px; align-items: baseline; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
+.ac li.active { background: var(--hl-bg); box-shadow: inset 3px 0 var(--hl-bar); }
+.ac-name { font: 12px var(--mono); font-weight: 600; }
+.ac-dir { font: 11px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.code tr.add td.src, .code tr.del td.src { cursor: pointer; }
 
 /* --- walkthrough ------------------------------------------------------------ */
 .pr-info { margin-left: 12px; }

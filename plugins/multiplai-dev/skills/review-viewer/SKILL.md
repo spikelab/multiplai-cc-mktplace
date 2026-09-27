@@ -230,8 +230,11 @@ Each line is one JSON row: `{"id", "target", "kind", "finding_id", "anchor", "te
 
 - **`kind: "question"`** — answer from the repository at the review's
   `head_sha`, citing `path:line`. A question with a `step_id` was asked on
-  that walkthrough step: answer in its context. One with no finding, anchor
-  or step is about the whole diff. Write the answer (markdown) to a temp file
+  that walkthrough step: answer in its context. An `anchor` names the lines
+  asked about: at `head_sha`, or at `base_sha` when `anchor.side` is `base`
+  (lines the change deletes). The text may hold more `@path:line` references
+  typed in the page; read each. One with no finding, anchor or step is about
+  the whole diff. Write the answer (markdown) to a temp file
   and send it:
 
   ```bash

@@ -308,6 +308,50 @@ test("summary badges: measured first, then the session's assessments", () => {
   assert.deepEqual(L.summaryBadges(null, null), []);
 });
 
+test("clicking a changed row takes its whole contiguous block", () => {
+  const rows = [
+    { k: "ctx", o: 1, n: 1 }, { k: "del", o: 2, n: null }, { k: "del", o: 3, n: null },
+    { k: "add", o: null, n: 2 }, { k: "add", o: null, n: 3 }, { k: "add", o: null, n: 4 },
+    { k: "ctx", o: 4, n: 5 }, { k: "del", o: 5, n: null }, { k: "del", o: 6, n: null }, { k: "ctx", o: 7, n: 6 },
+  ];
+  // A modified block: the head lines of its added rows, from any row in it.
+  assert.deepEqual(L.diffBlock(rows, 1), { side: "head", line_start: 2, line_end: 4 });
+  assert.deepEqual(L.diffBlock(rows, 5), { side: "head", line_start: 2, line_end: 4 });
+  // A block that only deletes: its base lines.
+  assert.deepEqual(L.diffBlock(rows, 8), { side: "base", line_start: 5, line_end: 6 });
+  assert.equal(L.diffBlock(rows, 0), null);
+  assert.equal(L.diffBlock(rows, 99), null);
+});
+
+test("references format and parse back, and hand edits are honoured", () => {
+  const files = ["a/b.py", "c.md"];
+  assert.equal(L.formatRef("a/b.py", { side: "head", line_start: 2, line_end: 4 }), "@a/b.py:2-4");
+  assert.equal(L.formatRef("a/b.py", { side: "head", line_start: 7, line_end: 7 }), "@a/b.py:7");
+  assert.equal(L.formatRef("a/b.py", { side: "base", line_start: 5, line_end: 6 }), "@a/b.py:base:5-6");
+  assert.equal(L.formatRef("c.md", null), "@c.md");
+  const refs = L.parseRefs("why @a/b.py:9-3, and @c.md? not @nope.py:1 or me@a/b.py:1 @a/b.py:base:5.", files);
+  assert.deepEqual(refs, [
+    { path: "a/b.py", side: "head", line_start: 3, line_end: 9 },
+    { path: "c.md", side: "head", line_start: null, line_end: null },
+    { path: "a/b.py", side: "base", line_start: 5, line_end: 5 },
+  ]);
+  assert.deepEqual(L.refAnchor(refs), { path: "a/b.py", side: "head", line_start: 3, line_end: 9 });
+  assert.equal(L.refAnchor(L.parseRefs("@c.md", files)), null);
+  assert.deepEqual(L.parseRefs("@a/b.py:0", files), []);
+});
+
+test("@ completion finds the word being typed and ranks file names first", () => {
+  assert.deepEqual(L.completion("look at @ser", 12), { start: 8, query: "ser" });
+  assert.deepEqual(L.completion("@", 1), { start: 0, query: "" });
+  assert.equal(L.completion("mail@x", 6), null);
+  assert.equal(L.completion("@a.py:12", 8), null);
+  assert.equal(L.completion("@a.py done", 10), null);
+  const files = ["app/service.py", "tests/test_service.py", "docs/services.md", "server/app.py"];
+  assert.deepEqual(L.matchFiles(files, "serv"), ["app/service.py", "docs/services.md", "tests/test_service.py", "server/app.py"]);
+  assert.deepEqual(L.matchFiles(files, "SERVICE"), ["app/service.py", "docs/services.md", "tests/test_service.py"]);
+  assert.equal(L.matchFiles(files, "", 2).length, 2);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

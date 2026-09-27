@@ -62,7 +62,7 @@ hex of `sha1(f"{file}\0{line_start}\0{claim}")`.
 
 | File | Writer | Row |
 |---|---|---|
-| `inbox.jsonl` | server | `{"v":1,"id":"q-<utc>-<4 hex>","ts","target","kind":"question"\|"decision","finding_id","anchor":{"path","line_start","line_end"}\|null,"text","decision","step_id"}` |
+| `inbox.jsonl` | server | `{"v":1,"id":"q-<utc>-<4 hex>","ts","target","kind":"question"\|"decision","finding_id","anchor":{"path","side":"head"\|"base","line_start","line_end"}\|null,"text","decision","step_id"}` |
 | `outbox.jsonl` | `reply` | `{"v":1,"reply_to","ts","text","done"}` |
 | `decisions.json` | server | `{finding_id: {"decision","note","ts"}}` |
 | `server.json` | server | `{"url_path_only","port","pid","session_id","started","targets"}` |

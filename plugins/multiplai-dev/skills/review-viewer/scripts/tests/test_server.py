@@ -107,7 +107,20 @@ def test_anchor_question_without_finding(start_live):
         "anchor": {"path": "app/service.py", "line_start": 3, "line_end": 5}})
     assert status == 200
     row = read_rows(live.box / "inbox.jsonl")[-1]
-    assert row["anchor"] == {"path": "app/service.py", "line_start": 3, "line_end": 5}
+    assert row["anchor"] == {"path": "app/service.py", "side": "head", "line_start": 3, "line_end": 5}
+
+
+def test_anchor_on_deleted_lines_carries_side_base(start_live):
+    live = start_live()
+    status, _ = live.request("POST", "/api/ask", {
+        "target": live.slug, "text": "why remove this?",
+        "anchor": {"path": "app/old_module.py", "side": "base", "line_start": 1, "line_end": 4}})
+    assert status == 200
+    assert read_rows(live.box / "inbox.jsonl")[-1]["anchor"]["side"] == "base"
+    status, _ = live.request("POST", "/api/ask", {
+        "target": live.slug, "text": "x",
+        "anchor": {"path": "app/x.py", "side": "left", "line_start": 1, "line_end": 1}})
+    assert status == 400
 
 
 def test_decision_writes_decisions_json(start_live):

@@ -36,13 +36,13 @@
     replies: new Map(),
     since: 0,
     pick: null,
-    pickAnchor: null,
     pollTimer: null,
     polling: null,
     pollAgain: false,
     pollGen: 0,
     tab: "summary",
     fileNote: null,
+    ac: null,
     badgeOpen: null,
     tabChosen: false,
     walk: null,
@@ -232,7 +232,6 @@
     state.openRows = new Map();
     state.selected = null;
     state.pick = null;
-    state.pickAnchor = null;
     state.walk = null;
     state.walkKey = "";
     state.stepId = null;
@@ -762,19 +761,14 @@
 
   function threadQuestions() {
     if (askingAboutStep()) return state.questions.filter((q) => q.step_id === state.stepId);
-    if (state.tab === "summary" || state.pickAnchor || !state.selected) return state.questions.filter((q) => !q.finding_id && !q.step_id);
+    if (state.tab === "summary" || !state.selected) return state.questions.filter((q) => !q.finding_id && !q.step_id);
     return state.questions.filter((q) => q.finding_id === state.selected);
   }
 
   function renderThread() {
-    const chip = $("anchor-chip");
-    chip.hidden = !state.pickAnchor;
-    if (state.pickAnchor) {
-      chip.replaceChildren("About " + L.anchorLabel(state.pickAnchor) + " ",
-        el("button", { class: "cite-link", text: "×", "aria-label": "Clear line selection", onclick: clearPick }));
-    }
+    renderAskAbout();
     $("thread-title").textContent = askingAboutStep() ? "Questions about this step"
-      : (state.tab === "summary" || state.pickAnchor || !state.selected ? "Questions about the diff or selected lines"
+      : (state.tab === "summary" || !state.selected ? "Questions about the diff or selected lines"
         : "Questions about this finding");
     const list = $("thread");
     list.replaceChildren();
@@ -800,8 +794,8 @@
     const box = $("question");
     const text = box.value.trim();
     if (!text) return;
-    const anchor = state.pickAnchor;
-    const stepId = askingAboutStep() ? state.stepId : null;
+    const anchor = L.refAnchor(L.parseRefs(text, state.detail.files));
+    const stepId = anchor ? null : (askingAboutStep() ? state.stepId : null);
     const body = { target: state.slug, text: text, finding_id: anchor || stepId || state.tab === "summary" ? null : state.selected,
       anchor: anchor, step_id: stepId };
     $("send").disabled = true;
@@ -810,6 +804,7 @@
       state.questions.push({ id: res.id, kind: "question", text: text, finding_id: body.finding_id,
         anchor: anchor, step_id: stepId });
       box.value = "";
+      closeAc();
       renderThread();
       schedulePoll(0);
     } catch (err) {
@@ -1117,7 +1112,6 @@
 
   function clearPickState() {
     state.pick = null;
-    state.pickAnchor = null;
     $("ask-lines").hidden = true;
     const sel = window.getSelection();
     if (sel) sel.removeAllRanges();
@@ -1147,7 +1141,16 @@
 
   function onCodeClick(ev) {
     const cell = ev.target.closest("td.ln");
-    if (!cell) return;
+    if (!cell) {
+      // A click (not a drag) on an added or deleted row puts its whole
+      // contiguous block into the question.
+      const tr = ev.target.closest("tr.add[data-ri], tr.del[data-ri]");
+      const sel = window.getSelection();
+      if (!tr || ev.target.closest(".dot, button") || (sel && !sel.isCollapsed)) return;
+      const block = L.diffBlock(state.view.rows, Number(tr.getAttribute("data-ri")));
+      if (block) insertRef(state.view.path, block);
+      return;
+    }
     const n = rowNumber(cell);
     if (n == null) return;
     const start = ev.shiftKey && state.pick && state.pick.path === state.view.path ? state.pick.start : n;
@@ -1156,10 +1159,117 @@
 
   function askAboutPick() {
     if (!state.pick) return;
-    state.pickAnchor = { path: state.pick.path, line_start: state.pick.start, line_end: state.pick.end };
+    insertRef(state.pick.path, { side: "head", line_start: state.pick.start, line_end: state.pick.end });
     $("ask-lines").hidden = true;
-    renderThread();
-    $("question").focus();
+  }
+
+  // --- the question box (footer) ---------------------------------------------
+
+  /* What a question sent now would be about: its first @reference with
+   * lines, else the open review step or finding, else the whole diff. */
+  function renderAskAbout() {
+    const box = $("ask-about");
+    if (!box || !state.detail) return;
+    const anchor = L.refAnchor(L.parseRefs($("question").value, state.detail.files));
+    const f = state.selected && state.findingsById.get(state.selected);
+    const step = askingAboutStep() ? currentStep() : null;
+    box.textContent = anchor ? "About " + L.walkAnchorLabel(anchor)
+      : step ? "About review: " + step.title
+        : state.tab === "finding" && f ? "About finding: " + f.claim
+          : "About the whole change";
+  }
+
+  /* Put "@path:lines" into the question at the caret, with spaces around it. */
+  function insertRef(path, ref) {
+    const box = $("question");
+    const token = L.formatRef(path, ref);
+    const focused = document.activeElement === box;
+    const at = focused ? box.selectionStart : box.value.length;
+    const end = focused ? box.selectionEnd : box.value.length;
+    const before = box.value.slice(0, at);
+    const after = box.value.slice(end);
+    const lead = before && !/\s$/.test(before) ? " " : "";
+    const trail = after && /^\s/.test(after) ? "" : " ";
+    box.value = before + lead + token + trail + after;
+    const caret = (before + lead + token + trail).length;
+    box.focus();
+    box.setSelectionRange(caret, caret);
+    closeAc();
+    renderAskAbout();
+  }
+
+  function closeAc() {
+    state.ac = null;
+    $("ac").hidden = true;
+    $("question").removeAttribute("aria-activedescendant");
+  }
+
+  function updateAc() {
+    const box = $("question");
+    const c = L.completion(box.value, box.selectionStart);
+    const items = c ? L.matchFiles(state.detail.files, c.query, 8) : [];
+    if (!c || !items.length) { closeAc(); return; }
+    const keep = state.ac && state.ac.query === c.query ? Math.min(state.ac.index, items.length - 1) : 0;
+    state.ac = { start: c.start, query: c.query, items: items, index: keep };
+    renderAc();
+  }
+
+  function renderAc() {
+    const list = $("ac");
+    list.replaceChildren();
+    state.ac.items.forEach((path, i) => {
+      const cut = path.lastIndexOf("/");
+      list.appendChild(el("li", {
+        id: "ac-" + i, role: "option", class: i === state.ac.index ? "active" : "",
+        "aria-selected": String(i === state.ac.index), title: path,
+        onmousedown: (ev) => { ev.preventDefault(); pickAc(i); },
+      }, [el("span", { class: "ac-name", text: path.slice(cut + 1) }),
+        cut > 0 ? el("span", { class: "ac-dir", text: path.slice(0, cut) }) : null]));
+    });
+    list.hidden = false;
+    $("question").setAttribute("aria-activedescendant", "ac-" + state.ac.index);
+    const active = list.querySelector("li.active");
+    if (active) active.scrollIntoView({ block: "nearest" });
+  }
+
+  /* Replace the "@query" being typed with "@path"; the caret stays right
+   * after it, so ":12" can follow. */
+  function pickAc(i) {
+    const box = $("question");
+    const ac = state.ac;
+    if (!ac) return;
+    const path = ac.items[i];
+    const caret = box.selectionStart;
+    const head = box.value.slice(0, ac.start) + "@" + path;
+    box.value = head + box.value.slice(caret);
+    box.focus();
+    box.setSelectionRange(head.length, head.length);
+    closeAc();
+    renderAskAbout();
+  }
+
+  function onQuestionKey(ev) {
+    if (state.ac) {
+      const n = state.ac.items.length;
+      if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+        ev.preventDefault();
+        state.ac.index = (state.ac.index + (ev.key === "ArrowDown" ? 1 : n - 1)) % n;
+        renderAc();
+        return;
+      }
+      if ((ev.key === "Enter" && !ev.ctrlKey && !ev.metaKey) || ev.key === "Tab") {
+        ev.preventDefault();
+        pickAc(state.ac.index);
+        return;
+      }
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeAc();
+        return;
+      }
+    }
+    if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); send(); }
   }
 
   // --- events ------------------------------------------------------------------
@@ -1167,9 +1277,10 @@
   function bindEvents() {
     bindResize();
     $("send").addEventListener("click", send);
-    $("question").addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); send(); }
-    });
+    $("question").addEventListener("keydown", onQuestionKey);
+    $("question").addEventListener("input", () => { updateAc(); renderAskAbout(); });
+    $("question").addEventListener("click", updateAc);
+    $("question").addEventListener("blur", () => setTimeout(closeAc, 100));
     for (const b of document.querySelectorAll("[data-decision]")) {
       b.addEventListener("click", () => decide(b.getAttribute("data-decision")));
     }

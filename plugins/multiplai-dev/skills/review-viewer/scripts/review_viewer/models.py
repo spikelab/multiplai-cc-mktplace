@@ -183,7 +183,10 @@ def walkthrough_schema_text() -> str:
 
 
 class Anchor(_Strict):
+    """Lines a question is about. `side: base` numbers lines at base_sha, for
+    a question about lines the change deletes; `head` (the default) at head_sha."""
     path: str
+    side: Literal["head", "base"] = "head"
     line_start: int = Field(ge=1)
     line_end: int = Field(ge=1)
 
