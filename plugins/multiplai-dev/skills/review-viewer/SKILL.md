@@ -178,6 +178,11 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   surrounding code to explain it. Anchor lines are at `head_sha` for
   `side: "head"`, and at `base_sha` for `side: "base"` (use base for code
   that was deleted).
+- The steps are a high-level tour of the **whole** change, written from the
+  commit messages and the full diff. Together they account for every change
+  in the diff, not a chosen sample. A single block's details are left to the
+  page's 💡 button (step 5), which asks for them only when the reader wants
+  them.
 - Order the steps by what a reviewer needs first: what the change is for →
   the core change → its callers and consumers → tests → config, generated
   and lock files. Files with nothing to explain go in `skipped` with a
@@ -226,7 +231,7 @@ each `put` within seconds; the server is not restarted.
 
 ### 5. Handle each event row
 
-Each line is one JSON row: `{"id", "target", "kind", "finding_id", "anchor", "text", "decision", "step_id"}`.
+Each line is one JSON row: `{"id", "target", "kind", "finding_id", "anchor", "text", "decision", "step_id", "explain"}`.
 
 - **`kind: "question"`** — answer from the repository at the review's
   `head_sha`, citing `path:line`. A question with a `step_id` was asked on
@@ -248,6 +253,13 @@ Each line is one JSON row: `{"id", "target", "kind", "finding_id", "anchor", "te
   progress; the thread keeps its spinner until a reply without `--more`.
   With no `--file`, `reply` reads the answer from stdin. Long answers are
   split into several rows automatically.
+- **`"explain": true`** — the reader pressed the 💡 button above one block
+  of changed lines; `anchor` is exactly that block. The answer is shown in a
+  strip directly above the block, so answer only that block: what it changes
+  and why, in 2–5 sentences. Say what the code did before when the block
+  replaces something. Cite `path:line` only outside the block, and mention
+  the review step that covers it if one does. No preamble, no restating the
+  code. Send it with `reply` like any other answer.
 - **`kind: "decision"`** — acknowledge it with a one-line reply to its `id`.
   The decision is already recorded in `decisions.json` beside the findings.
 

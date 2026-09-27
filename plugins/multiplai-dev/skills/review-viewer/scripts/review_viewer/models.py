@@ -202,6 +202,9 @@ class InboxRow(_Strict):
     text: str
     decision: Literal["accept", "reject", "defer"] | None = None
     step_id: StepId | None = None
+    # Sent by a block's light-bulb button: explain exactly `anchor`. The page
+    # shows the answer in a strip above that block, not in the thread.
+    explain: bool = False
 
 
 class OutboxRow(_Strict):

@@ -396,6 +396,35 @@
     return { side: adds.length ? "head" : "base", line_start: Math.min.apply(null, nums), line_end: Math.max.apply(null, nums) };
   }
 
+  /* The first row of every block of changed rows, mapped to the block's
+   * line range (as diffBlock gives it): Map(rowIndex -> {side, line_start, line_end}). */
+  function blockStarts(rows) {
+    const out = new Map();
+    (rows || []).forEach(function (r, i) {
+      const changed = r.k === "add" || r.k === "del";
+      const prev = rows[i - 1];
+      if (changed && !(prev && (prev.k === "add" || prev.k === "del"))) {
+        const b = diffBlock(rows, i);
+        if (b) out.set(i, b);
+      }
+    });
+    return out;
+  }
+
+  /* One key per block of one file: "side:start-end". */
+  function blockKey(range) {
+    return (range.side || "head") + ":" + range.line_start + "-" + range.line_end;
+  }
+
+  /* The latest light-bulb question for each block of `path`: Map(blockKey -> question). */
+  function explainByBlock(questions, path) {
+    const out = new Map();
+    for (const q of questions || []) {
+      if (q.explain && q.anchor && q.anchor.path === path) out.set(blockKey(q.anchor), q);
+    }
+    return out;
+  }
+
   /* "@path", "@path:12", "@path:12-20", "@path:base:40-52". */
   function formatRef(path, ref) {
     let out = "@" + path;
@@ -478,6 +507,7 @@
     summaryBadges: summaryBadges,
     diffBlock: diffBlock, formatRef: formatRef, parseRefs: parseRefs, refAnchor: refAnchor,
     completion: completion, matchFiles: matchFiles,
+    blockStarts: blockStarts, blockKey: blockKey, explainByBlock: explainByBlock,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;

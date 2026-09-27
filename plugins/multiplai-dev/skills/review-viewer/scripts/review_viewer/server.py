@@ -349,11 +349,14 @@ def make_handler(viewer: Viewer):
                 wt = state.walkthrough()
                 if wt is None or not any(s.id == step_id for s in wt.steps):
                     raise _Reject(404, "unknown step")
+            explain = body.get("explain") is True
+            if explain and anchor is None:
+                raise _Reject(400, "explain needs the block's anchor")
             row = InboxRow(id=new_question_id(), ts=utc_now(), target=state.slug,
                            kind="question", finding_id=finding_id, anchor=anchor, text=text,
-                           step_id=step_id)
+                           step_id=step_id, explain=explain)
             state.mailbox.append_inbox(row)
-            about = f"finding {finding_id}" if finding_id else (
+            about = f"block {anchor.path}:{anchor.line_start}" if explain else f"finding {finding_id}" if finding_id else (
                 f"step {step_id}" if step_id else (
                     f"{anchor.path}:{anchor.line_start}" if anchor else "the review"))
             log_event(COMPONENT, "question", f"question {row.id} on {about}",

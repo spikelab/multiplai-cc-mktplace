@@ -110,6 +110,22 @@ def test_anchor_question_without_finding(start_live):
     assert row["anchor"] == {"path": "app/service.py", "side": "head", "line_start": 3, "line_end": 5}
 
 
+def test_explain_question_needs_an_anchor_and_is_marked(start_live):
+    live = start_live()
+    anchor = {"path": "app/service.py", "side": "head", "line_start": 7, "line_end": 9}
+    status, _ = live.request("POST", "/api/ask", {
+        "target": live.slug, "text": "Explain this block.", "anchor": anchor, "explain": True})
+    assert status == 200
+    row = read_rows(live.box / "inbox.jsonl")[-1]
+    assert row["explain"] is True and row["anchor"] == anchor
+    status, _ = live.request("POST", "/api/ask", {
+        "target": live.slug, "text": "Explain this block.", "explain": True})
+    assert status == 400
+    # An ordinary question is not marked.
+    live.request("POST", "/api/ask", {"target": live.slug, "text": "why?"})
+    assert read_rows(live.box / "inbox.jsonl")[-1]["explain"] is False
+
+
 def test_anchor_on_deleted_lines_carries_side_base(start_live):
     live = start_live()
     status, _ = live.request("POST", "/api/ask", {

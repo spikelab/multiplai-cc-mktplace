@@ -352,6 +352,31 @@ test("@ completion finds the word being typed and ranks file names first", () =>
   assert.equal(L.matchFiles(files, "", 2).length, 2);
 });
 
+test("each block of changed rows starts once, keyed by its line range", () => {
+  const rows = [
+    { k: "ctx", o: 1, n: 1 }, { k: "del", o: 2, n: null }, { k: "add", o: null, n: 2 },
+    { k: "add", o: null, n: 3 }, { k: "ctx", o: 3, n: 4 }, { k: "del", o: 4, n: null }, { k: "ctx", o: 5, n: 5 },
+  ];
+  const starts = L.blockStarts(rows);
+  assert.deepEqual([...starts.keys()], [1, 5]);
+  assert.equal(L.blockKey(starts.get(1)), "head:2-3");
+  assert.equal(L.blockKey(starts.get(5)), "base:4-4");
+  assert.equal(L.blockStarts([]).size, 0);
+});
+
+test("block explanations: the latest light-bulb question per block of a file", () => {
+  const a = { path: "x.py", side: "head", line_start: 2, line_end: 3 };
+  const qs = [
+    { id: "q1", explain: true, anchor: a },
+    { id: "q2", explain: false, anchor: a },
+    { id: "q3", explain: true, anchor: Object.assign({}, a, { path: "y.py" }) },
+    { id: "q4", explain: true, anchor: a },
+  ];
+  const m = L.explainByBlock(qs, "x.py");
+  assert.deepEqual([...m.keys()], ["head:2-3"]);
+  assert.equal(m.get("head:2-3").id, "q4");
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

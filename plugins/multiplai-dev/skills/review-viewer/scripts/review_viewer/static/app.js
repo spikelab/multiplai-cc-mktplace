@@ -764,6 +764,10 @@
   }
 
   function threadQuestions() {
+    return threadCandidates().filter((q) => !q.explain);
+  }
+
+  function threadCandidates() {
     if (askingAboutStep()) return state.questions.filter((q) => q.step_id === state.stepId);
     if (state.tab === "summary" || !state.selected) return state.questions.filter((q) => !q.finding_id && !q.step_id);
     return state.questions.filter((q) => q.finding_id === state.selected);
@@ -854,6 +858,7 @@
     if (next.changed) {
       state.replies = L.groupReplies(state.replyRows);
       renderThread();
+      if (state.view && L.explainByBlock(state.questions, state.view.path).size) redrawCode();
     }
   }
 
@@ -944,6 +949,8 @@
     }
     const open = openRows(view.path);
     const items = L.foldRows(view.rows, keep, open, FOLD_CONTEXT, FOLD_MIN);
+    const starts = L.blockStarts(view.rows);
+    const explained = L.explainByBlock(state.questions, view.path);
     state.shownRows = new Set(items.filter((it) => it.row != null).map((it) => it.row));
     const tbody = el("tbody");
     for (const it of items) {
@@ -953,6 +960,7 @@
       }
       const ri = it.row;
       const r = view.rows[ri];
+      if (starts.has(ri)) tbody.appendChild(blockHead(view.path, starts.get(ri), explained));
       const classes = [r.k];
       if (r.n != null && cited.some(([a, b]) => r.n >= a && r.n <= b)) classes.push("cited");
       if (selected && selected.file === view.path && r.n != null &&
@@ -979,6 +987,59 @@
       ]));
     }
     code.replaceChildren(fileNav(-1), el("table", {}, [tbody]), fileNav(1));
+  }
+
+  // --- explaining one block ------------------------------------------------------
+
+  const EXPLAIN_TEXT = "Explain this block: what it changes and why.";
+
+  /* The row above a block of changed lines: a light-bulb button, or, once
+   * asked, the session's explanation (a spinner until it arrives). */
+  function blockHead(path, range, explained) {
+    const q = explained.get(L.blockKey(range));
+    const td = el("td", { colspan: "5" });
+    if (!q) {
+      td.appendChild(el("button", {
+        class: "bulb", title: "Ask " + (state.who ? state.who.agent : "the session") + " to explain " + L.formatRef(path, range),
+        "aria-label": "Explain this block", text: "💡 Explain",
+        onclick: () => explainBlock(path, range),
+      }));
+    } else {
+      const reply = state.replies.get(q.id);
+      const body = el("div", { class: "strip-body" });
+      if (reply && reply.text) renderMarkdown(body, reply.text);
+      if (L.isPending(q.id, state.replies)) {
+        body.appendChild(el("div", { class: "muted" }, [el("span", { class: "spinner" }),
+          (state.who ? state.who.agent : "The session") + " is explaining this block…"]));
+      }
+      td.appendChild(el("div", { class: "strip" }, [
+        el("span", { class: "strip-icon", text: "💡" }),
+        body,
+        el("button", { class: "cite-link strip-more", title: "Put this block into the question box",
+          text: "Follow up", onclick: () => insertRef(path, range) }),
+      ]));
+    }
+    return el("tr", { class: "block-head" }, [td]);
+  }
+
+  async function explainBlock(path, range) {
+    const anchor = { path: path, side: range.side, line_start: range.line_start, line_end: range.line_end };
+    try {
+      const res = await api("/api/ask", { target: state.slug, text: EXPLAIN_TEXT, anchor: anchor, explain: true });
+      state.questions.push({ id: res.id, kind: "question", text: EXPLAIN_TEXT, anchor: anchor, explain: true });
+      redrawCode();
+      schedulePoll(0);
+    } catch (err) {
+      showBanner("Could not ask for an explanation: " + err.message);
+    }
+  }
+
+  /* Re-render the code pane without moving it. */
+  function redrawCode() {
+    if (!state.view) return;
+    const top = $("code").scrollTop;
+    renderCode();
+    $("code").scrollTop = top;
   }
 
   // --- folds -------------------------------------------------------------------

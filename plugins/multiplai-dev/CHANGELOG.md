@@ -53,6 +53,13 @@ time, not derived from a tag.
   reasoning. Reviews holds the walkthrough steps. Clicking a file there
   opens the review that explains it, and a review's files are marked in the
   sidebar.
+- **A 💡 button above every block of changed lines** asks the session to
+  explain just that block. The answer appears in a strip above the block and
+  is still there after a reload. Nothing is explained until you ask, so no
+  tokens are spent on blocks you already understand. "Follow up" puts the
+  block into the question box. These explanations stay out of the Questions
+  list. The blue bar that marked a review's lines is gone; its lines still
+  flash when you jump to them.
 - **The question box is a footer, always in view.** Type `@` for a list of
   the changed files, and add `:12` or `:12-20` for lines. Clicking an added,
   removed or changed line adds its whole block of changed lines as a

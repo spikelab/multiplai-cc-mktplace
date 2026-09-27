@@ -229,10 +229,18 @@ body.resizing { cursor: col-resize; user-select: none; }
 .file-nav-btn { border: 0; background: none; color: var(--accent); padding: 2px 0; }
 .overscroll-bar { height: 3px; width: 0; background: var(--accent); transition: width 0.1s linear; }
 .code tr.cited td.src,
-.code tr.focus td.src,
-.code tr.walk-focus td.src { box-shadow: inset 3px 0 0 var(--hl-bar); }
-.code tr.focus.ctx td.src,
-.code tr.walk-focus.ctx td.src { background: var(--hl-bg); }
+.code tr.focus td.src { box-shadow: inset 3px 0 0 var(--hl-bar); }
+.code tr.focus.ctx td.src { background: var(--hl-bg); }
+/* Above each block of changed lines: a light bulb, or its explanation. */
+.code tr.block-head td { white-space: normal; font: 13px/1.45 var(--sans); padding: 2px 8px; background: var(--bg); }
+.bulb { border: 0; background: none; padding: 1px 4px; font-size: 12px; color: var(--muted); opacity: 0.55; }
+.bulb:hover, .bulb:focus-visible { opacity: 1; color: var(--accent); }
+.strip { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0; padding: 6px 10px;
+  border: 1px solid var(--border); border-left: 3px solid var(--hl-bar); border-radius: 6px; background: var(--panel); }
+.strip-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.strip-body p { margin: 0 0 4px; }
+.strip-body pre { overflow-x: auto; white-space: pre; }
+.strip-more { white-space: nowrap; font-size: 12px; }
 .code tr.picked td { outline: 1px dashed var(--accent); outline-offset: -1px; }
 .code tr.flash td.src { animation: flash 1.2s ease-out; }
 @keyframes flash { from { box-shadow: inset 3px 0 0 var(--hl-bar), inset 0 0 0 999px var(--hl-bg); } }
