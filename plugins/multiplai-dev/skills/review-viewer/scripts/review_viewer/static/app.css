@@ -19,6 +19,9 @@
   --low: #6e7781;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  /* One height for every control in a row, so labels and boxes line up. */
+  --ctl-h: 28px;
+  --input-h: 36px;
   color-scheme: light dark;
 }
 
@@ -113,13 +116,14 @@ kbd {
 
 .top {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 16px;
+  min-height: 48px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
-.top h1 { font-size: 16px; margin: 0; }
+.top h1 { font-size: 16px; margin: 0; line-height: 1.2; }
 .banner {
   padding: 8px 16px;
   background: var(--del-bg);
@@ -178,7 +182,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .finding-list .finding-item .claim { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .finding-detail { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 8px; scroll-margin-top: 48px; }
 .finding-list .sev-h:first-child { margin-top: 4px; }
-.target-select { width: auto; max-width: 40ch; padding: 2px 6px; }
+.target-select { width: auto; max-width: 40ch; height: var(--ctl-h); padding: 0 8px; }
 .finding-item .where { display: block; font: 12px var(--mono); color: var(--muted); }
 .badge {
   display: inline-block;
@@ -350,7 +354,6 @@ pre.sketch {
 @keyframes spin { to { transform: rotate(360deg); } }
 .row { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .decide input { margin-top: 4px; }
-.keys { margin-top: 20px; font-size: 12px; }
 
 /* --- question box: a footer, always visible ------------------------------- */
 .composer { position: relative; border-top: 1px solid var(--border); background: var(--panel); padding: 6px 12px 8px; }
@@ -365,11 +368,20 @@ pre.sketch {
 .chat-status { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); }
 .chat-status:empty { display: none; }
 .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: inline-block; }
-.composer-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin-bottom: 4px; font-size: 12px; }
-.ask-about { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60ch; }
+.composer-head { display: flex; gap: 12px; align-items: center; min-height: 20px; margin-bottom: 6px; font-size: 12px; }
+.ask-about { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-hint { margin-left: auto; white-space: nowrap; }
+.composer-hint kbd { font-size: 11px; }
+/* The Send button is as tall as the one-line box and stays level with its
+   last line when the box grows. */
 .composer-row { display: flex; gap: 8px; align-items: flex-end; }
 .composer-input { position: relative; flex: 1; min-width: 0; }
-.composer textarea { width: 100%; max-height: 30vh; resize: vertical; display: block; }
+.composer textarea { width: 100%; min-height: var(--input-h); max-height: 30vh; padding: 7px 10px;
+  line-height: 20px; resize: vertical; display: block; }
+.composer:not(.open) textarea { height: var(--input-h); resize: none; }
+.send-btn { height: var(--input-h); min-width: 80px; padding: 0 18px; font-weight: 600;
+  background: var(--accent); border-color: var(--accent); color: #fff; }
+.send-btn:hover { filter: brightness(1.08); }
 .ac { position: absolute; bottom: 100%; left: 0; z-index: 30; margin: 0 0 4px; padding: 4px 0; list-style: none;
   min-width: 280px; max-width: 100%; max-height: 260px; overflow: auto;
   background: var(--bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); }
@@ -431,14 +443,23 @@ img.diagram { display: block; max-width: none; background: var(--bg); }
 .detail { overflow-x: hidden; }
 /* Scrolled to on a click, below the pinned tab bar rather than under it. */
 .walk-step { scroll-margin-top: 48px; }
-.theme-pick { margin-left: auto; font-size: 12px; white-space: nowrap; }
-.theme-pick select { width: auto; padding: 2px 6px; margin-left: 4px; }
+/* Header controls: one height, one font, centred text. */
+.top-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.theme-pick { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.top .ctl, .help .ctl {
+  height: var(--ctl-h); width: auto; margin: 0; padding: 0 10px;
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 12px/1 var(--sans); white-space: nowrap;
+}
+.theme-pick select.ctl { padding-right: 24px; }
+.help-btn { width: var(--ctl-h) !important; padding: 0 !important; justify-content: center; font-weight: 700; }
 /* The theme menu's option list is drawn by the page, not the OS, where the
    browser allows it (Chrome 135+); elsewhere it stays the native menu. */
 @supports (appearance: base-select) {
   .theme-pick select, .theme-pick select::picker(select) { appearance: base-select; }
-  .theme-pick select { font: 12px var(--mono); padding: 2px 6px; background: var(--bg); color: var(--text);
+  .theme-pick select { padding: 0 10px; background: var(--bg); color: var(--text);
     border: 1px solid var(--border); cursor: pointer; }
+  .theme-pick select::picker-icon { font-size: 10px; margin-left: 4px; }
   .theme-pick select::picker(select) { font: 12px var(--mono); padding: 2px 0; margin-top: 2px;
     background: var(--panel); color: var(--text); border: 1px solid var(--border);
     box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.35); }
@@ -447,4 +468,17 @@ img.diagram { display: block; max-width: none; background: var(--bg); }
   .theme-pick option:checked { font-weight: 600; }
   .theme-pick option::checkmark { content: "▸"; }
 }
-.mode-btn { font-size: 12px; padding: 2px 8px; white-space: nowrap; }
+
+/* --- the ? dialog ------------------------------------------------------------ */
+.help { max-width: min(760px, calc(100vw - 32px)); width: 100%; padding: 16px 20px 20px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35); }
+.help::backdrop { background: rgba(0, 0, 0, 0.45); }
+.help-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.help h2 { font-size: 16px; margin: 0; }
+.help h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 8px 0; }
+.help-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px 32px; }
+.help dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 0; align-items: baseline; }
+.help dt { white-space: nowrap; color: var(--muted); font-size: 12px; }
+.help dd { margin: 0; }
+.help code { font: 12px var(--mono); }

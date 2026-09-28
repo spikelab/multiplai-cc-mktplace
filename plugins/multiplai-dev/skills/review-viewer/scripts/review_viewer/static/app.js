@@ -210,8 +210,6 @@
     } catch (err) {
       return;
     }
-    const sid = (state.who.session_id || "").slice(0, 8) || "no session id";
-    $("who").textContent = "Answers come from " + state.who.agent + " (session " + sid + ")";
     const res = await api("/api/targets");
     state.targets = res.targets;
     const sel = $("target-select");
@@ -618,6 +616,9 @@
     return [p.min, Math.max(p.min + 40, Math.round(window.innerWidth * 0.5))];
   }
 
+  /* Widths are saved where theme.js saves the theme, so every viewer shares them. */
+  const prefs = window.ReviewPrefs || { load: () => "", save: () => {} };
+
   /* Sets the width through the CSSOM: the CSP forbids style attributes, not this. */
   function setPanelWidth(name, px, save) {
     const p = PANELS[name];
@@ -626,9 +627,7 @@
     if (w == null) return;
     document.documentElement.style.setProperty(p.cssVar, w + "px");
     $(p.handle).setAttribute("aria-valuenow", String(w));
-    if (save) {
-      try { localStorage.setItem(p.key, String(w)); } catch (err) { /* private window */ }
-    }
+    if (save) prefs.save(p.key, String(w));
   }
 
   function panelWidth(name) {
@@ -638,8 +637,7 @@
   function bindResize() {
     for (const [name, p] of Object.entries(PANELS)) {
       const handle = $(p.handle);
-      let saved = null;
-      try { saved = localStorage.getItem(p.key); } catch (err) { /* private window */ }
+      const saved = prefs.load(p.key);
       if (saved) setPanelWidth(name, saved, false);
       handle.addEventListener("pointerdown", (ev) => {
         ev.preventDefault();
@@ -1299,20 +1297,20 @@
 
   // --- the question box (footer) ---------------------------------------------
 
-  /* Say so when a message will be filed under the open review or finding
-   * (the chat labels it that way); say nothing otherwise, including when
-   * the text holds @references, which speak for themselves. */
+  /* What the next message is filed under, the same way send() decides:
+   * @lines typed in it, else the open review step, else the open finding,
+   * else the whole change. */
   function renderAskAbout() {
     const box = $("ask-about");
     if (!box || !state.detail) return;
     const anchor = L.refAnchor(L.parseRefs($("question").value, state.detail.files));
     const f = state.selected && state.findingsById.get(state.selected);
     const step = askingAboutStep() ? currentStep() : null;
-    box.textContent = anchor ? ""
-      : step ? "Asking about the open review: " + step.title
-        : state.tab === "finding" && f ? "Asking about the open finding: " + f.claim : "";
-    box.title = box.textContent
-      ? "The session answers with this in mind. Type @ to ask about a file instead." : "";
+    const what = anchor ? L.walkAnchorLabel(anchor)
+      : step ? step.title
+        : state.tab === "finding" && f ? f.claim : "the whole change";
+    box.replaceChildren(el("span", { class: "muted", text: "Context: " }), what);
+    box.title = "Context: " + what + ". Type @ to point at a file and lines instead.";
   }
 
   /* Put "@path:lines" into the question at the caret, with spaces around it. */
@@ -1404,6 +1402,14 @@
     if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); send(); }
   }
 
+  // --- shortcuts ---------------------------------------------------------------
+
+  function toggleHelp() {
+    const dlg = $("help");
+    if (dlg.open) dlg.close();
+    else dlg.showModal();
+  }
+
   // --- events ------------------------------------------------------------------
 
   function bindEvents() {
@@ -1433,7 +1439,15 @@
     $("tab-finding").addEventListener("click", () => setTab("finding"));
     $("tab-summary").addEventListener("click", () => setTab("summary"));
     $("tab-walk").addEventListener("click", () => setTab("walk"));
+    $("help-btn").addEventListener("click", toggleHelp);
+    $("help-close").addEventListener("click", () => $("help").close());
+    // A click on the backdrop lands on the dialog itself, outside its content.
+    $("help").addEventListener("click", (ev) => { if (ev.target === $("help")) $("help").close(); });
     document.addEventListener("keydown", (ev) => {
+      if ($("help").open) {
+        if (ev.key === "?") { ev.preventDefault(); toggleHelp(); }
+        return;  // Esc closes the dialog natively
+      }
       const typing = ev.target.closest && ev.target.closest("input, textarea, select");
       if (ev.key === "Escape") {
         if (typing) ev.target.blur();
@@ -1453,6 +1467,9 @@
       } else if (ev.key === "/") {
         ev.preventDefault();
         $("file-search").focus();
+      } else if (ev.key === "?") {
+        ev.preventDefault();
+        toggleHelp();
       }
     });
   }

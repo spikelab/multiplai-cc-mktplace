@@ -37,9 +37,11 @@
   <h1 id="title">Review viewer</h1>
   <span id="pr-info" class="pr-info" hidden></span>
   <select id="target-select" class="target-select" hidden aria-label="Review target"></select>
-  <span id="who" class="muted"></span>
-  <label class="theme-pick muted">Theme <select id="theme-select" aria-label="Colour theme"></select></label>
-  <button id="mode-btn" class="mode-btn" type="button" aria-label="Light or dark mode">◐ Auto</button>
+  <div class="top-tools">
+    <label class="theme-pick muted"><span>Theme</span><select id="theme-select" class="ctl" aria-label="Colour theme"></select></label>
+    <button id="mode-btn" class="ctl mode-btn" type="button" aria-label="Light or dark mode">◐ Auto</button>
+    <button id="help-btn" class="ctl help-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+  </div>
 </header>
 <div id="banner" class="banner" hidden></div>
 <div id="notice" class="banner notice" hidden></div>
@@ -97,7 +99,6 @@
         <button data-decision="defer">Defer</button>
       </div>
     </section>
-    <p class="muted keys">Keys: <kbd>j</kbd>/<kbd>k</kbd> next/previous finding · <kbd>]</kbd>/<kbd>[</kbd> next/previous step · <kbd>/</kbd> filter files · <kbd>Esc</kbd> clear selection</p>
   </aside>
 </main>
 <footer id="composer" class="composer" aria-label="Chat with the session">
@@ -111,7 +112,7 @@
   <div class="composer-head">
     <span id="chat-status" class="chat-status" role="status" aria-live="polite"></span>
     <span id="ask-about" class="ask-about"></span>
-    <span class="muted small">Type <kbd>@</kbd> for a changed file, then <code>:12</code> or <code>:12-20</code> for lines · click a changed line to add its block · <kbd>Ctrl</kbd>+<kbd>Enter</kbd> sends</span>
+    <span class="muted small composer-hint"><kbd>@</kbd> a file · <kbd>Ctrl</kbd>+<kbd>Enter</kbd> sends · <kbd>?</kbd> all shortcuts</span>
   </div>
   <div class="composer-row">
     <div class="composer-input">
@@ -119,8 +120,38 @@
                 aria-autocomplete="list" aria-controls="ac"></textarea>
       <ul id="ac" class="ac" role="listbox" aria-label="Changed files" hidden></ul>
     </div>
-    <button id="send">Send</button>
+    <button id="send" class="send-btn" title="Send (Ctrl+Enter)">Send</button>
   </div>
 </footer>
+<dialog id="help" class="help" aria-labelledby="help-title">
+  <div class="help-head">
+    <h2 id="help-title">Keyboard shortcuts</h2>
+    <button id="help-close" class="ctl" type="button" aria-label="Close">Esc</button>
+  </div>
+  <div class="help-cols">
+    <section>
+      <h3>Moving around</h3>
+      <dl>
+        <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Next / previous finding</dd>
+        <dt><kbd>]</kbd> <kbd>[</kbd></dt><dd>Next / previous review step</dd>
+        <dt><kbd>/</kbd></dt><dd>Filter the changed files</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Clear the line selection, close the chat</dd>
+        <dt>Scroll past the end</dt><dd>Open the next (or previous) file</dd>
+        <dt><kbd>?</kbd></dt><dd>Show this list</dd>
+      </dl>
+    </section>
+    <section>
+      <h3>Asking the session</h3>
+      <dl>
+        <dt><kbd>@</kbd></dt><dd>Point at a changed file; <code>@file:12</code> or <code>@file:12-20</code> for lines</dd>
+        <dt><kbd>Tab</kbd> <kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Pick from the file list while typing <kbd>@</kbd></dd>
+        <dt><kbd>Ctrl</kbd>+<kbd>Enter</kbd></dt><dd>Send the message</dd>
+        <dt>Click a changed line</dt><dd>Add its whole block to the message</dd>
+        <dt>Click a line number</dt><dd>Select that line; <kbd>Shift</kbd>+click another to extend</dd>
+        <dt>💡 Explain</dt><dd>Ask for an explanation of one block, shown above it</dd>
+      </dl>
+    </section>
+  </div>
+</dialog>
 </body>
 </html>
