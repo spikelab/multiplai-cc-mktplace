@@ -1,8 +1,7 @@
 """`post`: one PR comment with the HIGH and MEDIUM findings.
 
-With `--decisions`, only findings whose recorded decision is `accept` go in.
-The viewer keeps one entry per finding id, so the entry is the latest
-decision. The skill runs this only on an explicit yes typed in the terminal.
+With `--only <id>` (repeatable), only those findings go in: the user names
+them in the terminal. The skill runs this only on an explicit yes typed there.
 """
 
 from __future__ import annotations
@@ -28,10 +27,14 @@ class PostError(Exception):
     """Refused or failed; the message says why. Exit code 2."""
 
 
-def select(findings: list[dict], decisions: dict | None) -> list[dict]:
+def select(findings: list[dict], only: list[str] | None) -> list[dict]:
     chosen = [f for f in findings if f["severity"] in POSTED_SEVERITIES and f["status"] in SHOWN_STATUSES]
-    if decisions is not None:
-        chosen = [f for f in chosen if (decisions.get(f["id"]) or {}).get("decision") == "accept"]
+    if only:
+        known = {f["id"] for f in chosen}
+        unknown = [i for i in only if i not in known]
+        if unknown:
+            raise PostError(f"not a shown HIGH or MEDIUM finding of this review: {', '.join(unknown)}")
+        chosen = [f for f in chosen if f["id"] in only]
     order = {s: i for i, s in enumerate(POSTED_SEVERITIES)}
     return sorted(chosen, key=lambda f: order[f["severity"]])
 
@@ -63,7 +66,7 @@ def comment_body(findings_file: dict, chosen: list[dict]) -> str:
     return "\n".join(out) + "\n"
 
 
-def post(target_dir: Path, decisions_path: Path | None, *, session_id: str = "") -> str:
+def post(target_dir: Path, only: list[str] | None = None, *, session_id: str = "") -> str:
     """Post the comment; return a one-line summary. Raises PostError to refuse."""
     target_dir = target_dir.resolve()
     state = load_state(target_dir / "review-state.json")
@@ -73,15 +76,10 @@ def post(target_dir: Path, decisions_path: Path | None, *, session_id: str = "")
     if t.pr is None:
         raise PostError(f"post needs a PR target; this review is of {t.kind} {t.ref}. "
                         f"Re-run the review with --pr <number> to post it.")
-    decisions = None
-    if decisions_path is not None:
-        if not decisions_path.is_file():
-            raise PostError(f"decisions file not found: {decisions_path}")
-        decisions = json.loads(decisions_path.read_text(encoding="utf-8"))
     findings_file = json.loads((target_dir / "findings.json").read_text(encoding="utf-8"))
-    chosen = select(findings_file["findings"], decisions)
+    chosen = select(findings_file["findings"], only)
     if not chosen:
-        return "nothing to post: no accepted HIGH or MEDIUM findings"
+        return "nothing to post: no HIGH or MEDIUM findings"
     body = comment_body(findings_file, chosen)
 
     gh = shutil.which("gh")
@@ -92,6 +90,6 @@ def post(target_dir: Path, decisions_path: Path | None, *, session_id: str = "")
                           cwd=t.repo_path, capture_output=True, text=True, shell=False, check=False)
     if proc.returncode != 0:
         raise PostError(f"gh pr comment failed: {proc.stderr.strip()}")
-    summary = f"posted {len(chosen)} {'accepted ' if decisions is not None else ''}findings to PR #{t.pr}"
+    summary = f"posted {len(chosen)} findings to PR #{t.pr}"
     log_event("review", "post", summary, session_id=session_id, target=t.slug, pr=t.pr, count=len(chosen))
     return summary

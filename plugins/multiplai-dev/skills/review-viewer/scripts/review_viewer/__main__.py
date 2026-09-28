@@ -4,7 +4,7 @@
 
     serve          start (or reuse) the viewer for findings files or a diff
     reply          send the session's answer to a question from the page
-    pending        print questions and decisions that have no final reply yet
+    pending        print questions that have no final reply yet
     list           show the live viewers this user can reach
     stop           stop one viewer (--box) or all of them (--all)
     walkthrough    put: check and publish the session's walkthrough; status: what is uncovered
@@ -216,7 +216,7 @@ def _monitor_command(boxes: list[Path], label: str) -> str:
     string, so spaces in paths and quotes in labels survive."""
     files = " ".join(shlex.quote(str(b / "inbox.jsonl")) for b in boxes)
     command = json.dumps(f"tail -n 0 -q -F {files}", ensure_ascii=False)
-    description = json.dumps(f"review-viewer questions and decisions for {label}",
+    description = json.dumps(f"review-viewer questions for {label}",
                              ensure_ascii=False)
     return f"Monitor(command={command}, description={description}, timeout_ms={MONITOR_TIMEOUT_MS})"
 
@@ -466,6 +466,9 @@ def cmd_pending(args) -> int:
         for row in box.read_outbox(0)[0]:
             last_done[row.get("reply_to")] = row.get("done") is True
         for row in box.read_inbox():
+            # Mailboxes from before 0.21 can hold accept/reject/defer rows.
+            if row.get("kind", "question") != "question":
+                continue
             if not last_done.get(row.get("id")):
                 print(json.dumps(row, ensure_ascii=False))
     return 0
@@ -637,7 +640,7 @@ def build_parser() -> argparse.ArgumentParser:
     ls.set_defaults(func=cmd_list)
 
     pe = sub.add_parser("pending", parents=[common],
-                        help="print questions and decisions that have no final reply yet")
+                        help="print questions that have no final reply yet")
     pe.add_argument("--box", required=True, action="append",
                     help="a mailbox directory (repeat for several)")
     pe.set_defaults(func=cmd_pending)

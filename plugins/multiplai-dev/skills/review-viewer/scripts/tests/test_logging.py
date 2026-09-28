@@ -1,4 +1,4 @@
-"""One real ask/reply/decision cycle through the CLI, then the log files.
+"""One real ask/reply cycle through the CLI, then the log files.
 
 Every process in the cycle (the `serve` server, the `reply` command, and this
 test) resolves its logs directory from the same WORKSPACE, which lives under
@@ -70,8 +70,6 @@ def test_cycle_logs_events_without_text_or_token(findings_path, logs_env, tmp_pa
              "--to", res["id"], "--file", str(answer)], capture_output=True, text=True,
             env=logs_env)
         assert reply.returncode == 0, reply.stderr
-        assert _post(port, "/api/decision", {"target": slug, "finding_id": HIGH,
-                                             "decision": "reject"}, token)[0] == 200
         assert _post(port, "/api/ask", {"target": slug, "text": "x"}, "bad-token")[0] == 401
         assert _post(port, "/api/shutdown", {}, token)[0] == 200
         server.wait(timeout=10)
@@ -86,13 +84,11 @@ def test_cycle_logs_events_without_text_or_token(findings_path, logs_env, tmp_pa
                if line.strip()]
     ours = [r for r in records if r.get("component") == "review-viewer"]
     events = [r["event"] for r in ours]
-    for expected in ("start", "question", "reply", "decision", "rejected_request", "stop"):
+    for expected in ("start", "question", "reply", "rejected_request", "stop"):
         assert expected in events, (expected, events)
     by_event = {r["event"]: r for r in ours}
     assert by_event["question"]["chars"] == len(QUESTION)
     assert by_event["reply"]["done"] is True and by_event["reply"]["chars"] == len(ANSWER)
-    assert by_event["decision"]["decision"] == "reject"
-    assert by_event["decision"]["msg"] == f"finding {HIGH} rejected"
     assert by_event["start"]["port"] == port
     assert by_event["rejected_request"]["level"] == "WARNING"
 

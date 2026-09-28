@@ -147,24 +147,20 @@ def fake_gh(monkeypatch):
     return calls
 
 
-def test_post_with_decisions_selects_exactly_the_accepted(pr_review, fake_gh, capsys):
+def test_post_only_selects_exactly_the_named(pr_review, fake_gh, capsys):
     state, target_dir = pr_review
+    state.findings[1].severity = "MEDIUM"
+    save_state(state, target_dir)
+    write_findings_file(state, target_dir)
     high = state.findings[0]
-    medium = state.findings[1]
-    decisions = target_dir / "viewer" / "decisions.json"
-    decisions.parent.mkdir()
-    decisions.write_text(json.dumps({
-        high.id: {"decision": "accept", "note": "", "ts": "2026-09-25T10:00:00Z"},
-        medium.id: {"decision": "reject", "note": "", "ts": "2026-09-25T10:01:00Z"},
-    }))
-    assert main(["post", str(target_dir), "--decisions", str(decisions)]) == 0
+    assert main(["post", str(target_dir), "--only", high.id]) == 0
     (argv, body), = fake_gh
     assert argv[1:4] == ["pr", "comment", "812"]
     assert body.count("\n1. ") == 1 and "\n2. " not in body
     assert CLAIM_HIGH in body and CLAIM_MEDIUM not in body
     head = state.target.head_sha
     assert f"https://github.com/example/booking-engine/blob/{head}/rateplan_service.py#L1-L2" in body
-    assert "posted 1 accepted findings to PR #812" in capsys.readouterr().out
+    assert "posted 1 findings to PR #812" in capsys.readouterr().out
 
 
 def test_post_without_decisions_takes_high_and_medium(pr_review, fake_gh):
@@ -177,11 +173,10 @@ def test_post_without_decisions_takes_high_and_medium(pr_review, fake_gh):
     assert CLAIM_HIGH in body and CLAIM_MEDIUM in body and CLAIM_REFUTED not in body
 
 
-def test_post_missing_decisions_file_exits_2(pr_review, fake_gh, capsys):
+def test_post_only_unknown_id_exits_2(pr_review, fake_gh, capsys):
     _, target_dir = pr_review
-    missing = target_dir / "viewer" / "decisions.json"
-    assert main(["post", str(target_dir), "--decisions", str(missing)]) == 2
-    assert str(missing) in capsys.readouterr().err
+    assert main(["post", str(target_dir), "--only", "0000000000"]) == 2
+    assert "0000000000" in capsys.readouterr().err
     assert fake_gh == []
 
 

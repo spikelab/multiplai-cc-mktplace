@@ -1,8 +1,8 @@
 """The mailbox: JSONL files beside the review that carry messages both ways.
 
-    inbox.jsonl     server writes  — questions and decisions from the page
+    inbox.jsonl     server writes  — questions from the page
     outbox.jsonl    `reply` writes — the session's answers
-    decisions.json  server writes  — latest decision per finding (atomic replace)
+    viewed.json     server writes  — files ticked "viewed" in the page (atomic replace)
     server.json     server writes  — who is serving this mailbox (never the token)
 
 Only one process ever writes each file, and each row is appended with a single
@@ -21,7 +21,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import Decision, InboxRow, OutboxRow
+from .models import InboxRow, OutboxRow
 
 log = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def read_rows(path: Path) -> list[dict]:
 class Mailbox:
     def __init__(self, directory: str | Path):
         self.dir = Path(directory)
-        self._decisions_lock = threading.Lock()
+        self._viewed_lock = threading.Lock()
 
     @property
     def inbox(self) -> Path:
@@ -86,8 +86,8 @@ class Mailbox:
         return self.dir / "outbox.jsonl"
 
     @property
-    def decisions(self) -> Path:
-        return self.dir / "decisions.json"
+    def viewed(self) -> Path:
+        return self.dir / "viewed.json"
 
     @property
     def server_json(self) -> Path:
@@ -108,7 +108,7 @@ class Mailbox:
         os.chmod(self.dir, 0o700)
         for path in (self.inbox, self.outbox):
             os.close(os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600))
-        for path in (self.inbox, self.outbox, self.decisions, self.server_json):
+        for path in (self.inbox, self.outbox, self.viewed, self.server_json):
             if path.exists():  # left by an earlier version with wider modes
                 os.chmod(path, 0o600)
 
@@ -127,20 +127,26 @@ class Mailbox:
         since = max(0, since)
         return rows[since:], len(rows)
 
-    def read_decisions(self) -> dict[str, dict]:
+    def read_viewed(self) -> dict[str, str]:
+        """{path: ts} for each changed file marked viewed."""
         try:
-            data = json.loads(self.decisions.read_text(encoding="utf-8"))
+            data = json.loads(self.viewed.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return {}
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
 
-    def write_decision(self, finding_id: str, decision: str, note: str = "") -> Decision:
-        entry = Decision(decision=decision, note=note, ts=utc_now())
-        with self._decisions_lock:
-            data = self.read_decisions()
-            data[finding_id] = entry.model_dump(mode="json")
-            atomic_write(self.decisions, json.dumps(data, indent=2, sort_keys=True) + "\n")
-        return entry
+    def set_viewed(self, path: str, viewed: bool) -> dict[str, str]:
+        """Mark or unmark one file; returns the whole map after the change."""
+        with self._viewed_lock:
+            data = self.read_viewed()
+            if viewed:
+                data[path] = utc_now()
+            else:
+                data.pop(path, None)
+            atomic_write(self.viewed, json.dumps(data, indent=2, sort_keys=True) + "\n")
+        return data
 
 
 def atomic_write(path: Path, text: str, mode: int = 0o600) -> None:
