@@ -157,9 +157,9 @@
 
   async function diagramUrl(source) {
     if (diagramCache.has(source)) return diagramCache.get(source);
-    // A theme picked in the header decides; otherwise the system setting does.
-    const theme = document.documentElement.getAttribute("data-theme");
-    const dark = theme ? !["onebit", "gameboy"].includes(theme)
+    // The mode theme.js resolved (the header's button, or the system setting).
+    const mode = document.documentElement.getAttribute("data-mode");
+    const dark = mode ? mode === "dark"
       : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
     if (!mermaidReady) {
       window.mermaid.initialize({

@@ -22,8 +22,34 @@
   color-scheme: light dark;
 }
 
+/* Dark colours: from the mode button (theme.js sets data-mode), or from the
+   system setting if that script did not run. */
+:root[data-mode="dark"] {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --panel: #161b22;
+  --text: #e6edf3;
+  --muted: #8d96a0;
+  --border: #30363d;
+  --accent: #4493f8;
+  --add-bg: #12261e;
+  --add-mark: #3fb950;
+  --del-bg: #2d1316;
+  --del-mark: #f85149;
+  --add-bg: rgba(46, 160, 67, 0.15);
+  --del-bg: rgba(248, 81, 73, 0.10);
+  --add-num: rgba(63, 185, 80, 0.30);
+  --del-num: rgba(248, 81, 73, 0.30);
+  --hl-bg: rgba(68, 147, 248, 0.15);
+  --hl-bar: #4493f8;
+  --gap-bg: #121d2f;
+  --high: #f85149;
+  --medium: #db6d28;
+  --low: #8d96a0;
+}
+:root[data-mode="light"] { color-scheme: light; }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-mode]) {
     --bg: #0d1117;
     --panel: #161b22;
     --text: #e6edf3;
@@ -421,3 +447,4 @@ img.diagram { display: block; max-width: none; background: var(--bg); }
   .theme-pick option:checked { font-weight: 600; }
   .theme-pick option::checkmark { content: "▸"; }
 }
+.mode-btn { font-size: 12px; padding: 2px 8px; white-space: nowrap; }

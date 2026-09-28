@@ -43,10 +43,11 @@ the first steps, then the rest. Click a step's file reference to jump the
 code there; `]` and `[` move between steps, `j` and `k` between findings.
 
 The **Theme** menu in the header changes colours and type without moving
-anything: Default follows the system's light or dark setting; Phosphor and
-Amber are CRT terminals; Turbo is a DOS text-mode IDE; 1-bit is black and
-white; Game Boy uses the handheld's four greens; Solarized dark is
-Ethan Schoonover's palette. The choice is kept per
+anything: Default; Phosphor and Amber are CRT terminals; Turbo is a DOS
+text-mode IDE; 1-bit is black and white; Game Boy uses the handheld's four
+greens; Solarized is Ethan Schoonover's palette. The button next to it
+cycles **Auto → Light → Dark**: every theme has a light and a dark version,
+and Auto follows the system setting, changing when it does. Both choices are kept per
 browser. The fonts ship with the viewer (`static/FONTS-LICENSE.txt`, all
 SIL Open Font License), so themes load nothing from the network.
 

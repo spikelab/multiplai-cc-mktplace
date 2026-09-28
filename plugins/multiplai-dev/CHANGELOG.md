@@ -21,11 +21,13 @@ time, not derived from a tag.
 
 ### Added
 
-- **`review-viewer` has six themes**, picked from a Theme menu in the page
+- **`review-viewer` has six themes, each light and dark**, picked from a Theme menu in the page
   header: Phosphor (green CRT), Amber (amber CRT), Turbo (DOS text-mode IDE),
-  1-bit (black and white), Game Boy (four greens) and Solarized dark. They change colours,
-  fonts and edges, not the layout; Default is the previous look. The choice
-  is remembered per browser. Pixel fonts are used for headings and tabs;
+  1-bit (black and white), Game Boy (four greens) and Solarized. They change
+  colours, fonts and edges, not the layout; Default is the previous look.
+  A button beside the menu cycles Auto, Light and Dark: every theme has a
+  light and a dark version, and Auto follows the system setting as it
+  changes. Both choices are remembered per browser. Pixel fonts are used for headings and tabs;
   code and prose use IBM Plex Mono. All fonts ship with the viewer, and the
   page's content security policy now allows fonts from the viewer itself.
 
