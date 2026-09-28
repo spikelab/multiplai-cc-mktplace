@@ -470,15 +470,15 @@ img.diagram { display: block; max-width: none; background: var(--bg); }
 }
 
 /* --- the ? dialog ------------------------------------------------------------ */
-.help { max-width: min(760px, calc(100vw - 32px)); width: 100%; padding: 16px 20px 20px;
+.help { max-width: min(900px, calc(100vw - 32px)); width: 100%; padding: 16px 20px 20px;
   background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35); }
 .help::backdrop { background: rgba(0, 0, 0, 0.45); }
 .help-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .help h2 { font-size: 16px; margin: 0; }
 .help h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 8px 0; }
-.help-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px 32px; }
+.help-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 8px 40px; }
 .help dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 0; align-items: baseline; }
-.help dt { white-space: nowrap; color: var(--muted); font-size: 12px; }
+.help dt { max-width: 11em; color: var(--muted); font-size: 12px; }
 .help dd { margin: 0; }
 .help code { font: 12px var(--mono); }
