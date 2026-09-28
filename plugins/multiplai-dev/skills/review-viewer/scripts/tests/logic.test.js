@@ -64,11 +64,10 @@ test("findings group by severity and hide refuted/rejected", () => {
     { id: "c", severity: "HIGH", status: "refuted" },
     { id: "d", severity: "MEDIUM", status: "unverifiable" },
   ];
-  const decisions = { d: { decision: "reject" } };
-  const shown = L.groupFindings(fs, decisions, false);
-  assert.equal(shown.hidden, 2);
-  assert.deepEqual(L.findingOrder(shown), ["b", "a"]);
-  const all = L.groupFindings(fs, decisions, true);
+  const shown = L.groupFindings(fs, false);
+  assert.equal(shown.hidden, 1);
+  assert.deepEqual(L.findingOrder(shown), ["b", "d", "a"]);
+  const all = L.groupFindings(fs, true);
   assert.deepEqual(L.findingOrder(all), ["b", "c", "d", "a"]);
 });
 
@@ -154,12 +153,6 @@ test("coverage counts anchored or skipped files and linked findings", () => {
   ]);
   assert.deepEqual(cov, { files: 3, filesTotal: 4, findings: 1, findingsTotal: 2 });
   assert.deepEqual(L.walkCoverage(null, ["a"], []), { files: 0, filesTotal: 1, findings: 0, findingsTotal: 0 });
-});
-
-test("walkthrough status text", () => {
-  assert.equal(L.walkStatus(null), "Waiting for the walkthrough");
-  assert.equal(L.walkStatus(WALK), "Walkthrough in progress");
-  assert.equal(L.walkStatus({ complete: true, steps: [] }), "");
 });
 
 test("anchors map to rows by new or old line number", () => {
@@ -418,6 +411,85 @@ test("adding a reference never repeats one; overlapping ones merge", () => {
     "@a.py:12 @a.py:base:12 ");
   assert.equal(L.mergeRef("@a.py:1", files, "a.py", { side: "head", line_start: 5, line_end: 6 }, 0).text,
     "@a.py:5-6 @a.py:1");
+});
+
+test("reply threads keep the latest part's timestamp", () => {
+  const t = L.groupReplies([{ reply_to: "q", text: "a", done: false, ts: "2026-01-01T10:00:00Z" },
+    { reply_to: "q", text: "b", done: true, ts: "2026-01-01T10:01:00Z" }]);
+  assert.equal(t.get("q").ts, "2026-01-01T10:01:00Z");
+});
+
+test("wordDiff marks the changed words of a changed line", () => {
+  const d = L.wordDiff("const x = foo(a, b);", "const x = bar(a, c);");
+  assert.deepEqual(d.del, [[10, 13], [17, 18]]);
+  assert.deepEqual(d.add, [[10, 13], [17, 18]]);
+  // Changed words with only a space between them become one mark.
+  assert.deepEqual(L.wordDiff("return old value;", "return new thing;").add, [[7, 16]]);
+  // A line rewritten from scratch gets no marks: the whole line is the change.
+  assert.equal(L.wordDiff("alpha beta gamma", "one two three"), null);
+  assert.equal(L.wordDiff("a ".repeat(400), "b ".repeat(400)), null);
+});
+
+test("changePairs pairs the i-th deleted row with the i-th added row", () => {
+  const rows = [{ k: "ctx" }, { k: "del" }, { k: "del" }, { k: "add" }, { k: "ctx" }, { k: "add" }];
+  const p = L.changePairs(rows);
+  assert.equal(p.get(1), 3);
+  assert.equal(p.get(3), 1);
+  assert.equal(p.has(2), false);
+  assert.equal(p.has(5), false);
+});
+
+test("markRanges wraps text offsets without breaking the highlighter's tags", () => {
+  const html = '<span class="k">const</span> x &lt; y';
+  assert.equal(L.markRanges(html, [[4, 9]], "wd"),
+    '<span class="k">cons<mark class="wd">t</mark></span><mark class="wd"> x &lt;</mark> y');
+  assert.equal(L.markRanges(html, [], "wd"), html);
+});
+
+test("splitLines pairs deletions left with additions right", () => {
+  const rows = [{ k: "ctx" }, { k: "del" }, { k: "del" }, { k: "add" }, { k: "ctx" }, { k: "gap" }, { k: "add" }];
+  const items = rows.map((_, i) => ({ row: i }));
+  items.splice(4, 1, { fold: [4, 4] });
+  assert.deepEqual(L.splitLines(rows, items), [
+    { left: 0, right: 0 }, { left: 1, right: 3 }, { left: 2, right: null },
+    { fold: [4, 4] }, { gap: 5 }, { left: null, right: 6 },
+  ]);
+});
+
+test("enclosingScope finds the nearest opening line above", () => {
+  const rows = [{ k: "ctx", t: "class A:" }, { k: "ctx", t: "    def run(self):" },
+    { k: "ctx", t: "        x = 1" }, { k: "del", t: "def gone():" }, { k: "add", t: "        y = 2" }];
+  assert.equal(L.enclosingScope(rows, 4), "def run(self):");
+  assert.equal(L.enclosingScope(rows, 0), "class A:");
+  assert.equal(L.enclosingScope([{ k: "ctx", t: "const go = async () => {" }], 0), "const go = async () => {");
+  assert.equal(L.enclosingScope([{ k: "ctx", t: "x = 1" }], 0), null);
+});
+
+test("stepBlock moves between blocks of changes", () => {
+  const starts = [5, 20, 40];
+  assert.equal(L.stepBlock(starts, 0, 1), 0);
+  assert.equal(L.stepBlock(starts, 5, 1), 1);
+  assert.equal(L.stepBlock(starts, 25, 1), 2);
+  assert.equal(L.stepBlock(starts, 40, 1), -1);
+  assert.equal(L.stepBlock(starts, 25, -1), 1);
+  assert.equal(L.stepBlock(starts, 20, -1), 0);
+  assert.equal(L.stepBlock(starts, 3, -1), -1);
+  assert.equal(L.stepBlock([], 3, 1), -1);
+});
+
+test("paletteMatch ranks prefix, then substring, then scattered letters", () => {
+  const e = [{ label: "server.py", sub: "review_viewer" }, { label: "observer.js", sub: "static" },
+    { label: "setup_rv.sh", sub: "scripts" }, { label: "app.js", sub: "static/server" }];
+  assert.deepEqual(L.paletteMatch(e, "serv").map((x) => x.label), ["server.py", "observer.js", "setup_rv.sh", "app.js"]);
+  // Scattered letters: the tighter span ranks first.
+  assert.deepEqual(L.paletteMatch(e, "srv").map((x) => x.label).slice(0, 3), ["server.py", "observer.js", "setup_rv.sh"]);
+  assert.equal(L.paletteMatch(e, "").length, 4);
+  assert.deepEqual(L.paletteMatch(e, "zzz"), []);
+});
+
+test("viewedCount counts only files in the change", () => {
+  assert.deepEqual(L.viewedCount(["a", "b", "c"], { a: "t", gone: "t" }), { done: 1, total: 3 });
+  assert.deepEqual(L.viewedCount(["a"], null), { done: 0, total: 1 });
 });
 
 let failed = 0;
