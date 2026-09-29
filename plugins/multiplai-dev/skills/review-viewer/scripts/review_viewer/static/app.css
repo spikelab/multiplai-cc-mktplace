@@ -12,6 +12,8 @@
   --s3: 12px;
   --s4: 16px;
   --s5: 24px;
+  --fab-size: 48px;
+  --fab-clear: calc(var(--fab-size) + 2 * var(--s5));
   --s6: 32px;
   /* text */
   --fs-xs: 11px;
@@ -663,9 +665,14 @@ pre:hover > .copy-btn, .copy-btn:focus-visible { opacity: 1; }
 .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; outline: none;
   margin: 0 calc(-1 * var(--s3)) var(--s2); background: var(--panel); border-bottom: 1px solid var(--border); }
 
+/* The chat button floats over the bottom right of the page. Every pane under
+ * it ends in blank space as tall as the button, so its last lines can always
+ * be scrolled clear of it. */
+.detail::after, .code::after { content: ""; display: block; height: var(--fab-clear); }
+@media (max-width: 1000px) { .layout::after { content: ""; height: var(--fab-clear); } }
 .chat-fab-wrap { position: fixed; right: var(--s5); bottom: var(--s5); z-index: 25;
   display: flex; align-items: center; gap: var(--s2); }
-.chat-fab { position: relative; width: 48px; height: 48px; padding: 0; border-radius: 50%;
+.chat-fab { position: relative; width: var(--fab-size); height: var(--fab-size); padding: 0; border-radius: 50%;
   display: grid; place-items: center;
   background: var(--accent); border-color: var(--accent); color: var(--on-accent);
   box-shadow: var(--overlay-shadow); transition: transform var(--t-fast) var(--ease); }
