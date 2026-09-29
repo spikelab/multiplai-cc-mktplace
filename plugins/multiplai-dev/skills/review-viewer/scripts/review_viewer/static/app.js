@@ -49,7 +49,6 @@
     fileNote: null,
     ac: null,
     chatOpen: false,
-    quietFocus: false,
     chatJustOpened: false,
     seen: new Set(),
     badgeOpen: null,
@@ -850,7 +849,30 @@
     return $(name).getBoundingClientRect().width;
   }
 
+  /* Hiding a side panel leaves a strip along its edge that brings it back.
+   * Saved with the widths. */
+  function setPanelHidden(name, hidden, save) {
+    const panel = $(name);
+    if (hidden && panel.contains(document.activeElement)) document.activeElement.blur();
+    $("layout").classList.toggle(name + "-hidden", hidden);
+    if (save) prefs.save("review-viewer." + name + "-hidden", hidden ? "1" : "");
+    if (!hidden) $(name === "side" ? "side-hide" : "detail-hide").focus({ preventScroll: true });
+  }
+
+  function togglePanel(name) {
+    setPanelHidden(name, !$("layout").classList.contains(name + "-hidden"), true);
+  }
+
+  function bindPanels() {
+    for (const name of Object.keys(PANELS)) {
+      if (prefs.load("review-viewer." + name + "-hidden") === "1") setPanelHidden(name, true, false);
+      $(name + "-hide").addEventListener("click", () => setPanelHidden(name, true, true));
+      $(name + "-rail").addEventListener("click", () => setPanelHidden(name, false, true));
+    }
+  }
+
   function bindResize() {
+    bindPanels();
     for (const [name, p] of Object.entries(PANELS)) {
       const handle = $(p.handle);
       const saved = prefs.load(p.key);
@@ -1026,6 +1048,7 @@
     if (st.pending) status.append(el("span", { class: "spinner" }), agent + " is answering" + (st.pending > 1 ? " " + st.pending + " messages" : "") + "…");
     else if (st.unread) status.append(el("span", { class: "unread-dot" }), st.unread + " new answer" + (st.unread > 1 ? "s" : "") + " · press c to read");
     $("chat-title").textContent = "Chat with " + agent;
+    renderFab();
     if (!open) return;
     const list = $("thread");
     const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 4;
@@ -1078,36 +1101,49 @@
       : d.toLocaleDateString([], { day: "numeric", month: "short" }) + " " + time;
   }
 
+  /* The drawer opens from the round button, `c`, or "Ask about these lines",
+   * and stays open until it is closed: clicking the code does not close it. */
   function setChatOpen(open) {
     if (state.chatOpen === open) return;
     state.chatOpen = open;
     state.chatJustOpened = open;
-    $("chat").setAttribute("aria-hidden", String(!open));
-    $("composer").classList.toggle("open", open);
-    $("question").rows = open ? 3 : 1;
+    const drawer = $("composer");
+    drawer.classList.toggle("open", open);
+    drawer.setAttribute("aria-hidden", String(!open));
+    $("chat-fab").setAttribute("aria-expanded", String(open));
+    if (open) {
+      const box = $("question");
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+    } else if (drawer.contains(document.activeElement)) {
+      document.activeElement.blur();
+    }
     renderThread();
+  }
+
+  /* The round button: a spinner while an answer is being written, a dot for
+   * unread answers, and a note beside it for those or for an unsent draft. */
+  function renderFab() {
+    const st = L.chatStatus(state.questions, state.replies, state.seen);
+    const open = state.chatOpen;
+    $("chat-fab").parentElement.hidden = open;
+    $("chat-fab").classList.toggle("busy", !!st.pending);
+    $("fab-dot").hidden = !st.unread;
+    const draft = $("question").value.trim();
+    const note = $("fab-note");
+    const text = st.unread ? st.unread + " new answer" + (st.unread > 1 ? "s" : "") + " · press c"
+      : draft ? "Unsent message · " + $("ask-about").textContent : "";
+    note.textContent = text;
+    note.hidden = open || !text;
   }
 
   function bindChat() {
     const footer = $("composer");
-    // Focus from a click into the box opens the chat. Focus that insertRef
-    // gives the box (a line clicked in the code) does not, so the chat does
-    // not cover the code while more lines are being picked; typing opens it.
-    footer.addEventListener("focusin", () => {
-      if (state.quietFocus) { state.quietFocus = false; return; }
-      setChatOpen(true);
-    });
-    $("question").addEventListener("mousedown", () => setChatOpen(true));
-    $("question").addEventListener("input", () => setChatOpen(true));
-    footer.addEventListener("focusout", () => {
-      // Focus moving within the footer (the chat, its links) keeps it open.
-      setTimeout(() => { if (!footer.contains(document.activeElement)) setChatOpen(false); }, 0);
-    });
-    $("chat-close").addEventListener("click", () => { document.activeElement.blur(); setChatOpen(false); });
+    $("chat-fab").addEventListener("click", () => setChatOpen(true));
+    $("chat-close").addEventListener("click", () => setChatOpen(false));
     footer.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape" && !state.ac) {
         ev.stopPropagation();
-        document.activeElement.blur();
         setChatOpen(false);
       }
     });
@@ -1687,7 +1723,7 @@
 
   function askAboutPick() {
     if (!state.pick) return;
-    insertRef(state.pick.path, { side: "head", line_start: state.pick.start, line_end: state.pick.end });
+    insertRef(state.pick.path, { side: "head", line_start: state.pick.start, line_end: state.pick.end }, { open: true });
     $("ask-lines").hidden = true;
   }
 
@@ -1710,18 +1746,22 @@
   }
 
   /* Put "@path:lines" into the question at the caret, with spaces around it. */
-  function insertRef(path, ref) {
+  /* Adds a line reference to the message. With the chat closed it stays
+   * closed (more lines can be picked; the button shows the unsent message)
+   * unless `open` is asked for. */
+  function insertRef(path, ref, opts) {
     const box = $("question");
     const at = document.activeElement === box ? box.selectionStart : null;
     const merged = L.mergeRef(box.value, state.detail.files, path, ref, at);
     box.value = merged.text;
-    const caret = merged.caret;
-    if (document.activeElement !== box) state.quietFocus = true;
-    box.focus();
-    state.quietFocus = false;  // focusin already ran, or never will (window not focused)
-    box.setSelectionRange(caret, caret);
+    if (opts && opts.open) setChatOpen(true);
+    if (state.chatOpen) {
+      box.focus();
+      box.setSelectionRange(merged.caret, merged.caret);
+    }
     closeAc();
     renderAskAbout();
+    renderFab();
   }
 
   function closeAc() {
@@ -1929,7 +1969,6 @@
     $("tab-summary").addEventListener("click", () => setTab("summary"));
     $("tab-walk").addEventListener("click", () => setTab("walk"));
     $("help-btn").addEventListener("click", toggleHelp);
-    $("goto-btn").addEventListener("click", openPalette);
     $("palette-input").addEventListener("input", () => { state.palette.index = 0; renderPalette(); });
     $("palette-input").addEventListener("keydown", onPaletteKey);
     $("palette").addEventListener("click", (ev) => { if (ev.target === $("palette")) $("palette").close(); });
@@ -1949,6 +1988,11 @@
     // A click on the backdrop lands on the dialog itself, outside its content.
     $("help").addEventListener("click", (ev) => { if (ev.target === $("help")) $("help").close(); });
     document.addEventListener("keydown", (ev) => {
+      if ((ev.ctrlKey || ev.metaKey) && !ev.shiftKey && ev.code === "KeyB") {
+        ev.preventDefault();
+        togglePanel(ev.altKey ? "detail" : "side");
+        return;
+      }
       if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey && (ev.key === "k" || ev.key === "K")) {
         ev.preventDefault();
         if ($("palette").open) $("palette").close();
@@ -1963,6 +2007,7 @@
       const typing = ev.target.closest && ev.target.closest("input, textarea, select");
       if (ev.key === "Escape") {
         if (typing) ev.target.blur();
+        if (state.chatOpen && !state.pick) setChatOpen(false);
         clearPick();
         return;
       }
@@ -1991,8 +2036,7 @@
         setWrap(!state.wrap);
       } else if (ev.key === "c") {
         ev.preventDefault();
-        $("question").focus();
-        setChatOpen(true);
+        setChatOpen(!state.chatOpen);
       }
     });
   }

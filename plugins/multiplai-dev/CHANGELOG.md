@@ -30,13 +30,20 @@ time, not derived from a tag.
   not only the whole line.
 - review-viewer: above the code, the function or class you are scrolled into,
   "change 2 of 5", and ▲ ▼ buttons (`n` / `p`) to jump between changes.
-- review-viewer: **Go to** (`Ctrl+K`, or the header button) finds a file,
-  review step or finding by name.
+- review-viewer: **Go to** (`Ctrl+K`) finds a file, review step or finding by
+  name.
 - review-viewer: `?` opens a list of every shortcut.
+- review-viewer: each side panel has a hide button (`Ctrl+B` for the files,
+  `Ctrl+Alt+B` for the review panel). A hidden panel leaves a thin strip along
+  its edge; click it to bring the panel back. Remembered like the theme.
 
 ### Changed
-- review-viewer: the chat opens over the right panel instead of over the code,
-  shows who wrote each message and when, and code blocks in answers have a
+- review-viewer: the chat is a round button in the bottom-right corner instead
+  of a message bar across the bottom. The button (or `c`) opens a drawer from
+  the bottom with the conversation and the message box; it stays open until
+  closed (`Esc`, `c` or Close). The button shows a spinner while an answer is
+  being written, a dot for unread answers, and a note for an unsent message.
+  Messages show who wrote them and when, and code blocks in answers have a
   Copy button.
 - review-viewer: while the session is still writing, the Summary and Reviews
   tabs show placeholder blocks and what is being written, instead of a sentence.

@@ -232,7 +232,7 @@
 :root[data-theme] .top { background: var(--head-bg); color: var(--head-text); border-bottom: 2px solid var(--border); }
 :root[data-theme] .top .muted, :root[data-theme] .top .theme-pick { color: var(--head-text); opacity: 0.85; }
 :root[data-theme] .composer { background: var(--foot-bg); color: var(--foot-text); border-top: 2px solid var(--border); }
-:root[data-theme] .composer .muted { color: var(--foot-text); opacity: 0.8; }
+:root[data-theme] .composer-head .muted { color: var(--foot-text); opacity: 0.8; }
 
 /* Pixel type for the chrome only; prose and code stay in the mono face. */
 :root[data-theme] .top h1 { font: var(--d-lg)/1 var(--display); letter-spacing: 0.02em; text-shadow: 0 0 6px var(--glow); }
@@ -256,7 +256,9 @@
 }
 :root[data-theme] #send:active { transform: translate(3px, 3px); box-shadow: none; }
 :root[data-theme] .float-btn { background: var(--sel-bg); color: var(--sel-text); border-color: var(--sel-bg); }
-:root[data-theme] .chat { box-shadow: -6px -6px 0 var(--shadow); border: 2px solid var(--border); border-bottom: 0; }
+:root[data-theme] .composer { box-shadow: 0 -6px 0 var(--shadow); }
+:root[data-theme] .chat { background: var(--panel); color: var(--text); }
+:root[data-theme] .chat-fab, :root[data-theme] .fab-note { border-radius: 0; box-shadow: 4px 4px 0 var(--shadow); border: 2px solid var(--border); }
 :root[data-theme] .ac { box-shadow: 4px 4px 0 var(--shadow); border-width: 2px; }
 :root[data-theme] .resizer { border-left-width: 2px; }
 

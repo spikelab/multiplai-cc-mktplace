@@ -216,8 +216,6 @@ code { font: 0.92em var(--mono); }
 .theme-pick { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); white-space: nowrap; }
 .theme-pick select.ctl { padding-right: var(--s5); }
 .help-btn { width: var(--ctl-h); padding: 0; justify-content: center; font-weight: 700; }
-.goto-btn { color: var(--muted); min-width: 160px; justify-content: space-between; }
-.goto-btn kbd { font-size: 10px; }
 /* The theme menu's option list is drawn by the page, not the OS, where the
    browser allows it (Chrome 135+); elsewhere it stays the native menu. */
 @supports (appearance: base-select) {
@@ -242,10 +240,34 @@ code { font: 0.92em var(--mono); }
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: var(--side-w, 280px) 6px minmax(0, 1fr) 6px var(--detail-w, 380px);
+  grid-template-columns: var(--side-col, var(--side-w, 280px)) var(--side-gap, 6px) minmax(0, 1fr)
+    var(--detail-gap, 6px) var(--detail-col, var(--detail-w, 380px));
   /* One row the height of the window, so each pane scrolls on its own. */
   grid-template-rows: minmax(0, 1fr);
+  transition: grid-template-columns var(--t-med) var(--ease);
 }
+body.resizing .layout { transition: none; }
+
+/* A hidden side panel leaves a strip along its edge; clicking it brings the
+   panel back. */
+.layout.side-hidden { --side-col: 28px; --side-gap: 0px; }
+.layout.detail-hidden { --detail-col: 28px; --detail-gap: 0px; }
+.layout.side-hidden #side-resize, .layout.detail-hidden #detail-resize { visibility: hidden; }
+.layout.side-hidden .side, .layout.detail-hidden .detail { padding: 0; overflow: hidden; }
+.layout.side-hidden .side > :not(.rail), .layout.detail-hidden .detail > :not(.rail) { display: none; }
+.rail { display: none; }
+.layout.side-hidden #side-rail, .layout.detail-hidden #detail-rail {
+  display: flex; flex-direction: column; align-items: center; gap: var(--s3);
+  width: 100%; height: 100%; padding: var(--s3) 0; border: 0; border-radius: 0;
+  background: var(--panel); color: var(--muted); cursor: pointer;
+}
+#side-rail { border-right: 1px solid var(--border); }
+#detail-rail { border-left: 1px solid var(--border); }
+.rail:hover, .rail:focus-visible { color: var(--text); background: var(--hl-bg); outline: none; }
+.rail-arrow { font-size: var(--fs-lg); line-height: 1; }
+.rail-label { writing-mode: vertical-rl; font-size: var(--fs-xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.hide-btn { width: var(--ctl-h-sm); padding: 0; justify-content: center; color: var(--muted); font-size: var(--fs-md); }
+.side-h .hide-btn { margin-left: var(--s2); }
 .side, .detail { overflow: auto; background: var(--panel); }
 .side { padding: 0 var(--s3) var(--s3); }
 .detail { padding: 0 var(--s3) var(--s4); overflow-x: hidden; }
@@ -260,8 +282,9 @@ body.resizing { cursor: col-resize; user-select: none; }
   .side, .detail { border-bottom: 1px solid var(--border); }
   .resizer { display: none; }
   .code { max-height: 70vh; }
-  .goto-btn span, .theme-pick > span { display: none; }
-  .goto-btn { min-width: 0; }
+  .theme-pick > span { display: none; }
+  .layout.side-hidden #side-rail, .layout.detail-hidden #detail-rail { flex-direction: row; height: 36px; justify-content: center; }
+  .rail-label { writing-mode: horizontal-tb; }
 }
 
 /* --- file list -------------------------------------------------------------------- */
@@ -412,7 +435,9 @@ mark.wd-del { background: var(--del-word); color: inherit; border-radius: 2px; }
 
 .tabs { display: flex; gap: var(--s1); border-bottom: 1px solid var(--border); }
 /* The tabs stay at the top of the right panel while its content scrolls. */
-.detail > .tabs { position: sticky; top: 0; z-index: 2; background: var(--panel); margin: 0 calc(-1 * var(--s3)) var(--s3); padding: var(--s2) var(--s3) 0; }
+.detail-top { position: sticky; top: 0; z-index: 2; background: var(--panel); margin: 0 calc(-1 * var(--s3)) var(--s3); padding: var(--s2) var(--s3) 0; }
+.detail-top .tabs { padding-right: calc(var(--ctl-h-sm) + var(--s2)); }
+.detail-top .hide-btn { position: absolute; right: var(--s3); top: calc(var(--s2) + 6px); }
 .tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 0 10px; min-height: 34px; color: var(--muted); }
 .tabs button:hover { color: var(--text); }
 .tabs button.active { border-bottom-color: var(--accent); font-weight: 600; color: var(--text); }
@@ -604,10 +629,23 @@ pre:hover > .copy-btn, .copy-btn:focus-visible { opacity: 1; }
 
 /* --- composer and chat ---------------------------------------------------------------- */
 
-.composer { position: relative; border-top: 1px solid var(--border); background: var(--panel); padding: var(--s2) var(--s3) 10px; }
+/* The chat lives in a drawer that slides up from the bottom; closed, it is a
+   round button in the bottom-right corner. */
+.composer {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  height: min(60vh, 560px);
+  display: flex; flex-direction: column;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  box-shadow: var(--overlay-shadow);
+  padding: 0 var(--s3) 10px;
+  visibility: hidden; transform: translateY(100%);
+  transition: transform var(--t-med) var(--ease), visibility 0s linear var(--t-med);
+}
+.composer.open { visibility: visible; transform: none; transition-delay: 0s; }
 .composer-head { display: flex; gap: var(--s3); align-items: center; min-height: 20px; margin-bottom: 6px; font-size: var(--fs-sm); }
 .ask-about { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-status { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); white-space: nowrap; }
+.chat-status { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); white-space: nowrap; font-size: var(--fs-sm); margin-left: auto; }
 .chat-status:empty { display: none; }
 .composer-hint { white-space: nowrap; }
 .composer-hint kbd { font-size: 10px; }
@@ -617,27 +655,27 @@ pre:hover > .copy-btn, .copy-btn:focus-visible { opacity: 1; }
 .composer-input { position: relative; flex: 1; min-width: 0; }
 .composer textarea { width: 100%; height: auto; min-height: var(--input-h); max-height: 30vh; padding: 7px 10px;
   line-height: 20px; resize: vertical; display: block; }
-.composer:not(.open) textarea { height: var(--input-h); resize: none; }
 .send-btn { height: var(--input-h); min-width: 80px; padding: 0 18px; font-weight: 600;
   background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .send-btn:hover { filter: brightness(1.08); }
+.chat { flex: 1; min-height: 0; display: flex; flex-direction: column; outline: none;
+  margin: 0 calc(-1 * var(--s3)) var(--s2); background: var(--panel); border-bottom: 1px solid var(--border); }
 
-/* The chat opens upward over the right panel, so the code stays in view. */
-.chat {
-  position: absolute; right: 0; bottom: 100%; z-index: 20;
-  width: max(var(--detail-w, 380px), 420px);
-  max-width: 100vw;
-  height: min(72vh, calc(100vh - 140px));
-  display: flex; flex-direction: column;
-  background: var(--panel);
-  border: 1px solid var(--border); border-bottom: 0;
-  border-radius: var(--radius-lg) 0 0 0;
-  box-shadow: var(--overlay-shadow);
-  outline: none;
-  visibility: hidden; opacity: 0; transform: translateY(12px);
-  transition: opacity var(--t-med) var(--ease), transform var(--t-med) var(--ease), visibility 0s linear var(--t-med);
-}
-.composer.open .chat { visibility: visible; opacity: 1; transform: none; transition-delay: 0s; }
+.chat-fab-wrap { position: fixed; right: var(--s5); bottom: var(--s5); z-index: 25;
+  display: flex; align-items: center; gap: var(--s2); }
+.chat-fab { position: relative; width: 48px; height: 48px; padding: 0; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+  box-shadow: var(--overlay-shadow); transition: transform var(--t-fast) var(--ease); }
+.chat-fab:hover { transform: scale(1.06); }
+.chat-fab svg { width: 22px; height: 22px; fill: currentColor; }
+.fab-dot { position: absolute; top: 1px; right: 1px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--high); border: 2px solid var(--bg); }
+.chat-fab.busy::after { content: ""; position: absolute; inset: -5px; border-radius: 50%;
+  border: 2px solid transparent; border-top-color: var(--accent); animation: spin 1s linear infinite; }
+.fab-note { max-width: min(420px, 50vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: var(--s1) var(--s3); font-size: var(--fs-sm);
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--overlay-shadow); }
 .chat-head { display: flex; justify-content: space-between; align-items: center; padding: 10px var(--s4);
   border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .thread { list-style: none; padding: var(--s3) var(--s4); margin: 0; overflow: auto; flex: 1; }
