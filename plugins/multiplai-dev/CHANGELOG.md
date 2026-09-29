@@ -52,6 +52,12 @@ time, not derived from a tag.
   remembered across viewers (a cookie shared by every port, and by every
   OrbStack container). Before, each new viewer forgot them.
 - review-viewer: the header no longer shows which session answers.
+- review-viewer: while any GitHub check on the PR is still running, the page
+  asks GitHub again every minute (the server calls `gh` at most once a minute
+  per PR), so "Checks: N running" turns into passing or failing by itself.
+- review-viewer: if no walkthrough has appeared 3 minutes after the page
+  loads, the Summary and Reviews tabs stop showing a spinner and say nothing
+  has been written, and to ask for one in the chat.
 - review-viewer: the server no longer stops itself 30 minutes after the last
   page closes; it runs until `stop` or until its container ends. `serve --idle
   <minutes>` brings the old behaviour back.

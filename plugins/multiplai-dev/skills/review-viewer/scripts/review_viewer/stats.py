@@ -247,6 +247,10 @@ def lockfile_badge(s: ChangeStats) -> Badge | None:
                  f"(+{lock.get('added', 0)} −{lock.get('deleted', 0)}); dependencies moved.")
 
 
+# The ids pr_badges() can return, so a refresh can replace exactly those.
+PR_BADGE_IDS = frozenset({"pr-body", "checks", "conflicts", "draft", "approval"})
+
+
 def pr_badges(pr: dict | None) -> list[Badge]:
     """Badges from the PR metadata `serve` already fetched."""
     if not pr:

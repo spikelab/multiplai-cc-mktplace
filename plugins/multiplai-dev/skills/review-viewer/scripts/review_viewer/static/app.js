@@ -326,6 +326,14 @@
     renderTabs();
     renderWalk();
     renderSummary();
+    schedulePrRefresh();
+    state.walkSince = Date.now();
+    const walkGen = state.pollGen;
+    setTimeout(() => {
+      if (walkGen !== state.pollGen || state.walk) return;
+      renderWalk();
+      renderSummary();
+    }, WALK_WAIT_MS + 50);
     await Promise.all([pollOnce(), pollWalk()]);
     const first = L.findingOrder(L.groupFindings(state.detail.findings.findings, state.detail.decisions, state.showHidden))[0];
     if (first) await selectFinding(first, { stay: true });
@@ -333,6 +341,31 @@
       renderDetail();
       if (state.detail.files.length) await openFile(state.detail.files[0]);
     }
+  }
+
+  // --- PR checks: asked again every minute while any is still running ---------------
+
+  const PR_REFRESH_MS = 60000;
+
+  function schedulePrRefresh() {
+    clearTimeout(state.prTimer);
+    const pr = state.detail.pr;
+    if (!pr || !pr.checks || !pr.checks.pending) return;
+    const gen = state.pollGen;
+    state.prTimer = setTimeout(async () => {
+      if (gen !== state.pollGen) return;
+      try {
+        const res = await api(targetUrl("/pr"));
+        if (gen !== state.pollGen) return;
+        state.detail.pr = res.pr;
+        state.detail.stats = res.stats;
+        renderHeader();
+        renderSummary();
+      } catch (err) {
+        // A server that is gone shows its own card; try again next minute.
+      }
+      schedulePrRefresh();
+    }, PR_REFRESH_MS);
   }
 
   // --- header, tabs ----------------------------------------------------------------
@@ -388,6 +421,17 @@
     return box;
   }
 
+  /* The page cannot see whether the session is writing a walkthrough. The
+   * session starts one within a minute or two of serving the page, so after
+   * WALK_WAIT_MS with nothing written, stop claiming it is on the way. */
+  const WALK_WAIT_MS = 3 * 60 * 1000;
+  const NO_WALK_TEXT = "Nothing has been written yet, so the session may not be writing a walkthrough. " +
+    "Ask for one in the chat below.";
+
+  function walkOverdue() {
+    return !state.walk && Date.now() - state.walkSince >= WALK_WAIT_MS;
+  }
+
   function emptyState(icon, text) {
     return el("div", { class: "empty-state" }, [el("span", { class: "big", text: icon }), text]);
   }
@@ -405,7 +449,7 @@
       const mine = badges.filter((b) => b.source === source);
       const row = el("div", { class: "badge-row" }, [el("div", { class: "label", text: title })]);
       if (!mine.length) {
-        if (source === "assessed" && (!state.walk || !state.walk.complete)) {
+        if (source === "assessed" && (!state.walk || !state.walk.complete) && !walkOverdue()) {
           for (let i = 0; i < 3; i++) row.appendChild(el("span", { class: "skel pill" }));
         } else {
           row.appendChild(el("span", { class: "muted small", text: source === "measured"
@@ -432,8 +476,9 @@
     }
     const overview = $("walk-overview");
     if (!state.walk) {
-      overview.replaceChildren(el("div", { class: "label", text: "Overview" }),
-        skeleton((state.who ? state.who.agent : "The session") + " is reading the diff and writing the overview"));
+      overview.replaceChildren(el("div", { class: "label", text: "Overview" }), walkOverdue()
+        ? emptyState("✎", NO_WALK_TEXT)
+        : skeleton((state.who ? state.who.agent : "The session") + " is reading the diff and writing the overview"));
     } else {
       renderMarkdown(overview, state.walk.overview_md);
       overview.insertBefore(el("div", { class: "label", text: "Overview" }), overview.firstChild);
@@ -497,8 +542,10 @@
     const list = $("walk-steps");
     list.replaceChildren();
     if (!state.walk) {
-      $("walk-step").replaceChildren(skeleton((state.who ? state.who.agent : "The session") + " is writing the reviews",
-        ["w75", "w60", "w75", "w40"]));
+      $("walk-step").replaceChildren(walkOverdue()
+        ? emptyState("✎", NO_WALK_TEXT)
+        : skeleton((state.who ? state.who.agent : "The session") + " is writing the reviews",
+          ["w75", "w60", "w75", "w40"]));
       return;
     }
     state.walk.steps.forEach((s, i) => {

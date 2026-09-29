@@ -112,6 +112,10 @@ head/base ref, check counts, mergeable, draft, review decision — from the one
 `findings.json`), `notice` (a review exists for other commits) and `stats`
 (`stats.change_stats`: line counts by file kind, commits, and the measured
 badges with their thresholds; null when git cannot read the range).
+`GET /api/targets/<slug>/pr` returns `{pr, stats}`, first asking GitHub again
+(`gitdata.pr_status`: checks, mergeable, draft, review decision) when the last
+answer is older than `PR_REFRESH_S` (60 s); the PR badges in `stats` are
+rebuilt from it. The page calls it once a minute while a check is pending.
 
 ## Git output
 
