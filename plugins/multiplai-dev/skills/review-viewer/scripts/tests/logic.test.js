@@ -469,6 +469,41 @@ test("stepBlock moves between blocks of changes", () => {
   assert.equal(L.stepBlock([], 3, 1), -1);
 });
 
+test("currentBlock keeps a block the pane cannot scroll up to the reference line", () => {
+  const starts = [5, 20, 40];
+  const mid = { top: false, bottom: false };
+  const bottom = { top: false, bottom: true };
+  const top = { top: true, bottom: false };
+  // Away from the ends, the reference line decides.
+  assert.equal(L.currentBlock(starts, 25, 40, mid), 1);
+  assert.equal(L.currentBlock(starts, 2, null, top), -1);
+  // At the bottom, the last block stepped to wins even though row 40 never
+  // reaches the line.
+  assert.equal(L.currentBlock(starts, 25, 40, bottom), 2);
+  // At the top, a block above the line wins the same way.
+  assert.equal(L.currentBlock(starts, 25, 5, top), 0);
+  // A pin behind the line in the wrong direction is ignored.
+  assert.equal(L.currentBlock(starts, 25, 5, bottom), 1);
+  // A pin that is no longer a block start is ignored.
+  assert.equal(L.currentBlock(starts, 25, 41, bottom), 1);
+});
+
+test("stepCurrent steps on from a pinned block at the end of the scroll range", () => {
+  const starts = [5, 20, 40];
+  const bottom = { top: false, bottom: true };
+  const both = { top: true, bottom: true };
+  // The reference line is stuck in block 1; Next reaches 2, then stops.
+  assert.equal(L.stepCurrent(starts, 25, null, bottom, 1), 2);
+  assert.equal(L.stepCurrent(starts, 25, 40, bottom, 1), -1);
+  assert.equal(L.stepCurrent(starts, 25, 40, bottom, -1), 1);
+  // A file that fits on screen: every block is reachable with Next and Prev.
+  assert.equal(L.stepCurrent(starts, 6, 20, both, 1), 2);
+  assert.equal(L.stepCurrent(starts, 21, 5, both, 1), 1);
+  assert.equal(L.stepCurrent(starts, 21, 5, both, -1), -1);
+  // Without a pin it behaves like stepBlock.
+  assert.equal(L.stepCurrent(starts, 25, null, { top: false, bottom: false }, -1), 1);
+});
+
 test("paletteMatch ranks prefix, then substring, then scattered letters", () => {
   const e = [{ label: "server.py", sub: "review_viewer" }, { label: "observer.js", sub: "static" },
     { label: "setup_rv.sh", sub: "scripts" }, { label: "app.js", sub: "static/server" }];
