@@ -808,6 +808,30 @@
     return next >= 0 && next < starts.length ? next : -1;
   }
 
+  /* The index in `starts` of the current block of changes. It is the block at
+   * row `ri` (the reference line), unless the pane cannot scroll far enough to
+   * bring the block last stepped to (starting at row `pinRow`) up to that line:
+   * `edge` says which ends the pane is against ({ top, bottom }), and a pinned
+   * block below the line at the bottom, or above it at the top, wins. */
+  function currentBlock(starts, ri, pinRow, edge) {
+    let pos = -1;
+    if (ri != null) for (let i = 0; i < starts.length; i++) if (starts[i] <= ri) pos = i;
+    const pin = pinRow == null ? -1 : starts.indexOf(pinRow);
+    if (pin < 0 || !edge) return pos;
+    if ((edge.bottom && pin > pos) || (edge.top && pin < pos)) return pin;
+    return pos;
+  }
+
+  /* The index in `starts` of the block `delta` away from the current one
+   * (see currentBlock); -1 when there is none. */
+  function stepCurrent(starts, ri, pinRow, edge, delta) {
+    const cur = currentBlock(starts, ri, pinRow, edge);
+    const pos = currentBlock(starts, ri, null, null);
+    if (cur === pos) return ri == null ? -1 : stepBlock(starts, ri, delta);
+    const next = cur + delta;
+    return next >= 0 && next < starts.length ? next : -1;
+  }
+
   // --- the Go to palette -------------------------------------------------------------
 
   /* Entries whose text matches `query` as a subsequence, best first:
@@ -883,6 +907,7 @@
     tokens: tokens, wordDiff: wordDiff, changePairs: changePairs, markRanges: markRanges,
     splitLines: splitLines, oldNumbers: oldNumbers, enclosingScope: enclosingScope, stepBlock: stepBlock,
     riskInputs: riskInputs, riskLevel: riskLevel, TIER_NAMES: TIER_NAMES,
+    currentBlock: currentBlock, stepCurrent: stepCurrent,
     paletteMatch: paletteMatch, viewedCount: viewedCount,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

@@ -60,6 +60,7 @@
     split: false,
     wrap: false,
     blockRows: [],
+    blockPin: null,
     shownMsgs: new Set(),
     fatal: null,
     toastTimer: null,
@@ -1510,35 +1511,54 @@
    * jumped to lands (see moveBlock). */
   const REF_OFFSET = 72;
 
+  /* Which ends of its scroll range the code pane is against. A pane that
+   * does not scroll is against both. */
+  function paneEdge() {
+    const code = $("code");
+    return { top: code.scrollTop <= 1, bottom: code.scrollTop + code.clientHeight >= code.scrollHeight - 1 };
+  }
+
+  /* The block of changes Prev/Next last moved to in this file, by its first
+   * row. It stays current while the pane cannot scroll that block up to the
+   * reference line: near the end or the start of the file, or when the whole
+   * file fits on screen. */
+  function blockPin() {
+    const pin = state.blockPin;
+    return pin && state.view && pin.path === state.view.path ? pin.row : null;
+  }
+
   function updateBlockLine() {
     const view = state.view;
     const starts = state.blockRows || [];
     const ri = view && !view.binary ? rowAt(REF_OFFSET) : null;
-    let k = 0;
-    if (ri != null) for (const s of starts) if (s <= ri) k += 1;
+    const edge = paneEdge();
+    const k = L.currentBlock(starts, ri, blockPin(), edge) + 1;
     const scope = ri != null ? L.enclosingScope(view.rows, ri) : null;
     $("block-where").textContent = scope ? "in " + scope : "";
     $("block-where").title = scope || "";
     $("block-pos").textContent = !starts.length ? "no changes shown"
       : k ? "change " + k + " of " + starts.length : starts.length + " change" + (starts.length === 1 ? "" : "s");
-    $("block-prev").disabled = ri == null || L.stepBlock(starts, ri, -1) < 0;
-    $("block-next").disabled = ri == null || L.stepBlock(starts, ri, 1) < 0;
+    $("block-prev").disabled = ri == null || L.stepCurrent(starts, ri, blockPin(), edge, -1) < 0;
+    $("block-next").disabled = ri == null || L.stepCurrent(starts, ri, blockPin(), edge, 1) < 0;
   }
 
   function moveBlock(delta) {
     const ri = rowAt(REF_OFFSET);
     if (ri == null) return;
-    const idx = L.stepBlock(state.blockRows, ri, delta);
+    const idx = L.stepCurrent(state.blockRows, ri, blockPin(), paneEdge(), delta);
     if (idx < 0) return;
     const target = state.blockRows[idx];
     const tr = rowEl(target);
     if (!tr) return;
+    state.blockPin = { path: state.view.path, row: target };
     const code = $("code");
     const top = tr.getBoundingClientRect().top - code.getBoundingClientRect().top + code.scrollTop;
     code.scrollTo({ top: Math.max(0, top - REF_OFFSET + 8), behavior: reducedMotion() ? "auto" : "smooth" });
     tr.classList.remove("flash");
     void tr.offsetWidth;
     tr.classList.add("flash");
+    // When the pane is already as far as it goes, no scroll event follows.
+    updateBlockLine();
   }
 
   function reducedMotion() {
