@@ -149,6 +149,11 @@ def check(wt: Walkthrough, ff: FindingsFile) -> list[str]:
         for fid in step.finding_ids:
             if fid not in known:
                 errors.append(f"{where}: finding {fid} is not in the loaded findings")
+        # The page shows linked findings under the step; the text must not repeat them.
+        named = sorted(fid for fid in known if fid in step.body_md)
+        if named:
+            errors.append(f"{where}: body_md names finding {', '.join(named)}; the page shows "
+                          "linked findings under the step, so explain the code instead")
     for k in wt.skipped:
         if k.path not in changed:
             errors.append(f"skipped {k.path}: not a changed file in this diff")

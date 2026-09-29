@@ -115,6 +115,13 @@ def test_rule4_complete_needs_every_file_and_finding(complete, ff):
     assert errors_for(complete, ff) == []
 
 
+def test_step_text_must_not_restate_a_finding(complete, ff):
+    complete["steps"][0]["body_md"] = f"**Finding {HIGH} (HIGH):** totals drop the quantity."
+    assert errors_for(complete, ff) == [
+        f"step totals: body_md names finding {HIGH}; the page shows linked findings under "
+        "the step, so explain the code instead"]
+
+
 def test_rule5_step_ids_are_unique(complete, ff):
     complete["steps"][1]["id"] = "totals"
     errs = errors_for(complete, ff)

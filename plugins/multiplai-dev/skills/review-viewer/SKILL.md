@@ -196,7 +196,10 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   Draw top to bottom (`flowchart TD`) and keep it under about 8 nodes, so it
   fits without scrolling.
 - When findings are loaded, link each finding from the step where its code is
-  explained, and say in that step's text what is wrong and why.
+  explained, by its id in `finding_ids`. The page shows each linked finding in
+  full under the step, so the step's text explains the code and never restates
+  a finding: no finding ids, no "Finding …:" paragraphs. `put` rejects a step
+  whose text names a finding id.
 - The page shows the overview and, for a PR, its description on a
   **Summary** tab, under badges. The server measures some badges from git and
   GitHub: size, tests changed, commit hygiene, TODOs, lock files, and for a
@@ -268,7 +271,7 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review-viewer/scripts \
 `status` prints the target's shas, the changed files no step covers and the
 findings no step links. `put` exits 2 and publishes nothing when a step
 anchors a file outside the diff, a line range past the end of the file, an
-unknown finding id, a duplicate step id, a `size` or `risk` assessment, an
+unknown finding id, a step whose text names a finding id, a duplicate step id, a `size` or `risk` assessment, an
 assessment title over 32 characters, or — with `complete: true` — leaves
 a changed file uncovered, a confirmed or unverifiable finding unlinked,
 the `commits` or `tests` assessment missing, or no `risk` block.

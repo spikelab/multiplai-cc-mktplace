@@ -38,6 +38,11 @@ time, not derived from a tag.
   longer wrap. `walkthrough put` rejects `size` and `risk` assessments;
   walkthroughs written before 0.22.0 still load.
 
+### Fixed
+- review-viewer: a walkthrough step no longer restates its findings in its
+  text; the page already shows them in full under the step. `walkthrough put`
+  rejects a step whose text names a finding id.
+
 ## [0.21.0] - 2026-09-29
 
 ### Added
