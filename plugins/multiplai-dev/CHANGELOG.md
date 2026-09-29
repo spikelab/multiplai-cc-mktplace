@@ -17,6 +17,27 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-09-29
+
+### Added
+- review-viewer: a **risk of merging** score (Low / Medium / High) in the page
+  header and at the top of the Summary tab. Fixed rules combine how critical
+  the changed code is, whether a revert can undo it, size, PR checks, the
+  tests verdict and the confirmed findings nobody rejected; the badge lists
+  the rules that fired and every input. It updates as findings are rejected.
+- review-viewer: an optional `.review-risk.toml` at a repo's root maps paths
+  to criticality tiers; those files take the file's tier instead of the
+  session's judgment.
+- review-viewer: walkthroughs carry a `risk` block (tier, revertable, and the
+  reasons), required once complete.
+
+### Changed
+- review-viewer: the `commits` and `tests` assessments are judged by a fixed
+  rubric in SKILL.md, and an assessment no longer restates a measured badge.
+- review-viewer: assessment titles are at most 32 characters and badges no
+  longer wrap. `walkthrough put` rejects `size` and `risk` assessments;
+  walkthroughs written before 0.22.0 still load.
+
 ## [0.21.0] - 2026-09-29
 
 ### Added

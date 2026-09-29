@@ -366,6 +366,73 @@
     return out;
   }
 
+  // --- the risk of merging -----------------------------------------------------
+
+  const TIER_NAMES = ["docs, tests or tooling", "one feature", "a shared module or interface",
+    "auth, money, data, shared infra or deploy config"];
+
+  /* The inputs to riskLevel, gathered from what the page has: the measured
+   * stats (size, PR checks, the repo's tier file), the walkthrough (the
+   * session's tier and revert judgment, the tests verdict) and the findings
+   * with their decisions. Null until the walkthrough has a risk block. A
+   * finding counts as open while it is confirmed and not rejected. */
+  function riskInputs(stats, walk, findings, decisions, changed) {
+    if (!walk || !walk.risk) return null;
+    const repoTiers = (stats && stats.tiers) || {};
+    const files = changed || [];
+    const unmatched = files.filter((p) => !(p in repoTiers));
+    const matched = Object.values(repoTiers);
+    const fileTier = matched.length ? Math.max.apply(null, matched) : -1;
+    const useSession = unmatched.length > 0 || !matched.length;
+    const sessionTier = useSession ? walk.risk.tier : -1;
+    const tier = Math.max(fileTier, sessionTier);
+    const badge = (id) => ((stats && stats.badges) || []).find((b) => b.id === id);
+    const tests = ((walk.assessments || []).find((a) => a.topic === "tests") || {}).verdict || null;
+    const open = { HIGH: 0, MEDIUM: 0 };
+    for (const f of findings || []) {
+      const d = decisions && decisions[f.id];
+      if (f.status === "confirmed" && !(d && d.decision === "reject") && f.severity in open) open[f.severity] += 1;
+    }
+    const checks = badge("checks");
+    const size = badge("size");
+    return {
+      tier: tier,
+      tierWhy: fileTier > sessionTier ? "set by the repo's .review-risk.toml" : walk.risk.tier_why,
+      revertable: walk.risk.revertable,
+      revertWhy: walk.risk.revert_why,
+      tests: tests,
+      checksFailing: !!checks && checks.level === "concern",
+      large: !!size && size.level === "concern",
+      openHigh: open.HIGH,
+      openMedium: open.MEDIUM,
+    };
+  }
+
+  /* Low, Medium or High, and the rules that put it there. The first rule
+   * list that has any rule true wins; every true rule in it is a reason. */
+  function riskLevel(r) {
+    const n = (k, word) => k + " open " + word + " finding" + (k === 1 ? "" : "s");
+    const tierName = "tier " + r.tier + " (" + TIER_NAMES[r.tier] + ")";
+    const high = [
+      [r.openHigh > 0, n(r.openHigh, "HIGH")],
+      [r.tier === 3 && !r.revertable, tierName + " that a revert cannot undo"],
+      [r.tier === 3 && r.tests === "concern", tierName + " without tests"],
+      [r.checksFailing, "PR checks failing"],
+    ];
+    const medium = [
+      [r.tier === 3, tierName],
+      [r.tier === 2 && r.tests !== "good", tierName + (r.tests ? " with tests: " + r.tests : " with no tests verdict")],
+      [r.openMedium > 0, n(r.openMedium, "MEDIUM")],
+      [r.large, "a large diff"],
+      [!r.revertable, "a revert cannot undo it"],
+    ];
+    for (const [level, rules] of [["high", high], ["medium", medium]]) {
+      const why = rules.filter((x) => x[0]).map((x) => x[1]);
+      if (why.length) return { level: level, reasons: why };
+    }
+    return { level: "low", reasons: ["no rule for Medium or High applies"] };
+  }
+
   // --- @ references in questions ------------------------------------------------
 
   /* The contiguous run of added and deleted rows around row `ri`, as a line
@@ -815,6 +882,7 @@
     chatQuestions: chatQuestions, chatStatus: chatStatus, refSpans: refSpans, mergeRef: mergeRef,
     tokens: tokens, wordDiff: wordDiff, changePairs: changePairs, markRanges: markRanges,
     splitLines: splitLines, oldNumbers: oldNumbers, enclosingScope: enclosingScope, stepBlock: stepBlock,
+    riskInputs: riskInputs, riskLevel: riskLevel, TIER_NAMES: TIER_NAMES,
     paletteMatch: paletteMatch, viewedCount: viewedCount,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

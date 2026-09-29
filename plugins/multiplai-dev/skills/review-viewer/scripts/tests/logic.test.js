@@ -484,6 +484,57 @@ test("viewedCount counts only files in the change", () => {
   assert.deepEqual(L.viewedCount(["a"], null), { done: 0, total: 1 });
 });
 
+const RISK_BASE = { tier: 1, tierWhy: "", revertable: true, revertWhy: "", tests: "good",
+  checksFailing: false, large: false, openHigh: 0, openMedium: 0 };
+const risk = (over) => L.riskLevel(Object.assign({}, RISK_BASE, over));
+
+test("riskLevel is Low when no rule applies", () => {
+  assert.deepEqual(risk({}), { level: "low", reasons: ["no rule for Medium or High applies"] });
+  assert.equal(risk({ tier: 2 }).level, "low");
+});
+
+test("riskLevel High rules", () => {
+  assert.deepEqual(risk({ openHigh: 2 }).reasons, ["2 open HIGH findings"]);
+  assert.equal(risk({ tier: 3, revertable: false }).level, "high");
+  assert.equal(risk({ tier: 3, tests: "concern" }).level, "high");
+  assert.equal(risk({ checksFailing: true }).level, "high");
+  // Every true High rule is a reason; Medium rules are not listed.
+  assert.deepEqual(risk({ tier: 3, revertable: false, tests: "concern", openMedium: 1 }).reasons, [
+    "tier 3 (auth, money, data, shared infra or deploy config) that a revert cannot undo",
+    "tier 3 (auth, money, data, shared infra or deploy config) without tests"]);
+});
+
+test("riskLevel Medium rules", () => {
+  assert.equal(risk({ tier: 3 }).level, "medium");
+  assert.equal(risk({ tier: 2, tests: "note" }).level, "medium");
+  assert.equal(risk({ tier: 2, tests: null }).level, "medium");
+  assert.deepEqual(risk({ openMedium: 1 }).reasons, ["1 open MEDIUM finding"]);
+  assert.deepEqual(risk({ large: true }).reasons, ["a large diff"]);
+  assert.deepEqual(risk({ revertable: false }).reasons, ["a revert cannot undo it"]);
+});
+
+test("riskInputs combines the repo tiers, the session's tier and the findings", () => {
+  const walk = { risk: { tier: 1, tier_why: "one feature", revertable: true, revert_why: "x" },
+    assessments: [{ topic: "tests", verdict: "note" }] };
+  const stats = { tiers: { "infra/main.tf": 3 },
+    badges: [{ id: "size", level: "concern" }, { id: "checks", level: "good" }] };
+  const findings = [
+    { id: "a", status: "confirmed", severity: "HIGH" },
+    { id: "b", status: "confirmed", severity: "HIGH" },
+    { id: "c", status: "refuted", severity: "MEDIUM" },
+    { id: "d", status: "confirmed", severity: "MEDIUM" },
+  ];
+  const r = L.riskInputs(stats, walk, findings, { b: { decision: "reject" }, a: { decision: "accept" } },
+    ["infra/main.tf", "app.py"]);
+  assert.deepEqual(r, { tier: 3, tierWhy: "set by the repo's .review-risk.toml", revertable: true,
+    revertWhy: "x", tests: "note", checksFailing: false, large: true, openHigh: 1, openMedium: 1 });
+  // When the file covers every changed file, the session's tier is not used.
+  assert.equal(L.riskInputs({ tiers: { "a.md": 0 } }, walk, [], {}, ["a.md"]).tier, 0);
+  // With no file the session decides, and its reason is shown.
+  assert.equal(L.riskInputs({}, walk, [], {}, ["app.py"]).tierWhy, "one feature");
+  assert.equal(L.riskInputs({}, { assessments: [] }, [], {}, []), null);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

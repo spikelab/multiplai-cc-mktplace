@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+import subprocess
+
 import pytest
 
 from review_viewer import stats
@@ -137,6 +140,50 @@ def test_change_stats_on_the_fixture_repo(findings_path):
     assert s.per_file["assets/logo.bin"]["added"] is None
     assert all(v["status"] in "AMDRCT" for v in s.per_file.values())
     assert d["per_file"] == s.per_file
+    # The fixture repo has no tier file.
+    assert (d["tiers"], d["tiers_error"]) == ({}, "")
+
+
+def test_parse_tiers_and_match_take_the_highest_tier():
+    table = stats.parse_tiers('[tiers]\n"modules/*" = 3\n"*.md" = 0\n"modules/x/*" = 1\n')
+    assert stats.match_tiers(table, ["modules/x/main.tf", "README.md", "app.py"]) == {
+        "modules/x/main.tf": 3, "README.md": 0}
+
+
+@pytest.mark.parametrize("text, reason", [
+    ("[tiers\n", "not valid TOML"),
+    ("x = 1\n", "needs a non-empty [tiers] table"),
+    ('[tiers]\n"a" = 4\n', "whole number from 0 to 3"),
+    ('[tiers]\n"a" = true\n', "whole number from 0 to 3"),
+])
+def test_parse_tiers_rejects_bad_files(text, reason):
+    with pytest.raises(ValueError, match=re.escape(reason)):
+        stats.parse_tiers(text)
+
+
+def _repo_with(tmp_path, files: dict[str, str]) -> str:
+    def git(*args):
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)
+    git("init", "-q")
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+    git("add", ".")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c")
+    return "HEAD"
+
+
+def test_repo_tiers_reads_the_file_at_head(tmp_path):
+    head = _repo_with(tmp_path, {stats.RISK_FILE: '[tiers]\n"infra/*" = 3\n', "a.py": ""})
+    assert stats.repo_tiers(tmp_path, head, ["infra/main.tf", "a.py"]) == ({"infra/main.tf": 3}, "")
+
+
+def test_repo_tiers_without_a_file_or_with_a_broken_one(tmp_path):
+    head = _repo_with(tmp_path, {"a.py": ""})
+    assert stats.repo_tiers(tmp_path, head, ["a.py"]) == ({}, "")
+    (tmp_path / stats.RISK_FILE).write_text("[tiers]\n")
+    head = _repo_with(tmp_path, {})
+    assert stats.repo_tiers(tmp_path, head, ["a.py"]) == (
+        {}, f"{stats.RISK_FILE}: needs a non-empty [tiers] table")
 
 
 def test_parse_name_status_handles_renames():

@@ -24,6 +24,11 @@ from .models import FindingsFile, Walkthrough
 MUST_LINK = ("confirmed", "unverifiable")
 # Assessments a walkthrough must carry when it says it is complete.
 MUST_ASSESS = ("commits", "tests")
+# Topics a new walkthrough may no longer use: size is measured, and risk is the
+# header score built from `risk` (models.RiskInput).
+RETIRED_TOPICS = {"size": "size is measured from git", "risk": "risk is scored from the `risk` block"}
+# A badge shows its title on one line.
+TITLE_MAX = 32
 
 
 def walkthrough_path(box: Path) -> Path:
@@ -148,6 +153,13 @@ def check(wt: Walkthrough, ff: FindingsFile) -> list[str]:
         if k.path not in changed:
             errors.append(f"skipped {k.path}: not a changed file in this diff")
     topics = [a.topic for a in wt.assessments]
+    for a in wt.assessments:
+        if a.topic in RETIRED_TOPICS:
+            errors.append(f"assessment {a.topic}: not an assessment topic any more "
+                          f"({RETIRED_TOPICS[a.topic]})")
+        if len(a.title) > TITLE_MAX:
+            errors.append(f"assessment {a.topic}: title is {len(a.title)} characters, over "
+                          f"{TITLE_MAX}; put the rest in detail_md")
     for topic in sorted({t for t in topics if t != "other" and topics.count(t) > 1}):
         errors.append(f"assessment {topic}: more than one assessment has this topic")
     if wt.complete:
@@ -155,6 +167,8 @@ def check(wt: Walkthrough, ff: FindingsFile) -> list[str]:
             if topic not in topics:
                 errors.append(f"walkthrough: complete is true but there is no {topic!r} "
                               "assessment")
+        if wt.risk is None:
+            errors.append("walkthrough: complete is true but there is no 'risk' block")
         uncovered, unlinked = coverage(wt, ff)
         for path in uncovered:
             errors.append(f"walkthrough: complete is true but changed file {path} has no "

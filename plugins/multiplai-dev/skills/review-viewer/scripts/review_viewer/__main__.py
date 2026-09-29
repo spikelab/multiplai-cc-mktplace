@@ -550,6 +550,20 @@ def cmd_walkthrough_status(args) -> int:
     have = {a.topic for a in wt.assessments} if wt else set()
     missing = [t for t in walkthrough.MUST_ASSESS if t not in have]
     print(f"assessments missing ({len(missing)}): {', '.join(missing)}")
+    print("risk: " + ("missing" if not wt or wt.risk is None else
+                      f"tier {wt.risk.tier}, {'revertable' if wt.risk.revertable else 'not revertable'}"))
+    st = served.stats or {}
+    tiers = st.get("tiers") or {}
+    if st.get("tiers_error"):
+        print(f"repo tiers: ignored, {st['tiers_error']}")
+    elif tiers:
+        rest = [p for p in t.files_changed if p not in tiers]
+        print(f"repo tiers ({stats.RISK_FILE}) set {len(tiers)} of {len(t.files_changed)} files; "
+              f"judge the tier for the other {len(rest)}:")
+        for path, tier in sorted(tiers.items()):
+            print(f"  tier {tier} {path}")
+    else:
+        print(f"repo tiers: no {stats.RISK_FILE}; judge the tier for every file")
     badges = (served.stats or {}).get("badges") or []
     print(f"measured ({len(badges)}):" if served.stats else "measured: not available")
     for b in badges:

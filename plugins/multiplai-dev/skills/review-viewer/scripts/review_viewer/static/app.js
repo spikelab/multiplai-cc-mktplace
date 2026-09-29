@@ -435,20 +435,76 @@
     return el("div", { class: "empty-state" }, [el("span", { class: "big", text: icon }), text]);
   }
 
+  // --- risk ------------------------------------------------------------------------
+
+  const RISK_BADGE = { high: "concern", medium: "note", low: "good" };
+
+  /* The risk score, or null until the walkthrough has its risk block. */
+  function currentRisk() {
+    const r = L.riskInputs(state.detail.stats, state.walk, state.detail.findings.findings,
+      state.detail.decisions, state.detail.findings.target.files_changed);
+    return r ? Object.assign({ inputs: r }, L.riskLevel(r)) : null;
+  }
+
+  function riskWord(level) {
+    return level.charAt(0).toUpperCase() + level.slice(1);
+  }
+
+  /* Markdown for the risk badge's detail: the rules that fired, then every input. */
+  function riskDetail(risk) {
+    const r = risk.inputs;
+    const findingsLine = r.openHigh + " HIGH, " + r.openMedium + " MEDIUM (confirmed and not rejected)";
+    return "**" + riskWord(risk.level) + "** because:\n\n" + risk.reasons.map((x) => "- " + x).join("\n") +
+      "\n\n**Inputs**\n\n" + [
+        "Touches tier " + r.tier + ", " + L.TIER_NAMES[r.tier] + ": " + r.tierWhy,
+        (r.revertable ? "A revert undoes it: " : "A revert cannot undo it: ") + r.revertWhy,
+        "Tests: " + (r.tests || "not assessed yet"),
+        "PR checks: " + (state.detail.pr ? (r.checksFailing ? "failing" : "not failing") : "no PR"),
+        "Size: " + (r.large ? "large" : "not large"),
+        "Open findings: " + findingsLine,
+      ].map((x) => "- " + x).join("\n") +
+      "\n\nThe rules are fixed; the review-viewer skill's SKILL.md lists them.";
+  }
+
+  function renderRisk() {
+    const pill = $("risk-pill");
+    const risk = currentRisk();
+    pill.hidden = false;
+    pill.className = "risk-pill " + (risk ? RISK_BADGE[risk.level] : "pending");
+    pill.textContent = risk ? "Risk: " + riskWord(risk.level) : "Risk: not scored yet";
+    pill.title = risk ? risk.reasons.join("; ") : "Scored once " + (state.who ? state.who.agent : "the session") +
+      " writes the walkthrough's risk block.";
+    pill.onclick = () => {
+      state.badgeOpen = risk ? "risk" : null;
+      setTab("summary");
+      renderSummary();
+    };
+    return risk;
+  }
+
   // --- summary ---------------------------------------------------------------------
 
   function renderSummary() {
     const agent = state.who ? state.who.agent : "the session";
+    const risk = renderRisk();
     const badges = L.summaryBadges(state.detail.stats, state.walk);
+    if (risk) {
+      badges.unshift({ key: "risk", label: "Risk: " + riskWord(risk.level) + " · " + risk.reasons[0],
+        level: RISK_BADGE[risk.level], detail: riskDetail(risk), source: "risk" });
+    }
     const box = $("badges");
     box.replaceChildren();
-    const groups = [["measured", "Measured from git" + (state.detail.pr ? " and GitHub" : "")],
+    const groups = [["risk", "Risk of merging"],
+      ["measured", "Measured from git" + (state.detail.pr ? " and GitHub" : "")],
       ["assessed", "Assessed by " + agent]];
     for (const [source, title] of groups) {
       const mine = badges.filter((b) => b.source === source);
       const row = el("div", { class: "badge-row" }, [el("div", { class: "label", text: title })]);
       if (!mine.length) {
-        if (source === "assessed" && (!state.walk || !state.walk.complete) && !walkOverdue()) {
+        if (source === "risk") {
+          row.appendChild(el("span", { class: "muted small", text: "Scored once " + agent +
+            " writes the walkthrough's risk block." }));
+        } else if (source === "assessed" && (!state.walk || !state.walk.complete) && !walkOverdue()) {
           for (let i = 0; i < 3; i++) row.appendChild(el("span", { class: "skel pill" }));
         } else {
           row.appendChild(el("span", { class: "muted small", text: source === "measured"
@@ -458,7 +514,8 @@
       for (const b of mine) {
         row.appendChild(el("button", {
           class: "qbadge " + b.level + (state.badgeOpen === b.key ? " open" : ""),
-          title: source === "measured" ? b.detail : "Click for " + agent + "'s reasoning",
+          title: source === "measured" ? b.detail : source === "risk" ? "Click for the rules and inputs"
+            : b.label + " (click for " + agent + "'s reasoning)",
           "aria-expanded": String(state.badgeOpen === b.key),
           text: b.label,
           onclick: () => { state.badgeOpen = state.badgeOpen === b.key ? null : b.key; renderSummary(); },
@@ -470,7 +527,7 @@
     const detail = $("badge-detail");
     detail.hidden = !open;
     if (open) {
-      if (open.source === "assessed") renderMarkdown(detail, open.detail);
+      if (open.source !== "measured") renderMarkdown(detail, open.detail);
       else detail.replaceChildren(el("p", { text: open.detail }));
     }
     const overview = $("walk-overview");
@@ -1013,6 +1070,7 @@
       state.detail.decisions[id] = res.decision;
       renderFindingList();
       renderDetail();
+      renderRisk();
     } catch (err) {
       showToast("Could not record the decision: " + err.message);
     }

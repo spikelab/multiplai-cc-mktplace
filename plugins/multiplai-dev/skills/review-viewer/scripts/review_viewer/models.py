@@ -153,13 +153,29 @@ AssessmentTopic = Literal["commits", "tests", "size", "design", "risk", "other"]
 
 class Assessment(_Strict):
     """The session's judgment on one quality question, shown as a badge beside
-    the measured ones. `commits` (do the messages and the PR description
-    explain the change?) and `tests` (is the new code tested?) are required
-    once the walkthrough is complete."""
+    the measured ones. `commits` (does anything say why the change is made?)
+    and `tests` (would a test fail if the changed behaviour broke?) are
+    required once the walkthrough is complete, and judged by the rubric in
+    SKILL.md. `size` and `risk` are accepted in files written before 0.22 but
+    rejected by `walkthrough put`: size is measured and risk is the header
+    score."""
     topic: AssessmentTopic
     verdict: Literal["good", "note", "concern"]
     title: str = Field(min_length=1, max_length=60)
     detail_md: str
+
+
+class RiskInput(_Strict):
+    """The session's two judgments the risk score needs; the page applies the
+    rules (see logic.js riskLevel). `tier` is how critical the most critical
+    changed code is, from the table in SKILL.md: 0 docs, tests and tooling;
+    1 one feature; 2 a shared module or public interface; 3 auth, money, data
+    deletion or migration, shared infra, production deploy config. A repo's
+    `.review-risk.toml` overrides it for the files it matches."""
+    tier: int = Field(ge=0, le=3)
+    tier_why: str = Field(min_length=1)
+    revertable: bool
+    revert_why: str = Field(min_length=1)
 
 
 class Walkthrough(_Strict):
@@ -171,6 +187,7 @@ class Walkthrough(_Strict):
     steps: list[Step]
     skipped: list[Skipped] = Field(default_factory=list)
     assessments: list[Assessment] = Field(default_factory=list)
+    risk: RiskInput | None = None
     complete: bool
 
 
