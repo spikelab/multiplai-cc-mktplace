@@ -17,6 +17,28 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+### Changed
+- review: findings that describe the same defect are **merged**. After
+  verification, confirmed and unverifiable findings in the same file whose
+  lines overlap are grouped, and one agent per group decides which are the same
+  defect. The merged finding keeps the highest severity, every citation and
+  every finder that reported it ("Reported by" in the review); the findings
+  merged away are listed in the review's appendix with the finding they went
+  into. Before, only word-for-word copies were merged.
+- review: **no more proposed fixes.** The prescribe and check-fix stages are
+  gone. Each confirmed or unverifiable finding instead carries an **expected
+  behaviour**: one sentence from the verifier on what correct behaviour looks
+  like, without proposing code. It appears in the markdown review, in the
+  `post` PR comment (replacing "Suggested fix") and in `findings.json`.
+- review-viewer: a finding shows its **Expected behaviour** where the fix used
+  to be. Findings files from earlier reviews still open; their fixes are not
+  shown.
+
+### Removed
+- review: the `prescriber_model` and `checker_model` keys in `review.yaml` and
+  `review_prescriber_model` in `multiplai.conf`. `merger_model` sets the model
+  of the new merge stage.
+
 ## [0.21.0] - 2026-09-29
 
 ### Added
