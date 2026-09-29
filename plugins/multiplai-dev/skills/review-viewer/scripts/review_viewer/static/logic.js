@@ -699,6 +699,25 @@
     return out;
   }
 
+  /* Base-side line numbers for every row: the server gives them only on
+   * deleted rows, and an unchanged row's is its head number minus the lines
+   * added and plus the lines deleted above it. A gap resets the count from
+   * the next row that carries both numbers. Returns an array like rows. */
+  function oldNumbers(rows) {
+    let delta = 0;
+    let known = true;
+    return (rows || []).map(function (r) {
+      if (r.k === "gap") { known = false; return null; }
+      if (r.o != null) {
+        if (r.n != null) { delta = r.n - r.o; known = true; }
+        if (r.k === "del") delta -= 1;
+        return r.o;
+      }
+      if (r.k === "add") { delta += 1; return null; }
+      return known && r.n != null ? r.n - delta : null;
+    });
+  }
+
   /* The nearest line at or above row `ri` that opens a function, class or
    * similar scope, trimmed, for the code pane's header; null if none. */
   const SCOPE_RE = new RegExp("^\\s*(?:export\\s+)?(?:default\\s+)?(?:pub(?:\\([^)]*\\))?\\s+)?" +
@@ -799,7 +818,7 @@
     blockStarts: blockStarts, blockKey: blockKey, explainByBlock: explainByBlock,
     chatQuestions: chatQuestions, chatStatus: chatStatus, refSpans: refSpans, mergeRef: mergeRef,
     tokens: tokens, wordDiff: wordDiff, changePairs: changePairs, markRanges: markRanges,
-    splitLines: splitLines, enclosingScope: enclosingScope, stepBlock: stepBlock,
+    splitLines: splitLines, oldNumbers: oldNumbers, enclosingScope: enclosingScope, stepBlock: stepBlock,
     paletteMatch: paletteMatch, viewedCount: viewedCount,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

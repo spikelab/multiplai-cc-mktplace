@@ -10,6 +10,7 @@
 
   const L = window.ReviewLogic;
   const $ = (id) => document.getElementById(id);
+  const REQUEST_TIMEOUT_MS = 8000;
   const FATAL = {
     auth: { icon: "🔒", title: "This page is not authorised",
       text: "The page needs the one-time link the viewer printed when it started.",
@@ -115,12 +116,19 @@
       opts.headers["Content-Type"] = "application/json";
       opts.body = JSON.stringify(body);
     }
+    // A stopped server behind the container's address can leave a request
+    // hanging instead of refusing it, so every request gives up after a while.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    opts.signal = ctrl.signal;
     let res;
     try {
       res = await fetch(path, opts);
     } catch (err) {
       showFatal("gone");
       throw err;
+    } finally {
+      clearTimeout(timer);
     }
     if (res.status === 401) {
       showFatal("auth");
@@ -363,7 +371,8 @@
       $(panel).hidden = !on;
     }
     const n = state.walk ? state.walk.steps.length : 0;
-    $("walk-count").textContent = !state.walk ? "…" : (state.walk.complete ? String(n) : n + "…");
+    $("walk-count").textContent = state.walk ? String(n) : "";
+    $("walk-count").classList.toggle("live", !state.walk || !state.walk.complete);
     $("walk-count").title = !state.walk ? "Waiting for the session" : state.walk.complete ? "" : "Still being written";
     const nf = state.detail ? state.detail.findings.findings.length : 0;
     $("finding-count").textContent = nf ? String(nf) : "";
@@ -1186,6 +1195,7 @@
       rowHtml[partner] = L.markRanges(rowHtml[partner], d.add, "wd-add");
     }
     const cited = view.cited_ranges || [];
+    const oldNum = L.oldNumbers(view.rows);
     const selected = state.selected && state.findingsById.get(state.selected);
     const dots = new Map();
     for (const f of findingsIn(view.path)) {
@@ -1225,7 +1235,7 @@
       return out;
     };
     const dotCell = (r) => {
-      const td = el("td", { class: "mark" });
+      const td = el("td", { class: "dots" });
       for (const f of (r && r.n != null && dots.get(r.n)) || []) {
         td.appendChild(el("span", {
           class: "dot " + f.severity, title: f.severity + ": " + f.claim,
@@ -1250,7 +1260,7 @@
         tbody.appendChild(el("tr", { class: [r.k].concat(marks(r, ri)).join(" "), "data-ri": String(ri),
           "data-n": r.n == null ? null : String(r.n), "data-o": r.o == null ? null : String(r.o) }, [
           dotCell(r),
-          el("td", { class: "ln", text: r.o == null ? "" : String(r.o) }),
+          el("td", { class: "ln", text: oldNum[ri] == null ? "" : String(oldNum[ri]) }),
           el("td", { class: "ln new", text: r.n == null ? "" : String(r.n) }),
           el("td", { class: "mark" }),
           src,
@@ -1285,7 +1295,7 @@
           "data-ri": String(ri != null ? ri : li), "data-ril": li != null && li !== ri ? String(li) : null,
           "data-n": rr && rr.n != null ? String(rr.n) : null, "data-o": lr && lr.o != null ? String(lr.o) : null }, [
           dotCell(rr),
-          el("td", { class: "ln" + side(lr), text: lr && lr.o != null ? String(lr.o) : "" }),
+          el("td", { class: "ln" + side(lr), text: lr && oldNum[li] != null ? String(oldNum[li]) : "" }),
           el("td", { class: "mark" + side(lr) }),
           srcCell(lr, li, "left"),
           el("td", { class: "ln new" + side(rr), text: rr && rr.n != null ? String(rr.n) : "" }),

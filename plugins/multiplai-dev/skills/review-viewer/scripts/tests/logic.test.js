@@ -456,6 +456,12 @@ test("splitLines pairs deletions left with additions right", () => {
   ]);
 });
 
+test("oldNumbers fills base line numbers on unchanged rows", () => {
+  const rows = [{ k: "ctx", n: 1 }, { k: "add", n: 2 }, { k: "ctx", n: 3 }, { k: "del", o: 3 },
+    { k: "del", o: 4 }, { k: "ctx", n: 4 }, { k: "gap", t: "…" }, { k: "ctx", n: 40 }];
+  assert.deepEqual(L.oldNumbers(rows), [1, null, 2, 3, 4, 5, null, null]);
+});
+
 test("enclosingScope finds the nearest opening line above", () => {
   const rows = [{ k: "ctx", t: "class A:" }, { k: "ctx", t: "    def run(self):" },
     { k: "ctx", t: "        x = 1" }, { k: "del", t: "def gone():" }, { k: "add", t: "        y = 2" }];

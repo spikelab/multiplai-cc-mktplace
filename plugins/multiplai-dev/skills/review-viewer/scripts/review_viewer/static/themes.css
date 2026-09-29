@@ -345,3 +345,6 @@
 :root[data-theme] .progress { height: 4px; }
 :root[data-theme] .skel { background-image: none; animation: blink 1.1s steps(2, start) infinite; }
 @keyframes blink { 50% { opacity: .35; } }
+/* Counts beside display-font headings stay in the reading face: the pixel
+ * faces are unreadable at count size. */
+:root[data-theme] .count { font: var(--fs-sm) var(--mono); text-transform: none; letter-spacing: 0; }
