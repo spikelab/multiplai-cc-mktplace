@@ -5,8 +5,8 @@ the commits you have not pushed yet, or a commit range. The page shows every
 changed file in full with the diff marked, and a walkthrough of the change
 that your Claude Code session writes. When `/multiplai-dev:review` has
 reviewed the same commits, the page shows its findings beside the code too.
-You can ask questions in the page and accept, reject or defer findings; the
-session answers, and the answers appear in the page.
+You can ask questions in the page and tick files off as viewed; the session
+answers, and the answers appear in the page.
 
 `SKILL.md` is the session's instructions. `scripts/CLAUDE.md` is for people
 changing the code. This file explains how the parts fit together.
@@ -57,9 +57,9 @@ SIL Open Font License), so themes load nothing from the network.
  browser (your Mac)                 container or machine running Claude Code
  ------------------                 ----------------------------------------
                                      ┌──────────────── mailbox dir ─────────────┐
- page ── HTTP + token ──► server ───►│ inbox.jsonl      questions, decisions    │
+ page ── HTTP + token ──► server ───►│ inbox.jsonl      questions               │
    ▲                        │        │ outbox.jsonl     answers                 │◄── session
-   └──── polls ─────────────┘◄───────│ decisions.json   accept/reject/defer     │    (Monitor
+   └──── polls ─────────────┘◄───────│ viewed.json      files marked viewed     │    (Monitor
                                      │ ../walkthrough.json                      │     + CLI)
                                      └──────────────────────────────────────────┘
 ```
@@ -77,10 +77,10 @@ SIL Open Font License), so themes load nothing from the network.
 
 ## How a question reaches the session and comes back
 
-1. You type a question, or click accept, reject or defer. The page sends it
-   to the server (`POST /api/ask`).
-2. The server appends one line to `inbox.jsonl`. A decision is also
-   recorded in `decisions.json` at once.
+1. You type a question. The page sends it to the server (`POST /api/ask`).
+2. The server appends one line to `inbox.jsonl`. (Ticking a file "viewed"
+   goes to `viewed.json` instead, through `POST /api/viewed`; the session
+   never sees it.)
 3. The session's Monitor sees the new line and wakes the session.
 4. The session reads the code, then runs `reply`, which appends the answer
    to `outbox.jsonl`.

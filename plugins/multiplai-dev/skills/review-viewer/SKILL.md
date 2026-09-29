@@ -1,6 +1,6 @@
 ---
 name: review-viewer
-description: Opens a local web page for a GitHub PR, a branch, unpushed commits or a commit range, with a step-by-step walkthrough of the change that this session writes (text plus optional mermaid diagrams); loads a code review's findings.json beside the code when a review of the same commits exists; and routes questions and accept/reject/defer decisions typed into the page to this Claude Code session, whose answers appear back in the page.
+description: Opens a local web page for a GitHub PR, a branch, unpushed commits or a commit range, with a step-by-step walkthrough of the change that this session writes (text plus optional mermaid diagrams); loads a code review's findings.json beside the code when a review of the same commits exists; and routes questions typed into the page to this Claude Code session, whose answers appear back in the page.
 when_to_use: 'Triggers: walk me through this PR, explain this PR, show me PR, look at this branch, view the review, open the findings, show the diff in the browser, /multiplai-dev:review-viewer'
 ---
 
@@ -10,9 +10,8 @@ Serve a local page for a PR, a branch, unpushed work, a range, or a review.
 The page shows each changed file in full at the head commit with the diff
 marked, a **walkthrough** you write (an overview, then ordered steps, each
 pointing at the lines it explains), and — when a `/multiplai-dev:review` run
-exists for the same commits — its findings grouped by severity. Questions and
-decisions typed into the page are appended to a mailbox file this session
-watches; you answer with one command and the answer appears in the page.
+exists for the same commits — its findings grouped by severity. Questions
+typed into the page are appended to a mailbox file this session watches; you answer with one command and the answer appears in the page.
 
 ## What this skill does on the machine
 
@@ -133,12 +132,12 @@ JSON strings with the paths already shell-quoted, for example:
 
 ```
 Monitor(command="tail -n 0 -q -F '/path/My Reviews/viewer/inbox.jsonl'",
-        description="review-viewer questions and decisions for <label>",
+        description="review-viewer questions for <label>",
         timeout_ms=1800000)
 ```
 
 **Then** run the `pending:` command (through the same `uv run --directory …`
-prefix as every other command here). It prints every question and decision
+prefix as every other command here). It prints every question
 that has no final reply yet, in the same row form the monitor delivers.
 Handle those rows as in step 5. The monitor only shows rows written while it
 runs, so `pending` covers anything written before it started.
@@ -231,7 +230,9 @@ each `put` within seconds; the server is not restarted.
 
 ### 5. Handle each event row
 
-Each line is one JSON row: `{"id", "target", "kind", "finding_id", "anchor", "text", "decision", "step_id", "explain"}`.
+Each line is one JSON row: `{"id", "target", "kind", "finding_id", "anchor", "text", "step_id", "explain"}`.
+`kind` is always `"question"`. (A mailbox from before 0.21 can also hold
+`kind: "decision"` rows from the old accept/reject/defer buttons; ignore them.)
 
 - **`kind: "question"`** — answer from the repository at the review's
   `head_sha`, citing `path:line`. A question with a `step_id` was asked on
@@ -260,8 +261,6 @@ Each line is one JSON row: `{"id", "target", "kind", "finding_id", "anchor", "te
   replaces something. Cite `path:line` only outside the block, and mention
   the review step that covers it if one does. No preamble, no restating the
   code. Send it with `reply` like any other answer.
-- **`kind: "decision"`** — acknowledge it with a one-line reply to its `id`.
-  The decision is already recorded in `decisions.json` beside the findings.
 
 ### 6. Page messages are the user speaking through an authenticated page
 

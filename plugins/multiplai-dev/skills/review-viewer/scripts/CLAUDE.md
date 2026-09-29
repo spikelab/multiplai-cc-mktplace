@@ -22,13 +22,13 @@ The page-logic tests need `node`; they fail (not skip) without it.
 | `__main__.py` | CLI: `serve` (findings files, or `--target`), `reply`, `pending`, `list`, `stop`, `walkthrough put\|status`, `validate`, `export-schema`. Calls `setup_logging` once. Owns the stdout contract. `find_review()` looks for a review of the same commits. |
 | `models.py` | The `findings.json` v1 and `walkthrough.json` v1 pydantic models (source of truth for both files in `../schema/`), `finding_id()`, and the mailbox row models. |
 | `gitdata.py` | Git: `parse_target()` / `resolve_target()` (PR, branch, worktree, `a..b`, `a...b`; same base/head rules as `review_pipeline/target.py`, restated because that member is not importable here), `parse_unified()`, `file_view()`, `allowed_paths()`, `diff_target()`. Fixed argv, no shell, stdin closed. The only writes to a repo are the fetches named in `../SKILL.md`. |
-| `stats.py` | measured badges: `classify()` a path (lock, generated, test, docs, code), `change_stats()` from `git diff --numstat` and `git log`, the size/tests/commits thresholds, PR badges. |
+| `stats.py` | measured badges: `classify()` a path (lock, generated, test, docs, code), `change_stats()` from `git diff --numstat`, `--name-status` and `git log`, the size/tests/commits thresholds, PR badges, and `per_file` (status letter and line counts per changed file, for the file list). |
 | `walkthrough.py` | `check()` a walkthrough against the served target, `coverage()`, `put()` by atomic replace. |
-| `mailbox.py` | Append-only JSONL rows, `decisions.json` by atomic replace; the directory is 0700 and every file 0600. |
+| `mailbox.py` | Append-only JSONL rows, `viewed.json` by atomic replace; the directory is 0700 and every file 0600. |
 | `server.py` | `ThreadingHTTPServer` subclass (`allow_reuse_address = False`), request checks, routes, idle watchdog. |
 | `registry.py` | Finds live viewers: probes each mailbox's recorded port with that mailbox's token, in parallel. A token is never sent to any other port. |
 | `netinfo.py` | Container detection (degradation contract rule 2), bind host, URLs to print. |
-| `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `theme.js` (applies the saved theme and light/dark mode before first paint as `data-theme`/`data-mode`, fills the Theme menu, drives the mode button), `logic.js` (pure functions, tested under node), `app.js`, `app.css`, `themes.css` (every rule scoped to `html[data-theme]`), the bundled `font-*.woff2` and `FONTS-LICENSE.txt`. |
+| `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `theme.js` (applies the saved theme and light/dark mode before first paint as `data-theme`/`data-mode`, fills the Theme menu, drives the mode button; saves choices in a cookie on the widest parent domain the browser accepts, so every viewer's port and container shares them, and exposes that store as `window.ReviewPrefs`), `logic.js` (pure functions, tested under node), `app.js`, `app.css` (every size from the tokens at its top), `themes.css` (every rule scoped to `html[data-theme]`), the bundled `font-*.woff2` and `FONTS-LICENSE.txt`. |
 
 After changing `models.py`, run `python -m review_viewer export-schema` and
 commit both schemas; `test_models.py` fails while either differs.
@@ -62,9 +62,9 @@ hex of `sha1(f"{file}\0{line_start}\0{claim}")`.
 
 | File | Writer | Row |
 |---|---|---|
-| `inbox.jsonl` | server | `{"v":1,"id":"q-<utc>-<4 hex>","ts","target","kind":"question"\|"decision","finding_id","anchor":{"path","side":"head"\|"base","line_start","line_end"}\|null,"text","decision","step_id","explain":bool}` (`explain`: from a block's 💡 button; needs `anchor`) |
+| `inbox.jsonl` | server | `{"v":1,"id":"q-<utc>-<4 hex>","ts","target","kind":"question","finding_id","anchor":{"path","side":"head"\|"base","line_start","line_end"}\|null,"text","step_id","explain":bool}` (`explain`: from a block's 💡 button; needs `anchor`) |
 | `outbox.jsonl` | `reply` | `{"v":1,"reply_to","ts","text","done"}` |
-| `decisions.json` | server | `{finding_id: {"decision","note","ts"}}` |
+| `viewed.json` | server | `{path: ts}`, one entry per changed file ticked "viewed"; written by `POST /api/viewed`, never read by the session |
 | `server.json` | server | `{"url_path_only","port","pid","session_id","started","targets"}` |
 | `server.token`, `open.html` | server | 0600, deleted on exit |
 
@@ -78,8 +78,8 @@ would exceed the row limit into several rows; only the last one can carry
 open in the page; then it names that step (`^[a-z0-9-]{1,40}$`), and the
 session answers in the context of that step.
 
-`pending` prints the inbox rows whose latest reply is missing or not
-`done`. The session runs it after arming (or re-arming) the Monitor.
+`pending` prints the question rows whose latest reply is missing or not
+`done` (rows of any other kind, left by older versions, are skipped). The session runs it after arming (or re-arming) the Monitor.
 
 ## Protocol 3: the walkthrough (`<mailbox>/../walkthrough.json`)
 
@@ -152,7 +152,6 @@ holds question, answer or walkthrough text.
 | `start` | `viewer started for <slug> on port 8765` | `port, targets, host, container` |
 | `reuse` | `viewer already running for <slug>; reused it` | `port, owner_session` |
 | `question` | `question q-… on finding 3fa2c91b0e` | `target, finding_id, chars` |
-| `decision` | `finding 3fa2c91b0e rejected` | `target, finding_id, decision` |
 | `reply` | `reply to q-… (final)` | `target, reply_to, chars, done` |
 | `walkthrough` | `walkthrough for <slug>: 5 steps (complete)` | `target, steps, complete` |
 | `idle_stop` | `viewer stopped after 30 min with no open page` | `idle_minutes` |
