@@ -476,7 +476,6 @@ pre.sketch {
   padding: var(--s2);
   overflow: auto;
 }
-.assumption { color: var(--medium); font-weight: 600; }
 .toggle { display: flex; align-items: center; gap: 6px; margin: 0 0 var(--s3); color: var(--muted); font-size: var(--fs-sm); }
 
 .sev-h { margin: var(--s4) 0 6px; }

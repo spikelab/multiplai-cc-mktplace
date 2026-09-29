@@ -1005,6 +1005,10 @@
     box.appendChild(el("h2", { text: f.claim }));
     box.appendChild(el("div", { class: "label", text: "Failure scenario" }));
     box.appendChild(el("p", { text: f.failure_scenario }));
+    if (f.expected_behaviour) {
+      box.appendChild(el("div", { class: "label", text: "Expected behaviour" }));
+      box.appendChild(el("p", { text: f.expected_behaviour }));
+    }
     if (f.verdict_reason) {
       box.appendChild(el("div", { class: "label", text: "Verdict" }));
       box.appendChild(el("p", { text: f.verdict_reason }));
@@ -1016,29 +1020,6 @@
       box.appendChild(el("div", { class: "label", text: "Explained in the walkthrough" }));
       for (const s of steps) {
         box.appendChild(el("button", { class: "cite-link", text: s.title, onclick: () => selectStep(s.id, { open: true }) }));
-      }
-    }
-    if (f.fix) {
-      box.appendChild(el("div", { class: "label", text: "Fix" }));
-      box.appendChild(el("p", { text: f.fix.description }));
-      if (f.fix.patch_sketch) box.appendChild(el("pre", { class: "sketch", text: f.fix.patch_sketch }));
-      if (f.fix.premises.length) {
-        box.appendChild(el("div", { class: "label", text: "Premises" }));
-        const ul = el("ul");
-        for (const p of f.fix.premises) {
-          ul.appendChild(el("li", {}, [
-            p.kind === "external" ? el("span", { class: "assumption", text: "Assumption: " }) : null,
-            p.statement,
-            p.citation ? citationLink(p.citation) : null,
-          ]));
-        }
-        box.appendChild(ul);
-      }
-      if (f.fix.open_questions.length) {
-        box.appendChild(el("div", { class: "label", text: "Open questions" }));
-        const ul = el("ul");
-        for (const q of f.fix.open_questions) ul.appendChild(el("li", { text: q }));
-        box.appendChild(ul);
       }
     }
     box.appendChild(decisionBox(f));

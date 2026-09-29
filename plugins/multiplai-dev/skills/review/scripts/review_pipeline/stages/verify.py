@@ -1,6 +1,6 @@
 """verify: one fresh agent per surviving finding, then `verdict_gate`.
 
-- confirmed → goes on to prescribe.
+- confirmed → stays in the review, and goes on to merge.
 - refuted → the appendix, with the verifier's reason.
 - unverifiable → stays in the review, severity lowered one step.
 """
