@@ -64,10 +64,11 @@ test("findings group by severity and hide refuted/rejected", () => {
     { id: "c", severity: "HIGH", status: "refuted" },
     { id: "d", severity: "MEDIUM", status: "unverifiable" },
   ];
-  const shown = L.groupFindings(fs, false);
-  assert.equal(shown.hidden, 1);
-  assert.deepEqual(L.findingOrder(shown), ["b", "d", "a"]);
-  const all = L.groupFindings(fs, true);
+  const decisions = { d: { decision: "reject" } };
+  const shown = L.groupFindings(fs, decisions, false);
+  assert.equal(shown.hidden, 2);
+  assert.deepEqual(L.findingOrder(shown), ["b", "a"]);
+  const all = L.groupFindings(fs, decisions, true);
   assert.deepEqual(L.findingOrder(all), ["b", "c", "d", "a"]);
 });
 

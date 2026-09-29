@@ -481,6 +481,11 @@ pre.sketch {
 .badge.HIGH { color: var(--high); border-color: var(--high); }
 .badge.MEDIUM { color: var(--medium); border-color: var(--medium); }
 .badge.LOW { color: var(--low); border-color: var(--low); }
+.badge.accept { color: var(--add-mark); border-color: var(--add-mark); }
+.badge.reject { color: var(--del-mark); border-color: var(--del-mark); }
+.decide { margin-top: var(--s5); padding-top: var(--s3); border-top: 1px solid var(--border); }
+.decide .decision-note { width: 100%; height: var(--ctl-h); margin-top: var(--s2); }
+.decide-row { display: flex; gap: var(--s2); margin-top: var(--s2); }
 
 .badges { display: flex; flex-direction: column; gap: var(--s3); margin-bottom: var(--s3); }
 .badge-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }

@@ -1,7 +1,7 @@
 """The HTTP server between the page and the Claude Code session.
 
 It never calls a model. It serves the page, answers read-only questions about
-the review, and carries messages: questions from the page go to
+the review, and carries messages: questions and decisions from the page go to
 `inbox.jsonl`, which the session watches; answers the session writes to
 `outbox.jsonl` go back to the page through `/api/poll`.
 
@@ -297,6 +297,7 @@ def make_handler(viewer: Viewer):
                     return self._json({
                         "findings": state.findings.model_dump(mode="json"),
                         "files": state.findings.target.files_changed,
+                        "decisions": state.mailbox.read_decisions(),
                         "viewed": state.mailbox.read_viewed(),
                         "questions": [r for r in state.mailbox.read_inbox()
                                       if r.get("kind") == "question"],
@@ -307,6 +308,8 @@ def make_handler(viewer: Viewer):
             if method == "POST":
                 if route == "/api/ask":
                     return self._ask(body)
+                if route == "/api/decision":
+                    return self._decision(body)
                 if route == "/api/viewed":
                     return self._viewed(body)
                 if route == "/api/shutdown":
@@ -363,6 +366,28 @@ def make_handler(viewer: Viewer):
                       session_id=viewer.session_id, target=state.slug,
                       finding_id=finding_id, chars=len(text))
             self._json({"id": row.id})
+
+        def _decision(self, body: dict) -> None:
+            state = self._target(body.get("target"))
+            finding_id = body.get("finding_id")
+            if not any(f.id == finding_id for f in state.findings.findings):
+                raise _Reject(404, "unknown finding")
+            decision = body.get("decision")
+            if decision not in ("accept", "reject", "defer"):
+                raise _Reject(400, "decision must be accept, reject or defer")
+            note = body.get("note") or ""
+            if not isinstance(note, str) or len(note) > MAX_QUESTION_CHARS:
+                raise _Reject(400, "invalid note")
+            entry = state.mailbox.write_decision(finding_id, decision, note)
+            row = InboxRow(id=new_question_id(), ts=entry.ts, target=state.slug,
+                           kind="decision", finding_id=finding_id, text=note,
+                           decision=decision)
+            state.mailbox.append_inbox(row)
+            past = {"accept": "accepted", "reject": "rejected", "defer": "deferred"}[decision]
+            log_event(COMPONENT, "decision", f"finding {finding_id} {past}",
+                      session_id=viewer.session_id, target=state.slug,
+                      finding_id=finding_id, decision=decision)
+            self._json({"id": row.id, "decision": entry.model_dump(mode="json")})
 
         def _viewed(self, body: dict) -> None:
             state = self._target(body.get("target"))

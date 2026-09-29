@@ -80,17 +80,18 @@
     return out;
   }
 
-  function isHidden(finding) {
-    return HIDDEN_STATUSES.has(finding.status);
+  function isHidden(finding, decisions) {
+    const d = decisions && decisions[finding.id];
+    return HIDDEN_STATUSES.has(finding.status) || !!(d && d.decision === "reject");
   }
 
   /* Findings by severity, in the input order within each severity. Refuted
    * and rejected findings are left out unless showHidden. */
-  function groupFindings(findings, showHidden) {
+  function groupFindings(findings, decisions, showHidden) {
     const groups = { HIGH: [], MEDIUM: [], LOW: [] };
     let hidden = 0;
     for (const f of findings || []) {
-      if (isHidden(f)) {
+      if (isHidden(f, decisions)) {
         hidden += 1;
         if (!showHidden) continue;
       }

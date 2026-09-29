@@ -327,7 +327,7 @@
     renderWalk();
     renderSummary();
     await Promise.all([pollOnce(), pollWalk()]);
-    const first = L.findingOrder(L.groupFindings(state.detail.findings.findings, state.showHidden))[0];
+    const first = L.findingOrder(L.groupFindings(state.detail.findings.findings, state.detail.decisions, state.showHidden))[0];
     if (first) await selectFinding(first, { stay: true });
     else {
       renderDetail();
@@ -650,7 +650,7 @@
     const box = $("findings");
     box.replaceChildren();
     const findings = state.detail.findings.findings;
-    const grouped = L.groupFindings(findings, state.showHidden);
+    const grouped = L.groupFindings(findings, state.detail.decisions, state.showHidden);
     $("hidden-label").textContent = "Show refuted and rejected (" + grouped.hidden + ")";
     $("show-hidden").parentElement.hidden = !grouped.hidden;
     if (!findings.length) {
@@ -664,7 +664,7 @@
       for (const f of items) {
         box.appendChild(el("button", {
           class: "finding-item " + sev + (f.id === state.selected ? " selected" : "") +
-            (L.isHidden(f) ? " hidden-finding" : ""),
+            (L.isHidden(f, state.detail.decisions) ? " hidden-finding" : ""),
           "data-id": f.id,
           onclick: async () => {
             await selectFinding(f.id);
@@ -672,6 +672,10 @@
           },
         }, [
           el("span", { class: "badge " + sev, text: f.status }),
+          state.detail.decisions[f.id] ? el("span", {
+            class: "badge " + state.detail.decisions[f.id].decision,
+            text: state.detail.decisions[f.id].decision,
+          }) : null,
           el("span", { class: "claim", text: f.claim }),
           el("span", { class: "where", text: f.file + ":" + f.line_start }),
         ]));
@@ -908,7 +912,39 @@
         box.appendChild(ul);
       }
     }
+    box.appendChild(decisionBox(f));
     renderThread();
+  }
+
+  // --- accept / reject / defer -------------------------------------------------
+
+  function decisionBox(f) {
+    const d = state.detail.decisions[f.id];
+    const note = el("input", { type: "text", class: "decision-note", placeholder: "Note (optional)",
+      "aria-label": "Decision note" });
+    const buttons = ["accept", "reject", "defer"].map((k) => el("button", {
+      class: "ctl",
+      "aria-pressed": String(!!d && d.decision === k),
+      text: k[0].toUpperCase() + k.slice(1),
+      onclick: () => decide(f.id, k, note.value.trim()),
+    }));
+    return el("section", { class: "decide" }, [
+      el("div", { class: "label", text: "Decision" }),
+      el("p", { class: "muted", text: d ? d.decision + (d.note ? ": " + d.note : "") : "None yet." }),
+      note,
+      el("div", { class: "decide-row" }, buttons),
+    ]);
+  }
+
+  async function decide(id, decision, note) {
+    try {
+      const res = await api("/api/decision", { target: state.slug, finding_id: id, decision: decision, note: note });
+      state.detail.decisions[id] = res.decision;
+      renderFindingList();
+      renderDetail();
+    } catch (err) {
+      showToast("Could not record the decision: " + err.message);
+    }
   }
 
   // --- threads ---------------------------------------------------------------
@@ -1134,7 +1170,7 @@
 
   function findingsIn(path) {
     return state.detail.findings.findings.filter((f) => f.file === path &&
-      (state.showHidden || !L.isHidden(f)));
+      (state.showHidden || !L.isHidden(f, state.detail.decisions)));
   }
 
   /* Above the code: status, path, line counts, viewed, and the layout buttons. */
@@ -1727,7 +1763,7 @@
       out.push({ kind: "review", label: st.title, sub: "review " + (i + 1), step: st.id });
     });
     for (const f of state.detail.findings.findings) {
-      if (!state.showHidden && L.isHidden(f)) continue;
+      if (!state.showHidden && L.isHidden(f, state.detail.decisions)) continue;
       out.push({ kind: f.severity, label: f.claim, sub: f.file + ":" + f.line_start, finding: f.id });
     }
     return out;
@@ -1885,7 +1921,7 @@
       }
       if (typing || ev.metaKey || ev.ctrlKey || ev.altKey) return;
       if (ev.key === "j" || ev.key === "k") {
-        const order = L.findingOrder(L.groupFindings(state.detail.findings.findings, state.showHidden));
+        const order = L.findingOrder(L.groupFindings(state.detail.findings.findings, state.detail.decisions, state.showHidden));
         const next = L.stepFinding(order, state.selected, ev.key === "j" ? 1 : -1);
         if (state.tab !== "finding") setTab("finding");
         if (next && next !== state.selected) selectFinding(next);

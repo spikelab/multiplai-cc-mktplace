@@ -139,6 +139,22 @@ def test_anchor_on_deleted_lines_carries_side_base(start_live):
     assert status == 400
 
 
+def test_decision_writes_decisions_json(start_live):
+    live = start_live()
+    status, _ = live.request("POST", "/api/decision",
+                             {"target": live.slug, "finding_id": HIGH, "decision": "reject",
+                              "note": "legacy checkout is gone"})
+    assert status == 200
+    data = json.loads((live.box / "decisions.json").read_text())
+    assert data[HIGH]["decision"] == "reject" and data[HIGH]["note"] == "legacy checkout is gone"
+    row = read_rows(live.box / "inbox.jsonl")[-1]
+    assert row["kind"] == "decision" and row["decision"] == "reject"
+    assert live.request("POST", "/api/decision", {"target": live.slug, "finding_id": HIGH,
+                                                   "decision": "maybe"})[0] == 400
+    status, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert detail["decisions"][HIGH]["decision"] == "reject"
+
+
 def test_viewed_writes_viewed_json(start_live):
     live = start_live()
     _, detail = live.request("GET", f"/api/targets/{live.slug}")
@@ -158,9 +174,6 @@ def test_viewed_writes_viewed_json(start_live):
                                                  "viewed": "yes"})[0] == 400
     # Nothing goes to the session's inbox.
     assert read_rows(live.box / "inbox.jsonl") == []
-    # The old decision route is gone.
-    assert live.request("POST", "/api/decision", {"target": live.slug, "finding_id": HIGH,
-                                                   "decision": "reject"})[0] == 404
 
 
 def test_idle_watchdog_stops_server(start_live):
@@ -239,7 +252,7 @@ def test_token_stays_out_of_stdout_logs_and_server_json(findings_path, tmp_path)
         for name in ("server.token", "open.html"):
             assert stat.S_IMODE((box / name).stat().st_mode) == 0o600, name
         assert token in (box / "open.html").read_text()
-        # Exercise the paths that log: a question, a bad token, a viewed file.
+        # Exercise the paths that log: a question, a bad token, a decision.
         import urllib.request
         def call(route, body, tok):
             req = urllib.request.Request(f"http://127.0.0.1:{port}{route}", method="POST",
@@ -253,8 +266,8 @@ def test_token_stays_out_of_stdout_logs_and_server_json(findings_path, tmp_path)
         slug = json.loads(findings_path.read_text())["target"]["slug"]
         assert call("/api/ask", {"target": slug, "text": "secret question"}, token) == 200
         assert call("/api/ask", {"target": slug, "text": "x"}, "bad") == 401
-        assert call("/api/viewed", {"target": slug, "path": json.loads(findings_path.read_text())
-                                    ["target"]["files_changed"][0], "viewed": True}, token) == 200
+        assert call("/api/decision", {"target": slug, "finding_id": HIGH, "decision": "defer"},
+                    token) == 200
         server_json = (box / "server.json").read_text()
         assert call("/api/shutdown", {}, token) == 200
         rest_out, err = proc.communicate(timeout=10)
@@ -339,20 +352,18 @@ def test_pending_lists_rows_without_a_final_reply(tmp_path):
     box = Mailbox(tmp_path / "viewer")
     box.create()
     ids = {}
-    for name in ("done", "partial", "none"):
-        row = InboxRow(id=f"q-{name}", ts=utc_now(), target="t", kind="question", text=name)
+    for name, kind in (("done", "question"), ("partial", "question"), ("none", "question"),
+                       ("decided", "decision")):
+        row = InboxRow(id=f"q-{name}", ts=utc_now(), target="t", kind=kind, text=name,
+                       decision="accept" if kind == "decision" else None)
         box.append_inbox(row)
         ids[name] = row.id
-    # A row left by a version that had accept/reject/defer buttons.
-    with box.inbox.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"v": 1, "id": "q-decided", "ts": utc_now(), "target": "t",
-                             "kind": "decision", "text": "", "decision": "accept"}) + "\n")
     box.append_outbox(OutboxRow(reply_to="q-done", ts=utc_now(), text="a", done=True))
     box.append_outbox(OutboxRow(reply_to="q-partial", ts=utc_now(), text="b", done=False))
     code, out = _serve_in_process("pending", "--box", str(box.dir))
     assert code == 0
     assert [json.loads(line)["id"] for line in out.splitlines()] == [
-        "q-partial", "q-none"]
+        "q-partial", "q-none", "q-decided"]
 
 
 def test_unanswering_live_process_keeps_its_files(findings_path):

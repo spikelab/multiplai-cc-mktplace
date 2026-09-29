@@ -106,8 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     po = sub.add_parser("post", parents=[common], help="Post the HIGH and MEDIUM findings as one PR comment")
     po.add_argument("target_dir", help="The review's directory, <out>/<slug>")
-    po.add_argument("--only", action="append", metavar="FINDING_ID",
-                    help="Post only this finding (repeatable); default: every HIGH and MEDIUM one")
+    po.add_argument("--decisions", help="The viewer's decisions.json; only accepted findings are posted")
     return parser
 
 
@@ -144,7 +143,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "post":
         try:
-            print(post(Path(args.target_dir), args.only, session_id=args.session_id))
+            print(post(Path(args.target_dir), Path(args.decisions) if args.decisions else None,
+                       session_id=args.session_id))
         except PostError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2

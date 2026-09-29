@@ -45,6 +45,16 @@ def test_row_size_limit(box):
         box.append_outbox(OutboxRow(reply_to="q", ts=utc_now(), text="x" * 70000, done=True))
 
 
+def test_decisions_keep_latest(box):
+    box.write_decision("abc", "accept", "looks right")
+    box.write_decision("abc", "reject", "changed my mind")
+    box.write_decision("def", "defer")
+    data = box.read_decisions()
+    assert data["abc"]["decision"] == "reject" and data["abc"]["note"] == "changed my mind"
+    assert data["def"]["decision"] == "defer"
+    assert not list(box.dir.glob(".decisions.json.*")), "temp file left behind"
+
+
 def test_viewed_marks_and_unmarks(box):
     box.set_viewed("a.py", True)
     data = box.set_viewed("b/c.py", True)
@@ -128,9 +138,10 @@ def test_mailbox_is_private(box):
     import stat
     box.append_outbox(OutboxRow(reply_to="q", ts=utc_now(), text="a", done=True))
     _question(box)
+    box.write_decision("abc", "accept")
     box.set_viewed("a.py", True)
     assert stat.S_IMODE(box.dir.stat().st_mode) == 0o700
-    for path in (box.inbox, box.outbox, box.viewed):
+    for path in (box.inbox, box.outbox, box.decisions, box.viewed):
         assert stat.S_IMODE(path.stat().st_mode) == 0o600, path.name
 
 

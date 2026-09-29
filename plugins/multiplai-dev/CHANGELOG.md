@@ -52,12 +52,11 @@ time, not derived from a tag.
   remembered across viewers (a cookie shared by every port, and by every
   OrbStack container). Before, each new viewer forgot them.
 - review-viewer: the header no longer shows which session answers.
-- review: `post` posts every shown HIGH and MEDIUM finding, or only those named
-  with `--only <finding_id>` (repeatable).
-
-### Removed
-- review-viewer: the Accept / Reject / Defer buttons and `decisions.json`.
-- review: `post --decisions`; use `--only` to pick findings in the terminal.
+- review-viewer: the server no longer stops itself 30 minutes after the last
+  page closes; it runs until `stop` or until its container ends. `serve --idle
+  <minutes>` brings the old behaviour back.
+- review-viewer: Accept / Reject / Defer now sit at the bottom of the open
+  finding, with the decision shown as a badge in the findings list.
 
 ## [0.20.0] - 2026-09-27
 

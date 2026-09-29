@@ -196,7 +196,7 @@ class InboxRow(_Strict):
     id: str
     ts: str
     target: str
-    kind: Literal["question"]
+    kind: Literal["question", "decision"]
     finding_id: str | None = None
     anchor: Anchor | None = None
     text: str
@@ -204,6 +204,7 @@ class InboxRow(_Strict):
     # Sent by a block's light-bulb button: explain exactly `anchor`. The page
     # shows the answer in a strip above that block, not in the thread.
     explain: bool = False
+    decision: Literal["accept", "reject", "defer"] | None = None
 
 
 class OutboxRow(_Strict):
@@ -213,3 +214,8 @@ class OutboxRow(_Strict):
     text: str
     done: bool
 
+
+class Decision(_Strict):
+    decision: Literal["accept", "reject", "defer"]
+    note: str = ""
+    ts: str
