@@ -8,10 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import KEYWORD_CITATION, SCHEMA, high_finding, verified_fix
+from conftest import KEYWORD_CITATION, SCHEMA, high_finding
 from review_pipeline import budget, sdk
 from review_pipeline.__main__ import main
-from review_pipeline.models import DuplicateSet, FinderOutput, FixCheck, MergeOutput, ReviewState, Verdict
+from review_pipeline.models import DuplicateSet, FinderOutput, MergeOutput, ReviewState, Verdict
 
 
 def reworded_finding():
@@ -45,14 +45,11 @@ class FakeAgents:
         if stage == "find":
             return FinderOutput()
         if stage == "verify":
-            return Verdict(status="confirmed", reason="the keyword is the only filter", citations=[KEYWORD_CITATION])
+            return Verdict(status="confirmed", reason="the keyword is the only filter", citations=[KEYWORD_CITATION],
+                           expected_behaviour="Rate plans match whatever the channel is titled.")
         if stage == "merge":
             return MergeOutput(duplicate_sets=[DuplicateSet(
                 finding_ids=[high_finding().id, reworded_finding().id], reason="the same literal keyword")])
-        if stage == "prescribe":
-            return schema.model_validate(verified_fix(high_finding().id).model_dump())
-        if stage == "check_fix":
-            return FixCheck(status="confirmed", reason="nothing else reads KEYWORD")
         raise AssertionError(budget_label)
 
 
@@ -107,8 +104,8 @@ def test_review_end_to_end(fixture_repo, tmp_path, agents, capsys):
     assert "**Reported by:** diff-bugs, callers" in review
     assert f"Merged into `{high_finding().id}`: the same defect as {high_finding().id}" in review
     assert "merge rateplan_service.py:1-1: 2 findings, 1 duplicates" in progress
-    # the repo was only read
-    assert "Assumption: the Open Channel is titled DolceBot." in (target_dir / f"review-booking-engine--{base}..{head}.md").read_text()
+    assert data["findings"][0]["expected_behaviour"] == "Rate plans match whatever the channel is titled."
+    assert "**Expected behaviour:** Rate plans match whatever the channel is titled." in review
 
 
 def test_resume_after_a_kill_following_verify(fixture_repo, tmp_path, agents, capsys):
@@ -128,7 +125,7 @@ def test_resume_after_a_kill_following_verify(fixture_repo, tmp_path, agents, ca
     assert path == target_dir / "findings.json" and path.is_file()
     resumed = fake.calls[len(first_run):]
     assert not [c for c in resumed if c.startswith(("find", "verify"))]  # finished stages are not repeated
-    assert "merge" in resumed and "prescribe" in resumed and "check_fix" in resumed
+    assert resumed == ["merge"]
     assert "RESUMED after verify" in (target_dir / "progress.log").read_text()
 
 

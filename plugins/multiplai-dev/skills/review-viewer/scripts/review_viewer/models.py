@@ -38,6 +38,9 @@ class Citation(_Strict):
     quote: str
 
 
+# `Premise` and `Fix` describe the fix that review wrote for a confirmed
+# finding before multiplai-dev 0.22. Review no longer writes one; the models
+# stay so a findings file written then still opens. The page does not show it.
 class Premise(_Strict):
     statement: str
     kind: Literal["in_repo", "external"]
@@ -62,7 +65,10 @@ class Finding(_Strict):
     failure_scenario: str
     citations: list[Citation] = Field(min_length=1)
     verdict_reason: str | None = None
-    fix: Fix | None = None
+    # One sentence from the verifier on what correct behaviour looks like,
+    # without proposing code. None for refuted and rejected findings.
+    expected_behaviour: str | None = None
+    fix: Fix | None = None  # older files only; see Premise
 
 
 class Target(_Strict):
