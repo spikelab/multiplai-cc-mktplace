@@ -1519,7 +1519,7 @@
         el("span", { class: "strip-icon", text: "💡" }),
         body,
         el("button", { class: "cite-link strip-more", title: "Put this block into the question box",
-          text: "Follow up", onclick: () => insertRef(path, range) }),
+          text: "Follow up", onclick: () => insertRef(path, range, { open: true }) }),
       ]));
     }
     return el("tr", { class: "block-head" }, [td]);
@@ -1948,6 +1948,11 @@
     });
     $("code").addEventListener("mouseup", onCodeMouseUp);
     $("file-prev").addEventListener("click", () => goFile(-1));
+    const code = $("code");
+    const setCodeWidth = () => code.style.setProperty("--code-w", code.clientWidth + "px");
+    setCodeWidth();
+    new ResizeObserver(setCodeWidth).observe(code);
+    window.addEventListener("resize", setCodeWidth);
     $("file-next").addEventListener("click", () => goFile(1));
     $("code").addEventListener("click", onCodeClick);
     $("ask-lines").addEventListener("click", askAboutPick);

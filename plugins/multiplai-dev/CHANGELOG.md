@@ -59,6 +59,9 @@ time, not derived from a tag.
   remembered across viewers (a cookie shared by every port, and by every
   OrbStack container). Before, each new viewer forgot them.
 - review-viewer: the header no longer shows which session answers.
+- review-viewer: a block's 💡 explanation is as wide as the visible code and
+  stays in view when the code scrolls sideways; before, a file with long lines
+  cut its text off on the right. "Follow up" opens the chat.
 - review-viewer: scrolling past the end of a file no longer opens the next one.
   ‹ Prev / Next › buttons beside the file name do it instead. With a review
   step open that covers several files, they move through that step's files

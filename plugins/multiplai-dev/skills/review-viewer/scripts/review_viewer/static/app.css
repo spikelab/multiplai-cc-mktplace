@@ -397,6 +397,11 @@ mark.wd-del { background: var(--del-word); color: inherit; border-radius: 2px; }
 .code tr.block-head td { white-space: normal; font: var(--fs-md)/var(--lh) var(--sans); padding: 2px var(--s2); background: var(--bg); }
 .bulb { border: 0; background: none; min-height: 0; padding: 1px var(--s1); font-size: var(--fs-sm); color: var(--muted); opacity: 0.55; }
 .bulb:hover, .bulb:focus-visible { opacity: 1; color: var(--accent); }
+/* The table can be wider than the pane (long lines, no wrap): the strip and
+   the bulb stay pinned to the visible part, and the strip is as wide as that
+   part (--code-w, set from the pane's width), so its text is never cut off. */
+.bulb, .strip { position: sticky; left: var(--s2); }
+.strip { box-sizing: border-box; width: calc(var(--code-w, 100%) - 2 * var(--s2)); }
 .strip { display: flex; gap: var(--s2); align-items: flex-start; margin: var(--s1) 0; padding: var(--s2) var(--s3);
   border: 1px solid var(--border); border-left: 3px solid var(--hl-bar); border-radius: var(--radius); background: var(--panel); }
 .strip-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
