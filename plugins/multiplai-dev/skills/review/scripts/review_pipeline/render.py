@@ -1,9 +1,10 @@
 """Markdown: the per-target review, and severity rollups across targets.
 
 Both render from `findings.json` v1 dicts, so a rollup never scrapes markdown.
-The per-target review adds two things only the pipeline state has: the
-severity a finding had before it was lowered, and the question to ask for each
-external premise ("Assumption: … Ask: …").
+The per-target review adds what only the pipeline state has: the severity a
+finding had before it was lowered, the finders that reported it, the findings
+merged into it, and the question to ask for each external premise
+("Assumption: … Ask: …").
 """
 
 from __future__ import annotations
@@ -43,7 +44,8 @@ def _one_line(text: str) -> str:
 
 def finding_section(fd: dict, *, web_base: str | None, head_sha: str,
                     original_severity: str | None = None,
-                    questions: dict[str, str] | None = None) -> str:
+                    questions: dict[str, str] | None = None,
+                    finders: list[str] | None = None) -> str:
     """One finding. *questions* maps an external premise's statement to what to ask."""
     questions = questions or {}
     lines_ = f"{fd['line_start']}" if fd["line_start"] == fd["line_end"] else f"{fd['line_start']}-{fd['line_end']}"
@@ -53,6 +55,8 @@ def finding_section(fd: dict, *, web_base: str | None, head_sha: str,
     if original_severity and original_severity != fd["severity"]:
         status += f" (lowered from {original_severity})"
     out += [f"**Verdict:** {status}. {_one_line(fd.get('verdict_reason') or '')}".rstrip(), ""]
+    if finders and len(finders) > 1:
+        out += [f"**Reported by:** {', '.join(finders)}", ""]
 
     out.append("**Evidence:**")
     out.append("")
@@ -132,6 +136,7 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
         out.append("- **Agent failures:** " + "; ".join(_one_line(e) for e in state.errors))
     out += ["", "## Findings", ""]
 
+    finders = {f.id: f.finders for f in state.findings}
     questions = {}
     for fix in state.fixes.values():
         for p in fix.premises:
@@ -149,17 +154,21 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
         for fd in group:
             out.append(finding_section(fd, web_base=web, head_sha=head,
                                        original_severity=state.original_severity.get(fd["id"]),
-                                       questions=questions))
+                                       questions=questions, finders=finders.get(fd["id"])))
 
-    out += ["## Appendix — rejected and refuted", ""]
+    out += ["## Appendix — rejected, refuted and merged", ""]
     dropped = [f for f in findings if f["status"] in ("refuted", "rejected")]
-    if not dropped:
-        out += ["Nothing was rejected or refuted.", ""]
+    if not dropped and not state.merged:
+        out += ["Nothing was rejected, refuted or merged.", ""]
     for fd in dropped:
         lines_ = f"{fd['line_start']}-{fd['line_end']}"
         who = "the verifier" if fd["status"] == "refuted" else "a gate"
         out.append(f"- **{fd['status']}** ({fd['severity']}) `{fd['file']}:{lines_}` — {_one_line(fd['claim'])}  ")
         out.append(f"  Reason from {who}: {_one_line(fd.get('verdict_reason') or '')}")
+    for m in state.merged:
+        f = m.finding
+        out.append(f"- **merged** ({f.severity}) `{f.file}:{f.line_start}-{f.line_end}` — {_one_line(f.claim)}  ")
+        out.append(f"  Merged into `{m.into}`: {_one_line(m.reason)}")
     out.append("")
     return "\n".join(out)
 
@@ -211,7 +220,8 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
     out.append(f"Findings: {counts['HIGH']} HIGH, {counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW; "
                f"{len(fixes)} with a verified fix. Dropped: "
                f"{sum(1 for f in dropped if f['status'] == 'refuted')} refuted by the verifier, "
-               f"{sum(1 for f in dropped if f['status'] == 'rejected')} rejected by the gates.")
+               f"{sum(1 for f in dropped if f['status'] == 'rejected')} rejected by the gates"
+               + (f", {len(state.merged)} merged into another finding as duplicates." if state.merged else "."))
     if state.errors:
         out.append("Agent failures: " + "; ".join(_short(e) for e in state.errors))
 

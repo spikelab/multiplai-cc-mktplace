@@ -13,11 +13,13 @@ from conftest import (
 from review_pipeline import sdk
 from review_pipeline.config import ReviewConfig
 from review_pipeline.models import (
-    NO_VERIFIED_FIX, FinderOutput, Fix, FixCheck, Premise, ReviewState, Verdict,
+    NO_VERIFIED_FIX, DuplicateSet, Finding, FinderOutput, Fix, FixCheck, MergeOutput, Premise, ReviewState,
+    Verdict,
 )
 from review_pipeline.stages import RunContext
 from review_pipeline.stages.check_fix import run_check_fix
 from review_pipeline.stages.find import conventions_chain, run_find
+from review_pipeline.stages.merge import MERGE_LINE_GAP, group_key, overlap_groups, run_merge
 from review_pipeline.stages.prescribe import run_prescribe
 from review_pipeline.stages.verify import run_verify
 
@@ -71,6 +73,7 @@ async def test_find_dedupes_gates_and_normalises_paths(target_info, ctx, monkeyp
     assert state.findings[0].file == "rateplan_service.py"
     assert state.findings[0].citations[0].path == "rateplan_service.py"
     assert state.findings[0].finder == "diff-bugs"
+    assert state.findings[0].finders == ["diff-bugs", "callers"]  # the copy's finder is kept
     assert len(state.rejected) == 1 and "quote not at cited lines" in state.rejected[0].reason
     assert state.stage == "find" and len(canned.calls) == 2
 
@@ -94,7 +97,7 @@ async def test_trust_error_escapes(target_info, ctx, monkeypatch):
 async def test_stage_already_done_makes_no_calls(target_info, ctx, monkeypatch):
     canned = use(monkeypatch, {})
     state = ReviewState(target=target_info, stage="check_fix")
-    for fn in (run_find, run_verify, run_prescribe, run_check_fix):
+    for fn in (run_find, run_verify, run_merge, run_prescribe, run_check_fix):
         assert await fn(state, ctx) is state
     assert canned.calls == []
 
@@ -133,6 +136,117 @@ async def test_verifier_failure_is_unverifiable(target_info, ctx, monkeypatch):
     use(monkeypatch, {"verify": [sdk.AgentCallError("timeout")]})
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high]), ctx)
     assert state.verdicts[high.id].status == "unverifiable"
+
+
+# --- merge -----------------------------------------------------------------------
+
+
+def _at(claim: str, severity: str, start: int, end: int, finder: str, *citations,
+        file: str = "rateplan_service.py") -> Finding:
+    return Finding(claim=claim, severity=severity, dimension=finder, file=file, line_start=start,
+                   line_end=end, failure_scenario="s", citations=list(citations) or [KEYWORD_CITATION],
+                   finder=finder, finders=[finder])
+
+
+def _verdicts(**status_by_id) -> dict[str, Verdict]:
+    return {fid: Verdict(finding_id=fid, status=status, reason="r") for fid, status in status_by_id.items()}
+
+
+def test_overlap_groups_chain_overlaps_and_near_touches_in_one_file(target_info):
+    a = _at("a", "LOW", 1, 1, "diff-bugs")
+    b = _at("b", "LOW", 1 + MERGE_LINE_GAP, 3, "callers")      # within the gap of a
+    c = _at("c", "LOW", 10, 12, "diff-bugs")
+    d = _at("d", "LOW", 11, 11, "tests")                        # inside c
+    far = _at("far", "LOW", 12 + MERGE_LINE_GAP + 1, 16, "history")  # one line past the gap
+    other_file = _at("o", "LOW", 1, 1, "callers", file="settings.py")
+    refuted = _at("r", "LOW", 1, 1, "history")
+    findings = [a, b, c, d, far, other_file, refuted]
+    state = ReviewState(target=target_info, findings=findings, verdicts={
+        **_verdicts(**{f.id: "confirmed" for f in findings}), **_verdicts(**{refuted.id: "refuted"})})
+    assert [[f.claim for f in g] for g in overlap_groups(state)] == [["a", "b"], ["c", "d"]]
+
+
+def _merge_state(target_info) -> tuple[ReviewState, Finding, Finding, Finding]:
+    """Three overlapping findings: a confirmed LOW, an unverifiable one lowered from HIGH, and a third."""
+    keep = _at("the keyword is hardcoded", "LOW", 1, 1, "diff-bugs", KEYWORD_CITATION)
+    copy = _at("rate plans are matched on a literal 'dolcebot'", "MEDIUM", 1, 6, "callers",
+               KEYWORD_CITATION, KEYWORD_USE_CITATION)
+    other = _at("the match is case-sensitive", "LOW", 6, 6, "tests", KEYWORD_USE_CITATION)
+    state = ReviewState(target=target_info, stage="verify", findings=[keep, copy, other],
+                        verdicts=_verdicts(**{keep.id: "confirmed", copy.id: "unverifiable",
+                                              other.id: "confirmed"}),
+                        original_severity={copy.id: "HIGH"})
+    return state, keep, copy, other
+
+
+async def test_merge_keeps_highest_severity_and_every_citation_and_records_the_copy(target_info, ctx, monkeypatch):
+    state, keep, copy, other = _merge_state(target_info)
+    canned = use(monkeypatch, {"merge": [MergeOutput(duplicate_sets=[
+        DuplicateSet(finding_ids=[copy.id, keep.id], reason="both say the keyword is a literal")])]})
+    state = await run_merge(state, ctx)
+
+    (label, prompt_text), = canned.calls
+    assert label == "merge" and all(f.id in prompt_text for f in (keep, copy, other))
+    assert [f.id for f in state.findings] == [keep.id, other.id]
+    merged = state.findings[0]
+    assert merged.claim == keep.claim  # the confirmed finding survives, id and verdict unchanged
+    assert merged.severity == "MEDIUM"  # the highest current severity in the set
+    assert merged.citations == [KEYWORD_CITATION, KEYWORD_USE_CITATION]
+    assert merged.finders == ["diff-bugs", "callers"]
+    (record,) = state.merged
+    assert record.finding.id == copy.id and record.into == keep.id
+    assert keep.id in record.reason and "both say the keyword is a literal" in record.reason
+    assert ctx.counts == {"groups": 1, "merged": 1, "agent_failures": 0}
+    assert state.stage == "merge" and group_key([keep, copy, other]) in state.merge_answers
+
+
+async def test_merge_of_unverifiable_findings_keeps_the_highest_original_severity(target_info, ctx, monkeypatch):
+    state, keep, copy, other = _merge_state(target_info)
+    state.verdicts[keep.id].status = "unverifiable"
+    state.original_severity[keep.id] = "MEDIUM"
+    use(monkeypatch, {"merge": [MergeOutput(duplicate_sets=[DuplicateSet(finding_ids=[keep.id, copy.id])])]})
+    state = await run_merge(state, ctx)
+    survivor = state.findings[0]
+    assert survivor.id == copy.id and survivor.severity == "MEDIUM"
+    assert state.original_severity[copy.id] == "HIGH"
+    assert state.merged[0].into == copy.id
+
+
+async def test_merge_agent_failure_leaves_the_group_unmerged(target_info, ctx, monkeypatch):
+    state, keep, copy, other = _merge_state(target_info)
+    before = [f.model_copy() for f in state.findings]
+    use(monkeypatch, {"merge": [sdk.AgentCallError("timeout\ntrace")]})
+    state = await run_merge(state, ctx)
+    assert state.findings == before and state.merged == []
+    assert state.errors == ["merge rateplan_service.py:1-6: timeout"]
+    assert ctx.counts["agent_failures"] == 1 and state.stage == "merge"
+
+
+async def test_merge_ignores_ids_outside_the_group_and_ids_used_twice(target_info, ctx, monkeypatch):
+    state, keep, copy, other = _merge_state(target_info)
+    use(monkeypatch, {"merge": [MergeOutput(duplicate_sets=[
+        DuplicateSet(finding_ids=[keep.id, "0123456789"]),  # one real id: not a set
+        DuplicateSet(finding_ids=[keep.id, copy.id]),
+        DuplicateSet(finding_ids=[copy.id, other.id]),  # copy is already used
+    ])]})
+    state = await run_merge(state, ctx)
+    assert [f.id for f in state.findings] == [keep.id, other.id]
+    assert [m.finding.id for m in state.merged] == [copy.id]
+
+
+async def test_merge_resume_reuses_stored_answers_and_a_budget_stop_keeps_the_findings(target_info, ctx, monkeypatch):
+    from review_pipeline import budget
+
+    state, keep, copy, other = _merge_state(target_info)
+    use(monkeypatch, {"merge": [budget.BudgetExceededError("stop")]})
+    with pytest.raises(budget.BudgetExceededError):
+        await run_merge(state, ctx)
+    assert state.stage == "verify" and len(state.findings) == 3 and state.merge_answers == {}
+
+    state.merge_answers[group_key(state.findings)] = [DuplicateSet(finding_ids=[keep.id, copy.id])]
+    canned = use(monkeypatch, {"merge": []})
+    state = await run_merge(state, ctx)
+    assert canned.calls == [] and [f.id for f in state.findings] == [keep.id, other.id]
 
 
 # --- prescribe -------------------------------------------------------------------

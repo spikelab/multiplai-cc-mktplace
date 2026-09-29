@@ -4,10 +4,11 @@ Precedence, highest first (same order as buildme's config.py: the project's
 own file beats multiplai.conf, which beats the default):
 
 1. `review.yaml` in the output directory (`<out>/review.yaml`):
-   `concurrency`, `finder_model`, `verifier_model`, `prescriber_model`,
-   `checker_model`, `effort`, `max_turns`.
+   `concurrency`, `finder_model`, `verifier_model`, `merger_model`,
+   `prescriber_model`, `checker_model`, `effort`, `max_turns`.
 2. `multiplai.conf` keys `review_finder_model`, `review_verifier_model`,
-   `review_prescriber_model`, `review_effort` (the checker uses the verifier's).
+   `review_prescriber_model`, `review_effort` (the merger and the checker use
+   the verifier's).
 3. Default: no model and no effort passed, so every stage runs on the
    session's model. Verifiers and checkers still each get a fresh context.
 """
@@ -34,6 +35,7 @@ class ReviewConfig:
     concurrency: int = DEFAULT_CONCURRENCY
     finder_model: str | None = None
     verifier_model: str | None = None
+    merger_model: str | None = None
     prescriber_model: str | None = None
     checker_model: str | None = None
     effort: str | None = None
@@ -59,7 +61,7 @@ def load_config(out_dir: Path | None, *, max_cost_usd: float | None = 10.0) -> R
         conf = {}
     cfg.finder_model = _conf_value(conf, "review_finder_model")
     cfg.verifier_model = _conf_value(conf, "review_verifier_model")
-    cfg.checker_model = cfg.verifier_model
+    cfg.merger_model = cfg.checker_model = cfg.verifier_model
     cfg.prescriber_model = _conf_value(conf, "review_prescriber_model")
     cfg.effort = _conf_value(conf, "review_effort")
 
@@ -73,9 +75,12 @@ def load_config(out_dir: Path | None, *, max_cost_usd: float | None = 10.0) -> R
         if not isinstance(data, dict):
             log.warning("Ignoring %s: expected a mapping", yaml_path)
             data = {}
-        for key in ("finder_model", "verifier_model", "prescriber_model", "checker_model", "effort"):
+        for key in ("finder_model", "verifier_model", "merger_model", "prescriber_model", "checker_model",
+                    "effort"):
             if data.get(key):
                 setattr(cfg, key, str(data[key]))
+        if data.get("verifier_model") and not data.get("merger_model"):
+            cfg.merger_model = str(data["verifier_model"])
         if data.get("verifier_model") and not data.get("checker_model"):
             cfg.checker_model = str(data["verifier_model"])
         for key in ("concurrency", "max_turns"):

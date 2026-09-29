@@ -55,7 +55,7 @@ def test_citations_without_github_remote_are_path_lines(canned_state):
 
 
 def test_appendix_lists_rejected_and_refuted_with_reasons(canned_state):
-    appendix = render_review(canned_state).split("## Appendix — rejected and refuted", 1)[1]
+    appendix = render_review(canned_state).split("## Appendix — rejected, refuted and merged", 1)[1]
     assert CLAIM_REFUTED in appendix and "line 5 sets the id" in appendix
     assert CLAIM_REJECTED in appendix and "quote not at cited lines" in appendix
     assert CLAIM_HIGH not in appendix

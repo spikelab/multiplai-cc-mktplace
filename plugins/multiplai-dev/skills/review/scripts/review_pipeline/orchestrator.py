@@ -1,4 +1,4 @@
-"""target → find → verify → prescribe → check_fix → export → render.
+"""target → find → verify → merge → prescribe → check_fix → export → render.
 
 `review-state.json` is written after every stage; `resume` reloads it and
 continues from the first stage not yet done.
@@ -25,6 +25,7 @@ from .render import summary_path, write_review, write_rollups
 from .stages import RunContext
 from .stages.check_fix import run_check_fix
 from .stages.find import run_find
+from .stages.merge import run_merge
 from .stages.prescribe import run_prescribe
 from .stages.verify import run_verify
 from .state import load_state, save_state
@@ -34,6 +35,7 @@ log = logging.getLogger(__name__)
 STAGE_FUNCTIONS = (
     ("find", run_find),
     ("verify", run_verify),
+    ("merge", run_merge),
     ("prescribe", run_prescribe),
     ("check_fix", run_check_fix),
 )

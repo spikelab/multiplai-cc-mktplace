@@ -22,7 +22,7 @@ SEVERITIES: tuple[str, ...] = ("HIGH", "MEDIUM", "LOW")
 
 # Stage names in run order. `ReviewState.stage` holds the last one completed.
 STAGES: tuple[str, ...] = (
-    "target", "find", "verify", "prescribe", "check_fix", "export", "render", "done",
+    "target", "find", "verify", "merge", "prescribe", "check_fix", "export", "render", "done",
 )
 
 
@@ -72,6 +72,9 @@ class Finding(_Model):
     failure_scenario: str
     citations: list[Citation] = Field(min_length=1)
     finder: str = ""
+    # Every finder that reported this defect: the first one, then any whose
+    # finding was dropped as a word-for-word copy or merged into this one.
+    finders: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _compute_id(self) -> "Finding":
@@ -118,6 +121,11 @@ class FixCheck(_Model):
     reason: str
 
 
+class DuplicateSet(_Model):
+    finding_ids: list[str]
+    reason: str = ""
+
+
 class GateResult(BaseModel):
     passed: bool
     reason: str = ""
@@ -147,6 +155,13 @@ class Rejected(BaseModel):
     stage: str = "find"
 
 
+class Merged(BaseModel):
+    """A finding folded into another that describes the same defect."""
+    finding: Finding
+    into: str  # the id of the finding it was merged into
+    reason: str
+
+
 class ReviewState(BaseModel):
     target: TargetInfo
     stage: str = "target"  # last stage completed
@@ -155,6 +170,10 @@ class ReviewState(BaseModel):
     fixes: dict[str, Fix] = Field(default_factory=dict)  # by finding id
     fix_checks: dict[str, FixCheck] = Field(default_factory=dict)
     rejected: list[Rejected] = Field(default_factory=list)
+    merged: list[Merged] = Field(default_factory=list)
+    # The merge agent's answer per group of overlapping findings, keyed by the
+    # group's sorted ids, so a resumed merge stage asks no group twice.
+    merge_answers: dict[str, list[DuplicateSet]] = Field(default_factory=dict)
     original_severity: dict[str, str] = Field(default_factory=dict)  # lowered findings only
     errors: list[str] = Field(default_factory=list)  # agent failures, shown in the review header
     budget: dict = Field(default_factory=dict)
@@ -169,3 +188,7 @@ class ReviewState(BaseModel):
 
 class FinderOutput(_Model):
     findings: list[Finding] = Field(default_factory=list)
+
+
+class MergeOutput(_Model):
+    duplicate_sets: list[DuplicateSet] = Field(default_factory=list)
