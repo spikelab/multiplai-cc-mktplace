@@ -298,7 +298,7 @@
   }
 
   /* The changed files in the order the sidebar lists them (grouped by
-   * directory, filtered), which is the order scrolling moves through. */
+   * directory, filtered): the order Prev / Next move through. */
   function fileOrder(files, filter) {
     const f = (filter || "").toLowerCase();
     const shown = (files || []).filter(function (p) { return !f || p.toLowerCase().includes(f); });
@@ -313,26 +313,6 @@
     if (i < 0) return null;
     const j = i + delta;
     return j >= 0 && j < order.length ? order[j] : null;
-  }
-
-  /* Scrolling past the top or bottom of a file moves to the previous or next
-   * file, but only on a fresh push: wheel events that arrive while the pane is
-   * already at its edge count only after a pause of `pauseMs`, so the momentum
-   * of a fling that reached the edge never turns the page. Returns the new
-   * accumulator and whether to move. `edge` is -1 (top), 1 (bottom) or 0. */
-  function overscroll(acc, edge, delta, now, opts) {
-    const o = opts || {};
-    const pauseMs = o.pauseMs == null ? 200 : o.pauseMs;
-    const need = o.need == null ? 300 : o.need;
-    const dir = delta > 0 ? 1 : delta < 0 ? -1 : 0;
-    const last = acc ? acc.last : -Infinity;
-    if (!dir || edge !== dir) return { move: false, acc: { armed: false, total: 0, dir: 0, last: now } };
-    let armed = acc && acc.armed && acc.dir === dir;
-    let total = armed ? acc.total : 0;
-    if (!armed && now - last >= pauseMs) armed = true;
-    if (armed) total += Math.abs(delta);
-    if (armed && total >= need) return { move: true, acc: { armed: false, total: 0, dir: 0, last: now } };
-    return { move: false, acc: { armed: armed, total: total, dir: dir, last: now }, progress: armed ? total / need : 0 };
   }
 
   /* Steps with an anchor on `path`, in walkthrough order, each with the
@@ -350,6 +330,21 @@
   function skippedReason(walk, path) {
     const k = ((walk && walk.skipped) || []).find(function (x) { return x.path === path; });
     return k ? k.reason : null;
+  }
+
+  /* Where Prev / Next go from `current`: through the open review step's
+   * files, in the order its anchors name them, when it spans more than one
+   * file and `current` is one of them; otherwise through every changed file
+   * as the sidebar lists them. */
+  function navFiles(step, files, filter, current) {
+    if (step) {
+      const seen = [];
+      for (const a of step.anchors || []) {
+        if ((files || []).includes(a.path) && !seen.includes(a.path)) seen.push(a.path);
+      }
+      if (seen.length > 1 && seen.includes(current)) return { order: seen, inStep: true };
+    }
+    return { order: fileOrder(files, filter), inStep: false };
   }
 
   /* The files a step's anchors point at. */
@@ -811,7 +806,7 @@
     svgDataUrl: svgDataUrl, safePrUrl: safePrUrl,
     groupFilesByDir: groupFilesByDir, shortDir: shortDir, clampWidth: clampWidth,
     foldRows: foldRows, expandFold: expandFold, fileOrder: fileOrder,
-    neighbourFile: neighbourFile, overscroll: overscroll,
+    neighbourFile: neighbourFile, navFiles: navFiles,
     stepsForFile: stepsForFile, skippedReason: skippedReason, stepFiles: stepFiles,
     summaryBadges: summaryBadges,
     diffBlock: diffBlock, formatRef: formatRef, parseRefs: parseRefs, refAnchor: refAnchor,

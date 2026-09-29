@@ -388,11 +388,8 @@ mark.wd-del { background: var(--del-word); color: inherit; border-radius: 2px; }
 .code tr.fold td { background: var(--gap-bg); color: var(--muted); padding: 2px var(--s2); font: var(--fs-sm) var(--sans); }
 .fold-label { margin-right: 10px; }
 .fold-btn { min-height: 0; height: 20px; font-size: var(--fs-xs); padding: 0 6px; margin-right: var(--s1); }
-.file-nav { padding: 6px var(--s3); font: var(--fs-sm) var(--sans); }
-.file-nav.next { border-top: 1px solid var(--border); margin-top: var(--s2); }
-.file-nav.prev:empty { display: none; }
-.file-nav-btn { border: 0; background: none; color: var(--accent); padding: 2px 0; min-height: 0; }
-.overscroll-bar { height: 3px; width: 0; background: var(--accent); transition: width 0.1s linear; }
+.file-nav { display: inline-flex; align-items: center; gap: var(--s1); flex-shrink: 0; }
+.file-pos { margin: 0 var(--s2) 0 var(--s1); white-space: nowrap; }
 .code tr.cited td.src,
 .code tr.focus td.src { box-shadow: inset 3px 0 0 var(--hl-bar); }
 .code tr.focus.ctx td.src { background: var(--hl-bg); }

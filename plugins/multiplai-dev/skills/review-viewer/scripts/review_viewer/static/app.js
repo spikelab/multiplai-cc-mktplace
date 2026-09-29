@@ -33,7 +33,6 @@
     views: new Map(),
     openRows: new Map(),
     shownRows: new Set(),
-    overscroll: null,
     showHidden: false,
     fileFilter: "",
     questions: [],
@@ -396,6 +395,7 @@
   const TABS = { summary: ["tab-summary", "summary"], walk: ["tab-walk", "walkthrough"], finding: ["tab-finding", "finding"] };
 
   function renderTabs() {
+    if (state.view) renderFileNav();
     for (const [name, [tab, panel]] of Object.entries(TABS)) {
       const on = state.tab === name;
       $(tab).setAttribute("aria-selected", String(on));
@@ -538,6 +538,7 @@
   }
 
   function renderWalk() {
+    if (state.view) renderFileNav();
     const list = $("walk-steps");
     list.replaceChildren();
     if (!state.walk) {
@@ -778,6 +779,7 @@
   }
 
   function renderFiles() {
+    if (state.view) renderFileNav();
     const list = $("files");
     list.replaceChildren();
     const filter = state.fileFilter.toLowerCase();
@@ -1280,6 +1282,7 @@
     $("layout-unified").setAttribute("aria-pressed", String(!state.split));
     $("layout-split").setAttribute("aria-pressed", String(state.split));
     $("wrap-btn").setAttribute("aria-pressed", String(state.wrap));
+    renderFileNav();
   }
 
   function renderCode() {
@@ -1423,7 +1426,7 @@
         ]));
       }
     }
-    code.replaceChildren(fileNav(-1), el("table", {}, [tbody]), fileNav(1));
+    code.replaceChildren(el("table", {}, [tbody]));
     state.rowEls = [...code.querySelectorAll("tr[data-ri]")];
     updateBlockLine();
   }
@@ -1584,57 +1587,39 @@
 
   // --- moving between files --------------------------------------------------
 
-  function neighbour(delta) {
-    const order = L.fileOrder(state.detail.files, state.fileFilter);
-    return L.neighbourFile(order, state.filePath, delta);
+  function navContext() {
+    return L.navFiles(state.tab === "walk" ? currentStep() : null, state.detail.files,
+      state.fileFilter, state.filePath);
   }
 
-  /* The bar above (delta -1) or below (delta 1) a file, naming the file
-   * that scrolling on past this edge opens. */
-  function fileNav(delta) {
-    const path = neighbour(delta);
-    const box = el("div", { class: "file-nav " + (delta > 0 ? "next" : "prev") });
-    if (!path) {
-      if (delta > 0) box.appendChild(el("span", { class: "muted", text: "End of the last changed file." }));
-      return box;
+  /* Prev / Next beside the file name. */
+  function renderFileNav() {
+    const nav = navContext();
+    const i = nav.order.indexOf(state.filePath);
+    const where = nav.inStep ? " file in this review" : " file";
+    for (const [id, d] of [["file-prev", -1], ["file-next", 1]]) {
+      const path = i < 0 ? null : nav.order[i + d];
+      const btn = $(id);
+      btn.disabled = !path;
+      btn.title = path ? (d < 0 ? "Previous" : "Next") + where + ": " + path
+        : "No " + (d < 0 ? "previous" : "next") + where;
     }
-    const name = path.slice(path.lastIndexOf("/") + 1);
-    box.appendChild(el("button", {
-      class: "file-nav-btn", title: path,
-      text: delta > 0 ? "Keep scrolling for the next file: " + name + " ▼" : "▲ Previous file: " + name,
-      onclick: () => goFile(delta),
-    }));
-    box.appendChild(el("div", { class: "overscroll-bar" }));
-    return box;
+    $("file-pos").textContent = i < 0 ? "" : (i + 1) + " of " + nav.order.length + (nav.inStep ? " in this review" : "");
   }
 
   async function goFile(delta) {
-    const path = neighbour(delta);
+    const nav = navContext();
+    const path = L.neighbourFile(nav.order, state.filePath, delta);
     if (!path) return;
     clearPickState();
+    if (nav.inStep) {
+      // Stay on the same review step: open the file at its first anchor there.
+      await openAnchor(currentStep().anchors.find((a) => a.path === path));
+      return;
+    }
     await openFile(path);
     if (state.tab === "walk") await showFileReview(path);
-    const code = $("code");
-    code.scrollTop = delta > 0 ? 0 : code.scrollHeight;
-  }
-
-  function showOverscroll(dir, progress) {
-    for (const bar of $("code").querySelectorAll(".overscroll-bar")) bar.style.width = "0";
-    if (!dir) return;
-    const bar = $("code").querySelector(".file-nav." + (dir > 0 ? "next" : "prev") + " .overscroll-bar");
-    if (bar) bar.style.width = Math.round(Math.min(1, progress) * 100) + "%";
-  }
-
-  function onCodeWheel(ev) {
-    if (!state.view || ev.ctrlKey) return;
-    const code = $("code");
-    const atTop = code.scrollTop <= 0;
-    const atBottom = code.scrollTop + code.clientHeight >= code.scrollHeight - 1;
-    const edge = ev.deltaY > 0 && atBottom ? 1 : ev.deltaY < 0 && atTop ? -1 : 0;
-    const res = L.overscroll(state.overscroll, edge, ev.deltaY, performance.now());
-    state.overscroll = res.acc;
-    showOverscroll(res.move ? 0 : res.acc.dir, res.progress || 0);
-    if (res.move) goFile(ev.deltaY > 0 ? 1 : -1);
+    $("code").scrollTop = 0;
   }
 
   function scrollToLines(start, end) {
@@ -1962,7 +1947,8 @@
       renderFiles();
     });
     $("code").addEventListener("mouseup", onCodeMouseUp);
-    $("code").addEventListener("wheel", onCodeWheel, { passive: true });
+    $("file-prev").addEventListener("click", () => goFile(-1));
+    $("file-next").addEventListener("click", () => goFile(1));
     $("code").addEventListener("click", onCodeClick);
     $("ask-lines").addEventListener("click", askAboutPick);
     $("tab-finding").addEventListener("click", () => setTab("finding"));

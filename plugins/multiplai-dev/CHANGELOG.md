@@ -59,6 +59,10 @@ time, not derived from a tag.
   remembered across viewers (a cookie shared by every port, and by every
   OrbStack container). Before, each new viewer forgot them.
 - review-viewer: the header no longer shows which session answers.
+- review-viewer: scrolling past the end of a file no longer opens the next one.
+  ‹ Prev / Next › buttons beside the file name do it instead. With a review
+  step open that covers several files, they move through that step's files
+  (and keep the step open); otherwise through every changed file.
 - review-viewer: while any GitHub check on the PR is still running, the page
   asks GitHub again every minute (the server calls `gh` at most once a minute
   per PR), so "Checks: N running" turns into passing or failing by itself.

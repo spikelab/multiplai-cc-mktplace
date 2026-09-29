@@ -249,29 +249,14 @@ test("files move in sidebar order, filtered, stopping at both ends", () => {
   assert.equal(L.neighbourFile(order, "gone.md", 1), null);
 });
 
-test("overscroll moves only on a fresh push past the edge", () => {
-  const opts = { pauseMs: 200, need: 300 };
-  // A fling reaches the bottom: its momentum events (16 ms apart) never count.
-  let r = L.overscroll(null, 0, 100, 0, opts);
-  for (let t = 16; t < 600; t += 16) {
-    r = L.overscroll(r.acc, 1, 50, t, opts);
-    assert.equal(r.move, false);
-  }
-  // A pause, then a deliberate push: counts, and moves once 300 px add up.
-  r = L.overscroll(r.acc, 1, 120, 1000, opts);
-  assert.equal(r.move, false);
-  assert.ok(r.progress > 0);
-  r = L.overscroll(r.acc, 1, 120, 1016, opts);
-  assert.equal(r.move, false);
-  r = L.overscroll(r.acc, 1, 120, 1032, opts);
-  assert.equal(r.move, true);
-  // Leaving the edge, or pushing the other way, resets.
-  r = L.overscroll(null, 1, 200, 5000, opts);
-  r = L.overscroll(r.acc, 0, 200, 5016, opts);
-  assert.equal(r.acc.total, 0);
-  r = L.overscroll(r.acc, -1, 200, 6000, opts);
-  assert.equal(r.move, false);
-  assert.equal(L.overscroll(r.acc, -1, -200, 6016, opts).move, false);
+test("Prev / Next follow the open review step when it spans several files", () => {
+  const files = ["a.py", "b.py", "c.py", "d.py"];
+  const step = { anchors: [{ path: "c.py" }, { path: "a.py" }, { path: "c.py" }, { path: "gone.py" }] };
+  assert.deepEqual(L.navFiles(step, files, "", "a.py"), { order: ["c.py", "a.py"], inStep: true });
+  // A file outside the step, or a one-file step: every changed file.
+  assert.equal(L.navFiles(step, files, "", "b.py").inStep, false);
+  assert.equal(L.navFiles({ anchors: [{ path: "a.py" }] }, files, "", "a.py").inStep, false);
+  assert.deepEqual(L.navFiles(null, files, "", "a.py").order, files);
 });
 
 test("a file's reviews: steps anchoring it, in order, with the matching anchor", () => {

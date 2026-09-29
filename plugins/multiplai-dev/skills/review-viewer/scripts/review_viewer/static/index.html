@@ -62,6 +62,11 @@
   <section class="centre" aria-label="File">
     <div class="file-head">
       <div class="file-line">
+        <span class="file-nav" role="group" aria-label="Previous or next file">
+          <button id="file-prev" type="button" class="ctl ctl-sm" aria-label="Previous file">‹ Prev</button>
+          <button id="file-next" type="button" class="ctl ctl-sm" aria-label="Next file">Next ›</button>
+          <span id="file-pos" class="muted small file-pos"></span>
+        </span>
         <span id="file-status" class="fstatus" hidden></span>
         <span id="file-path" class="mono file-path"></span>
         <span id="file-counts" class="counts"></span>
@@ -181,7 +186,7 @@
         <dt><kbd>/</kbd></dt><dd>Filter the changed files</dd>
         <dt><kbd>Ctrl</kbd>+<kbd>B</kbd></dt><dd>Hide or show the files panel</dd>
         <dt><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>B</kbd></dt><dd>Hide or show the review panel</dd>
-        <dt>Scroll past the end</dt><dd>Open the next (or previous) file</dd>
+        <dt>‹ Prev / Next ›</dt><dd>Beside the file name: the previous or next file of the open review, or of the whole change</dd>
         <dt><kbd>Esc</kbd></dt><dd>Clear the line selection, close the chat</dd>
       </dl>
       <h3>The code</h3>
