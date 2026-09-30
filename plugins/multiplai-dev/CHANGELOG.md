@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.22.0] - 2026-09-29
+## [0.22.0] - 2026-09-30
 
 ### Added
 - review-viewer: a **risk of merging** score (Low / Medium / High) in the page
@@ -37,12 +37,6 @@ time, not derived from a tag.
 - review-viewer: assessment titles are at most 32 characters and badges no
   longer wrap. `walkthrough put` rejects `size` and `risk` assessments;
   walkthroughs written before 0.22.0 still load.
-
-### Fixed
-- review-viewer: a walkthrough step no longer restates its findings in its
-  text; the page already shows them in full under the step. `walkthrough put`
-  rejects a step whose text names a finding id.
-### Changed
 - review: findings that describe the same defect are **merged**. After
   verification, confirmed and unverifiable findings in the same file whose
   lines overlap are grouped, and one agent per group decides which are the same
@@ -63,6 +57,16 @@ time, not derived from a tag.
 - review: the `prescriber_model` and `checker_model` keys in `review.yaml` and
   `review_prescriber_model` in `multiplai.conf`. `merger_model` sets the model
   of the new merge stage.
+
+### Fixed
+- review-viewer: a walkthrough step no longer restates its findings in its
+  text; the page already shows them in full under the step. `walkthrough put`
+  rejects a step whose text names a finding id.
+- review-viewer: the change arrows (▲ ▼) reach every change in a file. Near
+  the end of a file, or when the whole file fits on screen, Next used to stay
+  on the same change and never turned off.
+- review-viewer: the chat button no longer covers the last lines of the
+  right-hand panel or the code; both end in space you can scroll clear of it.
 
 ## [0.21.0] - 2026-09-29
 
