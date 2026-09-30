@@ -113,7 +113,8 @@ async def test_verify_downgrades_uncited_confirmation_and_keeps_refuted(target_i
     assert "without citing" in state.verdicts[high.id].reason
     assert state.findings[0].severity == "MEDIUM" and state.original_severity[high.id] == "HIGH"
     assert state.verdicts[medium.id].status == "refuted"
-    assert ctx.counts == {"confirmed": 0, "refuted": 1, "unverifiable": 1}
+    # The canned unverifiable verdict has no expected behaviour, so it is counted.
+    assert ctx.counts == {"confirmed": 0, "refuted": 1, "unverifiable": 1, "no_expected_behaviour": 1}
 
 
 async def test_verify_keeps_a_grounded_confirmation_and_its_expected_behaviour(target_info, ctx, monkeypatch):
@@ -124,6 +125,17 @@ async def test_verify_keeps_a_grounded_confirmation_and_its_expected_behaviour(t
     assert state.verdicts[high.id].status == "confirmed" and state.findings[0].severity == "HIGH"
     assert state.verdicts[high.id].expected_behaviour == "Rate plans match the channel's title."
     assert "without proposing a code change" in canned.calls[0][1]
+    assert state.errors == []
+
+
+async def test_verify_lists_findings_that_carry_no_expected_behaviour(target_info, ctx, monkeypatch):
+    high = high_finding()
+    use(monkeypatch, {"verify": [Verdict(status="confirmed", reason="r", citations=[KEYWORD_CITATION])]})
+    state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high]), ctx)
+    # The confirmation stands; the gap is reported, not hidden.
+    assert state.verdicts[high.id].status == "confirmed"
+    assert ctx.counts["no_expected_behaviour"] == 1
+    assert state.errors == [f"verify: no expected behaviour for 1 finding ({high.id})"]
 
 
 async def test_verifier_failure_is_unverifiable(target_info, ctx, monkeypatch):
