@@ -230,7 +230,7 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   `title` is at most 32 characters and shows on one line; put the reasoning,
   with `path:line` citations, in `detail_md`.
 - **Risk.** The page shows a Low / Medium / High risk of merging in its
-  header, computed by fixed rules from five inputs. Three are measured or
+  header, computed by fixed rules from six inputs. Four are measured or
   already written: size, PR checks, your `tests` verdict, and the confirmed
   findings nobody rejected. You supply the other two in `risk`:
 
@@ -247,9 +247,11 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   change runs a migration, deletes data or state, changes Terraform state, or
   sends anything outside the system. A repo may set tiers in
   `.review-risk.toml` at its root (`[tiers]` then `"modules/*" = 3`, fnmatch
-  globs, highest match wins); those files take the file's tier, and
-  `walkthrough status` lists which files it covers, so judge the tier from
-  the rest. `risk` is required once the walkthrough is complete.
+  globs, highest match wins). The file is read at the base commit, so the
+  change under review cannot edit its own tiers, and it can only raise your
+  tier, never lower it. `walkthrough status` lists the tiers it sets; judge
+  your tier from the whole change regardless. `risk` is required once the
+  walkthrough is complete.
 
   The rules: **High** if a confirmed HIGH finding is open, tier 3 cannot be
   reverted, tier 3 has a `tests` concern, or PR checks fail. Otherwise

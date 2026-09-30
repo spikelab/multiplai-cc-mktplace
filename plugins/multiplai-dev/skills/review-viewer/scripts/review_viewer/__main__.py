@@ -557,13 +557,12 @@ def cmd_walkthrough_status(args) -> int:
     if st.get("tiers_error"):
         print(f"repo tiers: ignored, {st['tiers_error']}")
     elif tiers:
-        rest = [p for p in t.files_changed if p not in tiers]
-        print(f"repo tiers ({stats.RISK_FILE}) set {len(tiers)} of {len(t.files_changed)} files; "
-              f"judge the tier for the other {len(rest)}:")
+        print(f"repo tiers ({stats.RISK_FILE} at base) set {len(tiers)} of {len(t.files_changed)} files; "
+              "they can raise your tier, never lower it:")
         for path, tier in sorted(tiers.items()):
             print(f"  tier {tier} {path}")
     else:
-        print(f"repo tiers: no {stats.RISK_FILE}; judge the tier for every file")
+        print(f"repo tiers: no {stats.RISK_FILE} at base; judge the tier for every file")
     badges = (served.stats or {}).get("badges") or []
     print(f"measured ({len(badges)}):" if served.stats else "measured: not available")
     for b in badges:

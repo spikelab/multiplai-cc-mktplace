@@ -157,6 +157,12 @@ class Skipped(_Strict):
 AssessmentTopic = Literal["commits", "tests", "size", "design", "risk", "other"]
 
 
+# A badge shows its title on one line, so `walkthrough put` takes titles up to
+# this long. The model still loads the 60 characters files written before 0.22
+# could use; the published schema advertises this limit, the one put enforces.
+ASSESSMENT_TITLE_MAX = 32
+
+
 class Assessment(_Strict):
     """The session's judgment on one quality question, shown as a badge beside
     the measured ones. `commits` (does anything say why the change is made?)
@@ -167,7 +173,8 @@ class Assessment(_Strict):
     score."""
     topic: AssessmentTopic
     verdict: Literal["good", "note", "concern"]
-    title: str = Field(min_length=1, max_length=60)
+    title: str = Field(min_length=1, max_length=60,
+                       json_schema_extra={"maxLength": ASSESSMENT_TITLE_MAX})
     detail_md: str
 
 
@@ -177,7 +184,8 @@ class RiskInput(_Strict):
     changed code is, from the table in SKILL.md: 0 docs, tests and tooling;
     1 one feature; 2 a shared module or public interface; 3 auth, money, data
     deletion or migration, shared infra, production deploy config. A repo's
-    `.review-risk.toml` overrides it for the files it matches."""
+    `.review-risk.toml`, read at the base commit, can raise it for the files
+    it matches, never lower it."""
     tier: int = Field(ge=0, le=3)
     tier_why: str = Field(min_length=1)
     revertable: bool

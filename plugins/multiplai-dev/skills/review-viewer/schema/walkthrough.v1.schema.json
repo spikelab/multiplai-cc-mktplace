@@ -9,7 +9,7 @@
           "type": "string"
         },
         "title": {
-          "maxLength": 60,
+          "maxLength": 32,
           "minLength": 1,
           "title": "Title",
           "type": "string"
@@ -68,7 +68,7 @@
     },
     "RiskInput": {
       "additionalProperties": false,
-      "description": "The session's two judgments the risk score needs; the page applies the\nrules (see logic.js riskLevel). `tier` is how critical the most critical\nchanged code is, from the table in SKILL.md: 0 docs, tests and tooling;\n1 one feature; 2 a shared module or public interface; 3 auth, money, data\ndeletion or migration, shared infra, production deploy config. A repo's\n`.review-risk.toml` overrides it for the files it matches.",
+      "description": "The session's two judgments the risk score needs; the page applies the\nrules (see logic.js riskLevel). `tier` is how critical the most critical\nchanged code is, from the table in SKILL.md: 0 docs, tests and tooling;\n1 one feature; 2 a shared module or public interface; 3 auth, money, data\ndeletion or migration, shared infra, production deploy config. A repo's\n`.review-risk.toml`, read at the base commit, can raise it for the files\nit matches, never lower it.",
       "properties": {
         "revert_why": {
           "minLength": 1,

@@ -315,6 +315,7 @@
     state.walkFocus = null;
     state.fileNote = null;
     state.badgeOpen = null;
+    state.blockPin = null;
     if (!state.tabChosen) state.tab = "summary";
     const target = state.detail.findings.target;
     $("title").textContent = target.label;
@@ -669,14 +670,18 @@
     if (cards.length) {
       box.appendChild(el("div", { class: "label", text: "Findings in this step" }));
       for (const f of cards) {
-        box.appendChild(el("button", {
-          class: "finding-item finding-card " + f.severity, "data-id": f.id,
-          onclick: () => { setTab("finding"); selectFinding(f.id); },
-        }, [
-          el("span", { class: "badge " + f.severity, text: f.severity }),
-          el("span", { class: "badge", text: f.status }),
-          el("span", { class: "claim", text: f.claim }),
-          el("span", { class: "where", text: f.file + ":" + f.line_start }),
+        box.appendChild(el("div", { class: "step-finding" }, [
+          el("button", {
+            class: "finding-item finding-card " + f.severity, "data-id": f.id,
+            title: "Open on the Findings tab to decide",
+            onclick: () => { setTab("finding"); selectFinding(f.id); },
+          }, [
+            el("span", { class: "badge " + f.severity, text: f.severity }),
+            el("span", { class: "badge", text: f.status }),
+            el("span", { class: "claim", text: f.claim }),
+            el("span", { class: "where", text: f.file + ":" + f.line_start }),
+          ]),
+          el("div", { class: "step-finding-facts" }, findingFacts(f)),
         ]));
       }
     }
@@ -989,6 +994,20 @@
     });
   }
 
+  /* What a finding says beyond its claim: the failure scenario, the expected
+   * behaviour, the verdict and the cited code. Shown on the Findings tab and
+   * under each walkthrough step that links the finding. */
+  function findingFacts(f) {
+    const out = [el("div", { class: "label", text: "Failure scenario" }), el("p", { text: f.failure_scenario })];
+    if (f.expected_behaviour) {
+      out.push(el("div", { class: "label", text: "Expected behaviour" }), el("p", { text: f.expected_behaviour }));
+    }
+    if (f.verdict_reason) out.push(el("div", { class: "label", text: "Verdict" }), el("p", { text: f.verdict_reason }));
+    out.push(el("div", { class: "label", text: "Cited code" }));
+    for (const c of f.citations) out.push(citationLink(c));
+    return out;
+  }
+
   function renderDetail() {
     const box = $("finding-detail");
     box.replaceChildren();
@@ -1003,18 +1022,7 @@
       el("span", { class: "badge", text: f.status }),
     ]));
     box.appendChild(el("h2", { text: f.claim }));
-    box.appendChild(el("div", { class: "label", text: "Failure scenario" }));
-    box.appendChild(el("p", { text: f.failure_scenario }));
-    if (f.expected_behaviour) {
-      box.appendChild(el("div", { class: "label", text: "Expected behaviour" }));
-      box.appendChild(el("p", { text: f.expected_behaviour }));
-    }
-    if (f.verdict_reason) {
-      box.appendChild(el("div", { class: "label", text: "Verdict" }));
-      box.appendChild(el("p", { text: f.verdict_reason }));
-    }
-    box.appendChild(el("div", { class: "label", text: "Cited code" }));
-    for (const c of f.citations) box.appendChild(citationLink(c));
+    for (const node of findingFacts(f)) box.appendChild(node);
     const steps = L.stepsForFinding(state.walk, f.id);
     if (steps.length) {
       box.appendChild(el("div", { class: "label", text: "Explained in the walkthrough" }));
@@ -1052,7 +1060,9 @@
       state.detail.decisions[id] = res.decision;
       renderFindingList();
       renderDetail();
-      renderRisk();
+      // renderSummary rebuilds the Summary tab's risk badge and calls renderRisk
+      // for the header pill, so both show the score after this decision.
+      renderSummary();
     } catch (err) {
       showToast("Could not record the decision: " + err.message);
     }

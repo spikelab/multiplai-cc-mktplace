@@ -7,7 +7,7 @@ import pytest
 
 from review_viewer import stats
 from review_viewer.gitdata import summarize_checks
-from review_viewer.models import load_findings
+from review_viewer.models import Target, load_findings
 from review_viewer.stats import Badge, ChangeStats
 
 
@@ -166,15 +166,30 @@ def _repo_with(tmp_path, files: dict[str, str]) -> str:
         subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)
     git("init", "-q")
     for name, text in files.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / name).write_text(text)
     git("add", ".")
     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c")
     return "HEAD"
 
 
-def test_repo_tiers_reads_the_file_at_head(tmp_path):
-    head = _repo_with(tmp_path, {stats.RISK_FILE: '[tiers]\n"infra/*" = 3\n', "a.py": ""})
-    assert stats.repo_tiers(tmp_path, head, ["infra/main.tf", "a.py"]) == ({"infra/main.tf": 3}, "")
+def test_repo_tiers_reads_the_file_at_the_given_commit(tmp_path):
+    ref = _repo_with(tmp_path, {stats.RISK_FILE: '[tiers]\n"infra/*" = 3\n', "a.py": ""})
+    assert stats.repo_tiers(tmp_path, ref, ["infra/main.tf", "a.py"]) == ({"infra/main.tf": 3}, "")
+
+
+def test_change_stats_reads_the_tiers_at_base_not_at_head(tmp_path):
+    # The change under review rewrites the tier file to rate everything 0; the
+    # score must still use the table the change cannot touch.
+    _repo_with(tmp_path, {stats.RISK_FILE: '[tiers]\n"infra/*" = 3\n', "infra/main.tf": "a"})
+    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    (tmp_path / "infra/main.tf").write_text("b")
+    (tmp_path / stats.RISK_FILE).write_text('[tiers]\n"*" = 0\n')
+    _repo_with(tmp_path, {})
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    target = Target(slug="t", label="t", repo_path=str(tmp_path), base_sha=base, head_sha=head,
+                    files_changed=[stats.RISK_FILE, "infra/main.tf"])
+    assert stats.change_stats(target).tiers == {"infra/main.tf": 3}
 
 
 def test_repo_tiers_without_a_file_or_with_a_broken_one(tmp_path):

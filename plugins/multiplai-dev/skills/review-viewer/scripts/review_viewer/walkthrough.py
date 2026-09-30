@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .gitdata import GIT_MISSING, GitError, _is_binary, git, split_lines
 from .mailbox import atomic_write
-from .models import FindingsFile, Walkthrough
+from .models import ASSESSMENT_TITLE_MAX, FindingsFile, Walkthrough
 
 # Findings a walkthrough must link when it says it is complete.
 MUST_LINK = ("confirmed", "unverifiable")
@@ -27,8 +27,8 @@ MUST_ASSESS = ("commits", "tests")
 # Topics a new walkthrough may no longer use: size is measured, and risk is the
 # header score built from `risk` (models.RiskInput).
 RETIRED_TOPICS = {"size": "size is measured from git", "risk": "risk is scored from the `risk` block"}
-# A badge shows its title on one line.
-TITLE_MAX = 32
+# A badge shows its title on one line (see models.ASSESSMENT_TITLE_MAX).
+TITLE_MAX = ASSESSMENT_TITLE_MAX
 
 
 def walkthrough_path(box: Path) -> Path:

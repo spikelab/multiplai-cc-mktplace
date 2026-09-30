@@ -502,6 +502,13 @@ test("stepCurrent steps on from a pinned block at the end of the scroll range", 
   assert.equal(L.stepCurrent(starts, 21, 5, both, -1), -1);
   // Without a pin it behaves like stepBlock.
   assert.equal(L.stepCurrent(starts, 25, null, { top: false, bottom: false }, -1), 1);
+  // At the top, the current block's start is already on screen above the
+  // reference line: Prev goes to the block before it, and there is none
+  // before the first, so Prev is disabled there.
+  const top = { top: true, bottom: false };
+  assert.equal(L.stepCurrent([1, 20, 40], 3, null, top, -1), -1);
+  assert.equal(L.stepCurrent([1, 5, 40], 7, null, top, -1), 0);
+  assert.equal(L.stepCurrent([1, 20, 40], 3, null, top, 1), 1);
 });
 
 test("paletteMatch ranks prefix, then substring, then scattered letters", () => {
@@ -563,8 +570,11 @@ test("riskInputs combines the repo tiers, the session's tier and the findings", 
     ["infra/main.tf", "app.py"]);
   assert.deepEqual(r, { tier: 3, tierWhy: "set by the repo's .review-risk.toml", revertable: true,
     revertWhy: "x", tests: "note", checksFailing: false, large: true, openHigh: 1, openMedium: 1 });
-  // When the file covers every changed file, the session's tier is not used.
-  assert.equal(L.riskInputs({ tiers: { "a.md": 0 } }, walk, [], {}, ["a.md"]).tier, 0);
+  // The file only raises the tier: covering every changed file with a lower
+  // tier leaves the session's tier and reason in place.
+  const low = L.riskInputs({ tiers: { "a.md": 0 } }, walk, [], {}, ["a.md"]);
+  assert.equal(low.tier, 1);
+  assert.equal(low.tierWhy, "one feature");
   // With no file the session decides, and its reason is shown.
   assert.equal(L.riskInputs({}, walk, [], {}, ["app.py"]).tierWhy, "one feature");
   assert.equal(L.riskInputs({}, { assessments: [] }, [], {}, []), null);

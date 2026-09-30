@@ -26,8 +26,9 @@ time, not derived from a tag.
   tests verdict and the confirmed findings nobody rejected; the badge lists
   the rules that fired and every input. It updates as findings are rejected.
 - review-viewer: an optional `.review-risk.toml` at a repo's root maps paths
-  to criticality tiers; those files take the file's tier instead of the
-  session's judgment.
+  to criticality tiers. It is read at the base commit, so a change cannot
+  edit its own tiers, and it can only raise the session's tier, never lower
+  it.
 - review-viewer: walkthroughs carry a `risk` block (tier, revertable, and the
   reasons), required once complete.
 

@@ -98,13 +98,22 @@ at publish time and left in place — it holds no secret):
 5. Step ids are unique. (`skipped` paths must be changed files too.)
 6. At most one assessment per topic (except `other`); with `complete: true`,
    the `commits` and `tests` assessments exist.
+7. No step's `body_md` contains a loaded finding's id: the page shows each
+   linked finding in full under the step, so the text explains the code.
+8. No assessment uses the retired `size` or `risk` topics
+   (`RETIRED_TOPICS`); files written before 0.22 that use them still load.
+9. Every assessment title is at most `TITLE_MAX` (32) characters
+   (`models.ASSESSMENT_TITLE_MAX`, which the schema advertises).
+10. With `complete: true`, the `risk` block exists.
 
 Any failure → exit 2, every problem listed with its step id, nothing written.
 Otherwise the file is replaced atomically (0600). `GET
 /api/targets/<slug>/walkthrough` returns it (404 while absent); the page polls
 it, so a new walkthrough never restarts the server. `walkthrough status`
 prints the target's shas, what is not yet covered, the missing assessments,
-the measured badges and each commit's subject.
+the `risk:` block (or `missing`), the `repo tiers:` that `.review-risk.toml`
+at the base commit sets (or why it was ignored), the measured badges and
+each commit's subject.
 
 `/api/targets/<slug>` also returns `pr` (number, title, author, url, body,
 head/base ref, check counts, mergeable, draft, review decision — from the one

@@ -171,6 +171,13 @@ def test_assessment_title_fits_one_line(complete, ff):
     complete["assessments"][0]["title"] = "PR body is thorough; neither commit has a body"
     assert errors_for(complete, ff) == [
         "assessment commits: title is 46 characters, over 32; put the rest in detail_md"]
+    # A file written before 0.22 with a longer title still loads.
+    Walkthrough.model_validate(complete)
+
+
+def test_the_schema_advertises_the_title_limit_put_enforces():
+    schema = Walkthrough.model_json_schema()
+    assert schema["$defs"]["Assessment"]["properties"]["title"]["maxLength"] == walkthrough.TITLE_MAX
 
 
 def test_assessment_verdicts_and_topics_are_closed_sets(complete):

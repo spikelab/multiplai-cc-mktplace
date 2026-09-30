@@ -178,7 +178,8 @@ def count_todos(diff: str) -> int:
 # --- criticality tiers from the repo --------------------------------------------
 
 # A repo may map paths to tiers (0-3, as in models.RiskInput) in this file at
-# its root, read at the head commit:
+# its root, read at the base commit, so the change under review cannot set
+# its own tiers:
 #
 #   [tiers]
 #   "modules/*" = 3
@@ -215,11 +216,11 @@ def match_tiers(table: dict[str, int], paths: list[str]) -> dict[str, int]:
     return out
 
 
-def repo_tiers(repo, head: str, paths: list[str]) -> tuple[dict[str, int], str]:
-    """(tiers of the matched paths, error) from RISK_FILE at `head`. No file is
+def repo_tiers(repo, base: str, paths: list[str]) -> tuple[dict[str, int], str]:
+    """(tiers of the matched paths, error) from RISK_FILE at `base`. No file is
     not an error."""
     try:
-        text = git(repo, "show", f"{head}:{RISK_FILE}")
+        text = git(repo, "show", f"{base}:{RISK_FILE}")
     except GitError:
         return {}, ""
     try:
@@ -361,7 +362,7 @@ def change_stats(target: Target, pr: dict | None = None) -> ChangeStats:
         s.added += a
         s.deleted += d or 0
     s.commits = read_commits(repo, base, head)
-    s.tiers, s.tiers_error = repo_tiers(repo, head, list(target.files_changed))
+    s.tiers, s.tiers_error = repo_tiers(repo, base, list(target.files_changed))
     s.todos_added = count_todos(git(repo, "diff", *_DIFF_FLAGS, "--unified=0", base, head))
     s.badges = [Badge("totals", f"{_plural(s.files, 'file')} · +{s.added} −{s.deleted}", "good",
                       ", ".join(f"{k} {v['files']} (+{v['added']} −{v['deleted']})"

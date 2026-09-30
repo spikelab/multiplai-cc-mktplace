@@ -375,16 +375,15 @@
    * stats (size, PR checks, the repo's tier file), the walkthrough (the
    * session's tier and revert judgment, the tests verdict) and the findings
    * with their decisions. Null until the walkthrough has a risk block. A
-   * finding counts as open while it is confirmed and not rejected. */
+   * finding counts as open while it is confirmed and not rejected. The repo's
+   * tier file can only raise the session's tier, never lower it. */
   function riskInputs(stats, walk, findings, decisions, changed) {
     if (!walk || !walk.risk) return null;
     const repoTiers = (stats && stats.tiers) || {};
     const files = changed || [];
-    const unmatched = files.filter((p) => !(p in repoTiers));
-    const matched = Object.values(repoTiers);
+    const matched = files.filter((p) => p in repoTiers).map((p) => repoTiers[p]);
     const fileTier = matched.length ? Math.max.apply(null, matched) : -1;
-    const useSession = unmatched.length > 0 || !matched.length;
-    const sessionTier = useSession ? walk.risk.tier : -1;
+    const sessionTier = walk.risk.tier;
     const tier = Math.max(fileTier, sessionTier);
     const badge = (id) => ((stats && stats.badges) || []).find((b) => b.id === id);
     const tests = ((walk.assessments || []).find((a) => a.topic === "tests") || {}).verdict || null;
@@ -827,7 +826,15 @@
   function stepCurrent(starts, ri, pinRow, edge, delta) {
     const cur = currentBlock(starts, ri, pinRow, edge);
     const pos = currentBlock(starts, ri, null, null);
-    if (cur === pos) return ri == null ? -1 : stepBlock(starts, ri, delta);
+    if (cur === pos) {
+      if (ri == null) return -1;
+      const idx = stepBlock(starts, ri, delta);
+      // At the top of the pane, the start of the current block is above the
+      // reference line and already on screen: stepping back to it cannot
+      // scroll, so step to the block before it (or to none).
+      if (delta < 0 && edge && edge.top && idx === pos && idx >= 0) return pos > 0 ? pos - 1 : -1;
+      return idx;
+    }
     const next = cur + delta;
     return next >= 0 && next < starts.length ? next : -1;
   }
