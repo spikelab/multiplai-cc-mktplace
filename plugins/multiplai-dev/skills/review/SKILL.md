@@ -107,7 +107,7 @@ background task's own completion notice also ends the wait.
 Exit codes: `0` done; `1` a batch target or every finder failed (the message
 says which); `2` bad input or a target that does not resolve (no output is
 written); `3` repository not trusted; `4` the budget circuit breaker stopped
-the run at `--max-cost-usd` (default 10 per target). On `4`, report the spend
+the run at `--max-cost-usd` (default 50 per target). On `4`, report the spend
 and the partial state; resume only if the user raises the ceiling:
 `python -m review_pipeline resume <out>/<slug> --trust-repo --max-cost-usd <n>`.
 

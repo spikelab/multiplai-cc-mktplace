@@ -52,6 +52,9 @@ time, not derived from a tag.
 - review-viewer: a finding shows its **Expected behaviour** where the fix used
   to be. Findings files from earlier reviews still open; their fixes are not
   shown.
+- review: the default `--max-cost-usd` is **50** per target, up from 10.
+  A 52-file PR spent $25 in the find stage alone, and 10 stopped it before
+  any finding was verified.
 
 ### Removed
 - review: the `prescriber_model` and `checker_model` keys in `review.yaml` and

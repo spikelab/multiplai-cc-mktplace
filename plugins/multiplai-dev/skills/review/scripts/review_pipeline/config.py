@@ -22,6 +22,8 @@ import yaml
 
 from multiplai_core.env import load_multiplai_conf
 
+from .budget import DEFAULT_MAX_USD
+
 log = logging.getLogger(__name__)
 
 DIMENSIONS: tuple[str, ...] = ("diff-bugs", "callers", "history", "conventions", "tests")
@@ -37,7 +39,7 @@ class ReviewConfig:
     merger_model: str | None = None
     effort: str | None = None
     max_turns: int = 60
-    max_cost_usd: float | None = 10.0
+    max_cost_usd: float | None = DEFAULT_MAX_USD
     dimensions: tuple[str, ...] = field(default=DIMENSIONS)
 
 
@@ -49,7 +51,7 @@ def _conf_value(conf: dict, key: str) -> str | None:
     return None
 
 
-def load_config(out_dir: Path | None, *, max_cost_usd: float | None = 10.0) -> ReviewConfig:
+def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MAX_USD) -> ReviewConfig:
     cfg = ReviewConfig(max_cost_usd=max_cost_usd)
     try:
         conf = load_multiplai_conf()
