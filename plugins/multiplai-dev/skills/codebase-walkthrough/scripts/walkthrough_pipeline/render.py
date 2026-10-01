@@ -52,8 +52,13 @@ class Linker:
     def snippet(self, c: Citation) -> str:
         end = min(c.line_end, c.line_start + SNIPPET_MAX_LINES - 1)
         lines = lines_at_commit(self.repos, c.path, c.line_start, end) or []
+        # Drop trailing blank lines and shrink the range to match, so the
+        # header names exactly the lines shown and `check` can compare them.
+        while len(lines) > 1 and not lines[-1].strip():
+            lines = lines[:-1]
+            end -= 1
         lang = LANG.get(PurePosixPath(c.path).suffix.lower(), "")
-        body = "\n".join(lines).rstrip("\n")
+        body = "\n".join(lines)
         fence = "````" if "```" in body else "```"
         return (f"<!-- snippet {c.path}:{c.line_start}-{end} -->\n{self.link(c)}\n\n"
                 f"{fence}{lang}\n{body}\n{fence}")
