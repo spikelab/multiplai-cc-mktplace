@@ -7,7 +7,8 @@ and is recorded, so the output can say LSP was cut short.
 
 A minimal JSON-RPC client over stdio: `initialize`, `initialized`, one
 `textDocument/didOpen` per queried file, then `textDocument/references` for
-every symbol, all in flight at once. Server-to-client requests
+each symbol in turn (pyright cancels a references request when the next one
+arrives). Server-to-client requests
 (`workspace/configuration`, progress, registration) get an empty answer so
 the server never waits on us.
 """
@@ -145,7 +146,10 @@ async def find_references(target: TargetInfo, snapshot: Path, symbols: list[Symb
             except (RuntimeError, ConnectionError) as err:
                 log.debug("references for %s failed: %s", e.name, err)
 
-        await asyncio.gather(*(one(i, e) for i, e in enumerate(wanted)))
+        # One at a time: pyright cancels an in-flight references request
+        # (-32800 "request cancelled") when the next one arrives.
+        for i, e in enumerate(wanted):
+            await one(i, e)
 
     try:
         await asyncio.wait_for(run(), timeout=timeout_s)

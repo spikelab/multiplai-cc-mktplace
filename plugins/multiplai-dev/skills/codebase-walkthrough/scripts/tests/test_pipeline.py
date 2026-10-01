@@ -86,3 +86,18 @@ def test_snapshots_never_hold_env_files_and_secrets_never_leave(done_run):
         if f.is_file():
             assert not f.name.startswith(".env")
             assert fixture_repo.SECRET not in f.read_text(errors="replace"), f
+
+
+def test_agent_mode_writes_compact_markdown_only(ws, tmp_path, monkeypatch, fake_fetch):
+    agents = FakeAgents()
+    monkeypatch.setattr(sdk, "agent_call_structured", agents)
+    args = ["run", str(ws["engine"] / "bookings"), "--trust-repo", "--runs-dir", str(tmp_path / "runs"),
+            "--output", str(tmp_path / "out"), "--mode", "agent", "--lsp-timeout", "0"]
+    assert main(args) == 0
+    out = tmp_path / "out"
+    assert sorted(p.name for p in out.iterdir()) == ["bookings-walkthrough.md"]
+    md = (out / "bookings-walkthrough.md").read_text()
+    assert markdown_headings(md) == ["Commits read", "Files (7)", "Architecture", "Patterns & Conventions",
+                                     "Key Interfaces", "Gotchas", "Coverage"]
+    assert {c["schema"] for c in agents.calls} == {"ExploreOutput", "SectionOutput"}
+    assert main(["check", str(out / "bookings-walkthrough.md")]) == 0
