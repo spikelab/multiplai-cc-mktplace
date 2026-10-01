@@ -142,7 +142,8 @@ def route_matches(literal: str, route: str) -> bool:
 
 def full_routes(symbols: list[SymbolEntry], refs: list[Reference]) -> dict[str, SymbolEntry]:
     """Route -> url entry, with the mount prefix from `include('<pkg>.urls')` prepended."""
-    prefixes = sorted({r.symbol.split(" ", 1)[1] if " " in r.symbol else "" for r in refs if r.kind == "url-include"})
+    prefixes = sorted({m.group(1) for r in refs if r.kind == "url-include"
+                       for m in [re.search(r" mounted at '(.*)'$", r.symbol)] if m})
     out: dict[str, SymbolEntry] = {}
     for e in symbols:
         if e.kind != "url" or e.name.startswith("^"):
@@ -191,6 +192,7 @@ class _PyScan:
             return
         lines = text.split("\n")
         imported: set[str] = set()
+        include_args: set[int] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module and not node.level and self._ours(node.module):
                 names = [a.asname or a.name for a in node.names]
@@ -209,8 +211,9 @@ class _PyScan:
                 if func in ("include", "urls.include") and node.args:
                     mod = static_string(node.args[0])
                     if mod and self._ours(mod):
+                        include_args.add(id(node.args[0]))
                         prefix = self._include_prefix(tree, node)
-                        self.add("url-include", f"{mod} {prefix}", rel, node.lineno, lines)
+                        self.add("url-include", f"{mod} mounted at '{prefix}'", rel, node.lineno, lines)
                     continue
                 if len(parts) >= 2 and parts[-1] in DISPATCH_METHODS and parts[-2] in imported:
                     self.add("celery-call", f"{parts[-2]}.{parts[-1]}", rel, node.lineno, lines)
@@ -222,7 +225,7 @@ class _PyScan:
                             if route_matches(lit, route):
                                 self.add("http-route", route, rel, node.lineno, lines)
                                 break
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in include_args:
                 v = node.value
                 if v in self.tasks:
                     self.add("celery-name", v, rel, node.lineno, lines)

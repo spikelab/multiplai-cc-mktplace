@@ -141,8 +141,10 @@ def coverage_lines(state: WalkState) -> list[str]:
     if state.scenarios:
         out.append(f"| Scenarios cut short by the trace check | {len(stops)} of {len(state.scenarios)} |")
     if state.lsp:
-        out.append(f"| pyright references | {state.lsp.get('status')} in {state.lsp.get('seconds')}s, "
-                   f"{state.lsp.get('answered')} of {state.lsp.get('symbols')} symbols answered |")
+        lsp = state.lsp
+        detail = (f"{lsp.get('status')} in {lsp.get('seconds')}s, {lsp.get('answered')} of {lsp.get('symbols')} "
+                  "symbols answered" if not str(lsp.get("status", "")).startswith("skipped") else lsp.get("status"))
+        out.append(f"| pyright references | {detail} |")
     out.append("")
     missing = [f for f in files if f not in cited]
     if missing:
