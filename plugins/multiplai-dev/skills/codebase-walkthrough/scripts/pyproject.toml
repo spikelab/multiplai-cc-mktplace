@@ -1,0 +1,46 @@
+[project]
+name = "walkthrough-pipeline"
+version = "0.1.0"
+description = "Codebase walkthrough pipeline: finds a module's callers, callees, data and config, explains them with agents, and keeps only claims whose citations re-read at the commit"
+requires-python = ">=3.12"
+dependencies = [
+    # The [sdk] extra, not a bare pin: every model call goes through
+    # multiplai_core.run_agent(), so core owns the SDK version floor.
+    "multiplai-core[sdk]",
+    "pydantic>=2",
+    "pyyaml>=6",
+    "python-dotenv>=1",
+    "httpx>=0.27",
+    "markdown>=3.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+# The same as the `dev` extra, as a dependency group: `uv run` installs the
+# default group without being asked, so the bare
+# `uv run --directory <this dir> python -m pytest tests/` works too. CI uses
+# `--package walkthrough-pipeline --extra dev` like the other members.
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# multiplai-core is a git direct reference (not on PyPI)
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["walkthrough_pipeline"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+# Member-local source so this directory also resolves standalone — an
+# installed plugin is a copy of the plugin subtree only (no workspace root
+# above it). In-repo, uv resolves through the workspace root and the single
+# uv.lock.
+[tool.uv.sources]
+multiplai-core = { git = "https://github.com/spikelab/multiplai-core", branch = "main" }

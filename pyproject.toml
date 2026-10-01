@@ -32,6 +32,7 @@ package = false
 members = [
     "plugins/multiplai-context/scripts",
     "plugins/multiplai-dev/skills/buildme/scripts",
+    "plugins/multiplai-dev/skills/codebase-walkthrough/scripts",
     "plugins/multiplai-dev/skills/deepen/scripts",
     "plugins/multiplai-dev/skills/review-viewer/scripts",
     "plugins/multiplai-dev/skills/review/scripts",
