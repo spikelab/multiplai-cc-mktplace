@@ -38,6 +38,10 @@ time, not derived from a tag.
   about the project's settings or process. `pre-existing` now covers unchanged
   files the change executes, builds or makes stale, documentation included.
 
+- ci: the review pipeline's tests now run on every push and PR, as a
+  `review pipeline tests` job next to review-viewer's. They were run by hand
+  only.
+
 ### Changed
 - review: a verifier whose question is only partly settled by the repository
   answers `unverifiable` and names what is missing, instead of `confirmed`
