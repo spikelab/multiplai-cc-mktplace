@@ -113,9 +113,13 @@ until grep -qE '^\[[^]]*\] (DONE|FAILED)' <run dir>/progress.log; do sleep 30; d
 (run through the Monitor tool, or in the background with a timeout.) The
 background task's own completion notice also ends the wait.
 
-Exit codes: `0` done; `1` an error, an untrusted repository, or a stop
+Exit codes: `0` done; `1` an error, an untrusted repository, `rg` missing
+(the message names ripgrep and how to install it), or a stop
 (`STOP (docs gate): …` when `llms.txt` does not answer 200 or lists no `.md`
-pages — ask the user how to proceed); `2` the budget circuit breaker stopped
+pages). On a docs-gate stop, ask the user how to proceed, then resume with
+their decision; the explore answers already paid for are kept:
+`python -m walkthrough_pipeline resume <run dir> --trust-repo --docs <other url>`
+or `… --no-docs`. `2` the budget circuit breaker stopped
 the run at `--max-usd`. On `2`, report the spend and the checkpoint; resume
 only if the user raises the ceiling:
 `python -m walkthrough_pipeline resume <run dir> --trust-repo --max-usd <n>`.

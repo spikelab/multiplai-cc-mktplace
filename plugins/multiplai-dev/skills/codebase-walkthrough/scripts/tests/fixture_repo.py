@@ -136,7 +136,8 @@ FRONT = {
 WAREHOUSE = {
     "models.sql": (
         "-- bookings_reservation in a comment is not a reference\n"
-        "select guest\n"
+        "select guest from archive_bookings_reservation\n"
+        "union select guest\n"
         "from bookings_reservation\n"
     ),
 }

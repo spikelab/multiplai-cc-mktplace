@@ -32,8 +32,11 @@ time, not derived from a tag.
   claims dropped.
 - The HTML page keeps the step-through navigation and Mermaid diagrams; the
   interactive force-directed architecture diagram is gone.
-- It needs `--trust-repo`, and stops at a `--max-usd` budget (default 50)
-  with a checkpoint that `resume` continues.
+- It needs `--trust-repo` and ripgrep (`rg`; a run without it stops before
+  any agent call and says how to install it), and stops at a `--max-usd`
+  budget (default 50) with a checkpoint that `resume` continues. After a
+  docs-gate stop, `resume --docs <url>` or `resume --no-docs` continues with
+  the new decision and keeps the answers already paid for.
 
 ### Added
 - `check`: re-verifies every `path:line` link and snippet in a finished

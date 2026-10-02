@@ -163,8 +163,8 @@ def test_glossary_gate(ws):
 
 
 def test_sections_gate():
-    md = "# T\n\n## Overview\n\n## 2. Glossary\n"
-    assert gates.sections_gate(md, ["Overview", "Glossary"]).passed
+    md = "# T\n\n## Overview\n\n## 2. Glossary\n\n## Files (12)\n"
+    assert gates.sections_gate(md, ["Overview", "Glossary", "Files"]).passed
     assert gates.sections_gate(md, ["Overview", "Coverage"]).reason == "missing sections: Coverage"
 
 
@@ -175,3 +175,11 @@ def test_target_gate(ws, tmp_path):
     assert "no files" in target.target_gate(empty).reason
     with pytest.raises(target.TargetError, match="not inside a git repository"):
         target.resolve_target(ws["docs"])
+
+
+def test_corpus_without_rg_names_ripgrep(ws, monkeypatch):
+    import shutil
+    real_which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda name, *a, **k: None if name == "rg" else real_which(name, *a, **k))
+    with pytest.raises(target.MissingToolError, match="ripgrep"):
+        gates.Corpus([ws["engine"]]).contains("Ospite")

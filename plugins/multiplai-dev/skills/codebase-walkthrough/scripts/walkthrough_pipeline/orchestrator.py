@@ -178,6 +178,10 @@ STAGES = (
 
 async def run_state(state: WalkState, run_dir: Path, config: WalkConfig, *, session_id: str = "") -> list[Path]:
     """Run every stage not yet done; return the files written."""
+    try:
+        target_mod.require_rg()
+    except target_mod.MissingToolError as e:
+        raise WalkError(str(e)) from e
     t = state.target
     ledger = budget.start(config.max_cost_usd, state.budget)
     progress = ProgressWriter(run_dir / "progress.log")
@@ -214,7 +218,9 @@ async def run_state(state: WalkState, run_dir: Path, config: WalkConfig, *, sess
             state.budget = ledger.to_state()
             save_state(state, run_dir)
             progress.failed(f"docs gate: {e}")
-            raise WalkError(f"STOP (docs gate): {e}. The run is saved; resume after deciding.") from e
+            raise WalkError(f"STOP (docs gate): {e}. The run is saved. Resume with a new decision: "
+                            f"`resume {run_dir} --docs <url>` to use other docs, or `--no-docs` to go on "
+                            f"without them.") from e
         state.budget = ledger.to_state()
         save_state(state, run_dir)
         summary = f"{name} done: " + (", ".join(f"{v} {k.replace('_', ' ')}" for k, v in ctx.counts.items())
@@ -250,8 +256,18 @@ async def run_state(state: WalkState, run_dir: Path, config: WalkConfig, *, sess
     return [Path(p) for p in state.outputs]
 
 
-async def resume(run_dir: Path, config: WalkConfig, *, session_id: str = "") -> list[Path]:
+NO_CHANGE = object()
+
+
+async def resume(run_dir: Path, config: WalkConfig, *, session_id: str = "",
+                 docs: str | None | object = NO_CHANGE) -> list[Path]:
+    """Continue a saved run. *docs* replaces the saved `--docs` URL (None drops the docs)."""
     state = load_state(run_dir / STATE_FILE)
     if state is None:
         raise WalkError(f"no readable {STATE_FILE} in {run_dir}")
+    if docs is not NO_CHANGE:
+        if state.past("docs"):
+            raise WalkError("the docs stage of this run is already done; --docs/--no-docs can no longer change it")
+        state.options["docs"] = docs
+        state.docs = {}
     return await run_state(state, run_dir, config, session_id=session_id)

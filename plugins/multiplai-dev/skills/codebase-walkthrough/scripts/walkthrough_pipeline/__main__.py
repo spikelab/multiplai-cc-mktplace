@@ -103,6 +103,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     rs = sub.add_parser("resume", help="Continue a run from <runs-dir>/<slug>/walkthrough-state.json")
     rs.add_argument("run_dir", help="The run's directory")
+    rs_docs = rs.add_mutually_exclusive_group()
+    rs_docs.add_argument("--docs", help="Replace the saved vendor docs URL (after a docs-gate stop)")
+    rs_docs.add_argument("--no-docs", action="store_true", help="Go on without vendor docs (after a docs-gate stop)")
     _run_flags(rs)
 
     ck = sub.add_parser("check", help="Re-check every path:line and snippet in a finished walkthrough")
@@ -137,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "trust_repo", False):
         os.environ["WALKTHROUGH_TRUST_REPO"] = "1"
 
-    from . import budget, orchestrator, sdk
+    from . import budget, orchestrator, sdk, target
     from .config import load_config
 
     if not sdk.repo_is_trusted():
@@ -162,12 +165,13 @@ def main(argv: list[str] | None = None) -> int:
                                                        session_id=args.session_id))
         else:
             run_dir = Path(args.run_dir).expanduser().resolve()
+            docs = None if args.no_docs else (args.docs if args.docs else orchestrator.NO_CHANGE)
             paths = asyncio.run(orchestrator.resume(run_dir, load_config(run_dir, max_cost_usd=max_cost),
-                                                    session_id=args.session_id))
+                                                    session_id=args.session_id, docs=docs))
         for p in paths:
             print(f"walkthrough: {p}")
         return 0
-    except orchestrator.WalkError as e:
+    except (orchestrator.WalkError, target.MissingToolError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
     except sdk.RepoTrustError:

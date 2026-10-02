@@ -12,12 +12,11 @@ from __future__ import annotations
 
 import functools
 import re
-import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
 
 from .models import (Citation, Fact, GateResult, Hop, Reference, RepoInfo, SymbolEntry, TargetInfo, Unit)
-from .target import _GIT, _env
+from .target import _GIT, _env, require_rg
 
 SMALL_FILE_LINES = 30
 
@@ -249,7 +248,8 @@ class Corpus:
         if key in self._cache:
             return self._cache[key]
         found = False
-        if text and self.roots and shutil.which("rg"):
+        if text and self.roots:
+            require_rg()
             argv = ["rg", "--fixed-strings", "--files-with-matches", "--max-count", "1", "--no-messages",
                     "--hidden", "--no-ignore", "--glob", "!.env*"]
             if ignore_case:
@@ -313,7 +313,8 @@ def glossary_gate(term: str, corpus: Corpus) -> GateResult:
 
 
 def sections_gate(markdown: str, required: list[str]) -> GateResult:
-    headings = {m.group(1).strip() for m in re.finditer(r"^##\s+(?:\d+\.\s+)?(.+)$", markdown, re.M)}
+    headings = {re.sub(r"\s+\(\d+\)$", "", m.group(1).strip())
+                for m in re.finditer(r"^##\s+(?:\d+\.\s+)?(.+)$", markdown, re.M)}
     missing = [r for r in required if r not in headings]
     if missing:
         return GateResult(passed=False, reason="missing sections: " + ", ".join(missing))

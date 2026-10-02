@@ -36,7 +36,7 @@ from pathlib import Path, PurePosixPath
 
 from .models import Reference, RepoInfo, SymbolEntry, TargetInfo
 from .symbols import _dotted, static_string
-from .target import _GIT, _env, git, is_secret_path
+from .target import _GIT, _env, git, is_secret_path, require_rg
 
 log = logging.getLogger(__name__)
 
@@ -71,8 +71,9 @@ def tracked(repo: RepoInfo) -> frozenset[str]:
 
 def rg_candidates(repo: RepoInfo, patterns: list[str], globs: list[str], *, ignore_case: bool = False) -> list[str]:
     """Repo-relative tracked files holding any of *patterns* (fixed strings)."""
-    if not patterns or not shutil.which("rg"):
+    if not patterns:
         return []
+    require_rg()
     argv = ["rg", "--files-with-matches", "--no-messages", "--no-ignore-parent", "--fixed-strings",
             "--glob", "!.env*", "--glob", "!**/node_modules/**"]
     if ignore_case:
@@ -328,7 +329,7 @@ def scan_repo(repo: RepoInfo, target: TargetInfo, symbols: list[SymbolEntry], ro
 
     # SQL
     if tables:
-        pattern = re.compile(r"(?<![A-Za-z0-9])(" + "|".join(re.escape(t) for t in tables) + r")(?![A-Za-z0-9_])",
+        pattern = re.compile(r"(?<![A-Za-z0-9_])(" + "|".join(re.escape(t) for t in tables) + r")(?![A-Za-z0-9_])",
                              re.IGNORECASE)
         for rel in rg_candidates(repo, tables, SQL_GLOBS, ignore_case=True):
             if inside(rel):

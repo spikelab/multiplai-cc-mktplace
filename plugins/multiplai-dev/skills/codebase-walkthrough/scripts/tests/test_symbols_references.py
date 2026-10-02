@@ -58,7 +58,7 @@ def test_references_find_every_planted_one_and_skip_comments(ws, built, tmp_path
         ("engine", "python-import", "engine/reports/usage.py", 2, "ast"),
         ("engine", "url-include", "engine/project/urls.py", 4, "ast"),
         ("front", "http-route", "front/src/api.ts", 5, "ast-grep"),
-        ("warehouse", "sql-table", "warehouse/models.sql", 3, "sql-identifier"),
+        ("warehouse", "sql-table", "warehouse/models.sql", 4, "sql-identifier"),
     ]
 
 
@@ -99,3 +99,13 @@ def test_partition_keeps_directories_together_and_isolates_big_files(built):
     flat = [f for u in units for f in u.files]
     assert sorted(flat) == sorted(info.ws(f) for f in info.files)
     assert all(u.lines <= 20 or (u.oversize and len(u.files) == 1) for u in units)
+
+
+def test_reference_scan_without_rg_names_ripgrep(ws, built, tmp_path, monkeypatch):
+    info, repo, snap = built
+    entries, _ = symbols.collect(info, snap)
+    found, _, _ = repos_mod.discover(repo)
+    real_which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda name, *a, **k: None if name == "rg" else real_which(name, *a, **k))
+    with pytest.raises(target.MissingToolError, match="ripgrep"):
+        references.scan_all(found, info, entries, tmp_path / "scan")

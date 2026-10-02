@@ -14,6 +14,7 @@ import os
 import re
 from datetime import date
 from pathlib import Path, PurePosixPath
+from urllib.parse import quote as url_quote
 
 from .gates import CITE_ID, lines_at_commit, sections_gate
 from .models import Citation, RepoInfo, WalkState
@@ -42,16 +43,21 @@ class Linker:
         anchor = f"#L{c.line_start}" + (f"-L{c.line_end}" if c.line_end != c.line_start else "")
         if base:
             return f"{base}/blob/{repo.head_sha}/{rel}{anchor}"
-        return os.path.relpath(Path(repo.path) / rel, self.out_dir) + anchor
+        # Percent-encode the local path: a space or `)` would end the Markdown link early.
+        return url_quote(os.path.relpath(Path(repo.path) / rel, self.out_dir)) + anchor
 
     def link(self, c: Citation) -> str:
         where = f"{c.path}:{c.line_start}" + (f"-{c.line_end}" if c.line_end != c.line_start else "")
-        quote = " ".join(c.quote.split())[:200].replace("\\", "\\\\").replace('"', '\\"')
-        return f'[`{where}`]({self._url(c)} "{quote}")'
+        # `|` is escaped too: links sit in table cells, where a bare `|` splits the row.
+        title = (" ".join(c.quote.split())[:200].replace("\\", "\\\\").replace('"', '\\"')
+                 .replace("|", "\\|"))
+        return f'[`{where}`]({self._url(c)} "{title}")'
 
     def snippet(self, c: Citation) -> str:
         end = min(c.line_end, c.line_start + SNIPPET_MAX_LINES - 1)
         lines = lines_at_commit(self.repos, c.path, c.line_start, end) or []
+        # A citation can run past the end of the file; the header names only the lines git returned.
+        end = c.line_start + max(len(lines), 1) - 1
         # Drop trailing blank lines and shrink the range to match, so the
         # header names exactly the lines shown and `check` can compare them.
         while len(lines) > 1 and not lines[-1].strip():

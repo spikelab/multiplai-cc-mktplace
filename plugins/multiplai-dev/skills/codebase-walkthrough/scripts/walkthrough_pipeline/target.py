@@ -48,6 +48,21 @@ class TargetError(Exception):
     """The target could not be resolved. The message says why."""
 
 
+class MissingToolError(Exception):
+    """A command-line tool the run cannot do without is not on PATH."""
+
+
+RG_MISSING = ("ripgrep (`rg`) is not on PATH. The walkthrough uses it to find references in every repository "
+              "and to check that written text occurs in the code. Install it (macOS: `brew install ripgrep`; "
+              "Debian/Ubuntu: `apt install ripgrep`; see https://github.com/BurntSushi/ripgrep#installation) "
+              "and run again.")
+
+
+def require_rg() -> None:
+    if not shutil.which("rg"):
+        raise MissingToolError(RG_MISSING)
+
+
 def _env() -> dict[str, str]:
     env = dict(os.environ)
     env.pop("GIT_EXTERNAL_DIFF", None)

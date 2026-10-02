@@ -22,7 +22,9 @@ from .models import Citation, RepoInfo
 from .target import head_sha
 
 ROW = re.compile(r"^\|\s*([^|\s]+)\s*\|\s*([^|]+?)\s*\|\s*`([0-9a-f]{40})`\s*\|\s*$", re.M)
-LINK = re.compile(r'\[`([^`\s]+?):(\d+)(?:-(\d+))?`\]\(([^)\s]*)\s+"((?:[^"\\]|\\.)*)"\)')
+LINK = re.compile(r'\[`([^`\n]+?):(\d+)(?:-(\d+))?`\]\(([^)\s]*)\s+"((?:[^"\\]|\\.)*)"\)')
+# Anything that starts like a link. One that LINK cannot parse is reported as a failure, never skipped.
+LINK_START = re.compile(r"\[`[^`\n]+?:\d+(?:-\d+)?`\]\(")
 SNIPPET = re.compile(r"<!-- snippet (\S+?):(\d+)-(\d+) -->\n.*?\n\n(`{3,})[^\n]*\n(.*?)\n\4", re.S)
 
 
@@ -49,6 +51,11 @@ def check_text(text: str, base: Path, *, at_head: bool = False,
             else:
                 repos[key] = repo.model_copy(update={"head_sha": sha})
     checked = 0
+    parsed = {m.start() for m in LINK.finditer(text)}
+    for m in LINK_START.finditer(text):
+        if m.start() not in parsed:
+            checked += 1
+            failures.append(f"link could not be parsed: {text[m.start():m.start() + 120].splitlines()[0]}")
     for m in LINK.finditer(text):
         path, start, end = m.group(1), int(m.group(2)), int(m.group(3) or m.group(2))
         quote = re.sub(r"\\(.)", r"\1", m.group(5))
