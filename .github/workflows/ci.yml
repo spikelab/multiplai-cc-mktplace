@@ -235,6 +235,29 @@ jobs:
           uv run --project ../../../../.. --package research-pipeline \
             --extra dev python -m pytest tests/ -q
 
+  walkthrough-tests:
+    name: walkthrough-pipeline tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # ripgrep and ast-grep pick and confirm references; the reference tests
+      # fail rather than skip without them. pyright-langserver is optional:
+      # its test skips when it is missing.
+      - name: Install ripgrep and ast-grep
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ripgrep
+          npm install -g @ast-grep/cli
+
+      - name: Run tests
+        working-directory: plugins/multiplai-dev/skills/codebase-walkthrough/scripts
+        run: |
+          uv run --project ../../../../.. --package walkthrough-pipeline \
+            --extra dev python -m pytest tests/ -q
+
   review-pipeline-tests:
     name: review pipeline tests
     runs-on: ubuntu-latest

@@ -17,6 +17,32 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-01
+
+### Changed
+- codebase-walkthrough is now a Python pipeline instead of a single prompt.
+  Pointed at a module, it finds every repository that refers to it (each
+  searched from its own root, so nested repositories are not missed), what
+  the module calls, its database tables, cache keys, settings and env vars,
+  and, with `--docs`, the vendor's documentation and API collection. Agents
+  explain what code found; gates in code re-read every cited line at the
+  commit and drop what is not there. The walkthrough adds end-to-end
+  scenarios that cross repositories, a glossary, questions for the module's
+  owner, and a coverage table of files explained, files not explained and
+  claims dropped.
+- The HTML page keeps the step-through navigation and Mermaid diagrams; the
+  interactive force-directed architecture diagram is gone.
+- It needs `--trust-repo` and ripgrep (`rg`; a run without it stops before
+  any agent call and says how to install it), and stops at a `--max-usd`
+  budget (default 50) with a checkpoint that `resume` continues. After a
+  docs-gate stop, `resume --docs <url>` or `resume --no-docs` continues with
+  the new decision and keeps the answers already paid for.
+
+### Added
+- `check`: re-verifies every `path:line` link and snippet in a finished
+  walkthrough against the commits in its header; `--at-head` says whether the
+  code has moved since.
+
 ## [0.23.0] - 2026-10-01
 
 ### Added
