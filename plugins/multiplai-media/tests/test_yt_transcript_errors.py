@@ -52,6 +52,8 @@ Language: en
 #          the requested subtitle language simply does not exist
 #   fail — exit 1 with a message on stderr: a network error, a private video,
 #          a broken extractor
+# The auto-caption phase is split in two: YTF_AUTO_ORIG answers the request for
+# the original-language English track (`en-orig`), YTF_AUTO every other one.
 _FAKE_YTDLP = r"""#!/bin/bash
 out=""
 prev=""
@@ -76,6 +78,10 @@ case " $* " in
   *" --write-sub "*)
     phase "${YTF_MANUAL:-none}" manual
     if [ "${YTF_MANUAL:-none}" = "ok" ]; then printf '%s' "$VTT_BODY" > "${out}.en.vtt"; fi
+    exit 0 ;;
+  *" --write-auto-sub --sub-langs en-orig "*)
+    phase "${YTF_AUTO_ORIG:-none}" auto-orig
+    if [ "${YTF_AUTO_ORIG:-none}" = "ok" ]; then printf '%s' "$VTT_BODY" > "${out}.en-orig.vtt"; fi
     exit 0 ;;
   *" --write-auto-sub "*)
     phase "${YTF_AUTO:-none}" auto
@@ -222,6 +228,36 @@ class TestSubtitleFailureVsNoSubtitles:
         # No mlx_whisper on this host, and it is Apple-Silicon-only.
         assert res.returncode == 1, (res.returncode, res.stderr)
         assert "Apple Silicon" in res.stderr
+
+
+class TestOriginalEnglishAutoCaptions:
+    """YouTube lists two English auto-caption tracks for an English video:
+    `en-orig`, its speech recognition, and `en`, a machine translation into
+    English built from another track. It answers requests for the translated
+    track with HTTP 429 (seen on uaVYHiF8f7k, 2026-10-05: three tries over
+    several minutes, every one 429, while `en-orig` downloaded each time). The
+    script used to ask for `en.*`, which pulls both, and yt-dlp aborts the
+    whole call on the first failure — so the good track was never saved."""
+
+    def test_en_orig_is_used_even_when_the_translated_track_fails(self, tmp_path):
+        env = _env(tmp_path, YTF_AUTO_ORIG="ok", YTF_AUTO="fail")
+        res, run_dir = _run(tmp_path, [], env)
+        assert res.returncode == 0, (res.returncode, res.stderr)
+        assert "Hello world" in (run_dir / "Test Video-transcript.txt").read_text()
+
+    def test_other_english_tracks_are_still_tried_without_en_orig(self, tmp_path):
+        """A video in another language has no `en-orig`; its English track is a
+        translation, and asking for it is still worth one try."""
+        env = _env(tmp_path, YTF_AUTO_ORIG="none", YTF_AUTO="ok")
+        res, run_dir = _run(tmp_path, [], env)
+        assert res.returncode == 0, (res.returncode, res.stderr)
+        assert (run_dir / "Test Video-transcript.txt").exists()
+
+    def test_en_orig_failure_is_reported_if_nothing_else_works(self, tmp_path):
+        env = _env(tmp_path, YTF_AUTO_ORIG="fail", YTF_AUTO="none")
+        res, _ = _run(tmp_path, [], env)
+        assert res.returncode == 4, (res.returncode, res.stderr)
+        assert "fake yt-dlp auto-orig failure" in res.stderr
 
 
 class TestEmptyCaptionTrack:
