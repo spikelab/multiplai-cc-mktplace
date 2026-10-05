@@ -21,6 +21,20 @@ a tag.
 
 Nothing yet.
 
+## [0.2.5] - 2026-10-05
+
+### Fixed
+
+- **`youtube-transcript` gets English auto-captions again for English videos
+  that YouTube also lists a translated English track for.** YouTube offers
+  two English auto-caption tracks for such a video: `en-orig`, its speech
+  recognition, and `en`, a machine translation into English. It refuses the
+  translated one with `HTTP Error 429: Too Many Requests`. The skill asked for
+  both at once, and `yt-dlp` stops at the first failure, so the run failed
+  with exit 4 and you had to fall back to slow audio transcription. It now
+  asks for `en-orig` on its own first, and only tries the other English tracks
+  if there is no `en-orig`.
+
 ## [0.2.4] - 2026-08-16
 
 ### Fixed

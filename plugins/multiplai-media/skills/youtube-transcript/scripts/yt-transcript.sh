@@ -327,9 +327,32 @@ else
     bank_ytdlp_failure "Manual subtitle download"
 fi
 
-# Try auto-generated subtitles
+# Try the original-language English auto-captions on their own first. For an
+# English video YouTube lists two English auto tracks: `en-orig`, its speech
+# recognition, and `en`, a machine translation into English built from another
+# track. It answers requests for the translated track with HTTP 429 (seen on
+# uaVYHiF8f7k, 2026-10-05, on every try). `en.*` below pulls both, and yt-dlp
+# aborts the whole call on the first failure, so asking for `en-orig` alone is
+# what keeps the good track. A video in another language has no `en-orig`;
+# yt-dlp exits 0 having written nothing, and the `en.*` attempt runs as before.
 if [[ "$SUBS_DOWNLOADED" != true ]]; then
-    echo "[yt-transcript] No manual subs. Trying auto-generated ..."
+    echo "[yt-transcript] No manual subs. Trying original English auto-captions ..."
+    if $YTDLP --write-auto-sub --sub-langs en-orig --skip-download \
+        --output "$TMPDIR_WORK/subs" "$URL" 2>"$YTDLP_ERR"; then
+        VTT_FILE=$(find "$TMPDIR_WORK" -name "subs*.vtt" -o -name "subs*.srt" 2>/dev/null | head -1)
+        if [[ -n "$VTT_FILE" && -s "$VTT_FILE" ]]; then
+            SUBS_DOWNLOADED=true
+            echo "[yt-transcript] Original English auto-captions found."
+        fi
+    else
+        SUB_DOWNLOAD_FAILED=true
+        bank_ytdlp_failure "Original English auto-caption (en-orig) download"
+    fi
+fi
+
+# Try any other English auto-generated subtitles
+if [[ "$SUBS_DOWNLOADED" != true ]]; then
+    echo "[yt-transcript] Trying other English auto-generated captions ..."
     if $YTDLP --write-auto-sub --sub-langs "en.*" --skip-download \
         --output "$TMPDIR_WORK/subs" "$URL" 2>"$YTDLP_ERR"; then
         VTT_FILE=$(find "$TMPDIR_WORK" -name "subs*.vtt" -o -name "subs*.srt" 2>/dev/null | head -1)
