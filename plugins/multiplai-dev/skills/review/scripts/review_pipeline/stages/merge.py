@@ -141,6 +141,37 @@ def merge_set(members: list[Finding], state: ReviewState) -> Finding:
     return survivor.model_copy(update={"severity": severity, "citations": citations, "finders": finders})
 
 
+def apply_duplicate_sets(state: ReviewState, answers: list[tuple[list[Finding], list[DuplicateSet]]],
+                         *, by: str = "") -> set[str]:
+    """Merge each usable set of each (group, answer) into one finding; return the ids merged away.
+
+    *by* names the stage in each merged finding's reason when it is not merge.
+    """
+    order = {f.id: i for i, f in enumerate(state.findings)}
+    by_id = {f.id: f for f in state.findings}
+    replaced: dict[str, Finding] = {}
+    removed: set[str] = set()
+    for group, sets in answers:
+        for ids, reason in usable_sets(group, sets):
+            ids = [i for i in ids if i in by_id and i not in removed]
+            if len(ids) < 2:
+                continue
+            members = sorted((replaced.get(i, by_id[i]) for i in ids), key=lambda f: order[f.id])
+            merged = merge_set(members, state)
+            replaced[merged.id] = merged
+            for m in members:
+                if m.id == merged.id:
+                    continue
+                removed.add(m.id)
+                why = f"the same defect as {merged.id} ({merged.file}:{merged.line_start})"
+                if by:
+                    why = f"{by}: {why}"
+                state.merged.append(Merged(finding=m, into=merged.id,
+                                           reason=f"{why}: {reason}" if reason.strip() else why))
+    state.findings = [replaced.get(f.id, f) for f in state.findings if f.id not in removed]
+    return removed
+
+
 async def run_merge(state: ReviewState, ctx: RunContext) -> ReviewState:
     if state.past("merge"):
         return state
@@ -176,23 +207,7 @@ async def run_merge(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     await bounded(todo, one, cfg.concurrency)
 
-    order = {f.id: i for i, f in enumerate(state.findings)}
-    by_id = {f.id: f for f in state.findings}
-    replaced: dict[str, Finding] = {}
-    removed: set[str] = set()
-    for group in groups:
-        for ids, reason in usable_sets(group, state.merge_answers.get(group_key(group), [])):
-            members = sorted((by_id[i] for i in ids), key=lambda f: order[f.id])
-            merged = merge_set(members, state)
-            replaced[merged.id] = merged
-            for m in members:
-                if m.id == merged.id:
-                    continue
-                removed.add(m.id)
-                why = f"the same defect as {merged.id} ({merged.file}:{merged.line_start})"
-                state.merged.append(Merged(finding=m, into=merged.id,
-                                           reason=f"{why}: {reason}" if reason.strip() else why))
-    state.findings = [replaced.get(f.id, f) for f in state.findings if f.id not in removed]
+    removed = apply_duplicate_sets(state, [(g, state.merge_answers.get(group_key(g), [])) for g in groups])
 
     ctx.counts = {"groups": len(groups), "merged": len(removed), "agent_failures": failures}
     state.stage = "merge"

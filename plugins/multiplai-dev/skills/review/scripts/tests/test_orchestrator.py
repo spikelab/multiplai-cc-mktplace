@@ -12,7 +12,8 @@ from conftest import DEF_CITATION, KEYWORD_CITATION, SCHEMA, high_finding
 from review_pipeline import budget, sdk
 from review_pipeline.__main__ import main
 from review_pipeline.config import DIMENSIONS
-from review_pipeline.models import DuplicateSet, FinderOutput, MergeOutput, ReviewState, Verdict
+from review_pipeline.models import (AssessOutput, DuplicateSet, FinderOutput, MergeOutput, RepeatsOutput,
+                                    ReviewState, Verdict)
 
 
 def reworded_finding():
@@ -40,6 +41,8 @@ class FakeAgents:
         self.cost = cost
         self.budget_stop_at = budget_stop_at
         self.two_groups = two_groups
+        self.assess_answer: AssessOutput | None = None
+        self.repeats_answer: RepeatsOutput | None = None
 
     async def __call__(self, prompt, schema, *, budget_label="", **kwargs):
         sdk.require_trusted_repo()
@@ -68,6 +71,10 @@ class FakeAgents:
         if stage == "merge":
             return MergeOutput(duplicate_sets=[DuplicateSet(
                 finding_ids=[high_finding().id, reworded_finding().id], reason="the same literal keyword")])
+        if stage == "assess":
+            return self.assess_answer or AssessOutput()
+        if stage == "repeats":
+            return self.repeats_answer or RepeatsOutput()
         raise AssertionError(budget_label)
 
 
@@ -242,7 +249,7 @@ def test_a_budget_stop_during_merge_keeps_the_answers_and_resume_asks_only_the_r
                                                two_groups=True)
     assert before[-1] == "merge" and before.count("merge") == 1
     assert saved.stage == "verify" and len(saved.merge_answers) == 1
-    assert resumed == ["merge"]
+    assert resumed == ["merge", "assess"]  # three findings remain, so assess runs once
 
 
 def test_rollup_subcommand(fixture_repo, tmp_path, agents, capsys):

@@ -1,4 +1,4 @@
-"""target → find → verify → merge → export → render.
+"""target → find → verify → merge → repeats → assess → export → render.
 
 `review-state.json` is written after every stage; `resume` reloads it and
 continues from the first stage not yet done.
@@ -23,8 +23,10 @@ from .models import SEVERITIES, ReviewState
 from .progress import ProgressWriter
 from .render import summary_path, write_review, write_rollups
 from .stages import RunContext
+from .stages.assess import run_assess
 from .stages.find import run_find
 from .stages.merge import run_merge
+from .stages.repeats import run_repeats
 from .stages.verify import run_verify
 from .state import load_state, save_state
 
@@ -34,6 +36,8 @@ STAGE_FUNCTIONS = (
     ("find", run_find),
     ("verify", run_verify),
     ("merge", run_merge),
+    ("repeats", run_repeats),
+    ("assess", run_assess),
 )
 
 # The gate reasons that may reach activity.jsonl. A raw reason can quote a
@@ -86,7 +90,8 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
 
     snapshot = target_mod.snapshot_head(t, target_dir / "tree")
     diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
-    ctx = RunContext(config=config, snapshot=snapshot, diff=diff, progress=progress, session_id=session_id)
+    ctx = RunContext(config=config, snapshot=snapshot, diff=diff, progress=progress, session_id=session_id,
+                     target_dir=target_dir)
     save_state(state, target_dir)
 
     for name, fn in STAGE_FUNCTIONS:
