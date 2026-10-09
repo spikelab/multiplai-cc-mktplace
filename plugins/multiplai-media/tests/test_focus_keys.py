@@ -95,3 +95,21 @@ def test_keys_need_a_crop_window() -> None:
     edl = _edl([{"t": 101, "x": 0.5}], fit="blur")
     with pytest.raises(ValueError, match='need fit "crop" or a single panel frame'):
         edl.validate()
+
+
+def test_a_panel_frame_with_keys_builds_a_moving_window_in_segment_time() -> None:
+    edl = EDL.from_dict({"source": "/rec/call.mp4", "output": {"width": W, "height": H},
+                         "layout": {"panels": {"A": {"x": 100, "y": 0, "w": 1000, "h": 1080}}},
+                         "segments": [{"src_start": 100, "src_end": 110, "frame": "A",
+                                       "focus": [{"t": 100, "x": 0.0}, {"t": 104, "x": 1.0}]}]})
+    v = composite._segment_video(edl, edl.segments[0], None, L.DEFAULT_BG)
+    x = v.split("crop=", 1)[1].split(",scale=")[0].split(":", 3)[2]
+    assert _eval(x, 0.0) == pytest.approx(100)
+    assert _eval(x, 4.0) == pytest.approx(1100 - 608)
+
+
+def test_a_segment_fit_alone_makes_render_probe_the_source() -> None:
+    plain = {"source": "/rec/talk.mp4", "segments": [{"src_start": 0, "src_end": 5}]}
+    assert not composite._needs_source_size(EDL.from_dict(plain))
+    with_fit = {**plain, "segments": [{"src_start": 0, "src_end": 5, "fit": "blur"}]}
+    assert composite._needs_source_size(EDL.from_dict(with_fit))
