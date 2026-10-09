@@ -21,6 +21,25 @@ a tag.
 
 Nothing yet.
 
+## [0.3.0] - 2026-10-09
+
+### Changed
+
+- **`screen-demo` is now `video-edit`.** The skill still turns a screen
+  recording into a landscape product demo, with the same commands and the
+  same EDL format; an EDL you wrote for `screen-demo` renders the same video.
+  It is renamed because it is becoming the one skill for editing an existing
+  video, reels included. Call it as `/multiplai-media:video-edit`; scripts now
+  live under `skills/video-edit/scripts/`.
+- **Prep caches its analysis in `.video-edit-cache`** (or
+  `~/.cache/video-edit/`). The old `.screen-demo-cache` is no longer read, so
+  the first `prep` on a recording you prepped before runs again from scratch.
+  You can delete the old directory.
+- **The title-card font override is `VIDEO_EDIT_FONT`.** `SCREEN_DEMO_FONT`
+  still works.
+- The screencast rules (dead spans, zooms, music) moved out of the skill's
+  main instructions into a guide that loads only for screencast jobs.
+
 ## [0.2.5] - 2026-10-05
 
 ### Fixed
