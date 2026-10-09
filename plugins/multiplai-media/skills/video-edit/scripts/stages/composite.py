@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from stages import brand as brand_mod, layouts
-from stages.edl import EDL, Logo
+from stages.edl import EDL, Logo, Overlay
 
 
 def _find_font(bold: bool) -> str:
@@ -353,6 +353,54 @@ def _burn_subtitles(edl: EDL, words: list[dict] | None, brand, work: Path) -> st
     return f"subtitles=filename={_filter_path(ass)}:fontsdir={_filter_path(Path(font_file).parent)}"
 
 
+KEY_SIMILARITY = 0.30          # colorkey: how close to the key colour counts as background
+KEY_BLEND = 0.08               # colorkey: soft edge width
+
+
+def _despill_type(hex_colour: str) -> str | None:
+    """despill handles green and blue screens only."""
+    r, g, b = (int(hex_colour[i:i + 2], 16) for i in (1, 3, 5))
+    if g > r and g > b:
+        return "green"
+    if b > r and b > g:
+        return "blue"
+    return None
+
+
+def overlay_graph(overlays: list[Overlay], movs: list[Path], first_input: int,
+                  vlabel: str, width: int, height: int) -> tuple[str, str]:
+    """Filter graph that lays each rendered overlay over [vlabel] during its span.
+
+    Input `first_input + i` is overlays[i]'s clip; returns (graph, new label).
+    """
+    parts = []
+    for i, (o, _mov) in enumerate(zip(overlays, movs)):
+        r = o.rect(width, height)
+        chain = f"[{first_input + i}:v]setpts=PTS-STARTPTS+{o.start}/TB"
+        if o.mode == "keyed":
+            chain += f",colorkey=0x{o.key_color[1:].upper()}:{KEY_SIMILARITY}:{KEY_BLEND}"
+            spill = _despill_type(o.key_color)
+            if spill:
+                chain += f",despill=type={spill}"
+        parts.append(f"{chain}[ov{i}]")
+        parts.append(f"[{vlabel}][ov{i}]overlay={r.x}:{r.y}:enable='between(t,{o.start},{o.end})':"
+                     f"eof_action=pass[vov{i}]")
+        vlabel = f"vov{i}"
+    return "; ".join(parts), vlabel
+
+
+def _render_overlays(edl: EDL) -> list[Path]:
+    from stages import overlay as overlay_mod
+    from stages.prep import cache_dir_for
+    cache = cache_dir_for(edl.source)
+    movs = []
+    for o in edl.overlays:
+        r = o.rect(edl.output.width, edl.output.height)
+        movs.append(overlay_mod.render_overlay(Path(o.html), r.w, r.h, edl.output.fps,
+                                               o.end - o.start, cache))
+    return movs
+
+
 def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
     brand = brand_mod.load(edl.brand) if edl.brand else brand_mod.default()
     words = _load_words(edl) if _needs_words(edl) else None
@@ -370,6 +418,13 @@ def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
     clips = _cut_segments(edl, work, words, bg=brand.background if edl.brand else layouts.DEFAULT_BG)
     title = _render_title(edl, work)
     filter_complex, cmd_inputs, vlabel, alabel = build_filter_complex(edl, clips, title)
+    if edl.overlays:
+        movs = _render_overlays(edl)
+        graph, vlabel = overlay_graph(edl.overlays, movs, len(cmd_inputs) // 2, vlabel,
+                                      edl.output.width, edl.output.height)
+        for mov in movs:
+            cmd_inputs.extend(["-i", str(mov)])
+        filter_complex += "; " + graph
     if subs:
         filter_complex += f"; [{vlabel}]{subs}[vsub]"
         vlabel = "vsub"
