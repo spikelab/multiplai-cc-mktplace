@@ -80,9 +80,11 @@
     return out;
   }
 
+  /* Refuted and gate-rejected findings, and any finding you decided (accept,
+   * reject or defer), leave the list, so what is left is what still needs you. */
   function isHidden(finding, decisions) {
     const d = decisions && decisions[finding.id];
-    return HIDDEN_STATUSES.has(finding.status) || !!(d && d.decision === "reject");
+    return HIDDEN_STATUSES.has(finding.status) || !!(d && d.decision);
   }
 
   /* Assess labels whose findings fold into a collapsed group after the rest. */
@@ -98,8 +100,8 @@
     return FOLDED_LABELS.has(assessLabel(finding));
   }
 
-  /* Findings by severity, in the input order within each severity. Refuted
-   * and rejected findings are left out unless showHidden. Findings labelled
+  /* Findings by severity, in the input order within each severity. Refuted,
+   * rejected and decided findings are left out unless showHidden. Findings labelled
    * repeat or low-value go to `folded` instead (severity order), shown after
    * the rest in a collapsed group. */
   function groupFindings(findings, decisions, showHidden) {
@@ -169,6 +171,66 @@
   function explanationText(a) {
     if (a && a.label === "useful") return a.reason || "";
     return assessmentText(a);
+  }
+
+  /* What a finding is about: the verifier's `topic`, or, for a file written
+   * before topics (multiplai-dev 0.32) or a finding no verifier labelled, a
+   * guess from the file's path, marked `guessed`. */
+  function findingTopic(f) {
+    if (f && f.topic) return { topic: f.topic, guessed: false };
+    const p = String((f && f.file) || "").toLowerCase();
+    const name = p.slice(p.lastIndexOf("/") + 1);
+    let topic = "code";
+    if (/(^|\/)(tests?|__tests__|spec|specs)\//.test(p) || /(^test_|_test\.|\.test\.|\.spec\.|_spec\.)/.test(name)) topic = "tests";
+    else if (/(^|\/)docs?\//.test(p) || /\.(md|mdx|rst|adoc|txt)$/.test(name)) topic = "docs";
+    else if (/\.tf$|^dockerfile/.test(name) || /(^|\/)\.github\/workflows\//.test(p)) topic = "infra";
+    else if (/\.(ya?ml|json|toml|ini|cfg|conf)$/.test(name) || name.startsWith(".env")) topic = "config";
+    return { topic: topic, guessed: true };
+  }
+
+  /* A GitHub link to lines of a file at a commit, or null when the remote is
+   * not on github.com. Takes https and ssh remotes. */
+  function githubBlobUrl(remote, sha, path, start, end) {
+    const m = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/
+      .exec(String(remote || ""));
+    if (!m || !/^[0-9a-f]{7,40}$/.test(String(sha || ""))) return null;
+    const lines = start ? "#L" + start + (end && end !== start ? "-L" + end : "") : "";
+    return "https://github.com/" + m[1] + "/blob/" + sha + "/" + String(path).split("/").map(encodeURIComponent).join("/") + lines;
+  }
+
+  /* One finding as markdown, to paste to whoever will fix it: what is wrong,
+   * where, how it fails, what correct looks like, and the code it cites. */
+  function findingMarkdown(f, target, explanation) {
+    const t = target || {};
+    const where = f.file + ":" + f.line_start + (f.line_end && f.line_end !== f.line_start ? "-" + f.line_end : "");
+    const link = githubBlobUrl(t.remote_url, t.head_sha, f.file, f.line_start, f.line_end);
+    const out = ["### [" + f.severity + "] " + f.claim, "",
+      "`" + where + "` · " + findingTopic(f).topic + (link ? " · " + link : ""), ""];
+    out.push("**Failure scenario:** " + f.failure_scenario, "");
+    if (explanation) out.push("**Explanation:** " + explanation, "");
+    if (f.expected_behaviour) out.push("**Expected behaviour:** " + f.expected_behaviour, "");
+    if (f.verdict_reason) out.push("**Verifier (" + f.status + "):** " + f.verdict_reason, "");
+    const cites = (f.citations || []).concat(f.verifier_citations || []);
+    if (cites.length) {
+      out.push("**Cited code:**", "");
+      for (const c of cites) {
+        out.push("- `" + c.path + ":" + c.line_start + (c.line_end !== c.line_start ? "-" + c.line_end : "") + "`");
+        if (c.quote) out.push("", "  ```", ...String(c.quote).split("\n").map((l) => "  " + l), "  ```");
+      }
+      out.push("");
+    }
+    out.push("_From the review of " + (t.label || "this change") + (t.head_sha ? " at " + t.head_sha.slice(0, 8) : "") +
+      ", finding " + f.id + "._");
+    return out.join("\n");
+  }
+
+  /* The ids j/k step through: the list as shown, plus `current` in its place
+   * when a decision just hid it, so j goes on to the finding after it. */
+  function navOrder(findings, decisions, showHidden, current) {
+    const shown = findingOrder(groupFindings(findings, decisions, showHidden));
+    if (!current || shown.indexOf(current) >= 0) return shown;
+    const keep = new Set(shown.concat([current]));
+    return findingOrder(groupFindings(findings, decisions, true)).filter((id) => keep.has(id));
   }
 
   /* The id `delta` steps from `current`, clamped to the list (j/k). */
@@ -1189,7 +1251,8 @@
   const api = {
     SEVERITIES: SEVERITIES, joinParts: joinParts, groupReplies: groupReplies,
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
-    isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder,
+    isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder, navOrder: navOrder,
+    githubBlobUrl: githubBlobUrl, findingTopic: findingTopic, findingMarkdown: findingMarkdown,
     assessLabel: assessLabel, isFolded: isFolded, effectiveDecision: effectiveDecision,
     undecidedCount: undecidedCount, assessmentText: assessmentText, explanationText: explanationText,
     stepFinding: stepFinding, anchorLabel: anchorLabel, escapeHtml: escapeHtml,

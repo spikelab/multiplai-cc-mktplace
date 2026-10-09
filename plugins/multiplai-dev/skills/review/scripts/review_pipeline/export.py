@@ -20,6 +20,8 @@ goes for `assessment`, the assess stage's label (`useful`, `still-open`,
 optional: files written before the stage existed have none.
 `verifier_citations` (optional in v1) holds the lines the verifier read; a
 finding with no verdict, such as a gate-rejected one, has no such key.
+`topic` (optional) is what the verifier says the finding is about, one of
+`models.TOPICS`; it is left out when the verifier gave none.
 
 `checks.json` (the `checks.v1` contract beside it) is the record of every
 agent call: `AgentCheck` and `GateCheck` from the state, mapped the same way.
@@ -212,6 +214,8 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
         row = _finding(f, status, reason, expected)
         if verdict:
             row["verifier_citations"] = [_citation(c) for c in verdict.citations]
+            if verdict.topic:
+                row["topic"] = verdict.topic
         assessment = state.assessments.get(f.id)
         if assessment is not None and status in ("confirmed", "unverifiable"):
             row["assessment"] = _assessment(assessment)

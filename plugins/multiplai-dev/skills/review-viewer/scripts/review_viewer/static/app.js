@@ -865,7 +865,7 @@
     box.replaceChildren();
     const findings = state.detail.findings.findings;
     const grouped = L.groupFindings(findings, state.detail.decisions, state.showHidden);
-    $("hidden-label").textContent = "Show refuted and rejected (" + grouped.hidden + ")";
+    $("hidden-label").textContent = "Show decided, refuted and rejected (" + grouped.hidden + ")";
     $("show-hidden").parentElement.hidden = !grouped.hidden;
     if (!findings.length) {
       box.appendChild(emptyState("✓", (L.isTreeReview(state.detail.findings.target)
@@ -895,6 +895,13 @@
     }
   }
 
+  /* What the finding is about; a guess from the path is in italics and says so. */
+  function topicBadge(f) {
+    const t = L.findingTopic(f);
+    return el("span", { class: "badge topic" + (t.guessed ? " guessed" : ""), text: t.topic,
+      title: t.guessed ? "What it is about, guessed from the file path" : "What it is about, as the verifier labelled it" });
+  }
+
   function findingItem(f, folded) {
     const sev = f.severity;
     const d = L.effectiveDecision(f, state.detail.decisions);
@@ -909,6 +916,7 @@
       },
     }, [
       el("span", { class: "badge " + sev, text: f.status }),
+      topicBadge(f),
       label && label !== "useful" ? el("span", { class: "badge assess " + label, text: label }) : null,
       d ? el("span", {
         class: "badge " + d.decision,
@@ -1273,9 +1281,20 @@
       renderThread();
       return;
     }
-    box.appendChild(el("div", {}, [
+    const copy = el("button", { class: "ctl ctl-sm copy-finding", type: "button", text: "Copy as markdown",
+      title: "Copy this finding (claim, where, failure scenario, explanation, cited code) to paste to whoever fixes it" });
+    copy.addEventListener("click", () => {
+      const md = L.findingMarkdown(f, state.detail.findings.target, L.explanationText(f.assessment));
+      copyText(md).then(() => {
+        copy.textContent = "Copied";
+        setTimeout(() => { copy.textContent = "Copy as markdown"; }, 1500);
+      }).catch(() => showToast("Could not copy."));
+    });
+    box.appendChild(el("div", { class: "finding-head" }, [
       el("span", { class: "badge " + f.severity, text: f.severity }),
       el("span", { class: "badge", text: f.status }),
+      topicBadge(f),
+      copy,
     ]));
     box.appendChild(el("h2", { text: f.claim }));
     // The failure scenario first, so the problem reads before anything about
@@ -2392,7 +2411,7 @@
       }
       if (typing || ev.metaKey || ev.ctrlKey || ev.altKey) return;
       if (ev.key === "j" || ev.key === "k") {
-        const order = L.findingOrder(L.groupFindings(state.detail.findings.findings, state.detail.decisions, state.showHidden));
+        const order = L.navOrder(state.detail.findings.findings, state.detail.decisions, state.showHidden, state.selected);
         const next = L.stepFinding(order, state.selected, ev.key === "j" ? 1 : -1);
         if (state.tab !== "finding") setTab("finding");
         if (next && next !== state.selected) selectFinding(next);

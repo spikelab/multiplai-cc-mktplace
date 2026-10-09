@@ -208,6 +208,29 @@
           "title": "Status",
           "type": "string"
         },
+        "topic": {
+          "anyOf": [
+            {
+              "enum": [
+                "code",
+                "tests",
+                "docs",
+                "config",
+                "infra",
+                "data",
+                "security",
+                "performance",
+                "process"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Topic"
+        },
         "verdict_reason": {
           "anyOf": [
             {

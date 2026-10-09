@@ -41,6 +41,22 @@ def test_expected_behaviour_only_for_shown_findings(canned_state):
     assert by_claim[CLAIM_REJECTED]["expected_behaviour"] is None
 
 
+def test_topic_is_exported_from_the_verdict_and_an_unknown_one_is_dropped(canned_state):
+    from review_pipeline.models import Verdict
+    high = next(f for f in canned_state.findings if f.claim == CLAIM_HIGH)
+    medium = next(f for f in canned_state.findings if f.claim == CLAIM_MEDIUM)
+    verdicts = dict(canned_state.verdicts)
+    verdicts[high.id] = verdicts[high.id].model_copy(update={"topic": "tests"})
+    verdicts[medium.id] = Verdict.model_validate({**verdicts[medium.id].model_dump(), "topic": "Vibes"})
+    data = to_findings_file(canned_state.model_copy(update={"verdicts": verdicts}))
+    jsonschema.validate(data, _schema())
+    by_claim = {f["claim"]: f for f in data["findings"]}
+    assert by_claim[CLAIM_HIGH]["topic"] == "tests"
+    assert "topic" not in by_claim[CLAIM_MEDIUM]  # "vibes" is not a topic
+    assert "topic" not in by_claim[CLAIM_REJECTED]  # no verdict, no topic
+    assert Verdict.model_validate({"status": "confirmed", "reason": "r", "topic": " Docs "}).topic == "docs"
+
+
 def test_a_merged_away_finding_is_not_exported(canned_state):
     from review_pipeline.models import Merged
 

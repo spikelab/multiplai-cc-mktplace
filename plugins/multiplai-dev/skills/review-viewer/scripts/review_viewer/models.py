@@ -108,6 +108,10 @@ class Finding(_Strict):
     # files written before multiplai-dev 0.26.
     verifier_citations: list[Citation] | None = None
     assessment: Assessment | None = None
+    # What the finding is about, as the verifier labelled it (multiplai-dev
+    # 0.32+). Absent in older files; the page then guesses from the path.
+    topic: Literal["code", "tests", "docs", "config", "infra", "data", "security", "performance",
+                   "process"] | None = None
 
 
 class Target(_Strict):

@@ -12,6 +12,7 @@ SCHEMA = """\
  "reason": "what you read and why it settles the question",
  "citations": [{"path": "...", "line_start": 1, "line_end": 1, "quote": "exact text"}],
  "expected_behaviour": "one sentence: what correct behaviour would be",
+ "topic": "code" | "tests" | "docs" | "config" | "infra" | "data" | "security" | "performance" | "process",
  "needs": [{"what": "one sentence naming the information you could not read",
             "cause": "no-access" | "unreachable",
             "command": "one read-only shell command that fetches it, or empty",
@@ -61,6 +62,11 @@ def build(target: TargetInfo, finding: Finding) -> str:
         "Unless you answer `refuted`, set `expected_behaviour`: state what correct behaviour would be, in "
         "one sentence, without proposing a code change. For example: \"A null timeout is rejected, not "
         "skipped.\" Say what the code should do, not how to change it.",
+        "Set `topic` to what the finding is about, whatever your answer: `code` (behaviour of the "
+        "program), `tests`, `docs` (documentation, comments, decision logs), `config`, `infra` "
+        "(deployment, CI, cloud resources), `data` (schemas, migrations, stored data), `security`, "
+        "`performance`, or `process` (the order of steps a person must follow, such as merge before "
+        "deploy). Pick the one a reader would file it under, not the file's type.",
         NEEDS_RULES,
         CITATION_RULES,
         f"Schema:\n{SCHEMA}",

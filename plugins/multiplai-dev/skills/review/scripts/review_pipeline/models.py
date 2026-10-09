@@ -95,6 +95,9 @@ class Finding(_Model):
 
 
 NEED_CAUSES: tuple[str, ...] = ("no-access", "lookup-failed", "unreachable")
+# What a finding is about, as the verifier labels it. The page shows it as a badge.
+TOPICS: tuple[str, ...] = ("code", "tests", "docs", "config", "infra", "data", "security", "performance",
+                           "process")
 
 
 class NeedAsk(_Model):
@@ -142,6 +145,15 @@ class Verdict(_Model):
     expected_behaviour: str = ""
     # What the verifier could not read, each with a command a person could run.
     needs: list[NeedAsk] = Field(default_factory=list)
+    # What the finding is about, one of TOPICS; "" when the verifier gave none
+    # or one not in the list. Exported on the finding as `topic`.
+    topic: str = ""
+
+    @field_validator("topic", mode="before")
+    @classmethod
+    def _known_topic(cls, value) -> str:
+        value = str(value or "").strip().lower()
+        return value if value in TOPICS else ""
 
 
 class DuplicateSet(_Model):

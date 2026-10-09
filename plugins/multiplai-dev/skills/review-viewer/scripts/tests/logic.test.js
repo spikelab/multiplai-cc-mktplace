@@ -57,19 +57,25 @@ test("citations map to row indices, skipping deleted rows", () => {
   assert.deepEqual(L.citationRows(rows, 20, 30), []);
 });
 
-test("findings group by severity and hide refuted/rejected", () => {
+test("findings group by severity and hide refuted, rejected and decided", () => {
   const fs = [
     { id: "a", severity: "LOW", status: "confirmed" },
     { id: "b", severity: "HIGH", status: "confirmed" },
     { id: "c", severity: "HIGH", status: "refuted" },
     { id: "d", severity: "MEDIUM", status: "unverifiable" },
+    { id: "e", severity: "MEDIUM", status: "confirmed" },
+    { id: "f", severity: "LOW", status: "confirmed" },
   ];
-  const decisions = { d: { decision: "reject" } };
+  const decisions = { d: { decision: "reject" }, e: { decision: "accept" }, f: { decision: "defer" } };
   const shown = L.groupFindings(fs, decisions, false);
-  assert.equal(shown.hidden, 2);
+  assert.equal(shown.hidden, 4);
   assert.deepEqual(L.findingOrder(shown), ["b", "a"]);
   const all = L.groupFindings(fs, decisions, true);
-  assert.deepEqual(L.findingOrder(all), ["b", "c", "d", "a"]);
+  assert.deepEqual(L.findingOrder(all), ["b", "c", "d", "e", "a", "f"]);
+  // j/k from a finding a decision just hid: it keeps its place, so j goes on to the next.
+  assert.deepEqual(L.navOrder(fs, decisions, false, "e"), ["b", "e", "a"]);
+  assert.deepEqual(L.navOrder(fs, decisions, false, "b"), ["b", "a"]);
+  assert.equal(L.stepFinding(L.navOrder(fs, decisions, false, "e"), "e", 1), "a");
 });
 
 test("repeats and low-value findings fold after the rest, most severe first", () => {
@@ -904,6 +910,50 @@ test("the help explains every value the Checked and Findings tabs can show", () 
     "finding", "finder", "verdict", "gate", "fate", "group", "outcome"]) {
     assert.ok(helpTerms.has(column), "the help does not explain the Checked tab's \"" + column + "\" column");
   }
+});
+
+test("a GitHub link to lines takes https and ssh remotes, and nothing else", () => {
+  const sha = "454e493f82f28689553833f91c510af68e10eb7e";
+  assert.equal(L.githubBlobUrl("https://github.com/DolceTech/DolceDataform.git", sha, "docs/history.md", 194, 198),
+    "https://github.com/DolceTech/DolceDataform/blob/" + sha + "/docs/history.md#L194-L198");
+  assert.equal(L.githubBlobUrl("git@github.com:o/r.git", sha, "a b.py", 3, 3),
+    "https://github.com/o/r/blob/" + sha + "/a%20b.py#L3");
+  assert.equal(L.githubBlobUrl("https://gitlab.com/o/r.git", sha, "a.py", 1, 1), null);
+  assert.equal(L.githubBlobUrl("https://github.com/o/r", "not-a-sha", "a.py", 1, 1), null);
+});
+
+test("a finding copies as markdown with where, scenario, explanation and cited code", () => {
+  const f = { id: "a1b2c3d4e5", severity: "MEDIUM", status: "confirmed", claim: "The timeout is ignored.",
+    file: "app.py", line_start: 7, line_end: 9, topic: "code", failure_scenario: "A slow call hangs.",
+    expected_behaviour: "It stops after 5 s.", verdict_reason: "Line 8 drops it.",
+    citations: [{ path: "app.py", line_start: 8, line_end: 8, quote: "call(url)" }] };
+  const md = L.findingMarkdown(f, { label: "o/r PR #1", head_sha: "a".repeat(40),
+    remote_url: "https://github.com/o/r.git" }, "Worth fixing.");
+  assert.match(md, /^### \[MEDIUM\] The timeout is ignored\.\n/);
+  assert.match(md, /`app\.py:7-9` · code · https:\/\/github\.com\/o\/r\/blob\/a{40}\/app\.py#L7-L9/);
+  assert.match(md, /\*\*Failure scenario:\*\* A slow call hangs\./);
+  assert.match(md, /\*\*Explanation:\*\* Worth fixing\./);
+  assert.match(md, /\*\*Verifier \(confirmed\):\*\* Line 8 drops it\./);
+  assert.match(md, /- `app\.py:8`\n\n  ```\n  call\(url\)\n  ```/);
+  assert.match(md, /_From the review of o\/r PR #1 at aaaaaaaa, finding a1b2c3d4e5\._$/);
+  assert.doesNotMatch(L.findingMarkdown({ ...f, expected_behaviour: "" }, {}, ""), /Explanation|Expected/);
+});
+
+
+test("a finding's topic is the verifier's, else a guess from its path", () => {
+  assert.deepEqual(L.findingTopic({ topic: "process", file: "docs/history.md" }), { topic: "process", guessed: false });
+  const guess = (file) => L.findingTopic({ file: file }).topic;
+  assert.equal(guess("tests/test_needs.py"), "tests");
+  assert.equal(guess("src/app.test.ts"), "tests");
+  assert.equal(guess("pkg/thing_test.go"), "tests");
+  assert.equal(guess("docs/history.md"), "docs");
+  assert.equal(guess("README.md"), "docs");
+  assert.equal(guess("infra/main.tf"), "infra");
+  assert.equal(guess(".github/workflows/ci.yml"), "infra");
+  assert.equal(guess("Dockerfile"), "infra");
+  assert.equal(guess("workflow_settings.yaml"), "config");
+  assert.equal(guess("includes/pii_utils.js"), "code");
+  assert.equal(L.findingTopic({ file: "a.py" }).guessed, true);
 });
 
 let failed = 0;
