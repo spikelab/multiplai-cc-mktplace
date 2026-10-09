@@ -68,3 +68,20 @@ def test_written_file_has_sorted_keys_and_two_space_indent(canned_state, tmp_pat
 def test_ids_are_unique(canned_state):
     ids = [f["id"] for f in to_findings_file(canned_state)["findings"]]
     assert len(ids) == len(set(ids)) == 4
+
+
+def test_exported_checks_validate_against_the_viewer_checks_schema(canned_state, tmp_path):
+    from review_pipeline.export import write_checks_file
+    from review_pipeline.models import AgentCheck, GateCheck
+
+    high = canned_state.findings[0]
+    marked = {**high.citations[0].model_dump(), "gate": "pass", "seen": "diff"}
+    canned_state.checks = [AgentCheck(
+        stage="find", subject="diff-bugs", given=["diff (3 files)"],
+        calls=[{"tool": "Read", "target": "rateplan_service.py", "detail": "lines 1-6"}], outcome="1 finding",
+        turns=2, cost_usd=0.3, started_at="2026-10-09T10:00:00.000Z", ended_at="2026-10-09T10:00:05.000Z",
+        findings=[{"id": high.id, "claim": high.claim, "severity": high.severity,
+                   "failure_scenario": high.failure_scenario, "citations": [marked], "fate": "kept"}])]
+    canned_state.gate_checks = [GateCheck(finding_id=high.id, gate="finding_gate", passed=True)]
+    data = json.loads(write_checks_file(canned_state, tmp_path).read_text(encoding="utf-8"))
+    jsonschema.validate(data, json.loads((SCHEMA.parent / "checks.v1.schema.json").read_text(encoding="utf-8")))
