@@ -33,6 +33,24 @@ The gates re-read every cited line range with `git show <head>:<path>` and
 check the quote is there. A finding that fails is rejected; a confirmation
 that fails is recorded as `unverifiable`. The gates never ask a model.
 
+## Rules the `conventions` finder reads
+
+The `conventions` finder reads every `coding-standards.md` and every
+`CLAUDE.md` in the repo root and in each directory down to a changed file, as
+they are at the reviewed commit. `coding-standards.md` holds rules meant for the
+reviewer only. Keeping them out of `CLAUDE.md` keeps them out of the context of
+the agent that writes the code, which already has to explore, edit and debug in
+one window. A `coding-standards.md` rule is enforced even when it states no
+consequence; a `CLAUDE.md` rule only when breaking it has one. All
+`coding-standards.md` files go in first, so when the rules pass 40 000
+characters, `CLAUDE.md` text is what gets skipped. The filename must be
+lowercase.
+
+The `tests` finder also reports tests the change adds or edits that cannot
+catch a change in behaviour: a test that asserts a value copied from the code,
+one that reads a source file as text instead of running it, and one that mocks
+the very dependency whose failure the code must handle.
+
 ## What this skill does on the machine
 
 - **Sends the repository's contents to a model.** Each agent reads a snapshot

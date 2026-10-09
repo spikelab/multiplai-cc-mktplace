@@ -17,24 +17,30 @@ CONVENTIONS_MAX_CHARS = 40_000
 
 
 def conventions_chain(target: TargetInfo) -> str:
-    """Every CLAUDE.md from the repo root down to each changed file's directory, at head."""
+    """Every coding-standards.md, then every CLAUDE.md, from the repo root down to each changed file's directory, at head.
+
+    coding-standards.md holds rules written for the reviewer only, so its blocks
+    come first: when the text passes CONVENTIONS_MAX_CHARS, CLAUDE.md is skipped first.
+    """
     dirs: list[str] = [""]
     for f in target.files:
         parts = PurePosixPath(f).parent.parts
         for i in range(1, len(parts) + 1):
             dirs.append("/".join(parts[:i]))
+    chain = list(dict.fromkeys(dirs))
     blocks, total = [], 0
-    for d in dict.fromkeys(dirs):
-        path = f"{d}/CLAUDE.md" if d else "CLAUDE.md"
-        text = file_at_head(target, path)
-        if text is None:
-            continue
-        block = f"### {path}\n\n{text.strip()}\n"
-        if total + len(block) > CONVENTIONS_MAX_CHARS:
-            blocks.append(f"### {path}\n\n[skipped: the rules above already fill the prompt budget]\n")
-            continue
-        blocks.append(block)
-        total += len(block)
+    for name in ("coding-standards.md", "CLAUDE.md"):
+        for d in chain:
+            path = f"{d}/{name}" if d else name
+            text = file_at_head(target, path)
+            if text is None:
+                continue
+            block = f"### {path}\n\n{text.strip()}\n"
+            if total + len(block) > CONVENTIONS_MAX_CHARS:
+                blocks.append(f"### {path}\n\n[skipped: the rules above already fill the prompt budget]\n")
+                continue
+            blocks.append(block)
+            total += len(block)
     return "\n".join(blocks)
 
 

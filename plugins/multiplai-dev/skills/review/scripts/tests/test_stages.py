@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from conftest import KEYWORD_CITATION, KEYWORD_USE_CITATION, cite, high_finding, medium_finding
-from review_pipeline import sdk
+from review_pipeline import sdk, target
 from review_pipeline.config import ReviewConfig
 from review_pipeline.models import DuplicateSet, Finding, FinderOutput, FinderResult, MergeOutput, ReviewState, Verdict
 from review_pipeline.stages import RunContext
+from review_pipeline.stages import find as find_stage
 from review_pipeline.stages.find import conventions_chain, run_find
 from review_pipeline.stages.merge import MERGE_LINE_GAP, group_key, overlap_groups, run_merge
 from review_pipeline.stages.verify import run_verify
@@ -136,6 +139,53 @@ async def test_stage_already_done_makes_no_calls(target_info, ctx, monkeypatch):
 
 def test_conventions_chain_reads_claude_md_at_head(target_info):
     assert conventions_chain(target_info) == ""  # the fixture has none
+
+
+def rules_repo(tmp_path: Path, claude_md: str = "Use tabs.\n"):
+    """A repo whose head changes pkg/x.py, with rules files at the root and in pkg/."""
+    repo = tmp_path / "rules-repo"
+    (repo / "pkg").mkdir(parents=True)
+    env = dict(os.environ, GIT_AUTHOR_NAME="Fixture", GIT_AUTHOR_EMAIL="fixture@example.com",
+               GIT_COMMITTER_NAME="Fixture", GIT_COMMITTER_EMAIL="fixture@example.com",
+               GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                              text=True, env=env).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    (repo / "CLAUDE.md").write_text(claude_md)
+    (repo / "coding-standards.md").write_text("Name every constant.\n")
+    (repo / "pkg" / "coding-standards.md").write_text("No mocks of the clock.\n")
+    (repo / "pkg" / "CLAUDE.md").write_text("Prefer pathlib.\n")
+    (repo / "pkg" / "x.py").write_text("X = 1\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    (repo / "pkg" / "x.py").write_text("X = 2\n")
+    git("commit", "-q", "-am", "change x")
+    resolved = target.resolve(repo, range_=f"{base}..{git('rev-parse', 'HEAD')}")
+    return target.build_target(resolved)
+
+
+def test_conventions_chain_puts_coding_standards_before_claude_md(tmp_path):
+    chain = conventions_chain(rules_repo(tmp_path))
+    headings = [line for line in chain.splitlines() if line.startswith("### ")]
+    assert headings == ["### coding-standards.md", "### pkg/coding-standards.md", "### CLAUDE.md",
+                        "### pkg/CLAUDE.md"]
+    for rule in ("Name every constant.", "No mocks of the clock.", "Use tabs.", "Prefer pathlib."):
+        assert rule in chain
+
+
+def test_conventions_chain_skips_claude_md_first_when_over_the_cap(tmp_path, monkeypatch):
+    info = rules_repo(tmp_path, claude_md="Use tabs.\n" * 50)
+    monkeypatch.setattr(find_stage, "CONVENTIONS_MAX_CHARS", 200)
+    chain = conventions_chain(info)
+    assert "Name every constant." in chain and "No mocks of the clock." in chain
+    assert "### CLAUDE.md\n\n[skipped: the rules above already fill the prompt budget]" in chain
+    assert "Use tabs." not in chain
+    # A skipped block does not stop the walk: the smaller pkg/CLAUDE.md still fits after it.
+    assert "### pkg/CLAUDE.md\n\nPrefer pathlib." in chain
 
 
 # --- verify ----------------------------------------------------------------------
