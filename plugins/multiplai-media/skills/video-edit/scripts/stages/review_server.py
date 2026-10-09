@@ -211,6 +211,7 @@ class ReviewHTTPServer(ThreadingHTTPServer):
 def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
     class Handler(BaseHTTPRequestHandler):
         server_version = "video-edit-review"
+        protocol_version = "HTTP/1.1"   # keep-alive: the browser seeks with many small Range requests
         sys_version = ""
 
         def log_message(self, format, *args):   # noqa: A002 — keep the token out of any log

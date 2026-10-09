@@ -159,7 +159,8 @@ composer.addEventListener("submit", (ev) => {
   ev.preventDefault();
   const text = composerText.value.trim();
   if (!text || !state.draft) return;
-  state.pending.push({ key: crypto.randomUUID(), video: state.clip, version: state.version, ...state.draft, text });
+  // crypto.randomUUID needs a secure origin; http://<host>.orb.local is not one.
+  state.pending.push({ key: `${Date.now()}-${Math.random().toString(36).slice(2)}`, video: state.clip, version: state.version, ...state.draft, text });
   savePending();
   closeComposer();
   renderComments();
@@ -272,12 +273,14 @@ const play = $("play"), seek = $("seek");
 play.addEventListener("click", () => (video.paused ? video.play() : video.pause()));
 video.addEventListener("play", () => { play.textContent = "❚❚"; play.setAttribute("aria-label", "Pause"); closeComposer(); });
 video.addEventListener("pause", () => { play.textContent = "▶"; play.setAttribute("aria-label", "Play"); });
-video.addEventListener("loadedmetadata", () => { seek.max = String(video.duration); renderMarkers(); });
-video.addEventListener("timeupdate", () => {
+function showTime() {
   seek.value = String(video.currentTime);
   $("time").textContent = `${fmt(video.currentTime)} / ${fmt(video.duration || 0)}`;
   renderMarkers();
-});
+}
+video.addEventListener("loadedmetadata", () => { seek.max = String(video.duration); showTime(); });
+video.addEventListener("timeupdate", showTime);
+video.addEventListener("seeked", showTime);
 seek.addEventListener("input", () => { video.currentTime = Number(seek.value); });
 $("version").addEventListener("change", (ev) => selectClip(state.clip, Number(ev.target.value)));
 window.addEventListener("resize", renderMarkers);

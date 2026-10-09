@@ -19,7 +19,7 @@ main { display: grid; grid-template-columns: 180px minmax(0, 1fr) 320px; gap: 16
 @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
 nav button { display: block; width: 100%; text-align: left; margin-bottom: 4px; }
 nav button[aria-current="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-nav .badge { font-size: 11px; margin-left: 6px; color: var(--muted); }
+nav .badge { font-size: 11px; margin-left: 6px; opacity: .7; }
 #stage { position: relative; background: #000; border-radius: 6px; overflow: hidden;
          display: flex; justify-content: center; }
 video { display: block; max-width: 100%; max-height: 72vh; cursor: crosshair; }
@@ -27,7 +27,7 @@ video { display: block; max-width: 100%; max-height: 72vh; cursor: crosshair; }
 .marker { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%;
           border: 2px solid #000; background: var(--marker); font: 700 11px/18px system-ui;
           text-align: center; color: #000; }
-#composer { position: absolute; left: 12px; right: 12px; bottom: 12px; background: var(--panel);
+#composer { margin-top: 8px; background: var(--panel);
             border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
 #composer label { display: block; font-weight: 600; margin-bottom: 6px; }
 textarea { width: 100%; font: inherit; color: var(--text); background: var(--bg);
