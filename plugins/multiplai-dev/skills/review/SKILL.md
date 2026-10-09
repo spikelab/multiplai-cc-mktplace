@@ -61,9 +61,12 @@ Three targets review code as it stands instead of a diff:
 - `--dir <path>` reviews a directory that is not under git. It is copied into
   `<out>/<slug>/source/` (without `node_modules`, `.venv`, `venv`,
   `__pycache__`, `dist` and `build`, and honouring a `.gitignore` in it) and
-  committed there; the source directory is never written to. A directory
-  inside a git repository exits 2 and names the `--tree --path` command to use
-  instead.
+  committed there; the source directory is never written to. The slug is the
+  directory's name plus six characters derived from its full path, so two
+  directories with the same name get two reviews. Reviewing the same
+  directory again keeps the earlier commit, so the earlier review still
+  opens. A directory inside a git repository, or an `--out` inside the
+  directory, exits 2 and says what to run instead.
 
 The base is git's empty tree, so every file counts as added and there are no
 commits. Binary files, files over 200 000 characters, lockfiles (`uv.lock`,

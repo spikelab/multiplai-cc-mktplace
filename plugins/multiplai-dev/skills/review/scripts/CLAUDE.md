@@ -45,7 +45,14 @@ knows a tree review by that base.
 - `import_dir()` copies the directory (less `IMPORT_EXCLUDES` and any `.git`)
   into `<slug>/source/`, not `<slug>/tree/`: `tree/` is the agents' snapshot,
   deleted at the end of a run, and the copy is the repository the review and
-  the viewer read afterwards.
+  the viewer read afterwards. The slug's name is `dir_name()`:
+  `<basename>-<6 hex of the absolute path>`, so two directories with one
+  basename never share a `source/`. A later run keeps the earlier commits: it
+  replaces the copy's files, reuses HEAD when nothing changed, and otherwise
+  commits on top, so the head an earlier `findings.json` names stays readable.
+  `check_out_dir()` refuses an `--out` inside the source before `__main__`
+  creates it. `review` (not `prepare`, which `--plan-only` also calls) deletes
+  the last `progress.log`.
 - `stages/find.file_groups()` splits the files at `GROUP_MAX_CHARS` (100 000)
   and at each top-level directory below the reviewed path; a change review is
   one group, so its path is unchanged. Each dimension runs once per group and

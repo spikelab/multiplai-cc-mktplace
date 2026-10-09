@@ -131,10 +131,11 @@ def test_dir_is_copied_and_committed_and_the_source_is_unchanged(tmp_path):
 
     assert _listing(src) == before  # nothing written to the source, no .git there
     copy = Path(state.target.repo_path)
-    assert copy == (tmp_path / "out" / "notes-app--tree" / "source").resolve()
+    slug = f"{target.dir_name(src.resolve())}--tree"
+    assert copy == (tmp_path / "out" / slug / "source").resolve()
     assert git(copy, "rev-list", "--count", "HEAD") == "1"
     assert state.target.files == [".gitignore", "app.py", "lib/util.py"]  # no node_modules, no ignored file
-    assert state.target.slug == "notes-app--tree" and target_dir.name == "notes-app--tree"
+    assert state.target.slug == slug and target_dir.name == slug and slug.startswith("notes-app-")
     assert state.target.label.startswith(f"{src}: whole tree at ")
 
 
@@ -323,3 +324,79 @@ def test_a_tree_review_writes_a_findings_file_that_validates(tmp_path, monkeypat
     assert [f["claim"] for f in data["findings"]] == ["total() ignores item quantity"]
     summary = (out / "shop--tree" / "summary-shop--tree.md").read_text()
     assert "5 files reviewed as they stand at" in summary and "4 skipped" in summary
+
+
+def _dir_review(src: Path, out: Path):
+    return orchestrator.prepare(orchestrator.TargetSpec(repo="", dir=str(src)), out)
+
+
+def test_a_second_dir_run_keeps_the_commit_an_earlier_review_names(tmp_path, capsys):
+    src = tmp_path / "plain" / "notes-app"
+    write(src, "app.py", "print('hi')\n")
+    out = tmp_path / "out"
+    first, target_dir = _dir_review(src, out)
+    (target_dir / "progress.log").write_text("DONE review finished\n")
+    copy, head = Path(first.target.repo_path), first.target.head_sha
+
+    # --plan-only on unchanged contents: the same commit, and the last run's progress.log stays.
+    code = main(["--out", str(out), "review", "--dir", str(src), "--plan-only"])
+    assert code == 0 and "groups: 1" in capsys.readouterr().out
+    assert git(copy, "rev-parse", "HEAD") == head and git(copy, "rev-list", "--count", "HEAD") == "1"
+    assert (target_dir / "progress.log").read_text() == "DONE review finished\n"
+
+    # Changed contents: a new commit on top, and the earlier head is still a readable commit.
+    write(src, "app.py", "print('bye')\n")
+    second, _ = _dir_review(src, out)
+    assert second.target.head_sha != head
+    assert git(copy, "rev-list", "--count", "HEAD") == "2"
+    assert git(copy, "show", f"{head}:app.py") == "print('hi')"
+
+
+def test_two_directories_with_one_basename_get_two_reviews(tmp_path):
+    a, b = tmp_path / "one" / "app", tmp_path / "two" / "app"
+    write(a, "a.py", "A = 1\n")
+    write(b, "b.py", "B = 1\n")
+    out = tmp_path / "out"
+    first, first_dir = _dir_review(a, out)
+    second, second_dir = _dir_review(b, out)
+    assert first_dir != second_dir and first.target.slug != second.target.slug
+    assert git(Path(first.target.repo_path), "show", f"{first.target.head_sha}:a.py") == "A = 1"
+    assert second.target.files == ["b.py"]
+
+
+def test_dir_with_out_inside_the_source_is_refused_and_writes_nothing_there(tmp_path, capsys):
+    src = tmp_path / "plain" / "proj"
+    write(src, "app.py", "x = 1\n")
+    before = _listing(src)
+    code = main(["--out", str(src / "reviews"), "review", "--dir", str(src), "--trust-repo"])
+    assert code == 2
+    assert "is inside" in capsys.readouterr().err
+    assert _listing(src) == before
+
+
+def test_dir_that_cannot_be_copied_exits_2_with_a_message(tmp_path, capsys):
+    src = tmp_path / "plain" / "locked"
+    write(src, "app.py", "x = 1\n")
+    write(src, "secret/key.txt", "k\n")
+    (src / "secret").chmod(0)
+    try:
+        if os.access(src / "secret", os.R_OK):
+            pytest.skip("running with permissions that ignore chmod")
+        code = main(["--out", str(tmp_path / "out"), "review", "--dir", str(src), "--trust-repo"])
+    finally:
+        (src / "secret").chmod(0o755)
+    assert code == 2
+    assert "cannot copy" in capsys.readouterr().err
+
+
+def test_a_large_file_that_is_not_utf8_does_not_stop_a_tree_review(tmp_path, monkeypatch):
+    repo = tmp_path / "latin"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    write(repo, "app.py", "x = 1\n")
+    write(repo, "notes.txt", ("caf\xe9 " * 20).encode("latin-1") + b"\n")  # text, not UTF-8
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "latin")
+    monkeypatch.setattr(target, "TREE_MAX_CHARS", 50)
+    files, skipped = target.tree_files(repo, git(repo, "rev-parse", "HEAD"))
+    assert files == ["app.py"] and skipped == [("notes.txt", "over 50 characters")]

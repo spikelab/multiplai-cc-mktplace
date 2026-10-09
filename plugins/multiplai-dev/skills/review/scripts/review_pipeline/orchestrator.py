@@ -147,14 +147,14 @@ def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
     """Resolve and gate the target, then write its directory. Raises ReviewError.
 
     A `--dir` target is first copied into `<out>/<slug>/source/` and committed
-    there, then reviewed as a tree at that commit.
+    there (`import_dir`), then reviewed as a tree at that commit.
     """
     repo, tree, name, src = spec.repo, spec.tree, None, None
     info = None
     try:
         if spec.dir:
             src = Path(spec.dir).expanduser().resolve()
-            name = src.name
+            name = target_mod.dir_name(src)
             repo = str(target_mod.import_dir(src, out_dir / target_mod.sanitize_slug(f"{name}--tree")))
             tree = "HEAD"
         resolved = target_mod.resolve(repo, branch=spec.branch, pr=spec.pr, range_=spec.range, tree=tree,
@@ -176,9 +176,6 @@ def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
         info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in)
     target_dir = out_dir / info.slug
     info = target_mod.write_target_files(info, diff or "", target_dir)
-    progress_log = target_dir / "progress.log"
-    if progress_log.exists():
-        progress_log.unlink()  # a fresh review starts a fresh progress file
     return ReviewState(target=info), target_dir
 
 
@@ -207,6 +204,8 @@ def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[st
 
 async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, session_id: str = "") -> Path:
     state, target_dir = prepare(spec, out_dir)
+    # A fresh review starts a fresh progress file; --plan-only leaves the last one alone.
+    (target_dir / "progress.log").unlink(missing_ok=True)
     return await run_state(state, target_dir, config, session_id=session_id)
 
 

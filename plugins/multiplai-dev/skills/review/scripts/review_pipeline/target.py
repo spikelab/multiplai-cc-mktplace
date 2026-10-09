@@ -11,6 +11,7 @@ nothing fetches unless the caller passes `fetch=True`.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -285,6 +286,13 @@ def _check_attrs(repo: Path, head: str, paths: list[str]) -> dict[str, str]:
     return out
 
 
+def _chars_at(repo: Path, head: str, path: str) -> int:
+    """Characters in *path* at *head*, decoded like `gates._show` (bytes that are not UTF-8 count as one each)."""
+    proc = subprocess.run([*_GIT, "-C", str(repo), "show", f"{head}:{path}"], capture_output=True,
+                          stdin=subprocess.DEVNULL, env=_env(), shell=False, check=False)
+    return len(proc.stdout.decode("utf-8", errors="replace"))
+
+
 def tree_files(repo: Path, head: str, path: str = "") -> tuple[list[str], list[tuple[str, str]]]:
     """(files to review, [(file, reason) skipped]) at *head*, under *path*, in path order.
 
@@ -310,7 +318,7 @@ def tree_files(repo: Path, head: str, path: str = "") -> tuple[list[str], list[t
     for f in sorted(listed):
         if f in binary:
             skipped.append((f, "binary"))
-        elif sizes.get(f, 0) > TREE_MAX_CHARS and len(git(repo, "show", f"{head}:{f}").stdout) > TREE_MAX_CHARS:
+        elif sizes.get(f, 0) > TREE_MAX_CHARS and _chars_at(repo, head, f) > TREE_MAX_CHARS:
             skipped.append((f, f"over {TREE_MAX_CHARS} characters"))
         elif f.rsplit("/", 1)[-1] in LOCKFILES:
             skipped.append((f, "lockfile"))
@@ -387,14 +395,45 @@ _IMPORT_ENV = {
 }
 
 
+def dir_name(src: Path) -> str:
+    """The name a `--dir` review uses for *src* in its slug: `<basename>-<6 hex of its absolute path>`.
+
+    Two directories with the same basename get different slugs, so one
+    review never replaces the other's `source/` repository.
+    """
+    return f"{src.name}-{hashlib.sha256(str(src).encode()).hexdigest()[:6]}"
+
+
+def _import_git(dest: Path, src: Path, *args: str) -> subprocess.CompletedProcess:
+    proc = subprocess.run([*_GIT, "-C", str(dest), *args], capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, env=dict(_env(), **_IMPORT_ENV), shell=False, check=False)
+    ok = proc.returncode == 0 or (args[0] == "diff" and proc.returncode == 1)  # diff --quiet: 1 = changed
+    if not ok:
+        raise TargetError(f"git {args[0]} in the copy of {src} failed: {proc.stderr.strip()}")
+    return proc
+
+
+def check_out_dir(src: str | Path, out: Path) -> None:
+    """Raise TargetError when *out* is *src* or inside it: a `--dir` review never writes to its source."""
+    src, out = Path(src).expanduser().resolve(), Path(out).expanduser().resolve()
+    if out == src or src in out.parents:
+        raise TargetError(f"the output directory {out} is inside {src}; pass --out somewhere else")
+
+
 def import_dir(path: str | Path, target_dir: Path) -> Path:
     """Copy a directory that is not under git into `<target_dir>/source/` and commit it there.
 
     The copy leaves out IMPORT_EXCLUDES (and any `.git`), and `git add` honours
-    a `.gitignore` copied with it. One commit, with a fixed author and no user
-    git config. Nothing is written to *path*. Returns the copy, which is then
+    a `.gitignore` copied with it. Commits have a fixed author and no user git
+    config. Nothing is written to *path*. Returns the copy, which is then
     reviewed as `--tree HEAD`. The copy is not `<target_dir>/tree/`: that is
     the agents' snapshot, deleted when a run ends.
+
+    An earlier import is kept, so the commit an earlier review's
+    `findings.json` and `review-state.json` name stays readable: the working
+    files of `source/` are replaced with a fresh copy, and a new commit is
+    added on top of the old one only when the contents changed. When they did
+    not, HEAD is reused and the review gets the same head sha.
     """
     src = Path(path).expanduser().resolve()
     if not src.is_dir():
@@ -405,20 +444,30 @@ def import_dir(path: str | Path, target_dir: Path) -> Path:
         rel = src.relative_to(top).as_posix() if src != top else "."
         raise TargetError(f"{src} is inside the git repository {top}; review it with "
                           f"--repo {top} --tree --path {rel}")
+    check_out_dir(src, target_dir)
     dest = (target_dir / "source").resolve()
-    if dest == src or src in dest.parents:
-        raise TargetError(f"the output directory {target_dir} is inside {src}; pass --out somewhere else")
-    if dest.exists():
-        shutil.rmtree(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src, dest, symlinks=True, ignore=shutil.ignore_patterns(*IMPORT_EXCLUDES, ".git"))
-    env = dict(_env(), **_IMPORT_ENV)
-    for args in (["init", "-q", "-b", "main"], ["add", "-A"],
-                 ["commit", "-q", "--allow-empty", "-m", f"Import {src.name} for review"]):
-        proc = subprocess.run([*_GIT, "-C", str(dest), *args], capture_output=True, text=True,
-                              stdin=subprocess.DEVNULL, env=env, shell=False, check=False)
-        if proc.returncode != 0:
-            raise TargetError(f"git {args[0]} in the copy of {src} failed: {proc.stderr.strip()}")
+    kept = (dest / ".git").is_dir()
+    try:
+        if dest.exists() and not kept:
+            shutil.rmtree(dest)  # a copy that was never committed holds nothing a review names
+        for child in (dest.iterdir() if kept else ()):
+            if child.name == ".git":
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src, dest, symlinks=True, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns(*IMPORT_EXCLUDES, ".git"))
+    except OSError as e:  # shutil.Error is an OSError
+        raise TargetError(f"cannot copy {src} into {dest}: {e}") from e
+    if not kept:
+        _import_git(dest, src, "init", "-q", "-b", "main")
+    _import_git(dest, src, "add", "-A")
+    if kept and _import_git(dest, src, "diff", "--cached", "--quiet").returncode == 0:
+        return dest  # same contents as the last import: keep its commit
+    _import_git(dest, src, "commit", "-q", "--allow-empty", "-m", f"Import {src.name} for review")
     return dest
 
 

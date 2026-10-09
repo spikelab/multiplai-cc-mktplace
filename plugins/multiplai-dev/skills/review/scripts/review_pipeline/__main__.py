@@ -145,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "trust_repo", False):
         os.environ["REVIEW_TRUST_REPO"] = "1"
 
-    from . import orchestrator, render, sdk
+    from . import orchestrator, render, sdk, target
     from .config import load_config
     from .post import PostError, post
 
@@ -174,6 +174,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.path and args.tree is None:
             print("ERROR: --path goes with --tree", file=sys.stderr)
             return 2
+        if args.dir:
+            try:
+                target.check_out_dir(args.dir, out)  # before anything creates --out
+            except target.TargetError as e:
+                print(f"ERROR: {e}", file=sys.stderr)
+                return 2
         spec = orchestrator.TargetSpec(repo=args.repo or "", branch=args.branch, pr=args.pr, range=args.range_,
                                        tickets=args.ticket, deployed_in=args.deployed_in,
                                        base_branch=args.base_branch, fetch=args.fetch,
