@@ -10,9 +10,15 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 SENTENCE_END = (".", "?", "!", "…")
-# With no punctuation (whisper drops it on long unpunctuated runs), a pause
-# this long also ends a sentence, and no sentence runs past MAX_SENTENCE_S.
+CLAUSE_END = (",", ";", ":")
+# whisper large-v3 run without conditioning on previous text punctuates
+# sparsely (49 full stops in a 29-minute interview), and its word timings
+# leave almost no gaps, so neither signal alone gives usable units. A pause
+# this long always ends a sentence; once a sentence has run SOFT_BREAK_S, a
+# comma or a shorter pause ends it too; none runs past MAX_SENTENCE_S.
 PAUSE_BREAK_S = 1.2
+SOFT_BREAK_S = 8.0
+SOFT_PAUSE_S = 0.5
 MAX_SENTENCE_S = 30.0
 SNAP_WINDOW_S = 0.5
 
@@ -40,9 +46,12 @@ def build_sentences(words: list[dict]) -> list[Sentence]:
     for i, w in enumerate(words):
         cur.append(w)
         nxt = words[i + 1] if i + 1 < len(words) else None
+        gap = nxt["start"] - w["end"] if nxt else 0.0
+        long_enough = w["end"] - cur[0]["start"] >= SOFT_BREAK_S
         if (w["text"].endswith(SENTENCE_END)
                 or nxt is None
-                or nxt["start"] - w["end"] >= PAUSE_BREAK_S
+                or gap >= PAUSE_BREAK_S
+                or (long_enough and (w["text"].endswith(CLAUSE_END) or gap >= SOFT_PAUSE_S))
                 or w["end"] - cur[0]["start"] >= MAX_SENTENCE_S):
             flush()
     return out

@@ -41,6 +41,14 @@ def test_sentences_split_on_a_long_pause_without_punctuation() -> None:
     assert [x.text for x in s] == ["no stop", "then"]
 
 
+def test_long_unpunctuated_run_splits_at_a_comma_after_8s() -> None:
+    words = [w(f"w{i}", i * 0.5, i * 0.5 + 0.45) for i in range(30)]
+    words[5]["text"] = "early,"      # at 2.5 s: too soon to split
+    words[20]["text"] = "late,"      # at 10.0 s: splits here
+    s = clips.build_sentences(words)
+    assert [len(x.text.split()) for x in s] == [21, 9]
+
+
 def test_sentence_takes_the_majority_speaker() -> None:
     s = clips.build_sentences([w("a", 0, 0.2, "S0"), w("b", 0.3, 0.5, "S0"), w("c.", 0.6, 0.8, "S1")])
     assert s[0].speaker == "S0"
