@@ -471,6 +471,11 @@ mark.wd-del { background: var(--del-word); color: inherit; border-radius: 2px; }
   text-align: left;
 }
 .cite-link:hover { text-decoration: underline; }
+/* The Findings tab's link to the verifier's entry on the Checked tab: a full-width
+   button, so it reads as the way to the evidence. */
+.check-link { display: flex; align-items: center; width: 100%; min-height: var(--ctl-h); padding: var(--s1) var(--s3);
+  text-align: left; font-size: var(--fs-sm); color: var(--accent); background: var(--bg); border: 1px solid var(--accent); }
+.check-link:hover { text-decoration: underline; }
 pre.sketch {
   font: var(--fs-sm) var(--mono);
   background: var(--bg);
@@ -781,15 +786,47 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
 .palette-list .none { color: var(--muted); cursor: default; }
 .palette-foot { padding: var(--s2) var(--s4); border-top: 1px solid var(--border); display: flex; gap: var(--s1); align-items: center; }
 
-.help { max-width: min(900px, calc(100vw - 32px)); width: 100%; padding: var(--s4) var(--s5) var(--s5);
-  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--overlay-shadow); }
-.help-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s2); }
+/* The help: a header that stays put over a body that scrolls, so Esc and the
+   topics are always in reach. */
+.help { max-width: min(900px, calc(100vw - 32px)); width: 100%; max-height: calc(100dvh - 32px); padding: 0;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--overlay-shadow);
+  overflow: hidden; }
+.help[open] { display: flex; flex-direction: column; }
+.help-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+  padding: var(--s4) var(--s5) var(--s2); border-bottom: 1px solid var(--border); }
+.help-body { flex: 1; min-height: 0; overflow: auto; padding: var(--s2) var(--s5) var(--s5); line-height: var(--lh); }
 .help h2 { font-size: var(--fs-lg); margin: 0; }
-.help h3 { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: var(--s4) 0 var(--s2); }
-.help-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 0 var(--s6); }
-.help dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--s2) var(--s4); margin: 0; align-items: baseline; }
+.help h3 { font-size: var(--fs-md); margin: var(--s5) 0 var(--s2); }
+.help h4 { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: var(--s4) 0 var(--s2); }
+.help p, .help ol { margin: 0 0 var(--s2); }
+.help ol { padding-left: var(--s5); }
+.help li { margin-bottom: var(--s1); }
+.help a { color: var(--accent); }
+.help code { font: var(--fs-sm) var(--mono); overflow-wrap: anywhere; }
+.help-toc { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3); padding: var(--s2) 0; font-size: var(--fs-sm); }
+.help-sec { border-top: 1px solid var(--border); scroll-margin-top: var(--s2); }
+.help-sub { scroll-margin-top: var(--s2); }
+/* Sections take focus only so a screen reader starts there; no ring round a whole section. */
+.help-toc:focus, .help-sec:focus, .help-sub:focus { outline: none; }
+.help-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 0 var(--s6); }
+.help dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--s2) var(--s4); margin: 0 0 var(--s2); align-items: baseline; }
 .help dt { max-width: 11em; color: var(--muted); font-size: var(--fs-sm); }
 .help dd { margin: 0; }
+@media (max-width: 600px) {
+  .help-head { padding: var(--s3) var(--s3) var(--s2); }
+  .help-body { padding: var(--s2) var(--s3) var(--s4); }
+  .help dl { grid-template-columns: 1fr; gap: 2px; }
+  .help dt { max-width: none; }
+  .help dd { margin-bottom: var(--s2); }
+}
+
+/* The small "?" beside a section heading: opens the help at that section. */
+.label-help { display: flex; align-items: center; gap: 6px; }
+.help-q { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: var(--ctl-h-sm); height: var(--ctl-h-sm); min-height: 0; padding: 0; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--bg); color: var(--muted); cursor: pointer;
+  font: 700 var(--fs-xs)/1 var(--sans); text-transform: none; letter-spacing: 0; }
+.help-q:hover, .help-q:focus-visible { color: var(--accent); border-color: var(--accent); }
 
 /* --- motion ------------------------------------------------------------------------------ */
 

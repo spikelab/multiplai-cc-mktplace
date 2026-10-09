@@ -782,6 +782,57 @@ test("a failed gate or an unseen citation is a warning", () => {
   assert.equal(L.citationWarning(cite("pass", "diff")), false);
 });
 
+// --- the help dialog ----------------------------------------------------------------
+
+const fs = require("node:fs");
+const STATIC = path.join(__dirname, "..", "review_viewer", "static");
+const SCHEMA = path.join(__dirname, "..", "..", "schema");
+const pageHtml = fs.readFileSync(path.join(STATIC, "index.html"), "utf8");
+const helpHtml = (pageHtml.match(/<dialog id="help"[\s\S]*?<\/dialog>/) || [""])[0];
+const helpIds = new Set([...helpHtml.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]));
+const unescape = (t) => t.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+// The words the help defines: every <dt> and <code> in it, as text.
+const helpTerms = new Set([...helpHtml.matchAll(/<(dt|code)>([\s\S]*?)<\/\1>/g)].map((m) => unescape(m[2])));
+
+test("every ? opens a section the help dialog has, and an unknown topic opens its top", () => {
+  assert.ok(helpHtml, "index.html has a <dialog id=\"help\">");
+  for (const [topic, id] of Object.entries(L.HELP_SECTIONS)) {
+    assert.ok(helpIds.has(id), "help topic " + topic + " names #" + id + ", which the dialog lacks");
+    assert.equal(L.helpSection(topic), id);
+  }
+  assert.equal(L.helpSection("no-such-topic"), "help-top");
+  assert.equal(L.helpSection("constructor"), "help-top");
+  assert.equal(L.helpSection(undefined), "help-top");
+});
+
+test("every link inside the help points at a section of the help", () => {
+  const links = [...helpHtml.matchAll(/href="#([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(links.length > 5);
+  for (const id of links) assert.ok(helpIds.has(id), "#" + id + " is linked from the help but missing");
+});
+
+test("the help explains every value the Checked and Findings tabs can show", () => {
+  const checks = JSON.parse(fs.readFileSync(path.join(SCHEMA, "checks.v1.schema.json"), "utf8")).$defs;
+  const findings = JSON.parse(fs.readFileSync(path.join(SCHEMA, "findings.v1.schema.json"), "utf8")).$defs;
+  const groups = {
+    seen: checks.MarkedCitation.properties.seen.enum.map((v) => "seen: " + v),
+    gate: checks.MarkedCitation.properties.gate.enum.map((v) => "gate: " + v),
+    fate: checks.CheckedFinding.properties.fate.enum,
+    verdict: checks.CheckedVerdict.properties.status.enum,
+    status: findings.Finding.properties.status.enum,
+    // `useful` shows no badge, so the help names it in prose only.
+    label: findings.Assessment.properties.label.enum.filter((v) => v !== "useful"),
+  };
+  for (const [name, values] of Object.entries(groups)) {
+    assert.ok(values.length, name + " has values in the schema");
+    for (const v of values) assert.ok(helpTerms.has(v), "the help does not define " + name + " \"" + v + "\"");
+  }
+  for (const column of ["ran", "files read", "returned", "kept", "deduped", "merged", "rejected",
+    "finding", "finder", "verdict", "gate", "fate", "group", "outcome"]) {
+    assert.ok(helpTerms.has(column), "the help does not explain the Checked tab's \"" + column + "\" column");
+  }
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

@@ -1109,6 +1109,30 @@
     return !!c && (c.gate === "fail" || c.seen === "not-seen");
   }
 
+  // --- the help dialog ------------------------------------------------------------
+
+  /* The id of the help dialog's section for each topic a "?" button names.
+   * Every id is an element of index.html's #help (logic.test.js checks). */
+  const HELP_SECTIONS = {
+    top: "help-top",
+    pipeline: "help-pipeline",
+    finders: "help-finders",
+    checked: "help-checked",
+    "checked-finders": "help-checked-finders",
+    "checked-findings": "help-checked-findings",
+    merges: "help-merges",
+    agents: "help-agents",
+    findings: "help-findings",
+    needs: "help-needs",
+    run: "help-run",
+    keys: "help-keys",
+  };
+
+  /* The section id a "?" opens; an unknown topic opens the help at the top. */
+  function helpSection(topic) {
+    return Object.prototype.hasOwnProperty.call(HELP_SECTIONS, topic) ? HELP_SECTIONS[topic] : HELP_SECTIONS.top;
+  }
+
   const api = {
     SEVERITIES: SEVERITIES, joinParts: joinParts, groupReplies: groupReplies,
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
@@ -1141,6 +1165,7 @@
     agentOrder: agentOrder, finderRows: finderRows, checkedFindingRows: checkedFindingRows,
     mergeRows: mergeRows, verifierIndex: verifierIndex, callLinksToDiff: callLinksToDiff,
     citationWarning: citationWarning,
+    HELP_SECTIONS: HELP_SECTIONS, helpSection: helpSection,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;

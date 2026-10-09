@@ -41,7 +41,9 @@
   <div class="top-tools">
     <label class="theme-pick muted"><span>Theme</span><select id="theme-select" class="ctl" aria-label="Colour theme"></select></label>
     <button id="mode-btn" class="ctl mode-btn" type="button" aria-label="Light or dark mode">◐ Auto</button>
-    <button id="help-btn" class="ctl help-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+    <button id="keys-btn" class="ctl help-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">⌨</button>
+    <button id="help-btn" class="ctl help-btn" type="button" title="Help: how the review works"
+            aria-label="Help: how the review works" aria-haspopup="dialog" aria-controls="help">?</button>
   </div>
 </header>
 <div id="notice" class="banner notice" hidden></div>
@@ -113,11 +115,11 @@
       <div id="badges" class="badges"></div>
       <div id="badge-detail" class="badge-detail md" hidden></div>
       <div id="walk-overview" class="md"></div>
-      <section id="run-block" class="run-block" hidden></section>
       <details id="pr-desc" class="pr-desc" open hidden>
         <summary>PR description</summary>
         <div id="pr-body" class="md"></div>
       </details>
+      <section id="run-block" class="run-block" hidden></section>
     </div>
     <div id="walkthrough" role="tabpanel" class="panel" hidden>
       <ol id="walk-steps" class="walk-steps"></ol>
@@ -177,42 +179,288 @@
 </dialog>
 <dialog id="help" class="help" aria-labelledby="help-title">
   <div class="help-head">
-    <h2 id="help-title">Keyboard shortcuts</h2>
-    <button id="help-close" class="ctl" type="button" aria-label="Close">Esc</button>
+    <h2 id="help-title">Help</h2>
+    <button id="help-close" class="ctl" type="button" aria-label="Close the help">Esc</button>
   </div>
-  <div class="help-cols">
-    <section>
-      <h3>Moving around</h3>
-      <dl>
-        <dt><kbd>Ctrl</kbd>+<kbd>K</kbd></dt><dd>Go to a file, review step or finding</dd>
-        <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Next / previous finding</dd>
-        <dt><kbd>]</kbd> <kbd>[</kbd></dt><dd>Next / previous review step</dd>
-        <dt><kbd>n</kbd> <kbd>p</kbd></dt><dd>Next / previous change in this file</dd>
-        <dt><kbd>/</kbd></dt><dd>Filter the changed files</dd>
-        <dt><kbd>Ctrl</kbd>+<kbd>B</kbd></dt><dd>Hide or show the files panel</dd>
-        <dt><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>B</kbd></dt><dd>Hide or show the review panel</dd>
-        <dt>‹ Prev / Next ›</dt><dd>Beside the file name: the previous or next file of the open review, or of the whole change</dd>
-        <dt><kbd>Esc</kbd></dt><dd>Clear the line selection, close the chat</dd>
-      </dl>
-      <h3>The code</h3>
-      <dl>
-        <dt><kbd>v</kbd></dt><dd>Mark this file viewed, or not</dd>
-        <dt><kbd>s</kbd></dt><dd>Switch between unified and split</dd>
-        <dt><kbd>w</kbd></dt><dd>Wrap long lines, or not</dd>
-        <dt><kbd>?</kbd></dt><dd>Show this list</dd>
-      </dl>
+  <div id="help-body" class="help-body">
+    <nav id="help-top" class="help-toc" aria-label="Help topics" tabindex="-1">
+      <a href="#help-pipeline">How a review runs</a>
+      <a href="#help-finders">Finders</a>
+      <a href="#help-checked">The Checked tab</a>
+      <a href="#help-findings">Findings, verdicts and labels</a>
+      <a href="#help-needs">Needs you</a>
+      <a href="#help-run">Run</a>
+      <a href="#help-keys">Keyboard shortcuts</a>
+    </nav>
+
+    <section id="help-pipeline" class="help-sec" tabindex="-1" aria-labelledby="help-h-pipeline">
+      <h3 id="help-h-pipeline">How a review runs</h3>
+      <p>The review skill runs these steps in order. Agents are separate model calls. The checks between
+        them are code: they re-read the reviewed commit with git and call no model.</p>
+      <ol>
+        <li><strong>Find.</strong> Several finder agents read the change, each looking for one kind of
+          problem (see <a href="#help-finders">Finders</a>). Each finding has a claim, a severity, a failure
+          scenario and citations: lines of a file, with the text on them quoted exactly.</li>
+        <li><strong>Check the findings.</strong> Code drops a finding that repeats one already returned
+          (same file, same first line, same opening words of the claim). It then rejects a finding when a
+          quote is not on the lines it cites at the reviewed commit, when its first citation is a web page,
+          when it is about a file the change did not touch (unless the finder reports it as a problem that
+          was already there), or when its severity is unknown.</li>
+        <li><strong>Verify.</strong> A fresh agent checks each remaining finding on its own. It is given the
+          finding and the lines it cites, not the diff, reads whatever settles the question, and answers
+          <code>confirmed</code>, <code>refuted</code> or <code>unverifiable</code>, citing the lines it
+          read. Unless it refutes the finding, it also writes one sentence on what correct behaviour would be.</li>
+        <li><strong>Check the verdicts.</strong> Code turns a <code>confirmed</code> answer into
+          <code>unverifiable</code> when none of its citations is a quote found on the cited lines (a web
+          page does not count). An unverifiable finding drops one severity step, but not below MEDIUM while
+          it waits on something under <a href="#help-needs">Needs you</a>.</li>
+        <li><strong>Merge.</strong> Code groups confirmed and unverifiable findings whose lines overlap, and
+          one agent per group says which describe the same defect (see <a href="#help-merges">Merge
+          groups</a>).</li>
+        <li><strong>Repeats.</strong> When you rejected findings in an earlier round of this review, a
+          finding with the same id is marked a repeat, and one agent says whether any other finding
+          describes the same defect as a rejected one. With nothing rejected earlier, this step is skipped.</li>
+        <li><strong>Assess.</strong> One agent reads the findings together and labels each one (see
+          <a href="#help-findings">labels</a>). It can also merge duplicates the merge step missed. It is
+          skipped when there is nothing to label, or only one finding and no earlier round.</li>
+      </ol>
+      <p>Repeats and Assess never delete a finding or change a verdict or a severity. A review of the same
+        PR after new commits is a new round: the earlier round's findings and your decisions on them are kept.</p>
     </section>
-    <section>
-      <h3>Asking the session</h3>
+
+    <section id="help-finders" class="help-sec" tabindex="-1" aria-labelledby="help-h-finders">
+      <h3 id="help-h-finders">Finders</h3>
+      <p>A finder is one agent with one job. It reads a copy of the reviewed commit with read and search
+        tools, and may look things up on the web. Five finders run on a change:</p>
       <dl>
-        <dt><kbd>c</kbd></dt><dd>Open or close the chat (also the button at the bottom right)</dd>
-        <dt><kbd>@</kbd></dt><dd>Point at a changed file; <code>@file:12</code> or <code>@file:12-20</code> for lines</dd>
-        <dt><kbd>Tab</kbd> <kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Pick from the file list while typing <kbd>@</kbd></dd>
-        <dt><kbd>Ctrl</kbd>+<kbd>Enter</kbd></dt><dd>Send the message</dd>
-        <dt>Click a changed line</dt><dd>Add its whole block to the message</dd>
-        <dt>Click a line number</dt><dd>Select that line; <kbd>Shift</kbd>+click another to extend</dd>
-        <dt>💡 Explain</dt><dd>Ask for an explanation of one block, shown above it</dd>
+        <dt><code>diff-bugs</code></dt><dd>Reads the diff and the changed files, and nothing else. Looks for
+          bugs the change brings in: wrong conditions or values, missed cases, broken error handling, lost data.</dd>
+        <dt><code>callers</code></dt><dd>Opens what the changed code calls and what calls it. Looks for
+          breakage at those boundaries, such as a changed signature or return shape, or a caller that relied
+          on behaviour the change removed.</dd>
+        <dt><code>history</code></dt><dd>Reads the commit subjects, which say what the change is meant to
+          do, and looks for code that does not do it, and for behaviour the removed lines had that nothing
+          replaces.</dd>
+        <dt><code>conventions</code></dt><dd>Checks the changed lines against the repository's own rules:
+          each <code>coding-standards.md</code> and <code>CLAUDE.md</code> from the repository root down to
+          the changed files' folders. Also searches for docs and comments elsewhere that the change made
+          wrong.</dd>
+        <dt><code>tests</code></dt><dd>Looks for changed behaviour that no test would catch breaking, and
+          for added or changed tests that cannot fail: tests that compare a value copied from the code, read
+          source code as text, or replace with a stub the very thing whose failure the code must handle.</dd>
       </dl>
+      <p>A review of a whole repository or folder, rather than a change, splits the files into groups and
+        runs each finder once per group. The Checked tab names those runs <code>diff-bugs@0</code>,
+        <code>diff-bugs@1</code> and so on, counting groups from 0. <code>history</code> does not run there:
+        there are no commits to compare with.</p>
+    </section>
+
+    <section id="help-checked" class="help-sec" tabindex="-1" aria-labelledby="help-h-checked">
+      <h3 id="help-h-checked">The Checked tab</h3>
+      <p>Shown when the review wrote a record of its checks (<code>checks.json</code>, review 0.26 and
+        later). It shows what every agent was given, did and concluded.</p>
+
+      <section id="help-checked-finders" class="help-sub" tabindex="-1" aria-labelledby="help-h-cf">
+        <h4 id="help-h-cf">Finders table</h4>
+        <p>One row per finder run.</p>
+        <dl>
+          <dt>finder</dt><dd>Which finder (see <a href="#help-finders">Finders</a>).</dd>
+          <dt>ran</dt><dd><code>ran</code>, or <code>failed</code> when the agent call failed; its entry
+            under Agents says why.</dd>
+          <dt>files read</dt><dd>How many different files it opened with its read tool. Searches and web
+            pages are not counted.</dd>
+          <dt>returned</dt><dd>How many findings it returned. The next four columns split them.</dd>
+          <dt>kept</dt><dd>Passed the check in code and went to a verifier, whatever the verifier then said,
+            and was not merged into another finding.</dd>
+          <dt>deduped</dt><dd>Dropped before the check, because a finding with the same file, first line and
+            opening words of the claim had already been returned, by this finder or another.</dd>
+          <dt>merged</dt><dd>Merged into another finding by the merge or assess step; the Findings table
+            says which.</dd>
+          <dt>rejected</dt><dd>Failed the check in code; the Findings table names the rule.</dd>
+        </dl>
+      </section>
+
+      <section id="help-checked-findings" class="help-sub" tabindex="-1" aria-labelledby="help-h-cfi">
+        <h4 id="help-h-cfi">Findings table</h4>
+        <p>One row per finding a finder returned, deduped copies left out.</p>
+        <dl>
+          <dt>finding</dt><dd>Its id. It opens the finding on the Findings tab when the review still shows
+            it; a finding merged into another is plain text.</dd>
+          <dt>finder</dt><dd>The finder run that returned it.</dd>
+          <dt>verdict</dt><dd>The verifier's answer, after the check in code: <code>confirmed</code>,
+            <code>refuted</code> or <code>unverifiable</code>. <code>failed</code> when the verifier's call
+            failed (the finding then counts as unverifiable); <code>not verified</code> when no verifier ran,
+            as for a rejected finding.</dd>
+          <dt>gate</dt><dd><code>passed</code>; <code>rejected:</code> and the rule when the check in code
+            rejected it (<code>quote not at cited lines</code>, <code>path not at head</code>,
+            <code>empty quote</code>, <code>is not a changed file</code>, <code>no citations</code>,
+            <code>first citation is a web source</code>, <code>unknown severity</code>, or
+            <code>other</code>); or <code>lowered by verdict_gate</code> when the verifier answered confirmed
+            but cited nothing the check could find, so its answer became unverifiable.</dd>
+          <dt>fate</dt><dd><code>kept</code>, <code>merged into</code> another finding's id, or
+            <code>rejected</code>, as in the Finders table.</dd>
+        </dl>
+      </section>
+
+      <section id="help-merges" class="help-sub" tabindex="-1" aria-labelledby="help-h-merges">
+        <h4 id="help-h-merges">Merge groups</h4>
+        <p>Two finders can report one defect in different words. Code links two confirmed or unverifiable
+          findings when their anchors are in the same file and overlap or are at most 2 lines apart, or when
+          a cited file range of one overlaps, or comes within 2 lines of, a cited range of the other in the
+          same file. Web citations never link. Links chain: when A links to B and B to C, all three form one
+          group. One agent reads each group of two or more and says which findings are the same defect.</p>
+        <p>Of each set of duplicates one finding stays: a confirmed one before an unverifiable one, then the
+          most severe, then the first. It keeps its id and verdict, takes the highest severity in the set, and
+          gets the citations of all of them. The others leave the Findings tab, and their fate here reads
+          merged into the one that stayed.</p>
+        <dl>
+          <dt>group</dt><dd>The ids of the findings in the group.</dd>
+          <dt>outcome</dt><dd><code>merged X into Y</code> for each finding merged away, <code>no
+            duplicates</code>, or <code>failed</code> when the agent call failed; that group then stays as
+            it was.</dd>
+        </dl>
+        <p>The section appears only when some findings overlapped.</p>
+      </section>
+
+      <section id="help-agents" class="help-sub" tabindex="-1" aria-labelledby="help-h-agents">
+        <h4 id="help-h-agents">Agents</h4>
+        <p>One entry per agent call, in the order they started. Its heading names the step
+          (<code>find</code>, <code>verify</code>, <code>merge</code>, <code>repeats</code>,
+          <code>assess</code>), what the call was about (a finder run, a finding's id, a merge group's ids)
+          and its outcome. Open it to see:</p>
+        <dl>
+          <dt>Given</dt><dd>What its prompt held: the diff, the commit subjects, the PR description, the
+            branch rules, the rules files, or the finding to check.</dd>
+          <dt>Tool calls</dt><dd>Every file it read, search it ran and web page it fetched: what it asked
+            for, never what came back. A read of a changed file opens in the code pane; a web address stays
+            text, never a link.</dd>
+          <dt>Findings returned, Verdict</dt><dd>What it concluded, each citation marked as below.</dd>
+        </dl>
+        <p>Each citation carries two marks. ⚠ flags one whose gate is <code>fail</code> or whose seen is
+          <code>not-seen</code>.</p>
+        <dl>
+          <dt><code>gate: pass</code></dt><dd>Code found the quoted text on the cited lines at the reviewed
+            commit (differences in spacing ignored).</dd>
+          <dt><code>gate: fail</code></dt><dd>It did not: the lines hold other text, the file is not in that
+            commit, or the quote is empty.</dd>
+          <dt><code>gate: web</code></dt><dd>A web page. Code does not check it.</dd>
+          <dt><code>seen: read</code></dt><dd>The agent opened that file with its read tool, at a range that
+            covers the lines, or the whole file.</dd>
+          <dt><code>seen: searched</code></dt><dd>It did not read those lines, but ran a search over that
+            file or a folder holding it.</dd>
+          <dt><code>seen: diff</code></dt><dd>The lines were in the diff its prompt held.</dd>
+          <dt><code>seen: prompt</code></dt><dd>The lines were in its prompt another way: a verifier's prompt
+            holds the lines the finding cites.</dd>
+          <dt><code>seen: fetched</code></dt><dd>A web citation whose page the agent fetched.</dd>
+          <dt><code>seen: not-seen</code></dt><dd>None of these: nothing shows the agent looked at those lines
+            or fetched that page.</dd>
+        </dl>
+      </section>
+    </section>
+
+    <section id="help-findings" class="help-sec" tabindex="-1" aria-labelledby="help-h-findings">
+      <h3 id="help-h-findings">Findings, verdicts and labels</h3>
+      <p>The Findings tab lists findings by severity. Picking one moves the code to its lines and shows the
+        claim, the failure scenario, the expected behaviour and the verdict's reason. When the review has a
+        Checked tab, a link opens the verifier's entry there, with every line it read and cited. Each finding
+        shows a status:</p>
+      <dl>
+        <dt><code>confirmed</code></dt><dd>The verifier showed the failure can happen, citing lines that
+          code found at the reviewed commit.</dd>
+        <dt><code>unverifiable</code></dt><dd>It depends on something the verifier could not read, the code
+          does not settle it, or the verifier's call failed. Its severity was lowered one step.</dd>
+        <dt><code>refuted</code></dt><dd>The verifier showed it cannot happen. Hidden unless you tick
+          Show refuted and rejected.</dd>
+        <dt><code>rejected</code></dt><dd>The check in code rejected it before any verifier saw it. Hidden
+          the same way, as is a finding you reject.</dd>
+      </dl>
+      <p>The assess step's label shows as a badge. A finding without one was labelled useful, or the review
+        is older than labels.</p>
+      <dl>
+        <dt><code>repeat</code></dt><dd>The same defect as a finding you rejected in an earlier round. It
+          counts as rejected, marked "earlier round", until you decide again.</dd>
+        <dt><code>still-open</code></dt><dd>The same defect as an earlier-round finding you accepted,
+          deferred or have not decided: it is not fixed yet.</dd>
+        <dt><code>low-value</code></dt><dd>True, but not worth acting on, for one of three reasons named at
+          the start of its reason. <code>[context]</code>: the PR description, the commit subjects, a rules
+          file or a note on an earlier decision says the affected thing does not matter.
+          <code>[covered]</code>: fixing another finding fixes this one too. <code>[speculative]</code>: it
+          fails only after a future change nobody has proposed, and the code is correct now; this does not
+          apply when the change's own tests, comments or description promise to catch such a change.</dd>
+      </dl>
+      <p>Repeats and low-value findings are folded into a closed group after the rest. Accept, Reject or
+        Defer records your decision; a later round of the review reads it.</p>
+    </section>
+
+    <section id="help-needs" class="help-sec" tabindex="-1" aria-labelledby="help-h-needs">
+      <h3 id="help-h-needs">Needs you</h3>
+      <p>Shown at the top of the Summary tab when the review could not get something it needed. Each item
+        says what is missing; what it blocks (a finding, which links to it, or the review as a whole); why
+        (the review has no access, a lookup failed, or it is not reachable on the web); and a command a
+        person with access could run to get it.</p>
+      <p>A verifier lists what kept it from settling its finding. A finder's gaps, and a failed GitHub
+        lookup of the PR or its branch rules, block the review as a whole. A finding's own needs also show
+        under it on the Findings tab.</p>
+      <p>The page runs nothing: read a command before you run it. Code keeps a command only when it is one
+        short line, has no pipes, redirects or chained commands, and is a known read-only form; otherwise the item
+        says no command is known.</p>
+    </section>
+
+    <section id="help-run" class="help-sec" tabindex="-1" aria-labelledby="help-h-run">
+      <h3 id="help-h-run">Run</h3>
+      <p>At the bottom of the Summary tab, for a review that recorded it (multiplai-dev 0.28 and later).</p>
+      <dl>
+        <dt>Cost</dt><dd>What the agent calls cost, against the review's spending ceiling.</dd>
+        <dt>Tokens</dt><dd>The total, then input, output, and cache reads and writes.</dd>
+        <dt>Agent calls</dt><dd>How many model calls the review made.</dd>
+        <dt>Wall time</dt><dd>How long the review ran, adding up each run when it was resumed. "Stopped by
+          the budget and resumed" when the ceiling stopped it once.</dd>
+        <dt>Errors</dt><dd>How many problems the run noted, such as failed agent calls. Shown only when
+          there were some.</dd>
+        <dt>Model</dt><dd>The model and effort each step used.</dd>
+        <dt>Table</dt><dd>One row per step (each finder, verify, merge and so on): calls, tokens, cost and
+          time.</dd>
+      </dl>
+      <p>With several reviews open, a line under it totals every review that recorded a run.</p>
+    </section>
+
+    <section id="help-keys" class="help-sec" tabindex="-1" aria-labelledby="help-h-keys">
+      <h3 id="help-h-keys">Keyboard shortcuts</h3>
+      <div class="help-cols">
+        <section>
+          <h4>Moving around</h4>
+          <dl>
+            <dt><kbd>Ctrl</kbd>+<kbd>K</kbd></dt><dd>Go to a file, review step or finding</dd>
+            <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Next / previous finding</dd>
+            <dt><kbd>]</kbd> <kbd>[</kbd></dt><dd>Next / previous review step</dd>
+            <dt><kbd>n</kbd> <kbd>p</kbd></dt><dd>Next / previous change in this file</dd>
+            <dt><kbd>/</kbd></dt><dd>Filter the changed files</dd>
+            <dt><kbd>Ctrl</kbd>+<kbd>B</kbd></dt><dd>Hide or show the files panel</dd>
+            <dt><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>B</kbd></dt><dd>Hide or show the review panel</dd>
+            <dt>‹ Prev / Next ›</dt><dd>Beside the file name: the previous or next file of the open review, or of the whole change</dd>
+            <dt><kbd>Esc</kbd></dt><dd>Clear the line selection, close the chat</dd>
+          </dl>
+          <h4>The code</h4>
+          <dl>
+            <dt><kbd>v</kbd></dt><dd>Mark this file viewed, or not</dd>
+            <dt><kbd>s</kbd></dt><dd>Switch between unified and split</dd>
+            <dt><kbd>w</kbd></dt><dd>Wrap long lines, or not</dd>
+            <dt><kbd>?</kbd></dt><dd>Show this list (the ⌨ button too); the <strong>?</strong> button and the ? beside a heading open the rest of this help</dd>
+          </dl>
+        </section>
+        <section>
+          <h4>Asking the session</h4>
+          <dl>
+            <dt><kbd>c</kbd></dt><dd>Open or close the chat (also the button at the bottom right)</dd>
+            <dt><kbd>@</kbd></dt><dd>Point at a changed file; <code>@file:12</code> or <code>@file:12-20</code> for lines</dd>
+            <dt><kbd>Tab</kbd> <kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Pick from the file list while typing <kbd>@</kbd></dd>
+            <dt><kbd>Ctrl</kbd>+<kbd>Enter</kbd></dt><dd>Send the message</dd>
+            <dt>Click a changed line</dt><dd>Add its whole block to the message</dd>
+            <dt>Click a line number</dt><dd>Select that line; <kbd>Shift</kbd>+click another to extend</dd>
+            <dt>💡 Explain</dt><dd>Ask for an explanation of one block, shown above it</dd>
+          </dl>
+        </section>
+      </div>
     </section>
   </div>
 </dialog>
