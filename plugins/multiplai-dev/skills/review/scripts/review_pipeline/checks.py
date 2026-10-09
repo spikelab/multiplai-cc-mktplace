@@ -36,6 +36,14 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _rel(path, target: TargetInfo, snapshot: Path) -> str:
+    """A repo-relative path; the snapshot or repository root itself is ""."""
+    p = str(path or "").strip()
+    if p.rstrip("/") in {str(snapshot.resolve()), str(snapshot), target.repo_path.rstrip("/")}:
+        return ""
+    return relative_path(p, target, snapshot) if p else ""
+
+
 def _input(call) -> dict:
     data = getattr(call, "input", None)
     return data if isinstance(data, dict) else {}
@@ -58,7 +66,7 @@ def summarise_call(call, target: TargetInfo, snapshot: Path) -> dict:
     """One tool call as `{tool, target, detail}`, with repo-relative paths. Inputs only."""
     name = getattr(call, "name", "") or "?"
     data = _input(call)
-    rel = lambda p: relative_path(str(p), target, snapshot) if p else ""  # noqa: E731
+    rel = lambda p: _rel(p, target, snapshot)  # noqa: E731
     if name == "Read":
         rng = _line_range(data)
         if rng is None:
@@ -117,15 +125,14 @@ def seen(citation: Citation, calls: list, hunks: dict[str, list[tuple[int, int]]
     searched = False
     for call in calls:
         name, data = getattr(call, "name", ""), _input(call)
-        if name == "Read" and relative_path(str(data.get("file_path", "")), target, snapshot) == citation.path:
+        if name == "Read" and _rel(data.get("file_path", ""), target, snapshot) == citation.path:
             rng = _line_range(data)
             if rng is None:
                 return "read"
             first, last = rng
             if first <= citation.line_end and (last is None or last >= citation.line_start):
                 return "read"
-        elif name == "Grep" and _covers(relative_path(str(data.get("path", "") or ""), target, snapshot),
-                                        citation.path):
+        elif name == "Grep" and _covers(_rel(data.get("path", ""), target, snapshot), citation.path):
             searched = True
     if searched:
         return "searched"
