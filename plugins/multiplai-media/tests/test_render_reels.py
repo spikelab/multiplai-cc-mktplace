@@ -153,3 +153,22 @@ def test_an_edl_logo_wins_over_the_brand_logo(tmp_path, calls) -> None:
     inputs = [final[i + 1] for i, c in enumerate(final) if c == "-i"]
     assert inputs[-1] == str(other)
     assert str(_LOGO.resolve()) not in inputs
+
+
+def test_a_reel_split_at_a_shot_cut_renders_a_hard_cut(tmp_path, calls) -> None:
+    # One take split at a shot change: blur the slide, crop the speaker.
+    edl = _reel(tmp_path, transcript=_transcript(tmp_path, ["Ciao", "a", "tutti."]), captions={},
+                segments=[{"src_start": 0, "src_end": 1.8, "fit": "blur"},
+                          {"src_start": 1.8, "src_end": 5, "fit": "crop", "focus": {"x": 0.3, "y": 0.4}}])
+    work = tmp_path / "work"
+    composite.render(edl, Path("<OUT>/reel.mp4"), work_dir=work)
+    seg0 = calls[0][calls[0].index("-filter_complex") + 1]
+    seg1 = calls[1][calls[1].index("-filter_complex") + 1]
+    assert "boxblur" in seg0 and "boxblur" not in seg1
+    assert "iw*0.3-ow/2" in seg1
+    fc = _final(calls)[_final(calls).index("-filter_complex") + 1]
+    assert "concat=n=2:v=1:a=0" in fc and "xfade" not in fc
+    assert "concat=n=2:v=0:a=1" in fc and "acrossfade" not in fc
+    # The caption on the far side of the cut keeps its source timing: no 0.5 s overlap.
+    ass = (work / "subs.ass").read_text()
+    assert "Dialogue: 0,0:00:01.80," in ass

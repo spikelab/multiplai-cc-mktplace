@@ -101,10 +101,11 @@ def _segment_video(edl: EDL, seg, words: list[dict] | None, bg: str) -> str:
     panels = {k: layouts.Rect(p.x, p.y, p.w, p.h)
               for k, p in (edl.layout.panels.items() if edl.layout else [])}
     chain = graph = None
+    fit = seg.fit or edl.output.fit
     if seg.frame is None:
-        if edl.output.fit == "crop":
+        if fit == "crop":
             chain = layouts.crop_chain(W, H, fx, fy)
-        elif edl.output.fit == "blur":
+        elif fit == "blur":
             graph = layouts.blur_graph(W, H)
         else:
             chain = layouts.pad_chain(W, H, bg)
@@ -231,7 +232,11 @@ def build_filter_complex(
         xfade_dur = _xfade_duration_for(edl, i)
         offset = cur_off - xfade_dur
         out = f"vx{i}"
-        parts.append(f"[{cur_v}][{next_label}]xfade=transition=fade:duration={xfade_dur}:offset={offset}[{out}]")
+        if xfade_dur == 0:
+            # A hard cut: one continuous take, so the frames simply follow on.
+            parts.append(f"[{cur_v}][{next_label}]concat=n=2:v=1:a=0[{out}]")
+        else:
+            parts.append(f"[{cur_v}][{next_label}]xfade=transition=fade:duration={xfade_dur}:offset={offset}[{out}]")
         cur_v = out
         cur_off = offset + seg.duration
 
@@ -244,10 +249,11 @@ def build_filter_complex(
         seg_idx = i if title else i + 1
         xfade_dur = _xfade_duration_for(edl, seg_idx)
         a_out = f"ax{i}"
-        if i == 0:
-            audio_parts.append(f"[0:a][{i+1}:a]acrossfade=d={xfade_dur}[{a_out}]")
+        a_in = "0:a" if i == 0 else last_a
+        if xfade_dur == 0:
+            audio_parts.append(f"[{a_in}][{i+1}:a]concat=n=2:v=0:a=1[{a_out}]")
         else:
-            audio_parts.append(f"[{last_a}][{i+1}:a]acrossfade=d={xfade_dur}[{a_out}]")
+            audio_parts.append(f"[{a_in}][{i+1}:a]acrossfade=d={xfade_dur}[{a_out}]")
         last_a = a_out
     if not audio_parts:
         last_a = "0:a"
@@ -288,7 +294,8 @@ def _xfade_duration_for(edl: EDL, segment_index: int) -> float:
 
 
 def _needs_source_size(edl: EDL) -> bool:
-    return bool(edl.layout) or edl.output.fit != "pad" or edl.output.height > edl.output.width
+    return (bool(edl.layout) or edl.output.fit != "pad" or edl.output.height > edl.output.width
+            or any(s.fit for s in edl.segments))
 
 
 def probe_size(path: str) -> tuple[int, int]:

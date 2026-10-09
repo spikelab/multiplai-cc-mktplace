@@ -38,6 +38,7 @@ class Segment:
     mute: bool = False          # replace audio with silence (auto-on for speed>4)
     focus: Optional[Focus] = None   # crop centre for fit "crop" (in the frame) or a panel frame (in the panel)
     frame: Optional[str] = None     # "stack" | a panel name ("A", "B") | "speaker"
+    fit: Optional[str] = None       # "pad" | "blur" | "crop": overrides output.fit for this segment
 
     @property
     def src_duration(self) -> float:
@@ -207,11 +208,16 @@ class EDL:
 
     def xfade_before(self, segment_index: int) -> float:
         """Crossfade into segment `segment_index`: the transition declared
-        `after` the previous one (-1 for the title card), else 0.5 s. Render
-        crossfades every join, declared or not."""
+        `after` the previous one (-1 for the title card); else 0 when the
+        segment starts where the previous one ended in the source (one
+        continuous take, so a hard cut with unbroken audio); else 0.5 s.
+        A duration of 0 is a hard cut."""
         for t in self.transitions:
             if t.after == segment_index - 1:
                 return t.duration
+        if 0 < segment_index < len(self.segments) and \
+                self.segments[segment_index].src_start == self.segments[segment_index - 1].src_end:
+            return 0.0
         return 0.5
 
     def total_duration(self) -> float:
@@ -313,6 +319,17 @@ class EDL:
         warnings: list[str] = []
         if self.output.fit not in FITS:
             raise ValueError(f"output.fit {self.output.fit!r} is not one of {', '.join(FITS)}.")
+        for i, s in enumerate(self.segments):
+            if s.fit is None:
+                continue
+            if s.fit not in FITS:
+                raise ValueError(f"segment {i} fit {s.fit!r} is not one of {', '.join(FITS)}.")
+            if s.frame is not None:
+                raise ValueError(f"segment {i} sets both fit {s.fit!r} and frame {s.frame!r}; fit "
+                                 "fills the output with the whole frame, so drop one of them.")
+        for t in self.transitions:
+            if t.duration < 0:
+                raise ValueError(f"transition after {t.after} has a negative duration ({t.duration}).")
         panels = self.layout.panels if self.layout else {}
         if source_size:
             sw, sh = source_size
@@ -359,11 +376,12 @@ class EDL:
         if source_size:
             sw, sh = source_size
             portrait_out = self.output.height > self.output.width
-            if portrait_out and sw > sh and self.output.fit == "pad":
-                padded = [i for i, s in enumerate(self.segments) if s.frame is None]
+            if portrait_out and sw > sh:
+                padded = [i for i, s in enumerate(self.segments)
+                          if s.frame is None and (s.fit or self.output.fit) == "pad"]
                 if padded:
                     warnings.append(
                         f"segments {padded} letterbox a landscape source into a portrait output "
-                        '(fit "pad" leaves bars above and below). Use output.fit "blur" or '
-                        '"crop", or give those segments a panel frame.')
+                        '(fit "pad" leaves bars above and below). Use fit "blur" or "crop" '
+                        "(in output or on the segment), or give those segments a panel frame.")
         return warnings

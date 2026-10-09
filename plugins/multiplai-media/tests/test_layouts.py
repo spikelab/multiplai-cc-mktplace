@@ -244,3 +244,22 @@ def test_validate_accepts_a_complete_speaker_setup() -> None:
                 layout=Layout(panels=dict(_AB), speakers={"S0": "A", "S1": "B"}))
     assert edl.validate(source_size=(1920, 1080),
                         words=[_w("a", 0, 1, "S0"), _w("b", 1, 2, "S1")]) == []
+
+
+# --- fit per segment ------------------------------------------------------------
+
+def _seg_graph(seg_fit, output_fit="crop"):
+    edl = EDL(source="/rec/talk.mp4", segments=[Segment(0, 5, fit=seg_fit)],
+              output=Output(width=W, height=H, fit=output_fit))
+    return composite._segment_video(edl, edl.segments[0], None, L.DEFAULT_BG)
+
+
+def test_a_segment_fit_overrides_the_output_fit() -> None:
+    assert "[vin]split=2[bgs][fgs]" in _seg_graph("blur", output_fit="crop")
+    assert L.crop_chain(W, H) in _seg_graph("crop", output_fit="blur")
+    assert L.pad_chain(W, H) in _seg_graph("pad", output_fit="crop")
+
+
+def test_without_a_segment_fit_the_output_fit_applies() -> None:
+    assert _seg_graph(None, output_fit="crop") == _seg_graph("crop", output_fit="pad")
+    assert _seg_graph(None, output_fit="blur") == _seg_graph("blur", output_fit="pad")
