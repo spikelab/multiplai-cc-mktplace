@@ -782,6 +782,50 @@ test("a failed gate or an unseen citation is a warning", () => {
   assert.equal(L.citationWarning(cite("pass", "diff")), false);
 });
 
+// --- what a finding's detail shows ----------------------------------------------------
+
+const FULL = { id: "ffffffffff", failure_scenario: "s", expected_behaviour: "e", verdict_reason: "v",
+  citations: [cite("pass", "read")], needs: [{ what: "w", blocks: "ffffffffff", cause: "no-access", command: "" }],
+  verifier_citations: [cite("pass", "read")] };
+// The verifier of FULL started first, so its entry is agent 0 in agentOrder.
+const CHECKS_FIRST = { agents: [
+  { stage: "find", subject: "diff-bugs", started_at: "2026-10-09T10:00:05Z", calls: [], findings: [] },
+  { stage: "verify", subject: "ffffffffff", started_at: "2026-10-09T10:00:00Z", calls: [], findings: [],
+    verdict: { status: "confirmed", reason: "r", citations: [], lowered: false } },
+], gates: [] };
+
+test("Findings tab: a verifier entry at agent 0 gets the Checked tab link and no citation lists", () => {
+  assert.equal(L.agentOrder(CHECKS_FIRST)[0].subject, "ffffffffff");
+  assert.deepEqual(L.findingParts(FULL, CHECKS_FIRST, "finding"),
+    { checkedBy: 0, parts: ["scenario", "expected", "verdict", "needs"] });
+  // A later index works the same way.
+  const f = Object.assign({}, FULL, { id: "aaaaaaaaaa" });
+  assert.equal(L.findingParts(f, CHECKS, "finding").checkedBy, 3);
+  assert.ok(!L.findingParts(f, CHECKS, "finding").parts.includes("cited"));
+});
+
+test("Findings tab: checks without this finding's verifier, or no checks at all, keep the citation lists", () => {
+  const full = ["scenario", "expected", "verdict", "cited", "needs", "verifier-cited"];
+  assert.deepEqual(L.findingParts(Object.assign({}, FULL, { id: "bbbbbbbbbb" }), CHECKS, "finding"),
+    { checkedBy: -1, parts: full });
+  assert.deepEqual(L.findingParts(FULL, null, "finding"), { checkedBy: -1, parts: full });
+  assert.deepEqual(L.findingParts(FULL, undefined, "finding"), { checkedBy: -1, parts: full });
+});
+
+test("a walkthrough step always lists the citations and never links the Checked tab", () => {
+  assert.deepEqual(L.findingParts(FULL, CHECKS_FIRST, "step"),
+    { checkedBy: -1, parts: ["scenario", "expected", "verdict", "cited", "needs", "verifier-cited"] });
+  assert.deepEqual(L.findingParts(FULL, null, "step").parts,
+    ["scenario", "expected", "verdict", "cited", "needs", "verifier-cited"]);
+});
+
+test("parts a finding lacks are left out", () => {
+  const bare = { id: "cccccccccc", failure_scenario: "s", citations: [cite("pass", "read")] };
+  assert.deepEqual(L.findingParts(bare, null, "finding"), { checkedBy: -1, parts: ["scenario", "cited"] });
+  assert.deepEqual(L.findingParts(Object.assign({}, bare, { needs: [], verifier_citations: [] }), null, "step").parts,
+    ["scenario", "cited"]);
+});
+
 // --- the help dialog ----------------------------------------------------------------
 
 const fs = require("node:fs");

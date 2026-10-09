@@ -33,11 +33,14 @@ time, not derived from a tag.
   goes back to the button that opened it.
 
 ### Changed
-- review-viewer: the Findings tab no longer lists the cited code or the
-  verifier's citations. Selecting a finding still moves the code pane to its
-  lines, and a "Checked by" link near the top opens the verifier's entry on
-  the Checked tab, with everything it read and cited. A walkthrough step still
-  lists both under each finding it links.
+- review-viewer: on the Findings tab, a finding the Checked tab has a
+  verifier entry for no longer lists the cited code or the verifier's
+  citations. A "Checked by" link near the top opens that entry instead, with
+  everything the verifier read and cited. A finding with no such entry (a
+  review written without `checks.json`, or a finding no verifier checked)
+  still lists both, as before. Selecting a finding still moves the code pane
+  to its lines, and a walkthrough step still lists both under each finding it
+  links.
 - review-viewer: the Summary tab's **Run** block moved to the bottom, below the
   PR description.
 

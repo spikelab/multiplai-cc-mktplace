@@ -361,9 +361,9 @@
     <section id="help-findings" class="help-sec" tabindex="-1" aria-labelledby="help-h-findings">
       <h3 id="help-h-findings">Findings, verdicts and labels</h3>
       <p>The Findings tab lists findings by severity. Picking one moves the code to its lines and shows the
-        claim, the failure scenario, the expected behaviour and the verdict's reason. When the review has a
-        Checked tab, a link opens the verifier's entry there, with every line it read and cited. Each finding
-        shows a status:</p>
+        claim, the failure scenario, the expected behaviour and the verdict's reason. When the Checked tab has
+        the finding's verifier, a link opens its entry there, with every line it read and cited; otherwise the
+        finding lists its cited code and the verifier's citations. Each finding shows a status:</p>
       <dl>
         <dt><code>confirmed</code></dt><dd>The verifier showed the failure can happen, citing lines that
           code found at the reviewed commit.</dd>

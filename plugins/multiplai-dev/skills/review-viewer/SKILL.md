@@ -299,11 +299,12 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   lines (`read`, `searched`, `diff`, `prompt`, `fetched`, or `not-seen`, shown as a
   warning). Rejected findings appear only here, with the rule that rejected
   them. A read of a changed file opens in the code pane; URLs are plain text.
-  The Findings tab lists no citations: selecting a finding moves the code
-  pane to its lines, and a "Checked by" link opens the verifier's entry here,
-  with every line it read and cited. An older review, or a `checks.json` that
-  does not validate or names other commits, opens without the tab and without
-  that link.
+  On the Findings tab, a finding with a verifier entry here shows a
+  "Checked by" link to it instead of the citation lists; selecting the
+  finding still moves the code pane to its lines. A finding with no verifier
+  entry keeps its "Cited code" and verifier citations lists. An older review,
+  or a `checks.json` that does not validate or names other commits, opens
+  without the tab, so every finding keeps its lists.
 - A **?** button in the header opens a help dialog that says what the review
   did step by step, what each finder looks for, what every Checked tab column
   and mark means, what a merge group is, the verdicts and labels, the

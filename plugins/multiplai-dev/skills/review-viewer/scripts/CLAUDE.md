@@ -64,10 +64,13 @@ finding's own under it; nothing runs a command. Line numbers are 1-based, at
 `sha1(f"{file}\0{line_start}\0{claim}")`.
 
 `findings.json` may carry `verifier_citations` per finding (review 0.26+): the
-lines the verifier read. `allowed_paths()` includes their paths, and a
-walkthrough step lists them under the finder's citations. The Findings tab
-lists neither: it links the verifier's Checked tab entry (`verifierIndex`)
-and leaves the code pane on the finding's lines.
+lines the verifier read. `allowed_paths()` includes their paths. A
+walkthrough step lists them under the finder's citations. On the Findings
+tab, a finding whose verifier has a `checks.json` entry shows a link to that
+entry instead of both lists; one without (no `checks.json`, or no verifier
+entry) keeps the lists. `logic.findingParts(finding, checks, context)` makes
+that choice and the order of the blocks under the claim; `app.js` renders
+what it returns.
 
 ## Protocol 1a: `checks.json` v1 (optional)
 
@@ -82,7 +85,7 @@ a warning and the target has none. `/api/targets/<slug>` returns it as
 unchanged. The page's Checked tab is shown only when `checks` is set; its
 grouping and ordering live in `logic.js` (`agentOrder`, `finderRows`,
 `checkedFindingRows`, `mergeRows`, `verifierIndex`, `callLinksToDiff`,
-`citationWarning`). Each section heading there carries a `?` that opens the
+`citationWarning`, `findingParts`). Each section heading there carries a `?` that opens the
 help dialog (`#help` in `index.html`) at its section; `logic.HELP_SECTIONS`
 maps each topic to a section id. The help's text restates
 `../../review/scripts/CLAUDE.md` and the review's code in plain words: change

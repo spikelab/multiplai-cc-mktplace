@@ -1099,6 +1099,29 @@
     return agentOrder(checks).findIndex((a) => a.stage === "verify" && a.subject === id);
   }
 
+  /* What a finding's detail shows, in order. `context` is "finding" (the
+   * Findings tab) or "step" (under a walkthrough step that links it); `checks`
+   * is checks.json, or null for a review without one.
+   *
+   * On the Findings tab, a finding whose verifier has an entry in `checks`
+   * gets `checkedBy`, that entry's index in agentOrder, and no citation lists:
+   * the entry shows what the verifier read and cited. Every other case
+   * (no checks.json, no verifier entry, a walkthrough step) gets `checkedBy`
+   * -1 and the lists: "cited" (the finding's citations) and, when there are
+   * any, "verifier-cited". `parts` names the blocks under the claim. */
+  function findingParts(finding, checks, context) {
+    const f = finding || {};
+    const checkedBy = context === "finding" && checks ? verifierIndex(checks, f.id) : -1;
+    const lists = checkedBy < 0;
+    const parts = ["scenario"];
+    if (f.expected_behaviour) parts.push("expected");
+    if (f.verdict_reason) parts.push("verdict");
+    if (lists) parts.push("cited");
+    if (f.needs && f.needs.length) parts.push("needs");
+    if (lists && f.verifier_citations && f.verifier_citations.length) parts.push("verifier-cited");
+    return { checkedBy: checkedBy, parts: parts };
+  }
+
   /* A Read of a changed file opens in the code pane; any other path or URL stays text. */
   function callLinksToDiff(call, files) {
     return !!call && call.tool === "Read" && (files || []).indexOf(call.target) >= 0;
@@ -1164,6 +1187,7 @@
     runBlock: runBlock, runTotal: runTotal,
     agentOrder: agentOrder, finderRows: finderRows, checkedFindingRows: checkedFindingRows,
     mergeRows: mergeRows, verifierIndex: verifierIndex, callLinksToDiff: callLinksToDiff,
+    findingParts: findingParts,
     citationWarning: citationWarning,
     HELP_SECTIONS: HELP_SECTIONS, helpSection: helpSection,
   };

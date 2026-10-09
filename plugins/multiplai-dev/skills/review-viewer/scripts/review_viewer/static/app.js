@@ -766,7 +766,7 @@
             el("span", { class: "claim", text: f.claim }),
             el("span", { class: "where", text: f.file + ":" + f.line_start }),
           ]),
-          el("div", { class: "step-finding-facts" }, findingFacts(f).concat(findingCitations(f))),
+          el("div", { class: "step-finding-facts" }, findingFacts(f, L.findingParts(f, state.detail.checks, "step").parts)),
         ]));
       }
     }
@@ -1214,34 +1214,33 @@
     });
   }
 
-  /* What a finding says beyond its claim: the failure scenario, the expected
-   * behaviour, the verdict and what it needs. Shown on the Findings tab and
-   * under each walkthrough step that links the finding. */
-  function findingFacts(f) {
-    const out = [el("div", { class: "label", text: "Failure scenario" }), el("p", { text: f.failure_scenario })];
-    if (f.expected_behaviour) {
-      out.push(el("div", { class: "label", text: "Expected behaviour" }), el("p", { text: f.expected_behaviour }));
-    }
-    if (f.verdict_reason) out.push(el("div", { class: "label", text: "Verdict" }), el("p", { text: f.verdict_reason }));
-    if (f.needs && f.needs.length) {
-      out.push(el("div", { class: "label", text: "Needs you" }));
-      for (const n of L.needsItems({ needs: f.needs, findings: [] })) {
-        out.push(el("div", { class: "needs" }, [el("div", { text: n.what }),
-          el("div", { class: "muted small", text: "Why: " + n.cause }), needCommand(n.command)]));
+  /* The blocks under a finding's claim, in the order L.findingParts gives:
+   * the failure scenario, the expected behaviour, the verdict, the cited code,
+   * what it needs and the verifier's citations, each only when it applies.
+   * Shown on the Findings tab and under each walkthrough step that links the
+   * finding. */
+  function findingFacts(f, parts) {
+    const out = [];
+    for (const part of parts) {
+      if (part === "scenario") {
+        out.push(el("div", { class: "label", text: "Failure scenario" }), el("p", { text: f.failure_scenario }));
+      } else if (part === "expected") {
+        out.push(el("div", { class: "label", text: "Expected behaviour" }), el("p", { text: f.expected_behaviour }));
+      } else if (part === "verdict") {
+        out.push(el("div", { class: "label", text: "Verdict" }), el("p", { text: f.verdict_reason }));
+      } else if (part === "cited") {
+        out.push(el("div", { class: "label", text: "Cited code" }));
+        for (const c of f.citations) out.push(citationLink(c));
+      } else if (part === "needs") {
+        out.push(el("div", { class: "label", text: "Needs you" }));
+        for (const n of L.needsItems({ needs: f.needs, findings: [] })) {
+          out.push(el("div", { class: "needs" }, [el("div", { text: n.what }),
+            el("div", { class: "muted small", text: "Why: " + n.cause }), needCommand(n.command)]));
+        }
+      } else if (part === "verifier-cited") {
+        out.push(el("div", { class: "label", text: "The verifier's citations" }));
+        for (const c of f.verifier_citations) out.push(citationLink(c));
       }
-    }
-    return out;
-  }
-
-  /* The finding's cited code and the verifier's citations, as links into the
-   * code pane. Shown under a walkthrough step; the Findings tab links the
-   * verifier's entry on the Checked tab instead. */
-  function findingCitations(f) {
-    const out = [el("div", { class: "label", text: "Cited code" })];
-    for (const c of f.citations) out.push(citationLink(c));
-    if (f.verifier_citations && f.verifier_citations.length) {
-      out.push(el("div", { class: "label", text: "The verifier's citations" }));
-      for (const c of f.verifier_citations) out.push(citationLink(c));
     }
     return out;
   }
@@ -1260,11 +1259,11 @@
       el("span", { class: "badge", text: f.status }),
     ]));
     box.appendChild(el("h2", { text: f.claim }));
-    // The code pane already shows the finding's lines; what the verifier read
-    // and cited is on its Checked tab entry. A review without checks.json has
-    // no such entry, and nothing is shown in its place.
-    const checks = state.detail.checks;
-    const vi = checks ? L.verifierIndex(checks, f.id) : -1;
+    // With a verifier entry on the Checked tab, the link replaces the citation
+    // lists (the entry shows what the verifier read and cited); without one,
+    // findingParts keeps the lists.
+    const shown = L.findingParts(f, state.detail.checks, "finding");
+    const vi = shown.checkedBy;
     if (vi >= 0) {
       box.appendChild(el("div", { class: "label", text: "Checked by" }));
       box.appendChild(el("button", { type: "button", class: "check-link", onclick: () => showAgent(vi) },
@@ -1276,7 +1275,7 @@
       box.appendChild(el("div", { class: "label", text: "Assessment: " + L.assessLabel(f) }));
       box.appendChild(el("p", { text: assessed }));
     }
-    for (const node of findingFacts(f)) box.appendChild(node);
+    for (const node of findingFacts(f, shown.parts)) box.appendChild(node);
     const steps = L.stepsForFinding(state.walk, f.id);
     if (steps.length) {
       box.appendChild(el("div", { class: "label", text: "Explained in the walkthrough" }));
