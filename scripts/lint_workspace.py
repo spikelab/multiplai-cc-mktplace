@@ -4,7 +4,8 @@
 Why this gate exists, concretely. On 2026-08-04 this repo carried four `.venv`
 directories totalling 915MB. Two were legitimate (buildme, deep-research, each
 with its own project). Two were hand-made — `plugins/multiplai-context/.venv`
-(30MB) and `plugins/multiplai-media/skills/screen-demo/.venv` (229MB, created
+(30MB) and `plugins/multiplai-media/skills/video-edit/.venv` (229MB, under the skill's
+earlier name, created
 by a since-retired `bootstrap.sh`). All four were gitignored, so `git status`
 was clean and nobody noticed for months.
 

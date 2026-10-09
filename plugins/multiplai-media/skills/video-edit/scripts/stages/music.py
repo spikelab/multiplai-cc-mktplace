@@ -8,7 +8,7 @@ from pathlib import Path
 
 def _cache_dir() -> Path:
     ws = os.environ.get("WORKSPACE")
-    base = Path(ws) / ".screen-demo-cache" if ws and Path(ws).is_dir() else Path.home() / ".cache" / "screen-demo"
+    base = Path(ws) / ".video-edit-cache" if ws and Path(ws).is_dir() else Path.home() / ".cache" / "video-edit"
     p = base / "music"
     p.mkdir(parents=True, exist_ok=True)
     return p

@@ -120,8 +120,8 @@ class EDL:
         warnings: list[str] = []
 
         src = Path(self.source)
-        if src.name.startswith("proxy_") or ".screen-demo-cache" in src.parts or (
-            ".cache" in src.parts and "screen-demo" in src.parts
+        if src.name.startswith("proxy_") or ".video-edit-cache" in src.parts or (
+            ".cache" in src.parts and "video-edit" in src.parts
         ):
             raise ValueError(
                 f"EDL source points at the analysis proxy ({self.source}). "

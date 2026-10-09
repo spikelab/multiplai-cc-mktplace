@@ -14,8 +14,8 @@ from pathlib import Path
 def _cache_root() -> Path:
     ws = os.environ.get("WORKSPACE")
     if ws and Path(ws).is_dir():
-        return Path(ws) / ".screen-demo-cache"
-    return Path.home() / ".cache" / "screen-demo"
+        return Path(ws) / ".video-edit-cache"
+    return Path.home() / ".cache" / "video-edit"
 
 CACHE_ROOT = _cache_root()
 MLX_BIN = "mlx_whisper"
@@ -396,7 +396,7 @@ def _parse_srt(srt: Path) -> list[dict]:
 def _write_context(result: PrepResult, segments: list[dict], cuts: list[CutCandidate],
                    dead: list[DeadSpan], dst: Path) -> None:
     lines = [
-        "# screen-demo prep context",
+        "# video-edit prep context",
         "",
         f"- source: {result.source}",
         f"- duration: {result.src_duration:.1f}s",

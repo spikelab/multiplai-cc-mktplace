@@ -23,7 +23,7 @@ _BASH = shutil.which("bash") or "/bin/bash"
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 _TRANSCRIBE = _PLUGIN_ROOT / "skills" / "transcribe" / "scripts" / "transcribe.sh"
 _YT = _PLUGIN_ROOT / "skills" / "youtube-transcript" / "scripts" / "yt-transcript.sh"
-_BOOTSTRAP = _PLUGIN_ROOT / "skills" / "screen-demo" / "scripts" / "bootstrap.sh"
+_BOOTSTRAP = _PLUGIN_ROOT / "skills" / "video-edit" / "scripts" / "bootstrap.sh"
 
 _VTT = """WEBVTT
 

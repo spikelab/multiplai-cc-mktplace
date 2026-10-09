@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap the screen-demo skill.
+# Bootstrap the video-edit skill.
 #
 # Transcription is NOT built here — it runs on the macOS host via mlx_whisper
 # (Metal GPU) over the SSH bridge. There is no in-container whisper build and no
@@ -13,7 +13,7 @@ SKILL_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 case "${1:-}" in
   -h|--help)
     cat <<'EOF'
-bootstrap.sh — preflight the screen-demo skill. Installs nothing.
+bootstrap.sh — preflight the video-edit skill. Installs nothing.
 
 Checks, in order:
   1. ffmpeg is on PATH (hint names the fix for the actual platform)

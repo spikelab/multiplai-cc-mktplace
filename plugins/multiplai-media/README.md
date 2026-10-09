@@ -17,7 +17,7 @@ the [`multiplai`](../../README.md) marketplace.
 |-------|--------------|
 | `transcribe` | Transcribe audio files (.mp3, .m4a, .wav, …) to text using mlx-whisper. |
 | `youtube-transcript` | Download transcripts from YouTube videos — subtitle download (fast) with audio-transcription fallback. |
-| `screen-demo` | Turn a raw screen recording into a polished 1–3 minute product demo video — ffmpeg + PySceneDetect editing, mlx-whisper transcription. Free and local, no SaaS. |
+| `video-edit` | Edit an existing video: turn a screen recording into a 1–3 minute landscape product demo — ffmpeg + PySceneDetect editing, mlx-whisper transcription. Free and local, no SaaS. |
 | `excalidraw` | Generate and iteratively refine Excalidraw diagrams for architecture and design exploration. |
 | `host-browser` | Drive the user's real logged-in Chrome on the macOS host (via the `ab`/agent-browser bridge) — logins, forms, JS/bot-walled pages, signups. |
 
@@ -33,7 +33,7 @@ the [`multiplai`](../../README.md) marketplace.
   fallback needs Apple-Silicon macOS (mlx-whisper) or the multiplai-kit SSH bridge.
 - `transcribe` — mlx-whisper needs Apple-Silicon macOS; from the kit container,
   the SSH bridge. On plain Linux use whisper.cpp / faster-whisper instead.
-- `screen-demo` — needs ffmpeg + mlx-whisper on a Mac; from the kit container,
+- `video-edit` — needs ffmpeg + mlx-whisper on a Mac; from the kit container,
   the SSH bridge.
 - `host-browser` — needs the multiplai-kit container→host SSH bridge **and an
   explicit opt-in on the host**: in container releases after v0.9.6 the gateway

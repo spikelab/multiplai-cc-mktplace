@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "screen-demo" / "scripts"
+_SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
 from stages.edl import EDL, Segment, Zoom  # noqa: E402
@@ -30,8 +30,8 @@ def _edl(source: str = "/rec/original.mov", segments: list[Segment] | None = Non
 @pytest.mark.parametrize(
     "source",
     [
-        "/work/.screen-demo-cache/proxy_720p.mp4",          # project cache root
-        "/home/u/.cache/screen-demo/rec/proxy_720p.mp4",    # user cache root
+        "/work/.video-edit-cache/proxy_720p.mp4",           # project cache root
+        "/home/u/.cache/video-edit/rec/proxy_720p.mp4",     # user cache root
         "/anywhere/proxy_720p.mp4",                          # bare proxy_ name
     ],
 )
@@ -45,7 +45,7 @@ def test_original_recording_accepted() -> None:
 
 
 def test_cache_dirname_alone_is_not_a_proxy() -> None:
-    # ".cache" only trips the check together with a "screen-demo" component.
+    # ".cache" only trips the check together with a "video-edit" component.
     assert _edl(source="/home/u/.cache/other-tool/original.mov").validate() == []
 
 

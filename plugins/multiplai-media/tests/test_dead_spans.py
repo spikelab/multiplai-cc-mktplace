@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-_SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "screen-demo" / "scripts"
+_SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
 from stages.prep import DeadSpan, _dead_spans  # noqa: E402

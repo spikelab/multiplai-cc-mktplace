@@ -1,4 +1,4 @@
-# Dependencies for the screen-demo pipeline.
+# Dependencies for the video-edit pipeline.
 #
 # These are CLI tools, not imports: prep.py shells out to the `scenedetect`
 # binary (shutil.which) alongside ffmpeg's silencedetect/blackdetect filters.
@@ -10,7 +10,7 @@
 # Headless OpenCV on purpose: the container has no display, and the GUI build
 # pulls a much larger dependency tree for windowing this never uses.
 [project]
-name = "screen-demo-scripts"
+name = "video-edit-scripts"
 version = "0.0.0"
 requires-python = ">=3.12"
 dependencies = [
