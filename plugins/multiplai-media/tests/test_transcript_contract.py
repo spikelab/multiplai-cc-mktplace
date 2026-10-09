@@ -3,7 +3,8 @@
 Both converters must produce {language, engine, words: [{text, start, end,
 speaker?}]}; speaker labels must survive; and source (a), the transcribe skill,
 must win over source (b), prep's own mlx_whisper, whenever it advertises
-word-level JSON. A fake transcribe.sh on PATH stands in for the skill.
+word-level JSON. A fake transcribe.sh in place of the sibling skill's script
+stands in for the skill.
 """
 from __future__ import annotations
 
@@ -68,17 +69,33 @@ def _fake_transcribe(bin_dir: Path, help_text: str) -> Path:
 
 
 def test_transcribe_skill_with_word_flag_is_chosen_first(tmp_path: Path, monkeypatch) -> None:
-    fake = _fake_transcribe(tmp_path / "bin", f"Usage: transcribe.sh <audio> [out] {tx.WORDS_JSON_FLAG}")
-    monkeypatch.setenv("PATH", f"{fake.parent}:/usr/bin:/bin")
+    fake = _fake_transcribe(tmp_path / "skill", f"Usage: transcribe.sh <audio> [out] {tx.WORDS_JSON_FLAG}")
+    monkeypatch.setattr(tx, "_SIBLING_TRANSCRIBE", fake)
     source, script = tx.choose_source()
     assert source == "transcribe-skill"
     assert script == fake
 
 
 def test_transcribe_skill_without_word_flag_falls_back_to_mlx_whisper(tmp_path: Path, monkeypatch) -> None:
-    fake = _fake_transcribe(tmp_path / "bin", "Usage: transcribe.sh <audio_file> [output_file] [--language <code>]")
-    monkeypatch.setenv("PATH", f"{fake.parent}:/usr/bin:/bin")
+    fake = _fake_transcribe(tmp_path / "skill", "Usage: transcribe.sh <audio_file> [output_file] [--language <code>]")
+    monkeypatch.setattr(tx, "_SIBLING_TRANSCRIBE", fake)
     assert tx.choose_source() == ("mlx_whisper", None)
+
+
+def test_a_transcribe_sh_on_path_is_never_run(tmp_path: Path, monkeypatch) -> None:
+    # Only the plugin's own transcribe skill is trusted; a same-named script
+    # elsewhere on PATH must not even be asked for --help.
+    marker = tmp_path / "ran"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stray = bin_dir / "transcribe.sh"
+    stray.write_text(f"#!/bin/bash\ntouch {marker}\necho {tx.WORDS_JSON_FLAG}\n")
+    stray.chmod(stray.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.setattr(tx, "_SIBLING_TRANSCRIBE", tmp_path / "absent" / "transcribe.sh")
+    assert tx.transcribe_skill_script() is None
+    assert tx.choose_source() == ("mlx_whisper", None)
+    assert not marker.exists()
 
 
 def test_transcribe_skill_argv_asks_for_words() -> None:
