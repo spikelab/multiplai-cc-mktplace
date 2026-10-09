@@ -216,8 +216,39 @@ def language_for(path: str) -> str:
     return LANGUAGES.get(p.suffix.lower(), "plaintext")
 
 
-def allowed_paths(target: Target, findings: FindingsFile | None) -> set[str]:
+# The page's "Show all files in the repo" list stops here, so a monorepo's
+# listing does not stall it; the file route still serves every listed file.
+REPO_FILES_MAX = 20_000
+
+
+def tree_pathspec(target: Target) -> list[str]:
+    """`["--", <dir>]` for a tree review whose files share a directory, else []."""
+    if target.base_sha != EMPTY_TREE or not target.files_changed:
+        return []
+    common = os.path.commonpath(target.files_changed) if len(target.files_changed) > 1 \
+        else os.path.dirname(target.files_changed[0])
+    return ["--", common] if common else []
+
+
+def repo_files(target: Target) -> list[str]:
+    """Every file (blob) at head, in git's order; for a tree review, only under
+    the directory it reviewed. Submodules are left out: there is no text to show."""
+    out = git(target.repo_path, "ls-tree", "-r", "-z", target.head_sha, *tree_pathspec(target))
+    files = []
+    for rec in out.split("\0"):
+        meta, _, name = rec.partition("\t")
+        if name and meta.split(" ")[1:2] == ["blob"]:
+            files.append(name)
+    return files
+
+
+def allowed_paths(target: Target, findings: FindingsFile | None,
+                  listed: list[str] | None = None) -> set[str]:
+    """The paths the file route serves: changed files, finding and citation
+    paths, and `listed` (`repo_files()`: every file git lists at head). Any
+    other path, `../` included, is refused with PathNotInReview."""
     paths = set(target.files_changed)
+    paths.update(listed or [])
     if findings is not None:
         for f in findings.findings:
             paths.add(f.file)
@@ -264,7 +295,10 @@ def file_view(target: Target, path: str, findings: FindingsFile | None = None,
     view = FileView(path=path, language=language_for(path),
                     cited_ranges=_cited_ranges(path, findings))
 
-    if _is_binary(repo, base, head, path):
+    # A file the change leaves alone has no diff, so ask git whether it is
+    # binary against the empty tree instead.
+    changed = path in target.files_changed
+    if _is_binary(repo, base if changed else EMPTY_TREE, head, path):
         view.binary = True
         return view
 
@@ -280,7 +314,7 @@ def file_view(target: Target, path: str, findings: FindingsFile | None = None,
 
     lines = split_lines(git(repo, "show", f"{head}:{path}"))
     added, deleted_before = _hunks(
-        git(repo, "diff", *_DIFF_FLAGS, "--unified=0", base, head, "--", path))
+        git(repo, "diff", *_DIFF_FLAGS, "--unified=0", base, head, "--", path)) if changed else (set(), {})
 
     keep: set[int] | None = None
     if len(lines) > MAX_FULL_LINES:
@@ -291,6 +325,9 @@ def file_view(target: Target, path: str, findings: FindingsFile | None = None,
             keep.update(range(n - HUNK_CONTEXT, n + HUNK_CONTEXT + 1))
         for start, end in view.cited_ranges:
             keep.update(range(start - CITED_CONTEXT, end + CITED_CONTEXT + 1))
+        if not keep:
+            # Nothing changed or cited here (a file outside the change): its top.
+            keep = set(range(1, MAX_FULL_LINES + 1))
 
     rows: list[Row] = []
     last = 0
@@ -303,6 +340,8 @@ def file_view(target: Target, path: str, findings: FindingsFile | None = None,
         if n <= len(lines):
             rows.append(Row("add" if n in added else "ctx", None, n, lines[n - 1]))
         last = n
+    if keep is not None and last < len(lines):
+        rows.append(Row("gap", None, None, f"… lines {last + 1}–{len(lines)} not shown"))
     view.rows = rows
     return view
 

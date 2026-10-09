@@ -336,6 +336,20 @@ body.resizing { cursor: col-resize; user-select: none; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .file-row input[type=checkbox] { flex-shrink: 0; cursor: pointer; }
+/* "Show all files in the repo": files and directories the change leaves alone are greyed. */
+.all-files { margin: var(--s2) 0 0; }
+#all-files-cut { margin: var(--s1) 0 0; }
+.files li.dir-h .dir-btn {
+  display: flex; align-items: center; gap: 4px; width: 100%; min-height: 0; height: 22px;
+  border: 0; background: none; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.files li.dir-h .dir-btn:hover { color: var(--text); }
+.files li.dir-h.unchanged { opacity: .7; }
+.dir-caret { width: 10px; flex-shrink: 0; }
+.file-row.unchanged .file-btn { color: var(--muted); }
+.file-row.unchanged.selected .file-btn { color: var(--accent); }
+.fstatus.none { border-color: transparent; }
 .fstatus {
   flex-shrink: 0;
   display: inline-flex; align-items: center; justify-content: center;

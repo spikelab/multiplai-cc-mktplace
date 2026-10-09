@@ -369,6 +369,42 @@
     return [...groups.values()];
   }
 
+  /* The sidebar's directories. With `all` null, the changed files grouped as
+   * groupFilesByDir does. With `all` (every file at head, from the server's
+   * `repo_files`), every file and every changed file (a deleted one is not at
+   * head) in path order. Each directory and file says whether the change
+   * touches it; `filter` keeps paths that contain it, ignoring case.
+   * [{dir, changed, files: [{path, name, changed}]}]. */
+  function sidebarGroups(changed, all, filter) {
+    const f = (filter || "").toLowerCase();
+    const touched = new Set(changed || []);
+    let paths = (changed || []).slice();
+    if (all) {
+      const union = new Set(all);
+      for (const p of touched) union.add(p);
+      // By directory, then name, so a directory's files come before its subdirectories'.
+      const key = (p) => { const i = p.lastIndexOf("/"); return [i < 0 ? "" : p.slice(0, i), p.slice(i + 1)]; };
+      paths = [...union].map((p) => [key(p), p])
+        .sort((a, b) => (a[0][0] < b[0][0] ? -1 : a[0][0] > b[0][0] ? 1 : a[0][1] < b[0][1] ? -1 : a[0][1] > b[0][1] ? 1 : 0))
+        .map((x) => x[1]);
+    }
+    return groupFilesByDir(paths.filter((p) => !f || p.toLowerCase().includes(f))).map((g) => ({
+      dir: g.dir,
+      changed: g.files.some((x) => touched.has(x.path)),
+      files: g.files.map((x) => ({ path: x.path, name: x.name, changed: touched.has(x.path) })),
+    }));
+  }
+
+  /* Whether a sidebar directory shows its files. One the change does not
+   * touch starts closed; a click (`toggled`: dir -> open) overrides that; a
+   * filter, or the open file being inside it, opens it. */
+  function dirOpen(group, toggled, filter, current) {
+    if (filter) return true;
+    if (current && group.files.some((x) => x.path === current)) return true;
+    if (toggled && toggled.has(group.dir)) return toggled.get(group.dir);
+    return group.changed;
+  }
+
   /* A directory as its last `keep` folders after "…/", for the file list's
    * group headings; the full directory goes in the tooltip. */
   function shortDir(dir, keep) {
@@ -1267,7 +1303,7 @@
     walkCoverage: walkCoverage, anchorRows: anchorRows,
     walkAnchorLabel: walkAnchorLabel, stepsForFinding: stepsForFinding,
     svgDataUrl: svgDataUrl, safePrUrl: safePrUrl,
-    groupFilesByDir: groupFilesByDir, shortDir: shortDir, clampWidth: clampWidth,
+    groupFilesByDir: groupFilesByDir, sidebarGroups: sidebarGroups, dirOpen: dirOpen, shortDir: shortDir, clampWidth: clampWidth,
     foldRows: foldRows, expandFold: expandFold, fileOrder: fileOrder,
     neighbourFile: neighbourFile, navFiles: navFiles,
     stepsForFile: stepsForFile, skippedReason: skippedReason, stepFiles: stepFiles,

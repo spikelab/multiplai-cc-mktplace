@@ -52,10 +52,12 @@
     <button id="side-rail" class="rail" type="button" title="Show the files (Ctrl+B)" aria-label="Show the files">
       <span class="rail-arrow" aria-hidden="true">›</span><span class="rail-label">Files</span></button>
     <div class="side-top">
-      <h2 class="side-h">Changed files <span id="viewed-count" class="count"></span>
+      <h2 class="side-h"><span id="side-title">Changed files</span> <span id="viewed-count" class="count"></span>
         <button id="side-hide" class="ctl ctl-sm hide-btn" type="button" title="Hide the files (Ctrl+B)" aria-label="Hide the files">‹</button></h2>
       <div class="progress" aria-hidden="true"><div id="viewed-bar" class="progress-bar"></div></div>
       <input id="file-search" type="search" placeholder="Filter files" aria-label="Filter files">
+      <label id="all-files" class="toggle all-files small" hidden><input type="checkbox" id="show-all-files"> Show all files in the repo</label>
+      <p id="all-files-cut" class="muted small" hidden></p>
     </div>
     <ul id="files" class="files"></ul>
   </nav>

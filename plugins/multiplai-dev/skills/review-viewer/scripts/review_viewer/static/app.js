@@ -35,6 +35,9 @@
     shownRows: new Set(),
     showHidden: false,
     fileFilter: "",
+    changed: new Set(),
+    showAllFiles: false,
+    dirToggled: new Map(),
     questions: [],
     replyRows: [],
     replies: new Map(),
@@ -300,6 +303,9 @@
     state.slug = slug;
     state.detail = await api(targetUrl());
     state.findingsById = new Map(state.detail.findings.findings.map((f) => [f.id, f]));
+    state.changed = new Set(state.detail.files);
+    state.dirToggled = new Map();
+    renderAllFilesToggle();
     state.viewed = state.detail.viewed || {};
     state.questions = state.detail.questions || [];
     state.replyRows = [];
@@ -976,16 +982,52 @@
     renderFileHead();
   }
 
+  /* "Show all files in the repo": offered when git listed files the change
+   * leaves alone (a tree review lists every file it reviewed as changed). */
+  function renderAllFilesToggle() {
+    const all = state.detail.repo_files || [];
+    const extra = all.some((p) => !state.changed.has(p));
+    $("all-files").hidden = !extra;
+    if (!extra) state.showAllFiles = false;
+    $("show-all-files").checked = state.showAllFiles;
+    const total = state.detail.repo_files_total || 0;
+    const cut = $("all-files-cut");
+    cut.hidden = !state.showAllFiles || total <= all.length;
+    cut.textContent = "Showing the first " + L.formatTokens(all.length) + " of " + L.formatTokens(total) +
+      " files; changed files are always listed.";
+    $("side-title").textContent = state.showAllFiles ? "Files" : "Changed files";
+    $("file-search").placeholder = state.showAllFiles ? "Filter all files" : "Filter files";
+  }
+
   function renderFiles() {
     if (state.view) renderFileNav();
     const list = $("files");
     list.replaceChildren();
-    const filter = state.fileFilter.toLowerCase();
-    const shown = state.detail.files.filter((p) => !filter || p.toLowerCase().includes(filter));
+    const groups = L.sidebarGroups(state.detail.files, state.showAllFiles ? state.detail.repo_files || [] : null,
+      state.fileFilter);
     const inStep = state.tab === "walk" ? L.stepFiles(currentStep()) : new Set();
-    for (const group of L.groupFilesByDir(shown)) {
-      list.appendChild(el("li", { class: "dir-h", title: group.dir || "(repository root)", text: L.shortDir(group.dir) }));
+    for (const group of groups) {
+      const open = !state.showAllFiles || L.dirOpen(group, state.dirToggled, state.fileFilter, state.filePath);
+      if (state.showAllFiles) {
+        list.appendChild(el("li", { class: "dir-h" + (group.changed ? "" : " unchanged") }, [el("button", {
+          class: "dir-btn", type: "button", "aria-expanded": String(open),
+          title: (group.dir || "(repository root)") + (group.changed ? "" : " (nothing here changed)"),
+          onclick: () => { state.dirToggled.set(group.dir, !open); renderFiles(); },
+        }, [el("span", { class: "dir-caret", "aria-hidden": "true", text: open ? "▾" : "▸" }),
+          L.shortDir(group.dir) + (open ? "" : " (" + group.files.length + ")")])]));
+      } else {
+        list.appendChild(el("li", { class: "dir-h", title: group.dir || "(repository root)", text: L.shortDir(group.dir) }));
+      }
+      if (!open) continue;
       for (const f of group.files) {
+        if (!f.changed) {
+          list.appendChild(el("li", { class: "file-row unchanged" + (f.path === state.filePath ? " selected" : "") }, [
+            el("span", { class: "fstatus none", "aria-hidden": "true" }),
+            el("button", { class: "file-btn", title: f.path + " (not changed)", text: f.name,
+              onclick: async () => { clearPick(); await openFile(f.path); } }),
+          ]));
+          continue;
+        }
         const info = fileInfo(f.path);
         const viewed = isViewed(f.path);
         const box = el("input", { type: "checkbox", title: viewed ? "Viewed; click to unmark" : "Mark viewed",
@@ -1007,7 +1049,9 @@
         ]));
       }
     }
-    if (!shown.length) list.appendChild(el("li", { class: "empty small", text: "No changed file matches." }));
+    if (!groups.length) {
+      list.appendChild(el("li", { class: "empty small", text: state.showAllFiles ? "No file matches." : "No changed file matches." }));
+    }
     const vc = L.viewedCount(state.detail.files, state.viewed);
     $("viewed-count").textContent = vc.done + " of " + vc.total + " viewed";
     $("viewed-bar").style.width = (vc.total ? Math.round(100 * vc.done / vc.total) : 0) + "%";
@@ -1632,10 +1676,15 @@
     $("file-counts").replaceChildren(...countsNode(info).childNodes);
     const flags = [];
     if (view.deleted) flags.push("deleted at head; first lines shown");
-    if (view.truncated && !view.deleted) flags.push("large file: changes and cited lines only");
+    if (view.truncated && !view.deleted) {
+      flags.push(state.changed.has(view.path) ? "large file: changes and cited lines only" : "large file: first lines and cited lines only");
+    }
     if (view.binary) flags.push("binary");
+    const changed = state.changed.has(view.path);
+    if (!changed) flags.unshift("not changed");
     $("file-flags").textContent = flags.join(" · ");
     $("file-viewed").checked = isViewed(view.path);
+    $("file-viewed").parentElement.hidden = !changed;
     $("layout-unified").setAttribute("aria-pressed", String(!state.split));
     $("layout-split").setAttribute("aria-pressed", String(state.split));
     $("wrap-btn").setAttribute("aria-pressed", String(state.wrap));
@@ -1695,7 +1744,9 @@
       for (const i of L.citationRows(view.rows, state.pick.start, state.pick.end)) keep.add(i);
     }
     const open = openRows(view.path);
-    const items = L.foldRows(view.rows, keep, open, FOLD_CONTEXT, FOLD_MIN);
+    // A file the change leaves alone has nothing to fold around: show all of it.
+    const items = state.changed.has(view.path) ? L.foldRows(view.rows, keep, open, FOLD_CONTEXT, FOLD_MIN)
+      : view.rows.map((r, i) => ({ row: i }));
     const starts = L.blockStarts(view.rows);
     const explained = L.explainByBlock(state.questions, view.path);
     state.shownRows = new Set(items.filter((it) => it.row != null).map((it) => it.row));
@@ -2219,7 +2270,8 @@
 
   function paletteEntries() {
     const out = [];
-    for (const path of state.detail.files) {
+    const files = state.showAllFiles ? [...new Set(state.detail.files.concat(state.detail.repo_files || []))] : state.detail.files;
+    for (const path of files) {
       const cut = path.lastIndexOf("/");
       out.push({ kind: "file", label: path.slice(cut + 1), sub: cut > 0 ? path.slice(0, cut) : "", path: path });
     }
@@ -2281,7 +2333,7 @@
     const it = state.palette.items[i];
     $("palette").close();
     if (!it) return;
-    if (it.path) { clearPick(); await openFile(it.path); await showFileReview(it.path); }
+    if (it.path) { clearPick(); await openFile(it.path); if (state.changed.has(it.path)) await showFileReview(it.path); }
     else if (it.step) { state.tabChosen = true; await selectStep(it.step, { open: true }); }
     else if (it.finding) { setTab("finding"); await selectFinding(it.finding); }
   }
@@ -2362,6 +2414,11 @@
     });
     $("file-search").addEventListener("input", (ev) => {
       state.fileFilter = ev.target.value;
+      renderFiles();
+    });
+    $("show-all-files").addEventListener("change", (ev) => {
+      state.showAllFiles = ev.target.checked;
+      renderAllFilesToggle();
       renderFiles();
     });
     $("code").addEventListener("mousedown", onGutterDown);
@@ -2456,7 +2513,7 @@
       } else if (ev.key === "n" || ev.key === "p") {
         moveBlock(ev.key === "n" ? 1 : -1);
       } else if (ev.key === "v") {
-        if (state.view) setViewed(state.view.path, !isViewed(state.view.path));
+        if (state.view && state.changed.has(state.view.path)) setViewed(state.view.path, !isViewed(state.view.path));
       } else if (ev.key === "s") {
         setSplit(!state.split);
       } else if (ev.key === "w") {

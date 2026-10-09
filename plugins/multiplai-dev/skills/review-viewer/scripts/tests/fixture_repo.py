@@ -116,6 +116,53 @@ def build(repo: Path) -> tuple[str, str]:
     return base, head
 
 
+UTIL = '''"""Helpers the change calls but does not touch."""
+
+RATE = 3
+
+
+def helper(x):
+    return x * RATE
+
+
+class Widget:
+    def total(self):
+        return helper(2)
+'''
+
+WEB = '''export const thing = 1;
+export function render(el) {
+  return el;
+}
+let counter = 0;
+interface Props { name: string }
+'''
+
+SQL = "CREATE OR REPLACE FUNCTION refresh_totals() RETURNS void AS $$ SELECT 1 $$;\n"
+
+
+def build_wide(repo: Path) -> tuple[str, str]:
+    """A repository with files the change leaves alone, for the whole-repo
+    list and the definitions search: one changed file (`app/main.py`, which
+    calls `helper`), and unchanged text, binary and 4500-line files."""
+    repo.mkdir(parents=True, exist_ok=True)
+    d1, d2 = "2026-09-01T10:00:00+00:00", "2026-09-02T10:00:00+00:00"
+    _git(repo, "init", "-q", "-b", "main", date=d1)
+    _write(repo, "app/main.py", "from lib.util import helper\n\nprint(helper(1))\n")
+    _write(repo, "lib/util.py", UTIL)
+    _write(repo, "web/view.ts", WEB)
+    _write(repo, "db/refresh.sql", SQL)
+    _write(repo, "assets/icon.bin", bytes(range(256)) * 2)
+    _write(repo, "lib/huge.py", BIG_BASE)
+    _git(repo, "add", "-A", date=d1)
+    _git(repo, "commit", "-q", "-m", "base", date=d1)
+    base = _git(repo, "rev-parse", "HEAD", date=d1)
+    _write(repo, "app/main.py", "from lib.util import helper, Widget\n\nprint(helper(1), Widget().total())\n")
+    _git(repo, "add", "-A", date=d2)
+    _git(repo, "commit", "-q", "-m", "head", date=d2)
+    return base, _git(repo, "rev-parse", "HEAD", date=d2)
+
+
 FEATURE_FILE = '''"""Feature work."""
 
 

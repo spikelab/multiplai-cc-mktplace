@@ -961,6 +961,30 @@ test("a downloaded finding is named by severity, file name and id", () => {
     "finding-medium-history-notes.md-a1b2c3d4e5.md");
 });
 
+test("the sidebar lists every repo file, unchanged ones marked, when asked", () => {
+  const changed = ["app/main.py", "app/gone.py"];
+  const all = ["lib/util.py", "app/main.py", "README.md", "lib/sub/x.py"];
+  assert.deepEqual(L.sidebarGroups(changed, null, "").map((g) => g.dir), ["app"]);
+  const g = L.sidebarGroups(changed, all, "");
+  assert.deepEqual(g.map((x) => [x.dir, x.changed]), [["", false], ["app", true], ["lib", false], ["lib/sub", false]]);
+  // A deleted file is not at head, but stays listed with the change.
+  assert.deepEqual(g[1].files.map((f) => [f.name, f.changed]), [["gone.py", true], ["main.py", true]]);
+  assert.deepEqual(g[2].files, [{ path: "lib/util.py", name: "util.py", changed: false }]);
+  // The filter searches every file when every file is listed.
+  assert.deepEqual(L.sidebarGroups(changed, all, "UTIL").map((x) => x.dir), ["lib"]);
+  assert.deepEqual(L.sidebarGroups(changed, null, "util"), []);
+});
+
+test("a directory the change does not touch starts closed", () => {
+  const [, app, lib] = L.sidebarGroups(["app/main.py"], ["README.md", "app/main.py", "lib/util.py"], "");
+  assert.equal(L.dirOpen(app, new Map(), "", null), true);
+  assert.equal(L.dirOpen(lib, new Map(), "", null), false);
+  assert.equal(L.dirOpen(lib, new Map([["lib", true]]), "", null), true);
+  assert.equal(L.dirOpen(app, new Map([["app", false]]), "", null), false);
+  assert.equal(L.dirOpen(lib, new Map(), "", "lib/util.py"), true, "the open file's directory");
+  assert.equal(L.dirOpen(lib, new Map([["lib", false]]), "ut", null), true, "a filter opens every match");
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

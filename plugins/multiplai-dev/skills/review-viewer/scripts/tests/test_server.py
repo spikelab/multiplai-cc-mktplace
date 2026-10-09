@@ -550,3 +550,38 @@ def test_findings_with_and_without_assessment_both_serve(start_live, findings_pa
     got = [f.get("assessment") for f in detail["findings"]["findings"]]
     assert got[0]["label"] == "repeat" and got[0]["earlier_note"] == "by design"
     assert got[1]["label"] == "low-value" and got[1]["earlier_id"] is None
+
+
+# --- every file at head ---------------------------------------------------------------
+
+def _wide_findings(tmp_path):
+    from fixture_repo import build_wide
+    from review_viewer.gitdata import diff_findings, diff_target
+    repo = tmp_path / "wide"
+    base, head = build_wide(repo)
+    review = tmp_path / "wide-review"
+    review.mkdir()
+    path = review / "findings.json"
+    path.write_text(diff_findings(diff_target(repo, f"{base}..{head}")).model_dump_json(), encoding="utf-8")
+    return path
+
+
+def test_detail_lists_every_repo_file_and_serves_unchanged_ones(start_live, tmp_path):
+    live = start_live(path=_wide_findings(tmp_path))
+    status, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert status == 200 and detail["files"] == ["app/main.py"]
+    assert "lib/util.py" in detail["repo_files"] and detail["repo_files_total"] == 6
+    status, view = live.request("GET", f"/api/targets/{live.slug}/file?path=lib/util.py")
+    assert status == 200 and {r["k"] for r in view["rows"]} == {"ctx"}
+    for bad in ("../../etc/passwd", "/etc/passwd", "lib/../lib/util.py", "missing.py"):
+        assert live.request("GET", f"/api/targets/{live.slug}/file?path={bad}")[0] == 404
+
+
+def test_repo_files_list_is_cut_at_the_cap(start_live, tmp_path, monkeypatch):
+    from review_viewer import server
+    monkeypatch.setattr(server, "REPO_FILES_MAX", 2)
+    live = start_live(path=_wide_findings(tmp_path))
+    _, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert len(detail["repo_files"]) == 2 and detail["repo_files_total"] == 6
+    # The cap is on the list the page gets, not on what the file route serves.
+    assert live.request("GET", f"/api/targets/{live.slug}/file?path=web/view.ts")[0] == 200

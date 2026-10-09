@@ -31,7 +31,8 @@ from multiplai_core.log_utils import log_event
 from pydantic import ValidationError
 
 from . import netinfo, registry
-from .gitdata import GitError, PathNotInReview, TargetError, allowed_paths, file_view, pr_status
+from .gitdata import (REPO_FILES_MAX, GitError, PathNotInReview, TargetError, allowed_paths, file_view,
+                      pr_status, repo_files)
 from .stats import PR_BADGE_IDS, pr_badges
 from .mailbox import Mailbox, new_question_id, utc_now, write_private
 from .models import Anchor, ChecksFile, FindingsFile, InboxRow, Walkthrough, findings_digest, load_checks
@@ -80,6 +81,9 @@ class TargetState:
     # The review's checks.json, when one sits beside its findings.json and
     # describes the same commits; None hides the page's Checked tab.
     checks: ChecksFile | None = None
+    # Every file git lists at head (gitdata.repo_files), for the page's
+    # "Show all files in the repo"; [] when git could not list them.
+    repo_files: list[str] = field(default_factory=list)
     # `serve` fetched the PR just before the server started.
     _pr_checked: float = field(default_factory=time.monotonic, repr=False)
     _pr_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -348,6 +352,8 @@ def make_handler(viewer: Viewer):
                     return self._json({
                         "findings": state.findings.model_dump(mode="json"),
                         "files": state.findings.target.files_changed,
+                        "repo_files": state.repo_files[:REPO_FILES_MAX],
+                        "repo_files_total": len(state.repo_files),
                         "decisions": state.mailbox.read_decisions(),
                         "viewed": state.mailbox.read_viewed(),
                         "questions": [r for r in state.mailbox.read_inbox()
@@ -464,10 +470,16 @@ def build_viewer(findings: list[tuple[FindingsFile, Path]], *, agent: str, sessi
         mailbox = Mailbox(box)
         mailbox.create()
         extra = (meta or {}).get(ff.target.slug, {})
-        targets[ff.target.slug] = TargetState(ff, mailbox, allowed_paths(ff.target, ff),
+        try:
+            listed = repo_files(ff.target)
+        except GitError as exc:
+            log.warning("cannot list the files at %s: %s", ff.target.head_sha[:12], exc)
+            listed = []
+        targets[ff.target.slug] = TargetState(ff, mailbox, allowed_paths(ff.target, ff, listed),
                                               pr=extra.get("pr"), notice=extra.get("notice"),
                                               stats=extra.get("stats"),
-                                              checks=checks_beside(ff, Path(box).parent))
+                                              checks=checks_beside(ff, Path(box).parent),
+                                              repo_files=listed)
     return Viewer(targets=targets, token=secrets.token_urlsafe(32), agent=agent,
                   session_id=session_id, idle_minutes=idle_minutes)
 
