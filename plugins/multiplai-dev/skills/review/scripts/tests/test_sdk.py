@@ -160,6 +160,13 @@ def test_a_call_with_no_usage_is_counted_with_zero_cost():
     assert a.by_stage["merge"]["no_usage_calls"] == 1
 
 
+def test_a_call_whose_usage_is_none_is_counted_as_a_no_usage_call():
+    a = budget.ReviewBudget(max_usd=10)
+    a.record(None, label="find")
+    assert (a.calls, a.cost_usd, a.no_usage_calls, a.total_tokens) == (1, 0.0, 1, 0)
+    assert a.by_stage["find"]["no_usage_calls"] == 1
+
+
 def test_an_old_ledger_without_by_stage_loads_and_keeps_counting():
     old = {"calls": 9, "input_tokens": 100, "output_tokens": 20, "cache_read_tokens": 0,
            "cache_creation_tokens": 0, "cost_usd": 1.25, "by_label": {"verify": 1.25}, "max_usd": 50.0}

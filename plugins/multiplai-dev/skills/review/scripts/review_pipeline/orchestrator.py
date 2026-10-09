@@ -250,5 +250,7 @@ async def batch(specs: list[TargetSpec], out_dir: Path, config: ReviewConfig, *,
     written = [p for p in results if p is not None]
     if written:
         write_rollups(out_dir, written)
-        write_runs(out_dir, written)
+        # Every review in out_dir, as after `review` and `resume`: a batch must
+        # not drop the lines of reviews it did not run.
+        write_runs(out_dir)
     return written, failures

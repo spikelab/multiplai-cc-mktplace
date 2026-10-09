@@ -353,3 +353,43 @@ def test_rollup_writes_runs_jsonl_and_counts_files_without_run(fixture_repo, tmp
     total = subprocess.run(["jq", "-s", "map(.run.cost_usd) | add", str(out / "runs.jsonl")],
                            capture_output=True, text=True, check=True).stdout.strip()
     assert float(total) == pytest.approx(expected_cost)
+
+
+def test_batch_keeps_runs_jsonl_lines_of_earlier_reviews(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    earlier = out / "earlier-review" / "findings.json"
+    earlier.parent.mkdir()
+    data = json.loads((out / f"booking-engine--{base}..{head}" / "findings.json").read_text())
+    data["target"] = {**data["target"], "slug": "earlier-review", "label": "earlier"}
+    earlier.write_text(json.dumps(data))
+    batch_file = tmp_path / "batch.yaml"
+    batch_file.write_text(f"- repo: {repo}\n  branch: feature/db-2038\n")
+    capsys.readouterr()
+
+    assert main(["--out", str(out), "batch", str(batch_file), "--trust-repo"]) == 0
+    slugs = sorted(json.loads(line)["target"]["slug"] for line in (out / "runs.jsonl").read_text().splitlines())
+    assert slugs == sorted([f"booking-engine--{base}..{head}", "booking-engine--feature_db-2038", "earlier-review"])
+
+
+def test_calls_with_no_usage_leave_one_budget_line_that_a_resume_replaces(target_info):
+    from review_pipeline.orchestrator import note_missing_usage
+
+    ledger = budget.ReviewBudget(max_usd=10)
+    state = ReviewState(target=target_info)
+    state.errors = ["verify: something else"]
+    note_missing_usage(state, ledger)
+    assert state.errors == ["verify: something else"]
+
+    ledger.record(None, label="find")
+    note_missing_usage(state, ledger)
+    assert state.errors == ["verify: something else",
+                            "budget: 1 agent call returned no usage; their cost and tokens are counted as 0"]
+
+    ledger.record(SimpleNamespace(), label="verify")  # a resume: the ledger carries on counting
+    note_missing_usage(state, ledger)
+    budget_lines = [e for e in state.errors if e.startswith("budget:")]
+    assert budget_lines == ["budget: 2 agent calls returned no usage; their cost and tokens are counted as 0"]
+    assert state.errors[0] == "verify: something else"
