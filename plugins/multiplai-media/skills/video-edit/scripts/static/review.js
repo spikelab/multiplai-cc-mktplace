@@ -159,7 +159,7 @@ composer.addEventListener("submit", (ev) => {
   ev.preventDefault();
   const text = composerText.value.trim();
   if (!text || !state.draft) return;
-  // crypto.randomUUID needs a secure origin; http://<host>.orb.local is not one.
+  // crypto.randomUUID needs a secure origin, and a plain-http page on a LAN name is not one.
   state.pending.push({ key: `${Date.now()}-${Math.random().toString(36).slice(2)}`, video: state.clip, version: state.version, ...state.draft, text });
   savePending();
   closeComposer();
