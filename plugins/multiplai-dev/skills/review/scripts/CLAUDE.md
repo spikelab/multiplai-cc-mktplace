@@ -51,7 +51,7 @@ when the run finishes.
 | `citation_gate` | the whitespace-normalised quote is inside lines `line_start..line_end` at head | building block |
 | `finding_gate` | every repo citation passes; the first citation is a repo citation; the file changed (unless `dimension == "pre-existing"`); severity is known | finding → `rejected` |
 | `verdict_gate` | a `confirmed` verdict has at least one repo citation that passes (web citations do not count) | verdict → `unverifiable`, severity lowered one step |
-| `need_gate` | a need's command is one line under 300 characters, holds none of `;` `&` `\|` `>` `<` backtick `$(`, and starts with a CLI in `NEED_CLIS` (`terraform` only with a read verb) | command blanked; the need is kept |
+| `need_gate` | a need's command is one line under 300 characters, holds none of `;` `&` `\|` `>` `<` backtick `$(`, and is a read-only form of a CLI in `NEED_READ_VERBS` (its verb listed there; `gh api` and `curl` with no write method or body, `aws` describe/list/get, no SQL that writes) | command blanked; the need is kept |
 
 `need_gate` is not a security boundary: neither the pipeline nor the session
 runs a need's command (the session gives it to the user as `! <command>`). It

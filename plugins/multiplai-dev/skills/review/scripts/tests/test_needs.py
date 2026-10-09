@@ -10,7 +10,7 @@ import jsonschema
 import pytest
 from conftest import KEYWORD_CITATION, REAL_BRANCH_RULES, SCHEMA, high_finding, medium_finding
 
-from review_pipeline import sdk, target
+from review_pipeline import orchestrator, sdk, target
 from review_pipeline.config import ReviewConfig
 from review_pipeline.export import to_findings_file
 from review_pipeline.gates import gated_need, need_gate
@@ -62,7 +62,10 @@ def test_failed_branch_rules_lookup_is_a_need_with_the_exact_command(fixture_rep
     assert len(needs) == 1
     need = needs[0]
     assert (need.cause, need.source, need.blocks) == ("lookup-failed", "pipeline", "review")
-    assert need.command == "gh api repos/o/r/rules/branches/main"
+    # The call the pipeline made, placeholders and all: gh fills them from the repository it runs in,
+    # so the command reads the same repository even in a fork clone or after `gh repo set-default`.
+    assert need.command == "gh api repos/{owner}/{repo}/rules/branches/main"
+    assert f"Run the command in `{repo}`" in need.what
     assert "HTTP 403: Resource not accessible" in need.what and "more" not in need.what
 
 
@@ -71,7 +74,7 @@ def test_branch_rules_lookup_without_json_is_a_need(fixture_repo, monkeypatch):
     _failing_gh(monkeypatch, returncode=0, stdout="<html>", stderr="")
     needs: list[Need] = []
     assert REAL_BRANCH_RULES(repo, "main", needs) is None
-    assert [n.command for n in needs] == ["gh api repos/o/r/rules/branches/main"]
+    assert [n.command for n in needs] == ["gh api repos/{owner}/{repo}/rules/branches/main"]
     assert "no JSON" in needs[0].what
 
 
@@ -92,7 +95,8 @@ def test_pr_view_with_empty_title_and_base_is_a_need(fixture_repo, monkeypatch):
     needs: list[Need] = []
     target.build_target(resolved, needs=needs)
     assert len(needs) == 1
-    assert needs[0].command == "gh pr view 7 --repo example/booking-engine --json title,baseRefName"
+    assert needs[0].command == "gh pr view 7 --json title,baseRefName"  # as `_pr_view` ran it, no --repo
+    assert str(repo) in needs[0].what
     assert needs[0].cause == "lookup-failed" and needs[0].source == "pipeline"
 
 
@@ -104,6 +108,30 @@ def test_pr_view_with_only_an_empty_body_is_not_a_need(fixture_repo, monkeypatch
     needs: list[Need] = []
     target.build_target(target.resolve(repo, pr=7), needs=needs)
     assert needs == []
+
+
+def test_prepare_puts_the_pipelines_failed_lookups_into_the_state(fixture_repo, tmp_path, monkeypatch):
+    """`prepare` passes build_target's needs through gated_need into the ReviewState it returns."""
+    repo, base, head = fixture_repo
+    monkeypatch.setattr(target, "_pr_view", lambda repo_path, number: {
+        "headRefOid": head, "baseRefOid": base, "headRefName": "x", "baseRefName": "main",
+        "title": "A title", "body": ""})
+
+    def failing_rules(repo_path, branch, needs=None):
+        needs.append(Need(what=" GitHub's rules on main. ", cause="lookup-failed", source="pipeline",
+                          command=" gh api repos/{owner}/{repo}/rules/branches/main "))
+        needs.append(Need(what="A lookup with a bad command.", cause="lookup-failed", source="pipeline",
+                          command="gh api repos/o/r -X PATCH"))
+        return None
+
+    monkeypatch.setattr(target, "branch_rules", failing_rules)
+    state, _ = orchestrator.prepare(orchestrator.TargetSpec(repo=str(repo), pr=7), tmp_path / "out")
+    assert [(n.what, n.command) for n in state.needs] == [
+        ("GitHub's rules on main.", "gh api repos/{owner}/{repo}/rules/branches/main"),  # stripped
+        ("A lookup with a bad command.", ""),  # need_gate blanked it, the need stays
+    ]
+    exported = to_findings_file(state)
+    assert [n["command"] for n in exported["needs"]] == ["gh api repos/{owner}/{repo}/rules/branches/main", ""]
 
 
 # --- verify ------------------------------------------------------------------------
@@ -196,8 +224,32 @@ def test_finder_answer_with_needs_parses_and_an_unknown_cause_becomes_no_access(
     ("gh api `whoami`", "'`'"),
     ("gh api $(whoami)", "'$('"),
     ("rm notes.txt", "not a known read-only CLI"),
-    ("terraform apply", "terraform is allowed only with"),
-    ("terraform", "terraform is allowed only with"),
+    ("terraform apply", "terraform apply is not a read-only form"),
+    ("terraform", "terraform (no verb) is not a read-only form"),
+    ("terraform state mv a b", "terraform mv is not a read-only form"),
+    ("git push origin main", "git push is not a read-only form"),
+    ("git -C repo reset --hard", "git reset is not a read-only form"),
+    ("pip install requests", "pip install is not a read-only form"),
+    ("npm install left-pad", "npm install is not a read-only form"),
+    ("uv pip install requests", "uv install is not a read-only form"),
+    ("uv version 2.0.0", "uv version is not a read-only form"),
+    ("kubectl scale deploy api --replicas 0", "kubectl scale is not a read-only form"),
+    ("kubectl -n prod apply -f x.yaml", "kubectl apply is not a read-only form"),
+    ("gh pr merge 7", "gh merge is not a read-only form"),
+    ("gh api -X PUT repos/o/r/topics", "gh api with method PUT"),
+    ("gh api --method=POST repos/o/r/issues", "gh api with method POST"),
+    ("gh api repos/o/r/issues -f title=x", "gh api with -f sends a request body"),
+    ("gh auth status", "gh auth can print a token"),
+    ("curl -X POST https://ex.com/hook", "curl with method POST"),
+    ("curl -XPATCH https://ex.com/x", "curl with method PATCH"),
+    ("curl -d a=1 https://ex.com/hook", "curl with -d sends or writes data"),
+    ("curl -o out.bin https://ex.com/x", "curl with -o sends or writes data"),
+    ("aws s3 cp a.txt s3://bucket/key", "aws cp is not a describe, list or get operation"),
+    ("aws ec2 stop-instances --instance-ids i-1", "aws stop-instances is not"),
+    ("gcloud run deploy api --image x", "gcloud without one of"),
+    ("az vm stop -n x -g y", "az without one of"),
+    ("psql -c 'INSERT INTO bookings VALUES (1)'", "psql with INSERT can change state"),
+    ("bq query 'UPDATE d.t SET a = 1 WHERE b = 2'", "bq with UPDATE can change state"),
 ])
 def test_need_gate_blanks_each_kind_of_bad_command_and_keeps_the_need(command, rule):
     need = Need(what="The base branch's rules.", blocks="review", cause="lookup-failed", command=command)
@@ -212,6 +264,28 @@ def test_need_gate_blanks_each_kind_of_bad_command_and_keeps_the_need(command, r
     "gcloud run services describe api --region europe-west1 --format json",
     "pip download tavily-python==0.8.4 --no-deps",
     "terraform state list",
+    "terraform show -json",
+    "gh api repos/{owner}/{repo}/rules/branches/main",
+    "gh api -X GET repos/o/r/actions/runs",
+    "gh pr view 7 --repo o/r --json title,baseRefName",
+    "gh run list --limit 5",
+    "git -C repo log --oneline -5",
+    "git ls-remote origin",
+    "kubectl -n prod get pods -o json",
+    "aws s3 ls s3://bucket/prefix",
+    "aws ecs describe-services --cluster c --services s",
+    "aws sts get-caller-identity",
+    "az account show",
+    "gcloud logging read resource.type=cloud_run_revision --limit 20",
+    "bq --format json show d.t",
+    "bq query 'SELECT count(*) FROM d.t'",
+    "psql -c 'SELECT 1'",
+    "curl -sS https://example.com/api/status",
+    "curl -I https://example.com",
+    "npm view left-pad versions",
+    "uv pip show requests",
+    "uv tree",
+    "pip index versions tavily-python",
     "",
 ])
 def test_need_gate_passes_short_read_only_commands(command):

@@ -31,7 +31,13 @@ time, not derived from a tag.
     finding.
   - The pipeline's own failed lookups (the base branch's rules from
     `gh api`, an empty field from `gh pr view`) are needs too, with the exact
-    command it ran. Before, they were only a warning in the log.
+    command it ran, to be run in the reviewed repository so `gh` picks the
+    same repository. Before, they were only a warning in the log.
+  - A suggested command is kept only in a read-only form: `gh api` without a
+    write method or body, `git log`/`show`/`diff`, `kubectl get`, `aws`
+    describe/list/get, `curl` GET, SQL that only reads, and the like. Anything
+    else (`git push`, an install, a `DELETE` request) is dropped and the need
+    keeps only its description.
 - review: `summary-<slug>.md` has a **Needs you** section after the counts,
   and `review-<slug>.md` lists each finding's needs under it. After pasting
   the summary, the session asks you about each need and gives its command as

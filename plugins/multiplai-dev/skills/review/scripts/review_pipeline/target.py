@@ -114,12 +114,6 @@ def _first_line(text: str) -> str:
     return lines[0][:300] if lines else "no error message"
 
 
-def owner_repo(repo: Path) -> str | None:
-    """`<owner>/<repo>` of a GitHub origin, else None."""
-    web = github_web_base(remote_url(repo))
-    return web.removeprefix("https://github.com/") if web else None
-
-
 PR_VIEW_FIELDS = "headRefOid,baseRefOid,headRefName,baseRefName,title,body"
 
 
@@ -150,18 +144,21 @@ def branch_rules(repo: Path, branch: str, needs: list[Need] | None = None) -> li
     gh = shutil.which("gh")
     if gh is None or not branch or github_web_base(remote_url(repo)) is None:
         return None
+    endpoint = f"repos/{{owner}}/{{repo}}/rules/branches/{branch}"
     proc = subprocess.run(
-        [gh, "api", f"repos/{{owner}}/{{repo}}/rules/branches/{branch}"],
+        [gh, "api", endpoint],
         cwd=repo, capture_output=True, text=True, stdin=subprocess.DEVNULL, shell=False, check=False,
     )
-    command = f"gh api repos/{owner_repo(repo) or '{owner}/{repo}'}/rules/branches/{branch}"
 
     def need(error: str) -> None:
         if needs is not None:
+            # The command is the call made above, placeholders included: gh fills
+            # them the same way when it runs in the repository, so a fork clone or
+            # `gh repo set-default` resolves to the repository the pipeline asked.
             needs.append(Need(
                 what=f"GitHub's rules on the base branch `{branch}`, so the review can tell whether CI "
-                     f"blocks a merge. The review went on without them: {error}",
-                cause="lookup-failed", command=command, source="pipeline"))
+                     f"blocks a merge. Run the command in `{repo}`. The review went on without them: {error}",
+                cause="lookup-failed", command=f"gh api {endpoint}", source="pipeline"))
 
     if proc.returncode != 0:
         log.warning("gh api rules/branches/%s failed; reviewing without branch rules: %s",
@@ -218,12 +215,13 @@ def resolve(repo: str | Path, *, branch: str | None = None, pr: int | None = Non
         missing = [name for name, value in (("title", resolved.title), ("baseRefName", resolved.base_ref))
                    if not value]
         if missing:
-            where = f" --repo {owner_repo(repo)}" if owner_repo(repo) else ""
+            # The same call `_pr_view` made, from the same directory, with no --repo: gh
+            # picks the repository the same way it did for the pipeline.
             resolved.needs.append(Need(
                 what=f"PR #{pr}'s {' and '.join(missing)}: `gh pr view` returned "
                      f"{'them' if len(missing) > 1 else 'it'} empty, so the review went on without "
-                     f"{'them' if len(missing) > 1 else 'it'}",
-                cause="lookup-failed", command=f"gh pr view {pr}{where} --json {','.join(missing)}",
+                     f"{'them' if len(missing) > 1 else 'it'}. Run the command in `{repo}`",
+                cause="lookup-failed", command=f"gh pr view {pr} --json {','.join(missing)}",
                 source="pipeline"))
         return resolved
 
