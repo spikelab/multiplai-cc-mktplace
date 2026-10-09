@@ -34,7 +34,7 @@ from . import netinfo, registry
 from .gitdata import GitError, PathNotInReview, TargetError, allowed_paths, file_view, pr_status
 from .stats import PR_BADGE_IDS, pr_badges
 from .mailbox import Mailbox, new_question_id, utc_now, write_private
-from .models import Anchor, FindingsFile, InboxRow, Walkthrough, findings_digest
+from .models import Anchor, ChecksFile, FindingsFile, InboxRow, Walkthrough, findings_digest, load_checks
 from .walkthrough import Served, served_path, walkthrough_path
 
 log = logging.getLogger(__name__)
@@ -77,6 +77,9 @@ class TargetState:
     pr: dict | None = None
     notice: str | None = None
     stats: dict | None = None
+    # The review's checks.json, when one sits beside its findings.json and
+    # describes the same commits; None hides the page's Checked tab.
+    checks: ChecksFile | None = None
     # `serve` fetched the PR just before the server started.
     _pr_checked: float = field(default_factory=time.monotonic, repr=False)
     _pr_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -157,6 +160,26 @@ class Viewer:
         log.warning("refused %s %s: %s", status, route, reason)
         log_event(COMPONENT, "rejected_request", f"refused request: {reason}",
                   session_id=self.session_id, level="WARNING", status=status, route=route)
+
+
+def checks_beside(ff: FindingsFile, review_dir: Path) -> ChecksFile | None:
+    """`<review_dir>/checks.json` when it exists, validates against checks.v1 and
+    names the same commits as *ff*. A missing file is normal (a review written
+    before multiplai-dev 0.26); an invalid or mismatched one logs a warning."""
+    path = review_dir / "checks.json"
+    if not path.is_file():
+        return None
+    try:
+        checks = load_checks(path)
+    except (OSError, ValidationError) as exc:
+        log.warning("ignoring %s: not a valid checks.json v1: %s", path, str(exc).splitlines()[0])
+        return None
+    t, c = ff.target, checks.target
+    if (c.base_sha, c.head_sha) != (t.base_sha, t.head_sha):
+        log.warning("ignoring %s: it describes %s..%s, not the reviewed commits", path,
+                    c.base_sha[:10], c.head_sha[:10])
+        return None
+    return checks
 
 
 def summarise(state: TargetState) -> dict:
@@ -331,6 +354,7 @@ def make_handler(viewer: Viewer):
                         "pr": state.pr,
                         "notice": state.notice,
                         "stats": state.stats,
+                        "checks": state.checks.model_dump(mode="json") if state.checks else None,
                     })
             if method == "POST":
                 if route == "/api/ask":
@@ -441,7 +465,8 @@ def build_viewer(findings: list[tuple[FindingsFile, Path]], *, agent: str, sessi
         extra = (meta or {}).get(ff.target.slug, {})
         targets[ff.target.slug] = TargetState(ff, mailbox, allowed_paths(ff.target, ff),
                                               pr=extra.get("pr"), notice=extra.get("notice"),
-                                              stats=extra.get("stats"))
+                                              stats=extra.get("stats"),
+                                              checks=checks_beside(ff, Path(box).parent))
     return Viewer(targets=targets, token=secrets.token_urlsafe(32), agent=agent,
                   session_id=session_id, idle_minutes=idle_minutes)
 
