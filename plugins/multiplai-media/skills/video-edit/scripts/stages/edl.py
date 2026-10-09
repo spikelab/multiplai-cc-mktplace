@@ -246,6 +246,12 @@ class EDL:
         for i, s in enumerate(self.segments):
             if s.frame is None:
                 continue
+            if s.zoom:
+                raise ValueError(
+                    f"segment {i} has both zoom and frame {s.frame!r}. Panel rectangles are in "
+                    "source pixels and the zoom crops the frame before them, so the panel would "
+                    "point at the wrong region. Drop the zoom; use focus to choose what the "
+                    "panel keeps in view.")
             if s.frame == "stack":
                 missing = [k for k in ("A", "B") if k not in panels]
                 if missing:

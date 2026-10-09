@@ -161,7 +161,7 @@ See `examples/demo-narrated.edl.json`. Top-level keys:
 
 Keys for reels (see `references/reels.md`):
 - `layout` — `{panels: {A: {x, y, w, h}, B: …}, speakers: {"SPEAKER_0": "A", …}}`, rectangles in source pixels
-- segment `frame` — `"stack"` (A over B), a panel name (that panel cropped to the output aspect), or `"speaker"` (follows the transcript's speaker labels)
+- segment `frame` — `"stack"` (A over B), a panel name (that panel cropped to the output aspect), or `"speaker"` (follows the transcript's speaker labels); a segment with a `frame` takes no `zoom` (render refuses the pair)
 - segment `focus` — `{x, y}` 0..1, the point a crop keeps in view
 - `captions` — `{words_per_line, max_chars, position_y, highlight, size}` — word-timed captions burned in from the transcript
 - `headline` — `{text, start, end}` in output time, shown at the top

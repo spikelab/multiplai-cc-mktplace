@@ -10,7 +10,7 @@ _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "s
 sys.path.insert(0, str(_SCRIPTS))
 
 from stages import composite, layouts as L  # noqa: E402
-from stages.edl import EDL, Focus, Layout, Output, Panel, Segment  # noqa: E402
+from stages.edl import EDL, Focus, Layout, Output, Panel, Segment, Zoom  # noqa: E402
 
 W, H = 1080, 1920
 A = L.Rect(36, 200, 920, 744)
@@ -154,3 +154,20 @@ def test_segment_video_uses_a_graph_for_stack_and_a_chain_for_a_panel() -> None:
     assert v0.startswith("[0:v]trim=duration=4,setpts=PTS-STARTPTS[vin];[vin]split=2")
     assert v0.endswith("[vfit]fps=30,trim=duration=4.0[v]")
     assert v1 == "[0:v]trim=duration=3,setpts=PTS-STARTPTS,crop=418:744:966:200,scale=1080:1920,setsar=1,fps=30,trim=duration=3.0[v]"
+
+
+@pytest.mark.parametrize("frame", ["A", "stack", "speaker"])
+def test_validate_rejects_zoom_on_a_framed_segment(frame) -> None:
+    # The zoom crop runs before the panel crop, whose rectangle is in source
+    # pixels: the panel would point past the zoomed frame's edge.
+    layout = Layout(panels={"A": Panel(36, 200, 920, 744), "B": Panel(966, 200, 918, 744)},
+                    speakers={"S0": "A"})
+    edl = _reel(segments=[Segment(0, 10, frame=frame, zoom=Zoom(scale=1.5))], layout=layout)
+    with pytest.raises(ValueError, match="both zoom and frame"):
+        edl.validate(source_size=(1920, 1080),
+                     words=[{"text": "x", "start": 0, "end": 1, "speaker": "S0"}])
+
+
+def test_zoom_without_a_frame_is_still_allowed() -> None:
+    edl = _reel(segments=[Segment(0, 10, zoom=Zoom(scale=1.5)), Segment(10, 20)], fit="crop")
+    assert edl.validate(source_size=(1920, 1080)) == []
