@@ -18,7 +18,7 @@ from multiplai_core.log_utils import log_event
 
 from . import budget, target as target_mod
 from .config import ReviewConfig
-from .export import write_findings_file
+from .export import write_checks_file, write_findings_file
 from .gates import reason_kind
 from .models import SEVERITIES, ReviewState
 from .progress import ProgressWriter
@@ -105,6 +105,7 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
     findings_path = target_dir / "findings.json"
     if not state.past("export"):
         findings_path = write_findings_file(state, target_dir)
+        write_checks_file(state, target_dir)
         state.stage = "export"
         save_state(state, target_dir)
     if not state.past("render"):

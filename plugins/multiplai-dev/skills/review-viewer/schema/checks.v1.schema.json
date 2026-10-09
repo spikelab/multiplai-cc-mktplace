@@ -1,0 +1,418 @@
+{
+  "$defs": {
+    "AgentEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "calls": {
+          "items": {
+            "$ref": "#/$defs/ToolCallRecord"
+          },
+          "title": "Calls",
+          "type": "array"
+        },
+        "cost_usd": {
+          "minimum": 0,
+          "title": "Cost Usd",
+          "type": "number"
+        },
+        "ended_at": {
+          "title": "Ended At",
+          "type": "string"
+        },
+        "error": {
+          "default": "",
+          "title": "Error",
+          "type": "string"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/CheckedFinding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "given": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Given",
+          "type": "array"
+        },
+        "outcome": {
+          "title": "Outcome",
+          "type": "string"
+        },
+        "stage": {
+          "minLength": 1,
+          "title": "Stage",
+          "type": "string"
+        },
+        "started_at": {
+          "title": "Started At",
+          "type": "string"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        },
+        "turns": {
+          "minimum": 0,
+          "title": "Turns",
+          "type": "integer"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CheckedVerdict"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "stage",
+        "subject",
+        "given",
+        "calls",
+        "outcome",
+        "turns",
+        "cost_usd",
+        "started_at",
+        "ended_at"
+      ],
+      "title": "AgentEntry",
+      "type": "object"
+    },
+    "CheckedFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/MarkedCitation"
+          },
+          "title": "Citations",
+          "type": "array"
+        },
+        "claim": {
+          "title": "Claim",
+          "type": "string"
+        },
+        "failure_scenario": {
+          "title": "Failure Scenario",
+          "type": "string"
+        },
+        "fate": {
+          "enum": [
+            "kept",
+            "deduped",
+            "merged",
+            "rejected"
+          ],
+          "title": "Fate",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[0-9a-f]{10}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "into": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Into"
+        },
+        "rule": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rule"
+        },
+        "severity": {
+          "enum": [
+            "HIGH",
+            "MEDIUM",
+            "LOW"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "claim",
+        "severity",
+        "failure_scenario",
+        "citations",
+        "fate"
+      ],
+      "title": "CheckedFinding",
+      "type": "object"
+    },
+    "CheckedVerdict": {
+      "additionalProperties": false,
+      "properties": {
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/MarkedCitation"
+          },
+          "title": "Citations",
+          "type": "array"
+        },
+        "lowered": {
+          "title": "Lowered",
+          "type": "boolean"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "confirmed",
+            "refuted",
+            "unverifiable"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "reason",
+        "citations",
+        "lowered"
+      ],
+      "title": "CheckedVerdict",
+      "type": "object"
+    },
+    "GateEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "gate": {
+          "enum": [
+            "finding_gate",
+            "verdict_gate"
+          ],
+          "title": "Gate",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "rule": {
+          "default": "",
+          "title": "Rule",
+          "type": "string"
+        }
+      },
+      "required": [
+        "finding_id",
+        "gate",
+        "passed"
+      ],
+      "title": "GateEntry",
+      "type": "object"
+    },
+    "MarkedCitation": {
+      "additionalProperties": false,
+      "properties": {
+        "gate": {
+          "enum": [
+            "pass",
+            "fail",
+            "web"
+          ],
+          "title": "Gate",
+          "type": "string"
+        },
+        "line_end": {
+          "minimum": 1,
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "minimum": 1,
+          "title": "Line Start",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "quote": {
+          "title": "Quote",
+          "type": "string"
+        },
+        "seen": {
+          "enum": [
+            "read",
+            "searched",
+            "diff",
+            "fetched",
+            "not-seen"
+          ],
+          "title": "Seen",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "line_start",
+        "line_end",
+        "quote",
+        "gate",
+        "seen"
+      ],
+      "title": "MarkedCitation",
+      "type": "object"
+    },
+    "Target": {
+      "additionalProperties": false,
+      "properties": {
+        "base_sha": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Base Sha",
+          "type": "string"
+        },
+        "files_changed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Files Changed",
+          "type": "array"
+        },
+        "head_sha": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Head Sha",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "remote_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Url"
+        },
+        "repo_path": {
+          "title": "Repo Path",
+          "type": "string"
+        },
+        "slug": {
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "title": "Slug",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "label",
+        "repo_path",
+        "base_sha",
+        "head_sha",
+        "files_changed"
+      ],
+      "title": "Target",
+      "type": "object"
+    },
+    "ToolCallRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "target": {
+          "title": "Target",
+          "type": "string"
+        },
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "target"
+      ],
+      "title": "ToolCallRecord",
+      "type": "object"
+    }
+  },
+  "$id": "checks.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "agents": {
+      "items": {
+        "$ref": "#/$defs/AgentEntry"
+      },
+      "title": "Agents",
+      "type": "array"
+    },
+    "gates": {
+      "items": {
+        "$ref": "#/$defs/GateEntry"
+      },
+      "title": "Gates",
+      "type": "array"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "producer": {
+      "title": "Producer",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "target": {
+      "$ref": "#/$defs/Target"
+    }
+  },
+  "required": [
+    "schema_version",
+    "generated_at",
+    "producer",
+    "target",
+    "agents",
+    "gates"
+  ],
+  "title": "ChecksFile",
+  "type": "object"
+}
