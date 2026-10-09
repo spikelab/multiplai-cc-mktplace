@@ -79,6 +79,35 @@ def cmd_timeline(args: argparse.Namespace) -> int:
     return 0
 
 
+def grid_filter(width: int, height: int, step: int = 100) -> str:
+    """drawgrid every `step` px plus a pixel label on each line, for reading
+    panel rectangles off one frame."""
+    font = composite._find_font(bold=True)
+    parts = [f"drawgrid=w={step}:h={step}:t=1:c=yellow@0.7"]
+    for x in range(step, width, step):
+        parts.append(f"drawtext=fontfile={font}:text={x}:x={x + 3}:y=3:fontsize=16:"
+                     "fontcolor=yellow:box=1:boxcolor=black@0.6")
+    for y in range(step, height, step):
+        parts.append(f"drawtext=fontfile={font}:text={y}:x=3:y={y + 3}:fontsize=16:"
+                     "fontcolor=yellow:box=1:boxcolor=black@0.6")
+    return ",".join(parts)
+
+
+def cmd_frame(args: argparse.Namespace) -> int:
+    """Write one frame as PNG, optionally with a labelled grid in source pixels."""
+    import subprocess
+    out = Path(args.out).resolve() if args.out else Path.cwd() / f"frame-{args.at:g}s.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(args.at),
+           "-i", args.source, "-frames:v", "1"]
+    if args.grid:
+        w, h = composite.probe_size(args.source)
+        cmd += ["-vf", grid_filter(w, h)]
+    subprocess.run(cmd + [str(out)], check=True)
+    print(f"FRAME: {out}")
+    return 0
+
+
 def cmd_make(args: argparse.Namespace) -> int:
     """make is a thin wrapper for orchestrators. The skill's SKILL.md instructs
     the consuming Claude to run prep, author the EDL, then render — this entry
@@ -129,6 +158,13 @@ def main() -> int:
     tl.add_argument("--transcript", default=None,
                     help="transcript.json (default: the EDL's `transcript`, else the prep cache for its source)")
     tl.set_defaults(func=cmd_timeline)
+
+    fr = sub.add_parser("frame", help="write one frame as PNG (with --grid: labelled 100 px grid)")
+    fr.add_argument("source", help="path to the source video")
+    fr.add_argument("--at", type=float, required=True, help="time in seconds")
+    fr.add_argument("--grid", action="store_true", help="overlay a 100 px grid labelled in source pixels")
+    fr.add_argument("--out", default=None, help="output PNG (default: ./frame-<t>s.png)")
+    fr.set_defaults(func=cmd_frame)
 
     m = sub.add_parser("make", help="natural-language → reel (orchestrator workflow)")
     m.add_argument("source", help="path to screen recording (.mov/.mp4)")
