@@ -17,6 +17,43 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-10-09
+
+### Added
+- review: when the review could not get information it needed, it now says
+  so, and gives the command that would get it. Each such **need** names what
+  was missing, what it blocks (a finding, or the review as a whole), and why:
+  no access, a failed lookup, or not reachable on the web.
+  - A verifier that answers `unverifiable` names what it could not read, with
+    one read-only command (for example `gcloud run services describe …` or
+    `pip download tavily-python==0.8.4 --no-deps`).
+  - A finder that could not check something reports it as a need, never as a
+    finding.
+  - The pipeline's own failed lookups (the base branch's rules from
+    `gh api`, an empty field from `gh pr view`) are needs too, with the exact
+    command it ran. Before, they were only a warning in the log.
+- review: `summary-<slug>.md` has a **Needs you** section after the counts,
+  and `review-<slug>.md` lists each finding's needs under it. After pasting
+  the summary, the session asks you about each need and gives its command as
+  `! <command>`, so the output lands in the conversation; it then says whether
+  that output confirms or refutes the finding. The session never runs a
+  suggested command itself.
+- review-viewer: a **Needs you** block at the top of the Summary tab, each
+  command in a code block with a Copy button and the label "suggested by the
+  review: read it before running". The Findings tab shows a finding's needs.
+- `findings.json` gains optional `needs`, at the top level and on each finding.
+  `schema_version` stays 1; older files still open.
+
+### Changed
+- review: an `unverifiable` finding that has a need is lowered one step but no
+  longer below MEDIUM, so it does not sink below findings you can already act
+  on.
+- review: a suggested command is kept only when it is one line under 300
+  characters, starts with a known read-only CLI (`gh`, `gcloud`, `bq`,
+  `kubectl`, `aws`, `az`, `terraform` with a read verb, `curl`, `pip`, `npm`,
+  `uv`, `git`, `psql`, `mysql`), and chains, pipes or redirects nothing.
+  Otherwise the command is dropped and the need is kept.
+
 ## [0.25.0] - 2026-10-09
 
 ### Added
