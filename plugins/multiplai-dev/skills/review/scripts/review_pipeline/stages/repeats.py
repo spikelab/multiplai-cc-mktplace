@@ -25,8 +25,8 @@ from __future__ import annotations
 
 import logging
 
-from .. import rounds, sdk
-from ..models import Finding, Repeat, RepeatMatch, RepeatsOutput, ReviewState
+from .. import checks, rounds, sdk
+from ..models import AgentCheck, Finding, Repeat, RepeatMatch, RepeatsOutput, ReviewState
 from ..prompts import repeats as prompt
 from . import RunContext
 
@@ -85,19 +85,33 @@ async def run_repeats(state: ReviewState, ctx: RunContext) -> ReviewState:
     todo = [f for f in shown if f.id not in state.repeats and f.id not in state.repeats_checked]
     failed = False
     if todo:
-        try:
-            out = await sdk.agent_call_structured(
-                prompt.build(target, todo, rejected), RepeatsOutput,
-                allowed_tools=sdk.MERGER_TOOLS, model=cfg.merger_model, effort=cfg.effort,
-                max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="repeats",
-            )
-        except sdk.RepoTrustError:
-            raise
-        except sdk.AgentCallError as e:
-            log.error("repeats agent failed for %s", target.slug, exc_info=True)
-            state.errors.append(f"repeats: {str(e).splitlines()[0][:200]}")
-            out, failed = RepeatsOutput(), True
+        started = checks.now()
+        error = ""
+        with sdk.recording() as rec:
+            try:
+                out = await sdk.agent_call_structured(
+                    prompt.build(target, todo, rejected), RepeatsOutput,
+                    allowed_tools=sdk.MERGER_TOOLS, model=cfg.merger_model, effort=cfg.effort,
+                    max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="repeats",
+                )
+            except sdk.RepoTrustError:
+                raise
+            except sdk.AgentCallError as e:
+                log.error("repeats agent failed for %s", target.slug, exc_info=True)
+                error = f"repeats: {str(e).splitlines()[0][:200]}"
+                state.errors.append(error)
+                out, failed = RepeatsOutput(), True
         kept, dropped = gate_matches(out.matches, {f.id for f in todo}, set(by_id))
+        check = AgentCheck(
+            stage="repeats", subject="repeats",
+            given=[f"findings ({len(todo)})", f"rejected earlier ({len(rejected)})"],
+            calls=[checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls],
+            turns=rec.turns, cost_usd=round(rec.cost_usd, 6), started_at=started, ended_at=checks.now(),
+            outcome="; ".join(f"{m.id} repeats {m.rejected_id}" for m in kept) or "no repeats",
+        )
+        if error:
+            check.error, check.outcome = error, f"failed: {checks.failure_kind(error)}"
+        state.checks.append(check)
         for line in dropped:
             state.errors.append(f"repeats: dropped a match: {line}")
         for m in kept:

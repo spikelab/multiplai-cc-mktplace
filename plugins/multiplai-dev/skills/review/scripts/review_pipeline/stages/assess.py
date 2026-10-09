@@ -29,11 +29,11 @@ from __future__ import annotations
 import logging
 import re
 
-from .. import rounds, sdk
-from ..models import AssessItem, AssessOutput, Assessment, Finding, ReviewState
+from .. import checks, rounds, sdk
+from ..models import AgentCheck, AssessItem, AssessOutput, Assessment, Finding, ReviewState
 from ..prompts import assess as prompt
 from . import RunContext
-from .merge import apply_duplicate_sets
+from .merge import apply_duplicate_sets, mark_merged
 from .repeats import earlier_findings, shown_findings
 
 log = logging.getLogger(__name__)
@@ -109,21 +109,37 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     prior = rounds.accepted_or_open(earlier)
     failed = False
+    check: AgentCheck | None = None
     if state.assess_answer is None:
-        try:
-            answer = await sdk.agent_call_structured(
-                prompt.build(target, candidates, state.verdicts, prior), AssessOutput,
-                allowed_tools=sdk.MERGER_TOOLS, model=cfg.merger_model, effort=cfg.effort,
-                max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="assess",
-            )
-        except sdk.RepoTrustError:
-            raise
-        except sdk.AgentCallError as e:
-            log.error("assess agent failed for %s", target.slug, exc_info=True)
-            state.errors.append(f"assess: {str(e).splitlines()[0][:200]}")
-            answer, failed = AssessOutput(), True
+        started = checks.now()
+        error = ""
+        with sdk.recording() as rec:
+            try:
+                answer = await sdk.agent_call_structured(
+                    prompt.build(target, candidates, state.verdicts, prior), AssessOutput,
+                    allowed_tools=sdk.MERGER_TOOLS, model=cfg.merger_model, effort=cfg.effort,
+                    max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="assess",
+                )
+            except sdk.RepoTrustError:
+                raise
+            except sdk.AgentCallError as e:
+                log.error("assess agent failed for %s", target.slug, exc_info=True)
+                error = f"assess: {str(e).splitlines()[0][:200]}"
+                state.errors.append(error)
+                answer, failed = AssessOutput(), True
+        check = AgentCheck(
+            stage="assess", subject="assess",
+            given=[f"findings ({len(candidates)})", f"earlier findings ({len(prior)})",
+                   f"commit subjects ({len(target.commits)})"]
+                  + (["PR description"] if target.title or target.description else []),
+            calls=[checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls],
+            turns=rec.turns, cost_usd=round(rec.cost_usd, 6), started_at=started, ended_at=checks.now(),
+        )
+        if error:
+            check.error, check.outcome = error, f"failed: {checks.failure_kind(error)}"
         # Stored as it arrives (empty when the call failed), so a resume does not ask twice.
         state.assess_answer = answer
+        state.checks.append(check)
     answer = state.assess_answer
 
     if failed:
@@ -134,6 +150,15 @@ async def run_assess(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     removed = apply_duplicate_sets(state, [(candidates, answer.duplicate_sets)], by="assess")
     state.assessments = {**{k: v for k, v in labels.items() if k not in removed}, **repeats}
+    mark_merged(state)
+    if check is not None and not check.error:
+        counts = {}
+        for fid, a in labels.items():
+            if fid not in removed:
+                counts[a.label] = counts.get(a.label, 0) + 1
+        parts = [f"{n} {label}" for label, n in sorted(counts.items())]
+        parts += [f"merged {m.finding.id} into {m.into}" for m in state.merged if m.finding.id in removed]
+        check.outcome = "; ".join(parts) or "no labels"
 
     values = [a.label for a in state.assessments.values()]
     ctx.counts = {"useful": values.count("useful"), "still_open": values.count("still-open"),

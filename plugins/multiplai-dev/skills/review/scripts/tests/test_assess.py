@@ -605,3 +605,85 @@ def test_assess_only_keeps_the_report_when_one_review_goes_over_budget_or_fails(
     assert "| done | `aaaaaaaaaa`" in text and "Cost: $0.50 over 1 reviews" in text
     assert "- costly: stopped at the cost limit (spent $2.00 of $1.00)" in text
     assert "- broken: failed (RuntimeError: snapshot failed)" in text
+
+
+# --- the record of what was checked (checks.json) --------------------------------------
+
+
+async def test_repeats_records_its_agent_call_and_the_matches(target_info, ctx, fake):
+    earlier = at("the keyword is a literal")
+    reworded = at("rate plans match a fixed word", KEYWORD_USE_CITATION, file="settings.py", line=3, severity="MEDIUM")
+    write_round(ctx.target_dir, OLD_HEAD, [earlier])
+    decide(ctx.target_dir, **{earlier.id: ("reject", "intended")})
+    fake(repeats=[RepeatsOutput(matches=[RepeatMatch(id=reworded.id, rejected_id=earlier.id, reason="same")])])
+    state = await run_repeats(state_with(target_info, reworded), ctx)
+    check, = state.checks
+    assert (check.stage, check.subject, check.error) == ("repeats", "repeats", "")
+    assert check.given == ["findings (1)", "rejected earlier (1)"]
+    assert check.outcome == f"{reworded.id} repeats {earlier.id}"
+    # A resume asks nothing again, so it records nothing again.
+    state.stage = "merge"
+    fake()
+    assert len((await run_repeats(state, ctx)).checks) == 1
+
+
+async def test_a_failed_repeats_call_is_recorded_with_its_error(target_info, ctx, fake):
+    earlier, now = at("earlier"), at("now", file="settings.py", line=3)
+    write_round(ctx.target_dir, OLD_HEAD, [earlier])
+    decide(ctx.target_dir, **{earlier.id: ("reject", "")})
+    fake(repeats=[sdk.AgentCallError("timeout\ntrace")])
+    check, = (await run_repeats(state_with(target_info, now), ctx)).checks
+    assert check.error == "repeats: timeout" and check.outcome == "failed: timeout"
+
+
+async def test_an_exact_id_repeat_makes_no_call_and_records_none(target_info, ctx, fake):
+    same = at("the keyword is a literal")
+    write_round(ctx.target_dir, OLD_HEAD, [same])
+    decide(ctx.target_dir, **{same.id: ("reject", "intended")})
+    fake()
+    assert (await run_repeats(state_with(target_info, same), ctx)).checks == []
+
+
+async def test_assess_records_its_labels_and_merges_and_marks_the_finder_entry(target_info, ctx, fake):
+    from review_pipeline.models import AgentCheck
+
+    state, a, b, c = three(target_info)
+    state.checks.append(AgentCheck(stage="find", subject="diff-bugs", findings=[
+        {"id": i, "fate": "kept"} for i in (a.id, b.id, c.id)]))
+    fake(assess=[AssessOutput(
+        assessments=[AssessItem(id=a.id, label="useful"), AssessItem(id=b.id, label="useful"),
+                     AssessItem(id=c.id, label="low-value", reason="[speculative] r")],
+        duplicate_sets=[DuplicateSet(finding_ids=[a.id, b.id], reason="one defect")])])
+    state = await run_assess(state, ctx)
+    finder, check = state.checks
+    assert (check.stage, check.subject, check.error) == ("assess", "assess", "")
+    assert check.given[:2] == ["findings (3)", "earlier findings (0)"]
+    assert check.outcome == f"1 low-value; 1 useful; merged {b.id} into {a.id}"
+    assert [(e["id"], e["fate"], e.get("into")) for e in finder.findings] == [
+        (a.id, "kept", None), (b.id, "merged", a.id), (c.id, "kept", None)]
+    # A resume reuses the stored answer and records no second call.
+    state.stage = "repeats"
+    fake()
+    assert [x.stage for x in (await run_assess(state, ctx)).checks] == ["find", "assess"]
+
+
+async def test_a_failed_assess_call_is_recorded_with_its_error(target_info, ctx, fake):
+    state, a, b, c = three(target_info)
+    fake(assess=[sdk.AgentCallError("timeout\ntrace")])
+    check, = (await run_assess(state, ctx)).checks
+    assert check.error == "assess: timeout" and check.outcome == "failed: timeout"
+
+
+async def test_checks_json_with_repeats_and_assess_entries_validates(target_info, ctx, fake):
+    import jsonschema
+
+    from review_pipeline.export import to_checks_file
+
+    state, a, b, c = three(target_info)
+    fake(assess=[AssessOutput(assessments=[AssessItem(id=i, label="useful") for i in (a.id, b.id, c.id)])])
+    state = await run_assess(state, ctx)
+    data = to_checks_file(state)
+    jsonschema.validate(data, json.loads((SCHEMA.parent / "checks.v1.schema.json").read_text(encoding="utf-8")))
+    assert [x["stage"] for x in data["agents"]] == ["assess"]
+    from review_pipeline.render import render_checks
+    assert "### assess: assess — 3 useful" in render_checks(state, checks_file=data)

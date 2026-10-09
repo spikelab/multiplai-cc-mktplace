@@ -34,7 +34,9 @@ time, not derived from a tag.
   open) or `low-value` (true but not worth acting on, for a named reason:
   context, covered or speculative). It may also merge more duplicates. Labels
   are checked in code; a bad one becomes `useful`. At most two more agent
-  calls per review, none when there is nothing to compare.
+  calls per review, none when there is nothing to compare. Both stages' agent
+  calls are recorded in `checks.json` and on the Checked tab, and a finding
+  the assess stage merges shows as merged in its finder's entry.
 - review: `findings.json` carries each finding's `assessment` (optional; older
   files still validate). The review lists repeats and low-value findings in
   their own section at the end; the summary counts them and lists only useful

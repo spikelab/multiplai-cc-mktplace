@@ -141,9 +141,18 @@ def merge_set(members: list[Finding], state: ReviewState) -> Finding:
     return survivor.model_copy(update={"severity": severity, "citations": citations, "finders": finders})
 
 
+def mark_merged(state: ReviewState) -> None:
+    """Set the `merged` fate, with `into`, on every finder entry whose finding was merged away."""
+    into = {m.finding.id: m.into for m in state.merged}
+    for check in state.checks:
+        if check.stage == "find":
+            for entry in check.findings:
+                if entry.get("fate") == "kept" and entry.get("id") in into:
+                    entry.update(fate="merged", into=into[entry["id"]])
+
+
 def _record_merges(state: ReviewState, groups: list[list[Finding]]) -> None:
     """Each merge entry's outcome, and the `merged` fate in the finders' entries."""
-    into = {m.finding.id: m.into for m in state.merged}
     outcomes: dict[str, list[str]] = {}
     for m in state.merged:
         for group in groups:
@@ -152,10 +161,7 @@ def _record_merges(state: ReviewState, groups: list[list[Finding]]) -> None:
     for check in state.checks:
         if check.stage == "merge" and not check.error:
             check.outcome = "; ".join(outcomes.get(check.subject, [])) or "no duplicates"
-        elif check.stage == "find":
-            for entry in check.findings:
-                if entry.get("fate") == "kept" and entry.get("id") in into:
-                    entry.update(fate="merged", into=into[entry["id"]])
+    mark_merged(state)
 
 
 def apply_duplicate_sets(state: ReviewState, answers: list[tuple[list[Finding], list[DuplicateSet]]],
