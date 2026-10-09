@@ -148,6 +148,36 @@ def cmd_outdir(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_review(args: argparse.Namespace) -> int:
+    """Serve the review page for every render in a directory until stopped."""
+    from stages import review_server as rs
+    video_dir = Path(args.dir)
+    if args.next_version:
+        print(f"NEXT: {rs.next_version_path(video_dir, args.next_version)}")
+        return 0
+    mailbox = Path(args.mailbox) if args.mailbox else video_dir / "review"
+    try:
+        httpd, _token, urls = rs.serve(video_dir, mailbox, port=args.port)
+    except (FileNotFoundError, RuntimeError) as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+    box = rs.Mailbox(mailbox.resolve())
+    # The token is in open.html only; never print it (stdout is the transcript).
+    print(f"REVIEW: serving {len(rs.list_videos(video_dir.resolve()))} clip(s) from {video_dir.resolve()}")
+    for u in urls:
+        print(f"URL: {u}  (needs the token: open {box.open_html} or append ?t=<token from {box.token_file}>)")
+    print(f"OPEN: {box.open_html}")
+    print(f"MAILBOX: {box.comments}", flush=True)
+    try:
+        httpd.serve_forever(poll_interval=0.2)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+        rs.unpublish(mailbox.resolve())
+    return 0
+
+
 def cmd_make(args: argparse.Namespace) -> int:
     """make is a thin wrapper for orchestrators. The skill's SKILL.md instructs
     the consuming Claude to run prep, author the EDL, then render — this entry
@@ -222,6 +252,14 @@ def main() -> int:
     od = sub.add_parser("outdir", help="print and create the output directory for a job")
     od.add_argument("job", help="job name, e.g. the show and episode")
     od.set_defaults(func=cmd_outdir)
+
+    rv = sub.add_parser("review", help="serve a page to watch renders and comment on them by time and position")
+    rv.add_argument("dir", help="directory of rendered videos (clip.mp4, clip.v2.mp4, …)")
+    rv.add_argument("--mailbox", default=None, help="where comments.jsonl goes (default: <dir>/review)")
+    rv.add_argument("--port", type=int, default=8765, help="first port to try (20 tried)")
+    rv.add_argument("--next-version", metavar="CLIP", default=None,
+                    help="print the path for CLIP's next version and exit")
+    rv.set_defaults(func=cmd_review)
 
     m = sub.add_parser("make", help="natural-language → reel (orchestrator workflow)")
     m.add_argument("source", help="path to screen recording (.mov/.mp4)")
