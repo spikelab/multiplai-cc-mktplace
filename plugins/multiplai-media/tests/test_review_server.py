@@ -229,3 +229,30 @@ def test_page_loads_nothing_from_a_cdn() -> None:
     for f in static.iterdir():
         text = f.read_text()
         assert "http://" not in text and "https://" not in text, f.name
+
+
+@pytest.mark.parametrize("sig", ["SIGTERM", "SIGHUP"])
+def test_stopping_the_review_command_removes_the_token_files(tmp_path: Path, sig: str) -> None:
+    import signal
+    import subprocess
+    import time
+    videos = tmp_path / "renders"
+    videos.mkdir()
+    (videos / "a.mp4").write_bytes(b"x")
+    box = rs.Mailbox(tmp_path / "box")
+    proc = subprocess.Popen([sys.executable, str(_SCRIPTS / "pipeline.py"), "review", str(videos),
+                             "--mailbox", str(box.dir), "--port", "19765"],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            env={"PATH": "/usr/bin:/bin", "MULTIPLAI_CONTAINER": "0"})
+    try:
+        deadline = time.monotonic() + 10
+        while not box.token_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert box.token_file.exists() and box.open_html.exists()
+        proc.send_signal(getattr(signal, sig))
+        assert proc.wait(timeout=10) == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert not box.token_file.exists() and not box.open_html.exists()
+    assert box.comments.exists()
