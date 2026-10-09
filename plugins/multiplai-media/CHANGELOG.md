@@ -21,6 +21,56 @@ a tag.
 
 Nothing yet.
 
+## [0.7.0] - 2026-10-09
+
+### Added
+
+- **A proof sheet for every reel.** `pipeline.py proof <reel> --edl <edl>`
+  tiles a frame every 3 s and one just after every cut, each labelled with
+  the source time, the framing, the caption on screen and the speaker. The
+  reels guide now asks five questions of it before a reel is reported: is
+  the person on screen the one speaking, are captions clear of faces, are
+  crops clear of name tags and watermarks, are the brand assets real, is all
+  slide text inside the frame.
+- **Transcript corrections before captions.** `pipeline.py correct <cache>
+  corrections.json` replaces misheard words at given times, keeping their
+  timing, and rebuilds the transcript and context. The original transcript
+  is kept, and an entry that matches nothing changes nothing.
+- **Framing per segment.** A segment can set its own `fit` (a slide whole
+  over a blurred copy, the speaker cropped), and `focus` can be a list of
+  `{t, x, y}` keys the crop follows, for a speaker who walks.
+- **Shot sheets for broadcast feeds.** `pipeline.py shots <cache> --from
+  --to` lists the camera cuts in a span and draws three frames of each, to
+  frame a keynote or TV feed shot by shot.
+- `pipeline.py timeline` lists each segment's place in the output and how it
+  joins the one before.
+- **A how-to for people using the skill**: `skills/video-edit/README.md`
+  walks through making reels and demos, what you are asked to decide, the
+  review page, and where files go.
+
+### Changed
+
+- **Segments that are contiguous in the source join with a hard cut**, with
+  unbroken audio, instead of a 0.5 s crossfade; a transition with `duration:
+  0` asks for a hard cut anywhere.
+- **Captions break at phrase boundaries.** A line holds up to 22 characters
+  and about 5 words, breaks after a comma where it can, and never leaves one
+  word alone unless it ends a sentence or a pause follows.
+- The reels guide covers single-camera and broadcast sources, a glossary
+  hint written as a sentence, and keeping panel crops clear of broadcast
+  graphics.
+
+### Fixed
+
+- **Word times on recordings with audio dropouts.** A recording whose audio
+  skips ahead (13 dropouts, 52 s in all, on one video call) was transcribed
+  up to 52 s early, so clips were cut and captioned at the wrong moments.
+  prep and render now fill each dropout with silence.
+- Words whisper gives no length (`start == end`) are no longer dropped from
+  captions.
+- A whisper word split across two tokens ("dell 'intelligenza") is joined
+  back into one.
+
 ## [0.6.0] - 2026-10-09
 
 ### Added

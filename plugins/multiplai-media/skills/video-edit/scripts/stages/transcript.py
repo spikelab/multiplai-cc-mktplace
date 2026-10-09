@@ -82,19 +82,36 @@ def _word(text: Any, start: Any, end: Any, speaker: Any = None) -> dict | None:
     return w
 
 
+# Languages written without spaces between words: whisper's word tokens there
+# carry no leading space, and each token is a word of its own.
+UNSPACED_LANGUAGES = {"zh", "ja", "th", "lo", "km", "my", "bo", "yue"}
+
+
 def from_whisper_json(data: dict, engine: str, language: str | None = None) -> dict:
     """mlx_whisper `--word-timestamps True --output-format json` → contract.
 
     whisper prefixes each word with its leading space (" Ciao"); that is
-    stripped. Segments without `words` (word timestamps off) contribute nothing.
+    stripped. A token with no leading space continues the word before it
+    ("dell" + "'intelligenza", "sub" + "-milliseconds", "30" + ",000"), so it
+    is joined onto that word, which keeps its start and takes the token's end.
+    In a language written without spaces (UNSPACED_LANGUAGES) no token is
+    joined. Segments without `words` (word timestamps off) contribute nothing.
     """
-    words = []
+    lang = language or data.get("language") or ""
+    join = lang.split("-")[0].lower() not in UNSPACED_LANGUAGES
+    words: list[dict] = []
     for seg in data.get("segments", []):
         for w in seg.get("words", []) or []:
-            cw = _word(w.get("word"), w.get("start"), w.get("end"))
-            if cw:
+            raw = str(w.get("word") or "")
+            cw = _word(raw, w.get("start"), w.get("end"))
+            if not cw:
+                continue
+            if join and words and not raw[0].isspace():
+                words[-1]["text"] += cw["text"]
+                words[-1]["end"] = max(words[-1]["end"], cw["end"])
+            else:
                 words.append(cw)
-    return {"language": language or data.get("language") or "", "engine": engine, "words": words}
+    return {"language": lang, "engine": engine, "words": words}
 
 
 def from_transcribe_skill(data: dict) -> dict:

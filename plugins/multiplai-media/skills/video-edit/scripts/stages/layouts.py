@@ -46,14 +46,32 @@ def pad_chain(W: int, H: int, bg: str = DEFAULT_BG) -> str:
             f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color={bg},setsar=1")
 
 
-def crop_chain(W: int, H: int, fx: float = 0.5, fy: float = 0.5) -> str:
+def crop_chain(W: int, H: int, fx: float | str = 0.5, fy: float | str = 0.5) -> str:
     """Cover the output: crop the largest W:H window, centred on (fx, fy) of the
-    frame and clamped inside it, then scale to W×H."""
+    frame and clamped inside it, then scale to W×H. fx and fy may be
+    expressions in t (lerp_expr), which crop evaluates on every frame."""
     cw = f"min(iw\\,ih*{W}/{H})"
     ch = f"min(ih\\,iw*{H}/{W})"
     x = f"max(0\\,min(iw-ow\\,iw*{fx}-ow/2))"
     y = f"max(0\\,min(ih-oh\\,ih*{fy}-oh/2))"
     return f"crop={cw}:{ch}:{x}:{y},scale={W}:{H},setsar=1"
+
+
+def _num(v: float) -> str:
+    return f"{v:.6g}"
+
+
+def lerp_expr(points: list[tuple[float, float]]) -> str:
+    """An ffmpeg expression in t that moves in straight lines through
+    (t, value) points and holds the first and last values outside them.
+    Commas are escaped for use inside a filtergraph."""
+    t_last, v_last = points[-1]
+    expr = _num(v_last)
+    for (t0, v0), (t1, v1) in reversed(list(zip(points, points[1:]))):
+        seg = f"{_num(v0)}+({_num(v1 - v0)})*(t-{_num(t0)})/{_num(t1 - t0)}"
+        expr = f"if(lt(t\\,{_num(t1)})\\,{seg}\\,{expr})"
+    t0, v0 = points[0]
+    return f"(if(lt(t\\,{_num(t0)})\\,{_num(v0)}\\,{expr}))"
 
 
 def blur_graph(W: int, H: int) -> str:
@@ -89,6 +107,15 @@ def panel_crop_rect(panel: Rect, W: int, H: int, fx: float = 0.5, fy: float = 0.
 def panel_chain(panel: Rect, W: int, H: int, fx: float = 0.5, fy: float = 0.5) -> str:
     r = panel_crop_rect(panel, W, H, fx, fy)
     return f"crop={r.w}:{r.h}:{r.x}:{r.y},scale={W}:{H},setsar=1"
+
+
+def panel_chain_moving(panel: Rect, W: int, H: int, fx: str, fy: str) -> str:
+    """panel_chain whose window follows the expressions fx, fy (fractions of
+    the panel, in t), clamped to the panel's edges on every frame."""
+    r = panel_crop_rect(panel, W, H)
+    x = f"max({panel.x}\\,min({panel.x + panel.w - r.w}\\,{panel.x}+{panel.w}*{fx}-{r.w}/2))"
+    y = f"max({panel.y}\\,min({panel.y + panel.h - r.h}\\,{panel.y}+{panel.h}*{fy}-{r.h}/2))"
+    return f"crop={r.w}:{r.h}:{x}:{y},scale={W}:{H},setsar=1"
 
 
 @dataclass

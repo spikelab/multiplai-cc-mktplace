@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """video-edit pipeline entry point.
 
-Subcommands:
+Subcommands (see --help for all):
   render <edl.json>             Deterministic render (walking skeleton).
+  correct <cache> <fixes.json>  Fix misheard words before they become captions.
+  proof <mp4> --edl E --out P   One PNG of the reel, moment by moment, to check before reporting.
+  shots <cache> --from --to     The shots in a range, 3 frames each, for framing a broadcast feed.
   make <source> --prompt TEXT   Natural-language → EDL → render (not yet implemented).
 """
 from __future__ import annotations
@@ -69,12 +72,74 @@ def cmd_prep(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_correct(args: argparse.Namespace) -> int:
+    """Apply a corrections file to a prep cache's transcript, then rebuild
+    what prep derives from it (sentences, retakes, context.md)."""
+    from stages import corrections
+    cache = Path(args.cache)
+    try:
+        source = corrections.source_of(cache)
+        path = corrections.correct(cache, Path(args.corrections))
+    except (corrections.CorrectionError, FileNotFoundError) as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+    print(f"CORRECTED: {path} (original kept in {path.with_name('transcript.raw.json')})")
+    result = prep_stage.prep(source)
+    print(f"CONTEXT: {result.context_path}")
+    return 0
+
+
+def cmd_proof(args: argparse.Namespace) -> int:
+    """Tile a rendered reel's frames, labelled with time, framing, caption and speaker."""
+    import subprocess
+    from stages import proof, transcript as tx
+    edl = EDL.load(args.edl)
+    tpath = composite.transcript_path(edl)
+    words = tx.load(tpath)["words"] if tpath.exists() else None
+    dur = float(subprocess.check_output(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", args.mp4],
+        text=True).strip())
+    out = Path(args.out)
+    shown = proof.make(args.mp4, edl, words, out, composite._find_font(bold=True), duration=dur)
+    for tile in shown:
+        print(" | ".join(proof.label_lines(tile)))
+    print(f"PROOF: {out.resolve()} ({len(shown)} tiles"
+          f"{'' if words else '; no transcript, so no captions or speakers in the labels'})")
+    return 0
+
+
+def cmd_shots(args: argparse.Namespace) -> int:
+    """List the shots prep detected in a time range and draw 3 frames of each."""
+    from stages import shots
+    cache = Path(args.cache)
+    scenes_csv, proxy = cache / "scenes.csv", cache / "proxy_720p.mp4"
+    for f in (scenes_csv, proxy):
+        if not f.exists():
+            print(f"✗ {f} not found — run `pipeline.py prep <source>` first.", file=sys.stderr)
+            return 1
+    found = shots.shots_in(shots.read_scenes(scenes_csv), args.start, args.end)
+    if not found:
+        print(f"✗ no shots between {args.start} and {args.end}", file=sys.stderr)
+        return 1
+    for k, (s, e) in enumerate(found, start=1):
+        print(f"SHOT {k}: {s:.2f}–{e:.2f} ({e - s:.1f}s)")
+    out = Path(args.out)
+    shots.make(proxy, found, out, composite._find_font(bold=True))
+    print(f"SHEET: {out.resolve()} (frames just after the start, the middle, just before the end)")
+    return 0
+
+
 def cmd_timeline(args: argparse.Namespace) -> int:
-    """Print the transcript in output time: what the render will say, and when."""
+    """Print each segment's place in the output and its join, then the
+    transcript in output time: what the render will say, and when."""
     from stages import timeline, transcript as tx
     edl = EDL.load(args.edl)
     path = Path(args.transcript) if args.transcript else composite.transcript_path(edl)
-    words = timeline.map_words(tx.load(path)["words"], timeline.place_segments(edl))
+    placed = timeline.place_segments(edl)
+    for line in timeline.segment_lines(edl, placed):
+        print(line)
+    print()
+    words = timeline.map_words(tx.load(path)["words"], placed)
     line: list[dict] = []
     for i, w in enumerate(words):
         line.append(w)
@@ -272,6 +337,24 @@ def main() -> int:
                     help="override the mlx_whisper model (default: mlx-community/whisper-large-v3-mlx "
                          "for a non-English --language, else mlx-community/whisper-medium-mlx)")
     pp.set_defaults(func=cmd_prep)
+
+    co = sub.add_parser("correct", help="fix misheard words in a prep cache's transcript before captioning")
+    co.add_argument("cache", help="the prep cache directory (prep prints it)")
+    co.add_argument("corrections", help='JSON list of {"at": <source s>, "from": "...", "to": "..."}')
+    co.set_defaults(func=cmd_correct)
+
+    pr = sub.add_parser("proof", help="tile a rendered reel's frames with time, framing, caption and speaker")
+    pr.add_argument("mp4", help="the rendered reel")
+    pr.add_argument("--edl", required=True, help="the EDL it was rendered from")
+    pr.add_argument("--out", required=True, help="PNG to write")
+    pr.set_defaults(func=cmd_proof)
+
+    sh = sub.add_parser("shots", help="list the shots in a time range and draw 3 frames of each")
+    sh.add_argument("cache", help="the prep cache directory (prep prints it)")
+    sh.add_argument("--from", dest="start", type=float, required=True, help="source seconds")
+    sh.add_argument("--to", dest="end", type=float, required=True, help="source seconds")
+    sh.add_argument("--out", required=True, help="PNG to write")
+    sh.set_defaults(func=cmd_shots)
 
     tl = sub.add_parser("timeline", help="print the transcript in output time for an EDL")
     tl.add_argument("edl", help="path to EDL JSON")

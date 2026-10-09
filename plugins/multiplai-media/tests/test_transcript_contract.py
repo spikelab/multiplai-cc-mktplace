@@ -200,3 +200,72 @@ def test_contract_with_no_words_raises_and_writes_no_transcript(tmp_path: Path, 
     with pytest.raises(RuntimeError, match="no word timings"):
         prep._transcript_contract(tmp_path / "a.wav", tmp_path, "", "it", None)
     assert not (tmp_path / "transcript.json").exists()
+
+
+def test_a_whisper_token_without_a_leading_space_joins_the_word_before() -> None:
+    # whisper writes "dell'intelligenza" as " dell" + "'intelligenza" and
+    # "sub-milliseconds" as " sub" + "-milliseconds"; the caption must show
+    # one word, not "dell 'intelligenza".
+    data = {"segments": [
+        {"words": [{"word": " dell", "start": 1.0, "end": 1.2},
+                   {"word": "'intelligenza", "start": 1.2, "end": 1.9},
+                   {"word": " in", "start": 2.0, "end": 2.1},
+                   {"word": " sub", "start": 2.1, "end": 2.3}]},
+        {"words": [{"word": "-milliseconds,", "start": 2.3, "end": 2.9},
+                   {"word": " 30", "start": 3.0, "end": 3.2},
+                   {"word": ",000", "start": 3.2, "end": 3.5}]}]}
+    c = tx.from_whisper_json(data, engine="mlx_whisper:test")
+    assert c["words"] == [
+        {"text": "dell'intelligenza", "start": 1.0, "end": 1.9},
+        {"text": "in", "start": 2.0, "end": 2.1},
+        {"text": "sub-milliseconds,", "start": 2.1, "end": 2.9},
+        {"text": "30,000", "start": 3.0, "end": 3.5}]
+
+
+def test_a_first_token_without_a_leading_space_stays_a_word() -> None:
+    data = {"segments": [{"words": [{"word": "Ciao", "start": 0.0, "end": 0.3},
+                                    {"word": " a", "start": 0.3, "end": 0.4}]}]}
+    assert [w["text"] for w in tx.from_whisper_json(data, engine="t")["words"]] == ["Ciao", "a"]
+
+
+def test_audio_extraction_fills_dropouts_with_silence(tmp_path: Path, monkeypatch) -> None:
+    # Packets that jump seconds ahead must become silence, not be joined up,
+    # or every later word is timed early.
+    calls: list[list[str]] = []
+    monkeypatch.setattr(prep.subprocess, "run", lambda cmd, *a, **k: calls.append(list(cmd)))
+    prep._extract_audio(tmp_path / "proxy_720p.mp4", tmp_path / "audio16k.wav")
+    cmd = calls[0]
+    assert cmd[cmd.index("-af") + 1] == "aresample=async=1:first_pts=0"
+    assert cmd.index("-af") < cmd.index("-ar")
+
+
+def test_a_short_audio_track_is_reported() -> None:
+    assert prep.audio_length_warning(1756.47, 1756.47) is None
+    assert prep.audio_length_warning(1756.47, 1756.2) is None
+    msg = prep.audio_length_warning(1756.47, 1704.46)
+    assert msg and "1704.5s" in msg and "1756.5s" in msg
+
+
+def test_audio_gaps_finds_long_packets_and_jumps() -> None:
+    d = 0.02322
+    packets = [(i * d, d) for i in range(100)]
+    packets[50] = (50 * d, 4.04)                       # a packet that claims 4 s
+    packets = packets[:51] + [(p + 4.04 - d, dd) for p, dd in packets[51:]]
+    packets[80] = (packets[80][0] + 0.5, d)            # a 0.5 s jump before packet 80
+    packets = packets[:81] + [(p + 0.5, dd) for p, dd in packets[81:]]
+    gaps = prep.audio_gaps(packets)
+    assert gaps == [{"at": round(50 * d + d, 3), "length": round(4.04 - d, 3)},
+                    {"at": round(packets[79][0] + d, 3), "length": 0.5}]
+
+
+def test_audio_gaps_is_empty_for_a_clean_track() -> None:
+    assert prep.audio_gaps([(i * 0.02, 0.02) for i in range(50)]) == []
+    assert prep.audio_gaps([]) == []
+
+
+def test_tokens_are_not_joined_in_a_language_written_without_spaces() -> None:
+    data = {"language": "ja", "segments": [{"words": [
+        {"word": "今日", "start": 0.0, "end": 0.4}, {"word": "は", "start": 0.4, "end": 0.5},
+        {"word": "晴れ", "start": 0.5, "end": 0.9}]}]}
+    words = tx.from_whisper_json(data, engine="t")["words"]
+    assert [w["text"] for w in words] == ["今日", "は", "晴れ"]

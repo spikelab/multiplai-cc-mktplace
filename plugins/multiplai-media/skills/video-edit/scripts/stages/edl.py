@@ -3,7 +3,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 _HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
@@ -30,14 +30,27 @@ class Focus:
 
 
 @dataclass
+class FocusKey:
+    """One point of a moving focus: at source time t, keep (x, y) in view.
+    Between keys the point moves in a straight line; before the first and
+    after the last it holds still."""
+    t: float                    # source seconds, inside the segment
+    x: float = 0.5
+    y: float = 0.5
+
+
+@dataclass
 class Segment:
     src_start: float
     src_end: float
     speed: float = 1.0          # >1 = faster, <1 = slower
     zoom: Optional[Zoom] = None
     mute: bool = False          # replace audio with silence (auto-on for speed>4)
-    focus: Optional[Focus] = None   # crop centre for fit "crop" (in the frame) or a panel frame (in the panel)
+    # crop centre for fit "crop" (in the frame) or a panel frame (in the panel);
+    # a list of FocusKey follows a subject that moves
+    focus: Optional[Union[Focus, list[FocusKey]]] = None
     frame: Optional[str] = None     # "stack" | a panel name ("A", "B") | "speaker"
+    fit: Optional[str] = None       # "pad" | "blur" | "crop": overrides output.fit for this segment
 
     @property
     def src_duration(self) -> float:
@@ -103,7 +116,7 @@ class Layout:
 
 @dataclass
 class Captions:
-    words_per_line: int = 3
+    words_per_line: int = 5     # a soft cap; max_chars is the hard limit (stages/captions.py)
     max_chars: int = 22
     position_y: float = 0.68    # vertical centre of the caption line, fraction of output height
     highlight: bool = True      # colour the word being spoken
@@ -177,7 +190,9 @@ class EDL:
             seg = Segment(**s)
             if z:
                 seg.zoom = Zoom(**z)
-            if f:
+            if isinstance(f, list):
+                seg.focus = [FocusKey(**k) for k in f]
+            elif f:
                 seg.focus = Focus(**f)
             return seg
 
@@ -207,11 +222,16 @@ class EDL:
 
     def xfade_before(self, segment_index: int) -> float:
         """Crossfade into segment `segment_index`: the transition declared
-        `after` the previous one (-1 for the title card), else 0.5 s. Render
-        crossfades every join, declared or not."""
+        `after` the previous one (-1 for the title card); else 0 when the
+        segment starts where the previous one ended in the source (one
+        continuous take, so a hard cut with unbroken audio); else 0.5 s.
+        A duration of 0 is a hard cut."""
         for t in self.transitions:
             if t.after == segment_index - 1:
                 return t.duration
+        if 0 < segment_index < len(self.segments) and \
+                self.segments[segment_index].src_start == self.segments[segment_index - 1].src_end:
+            return 0.0
         return 0.5
 
     def total_duration(self) -> float:
@@ -308,11 +328,43 @@ class EDL:
                                      f"time ({max(a.start, b.start):.2f}–{min(a.end, b.end):.2f}s); "
                                      "move one, shorten one, or give them separate regions.")
 
+    def _validate_focus_keys(self, i: int, s: Segment) -> None:
+        keys = s.focus if isinstance(s.focus, list) else []
+        if not keys:
+            raise ValueError(f"segment {i} has an empty focus list; give at least one {{t, x, y}}.")
+        if s.frame in ("stack", "speaker") or (s.frame is None and (s.fit or self.output.fit) != "crop"):
+            raise ValueError(
+                f"segment {i}: focus keyframes move a crop window, so they need fit \"crop\" or a "
+                f"single panel frame; this segment uses {'frame ' + repr(s.frame) if s.frame else 'fit ' + repr(s.fit or self.output.fit)}.")
+        for k in keys:
+            if not (s.src_start <= k.t <= s.src_end):
+                raise ValueError(f"segment {i}: focus key at t={k.t} is outside the segment "
+                                 f"({s.src_start}–{s.src_end}, source seconds).")
+            if not (0 <= k.x <= 1 and 0 <= k.y <= 1):
+                raise ValueError(f"segment {i}: focus key at t={k.t} has x={k.x}, y={k.y}; both must be 0–1.")
+        times = [k.t for k in keys]
+        if any(b <= a for a, b in zip(times, times[1:])):
+            raise ValueError(f"segment {i}: focus key times must go up: {times}.")
+
     def _validate_framing(self, source_size: Optional[tuple[int, int]],
                           words: Optional[list[dict]]) -> list[str]:
         warnings: list[str] = []
         if self.output.fit not in FITS:
             raise ValueError(f"output.fit {self.output.fit!r} is not one of {', '.join(FITS)}.")
+        for i, s in enumerate(self.segments):
+            if s.fit is None:
+                continue
+            if s.fit not in FITS:
+                raise ValueError(f"segment {i} fit {s.fit!r} is not one of {', '.join(FITS)}.")
+            if s.frame is not None:
+                raise ValueError(f"segment {i} sets both fit {s.fit!r} and frame {s.frame!r}; fit "
+                                 "fills the output with the whole frame, so drop one of them.")
+        for i, s in enumerate(self.segments):
+            if isinstance(s.focus, list):
+                self._validate_focus_keys(i, s)
+        for t in self.transitions:
+            if t.duration < 0:
+                raise ValueError(f"transition after {t.after} has a negative duration ({t.duration}).")
         panels = self.layout.panels if self.layout else {}
         if source_size:
             sw, sh = source_size
@@ -359,11 +411,12 @@ class EDL:
         if source_size:
             sw, sh = source_size
             portrait_out = self.output.height > self.output.width
-            if portrait_out and sw > sh and self.output.fit == "pad":
-                padded = [i for i, s in enumerate(self.segments) if s.frame is None]
+            if portrait_out and sw > sh:
+                padded = [i for i, s in enumerate(self.segments)
+                          if s.frame is None and (s.fit or self.output.fit) == "pad"]
                 if padded:
                     warnings.append(
                         f"segments {padded} letterbox a landscape source into a portrait output "
-                        '(fit "pad" leaves bars above and below). Use output.fit "blur" or '
-                        '"crop", or give those segments a panel frame.')
+                        '(fit "pad" leaves bars above and below). Use fit "blur" or "crop" '
+                        "(in output or on the segment), or give those segments a panel frame.")
         return warnings

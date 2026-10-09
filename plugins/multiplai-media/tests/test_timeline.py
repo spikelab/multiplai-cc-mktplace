@@ -91,3 +91,65 @@ def test_total_duration_matches_the_render_with_a_title_card() -> None:
     assert edl.total_duration() == pytest.approx(timeline.place_segments(edl)[-1].out_end)
     seg_d = sum(s.duration for s in edl.segments)
     assert edl.total_duration() == pytest.approx(edl.title.duration + seg_d - 0.5 - 9 * 0.4)
+
+
+def test_a_word_with_no_length_is_kept_in_the_segment_it_falls_in() -> None:
+    # whisper gives some words start == end ("you 1744.04–1744.04" in a
+    # keynote); they must still reach the captions.
+    edl = _edl([Segment(0, 10), Segment(20, 30)], transitions=[Transition(after=0, duration=0.5)])
+    placed = timeline.place_segments(edl)
+    assert timeline.map_span(4.0, 4.0, placed) == pytest.approx((4.0, 4.0))
+    assert timeline.map_span(22.0, 22.0, placed) == pytest.approx((11.5, 11.5))
+    assert timeline.map_span(15.0, 15.0, placed) is None          # inside the cut
+    words = [{"text": t, "start": s, "end": e} for t, s, e in
+             [("why", 1.0, 1.3), ("do", 1.3, 2.0), ("you", 2.0, 2.0), ("hate", 2.0, 2.2)]]
+    assert [w["text"] for w in timeline.map_words(words, placed)] == ["why", "do", "you", "hate"]
+
+
+# --- hard cuts inside one take ---------------------------------------------------
+
+def test_contiguous_segments_join_with_a_hard_cut() -> None:
+    # A shot change inside one take: segment 1 starts where segment 0 ends.
+    edl = _edl([Segment(0, 10), Segment(10, 20), Segment(30, 40)])
+    assert [edl.xfade_before(i) for i in range(1, 3)] == [0.0, 0.5]
+    placed = timeline.place_segments(edl)
+    assert [p.out_start for p in placed] == pytest.approx([0.0, 10.0, 19.5])
+    assert edl.total_duration() == pytest.approx(29.5)
+    assert timeline.to_output(10.0, placed) == pytest.approx(10.0)
+
+
+def test_a_declared_transition_wins_over_the_hard_cut() -> None:
+    edl = _edl([Segment(0, 10), Segment(10, 20)], transitions=[Transition(after=0, duration=0.4)])
+    assert edl.xfade_before(1) == 0.4
+    edl = _edl([Segment(0, 10), Segment(30, 40)], transitions=[Transition(after=0, duration=0)])
+    assert edl.xfade_before(1) == 0.0
+    assert edl.total_duration() == pytest.approx(20.0)
+
+
+def test_render_uses_concat_for_a_hard_cut_and_agrees_with_the_timeline() -> None:
+    edl = _edl([Segment(0, 10), Segment(10, 20), Segment(30, 40)])
+    fc, *_ = composite.build_filter_complex(edl, [Path(f"s{i}") for i in range(3)], None)
+    assert "[v0][v1]concat=n=2:v=1:a=0[vx1]" in fc
+    assert "[0:a][1:a]concat=n=2:v=0:a=1[ax0]" in fc
+    assert "[vx1][v2]xfade=transition=fade:duration=0.5:offset=19.5[vx2]" in fc
+    assert "[ax0][2:a]acrossfade=d=0.5[ax1]" in fc
+    starts = [p.out_start for p in timeline.place_segments(edl)]
+    assert starts[2] == pytest.approx(19.5)
+
+
+def test_the_title_card_join_is_never_a_hard_cut_by_default() -> None:
+    edl = _edl([Segment(0, 10)], title=Title(line1="Hi", duration=3.0))
+    assert edl.xfade_before(0) == 0.5
+
+
+def test_segment_lines_name_each_join_and_its_length() -> None:
+    edl = EDL.from_dict({"source": "/r/talk.mp4", "output": {"fit": "crop"}, "segments": [
+        {"src_start": 10, "src_end": 16, "fit": "blur"},
+        {"src_start": 16, "src_end": 30, "focus": [{"t": 16, "x": 0.4}, {"t": 30, "x": 0.6}]},
+        {"src_start": 40, "src_end": 45}]})
+    lines = timeline.segment_lines(edl, timeline.place_segments(edl))
+    assert lines == [
+        "seg 0: src 10.00–16.00 → out 0.00–6.00  fit blur",
+        "seg 1: src 16.00–30.00 → out 6.00–20.00  fit crop, 2 focus keys  joins with a hard cut (0.00s)",
+        "seg 2: src 40.00–45.00 → out 19.50–24.50  fit crop  joins with a crossfade (0.50s)",
+    ]

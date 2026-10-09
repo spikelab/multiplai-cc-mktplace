@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import os
 import shlex
 import subprocess
@@ -97,14 +98,24 @@ def _segment_video(edl: EDL, seg, words: list[dict] | None, bg: str) -> str:
     post.append(f"fps={fps}")
     post.append(f"trim=duration={seg.duration}")
 
-    fx, fy = (seg.focus.x, seg.focus.y) if seg.focus else (0.5, 0.5)
+    fx, fy = 0.5, 0.5
+    mx = my = ""
+    moving = isinstance(seg.focus, list)
+    if isinstance(seg.focus, list):
+        # Keyframe times are source seconds; the crop runs after the trim,
+        # where t starts at 0 for this segment.
+        mx = layouts.lerp_expr([(k.t - seg.src_start, k.x) for k in seg.focus])
+        my = layouts.lerp_expr([(k.t - seg.src_start, k.y) for k in seg.focus])
+    elif seg.focus:
+        fx, fy = seg.focus.x, seg.focus.y
     panels = {k: layouts.Rect(p.x, p.y, p.w, p.h)
               for k, p in (edl.layout.panels.items() if edl.layout else [])}
     chain = graph = None
+    fit = seg.fit or edl.output.fit
     if seg.frame is None:
-        if edl.output.fit == "crop":
-            chain = layouts.crop_chain(W, H, fx, fy)
-        elif edl.output.fit == "blur":
+        if fit == "crop":
+            chain = layouts.crop_chain(W, H, mx, my) if moving else layouts.crop_chain(W, H, fx, fy)
+        elif fit == "blur":
             graph = layouts.blur_graph(W, H)
         else:
             chain = layouts.pad_chain(W, H, bg)
@@ -116,6 +127,8 @@ def _segment_video(edl: EDL, seg, words: list[dict] | None, bg: str) -> str:
         if not runs:
             runs = [(0.0, seg.src_duration, sorted(panels)[0])]
         graph = layouts.speaker_graph(runs, panels, W, H, (fx, fy))
+    elif moving:
+        chain = layouts.panel_chain_moving(panels[seg.frame], W, H, mx, my)
     else:
         chain = layouts.panel_chain(panels[seg.frame], W, H, fx, fy)
 
@@ -124,9 +137,27 @@ def _segment_video(edl: EDL, seg, words: list[dict] | None, bg: str) -> str:
     return f"[0:v]{','.join(pre)}[vin];{graph};[vfit]{','.join(post)}[v]"
 
 
+# Fills a source's audio dropouts with silence, as prep does for the WAV it
+# transcribes. Without it a dropout stays a jump in the segment's audio
+# timestamps, and anything that plays the samples end to end hears the rest
+# of the segment early by the dropout's length.
+AUDIO_GAP_FILL = "aresample=async=1:first_pts=0"
+
+
+def _audio_gaps(edl: EDL) -> list[dict]:
+    """The source's audio dropouts, as prep recorded them; none when the
+    source or its prep cache is missing."""
+    if not Path(edl.source).exists():
+        return []
+    from stages.prep import cache_dir_for
+    path = cache_dir_for(edl.source) / "audio_gaps.json"
+    return json.loads(path.read_text())["gaps"] if path.exists() else []
+
+
 def _cut_segments(edl: EDL, work: Path, words: list[dict] | None = None,
                   bg: str = layouts.DEFAULT_BG) -> list[Path]:
     out = []
+    gaps = _audio_gaps(edl)
     for i, seg in enumerate(edl.segments):
         p = work / f"seg{i:02d}.mp4"
         mute = seg.mute or seg.speed > 4.0
@@ -144,6 +175,8 @@ def _cut_segments(edl: EDL, work: Path, words: list[dict] | None = None,
                 f"atrim=duration={seg.src_duration}",
                 "asetpts=PTS-STARTPTS",
             ]
+            if any(g["at"] < seg.src_end and g["at"] + g["length"] > seg.src_start for g in gaps):
+                afilters.insert(0, AUDIO_GAP_FILL)
             if seg.speed != 1.0:
                 afilters.append(_atempo_chain(seg.speed))
             afilters.append(f"atrim=duration={out_dur}")
@@ -231,7 +264,11 @@ def build_filter_complex(
         xfade_dur = _xfade_duration_for(edl, i)
         offset = cur_off - xfade_dur
         out = f"vx{i}"
-        parts.append(f"[{cur_v}][{next_label}]xfade=transition=fade:duration={xfade_dur}:offset={offset}[{out}]")
+        if xfade_dur == 0:
+            # A hard cut: one continuous take, so the frames simply follow on.
+            parts.append(f"[{cur_v}][{next_label}]concat=n=2:v=1:a=0[{out}]")
+        else:
+            parts.append(f"[{cur_v}][{next_label}]xfade=transition=fade:duration={xfade_dur}:offset={offset}[{out}]")
         cur_v = out
         cur_off = offset + seg.duration
 
@@ -244,10 +281,11 @@ def build_filter_complex(
         seg_idx = i if title else i + 1
         xfade_dur = _xfade_duration_for(edl, seg_idx)
         a_out = f"ax{i}"
-        if i == 0:
-            audio_parts.append(f"[0:a][{i+1}:a]acrossfade=d={xfade_dur}[{a_out}]")
+        a_in = "0:a" if i == 0 else last_a
+        if xfade_dur == 0:
+            audio_parts.append(f"[{a_in}][{i+1}:a]concat=n=2:v=0:a=1[{a_out}]")
         else:
-            audio_parts.append(f"[{last_a}][{i+1}:a]acrossfade=d={xfade_dur}[{a_out}]")
+            audio_parts.append(f"[{a_in}][{i+1}:a]acrossfade=d={xfade_dur}[{a_out}]")
         last_a = a_out
     if not audio_parts:
         last_a = "0:a"
@@ -288,7 +326,8 @@ def _xfade_duration_for(edl: EDL, segment_index: int) -> float:
 
 
 def _needs_source_size(edl: EDL) -> bool:
-    return bool(edl.layout) or edl.output.fit != "pad" or edl.output.height > edl.output.width
+    return (bool(edl.layout) or edl.output.fit != "pad" or edl.output.height > edl.output.width
+            or any(s.fit for s in edl.segments))
 
 
 def probe_size(path: str) -> tuple[int, int]:

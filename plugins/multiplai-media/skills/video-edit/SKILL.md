@@ -8,9 +8,9 @@ description: Edit an existing video into finished outputs — a polished 1-3 min
 Free + local pipeline that turns an existing video into edited outputs. Every
 job follows the same steps: analyse the video (transcript, silences, scene
 changes, motion), decide what to keep, write an edit list (EDL), render it,
-and check the result. Commands: `prep`, `render`, `check`, `review`, `timeline`,
-`snap`, `frame`, `outdir`, `contact-sheet`, `prefs`, `make` (prints the workflow); `pipeline.py <command> --help`
-for each.
+and check the result. Commands: `prep`, `correct`, `render`, `check`, `proof`,
+`review`, `timeline`, `snap`, `frame`, `shots`, `outdir`, `contact-sheet`, `prefs`,
+`make` (prints the workflow); `pipeline.py <command> --help` for each.
 
 ## Pick the job, then load its guide
 
@@ -78,7 +78,7 @@ not a venv this skill should build for itself.
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py prep <source.mov> \
   --language it \                     # ISO code; omit to auto-detect. NEVER English-only.
   --model mlx-community/whisper-large-v3-mlx \  # optional; default: large-v3 unless English
-  --prompt-hint "Proper Noun, Other Name"
+  --prompt-hint "A sentence, in the spoken language, that uses the names and terms."
 ```
 Builds a 720p proxy, extracts 16 kHz audio, transcribes on the host with a
 **multilingual** mlx_whisper model with word timestamps (`whisper-large-v3`
@@ -98,6 +98,21 @@ later reads it. It comes from this plugin's `transcribe` skill (its own
 timings, else from prep's own `mlx_whisper` call; `context.md` names the
 engine. If the large-v3 model fails to load on the host, stop and tell the
 user rather than switching to a smaller model.
+
+**Hint and corrections:** write `--prompt-hint` as a sentence in the spoken
+language that uses the names and terms (from the user's request, the video's
+title, and names on screen). A bare comma list ("CIN fuori, DolceBot") made
+whisper-large-v3 return two words for 20 s of Italian speech; the same terms
+in a sentence transcribed normally. If the transcript is far shorter than the
+speech, re-run prep without the hint. Then fix what was still misheard with
+`pipeline.py correct <cache> corrections.json` before any caption is rendered
+(`references/reels.md` step 2).
+
+**Audio dropouts:** some recordings have gaps in their audio timestamps.
+prep records them in `audio_gaps.json` and fills them with silence, so word
+times stay on source time; render fills them too, in each segment that has
+one, so the reel's audio stays in step with its picture. prep warns if the
+extracted audio's length still differs from the source's.
 
 **Language:** `--language` takes an ISO code (`it`, `es`, `fr`, …). Omit it to let
 mlx_whisper auto-detect. The model is always multilingual — an `.en` model is
@@ -126,8 +141,10 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py render <edl.
 
 ### 5. Quality check + report back
 
-Before declaring done, verify the render (ffprobe + spot-check frames with
-`ffmpeg -ss <t> -frames:v 1`) against the checks in the job's guide. For a
+Before declaring done, verify the render against the checks in the job's
+guide. For a reel that means `pipeline.py proof <mp4> --edl <edl> --out
+<png>`, one sheet of labelled frames, and the five questions in
+`references/reels.md` step 7. For a
 vertical reel, `pipeline.py check <mp4> --preset reels --edl <edl>` checks the
 platform requirements and exits 1 on any failure.
 
@@ -225,10 +242,10 @@ $WORKSPACE/.video-edit-cache/<source-hash>/   (or ~/.cache/video-edit/ if no $WO
 See `examples/demo-narrated.edl.json`. Top-level keys:
 - `source` — path to the source recording
 - `title` — `{line1, line2, duration}` (omit to skip)
-- `segments` — `[{src_start, src_end, speed?, zoom?, mute?}]`
+- `segments` — `[{src_start, src_end, speed?, zoom?, mute?, fit?, focus?}]`
   - `speed` — `>1` faster, `<1` slower; default 1.0; auto-mutes audio if >4
   - `zoom` — `{scale, x, y, hold?}` where x,y are normalized 0..1 crop position; `hold: true` permits a zoom on the final segment (otherwise render errors)
-- `transitions` — `[{after, kind, duration}]` (currently only `fade`)
+- `transitions` — `[{after, kind, duration}]` (currently only `fade`). Undeclared joins crossfade 0.5 s, except a segment that starts where the previous one ended in the source: that join is a hard cut with unbroken audio. `duration: 0` asks for a hard cut anywhere.
 - `logo` — `{path, position: br|bl|tr|tl, scale, start_at}`
 - `music` — `{file}` OR `{prompt}` (prompt is documented but generation is not available in CPU-only Linux containers — pass `file` or `url`)
 - `output` — `{width, height, fps, crf, fit, audio_rate}` (defaults 1920×1080, 30 fps, CRF 18, fit `pad`)
@@ -238,8 +255,9 @@ See `examples/demo-narrated.edl.json`. Top-level keys:
 Keys for reels (see `references/reels.md`):
 - `layout` — `{panels: {A: {x, y, w, h}, B: …}, speakers: {"SPEAKER_0": "A", …}}`, rectangles in source pixels
 - segment `frame` — `"stack"` (A over B), a panel name (that panel cropped to the output aspect), or `"speaker"` (follows the transcript's speaker labels); a segment with a `frame` takes no `zoom` (render refuses the pair)
-- segment `focus` — `{x, y}` 0..1, the point a crop keeps in view
-- `captions` — `{words_per_line, max_chars, position_y, highlight, size}` — word-timed captions burned in from the transcript
+- segment `fit` — `pad`, `blur` or `crop` for this segment only, overriding `output.fit` (a slide whole, the speaker cropped); not with a `frame`
+- segment `focus` — `{x, y}` 0..1, the point a crop keeps in view; or a list `[{t, x, y}]` (`t` in source seconds, inside the segment, ascending) that the crop follows in straight lines, for a speaker who walks. Keys work with fit `crop` and a single panel frame.
+- `captions` — `{words_per_line, max_chars, position_y, highlight, size}` — word-timed captions burned in from the transcript. `max_chars` (22) is a hard limit; `words_per_line` (5) is soft: lines break after a comma, semicolon or colon where they can, and never leave one word alone unless it ends a sentence or a pause follows
 - `headline` — `{text, start, end}` in output time, shown at the top
 - `brand` — path to a brand file (fonts, colours, logo)
 - `transcript` — a `transcript.json` other than the prep cache's
@@ -248,7 +266,7 @@ Keys for reels (see `references/reels.md`):
 ## What it does NOT do
 
 - **Subtitles on a screencast.** Captions are a reels feature; a landscape demo gets none unless its EDL asks for `captions`.
-- **Face tracking.** Reels frame speakers from declared panels, or from speaker labels in the transcript — never by detecting faces.
+- **Face tracking.** Reels frame speakers from declared panels, from speaker labels in the transcript, or from focus keys the session places after looking at frames — never by detecting faces.
 - **Hosted review.** The review page is served from this machine to the user's browser; sharing it with someone elsewhere means putting the renders somewhere they can reach.
 - **Posting.** It renders files; uploading or scheduling to Instagram, Facebook or TikTok is up to the user.
 - **Cursor zoom-on-click.** Would require a macOS sidecar logger at record time. Out of scope.

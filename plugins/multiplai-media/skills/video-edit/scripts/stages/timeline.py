@@ -1,8 +1,10 @@
 """Map source time to output time through an EDL.
 
-The render lays segments end to end after the optional title card, and each
-join is a crossfade that overlaps the two neighbours by the transition's
-duration (composite.build_filter_complex). place_segments() repeats that
+The render lays segments end to end after the optional title card. A join
+is a crossfade that overlaps the two neighbours by the transition's
+duration, or a hard cut (no overlap) between segments contiguous in the
+source or under a transition of duration 0 (EDL.xfade_before,
+composite.build_filter_complex). place_segments() repeats that
 arithmetic in the same order, so a caption timed here lands on the frame the
 render produces. A source time inside a cut, or inside a muted segment
 (speed > 4, or `mute`), has no output time: its audio is not heard.
@@ -47,6 +49,24 @@ def place_segments(edl: EDL) -> list[Placed]:
     return placed
 
 
+def segment_lines(edl: EDL, placed: list[Placed]) -> list[str]:
+    """One line per segment: where it sits in the output, how it is framed,
+    and how it joins the one before (a hard cut is 0.00 s)."""
+    lines = []
+    for p in placed:
+        seg = edl.segments[p.index]
+        framing = seg.frame or f"fit {seg.fit or edl.output.fit}"
+        if isinstance(seg.focus, list):
+            framing += f", {len(seg.focus)} focus keys"
+        join = ""
+        if p.index > 0 or edl.title:
+            d = _xfade(edl, p.index)
+            join = f"  joins with a {'hard cut' if d == 0 else 'crossfade'} ({d:.2f}s)"
+        lines.append(f"seg {p.index}: src {p.src_start:.2f}–{p.src_end:.2f} → out "
+                     f"{p.out_start:.2f}–{p.out_end:.2f}  {framing}{join}")
+    return lines
+
+
 def to_output(t: float, placed: list[Placed]) -> float | None:
     """Output time of source time t, or None when t is cut or muted."""
     for p in placed:
@@ -61,8 +81,9 @@ def map_span(start: float, end: float, placed: list[Placed]) -> tuple[float, flo
     """Output span of a word [start, end].
 
     A word that straddles a cut belongs to the segment holding most of it and
-    is clipped to that segment's edge. None when no kept, unmuted segment
-    holds any of it.
+    is clipped to that segment's edge. A word whisper gave no length
+    (start == end) belongs to the segment it falls in. None when no kept,
+    unmuted segment holds any of it.
     """
     best: Placed | None = None
     best_overlap = 0.0
@@ -70,6 +91,8 @@ def map_span(start: float, end: float, placed: list[Placed]) -> tuple[float, flo
         overlap = min(end, p.src_end) - max(start, p.src_start)
         if overlap > best_overlap:
             best, best_overlap = p, overlap
+    if best is None and end <= start:
+        best = next((p for p in placed if p.src_start <= start < p.src_end), None)
     if best is None or best.muted:
         return None
     s = max(start, best.src_start)
