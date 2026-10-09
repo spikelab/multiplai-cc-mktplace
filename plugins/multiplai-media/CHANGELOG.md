@@ -44,6 +44,9 @@ Nothing yet.
   frame a keynote or TV feed shot by shot.
 - `pipeline.py timeline` lists each segment's place in the output and how it
   joins the one before.
+- **A how-to for people using the skill**: `skills/video-edit/README.md`
+  walks through making reels and demos, what you are asked to decide, the
+  review page, and where files go.
 
 ### Changed
 
