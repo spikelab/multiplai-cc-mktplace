@@ -165,11 +165,24 @@ class EDL:
             brand=d.get("brand"),
         )
 
+    def xfade_before(self, segment_index: int) -> float:
+        """Crossfade into segment `segment_index`: the transition declared
+        `after` the previous one (-1 for the title card), else 0.5 s. Render
+        crossfades every join, declared or not."""
+        for t in self.transitions:
+            if t.after == segment_index - 1:
+                return t.duration
+        return 0.5
+
     def total_duration(self) -> float:
-        title_d = self.title.duration if self.title else 0.0
-        seg_d = sum(s.duration for s in self.segments)
-        xfade_d = sum(t.duration for t in self.transitions)
-        return title_d + seg_d - xfade_d
+        """Rendered length: the title card, then each segment overlapping the
+        one before by its crossfade (the same arithmetic as
+        composite.build_filter_complex and timeline.place_segments)."""
+        end = self.title.duration if self.title else 0.0
+        for i, seg in enumerate(self.segments):
+            start = 0.0 if i == 0 and not self.title else end - self.xfade_before(i)
+            end = start + seg.duration
+        return end
 
     def validate(self, source_size: Optional[tuple[int, int]] = None,
                  words: Optional[list[dict]] = None) -> list[str]:

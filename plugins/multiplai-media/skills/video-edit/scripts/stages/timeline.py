@@ -28,12 +28,7 @@ class Placed:
 
 
 def _xfade(edl: EDL, segment_index: int) -> float:
-    # Same rule as composite._xfade_duration_for (kept separate so this module
-    # imports nothing that shells out).
-    for t in edl.transitions:
-        if t.after == segment_index - 1:
-            return t.duration
-    return 0.5
+    return edl.xfade_before(segment_index)
 
 
 def place_segments(edl: EDL) -> list[Placed]:
