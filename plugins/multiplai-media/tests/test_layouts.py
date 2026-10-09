@@ -56,12 +56,29 @@ def test_panel_focus_clamps_at_both_edges() -> None:
     assert L.panel_crop_rect(A, W, H, fx=7).x == A.x + A.w - right.w
 
 
-def test_stack_geometry_for_1080x1920() -> None:
+def test_stack_geometry_for_1080x1920_fills_the_frame() -> None:
+    # Panels 920x740 and 918x740 are wider than 1080:960, so each loses a
+    # little of its sides and the pair fills 1920 px with no bars.
     g = L.stack_geometry(A, B, W, H)
-    assert g.width == 1080
-    assert g.height_a == 874 and g.height_b == 876      # 744 * 1080/920, 744 * 1080/918, even
-    assert g.x == 0
-    assert g.y == (1920 - 874 - 876) // 2 == 85
+    assert (g.crop_a.w, g.crop_a.h) == (836, 744)            # 744 * 1080/960, even
+    assert g.crop_a.x == round(36 + 920 / 2 - 836 / 2)       # centred in the panel
+    assert (g.width, g.height_a, g.height_b) == (1080, 960, 960)
+    assert g.height_a + g.height_b == H
+    assert (g.x, g.y) == (0, 0)
+
+
+def test_stack_crop_follows_focus_and_clamps() -> None:
+    g = L.stack_geometry(A, B, W, H, fx_a=0.0, fx_b=1.0)
+    assert g.crop_a.x == A.x
+    assert g.crop_b.x + g.crop_b.w == B.x + B.w
+
+
+def test_narrow_panels_stay_whole_and_centre_on_the_background() -> None:
+    narrow = L.Rect(0, 0, 600, 740)                         # narrower than 1080:960
+    g = L.stack_geometry(narrow, narrow, W, H)
+    assert g.crop_a == narrow
+    assert g.height_a + g.height_b <= H
+    assert g.y == (H - g.height_a - g.height_b) // 2
 
 
 def test_stack_shrinks_when_panels_are_too_tall() -> None:
@@ -74,9 +91,9 @@ def test_stack_shrinks_when_panels_are_too_tall() -> None:
 def test_stack_graph_filter_string() -> None:
     g = L.stack_graph(A, B, W, H, "#112233")
     assert g == ("[vin]split=2[sa][sb];"
-                 "[sa]crop=920:744:36:200,scale=1080:874,setsar=1[pa];"
-                 "[sb]crop=918:744:966:200,scale=1080:876,setsar=1[pb];"
-                 "[pa][pb]vstack=inputs=2,pad=1080:1920:0:85:color=#112233,setsar=1[vfit]")
+                 "[sa]crop=836:744:78:200,scale=1080:960,setsar=1[pa];"
+                 "[sb]crop=836:744:1007:200,scale=1080:960,setsar=1[pb];"
+                 "[pa][pb]vstack=inputs=2,pad=1080:1920:0:0:color=#112233,setsar=1[vfit]")
 
 
 def _w(text, s, e, spk):

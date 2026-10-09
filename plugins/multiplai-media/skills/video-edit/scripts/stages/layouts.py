@@ -16,6 +16,7 @@ Modes:
   frame "A"   one declared panel, cropped to the output aspect around its
               centre or focus
   frame "stack"   panel A over panel B, each scaled to the output width
+                  (sides trimmed so the pair fills the frame)
   frame "speaker" switch between panels as the transcript's speaker changes
 """
 from __future__ import annotations
@@ -92,6 +93,8 @@ def panel_chain(panel: Rect, W: int, H: int, fx: float = 0.5, fy: float = 0.5) -
 
 @dataclass
 class StackGeometry:
+    crop_a: Rect     # the part of each panel that is shown, source pixels
+    crop_b: Rect
     width: int       # width of each scaled panel
     height_a: int
     height_b: int
@@ -99,22 +102,49 @@ class StackGeometry:
     y: int           # top edge of panel A in the output
 
 
-def stack_geometry(a: Rect, b: Rect, W: int, H: int) -> StackGeometry:
-    """Both panels scaled to the output width, A on top, centred vertically.
-    If the two together are taller than the output, both shrink to fit."""
-    ha, hb = a.h * W / a.w, b.h * W / b.w
+def _stack_crop(panel: Rect, W: int, H: int, fx: float) -> Rect:
+    """Trim a panel's sides so it is no wider than W:(H/2), keeping fx in view.
+    A panel already that narrow is kept whole."""
+    max_w = _even(panel.h * W / (H / 2))
+    if panel.w <= max_w:
+        return panel
+    cx = panel.x + fx * panel.w - max_w / 2
+    cx = int(round(min(max(cx, panel.x), panel.x + panel.w - max_w)))
+    return Rect(cx, panel.y, max_w, panel.h)
+
+
+def stack_geometry(a: Rect, b: Rect, W: int, H: int,
+                   fx_a: float = 0.5, fx_b: float = 0.5) -> StackGeometry:
+    """Panel A over panel B, each scaled to the output width.
+
+    Panels wider than W:(H/2) lose a little of each side, so the two fill the
+    output with no bars. Narrower panels stay whole: the pair is centred
+    vertically on the background, and shrinks if together it is taller than
+    the output.
+    """
+    ca, cb = _stack_crop(a, W, H, fx_a), _stack_crop(b, W, H, fx_b)
+    if ca != a and cb != b:
+        # Both trimmed to W:(H/2): each fills exactly half the frame.
+        half = _even(H / 2)
+        return StackGeometry(crop_a=ca, crop_b=cb, width=W, height_a=half,
+                             height_b=H - half, x=0, y=0)
+    ha, hb = ca.h * W / ca.w, cb.h * W / cb.w
     k = min(1.0, H / (ha + hb))
     width = _even(W * k)
     height_a, height_b = _even(ha * k), _even(hb * k)
-    return StackGeometry(width=width, height_a=height_a, height_b=height_b,
+    if height_a + height_b > H:          # rounding up both halves can overshoot by 2
+        height_b -= height_a + height_b - H
+    return StackGeometry(crop_a=ca, crop_b=cb, width=width, height_a=height_a, height_b=height_b,
                          x=(W - width) // 2, y=(H - height_a - height_b) // 2)
 
 
-def stack_graph(a: Rect, b: Rect, W: int, H: int, bg: str = DEFAULT_BG) -> str:
-    g = stack_geometry(a, b, W, H)
+def stack_graph(a: Rect, b: Rect, W: int, H: int, bg: str = DEFAULT_BG,
+                fx_a: float = 0.5, fx_b: float = 0.5) -> str:
+    g = stack_geometry(a, b, W, H, fx_a, fx_b)
+    ca, cb = g.crop_a, g.crop_b
     return (f"[vin]split=2[sa][sb];"
-            f"[sa]crop={a.w}:{a.h}:{a.x}:{a.y},scale={g.width}:{g.height_a},setsar=1[pa];"
-            f"[sb]crop={b.w}:{b.h}:{b.x}:{b.y},scale={g.width}:{g.height_b},setsar=1[pb];"
+            f"[sa]crop={ca.w}:{ca.h}:{ca.x}:{ca.y},scale={g.width}:{g.height_a},setsar=1[pa];"
+            f"[sb]crop={cb.w}:{cb.h}:{cb.x}:{cb.y},scale={g.width}:{g.height_b},setsar=1[pb];"
             f"[pa][pb]vstack=inputs=2,pad={W}:{H}:{g.x}:{g.y}:color={bg},setsar=1[vfit]")
 
 

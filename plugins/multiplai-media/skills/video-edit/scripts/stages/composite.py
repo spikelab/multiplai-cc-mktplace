@@ -109,7 +109,7 @@ def _segment_video(edl: EDL, seg, words: list[dict] | None, bg: str) -> str:
         else:
             chain = layouts.pad_chain(W, H, bg)
     elif seg.frame == "stack":
-        graph = layouts.stack_graph(panels["A"], panels["B"], W, H, bg)
+        graph = layouts.stack_graph(panels["A"], panels["B"], W, H, bg, fx, fx)
     elif seg.frame == "speaker":
         runs = layouts.speaker_runs(words or [], seg.src_start, seg.src_end,
                                     edl.layout.speakers if edl.layout else {})
