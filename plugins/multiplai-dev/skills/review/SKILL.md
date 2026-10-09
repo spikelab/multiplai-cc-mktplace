@@ -17,7 +17,12 @@ Python between them:
    `confirmed`, `refuted` or `unverifiable`, citing what it read. Unless it
    refutes the finding, it also says in one sentence what correct behaviour
    would be (the finding's **expected behaviour**), without proposing a code
-   change.
+   change, and rates its **impact**: what goes wrong in production if the
+   change is merged as it is — `breaks-users`, `breaks-business`,
+   `correctness-only` or `hygiene`. A missing or weak test is always
+   `correctness-only`. An answer without an impact is re-asked; a verify call
+   is tried up to three times, and a finding still without a verdict stops
+   the run (exit `5`) instead of reaching the review unverified.
 3. **merge** — the finders work independently, so one defect is often
    reported several times in different words. Confirmed and unverifiable
    findings are grouped when their lines overlap (or come within two lines)
@@ -46,10 +51,14 @@ Python between them:
    Python checks every label; a bad one becomes `useful`. Skipped when fewer
    than two findings remain and there are no earlier rounds.
 
-   Neither step deletes a finding or changes a verdict or a severity. The
-   review lists `repeat` and `low-value` findings in their own section after
-   the others, the summary counts them, and review-viewer folds them into a
-   collapsed group. The user still decides every one.
+   Neither step deletes a finding or changes a verdict or a severity.
+   `repeat` and `low-value` findings are not listed or counted in the review,
+   its summary, the rollups or review-viewer; they are in the appendix of
+   `review-<slug>.md` and in `findings.json`.
+
+Findings are listed in three sections, **Code**, **Tests** and **Docs**, by
+the verifier's topic, with severity read within each section: a HIGH under
+Tests is a serious test gap, not a serious defect in the code.
 
 The review proposes no fixes. Fixing a finding is a separate step that
 changes the code and runs the tests.
@@ -57,6 +66,21 @@ changes the code and runs the tests.
 The gates re-read every cited line range with `git show <head>:<path>` and
 check the quote is there. A finding that fails is rejected; a confirmation
 that fails is recorded as `unverifiable`. The gates never ask a model.
+
+## Full or critical
+
+`--mode full` (the default) lists every finding to act on. `--mode critical`
+lists only the findings the verifier rates `breaks-users` or
+`breaks-business`; the rest go to the appendix of `review-<slug>.md`, and the
+viewer shows **Critical only** and hides them. Both modes run the same
+finders and verifiers and cost the same.
+
+Use `critical` when the user is about to merge or release and wants only what
+will break: "anything blocking?", "is this safe to ship?", "only the critical
+stuff", or a rerun after the earlier rounds' findings were dealt with. Use
+`full` (say nothing) for a first review, for a change still being written, or
+when the user asks about tests, docs or code quality. `resume` keeps the mode
+the review started with.
 
 ## What the review could not get: needs
 
@@ -213,7 +237,7 @@ One target:
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts \
   python -m review_pipeline --session-id "{session_id}" [--out /abs/out] \
   review --repo /abs/path/to/repo --range <base>..<head> --trust-repo \
-  [--ticket DB-2038] [--deployed-in staging]
+  [--mode critical] [--ticket DB-2038] [--deployed-in staging]
 ```
 
 Use `--branch <name>` (reviewed against its merge-base with `origin/HEAD`) or
@@ -225,7 +249,8 @@ Use `--branch <name>` (reviewed against its merge-base with `origin/HEAD`) or
 `finder calls` is over 20, ask the user to confirm the run and to choose
 `--max-cost-usd` before starting it. Say that the 50 USD default stops a large
 run part way, and that `resume` continues it with a higher ceiling. A batch is a YAML list of
-`{repo, branch|pr|range, tickets, deployed_in}`:
+`{repo, branch|pr|range, tickets, deployed_in, mode}` (`batch --mode` sets
+the default for entries without one):
 
 ```bash
 uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts \
@@ -253,13 +278,19 @@ written); `3` repository not trusted; `4` the budget circuit breaker stopped
 the run at `--max-cost-usd` (default 50 per target). On `4`, report the spend
 and the partial state; resume only if the user raises the ceiling:
 `python -m review_pipeline resume <out>/<slug> --trust-repo --max-cost-usd <n>`.
+`5` the verifier gave no usable answer for some findings after three tries
+each; the message lists them, and the other verdicts are kept. Tell the user,
+then run `python -m review_pipeline resume <out>/<slug> --trust-repo`, which
+asks again only for those findings.
 
 ### 2. Report
 
 Each finished target prints a `summary: <path>` line. Read each
 `summary-<slug>.md` and paste it into chat as it is: it is about 20 lines, with
-the cost, the severity counts, one line per HIGH and MEDIUM finding with its
-status, and one line per finding that was dropped and why. Then give the output
+the cost, the severity counts per section, and one line per HIGH and MEDIUM
+finding with its status, under Code, Tests or Docs. Refuted, gate-rejected,
+low-value and repeat findings (and, in critical mode, the ones not rated
+`breaks-*`) are neither listed nor counted there. Then give the output
 directory. Do not paste `review-<slug>.md`; the viewer shows the full findings.
 
 The last stdout line, `checks: <path> [<path> ...]`, names each target's

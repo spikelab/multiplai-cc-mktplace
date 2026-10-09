@@ -64,6 +64,29 @@ time, not derived from a tag.
   Slack skill in the session (`serve --share slack`); without it, or for a
   review that is not of a PR, the button says why it is off.
 
+- review: `--mode critical|full` on `review` and `batch` (default `full`;
+  `resume` keeps the mode; recorded as `mode` in `findings.json`). `full`
+  lists every finding to act on, as before. `critical` lists and counts only
+  the findings the verifier rates as breaking users or the business after
+  merge; the rest go to the appendix of `review-<slug>.md`, and review-viewer
+  shows **Critical only** and hides them. Both modes run the same finders and
+  verifiers, so they cost the same. Use `critical` before a merge or release,
+  when only what will break matters.
+- review: the verifier rates each finding's `impact`: what goes wrong in
+  production if the change is merged as it is. The values are
+  `breaks-users`, `breaks-business` (money, a failing deploy or job, access
+  wider than intended, a wrong audit or billing record, or a document that
+  would lead an operator to a wrong action in production),
+  `correctness-only` (wrong, but no path after merge reaches anyone; every
+  missing or weak test) and `hygiene`. It is exported in `findings.json` and
+  printed under each finding. review-viewer shows it as a badge beside the
+  topic.
+- review, review-viewer: findings are listed in **Code**, **Tests** and
+  **Docs** sections by topic, with severity read within each section. A
+  HIGH test gap is listed and counted under Tests, not beside the code
+  defects. The counts in `review-<slug>.md`, `summary-<slug>.md` and the
+  final `review finished:` line are per section.
+
 ### Changed
 - review-viewer: **Needs you** is its own tab, with a count, instead of a
   block at the top of the Summary tab, so the Summary opens on what the
@@ -89,6 +112,15 @@ time, not derived from a tag.
   earlier round (`rounds/<sha>/`, then `<sha>-2/` for a second one), so it
   is checked for repeats against your decisions on that run. Before, a
   same-commit rerun had nothing to compare with.
+- review: a verify call that fails is now tried up to three times, and an
+  answer without an impact is re-asked. A finding still without a verdict
+  stops the run with exit code 5 after the other verifiers finish, keeping
+  their verdicts; `resume` asks again only for that finding. Before, such a
+  finding was recorded as `unverifiable` with the reason "the verifier
+  failed", lowered one step, and shown.
+- review: `post` without `--decisions` posts the HIGH and MEDIUM findings
+  the review lists, so never a low-value or repeat finding, and in critical
+  mode only `breaks-*` ones.
 - review: a finding labelled a repeat of one you rejected takes that
   rejection under its new wording. The next round matches the same wording
   by id, with no agent call, and the repeat stays hidden however many rounds

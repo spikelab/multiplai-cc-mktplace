@@ -28,7 +28,7 @@ The page-logic tests need `node`; they fail (not skip) without it.
 | `server.py` | `ThreadingHTTPServer` subclass (`allow_reuse_address = False`), request checks, routes, idle watchdog. |
 | `registry.py` | Finds live viewers: probes each mailbox's recorded port with that mailbox's token, in parallel. A token is never sent to any other port. |
 | `netinfo.py` | Container detection (degradation contract rule 2), bind host, URLs to print. |
-| `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `theme.js` (applies the saved theme and light/dark mode before first paint as `data-theme`/`data-mode`, fills the Theme menu, drives the mode button; saves choices in a cookie on the widest parent domain the browser accepts, so every viewer's port and container shares them, and exposes that store as `window.ReviewPrefs`), `logic.js` (pure functions, tested under node; `riskLevel` holds the risk rules; `runBlock`/`runTotal` and the number formats behind the Run block at the end of the Summary tab; `helpSection` for the help dialog; `shownFindings`/`shownFile` drop gate-rejected, low-value and repeat findings, and every list and count goes through them; `sidebarGroups`, `identifierAt`, `shareOptions`), `app.js`, `app.css` (every size from the tokens at its top), `themes.css` (every rule scoped to `html[data-theme]`), the bundled `font-*.woff2` and `FONTS-LICENSE.txt`. |
+| `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `theme.js` (applies the saved theme and light/dark mode before first paint as `data-theme`/`data-mode`, fills the Theme menu, drives the mode button; saves choices in a cookie on the widest parent domain the browser accepts, so every viewer's port and container shares them, and exposes that store as `window.ReviewPrefs`), `logic.js` (pure functions, tested under node; `riskLevel` holds the risk rules; `runBlock`/`runTotal` and the number formats behind the Run block at the end of the Summary tab; `helpSection` for the help dialog; `shownFindings`/`shownFile` drop gate-rejected, low-value and repeat findings, and in a `critical` review (`mode` in `findings.json`) every finding whose `impact` is not `breaks-*`; every list and count goes through them; `groupFindings` splits the list into Code, Tests and Docs (`findingSection`, from the topic or its path guess); `sidebarGroups`, `identifierAt`, `shareOptions`), `app.js`, `app.css` (every size from the tokens at its top), `themes.css` (every rule scoped to `html[data-theme]`), the bundled `font-*.woff2` and `FONTS-LICENSE.txt`. |
 
 After changing `models.py`, run `python -m review_viewer export-schema` and
 commit the three schemas; `test_models.py` and `test_checks.py` fail while
@@ -135,7 +135,8 @@ at publish time and left in place — it holds no secret):
 3. Every `finding_ids` entry is a loaded finding.
 4. With `complete: true`: every changed file is anchored or in `skipped`, and
    every `confirmed` or `unverifiable` finding is linked from a step, except
-   those labelled `low-value` or `repeat`, which the page never shows.
+   those labelled `low-value` or `repeat`, and in a `critical` review those
+   whose `impact` is not `breaks-*`: the page never shows them.
 5. Step ids are unique. (`skipped` paths must be changed files too.)
 6. At most one assessment per topic (except `other`); with `complete: true`,
    the `commits` and `tests` assessments exist.

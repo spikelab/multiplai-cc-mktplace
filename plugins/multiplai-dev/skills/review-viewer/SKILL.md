@@ -250,6 +250,16 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   review), and **Copy as markdown** copies the finding (claim, where, with a
   GitHub link when the remote is on GitHub, failure scenario, explanation,
   expected behaviour, verdict, cited code) for whoever will fix it.
+- The Findings list is split into **Code**, **Tests** and **Docs** sections
+  by topic, by severity within each: a HIGH under Tests is a serious test
+  gap, not a serious code defect. A second badge shows the verifier's
+  `impact` (`breaks-users`, `breaks-business`, `correctness-only`,
+  `hygiene`; none for an older review).
+- A review run with `--mode critical` (`mode` in `findings.json`) shows
+  **Critical only** in the header, and the page shows and counts only its
+  `breaks-users` and `breaks-business` findings; the rest are in the review's
+  markdown appendix and `findings.json`. A complete walkthrough of such a
+  review need not link the others.
 - **GitHub** and **Slack** beside **Copy as markdown** send a finding. Each
   opens a dialog with the text that will go (the same markdown, editable)
   and a 20,000-character cap. GitHub offers a comment on the PR or an inline
