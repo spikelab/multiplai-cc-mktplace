@@ -441,3 +441,64 @@ def test_a_finding_rejected_in_round_one_comes_back_reworded_and_is_labelled_rep
         "earlier_note": "negative levels are the sensor's idle state"}
     summary = next(target_dir.glob("summary-*.md")).read_text()
     assert "Assessed: 1 repeats of rejected findings" in summary
+
+
+def test_assess_only_labels_a_saved_review_and_changes_nothing_in_it(tmp_path, monkeypatch, capsys):
+    from review_pipeline import budget
+    from review_pipeline.__main__ import main
+
+    repo = tmp_path / "weather"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "gauge.py").write_text("def level():\n    return 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "gauge.py").write_text("def level():\n    return -1\n\ndef unit():\n    return 'mm'\n")
+    _git(repo, "commit", "-q", "-am", "change")
+    head = _git(repo, "rev-parse", "HEAD")
+    kept = Finding(claim="level() is negative", severity="MEDIUM", file="gauge.py", line_start=2, line_end=2,
+                   failure_scenario="no alarm", citations=[cite("gauge.py", 2, "return -1")])
+    noise = Finding(claim="unit() could one day return inches", severity="LOW", file="gauge.py", line_start=5,
+                    line_end=5, failure_scenario="a future change", citations=[cite("gauge.py", 5, "return 'mm'")])
+    answers = {"assess": AssessOutput(assessments=[
+        AssessItem(id=kept.id, label="useful"),
+        AssessItem(id=noise.id, label="low-value", reason="[speculative] nobody proposed inches")])}
+
+    async def agent(prompt, schema, *, budget_label="", **kwargs):
+        sdk.require_trusted_repo()
+        budget.check(stage=budget_label)
+        stage = budget_label.split(":")[0]
+        if budget_label == "find:diff-bugs":
+            return schema(findings=[kept, noise])
+        if stage == "find":
+            return schema()
+        if stage == "verify":
+            return Verdict(status="confirmed", reason="r", citations=[cite("gauge.py", 2, "return -1")])
+        if stage == "merge":
+            return schema()
+        return answers[stage]
+
+    monkeypatch.setattr(sdk, "agent_call_structured", agent)
+    out = tmp_path / "out"
+    answers_during_review = AssessOutput(assessments=[AssessItem(id=kept.id, label="useful"),
+                                                      AssessItem(id=noise.id, label="useful")])
+    answers["assess"], saved = answers_during_review, answers["assess"]
+    assert main(["--out", str(out), "review", "--repo", str(repo), "--range", f"{base}..{head}", "--trust-repo"]) == 0
+    target_dir = next(out.glob("weather--*"))
+    decide(target_dir, **{kept.id: ("accept", ""), noise.id: ("reject", "never")})
+    before = {p.name: p.read_bytes() for p in target_dir.iterdir() if p.is_file()}
+    answers["assess"] = saved
+    no_decisions = out / "other"
+    no_decisions.mkdir()
+    report = tmp_path / "report.md"
+    capsys.readouterr()
+    assert main(["assess-only", str(target_dir), str(no_decisions), "--report", str(report), "--trust-repo"]) == 0
+    assert f"report: {report}" in capsys.readouterr().out
+    text = report.read_text()
+    assert f"`{noise.id}`" in text and "| reject | low-value | [speculative] nobody proposed inches |" in text
+    assert "Rejected findings labelled repeat or low-value: 1 of 1" in text
+    assert "Accepted findings labelled repeat or low-value (wrongly folded): 0 of 1" in text
+    assert "other: no viewer/decisions.json" in text
+    after = {p.name: p.read_bytes() for p in target_dir.iterdir() if p.is_file()}
+    assert after == before and not (target_dir / "assess-tree").exists()

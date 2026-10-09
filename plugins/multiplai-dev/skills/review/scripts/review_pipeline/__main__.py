@@ -5,6 +5,9 @@
   rollup  — regenerate HIGH/MEDIUM/LOW-only.md from existing findings.json files
   resume  — continue a review from its review-state.json
   post    — one PR comment with the HIGH and MEDIUM findings
+  assess-only — run the repeats and assess stages on saved reviews and compare
+            their labels with the decisions already recorded (writes a report;
+            changes no review)
 
 stdout contract: progress summary lines, a `summary: <path>` line per finished
 target, then for review/batch/resume a final `findings: <path>[ <path>...]`
@@ -28,7 +31,7 @@ from .budget import DEFAULT_MAX_USD
 
 log = logging.getLogger("review_pipeline")
 
-SUBCOMMANDS = ("review", "batch", "rollup", "resume", "post")
+SUBCOMMANDS = ("review", "batch", "rollup", "resume", "post", "assess-only")
 
 
 def default_out() -> Path:
@@ -109,6 +112,14 @@ def build_parser() -> argparse.ArgumentParser:
     po = sub.add_parser("post", parents=[common], help="Post the HIGH and MEDIUM findings as one PR comment")
     po.add_argument("target_dir", help="The review's directory, <out>/<slug>")
     po.add_argument("--decisions", help="The viewer's decisions.json; only accepted findings are posted")
+
+    ao = sub.add_parser("assess-only", parents=[common],
+                        help="Run repeats and assess on saved reviews; report labels beside recorded decisions")
+    ao.add_argument("target_dirs", nargs="+", help="Review directories, <out>/<slug>; those without "
+                                                   "viewer/decisions.json are skipped")
+    ao.add_argument("--report", required=True, help="Markdown report to write")
+    _trust_flag(ao)
+    _budget_flag(ao)
     return parser
 
 
@@ -176,6 +187,27 @@ def main(argv: list[str] | None = None) -> int:
                                                    session_id=args.session_id))
             render.write_rollups(target_dir.parent)
             print(f"findings: {path}")
+            return 0
+
+        if args.command == "assess-only":
+            results, skipped = [], []
+            for raw in args.target_dirs:
+                target_dir = Path(raw).expanduser().resolve()
+                if not (target_dir / "viewer" / "decisions.json").is_file():
+                    skipped.append(f"{target_dir.name}: no viewer/decisions.json")
+                    continue
+                try:
+                    result = asyncio.run(orchestrator.assess_only(
+                        target_dir, load_config(target_dir.parent, max_cost_usd=max_cost)))
+                except orchestrator.ReviewError as e:
+                    skipped.append(f"{target_dir.name}: {e}")
+                    continue
+                results.append(result)
+                print(f"{target_dir.name}: {len(result.rows)} findings labelled (${result.cost_usd:.2f})", flush=True)
+            report = Path(args.report).expanduser().resolve()
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(orchestrator.assess_report(results, skipped), encoding="utf-8")
+            print(f"report: {report}")
             return 0
 
         if args.command == "batch":
