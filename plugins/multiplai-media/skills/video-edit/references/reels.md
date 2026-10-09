@@ -29,6 +29,9 @@ cache directory:
   "Likely retakes" table in `context.md`; keep the later take);
 - `silences.json` — short pauses, used to snap clip edges.
 
+Ignore the dead-span table in `context.md` for an interview: it measures how
+much the picture moves, and a talking head barely moves.
+
 If prep fails because the large-v3 model will not load on the host, stop and
 tell the user. Do not switch to a smaller model on your own: medium's
 punctuation and word timings make visibly worse captions.
@@ -125,7 +128,7 @@ Framing, per segment:
 
 | `frame` | Shows | Use when |
 |---|---|---|
-| `"stack"` | panel A over panel B | a back-and-forth; both reactions matter |
+| `"stack"` | panel A over panel B, sides trimmed so the pair fills the frame | a back-and-forth; both reactions matter |
 | `"A"` / `"B"` | that panel, cropped to 9:16 around its centre (or `focus: {x, y}`, 0–1 within the panel) | one person talks for the whole clip |
 | `"speaker"` | whoever is talking; turns under 1.5 s keep the previous panel | the transcript has speaker labels and `layout.speakers` maps them: `{"SPEAKER_0": "A", "SPEAKER_1": "B"}` |
 | none | the whole frame, filled per `output.fit` | a single-camera recording |

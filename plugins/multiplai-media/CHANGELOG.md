@@ -21,6 +21,53 @@ a tag.
 
 Nothing yet.
 
+## [0.4.0] - 2026-10-09
+
+### Added
+
+- **`video-edit` makes vertical reels from a long interview or podcast.** Ask
+  for "reels from this podcast" and the session reads the whole transcript,
+  proposes 8–12 clips scored on hook, emotional payoff, quotability,
+  self-containedness and density, and renders the ones you pick as
+  1080×1920 MP4s. The steps are in the skill's new reels guide.
+- **Speaker framing.** Declare where each speaker sits in the frame once per
+  show (`pipeline.py frame <video> --at <s> --grid` draws a labelled grid to
+  read the rectangles from); each clip then shows both speakers stacked or one
+  speaker cropped to 9:16. For a single-camera video, `output.fit` can fill
+  the frame over a blurred copy of itself, or crop around a point you choose.
+- **Word-timed captions and a headline.** Captions show up to 3 words at a
+  time, colour the word being spoken, and never stay on screen across a
+  pause. A headline sits at the top for the first seconds. Render stops with
+  the missing characters named if the font cannot draw the transcript's
+  language.
+- **Brand file.** A `brand.json` sets the caption font, colours and a logo;
+  without one, reels use the title-card font, white captions and a yellow
+  highlight.
+- **`pipeline.py check <mp4> --preset reels`** reports pass or fail for
+  Instagram, Facebook and TikTok: size, codecs, 48 kHz audio, frame rate,
+  bitrate, file size, length, and (with `--edl`) captions inside the bands
+  the apps cover with their own buttons. It exits 1 on any failure.
+- **`pipeline.py snap`** moves a rough clip's edges to whole sentences and
+  into the nearest pause, and **`pipeline.py timeline`** prints what an edit
+  will say, and when.
+
+### Changed
+
+- **Prep transcribes with word timings, and with `whisper-large-v3` for any
+  non-English `--language`** (English still uses `whisper-medium`). It writes
+  `transcript.json` with every word's start and end, plus sentences, short
+  pauses and likely retakes, and `context.md` now names the transcription
+  engine and lists "Likely retakes". If the `transcribe` skill gains
+  word-level output, prep uses it instead of its own call.
+- Prep's cache directory names no longer contain spaces, so a recording
+  whose file name has spaces now transcribes over the host bridge instead of
+  failing.
+
+### Fixed
+
+- **An edit with one segment and no title card renders.** It used to fail in
+  the last ffmpeg pass with "Output with label '0:a' does not exist".
+
 ## [0.3.0] - 2026-10-09
 
 ### Changed
