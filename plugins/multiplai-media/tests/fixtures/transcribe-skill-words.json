@@ -1,0 +1,15 @@
+{
+ "language": "it",
+ "engine": "parakeet-tdt-v3",
+ "segments": [
+  {"speaker": "SPEAKER_0", "words": [
+    {"text": "Buongiorno", "start": 0.2, "end": 0.8},
+    {"text": "a", "start": 0.82, "end": 0.9},
+    {"text": "tutti.", "start": 0.92, "end": 1.3}
+  ]},
+  {"speaker": "SPEAKER_1", "words": [
+    {"text": "Grazie", "start": 1.9, "end": 2.3},
+    {"word": "dell'invito.", "start": 2.32, "end": 3.0, "speaker": "SPEAKER_1"}
+  ]}
+ ]
+}

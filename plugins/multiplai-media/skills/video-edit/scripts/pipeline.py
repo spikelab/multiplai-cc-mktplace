@@ -53,6 +53,7 @@ def cmd_prep(args: argparse.Namespace) -> int:
         model=args.model,
     )
     print(f"\nCONTEXT: {result.context_path}")
+    print(f"TRANSCRIPT: {result.transcript_json_path} ({result.transcript_engine})")
     print(f"DURATION: {result.src_duration:.1f}")
     print(f"PROXY: {result.proxy_path}")
     return 0
@@ -99,8 +100,8 @@ def main() -> int:
                     help="ISO code of the spoken language (e.g. 'it', 'es'). Omit to auto-detect. "
                          "Transcription is always multilingual — never English-only.")
     pp.add_argument("--model", default=None,
-                    help="override the mlx_whisper model (default multilingual "
-                         "mlx-community/whisper-medium-mlx; best quality: mlx-community/whisper-large-v3-mlx)")
+                    help="override the mlx_whisper model (default: mlx-community/whisper-large-v3-mlx "
+                         "for a non-English --language, else mlx-community/whisper-medium-mlx)")
     pp.set_defaults(func=cmd_prep)
 
     m = sub.add_parser("make", help="natural-language → reel (orchestrator workflow)")
