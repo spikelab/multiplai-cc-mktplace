@@ -458,6 +458,23 @@ mark.wd-del { background: var(--del-word); color: inherit; border-radius: 2px; }
   padding: 4px 6px 4px 10px; background: var(--panel); border: 1px solid var(--accent); border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2); animation: rise var(--t-fast) var(--ease);
 }
+/* Cmd/Ctrl+click on a name: where it is defined. */
+.code.def-key td.src { cursor: pointer; }
+::highlight(def-name) { text-decoration: underline; text-decoration-color: var(--accent); color: var(--accent); }
+.def-pop {
+  position: fixed; z-index: 20; width: min(560px, calc(100vw - 16px)); max-height: 50vh; overflow: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25); padding: var(--s2); animation: rise var(--t-fast) var(--ease);
+}
+.def-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2);
+  font-size: var(--fs-sm); margin-bottom: var(--s1); }
+.def-list { list-style: none; margin: 0; padding: 0; }
+.def-list li { padding: 2px 0; }
+.def-hit { display: flex; flex-direction: column; align-items: flex-start; width: 100%; min-height: 0;
+  text-align: left; border: 0; background: none; padding: 4px 6px; border-radius: var(--radius); cursor: pointer; }
+.def-hit:hover, .def-hit:focus-visible { background: var(--hl-bg); }
+.def-where { font-size: var(--fs-xs); color: var(--accent); }
+.def-text { font-size: var(--fs-sm); white-space: pre; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .float-bar #ask-lines-go { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 /* --- right panel ------------------------------------------------------------------ */
 

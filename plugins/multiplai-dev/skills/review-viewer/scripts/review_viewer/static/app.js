@@ -68,6 +68,9 @@
     fatal: null,
     toastTimer: null,
     palette: { items: [], index: 0 },
+    defGen: 0,
+    defEvent: null,
+    pointer: null,
   };
 
   // --- small helpers ---------------------------------------------------------
@@ -2155,6 +2158,138 @@
     $("ask-lines").hidden = true;
   }
 
+  // --- where a name is defined (Cmd/Ctrl+click) -----------------------------------
+
+  const DEF_HIGHLIGHT = "def-name";
+
+  /* The character offset in a code cell's text of the caret the browser
+   * would put at (x, y), or null when that is outside the cell. */
+  function caretOffset(td, x, y) {
+    let node = null;
+    let offset = 0;
+    if (document.caretPositionFromPoint) {
+      const pos = document.caretPositionFromPoint(x, y);
+      if (pos) { node = pos.offsetNode; offset = pos.offset; }
+    } else if (document.caretRangeFromPoint) {
+      const r = document.caretRangeFromPoint(x, y);
+      if (r) { node = r.startContainer; offset = r.startOffset; }
+    }
+    if (!node || !td.contains(node)) return null;
+    const range = document.createRange();
+    range.setStart(td, 0);
+    range.setEnd(node, offset);
+    return range.toString().length;
+  }
+
+  /* The identifier under the pointer of a mouse event in the code, with its cell. */
+  function nameAt(ev) {
+    const td = ev.target && ev.target.closest && ev.target.closest("td.src");
+    if (!td) return null;
+    const at = caretOffset(td, ev.clientX, ev.clientY);
+    const id = at == null ? null : L.identifierAt(td.textContent, at);
+    return id ? Object.assign({ td: td }, id) : null;
+  }
+
+  /* A DOM range over characters start..end of a cell's text, across the highlighter's spans. */
+  function textRange(td, start, end) {
+    const walker = document.createTreeWalker(td, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    let pos = 0;
+    let began = false;
+    let n;
+    while ((n = walker.nextNode())) {
+      const len = n.nodeValue.length;
+      if (!began && start <= pos + len) { range.setStart(n, start - pos); began = true; }
+      if (began && end <= pos + len) { range.setEnd(n, end - pos); return range; }
+      pos += len;
+    }
+    return null;
+  }
+
+  /* While Cmd or Ctrl is held, underline the name under the pointer (CSS
+   * highlights, where the browser has them) and show a pointer cursor. */
+  function markNameUnder(ev) {
+    const held = !!(ev && (ev.metaKey || ev.ctrlKey));
+    $("code").classList.toggle("def-key", held);
+    const hl = window.CSS && window.CSS.highlights;
+    if (!hl || typeof window.Highlight !== "function") return;
+    const id = held ? nameAt(ev) : null;
+    const range = id ? textRange(id.td, id.start, id.end) : null;
+    if (range) hl.set(DEF_HIGHLIGHT, new window.Highlight(range));
+    else hl.delete(DEF_HIGHLIGHT);
+  }
+
+  function onCodeMove(ev) {
+    state.pointer = { x: ev.clientX, y: ev.clientY };
+    if (ev.metaKey || ev.ctrlKey || $("code").classList.contains("def-key")) markNameUnder(ev);
+  }
+
+  /* Cmd or Ctrl pressed or let go with the pointer still: mark again where it is. */
+  function onModifierKey(ev) {
+    if (ev.key !== "Meta" && ev.key !== "Control") return;
+    const p = state.pointer;
+    const target = p && document.elementFromPoint(p.x, p.y);
+    if (!target || !$("code").contains(target)) { markNameUnder(null); return; }
+    markNameUnder({ metaKey: ev.type === "keydown", ctrlKey: false, clientX: p.x, clientY: p.y, target: target });
+  }
+
+  /* Cmd/Ctrl+click on a name: where it is defined. Plain clicks in the code do nothing. */
+  function onCodeDown(ev) {
+    if (ev.button !== 0 || !(ev.metaKey || ev.ctrlKey) || !state.view) return;
+    const id = nameAt(ev);
+    if (!id) return;
+    ev.preventDefault();
+    state.defEvent = ev;
+    showDefinitions(id.name, ev.clientX, ev.clientY);
+  }
+
+  function placePopover(pop, x, y) {
+    const w = pop.offsetWidth;
+    const h = pop.offsetHeight;
+    pop.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + "px";
+    pop.style.top = (y + 12 + h > window.innerHeight - 8 ? Math.max(8, y - h - 8) : y + 12) + "px";
+  }
+
+  function closeDefinitions() {
+    state.defGen += 1;
+    $("def-pop").hidden = true;
+  }
+
+  async function showDefinitions(name, x, y) {
+    const pop = $("def-pop");
+    const gen = ++state.defGen;
+    const list = el("ul", { class: "def-list" },
+      [el("li", { class: "muted small" }, [el("span", { class: "spinner" }), "Searching the repo…"])]);
+    pop.replaceChildren(el("div", { class: "def-head" }, [
+      el("span", {}, ["Where ", el("code", { text: name }), " is defined"]),
+      el("button", { class: "ctl ctl-sm", type: "button", title: "Close (Esc)", "aria-label": "Close", text: "✕",
+        onclick: closeDefinitions }),
+    ]), list);
+    pop.hidden = false;
+    placePopover(pop, x, y);
+    let res;
+    try {
+      res = await api(targetUrl("/definitions") + "?name=" + encodeURIComponent(name));
+    } catch (err) {
+      if (gen === state.defGen) list.replaceChildren(el("li", { class: "muted", text: "Could not search: " + err.message }));
+      return;
+    }
+    if (gen !== state.defGen) return;
+    list.replaceChildren();
+    if (!res.hits.length) list.appendChild(el("li", { class: "muted", text: "No definition found in the repo." }));
+    for (const h of res.hits) {
+      list.appendChild(el("li", {}, [el("button", {
+        class: "def-hit", type: "button", title: h.path + ":" + h.line,
+        onclick: async () => { closeDefinitions(); clearPickState(); await openFile(h.path, h.line, h.line); },
+      }, [el("span", { class: "mono def-where", text: h.path + ":" + h.line }),
+        el("span", { class: "mono def-text", text: h.text })])]));
+    }
+    if (res.hits.length >= 50) list.appendChild(el("li", { class: "muted small", text: "The first 50 shown." }));
+    placePopover(pop, x, y);
+    const first = pop.querySelector(".def-hit");
+    if (first) first.focus({ preventScroll: true });
+  }
+
   // --- the question box (footer) ---------------------------------------------
 
   /* What the next message is filed under, the same way send() decides:
@@ -2422,6 +2557,18 @@
       renderFiles();
     });
     $("code").addEventListener("mousedown", onGutterDown);
+    $("code").addEventListener("mousedown", onCodeDown);
+    $("code").addEventListener("mousemove", onCodeMove);
+    $("code").addEventListener("mouseleave", () => markNameUnder(null));
+    // On a Mac, Ctrl+click also asks for the context menu.
+    $("code").addEventListener("contextmenu", (ev) => { if (ev.ctrlKey && nameAt(ev)) ev.preventDefault(); });
+    document.addEventListener("keydown", onModifierKey);
+    document.addEventListener("keyup", onModifierKey);
+    window.addEventListener("blur", () => markNameUnder(null));
+    document.addEventListener("mousedown", (ev) => {
+      const pop = $("def-pop");
+      if (!pop.hidden && ev !== state.defEvent && !pop.contains(ev.target)) closeDefinitions();
+    });
     $("code").addEventListener("mouseover", onGutterOver);
     window.addEventListener("mouseup", onGutterUp);
     $("file-prev").addEventListener("click", () => goFile(-1));
@@ -2484,6 +2631,11 @@
         return;
       }
       if ($("palette").open) return;
+      if (ev.key === "Escape" && !$("def-pop").hidden) {
+        ev.preventDefault();
+        closeDefinitions();
+        return;
+      }
       if ($("help").open) {
         if (ev.key === "?") { ev.preventDefault(); toggleHelp(); }
         return;  // Esc closes the dialog natively

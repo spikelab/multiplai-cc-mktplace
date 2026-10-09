@@ -585,3 +585,55 @@ def test_repo_files_list_is_cut_at_the_cap(start_live, tmp_path, monkeypatch):
     assert len(detail["repo_files"]) == 2 and detail["repo_files_total"] == 6
     # The cap is on the list the page gets, not on what the file route serves.
     assert live.request("GET", f"/api/targets/{live.slug}/file?path=web/view.ts")[0] == 200
+
+
+# --- where a name is defined ------------------------------------------------------------
+
+def test_definitions_finds_each_form_in_the_repo(start_live, tmp_path):
+    live = start_live(path=_wide_findings(tmp_path))
+    url = f"/api/targets/{live.slug}/definitions?name="
+
+    def hits(name):
+        status, body = live.request("GET", url + name)
+        assert status == 200, body
+        return [(h["path"], h["line"]) for h in body["hits"]]
+
+    assert hits("helper") == [("lib/util.py", 6)]          # def, in a file the change leaves alone
+    assert hits("Widget") == [("lib/util.py", 10)]          # class
+    assert hits("RATE") == [("lib/util.py", 3)]             # NAME = at line start
+    assert hits("thing") == [("web/view.ts", 1)]            # export const
+    assert hits("render") == [("web/view.ts", 2)]           # export function
+    assert hits("counter") == [("web/view.ts", 5)]          # let
+    assert hits("Props") == [("web/view.ts", 6)]            # interface
+    assert hits("refresh_totals") == [("db/refresh.sql", 1)]  # CREATE OR REPLACE FUNCTION
+    assert hits("total") == [("lib/util.py", 11)]           # a method; `total(` calls are not hits
+    assert hits("nowhere") == []
+    _, body = live.request("GET", url + "helper")
+    assert body["hits"][0]["text"] == "def helper(x):"
+
+
+def test_definitions_refuses_anything_but_an_identifier(start_live, tmp_path):
+    live = start_live(path=_wide_findings(tmp_path))
+    url = f"/api/targets/{live.slug}/definitions?name="
+    for bad in ("", "1abc", "a-b", "a%20b", "a.b", "x" * 101, "%27%3B", "-e", "a*"):
+        assert live.request("GET", url + bad)[0] == 400, bad
+    assert live.request("GET", url + "helper", token="wrong")[0] == 401
+
+
+def test_definitions_stop_at_the_cap(start_live, tmp_path, monkeypatch):
+    from review_viewer import gitdata
+    import subprocess
+    from fixture_repo import build_wide
+    repo = tmp_path / "wide"
+    build_wide(repo)
+    many = "".join(f"def dup():\n    return {i}\n\n" for i in range(60))
+    (repo / "lib" / "dups.py").write_text(many, encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com",
+                    "-c", "commit.gpgsign=false", "commit", "-qm", "dups"], check=True)
+    target = gitdata.diff_target(repo, "HEAD~1..HEAD")
+    listed = gitdata.repo_files(target)
+    hits = gitdata.definitions(target, "dup", gitdata.allowed_paths(target, None, listed))
+    assert len(hits) == gitdata.DEFINITIONS_MAX == 50
+    # A path the file route would not serve is never a hit.
+    assert gitdata.definitions(target, "dup", {"app/main.py"}) == []

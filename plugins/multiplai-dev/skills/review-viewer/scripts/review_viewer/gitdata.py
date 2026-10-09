@@ -93,7 +93,7 @@ _GIT_CONFIG = ("-c", "color.ui=never", "-c", "core.quotepath=off")
 _DIFF_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
 
 
-def git(repo: str | Path, *args: str) -> str:
+def git(repo: str | Path, *args: str, ok: tuple[int, ...] = (0,)) -> str:
     env = {k: v for k, v in os.environ.items() if k not in ("GIT_EXTERNAL_DIFF", "GIT_PAGER")}
     env["GIT_TERMINAL_PROMPT"] = "0"
     try:
@@ -103,7 +103,7 @@ def git(repo: str | Path, *args: str) -> str:
             errors="replace", env=env)
     except FileNotFoundError:
         raise GitError(GIT_MISSING) from None
-    if proc.returncode != 0:
+    if proc.returncode not in ok:
         raise GitError(f"git {args[0]} failed: {proc.stderr.strip()}")
     return proc.stdout
 
@@ -255,6 +255,71 @@ def allowed_paths(target: Target, findings: FindingsFile | None,
             paths.update(c.path for c in f.citations)
             paths.update(c.path for c in f.verifier_citations or [])
     return paths
+
+
+# --- where a name is defined (Cmd/Ctrl+click in the page) ---------------------------
+
+# An identifier: what the page sends, and the only text that reaches the pattern.
+DEFINITION_NAME_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]{0,99}$")
+DEFINITIONS_MAX = 50
+DEFINITION_TEXT_MAX = 200
+
+_S = "[[:space:]]"
+
+
+def _any_case(word: str) -> str:
+    return "".join(f"[{c.upper()}{c.lower()}]" for c in word)
+
+
+def definition_pattern(name: str) -> str:
+    """A POSIX ERE (no GNU escapes, so it means the same on macOS) for the
+    lines that commonly define `name`: def, class, function, const/let/var,
+    func (Go methods too), fn, type, interface, struct, enum, trait; Python's
+    `NAME =` at the start of a line; SQL's CREATE [OR REPLACE] FUNCTION.
+
+    `git grep -w` is not used: it checks the boundary after the whole match,
+    so `NAME = 3` would fail it (the match ends before a word character).
+    The boundary after the name is written into the pattern instead."""
+    if not DEFINITION_NAME_RE.match(name):
+        raise ValueError(f"not an identifier: {name!r}")
+    n = name.replace("$", r"\$")
+    end = "([^A-Za-z0-9_$]|$)"
+    keywords = "def|class|function\\*?|func|fn|type|interface|struct|enum|trait|const|let|var"
+    lead = (f"^{_S}*(export{_S}+)?(default{_S}+)?(pub(\\([^)]*\\))?{_S}+)?(async{_S}+)?"
+            f"(abstract{_S}+)?(static{_S}+)?")
+    forms = [
+        f"{lead}({keywords}){_S}+{n}{end}",
+        f"^{_S}*func{_S}*\\([^)]*\\){_S}*{n}{end}",
+        f"^{n}{_S}*(:[^=]*)?=([^=]|$)",
+        f"^{_S}*{_any_case('create')}{_S}+({_any_case('or')}{_S}+{_any_case('replace')}{_S}+)?"
+        f"{_any_case('function')}{_S}+([A-Za-z0-9_\".]+\\.)?\"?{n}\"?{end}",
+    ]
+    return "|".join(f"({f})" for f in forms)
+
+
+def definitions(target: Target, name: str, allowed: set[str],
+                limit: int = DEFINITIONS_MAX) -> list[dict]:
+    """Lines at head that look like they define `name`: [{path, line, text}],
+    at most `limit`, only in paths the file route serves (`allowed`).
+    Raises ValueError for a name that is not an identifier."""
+    pattern = definition_pattern(name)
+    out = git(target.repo_path, "grep", "-n", "-I", "--null", "--full-name", "--no-color", "-E",
+              "-e", pattern, target.head_sha, *(tree_pathspec(target) or ["--"]), ok=(0, 1))
+    prefix = f"{target.head_sha}:"
+    hits: list[dict] = []
+    for line in split_lines(out):
+        path, _, rest = line.partition("\0")
+        number, _, text = rest.partition("\0")
+        if path.startswith(prefix):
+            path = path[len(prefix):]
+        if path not in allowed or not number.isdigit():
+            continue
+        text = text.strip()
+        hits.append({"path": path, "line": int(number),
+                     "text": text if len(text) <= DEFINITION_TEXT_MAX else text[:DEFINITION_TEXT_MAX - 1] + "…"})
+        if len(hits) >= limit:
+            break
+    return hits
 
 
 def _cited_ranges(path: str, findings: FindingsFile | None) -> list[tuple[int, int]]:

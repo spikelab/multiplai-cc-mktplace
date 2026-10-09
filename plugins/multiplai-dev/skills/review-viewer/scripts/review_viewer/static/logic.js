@@ -1066,6 +1066,28 @@
     return next >= 0 && next < starts.length ? next : -1;
   }
 
+  // --- where a name is defined (Cmd/Ctrl+click) ------------------------------------
+
+  /* The identifier at character `offset` of `text` (a line of code): the run
+   * of letters, digits, _ and $ around it, or the one just before it when
+   * `offset` is right after its last character. {name, start, end} (end
+   * exclusive), or null on anything else: a number, an operator, a space,
+   * or a run longer than the server takes (100). */
+  function identifierAt(text, offset) {
+    const t = String(text || "");
+    const word = (c) => /[A-Za-z0-9_$]/.test(c || "");
+    let i = Math.max(0, Math.min(Number(offset) || 0, t.length));
+    if (!word(t[i]) && word(t[i - 1])) i -= 1;
+    if (!word(t[i])) return null;
+    let start = i;
+    let end = i + 1;
+    while (start > 0 && word(t[start - 1])) start--;
+    while (end < t.length && word(t[end])) end++;
+    const name = t.slice(start, end);
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]{0,99}$/.test(name)) return null;
+    return { name: name, start: start, end: end };
+  }
+
   // --- the Go to palette -------------------------------------------------------------
 
   /* Entries whose text matches `query` as a subsequence, best first:
@@ -1318,7 +1340,7 @@
     riskInputs: riskInputs, riskLevel: riskLevel, TIER_NAMES: TIER_NAMES,
     EMPTY_TREE: EMPTY_TREE, isTreeReview: isTreeReview,
     currentBlock: currentBlock, stepCurrent: stepCurrent,
-    paletteMatch: paletteMatch, viewedCount: viewedCount,
+    paletteMatch: paletteMatch, viewedCount: viewedCount, identifierAt: identifierAt,
     formatUsd: formatUsd, formatTokens: formatTokens, formatSeconds: formatSeconds,
     runBlock: runBlock, runTotal: runTotal,
     agentOrder: agentOrder, finderRows: finderRows, checkedFindingRows: checkedFindingRows,

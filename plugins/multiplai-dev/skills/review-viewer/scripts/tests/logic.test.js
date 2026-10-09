@@ -985,6 +985,21 @@ test("a directory the change does not touch starts closed", () => {
   assert.equal(L.dirOpen(lib, new Map([["lib", false]]), "ut", null), true, "a filter opens every match");
 });
 
+test("cmd/ctrl+click takes the whole identifier under the pointer", () => {
+  const line = "  return helper(x) + $el.value_2 * 10;";
+  assert.deepEqual(L.identifierAt(line, 11), { name: "helper", start: 9, end: 15 });
+  assert.deepEqual(L.identifierAt(line, 9), { name: "helper", start: 9, end: 15 }, "first character");
+  assert.deepEqual(L.identifierAt(line, 15), { name: "helper", start: 9, end: 15 }, "just after the last");
+  assert.equal(L.identifierAt(line, 21).name, "$el");
+  assert.equal(L.identifierAt(line, 27).name, "value_2");
+  assert.equal(L.identifierAt(line, 36), null, "a number is not a name");
+  assert.equal(L.identifierAt(line, 0), null, "a space");
+  assert.equal(L.identifierAt(line, 19), null, "an operator between spaces");
+  assert.equal(L.identifierAt("x".repeat(101), 3), null, "longer than the server takes");
+  assert.equal(L.identifierAt("", 0), null);
+  assert.equal(L.identifierAt("abc", 99).name, "abc", "an offset past the end is clamped");
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

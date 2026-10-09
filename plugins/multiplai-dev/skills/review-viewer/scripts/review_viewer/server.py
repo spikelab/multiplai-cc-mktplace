@@ -31,8 +31,8 @@ from multiplai_core.log_utils import log_event
 from pydantic import ValidationError
 
 from . import netinfo, registry
-from .gitdata import (REPO_FILES_MAX, GitError, PathNotInReview, TargetError, allowed_paths, file_view,
-                      pr_status, repo_files)
+from .gitdata import (DEFINITION_NAME_RE, REPO_FILES_MAX, GitError, PathNotInReview, TargetError,
+                      allowed_paths, definitions, file_view, pr_status, repo_files)
 from .stats import PR_BADGE_IDS, pr_badges
 from .mailbox import Mailbox, new_question_id, utc_now, write_private
 from .models import Anchor, ChecksFile, FindingsFile, InboxRow, Walkthrough, findings_digest, load_checks
@@ -340,6 +340,9 @@ def make_handler(viewer: Viewer):
                     if rest.endswith("/file"):
                         state = self._target(rest[: -len("/file")])
                         return self._file(state, q.get("path", ""))
+                    if rest.endswith("/definitions"):
+                        state = self._target(rest[: -len("/definitions")])
+                        return self._definitions(state, q.get("name", ""))
                     if rest.endswith("/pr"):
                         return self._json(self._target(rest[: -len("/pr")]).refresh_pr())
                     if rest.endswith("/walkthrough"):
@@ -390,6 +393,16 @@ def make_handler(viewer: Viewer):
                 log.warning("file view failed for %s: %s", path, exc)
                 raise _Reject(422, "git could not read this file at the reviewed commits")
             self._json(view.to_dict())
+
+        def _definitions(self, state: TargetState, name: str) -> None:
+            if not DEFINITION_NAME_RE.match(name):
+                raise _Reject(400, "name must be an identifier: a letter, _ or $, then up to 99 of those or digits")
+            try:
+                hits = definitions(state.findings.target, name, state.allowed)
+            except GitError as exc:
+                log.warning("definitions search failed: %s", exc)
+                raise _Reject(422, "git could not search the reviewed commit")
+            self._json({"name": name, "hits": hits})
 
         def _ask(self, body: dict) -> None:
             state = self._target(body.get("target"))

@@ -95,6 +95,7 @@
       </div>
     </div>
     <div id="code" class="code" tabindex="0"></div>
+    <div id="def-pop" class="def-pop" role="dialog" aria-label="Where a name is defined" hidden></div>
     <div id="ask-lines" class="float-bar" role="group" aria-label="Selected lines" hidden>
       <span id="ask-lines-label" class="small"></span>
       <button id="ask-lines-go" type="button" class="ctl ctl-sm">Ask about these lines</button>
@@ -445,7 +446,7 @@
             <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Next / previous finding</dd>
             <dt><kbd>]</kbd> <kbd>[</kbd></dt><dd>Next / previous review step</dd>
             <dt><kbd>n</kbd> <kbd>p</kbd></dt><dd>Next / previous change in this file</dd>
-            <dt><kbd>/</kbd></dt><dd>Filter the changed files</dd>
+            <dt><kbd>/</kbd></dt><dd>Filter the files (every file in the repo while <b>Show all files in the repo</b> is on)</dd>
             <dt><kbd>Ctrl</kbd>+<kbd>B</kbd></dt><dd>Hide or show the files panel</dd>
             <dt><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>B</kbd></dt><dd>Hide or show the review panel</dd>
             <dt>‹ Prev / Next ›</dt><dd>Beside the file name: the previous or next file of the open review, or of the whole change</dd>
@@ -456,6 +457,9 @@
             <dt><kbd>v</kbd></dt><dd>Mark this file viewed, or not</dd>
             <dt><kbd>s</kbd></dt><dd>Switch between unified and split</dd>
             <dt><kbd>w</kbd></dt><dd>Wrap long lines, or not</dd>
+            <dt><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+click a name</dt><dd>Where it is defined: a list of the lines
+              in the repo, at the reviewed commit, that look like its definition. Hold <kbd>Cmd</kbd> or
+              <kbd>Ctrl</kbd> to see which name a click would take. A plain click in the code does nothing.</dd>
             <dt><kbd>?</kbd></dt><dd>Show this list (the ⌨ button too); the <strong>?</strong> button and the ? beside a heading open the rest of this help</dd>
           </dl>
         </section>
@@ -466,7 +470,6 @@
             <dt><kbd>@</kbd></dt><dd>Point at a changed file; <code>@file:12</code> or <code>@file:12-20</code> for lines</dd>
             <dt><kbd>Tab</kbd> <kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Pick from the file list while typing <kbd>@</kbd></dd>
             <dt><kbd>Ctrl</kbd>+<kbd>Enter</kbd></dt><dd>Send the message</dd>
-            <dt>Click a changed line</dt><dd>Add its whole block to the message</dd>
             <dt>Click a line number</dt><dd>Select that line to ask about it (a <b>+</b> shows on hover); drag
               down the numbers, or <kbd>Shift</kbd>+click another, to select several. Nothing goes into the
               chat until you press Ask about these lines; <kbd>Esc</kbd> or ✕ clears the selection.</dd>
