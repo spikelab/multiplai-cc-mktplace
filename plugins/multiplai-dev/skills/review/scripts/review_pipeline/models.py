@@ -125,8 +125,8 @@ class TargetInfo(BaseModel):
     diff_path: str = ""
     slug: str
     label: str = ""
-    kind: Literal["branch", "pr", "range"] = "range"
-    ref: str = ""  # the branch name, PR number or range as given
+    kind: Literal["branch", "pr", "range", "tree"] = "range"
+    ref: str = ""  # the branch name, PR number or range as given; for a tree, the path or "."
     pr: int | None = None
     tickets: list[str] = Field(default_factory=list)
     deployed_in: str | None = None
@@ -140,6 +140,14 @@ class TargetInfo(BaseModel):
     # rules; `None` means they could not be read (no gh, not GitHub, API error).
     base_ref: str = ""
     branch_rules: list[dict] | None = None
+    # Tree targets only: (file, reason) for each file at head left out of the
+    # review (binary, too large, a lockfile, generated or vendored).
+    skipped: list[tuple[str, str]] = Field(default_factory=list)
+
+    @property
+    def is_tree(self) -> bool:
+        """A whole tree or a directory at one commit, not a change: there is no diff and no commits."""
+        return self.kind == "tree"
 
 
 class Rejected(BaseModel):
