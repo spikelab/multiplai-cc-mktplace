@@ -284,10 +284,7 @@ def _map_label(label: str) -> str:
 
 
 def _xfade_duration_for(edl: EDL, segment_index: int) -> float:
-    for t in edl.transitions:
-        if t.after == segment_index - 1:
-            return t.duration
-    return 0.5
+    return edl.xfade_before(segment_index)
 
 
 def _needs_source_size(edl: EDL) -> bool:

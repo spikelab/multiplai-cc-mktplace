@@ -11,8 +11,9 @@ speaker labels.
 
 Prep fills it from one of two sources, in this order:
 
-  (a) The `transcribe` skill of this plugin, when its `transcribe.sh --help`
-      lists WORDS_JSON_FLAG. That skill is where Parakeet and diarization
+  (a) The `transcribe` skill of this plugin (its own scripts/transcribe.sh,
+      never one found on PATH), when its `transcribe.sh --help` lists
+      WORDS_JSON_FLAG. That skill is where Parakeet and diarization
       arrive; this skill never calls FluidAudio itself.
   (b) Otherwise prep's own host `mlx_whisper` call (stages/prep.py), run with
       word timestamps and JSON output.
@@ -24,7 +25,6 @@ should use this name, or change it here in the same change.
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -36,10 +36,11 @@ _SIBLING_TRANSCRIBE = Path(__file__).resolve().parents[3] / "transcribe" / "scri
 
 
 def transcribe_skill_script() -> Path | None:
-    """The transcribe skill's entry point: one on PATH first, else the sibling skill."""
-    on_path = shutil.which("transcribe.sh")
-    if on_path:
-        return Path(on_path)
+    """The sibling `transcribe` skill's entry point in this plugin, if present.
+
+    Only that file: a `transcribe.sh` elsewhere on PATH is never run, since
+    prep would execute it with the user's credentials.
+    """
     return _SIBLING_TRANSCRIBE if _SIBLING_TRANSCRIBE.exists() else None
 
 

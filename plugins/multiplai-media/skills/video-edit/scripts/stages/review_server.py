@@ -24,12 +24,14 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import mimetypes
 import os
 import re
 import secrets
 import socket
 import subprocess
+import threading
 import uuid
 from datetime import datetime, timezone
 from html import escape
@@ -62,18 +64,54 @@ def bind_host() -> str:
     return os.environ.get("VIDEO_EDIT_REVIEW_HOST") or ("0.0.0.0" if detect_container() else "127.0.0.1")
 
 
-def display_urls(port: int) -> list[str]:
-    if not detect_container():
-        return [f"http://127.0.0.1:{port}/"]
-    urls = [f"http://{socket.gethostname()}.orb.local:{port}/"]
+def _resolves(name: str, timeout: float = 2.0) -> bool:
+    """Whether `name` resolves here, giving up after `timeout` (getaddrinfo has none)."""
+    found: list[bool] = []
+
+    def look() -> None:
+        try:
+            socket.getaddrinfo(name, None)
+            found.append(True)
+        except (OSError, UnicodeError):
+            pass
+    t = threading.Thread(target=look, daemon=True)
+    t.start()
+    t.join(timeout)
+    return bool(found)
+
+
+def _first_address() -> str | None:
     try:
-        addr = subprocess.run(["hostname", "-I"], capture_output=True, text=True,
-                              timeout=2).stdout.split()
+        out = subprocess.run(["hostname", "-I"], stdin=subprocess.DEVNULL, capture_output=True,
+                             text=True, timeout=2).stdout
     except (OSError, subprocess.SubprocessError):
-        addr = []
+        return None
+    parts = out.split()
+    return parts[0] if parts else None
+
+
+def display_urls(port: int) -> list[str]:
+    """URLs a browser may use, best first; open.html redirects to the first.
+
+    VIDEO_EDIT_REVIEW_URL_HOST, when set, comes first. In a container the
+    `<hostname>.orb.local` name is offered only when it resolves, because only
+    OrbStack serves it; elsewhere the container IP comes first, and 127.0.0.1
+    is the last resort (a port published with `-p`).
+    """
+    urls = []
+    override = os.environ.get("VIDEO_EDIT_REVIEW_URL_HOST")
+    if override:
+        base = override if "://" in override else f"http://{override}"
+        urls.append(f"{base.rstrip('/')}:{port}/")
+    if not detect_container():
+        return urls or [f"http://127.0.0.1:{port}/"]
+    orb = f"{socket.gethostname()}.orb.local"
+    if _resolves(orb):
+        urls.append(f"http://{orb}:{port}/")
+    addr = _first_address()
     if addr:
-        urls.append(f"http://{addr[0]}:{port}/")
-    return urls
+        urls.append(f"http://{addr}:{port}/")
+    return urls or [f"http://127.0.0.1:{port}/"]
 
 
 # --- HTTP Range ----------------------------------------------------------------
@@ -186,8 +224,10 @@ def validate_comment(c: Any, known: set[tuple[str, int]]) -> dict:
         t, x, y = float(c["t"]), float(c["x"]), float(c["y"])
     except (KeyError, TypeError, ValueError):
         raise ValueError("t, x and y must be numbers") from None
-    if t < 0 or not (0 <= x <= 1 and 0 <= y <= 1):
-        raise ValueError("t must be >= 0 and x, y within 0..1")
+    # float() takes "nan" and "inf", and json.loads takes bare NaN and Infinity;
+    # every comparison with NaN is false, so test finiteness first.
+    if not all(map(math.isfinite, (t, x, y))) or t < 0 or not (0 <= x <= 1 and 0 <= y <= 1):
+        raise ValueError("t must be a finite number >= 0 and x, y within 0..1")
     text = c.get("text")
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
         raise ValueError(f"text must be 1..{MAX_TEXT} characters")
@@ -348,11 +388,15 @@ def make_handler(video_dir: Path, mailbox: Mailbox, token: str):
     return Handler
 
 
-def open_page_html(url: str, token: str) -> str:
-    target = escape(f"{url}?t={token}", quote=True)
+def open_page_html(urls: list[str], token: str) -> str:
+    """Redirects to the first URL; links every URL in case the first does not resolve."""
+    targets = [escape(f"{u}?t={token}", quote=True) for u in urls]
+    links = "".join(f"<li><a href=\"{t}\" rel=\"noreferrer\">{escape(u)}</a></li>\n"
+                    for t, u in zip(targets, urls))
     return ("<!doctype html>\n<meta charset=\"utf-8\">\n<meta name=\"referrer\" content=\"no-referrer\">\n"
-            f"<meta http-equiv=\"refresh\" content=\"0; url={target}\">\n<title>Opening video review…</title>\n"
-            f"<p><a href=\"{target}\" rel=\"noreferrer\">Open the video review</a></p>\n")
+            f"<meta http-equiv=\"refresh\" content=\"0; url={targets[0]}\">\n<title>Opening video review…</title>\n"
+            "<p>Opening the video review. If it does not load, try another address:</p>\n"
+            f"<ul>\n{links}</ul>\n")
 
 
 def serve(video_dir: Path, mailbox_dir: Path, host: str | None = None,
@@ -377,7 +421,7 @@ def serve(video_dir: Path, mailbox_dir: Path, host: str | None = None,
         raise RuntimeError(f"no free port in {port}..{port + span - 1}")
     urls = display_urls(httpd.server_address[1])
     _write_private(mailbox.token_file, token + "\n")
-    _write_private(mailbox.open_html, open_page_html(urls[0], token))
+    _write_private(mailbox.open_html, open_page_html(urls, token))
     return httpd, token, urls
 
 

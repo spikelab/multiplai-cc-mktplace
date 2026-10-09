@@ -178,6 +178,14 @@ def test_invalid_comment_rejects_the_whole_batch(server, bad) -> None:
     assert (server["box"] / "comments.jsonl").read_text() == ""
 
 
+@pytest.mark.parametrize("t", ["nan", "inf", "Infinity", float("nan"), float("inf")])
+def test_non_finite_time_is_rejected(server, t) -> None:
+    # A float in the list goes out as a bare NaN / Infinity token, which json.loads accepts.
+    res, _ = _post(server, [{"video": "clip-01", "version": 1, "t": t, "x": 0.5, "y": 0.5, "text": "when?"}])
+    assert res.status == 400
+    assert (server["box"] / "comments.jsonl").read_text() == ""
+
+
 def test_post_needs_json_content_type(server) -> None:
     res, _ = _req(server, "POST", "/api/comments", {"Content-Type": "text/plain", **_auth(server)}, b"{}")
     assert res.status == 415
@@ -222,6 +230,45 @@ def test_token_files_are_private_and_removed_on_unpublish(server) -> None:
     assert server["token"] in box.open_html.read_text()
     rs.unpublish(server["box"])
     assert not box.token_file.exists() and not box.open_html.exists()
+
+
+# --- which URL open.html sends the browser to --------------------------------------
+
+@pytest.fixture
+def container(monkeypatch):
+    monkeypatch.setenv("MULTIPLAI_CONTAINER", "1")
+    monkeypatch.delenv("VIDEO_EDIT_REVIEW_URL_HOST", raising=False)
+    monkeypatch.setattr(rs.socket, "gethostname", lambda: "box")
+    monkeypatch.setattr(rs, "_first_address", lambda: "10.0.0.7")
+    return monkeypatch
+
+
+def test_orbstack_name_comes_first_when_it_resolves(container) -> None:
+    container.setattr(rs, "_resolves", lambda name: name == "box.orb.local")
+    assert rs.display_urls(8765) == ["http://box.orb.local:8765/", "http://10.0.0.7:8765/"]
+
+
+def test_plain_docker_leads_with_the_container_ip(container) -> None:
+    container.setattr(rs, "_resolves", lambda name: False)
+    assert rs.display_urls(8765) == ["http://10.0.0.7:8765/"]
+
+
+def test_url_host_override_comes_first(container) -> None:
+    container.setattr(rs, "_resolves", lambda name: False)
+    container.setenv("VIDEO_EDIT_REVIEW_URL_HOST", "localhost")
+    assert rs.display_urls(8765) == ["http://localhost:8765/", "http://10.0.0.7:8765/"]
+
+
+def test_container_with_nothing_to_offer_falls_back_to_loopback(container) -> None:
+    container.setattr(rs, "_resolves", lambda name: False)
+    container.setattr(rs, "_first_address", lambda: None)
+    assert rs.display_urls(8765) == ["http://127.0.0.1:8765/"]
+
+
+def test_open_page_redirects_to_the_first_url_and_links_every_url() -> None:
+    html = rs.open_page_html(["http://a:1/", "http://b:1/"], "tok")
+    assert 'content="0; url=http://a:1/?t=tok"' in html
+    assert 'href="http://a:1/?t=tok"' in html and 'href="http://b:1/?t=tok"' in html
 
 
 def test_page_loads_nothing_from_a_cdn() -> None:

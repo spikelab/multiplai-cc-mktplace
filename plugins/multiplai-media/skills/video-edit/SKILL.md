@@ -93,8 +93,9 @@ the file you need to read next.**
 
 **Transcript:** prep writes `transcript.json` — every word with its `start` and
 `end` (and `speaker`, when the source has speaker labels) — and everything
-later reads it. It comes from the `transcribe` skill when that skill can emit
-word timings, else from prep's own `mlx_whisper` call; `context.md` names the
+later reads it. It comes from this plugin's `transcribe` skill (its own
+`transcribe.sh`, never one found on PATH) when that skill can emit word
+timings, else from prep's own `mlx_whisper` call; `context.md` names the
 engine. If the large-v3 model fails to load on the host, stop and tell the
 user rather than switching to a smaller model.
 
@@ -150,8 +151,11 @@ all comments in one batch.
    path (`<dir>/review/open.html`): opening that file sends the browser to
    the page with its access token. **Never print or read out the token**; it
    is in `open.html` and `server.token` only, both deleted when the server
-   stops. Inside a container the server binds `0.0.0.0` and the first URL is
-   the one the host can reach.
+   stops. Inside a container the server binds `0.0.0.0`; the first URL is
+   `<hostname>.orb.local` under OrbStack, otherwise the container IP, and
+   `open.html` links every URL in case the first does not load. Set
+   `VIDEO_EDIT_REVIEW_URL_HOST` (e.g. `localhost` for a port published with
+   `-p`) to put that host first.
 
 2. **Watch the mailbox** with the Monitor tool, one event per comment:
 
@@ -233,7 +237,7 @@ See `examples/demo-narrated.edl.json`. Top-level keys:
 
 Keys for reels (see `references/reels.md`):
 - `layout` — `{panels: {A: {x, y, w, h}, B: …}, speakers: {"SPEAKER_0": "A", …}}`, rectangles in source pixels
-- segment `frame` — `"stack"` (A over B), a panel name (that panel cropped to the output aspect), or `"speaker"` (follows the transcript's speaker labels)
+- segment `frame` — `"stack"` (A over B), a panel name (that panel cropped to the output aspect), or `"speaker"` (follows the transcript's speaker labels); a segment with a `frame` takes no `zoom` (render refuses the pair)
 - segment `focus` — `{x, y}` 0..1, the point a crop keeps in view
 - `captions` — `{words_per_line, max_chars, position_y, highlight, size}` — word-timed captions burned in from the transcript
 - `headline` — `{text, start, end}` in output time, shown at the top
