@@ -116,3 +116,19 @@ def test_a_malformed_entry_is_refused(tmp_path: Path) -> None:
 def test_source_of_reads_the_context_line(tmp_path: Path) -> None:
     (tmp_path / "context.md").write_text("# video-edit prep context\n\n- source: /rec/talk.mp4\n")
     assert co.source_of(tmp_path) == "/rec/talk.mp4"
+
+
+def test_a_new_transcription_replaces_the_saved_original(tmp_path: Path) -> None:
+    # prep transcribed again after a correct run: the new transcript, not the
+    # old saved original, is what the corrections apply to.
+    cache = _cache(tmp_path)
+    fixes = tmp_path / "fixes.json"
+    fixes.write_text(json.dumps([{"at": 11, "from": "Century", "to": "Sentry"}]))
+    co.correct(cache, fixes)
+    fresh = [dict(x) for x in WORDS]
+    fresh[0] = {**fresh[0], "text": "Retranscribed"}
+    tx.write({"language": "en", "engine": "test", "words": fresh}, cache / "transcript.json")
+    co.correct(cache, fixes)
+    words = texts(tx.load(cache / "transcript.json")["words"])
+    assert "Retranscribed" in words and "Sentry." in words
+    assert "Retranscribed" in texts(tx.load(cache / "transcript.raw.json")["words"])

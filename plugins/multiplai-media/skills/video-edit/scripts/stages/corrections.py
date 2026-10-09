@@ -118,15 +118,27 @@ def apply(words: list[dict], corrections: list[dict]) -> list[dict]:
     return out
 
 
+# Set on a transcript that correct() wrote. A transcript without it is a
+# fresh transcription (prep ran again), and it replaces the saved original.
+CORRECTED_KEY = "corrected"
+
+
 def correct(cache: Path, corrections_path: Path) -> Path:
-    """Apply a corrections file to cache/transcript.json; returns its path."""
+    """Apply a corrections file to cache/transcript.json; returns its path.
+
+    The corrections always apply to the original transcription, saved once
+    as transcript.raw.json, so re-running a grown corrections file never
+    corrects twice. When prep has transcribed again since, the new
+    transcript becomes the original."""
     current = cache / "transcript.json"
     raw = cache / "transcript.raw.json"
-    base = tx.load(raw if raw.exists() else current)
+    now = tx.load(current)
+    fresh = not now.get(CORRECTED_KEY)
+    base = now if fresh or not raw.exists() else tx.load(raw)
     words = apply(base["words"], load(corrections_path))
-    if not raw.exists():
+    if fresh:
         tx.write(base, raw)
-    contract = {**base, "words": words}
+    contract = {**base, "words": words, CORRECTED_KEY: True}
     tx.write(contract, current)
     (cache / "transcript.srt").write_text(tx.to_srt(contract))
     return current
