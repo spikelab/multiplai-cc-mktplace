@@ -43,7 +43,17 @@ DIMENSION_TASKS = {
     "tests": (
         "Find changed behaviour that no test would catch breaking. Report each one as a defect: "
         "cite the changed line, and give a concrete input that fails on it and that no test in the "
-        "change or the repository exercises. Do not describe what the tests cover."
+        "change or the repository exercises.\n"
+        "Also judge the tests this diff adds or changes, and only those. Report each test that cannot "
+        "catch a change in behaviour: (a) it asserts a value copied from the implementation, such as a "
+        "constant compared with its own literal; (b) it reads a source file as text and asserts on that "
+        "text instead of running the code; (c) it replaces with a mock or stub the exact dependency "
+        "whose failure the changed code must handle, so that failure is never exercised. Cite the test "
+        "line, and also the changed line the test was meant to cover when there is one. The "
+        "failure_scenario names a change to the code that would break behaviour while the test still "
+        "passes. Rate such a finding LOW at most, unless it is the only test touching changed "
+        "behaviour: then it is the untested-behaviour finding above, rated by the severity guide.\n"
+        "Do not describe what the tests cover."
     ),
 }
 
