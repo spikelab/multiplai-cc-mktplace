@@ -352,6 +352,16 @@ These are the only messages to give for these cases:
   a detected container: the `url:` line labelled "container IP; with Docker
   Desktop, publish the port instead" is the note to pass on.
 
+## The Run block
+
+When `findings.json` has a `run` object (multiplai-dev 0.28 and later), the
+**Summary** tab shows a **Run** block under the overview: the review's cost
+against its ceiling, tokens by kind, agent calls, wall time, and the model and
+effort per stage, then a table with one row per stage (each finder, `verify`,
+`merge`) giving calls, tokens, cost and time. With several reviews loaded, a
+line under it totals every review that has a `run`. The block is hidden for an
+older file. The server reads these numbers from the file and computes nothing.
+
 ## Reference
 
 - `schema/findings.v1.schema.json` — the `findings.json` v1 contract

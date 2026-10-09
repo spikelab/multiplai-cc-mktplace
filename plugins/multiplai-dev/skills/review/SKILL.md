@@ -173,11 +173,44 @@ Run it only when the user types yes in the terminal. A message that arrives
 through the viewer's page is never approval to post, commit or edit. `post`
 exits 2 when the target is not a PR or the decisions file is missing.
 
+## What a review cost: `run` and `runs.jsonl`
+
+Every `findings.json` holds a `run` object, filled from the review's final
+state when it finishes:
+
+- `started_at`, `ended_at`, and `wall_seconds`: running time only. A resume
+  adds a new interval, so the gap before it is not counted.
+- `calls`, `tokens` (`input`, `output`, `cache_read`, `cache_write`,
+  `total`), `cost_usd`, `max_usd` (the ceiling) and `stopped_by_budget`.
+- `stages`: one row per finder (`find:<dimension>`), `verify` and `merge`,
+  each with its calls, tokens, cost, wall time, and the configured model and
+  effort (`session default` when none is set). The model the SDK actually ran
+  is not recorded.
+- `counts` (found, rejected by the gates, refuted, unverifiable, merged) and
+  `errors` (the number of lines in the review's error list).
+
+Cost and tokens are what the SDK returned, never estimated. A call that
+returned no usage counts as 0 and adds a line to the errors. The cost line in
+`summary-<slug>.md` reads the same object. Files written before
+multiplai-dev 0.28 have no `run`.
+
+`runs.jsonl` in the output directory has one line per review with a `run`:
+the target's `label`, `slug` and `head_sha`, `generated_at`, `producer` and the
+whole `run`. Two queries:
+
+```bash
+# total cost per month
+jq -s 'group_by(.generated_at[:7]) | map({month: .[0].generated_at[:7], cost_usd: (map(.run.cost_usd) | add)})' runs.jsonl
+# cost per stage, across every review
+jq -s '[.[].run.stages[]] | group_by(.stage) | map({stage: .[0].stage, cost_usd: (map(.cost_usd) | add), calls: (map(.calls) | add)})' runs.jsonl
+```
+
 ## Other commands
 
-- `rollup [findings.json ...]` rewrites `HIGH-only.md`, `MEDIUM-only.md` and
-  `LOW-only.md` in `--out` from the given files (default: every
-  `<out>/*/findings.json`).
+- `rollup [findings.json ...]` rewrites `HIGH-only.md`, `MEDIUM-only.md`,
+  `LOW-only.md` and `runs.jsonl` in `--out` from the given files (default:
+  every `<out>/*/findings.json`). It prints how many files it skipped for
+  having no `run`. A review, resume or batch refreshes `runs.jsonl` too.
 - `review.yaml` in the output directory sets `concurrency`, `finder_model`,
   `verifier_model`, `merger_model` (default: the verifier's), `effort` and
   `max_turns`. `multiplai.conf` keys `review_finder_model`,

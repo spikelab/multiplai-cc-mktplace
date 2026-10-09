@@ -28,7 +28,7 @@ The page-logic tests need `node`; they fail (not skip) without it.
 | `server.py` | `ThreadingHTTPServer` subclass (`allow_reuse_address = False`), request checks, routes, idle watchdog. |
 | `registry.py` | Finds live viewers: probes each mailbox's recorded port with that mailbox's token, in parallel. A token is never sent to any other port. |
 | `netinfo.py` | Container detection (degradation contract rule 2), bind host, URLs to print. |
-| `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `theme.js` (applies the saved theme and light/dark mode before first paint as `data-theme`/`data-mode`, fills the Theme menu, drives the mode button; saves choices in a cookie on the widest parent domain the browser accepts, so every viewer's port and container shares them, and exposes that store as `window.ReviewPrefs`), `logic.js` (pure functions, tested under node; `riskLevel` holds the risk rules), `app.js`, `app.css` (every size from the tokens at its top), `themes.css` (every rule scoped to `html[data-theme]`), the bundled `font-*.woff2` and `FONTS-LICENSE.txt`. |
+| `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `theme.js` (applies the saved theme and light/dark mode before first paint as `data-theme`/`data-mode`, fills the Theme menu, drives the mode button; saves choices in a cookie on the widest parent domain the browser accepts, so every viewer's port and container shares them, and exposes that store as `window.ReviewPrefs`), `logic.js` (pure functions, tested under node; `riskLevel` holds the risk rules; `runBlock`/`runTotal` and the number formats behind the Summary tab's Run block), `app.js`, `app.css` (every size from the tokens at its top), `themes.css` (every rule scoped to `html[data-theme]`), the bundled `font-*.woff2` and `FONTS-LICENSE.txt`. |
 
 After changing `models.py`, run `python -m review_viewer export-schema` and
 commit both schemas; `test_models.py` fails while either differs.
@@ -115,7 +115,9 @@ the `risk:` block (or `missing`), the `repo tiers:` that `.review-risk.toml`
 at the base commit sets (or why it was ignored), the measured badges and
 each commit's subject.
 
-`/api/targets/<slug>` also returns `pr` (number, title, author, url, body,
+`/api/targets` lists each target's slug, label, counts and its `run` object
+(null when the file has none), so the page can total the Run block across
+reviews. `/api/targets/<slug>` also returns `pr` (number, title, author, url, body,
 head/base ref, check counts, mergeable, draft, review decision — from the one
 `gh pr view` call, in memory and `target.json` only, never in
 `findings.json`), `notice` (a review exists for other commits) and `stats`
