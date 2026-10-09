@@ -11,7 +11,23 @@ SCHEMA = """\
 {"status": "confirmed" | "refuted" | "unverifiable",
  "reason": "what you read and why it settles the question",
  "citations": [{"path": "...", "line_start": 1, "line_end": 1, "quote": "exact text"}],
- "expected_behaviour": "one sentence: what correct behaviour would be"}"""
+ "expected_behaviour": "one sentence: what correct behaviour would be",
+ "needs": [{"what": "one sentence naming the information you could not read",
+            "cause": "no-access" | "unreachable",
+            "command": "one read-only shell command that fetches it, or empty"}]}"""
+
+NEEDS_RULES = """\
+When your answer is `unverifiable` because something could not be read, fill `needs`: one item per
+missing piece of information. `what` names it in one sentence. `cause` is `no-access` when it needs
+access you do not have (a cloud project, a database, a private API) and `unreachable` when it is
+public but you could not reach it on the web. `command` is ONE read-only shell command that a person
+with normal access to this project would run to get it, on one line, with no pipes, redirects or
+`;`. For example:
+- `gh api repos/<owner>/<repo>/rules/branches/main`
+- `gcloud run services describe <service> --region <region> --format json`
+- `pip download tavily-python==0.8.4 --no-deps`
+Fill in the real names you read in the repository. Leave `command` empty when you know of no such
+command. Leave `needs` empty for any other answer."""
 
 
 def build(target: TargetInfo, finding: Finding) -> str:
@@ -40,6 +56,7 @@ def build(target: TargetInfo, finding: Finding) -> str:
         "Unless you answer `refuted`, set `expected_behaviour`: state what correct behaviour would be, in "
         "one sentence, without proposing a code change. For example: \"A null timeout is rejected, not "
         "skipped.\" Say what the code should do, not how to change it.",
+        NEEDS_RULES,
         CITATION_RULES,
         f"Schema:\n{SCHEMA}",
         JSON_ONLY,

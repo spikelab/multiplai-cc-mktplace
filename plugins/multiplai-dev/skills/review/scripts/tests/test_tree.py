@@ -246,6 +246,57 @@ async def test_a_resumed_tree_review_asks_only_the_missing_pairs(tmp_path, monke
     assert [label for label, _ in again.calls] == ["find:tests", "find:tests"]
 
 
+async def test_a_tree_review_records_one_check_per_group_and_times_each_call(tmp_path, monkeypatch):
+    repo = tree_repo(tmp_path)
+    state = _tree_state(repo)
+    every = file_groups(state.target)
+    groups = [every[0], every[-1]]  # the last group holds pkg/cart.py
+    monkeypatch.setattr(find_stage, "file_groups", lambda t: groups)
+    cart = Finding(claim="total() ignores item quantity", severity="MEDIUM", file="pkg/cart.py",
+                   line_start=2, line_end=2, failure_scenario="Two of one item are charged once.",
+                   citations=[Citation(path="pkg/cart.py", line_start=2, line_end=2,
+                                       quote="return sum(i.price for i in items)")])
+    in_cart = next(i for i, g in enumerate(groups) if "pkg/cart.py" in g)
+
+    misquoted = cart.model_copy(update={"claim": "tax is never added", "citations": [
+        Citation(path="pkg/cart.py", line_start=2, line_end=2, quote="not in the file")]})
+
+    async def agents(prompt, schema, *, budget_label="", **kwargs):
+        if budget_label == "find:diff-bugs" and "- pkg/cart.py" in prompt:
+            return FinderOutput(findings=[cart, misquoted])
+        return FinderOutput()
+
+    monkeypatch.setattr(sdk, "agent_call_structured", agents)
+    await run_find(state, _ctx(tmp_path))
+    dims = [d for d in DIMENSIONS if d != "history"]
+    assert sorted(c.subject for c in state.checks) == sorted(f"{d}@{i}" for i in (0, 1) for d in dims)
+    check = next(c for c in state.checks if c.subject == f"diff-bugs@{in_cart}")
+    assert check.given[0] == f"files ({len(groups[in_cart])}, group {in_cart + 1} of 2)"
+    assert not any(g.startswith("diff (") for g in check.given)
+    # The fates are set on the entry of the group's own call ("diff-bugs@<i>").
+    assert [e["fate"] for e in check.findings] == ["kept", "rejected"]
+    assert [(g.gate, g.passed) for g in state.gate_checks] == [("finding_gate", True), ("finding_gate", False)]
+
+
+async def test_overlapping_calls_of_one_dimension_each_close_their_own_interval(tmp_path, monkeypatch):
+    import asyncio
+
+    repo = tree_repo(tmp_path)
+    state = _tree_state(repo)
+    every = file_groups(state.target)
+    monkeypatch.setattr(find_stage, "file_groups", lambda t: every)
+    delays = iter([0.05, 0.0, 0.0])  # the first group's call ends after the second one starts
+
+    async def agents(prompt, schema, **kwargs):
+        await asyncio.sleep(next(delays))
+        return FinderOutput()
+
+    monkeypatch.setattr(sdk, "agent_call_structured", agents)
+    await run_find(state, _ctx(tmp_path, dims=("diff-bugs",)))
+    intervals = state.timings["find:diff-bugs"]
+    assert len(intervals) == len(every) == 3 and all(i.ended_at for i in intervals)
+
+
 async def test_a_change_review_still_makes_five_finder_calls(target_info, tmp_path, monkeypatch):
     fake = Fake()
     monkeypatch.setattr(sdk, "agent_call_structured", fake)

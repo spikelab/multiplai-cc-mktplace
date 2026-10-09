@@ -1,4 +1,4 @@
-"""Stages: find → verify → merge.
+"""Stages: find → verify → merge → repeats → assess.
 
 Each is `async def run_<stage>(state, ctx) -> state`. A stage returns at once
 when `state.stage` is already past it, and skips items it already has a
@@ -34,6 +34,9 @@ class RunContext:
     diff: str
     progress: ProgressWriter | None = None
     session_id: str = ""
+    # `<out>/<slug>/`, where earlier rounds and the person's decisions are
+    # read from (repeats, assess). None in tests that need neither.
+    target_dir: Path | None = None
     # Stage-level counts for the `stage` activity event, filled by each stage.
     counts: dict[str, int] = field(default_factory=dict)
     gate_reasons: list[str] = field(default_factory=list)

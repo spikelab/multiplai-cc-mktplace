@@ -72,7 +72,7 @@ def test_pr_uses_gh_view_and_merge_base(fixture_repo, monkeypatch):
     rules = [{"type": "pull_request", "parameters": {"required_approving_review_count": 1}}]
     asked = []
 
-    def fake_rules(repo_path, branch):
+    def fake_rules(repo_path, branch, needs=None):
         asked.append(branch)
         return rules
 

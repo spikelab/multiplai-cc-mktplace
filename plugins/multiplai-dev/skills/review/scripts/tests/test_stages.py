@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -11,7 +12,7 @@ import pytest
 from conftest import KEYWORD_CITATION, KEYWORD_USE_CITATION, cite, high_finding, medium_finding
 from review_pipeline import sdk, target
 from review_pipeline.config import ReviewConfig
-from review_pipeline.models import DuplicateSet, Finding, FinderOutput, FinderResult, MergeOutput, ReviewState, Verdict
+from review_pipeline.models import Citation, DuplicateSet, Finding, FinderOutput, FinderResult, MergeOutput, ReviewState, Verdict
 from review_pipeline.stages import RunContext
 from review_pipeline.stages import find as find_stage
 from review_pipeline.stages.find import conventions_chain, run_find
@@ -249,18 +250,58 @@ def _verdicts(**status_by_id) -> dict[str, Verdict]:
     return {fid: Verdict(finding_id=fid, status=status, reason="r") for fid, status in status_by_id.items()}
 
 
+def _own(claim, severity, start, end, finder, file="rateplan_service.py"):
+    """A finding whose only citation is its own anchor, so only anchors can link it."""
+    return _at(claim, severity, start, end, finder, Citation(path=file, line_start=start, line_end=end, quote="q"),
+               file=file)
+
+
 def test_overlap_groups_chain_overlaps_and_near_touches_in_one_file(target_info):
-    a = _at("a", "LOW", 1, 1, "diff-bugs")
-    b = _at("b", "LOW", 1 + MERGE_LINE_GAP, 3, "callers")      # within the gap of a
-    c = _at("c", "LOW", 10, 12, "diff-bugs")
-    d = _at("d", "LOW", 11, 11, "tests")                        # inside c
-    far = _at("far", "LOW", 12 + MERGE_LINE_GAP + 1, 16, "history")  # one line past the gap
-    other_file = _at("o", "LOW", 1, 1, "callers", file="settings.py")
-    refuted = _at("r", "LOW", 1, 1, "history")
+    a = _own("a", "LOW", 1, 1, "diff-bugs")
+    b = _own("b", "LOW", 1 + MERGE_LINE_GAP, 3, "callers")      # within the gap of a
+    c = _own("c", "LOW", 10, 12, "diff-bugs")
+    d = _own("d", "LOW", 11, 11, "tests")                        # inside c
+    far = _own("far", "LOW", 12 + MERGE_LINE_GAP + 1, 16, "history")  # one line past the gap
+    other_file = _own("o", "LOW", 1, 1, "callers", file="settings.py")
+    refuted = _own("r", "LOW", 1, 1, "history")
     findings = [a, b, c, d, far, other_file, refuted]
     state = ReviewState(target=target_info, findings=findings, verdicts={
         **_verdicts(**{f.id: "confirmed" for f in findings}), **_verdicts(**{refuted.id: "refuted"})})
     assert [[f.claim for f in g] for g in overlap_groups(state)] == [["a", "b"], ["c", "d"]]
+
+
+def test_overlap_groups_link_findings_in_different_files_that_cite_the_same_line(target_info):
+    shared = Citation(path="docs/order.md", line_start=7, line_end=7, quote="q")
+    in_code = _at("in code", "MEDIUM", 1, 1, "diff-bugs", Citation(path="a.py", line_start=1, line_end=1, quote="q"),
+                  shared, file="a.py")
+    in_test = _at("in test", "LOW", 40, 40, "tests", Citation(path="t.py", line_start=40, line_end=40, quote="q"),
+                  shared.model_copy(update={"line_start": 7 + MERGE_LINE_GAP, "line_end": 7 + MERGE_LINE_GAP}),
+                  file="t.py")
+    alone = _own("alone", "LOW", 1, 1, "history", file="b.py")
+    state = ReviewState(target=target_info, findings=[in_code, in_test, alone],
+                        verdicts=_verdicts(**{f.id: "confirmed" for f in (in_code, in_test, alone)}))
+    assert [[f.claim for f in g] for g in overlap_groups(state)] == [["in code", "in test"]]
+
+
+def test_overlap_groups_do_not_link_on_a_shared_web_citation(target_info):
+    page = Citation(path="https://example.com/docs", line_start=1, line_end=1, quote="q")
+    a = _at("a", "LOW", 1, 1, "diff-bugs", Citation(path="a.py", line_start=1, line_end=1, quote="q"), page, file="a.py")
+    b = _at("b", "LOW", 1, 1, "callers", Citation(path="b.py", line_start=1, line_end=1, quote="q"), page, file="b.py")
+    state = ReviewState(target=target_info, findings=[a, b], verdicts=_verdicts(**{a.id: "confirmed", b.id: "confirmed"}))
+    assert overlap_groups(state) == []
+
+
+def test_made_up_round_links_each_cross_file_pair_and_leaves_the_third_alone():
+    """Invented data with the shape of a real round the merge stage once got wrong:
+    two duplicate pairs, each anchored in two files but citing one line of a third."""
+    from review_pipeline.stages.merge import link_groups
+
+    data = json.loads((Path(__file__).parent / "fixtures" / "duplicate_pairs" / "findings.json").read_text())
+    findings = [Finding.model_validate({**f, "dimension": "diff-bugs", "finder": "diff-bugs"})
+                for f in data["findings"]]
+    groups = [[f.file for f in g] for g in link_groups(findings)]
+    assert groups == [["stations/README.md", "stations/reader_access.tf"],
+                      ["policy/reader_access.tf", "policy/tests/reader.tftest.hcl"]]
 
 
 def _merge_state(target_info) -> tuple[ReviewState, Finding, Finding, Finding]:

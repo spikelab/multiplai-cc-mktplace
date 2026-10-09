@@ -18,10 +18,13 @@ read-only over the reviewed code by construction.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import logging
 import os
-from typing import TypeVar
+from dataclasses import dataclass, field
+from typing import Iterator, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -63,6 +66,43 @@ _TOOL_UNIVERSE = [
     "EnterWorktree", "ExitWorktree", "ReportFindings", "ProposeSkills",
     "Projects", "ClaudeDesign", "ShowOnboardingRolePicker",
 ]
+
+
+@dataclass
+class CallRecord:
+    """What the agent runs inside one `recording()` block did: every attempt's
+    tool calls in order (`multiplai_core.ToolCall`), turns and cost."""
+    tool_calls: list = field(default_factory=list)
+    turns: int = 0
+    cost_usd: float = 0.0
+
+
+_recorder: contextvars.ContextVar[CallRecord | None] = contextvars.ContextVar("review_call_record", default=None)
+
+
+@contextlib.contextmanager
+def recording() -> Iterator[CallRecord]:
+    """Collect what every `_run` in this block does, the re-ask included.
+
+    A ContextVar, so concurrent stage tasks each fill their own record. The
+    stages open one around each `agent_call_structured`, which keeps that
+    function's signature (and the tests that monkeypatch it) unchanged.
+    """
+    record = CallRecord()
+    token = _recorder.set(record)
+    try:
+        yield record
+    finally:
+        _recorder.reset(token)
+
+
+def _note(result) -> None:
+    record = _recorder.get()
+    if record is None or result is None:
+        return
+    record.tool_calls.extend(getattr(result, "tool_calls", ()) or ())
+    record.turns += int(getattr(result, "turns", 0) or 0)
+    record.cost_usd += float(getattr(getattr(result, "usage", None), "cost_usd", 0.0) or 0.0)
 
 
 class AgentCallError(Exception):
@@ -122,9 +162,11 @@ async def _run(prompt: str, *, allowed_tools: list[str], model: str | None, effo
         partial = getattr(e, "partial", None)
         if partial is not None:
             budget.record(partial.usage, label=budget_label)
+            _note(partial)
         kind = "timeout" if isinstance(e, AgentRunTimeout) else e.reason
         raise AgentCallError(f"agent call failed ({kind})\n{e.stderr_tail}") from e
     budget.record(result.usage, label=budget_label)
+    _note(result)
     return result.text
 
 

@@ -1,4 +1,4 @@
-"""target → find → verify → merge → export → render.
+"""target → find → verify → merge → repeats → assess → export → render.
 
 `review-state.json` is written after every stage; `resume` reloads it and
 continues from the first stage not yet done.
@@ -16,15 +16,18 @@ import yaml
 
 from multiplai_core.log_utils import log_event
 
-from . import budget, target as target_mod
-from .config import ReviewConfig
-from .export import write_findings_file
+from . import budget, rounds, target as target_mod, timings
+from .config import ReviewConfig, run_config
+from .export import write_checks_file, write_findings_file
+from .gates import gated_need, reason_kind
 from .models import SEVERITIES, ReviewState
 from .progress import ProgressWriter
-from .render import summary_path, write_review, write_rollups
+from .render import summary_path, write_review, write_rollups, write_runs
 from .stages import RunContext
+from .stages.assess import run_assess
 from .stages.find import file_chars, file_groups, finder_dimensions, run_find
 from .stages.merge import run_merge
+from .stages.repeats import run_repeats
 from .stages.verify import run_verify
 from .state import load_state, save_state
 
@@ -34,22 +37,9 @@ STAGE_FUNCTIONS = (
     ("find", run_find),
     ("verify", run_verify),
     ("merge", run_merge),
+    ("repeats", run_repeats),
+    ("assess", run_assess),
 )
-
-# The gate reasons that may reach activity.jsonl. A raw reason can quote a
-# citation; the log records only which rule fired.
-_REASON_KINDS = (
-    "quote not at cited lines", "path not at head", "empty quote", "is not a changed file",
-    "unknown severity", "no citations", "confirmed without citing", "none of its citations reproduce",
-)
-
-
-def reason_kind(reason: str) -> str:
-    for kind in _REASON_KINDS:
-        if kind in reason:
-            return kind
-    return "other"
-
 
 class ReviewError(Exception):
     """Bad input or an unresolvable target. Exit code 2."""
@@ -74,6 +64,18 @@ def _count_line(counts: dict[str, int]) -> str:
     return ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in counts.items()) or "nothing to do"
 
 
+NO_USAGE_NOTE = "budget:"
+
+
+def note_missing_usage(state: ReviewState, ledger: budget.ReviewBudget) -> None:
+    """One line in `state.errors` when calls returned no usage; their cost and tokens count as 0."""
+    state.errors = [e for e in state.errors if not e.startswith(NO_USAGE_NOTE)]
+    if ledger.no_usage_calls:
+        n = ledger.no_usage_calls
+        state.errors.append(f"{NO_USAGE_NOTE} {n} agent call{'' if n == 1 else 's'} returned no usage; "
+                            "their cost and tokens are counted as 0")
+
+
 async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, *,
                     session_id: str = "") -> Path:
     """Run every stage not yet done; return the findings.json path."""
@@ -89,7 +91,10 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
 
     snapshot = target_mod.snapshot_head(t, target_dir / "tree")
     diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
-    ctx = RunContext(config=config, snapshot=snapshot, diff=diff, progress=progress, session_id=session_id)
+    ctx = RunContext(config=config, snapshot=snapshot, diff=diff, progress=progress, session_id=session_id,
+                     target_dir=target_dir)
+    state.run_config = run_config(config)
+    timings.open_interval(state, "run")
     save_state(state, target_dir)
 
     for name, fn in STAGE_FUNCTIONS:
@@ -97,15 +102,21 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
             continue
         progress.stage(name, "started")
         ctx.counts, ctx.gate_reasons = {}, []
+        timings.open_interval(state, name)
         try:
             state = await fn(state, ctx)
         except budget.BudgetExceededError as e:
+            timings.close_interval(state, name)
+            timings.close_interval(state, "run")
+            state.budget_stops += 1
             state.budget = ledger.to_state()
             save_state(state, target_dir)
             progress.failed(str(e))
             log_event("review", "budget_stop", str(e), session_id=session_id, level="WARNING",
                       target=t.slug, cost_usd=round(e.cost_usd, 4), stage=name)
             raise
+        timings.close_interval(state, name)
+        timings.close_interval(state, "run")  # moved forward at each checkpoint; see timings.py
         state.budget = ledger.to_state()
         save_state(state, target_dir)
         summary = f"{name} done: {_count_line(ctx.counts)}"
@@ -119,9 +130,13 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
                       session_id=session_id, target=t.slug, stage=name, count=len(ctx.gate_reasons),
                       reasons=sorted({reason_kind(r) for r in ctx.gate_reasons}))
 
+    timings.close_interval(state, "run")
+    note_missing_usage(state, ledger)
+    state.budget = ledger.to_state()
     findings_path = target_dir / "findings.json"
     if not state.past("export"):
         findings_path = write_findings_file(state, target_dir)
+        write_checks_file(state, target_dir)
         state.stage = "export"
         save_state(state, target_dir)
     if not state.past("render"):
@@ -151,6 +166,7 @@ def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
     """
     repo, tree, name, src = spec.repo, spec.tree, None, None
     info = None
+    needs: list = []
     try:
         if spec.dir:
             src = Path(spec.dir).expanduser().resolve()
@@ -164,7 +180,7 @@ def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
             if resolved.head_sha and not resolved.problem:
                 label = f"{src}: whole tree at {resolved.head_sha[:8]}" if src else None
                 info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in,
-                                               name=name, label=label)
+                                               name=name, label=label, needs=needs)
         elif resolved.base_sha and resolved.head_sha and not resolved.problem:
             diff = target_mod.diff_text(resolved.repo, resolved.base_sha, resolved.head_sha)
     except target_mod.TargetError as e:
@@ -173,10 +189,15 @@ def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
     if not gate.passed:
         raise ReviewError(f"{spec.dir or spec.repo}: {gate.reason}")
     if info is None:
-        info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in)
+        info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in, needs=needs)
     target_dir = out_dir / info.slug
+    # A new head in a directory an earlier round wrote: keep that round's
+    # findings before this run writes over them. The same head keeps nothing.
+    kept = rounds.keep_round(target_dir, info.slug, info.head_sha)
+    if kept is not None:
+        log.info("kept the earlier round of %s in %s", info.slug, kept)
     info = target_mod.write_target_files(info, diff or "", target_dir)
-    return ReviewState(target=info), target_dir
+    return ReviewState(target=info, needs=[gated_need(n) for n in needs]), target_dir
 
 
 def plan_text(state: ReviewState, config: ReviewConfig) -> str:
@@ -214,6 +235,83 @@ async def resume(target_dir: Path, config: ReviewConfig, *, session_id: str = ""
     if state is None:
         raise ReviewError(f"no readable review-state.json in {target_dir}")
     return await run_state(state, target_dir, config, session_id=session_id)
+
+
+# --- the assess stage alone, on a saved review ------------------------------------
+
+FOLDED = ("repeat", "low-value")
+
+
+@dataclass
+class AssessOnly:
+    """The assess stage's labels for one saved review, beside the person's decisions."""
+    target_dir: Path
+    rows: list[dict] = field(default_factory=list)  # id, severity, claim, decision, note, label, reason
+    cost_usd: float = 0.0
+    errors: list[str] = field(default_factory=list)
+
+
+async def assess_only(target_dir: Path, config: ReviewConfig) -> AssessOnly:
+    """Run repeats and assess on a finished review's findings, without changing the review.
+
+    Reads `review-state.json` and `viewer/decisions.json`, runs both stages on
+    a copy of the state, and returns each shown finding's label beside the
+    decision already recorded for it. The decisions of this round are not
+    shown to the agent: only earlier rounds' are. Writes nothing; raises
+    ReviewError when there is no readable state.
+    """
+    loaded = load_state(target_dir / "review-state.json")
+    if loaded is None:
+        raise ReviewError(f"no readable review-state.json in {target_dir}")
+    state = loaded.model_copy(deep=True)
+    state.stage, state.errors = "merge", []
+    state.repeats, state.repeats_checked, state.assessments, state.assess_answer = {}, [], {}, None
+    ledger = budget.start(config.max_cost_usd)
+    snapshot = target_mod.snapshot_head(state.target, target_dir / "assess-tree")
+    ctx = RunContext(config=config, snapshot=snapshot, diff="", target_dir=target_dir)
+    try:
+        state = await run_repeats(state, ctx)
+        state = await run_assess(state, ctx)
+    finally:
+        shutil.rmtree(snapshot, ignore_errors=True)
+    decisions = rounds.load_decisions(target_dir)
+    result = AssessOnly(target_dir=target_dir, cost_usd=ledger.cost_usd, errors=list(state.errors))
+    for f in state.findings:
+        a = state.assessments.get(f.id)
+        if a is None:
+            continue
+        d = decisions.get(f.id) or {}
+        result.rows.append({"id": f.id, "severity": f.severity, "claim": f.claim,
+                            "decision": d.get("decision") or "", "note": d.get("note") or "",
+                            "label": a.label, "reason": a.reason})
+    return result
+
+
+def assess_report(results: list[AssessOnly], skipped: list[str]) -> str:
+    """Markdown: one row per finding (decision, label, reason), then the two counts that matter."""
+    def cell(text) -> str:
+        return " ".join(str(text).split()).replace("|", "\\|")
+
+    out = ["# Assess stage measured against recorded decisions", "",
+           "| Review | Finding | Severity | Decision | Label | Reason |", "|---|---|---|---|---|---|"]
+    for r in results:
+        for row in r.rows:
+            out.append(f"| {r.target_dir.name} | `{row['id']}` {cell(row['claim'])[:100]} | {row['severity']} | "
+                       f"{row['decision'] or 'none'} | {row['label']} | {cell(row['reason'])} |")
+    rows = [row for r in results for row in r.rows]
+    right = sum(1 for row in rows if row["decision"] == "reject" and row["label"] in FOLDED)
+    wrong = sum(1 for row in rows if row["decision"] == "accept" and row["label"] in FOLDED)
+    rejected = sum(1 for row in rows if row["decision"] == "reject")
+    accepted = sum(1 for row in rows if row["decision"] == "accept")
+    out += ["", f"- Rejected findings labelled repeat or low-value: {right} of {rejected}",
+            f"- Accepted findings labelled repeat or low-value (wrongly folded): {wrong} of {accepted}",
+            f"- Cost: ${sum(r.cost_usd for r in results):.2f} over {len(results)} reviews"]
+    errors = [f"{r.target_dir.name}: {e}" for r in results for e in r.errors]
+    if errors:
+        out += ["", "Errors:", ""] + [f"- {cell(e)}" for e in errors]
+    if skipped:
+        out += ["", "Skipped:", ""] + [f"- {s}" for s in skipped]
+    return "\n".join(out) + "\n"
 
 
 def load_batch(path: Path) -> list[TargetSpec]:
@@ -270,4 +368,7 @@ async def batch(specs: list[TargetSpec], out_dir: Path, config: ReviewConfig, *,
     written = [p for p in results if p is not None]
     if written:
         write_rollups(out_dir, written)
+        # Every review in out_dir, as after `review` and `resume`: a batch must
+        # not drop the lines of reviews it did not run.
+        write_runs(out_dir)
     return written, failures

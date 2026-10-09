@@ -221,6 +221,7 @@ def allowed_paths(target: Target, findings: FindingsFile | None) -> set[str]:
         for f in findings.findings:
             paths.add(f.file)
             paths.update(c.path for c in f.citations)
+            paths.update(c.path for c in f.verifier_citations or [])
     return paths
 
 
@@ -231,7 +232,8 @@ def _cited_ranges(path: str, findings: FindingsFile | None) -> list[tuple[int, i
     for f in findings.findings:
         if f.file == path:
             ranges.append((f.line_start, f.line_end))
-        ranges.extend((c.line_start, c.line_end) for c in f.citations if c.path == path)
+        ranges.extend((c.line_start, c.line_end) for c in [*f.citations, *(f.verifier_citations or [])]
+                      if c.path == path)
     return sorted(set(ranges))
 
 

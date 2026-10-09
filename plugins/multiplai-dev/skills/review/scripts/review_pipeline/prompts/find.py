@@ -111,7 +111,20 @@ SCHEMA = """\
                "line_start": 1, "line_end": 1,
                "failure_scenario": "concrete inputs or state -> the wrong output or crash",
                "citations": [{"path": "...", "line_start": 1, "line_end": 1, "quote": "exact text"}],
-               "dimension": "" }]}"""
+               "dimension": "" }],
+ "needs": [{"what": "one sentence naming what you could not check, and why it matters here",
+            "cause": "no-access" | "unreachable",
+            "command": "one read-only shell command that fetches it, or empty"}]}"""
+
+NEEDS_RULES = """\
+When you could not check something your task asks for, because you could not read it (a provider's
+behaviour you could not fetch, settings or data outside this repository), add one item to `needs`
+instead of guessing. Never write a finding to say you could not check something. `cause` is
+`no-access` when it needs access you do not have, `unreachable` when it is public but you could not
+reach it. `command` is ONE read-only shell command, on one line with no pipes, redirects or `;`,
+that a person with normal access to this project would run to get it, such as
+`gh api repos/<owner>/<repo>/rules/branches/main` with the real names filled in; leave it empty when
+you know of none. Leave `needs` empty when you checked everything."""
 
 
 FILE_RULE = (
@@ -164,6 +177,7 @@ def build(target: TargetInfo, dimension: str, diff: str, conventions: str = "",
         SEVERITY_GUIDE,
         CITATION_RULES,
         FILE_RULE,
+        NEEDS_RULES,
         f"Schema:\n{SCHEMA}",
         JSON_ONLY,
     ]
@@ -185,6 +199,7 @@ def _build_tree(target: TargetInfo, dimension: str, conventions: str, files: lis
         SEVERITY_GUIDE,
         CITATION_RULES,
         FILE_RULE_TREE,
+        NEEDS_RULES,
         "Schema:\n" + SCHEMA.replace("path of the changed file the bug is in", "path of the file under review the bug is in"),
         JSON_ONLY,
     ]

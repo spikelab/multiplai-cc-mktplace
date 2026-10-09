@@ -70,7 +70,7 @@ def test_summary_is_short_and_says_how_the_review_went(canned_state):
     text = render_summary(canned_state)
     lines = text.splitlines()
     assert len(lines) <= 25
-    assert "Cost $1.25 over 9 agent calls." in text
+    assert "Cost $1.25 over 9 agent calls, 0 tokens, 0s wall time." in text
     assert "Findings: 1 HIGH, 0 MEDIUM, 1 LOW. Dropped: 1 refuted" in text
     assert "1 refuted by the verifier, 1 rejected by the gates" in text
     (high_line,) = [l for l in lines if l.startswith("- `rateplan_service.py")]
@@ -209,3 +209,25 @@ def test_web_citation_renders_as_a_link_not_a_code_line():
                         {"path": "https://example.com/doc", "line_start": 1, "line_end": 1, "quote": "a duration"}]}
     text = render.finding_section(fd, web_base=None, head_sha="0" * 40)
     assert "web source: <https://example.com/doc>" in text and "a duration" in text
+
+
+def test_the_summary_and_review_cost_lines_come_from_the_run_object(canned_state):
+    from review_pipeline.export import to_findings_file
+    from review_pipeline.models import Interval
+    from review_pipeline.render import render_review
+
+    canned_state.budget = {"calls": 3, "cost_usd": 4.105, "input_tokens": 1000, "output_tokens": 234,
+                           "cache_read_tokens": 1_400_000, "cache_creation_tokens": 0}
+    canned_state.timings = {"run": [Interval(started_at="2026-10-01T10:00:00.000Z",
+                                             ended_at="2026-10-01T10:07:12.000Z")]}
+    run = to_findings_file(canned_state)["run"]
+    line = "$4.11 over 3 agent calls, 1,401,234 tokens, 7m 12s wall time"
+    assert f"${run['cost_usd']:.2f}" == "$4.11"
+    assert f"Cost {line}." in render_summary(canned_state)
+    assert f"- **Model cost:** {line}" in render_review(canned_state)
+
+
+def test_duration_format():
+    from review_pipeline.render import duration
+
+    assert (duration(0), duration(59.4), duration(60), duration(432)) == ("0s", "59s", "1m 0s", "7m 12s")
