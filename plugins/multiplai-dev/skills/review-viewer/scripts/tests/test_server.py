@@ -502,3 +502,29 @@ def test_pr_route_without_a_pr_returns_null(start_live):
     live = start_live()
     status, res = live.request("GET", f"/api/targets/{live.slug}/pr")
     assert status == 200 and res["pr"] is None
+
+
+RUN = {"started_at": "2026-10-01T10:00:00Z", "ended_at": "2026-10-01T10:01:00Z", "wall_seconds": 60.0,
+       "calls": 2, "tokens": {"input": 1, "output": 2, "cache_read": 3, "cache_write": 4, "total": 10},
+       "cost_usd": 0.5, "max_usd": 50.0, "stopped_by_budget": False,
+       "stages": [{"name": "verify", "stage": "verify", "calls": 2,
+                   "tokens": {"input": 1, "output": 2, "cache_read": 3, "cache_write": 4, "total": 10},
+                   "cost_usd": 0.5, "wall_seconds": 60.0, "model": "session default", "effort": "session default"}],
+       "counts": {"found": 3, "rejected": 0, "refuted": 0, "unverifiable": 0, "merged": 0}, "errors": 0}
+
+
+def test_findings_with_and_without_run_serve(start_live, findings_path, tmp_path):
+    live = start_live()
+    status, t = live.request("GET", "/api/targets")
+    assert status == 200 and t["targets"][0]["run"] is None  # the fixture predates `run`
+    assert live.request("GET", f"/api/targets/{live.slug}")[1]["findings"]["run"] is None
+    data = json.loads(findings_path.read_text(encoding="utf-8"))
+    data["run"] = RUN
+    with_run = tmp_path / "with-run" / "findings.json"
+    with_run.parent.mkdir()
+    with_run.write_text(json.dumps(data), encoding="utf-8")
+    live2 = start_live(path=with_run)
+    status, t = live2.request("GET", "/api/targets")
+    assert status == 200 and t["targets"][0]["run"]["cost_usd"] == 0.5
+    status, detail = live2.request("GET", f"/api/targets/{live2.slug}")
+    assert status == 200 and detail["findings"]["run"]["stages"][0]["name"] == "verify"

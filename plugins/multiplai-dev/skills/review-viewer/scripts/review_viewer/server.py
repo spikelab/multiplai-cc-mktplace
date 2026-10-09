@@ -165,7 +165,8 @@ def summarise(state: TargetState) -> dict:
         counts["severity"][f.severity] = counts["severity"].get(f.severity, 0) + 1
         counts["status"][f.status] = counts["status"].get(f.status, 0) + 1
     t = state.findings.target
-    return {"slug": t.slug, "label": t.label, "counts": counts}
+    run = state.findings.run.model_dump(mode="json") if state.findings.run else None
+    return {"slug": t.slug, "label": t.label, "counts": counts, "run": run}
 
 
 class _Reject(Exception):

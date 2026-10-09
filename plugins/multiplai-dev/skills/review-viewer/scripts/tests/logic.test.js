@@ -580,6 +580,66 @@ test("riskInputs combines the repo tiers, the session's tier and the findings", 
   assert.equal(L.riskInputs({}, { assessments: [] }, [], {}, []), null);
 });
 
+const RUN = {
+  started_at: "2026-10-01T10:00:00Z", ended_at: "2026-10-01T10:07:12Z", wall_seconds: 432.4,
+  calls: 16, tokens: { input: 1200, output: 3400, cache_read: 1418951, cache_write: 0, total: 1423551 },
+  cost_usd: 4.105, max_usd: 50, stopped_by_budget: false, errors: 0,
+  stages: [
+    { name: "find:diff-bugs", stage: "find", calls: 1, tokens: { total: 90000 }, cost_usd: 0.5, wall_seconds: 61,
+      model: "session default", effort: "session default" },
+    { name: "find:tests", stage: "find", calls: 2, tokens: { total: 1000 }, cost_usd: 0.25, wall_seconds: 30,
+      model: "session default", effort: "session default" },
+    { name: "verify", stage: "verify", calls: 13, tokens: { total: 1332551 }, cost_usd: 3.355, wall_seconds: 300,
+      model: "claude-x", effort: "high" },
+  ],
+  counts: { found: 5, rejected: 1, refuted: 1, unverifiable: 0, merged: 0 },
+};
+
+test("run numbers: USD to 2 decimals, tokens with separators, seconds as Xm Ys", () => {
+  assert.equal(L.formatUsd(4.105), "$4.11");
+  assert.equal(L.formatUsd(0), "$0.00");
+  assert.equal(L.formatTokens(1423551), "1,423,551");
+  assert.equal(L.formatTokens(999), "999");
+  assert.equal(L.formatTokens(1000), "1,000");
+  assert.equal(L.formatSeconds(432.4), "7m 12s");
+  assert.equal(L.formatSeconds(45), "45s");
+  assert.equal(L.formatSeconds(60), "1m 0s");
+});
+
+test("the Run block is hidden when findings.json has no run", () => {
+  assert.equal(L.runBlock(undefined), null);
+  assert.equal(L.runBlock(null), null);
+});
+
+test("the Run block has totals, one model line per stage, and a row per stage label", () => {
+  const b = L.runBlock(RUN);
+  const totals = Object.fromEntries(b.totals);
+  assert.equal(totals.Cost, "$4.11 of $50.00 ceiling");
+  assert.equal(totals.Tokens, "1,423,551 (input 1,200, output 3,400, cache read 1,418,951, cache write 0)");
+  assert.equal(totals["Agent calls"], "16");
+  assert.equal(totals["Wall time"], "7m 12s");
+  assert.equal(totals.Errors, undefined);
+  assert.deepEqual(b.models, [{ stage: "find", model: "session default", effort: "session default" },
+    { stage: "verify", model: "claude-x", effort: "high" }]);
+  assert.deepEqual(b.stages.map((s) => [s.name, s.calls, s.tokens, s.cost, s.time]), [
+    ["find:diff-bugs", "1", "90,000", "$0.50", "1m 1s"],
+    ["find:tests", "2", "1,000", "$0.25", "30s"],
+    ["verify", "13", "1,332,551", "$3.35", "5m 0s"],
+  ]);
+  const stopped = L.runBlock(Object.assign({}, RUN, { max_usd: null, stopped_by_budget: true, errors: 2 }));
+  const t2 = Object.fromEntries(stopped.totals);
+  assert.equal(t2.Cost, "$4.11 (no ceiling)");
+  assert.match(t2["Wall time"], /stopped by the budget/);
+  assert.equal(t2.Errors, "2");
+});
+
+test("the total line needs two reviews with a run, and skips those without", () => {
+  assert.equal(L.runTotal([{ run: RUN }]), null);
+  assert.equal(L.runTotal([{ run: RUN }, { run: null }]), null);
+  assert.equal(L.runTotal([{ run: RUN }, { run: RUN }, { slug: "old" }]),
+    "All 2 reviews: $8.21, 2,847,102 tokens, 32 agent calls, 14m 25s wall time");
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {
