@@ -23,9 +23,11 @@ DIMENSION_TASKS = {
         "had that nothing replaces."
     ),
     "conventions": (
-        "The repository's own rules (its CLAUDE.md files) are below. Find places where the changed "
-        "lines break a rule that has a concrete consequence. Cite the changed line, and cite the rule "
-        "as a second citation. Three cases the diff alone does not show:\n"
+        "The repository's own rules (its coding-standards.md and CLAUDE.md files) are below. "
+        "coding-standards.md holds rules written for review: a changed line that breaks one is a "
+        "finding even where the rule states no consequence. A CLAUDE.md rule counts only when breaking "
+        "it has a concrete consequence. Cite the changed line, and cite the rule as a second citation. "
+        "Three cases the diff alone does not show:\n"
         "- When the change retires or alters a fact (a thing that 'does not exist yet' now exists, "
         "'nothing runs it' now something does, a number or a date changes), Grep the whole repository "
         "for other statements of the old fact: README, docs, comments, plans. Each one left standing "
@@ -75,7 +77,7 @@ def build(target: TargetInfo, dimension: str, diff: str, conventions: str = "") 
     ]
     parts = [p for p in parts if p]
     if dimension == "conventions":
-        parts.append("The repository's rules:\n\n" + (conventions or "(no CLAUDE.md files found)"))
+        parts.append("The repository's rules:\n\n" + (conventions or "(no coding-standards.md or CLAUDE.md files found)"))
     parts += [
         SEVERITY_GUIDE,
         CITATION_RULES,
