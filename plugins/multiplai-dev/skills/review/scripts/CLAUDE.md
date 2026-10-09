@@ -20,9 +20,9 @@ cd plugins/multiplai-dev/skills/review/scripts && \
 
 | Module | Does |
 |---|---|
-| `__main__.py` | CLI: `review`, `batch`, `rollup`, `resume`, `post`. Calls `setup_logging` once. Owns the stdout contract and the exit codes. |
+| `__main__.py` | CLI: `review` (also `--tree`, `--dir`, `--plan-only`), `batch`, `rollup`, `resume`, `post`. Calls `setup_logging` once. Owns the stdout contract and the exit codes. |
 | `models.py` | Pipeline models. `Finding.citations` has `min_length=1`; `Finding.id` is computed with the v1 rule, never taken from a model. `Finding.finders` lists every finder that reported it. `STAGES` is the run order; `ReviewState` maps the removed `prescribe`/`check_fix` stages of an old checkpoint to `verify`. |
-| `target.py` | Resolves `--branch` / `--pr` / `--range` to shas, writes `diff.patch`, `commits.txt`, `files.txt`; `target_gate`; `snapshot_head()` (`git archive` of head into `<slug>/tree/`). For `--pr`, also the PR title and body and `branch_rules()` (the base branch's GitHub rules; `[]` when GitHub reports none, `None` with a warning when `gh` or the API fails). Fixed argv, no shell, no checkout. |
+| `target.py` | Resolves `--branch` / `--pr` / `--range` / `--tree` to shas, writes `diff.patch`, `commits.txt`, `files.txt` (and `skipped.txt` for a tree); a tree's base is `EMPTY_TREE` and `tree_files()` lists its files less the skipped ones; `import_dir()` copies a `--dir` source into `<slug>/source/` and commits it there; `target_gate`; `snapshot_head()` (`git archive` of head into `<slug>/tree/`). For `--pr`, also the PR title and body and `branch_rules()` (the base branch's GitHub rules; `[]` when GitHub reports none, `None` with a warning when `gh` or the API fails). Fixed argv, no shell, no checkout. |
 | `gates.py` | `citation_gate`, `finding_gate`, `verdict_gate`. Each takes `TargetInfo` and returns `GateResult`. A web citation (`Citation.is_web`) is skipped, not checked: it may not be first, and it does not confirm. |
 | `sdk.py` | `agent_call_structured`: trust gate, an allow-list with its complement denied (`Read`/`Grep`/`Glob` for every stage, plus `WebFetch`/`WebSearch` for finders and verifiers), one re-ask on a bad answer: a no-tools, one-turn reformat of the text returned, or a re-run of the prompt when the run itself failed. `parse_answer` says so when an answer holds no JSON at all. The only caller of `run_agent`. |
 | `budget.py` | Per-target ledger in a `ContextVar` (a batch runs targets concurrently) and the circuit breaker. |
@@ -34,6 +34,29 @@ cd plugins/multiplai-dev/skills/review/scripts && \
 | `post.py` | One `gh pr comment`; with `--decisions`, only findings whose decision is `accept`. |
 | `orchestrator.py` | target → find → verify → merge → export → render, saving `review-state.json` after each; `resume`; `batch`. |
 | `state.py`, `progress.py` | Atomic checkpoint; the tailable `progress.log` (`STARTED`, `STAGE`, `DONE`, `FAILED`). |
+
+## Tree reviews
+
+`--tree [COMMIT] [--path DIR]` and `--dir PATH` review code that is not a
+change. `TargetInfo.kind` is `"tree"` and `base_sha` is git's empty tree
+(`target.EMPTY_TREE`), which `findings.json` v1 accepts unchanged; review-viewer
+knows a tree review by that base.
+
+- `import_dir()` copies the directory (less `IMPORT_EXCLUDES` and any `.git`)
+  into `<slug>/source/`, not `<slug>/tree/`: `tree/` is the agents' snapshot,
+  deleted at the end of a run, and the copy is the repository the review and
+  the viewer read afterwards.
+- `stages/find.file_groups()` splits the files at `GROUP_MAX_CHARS` (100 000)
+  and at each top-level directory below the reviewed path; a change review is
+  one group, so its path is unchanged. Each dimension runs once per group and
+  its result is stored in `finder_results` under `"<dimension>@<group index>"`;
+  change reviews keep plain dimension keys, so old checkpoints still load.
+  `history` does not run on a tree.
+- `prompts/find.build(..., files=)` gives a tree finder the group's file list
+  instead of the commits, description, settings, files and diff blocks, with
+  the task worded from `DIMENSION_TASKS_TREE`.
+- `orchestrator.plan_only()` (`review --plan-only`) writes `plan.txt` and makes
+  no agent call and no ledger.
 
 ## Why the agents read a snapshot
 

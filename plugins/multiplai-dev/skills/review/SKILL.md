@@ -1,6 +1,6 @@
 ---
 name: review
-description: Reviews a branch, PR or commit range with a Python pipeline that finds, verifies and merges duplicate review findings, rejecting in code any finding whose cited lines are not at the reviewed commit. Writes a markdown review, severity rollups and a findings.json, then opens the findings in review-viewer.
+description: Reviews a branch, PR or commit range, or a whole repository or directory, with a Python pipeline that finds, verifies and merges duplicate review findings, rejecting in code any finding whose cited lines are not at the reviewed commit. Writes a markdown review, severity rollups and a findings.json, then opens the findings in review-viewer.
 when_to_use: 'Triggers: review this branch, review PR, deep review, /multiplai-dev:review'
 model: opus
 effort: medium
@@ -51,6 +51,35 @@ catch a change in behaviour: a test that asserts a value copied from the code,
 one that reads a source file as text instead of running it, and one that mocks
 the very dependency whose failure the code must handle.
 
+## Reviewing code that is not a change
+
+Three targets review code as it stands instead of a diff:
+
+- `--tree [COMMIT]` reviews every file of the repository at a commit
+  (default `HEAD`);
+- `--tree --path <dir>` reviews one directory of it;
+- `--dir <path>` reviews a directory that is not under git. It is copied into
+  `<out>/<slug>/source/` (without `node_modules`, `.venv`, `venv`,
+  `__pycache__`, `dist` and `build`, and honouring a `.gitignore` in it) and
+  committed there; the source directory is never written to. A directory
+  inside a git repository exits 2 and names the `--tree --path` command to use
+  instead.
+
+The base is git's empty tree, so every file counts as added and there are no
+commits. Binary files, files over 200 000 characters, lockfiles (`uv.lock`,
+`package-lock.json` and the like) and files marked `linguist-generated` or
+`linguist-vendored` in `.gitattributes` are left out; `<out>/<slug>/skipped.txt`
+lists each with its reason. A repository does not fit in one prompt, so the
+files are split into groups of up to 100 000 characters, one top-level
+directory at a time, and each finder runs once per group. `history` does not
+run, since there are no commits to compare. Findings carry the same citations
+and pass the same gates as a change review. `post` refuses a tree review: it
+has no PR.
+
+`--plan-only` resolves the target, prints one line per group and a total line
+(`groups: <n>  finder calls: <n>  files skipped: <n>`), writes
+`<out>/<slug>/plan.txt`, and stops before any model call.
+
 ## What this skill does on the machine
 
 - **Sends the repository's contents to a model.** Each agent reads a snapshot
@@ -71,7 +100,9 @@ the very dependency whose failure the code must handle.
   the base branch, so the agents know whether CI blocks a merge); and
   `gh pr comment` for `post`, which is the only command that writes anywhere
   outside the output directory.
-- **Writes files** under the output directory and to the log files.
+- **Writes files** under the output directory and to the log files. For
+  `--dir`, that includes a copy of the directory, in which it runs `git init`,
+  `git add -A` and one `git commit` with a fixed author and no user git config.
 
 ## Prerequisites
 
@@ -106,7 +137,14 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts \
 ```
 
 Use `--branch <name>` (reviewed against its merge-base with `origin/HEAD`) or
-`--pr <number>` instead of `--range`. A batch is a YAML list of
+`--pr <number>` instead of `--range`. To review code that is not a change, use
+`--tree [COMMIT] [--path <dir>]` or `--dir /abs/path` (no `--repo`) instead.
+
+**For `--tree` and `--dir`, plan first.** Run the same command with
+`--plan-only` in the foreground and paste its total line to the user. When
+`finder calls` is over 20, ask the user to confirm the run and to choose
+`--max-cost-usd` before starting it. Say that the 50 USD default stops a large
+run part way, and that `resume` continues it with a higher ceiling. A batch is a YAML list of
 `{repo, branch|pr|range, tickets, deployed_in}`:
 
 ```bash
