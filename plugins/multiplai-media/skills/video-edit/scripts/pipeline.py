@@ -137,6 +137,15 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def cmd_outdir(args: argparse.Namespace) -> int:
+    """Print (and create) the output directory for a job."""
+    from stages import outdir
+    d = outdir.job_dir(args.job)
+    (d / "edl").mkdir(parents=True, exist_ok=True)
+    print(f"OUTDIR: {d}")
+    return 0
+
+
 def cmd_make(args: argparse.Namespace) -> int:
     """make is a thin wrapper for orchestrators. The skill's SKILL.md instructs
     the consuming Claude to run prep, author the EDL, then render — this entry
@@ -207,6 +216,10 @@ def main() -> int:
                     help="reels: 1080x1920 H.264/AAC for Instagram, Facebook and TikTok")
     ck.add_argument("--edl", default=None, help="also lint the EDL's caption and headline placement")
     ck.set_defaults(func=cmd_check)
+
+    od = sub.add_parser("outdir", help="print and create the output directory for a job")
+    od.add_argument("job", help="job name, e.g. the show and episode")
+    od.set_defaults(func=cmd_outdir)
 
     m = sub.add_parser("make", help="natural-language → reel (orchestrator workflow)")
     m.add_argument("source", help="path to screen recording (.mov/.mp4)")
