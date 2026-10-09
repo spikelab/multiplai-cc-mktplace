@@ -1,17 +1,26 @@
 ---
-name: screen-demo
-description: Turn a raw screen recording (.mov/.mp4) into a polished 1-3 minute landscape product demo video. Free + local — uses ffmpeg + PySceneDetect for editing and mlx_whisper on the macOS host (over the SSH bridge) for multilingual transcription. No SaaS, no API keys. The user provides a recording and a prose description ("keep it 90s, hook in first 10s, money shot at 2:30, lo-fi vibe") plus an optional music file/URL; the orchestrating Claude runs prep, authors an EDL, renders the reel. Triggers on "make a demo video", "edit this screencast", "turn this recording into a demo", "product demo from screen recording", "screen-demo skill".
+name: video-edit
+description: Edit an existing video into finished outputs — a polished 1-3 minute landscape product demo from a raw screen recording (.mov/.mp4), or short 9:16 reels from a long podcast or interview recording. Free + local — uses ffmpeg + PySceneDetect for editing and mlx_whisper on the macOS host (over the SSH bridge) for multilingual transcription. No SaaS, no API keys. The user provides a recording and a prose description ("keep it 90s, hook in first 10s, money shot at 2:30, lo-fi vibe") plus an optional music file/URL; the orchestrating Claude runs prep, authors an EDL, renders the result. Triggers on "make a demo video", "edit this screencast", "turn this recording into a demo", "product demo from screen recording", "screen demo", "make reels from this podcast", "make shorts from this interview", "make TikToks from this video", "clip this video for Instagram", "video-edit skill".
 ---
 
-# screen-demo
+# video-edit
 
-Free + local pipeline that turns a raw screen recording into a polished 1-3 min landscape product demo. Three commands: `prep`, `render`, `make` (the orchestration wrapper).
+Free + local pipeline that turns an existing video into edited outputs. Every
+job follows the same steps: analyse the video (transcript, silences, scene
+changes, motion), decide what to keep, write an edit list (EDL), render it,
+and check the result. Commands: `prep`, `render`, `make` (prints the workflow).
 
-## When the user invokes this skill
+## Pick the job, then load its guide
 
-Typical: "make a demo video from `/path/to/recording.mov` — keep it 90s, hook is the first 10s, the money shot is around 2:30, lo-fi vibe. Use `https://pixabay.com/music/some-track`."
+| The user has… | and wants… | Load |
+|---|---|---|
+| a screen recording | one 1–3 min landscape product demo | `references/screencast.md` |
+| a long interview or podcast | several 15–90 s vertical 9:16 reels | not built yet — tell the user this skill cannot make reels in this version |
 
-**Run this workflow:**
+Read the guide for the job before writing the EDL. It holds the rules for
+what to keep, what to cut and how to frame.
+
+## Workflow
 
 ### 0. Transcription prerequisites (host bridge — read this first)
 
@@ -36,7 +45,7 @@ silently falls back to building anything in the container.
 ### 1. Bootstrap (first run only)
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/bootstrap.sh
+bash ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/bootstrap.sh
 ```
 Verifies `ffmpeg`, checks PySceneDetect + OpenCV are importable, and preflights
 the host transcription bridge. Idempotent, and it installs nothing — it reports
@@ -47,7 +56,7 @@ The Python deps are declared in `scripts/pyproject.toml`. Run the pipeline
 through it and uv provides them:
 
 ```bash
-uv run --project "${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts" python3 "${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/pipeline.py" …
+uv run --project "${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts" python3 "${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py" …
 ```
 
 This works for an installed plugin (the directory resolves standalone) and in
@@ -58,7 +67,7 @@ not a venv this skill should build for itself.
 ### 2. Prep
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/pipeline.py prep <source.mov> \
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py prep <source.mov> \
   --language it \                     # ISO code; omit to auto-detect. NEVER English-only.
   --model mlx-community/whisper-large-v3-mlx \  # optional; default whisper-medium-mlx
   --prompt-hint "Proper Noun, Other Name"
@@ -69,7 +78,7 @@ runs silencedetect + scenedetect, and profiles on-screen activity (blackdetect +
 a per-second motion score) into a **dead-span table** — black gaps, frozen
 frames, and typing/cursor-only stretches where nothing watchable happens.
 Caches everything under
-`$WORKSPACE/.screen-demo-cache/<source-hash>/` (or `~/.cache/screen-demo/` when
+`$WORKSPACE/.video-edit-cache/<source-hash>/` (or `~/.cache/video-edit/` when
 no `WORKSPACE`) so re-runs are instant. **Output: prints `CONTEXT: <path>` — that's
 the file you need to read next.**
 
@@ -80,46 +89,19 @@ language)").
 
 ### 3. Author the EDL
 
-Read `<CONTEXT>` (a markdown file with timecoded transcript + cut candidates), then **write an EDL JSON** that realizes the user's prose description. Schema in `examples/demo-narrated.edl.json`.
+Read `<CONTEXT>` (a markdown file with timecoded transcript + cut candidates),
+then **write an EDL JSON** that realizes the user's prose description, following
+the job's guide. Schema below; a full example is `examples/demo-narrated.edl.json`.
 
-EDL authoring guidance:
 - **`source` must be the ORIGINAL recording — never the 720p proxy.** The proxy is an analysis artifact; render refuses it.
-- **Honor the dead-span table first.** Segments must not contain a `black` span at any speed, and must not cross a `static`/`low` span at an ordinary fast-forward speed (4-8x) — at 6x a 30s wait is still 5s of a video where nothing moves. Place segment boundaries so dead spans fall in the cuts; when continuity genuinely needs one (text appearing in a field), cross it at `speed >= 20`. After drafting segments, re-check each one against the table. Nuance: dead means don't *linger*, not don't *show* — a motionless-but-readable frame (a results list) can still carry a few-second speed-1 zoom money shot.
 - Map each user beat to a segment with `src_start`/`src_end` from the transcript anchors.
-- Use `speed > 1` for "fast-forward" sections (anything >4 auto-mutes audio; that's where the music bed carries).
-- Use `speed = 1.0` and a `zoom: {scale, x, y}` for "money shot" moments.
-- Use silencedetect timestamps as natural cut points.
-- Total target duration: usually 60–120 s.
-- Add a small title card and optional logo per the user's request.
 
-**Zoom rules (a zoom is a crop — everything outside it is invisible):**
-- Zooms are short money shots (≤12 s). After every zoomed segment, return to a full-frame segment so the viewer regains context.
-- **Never end the video zoomed** — render errors on a zoomed final segment. If a close-up ending is genuinely intended, set `"hold": true` inside that zoom.
-- Keep most of the runtime full-frame; render warns when >50% is zoomed.
-
-Write the EDL to a sensible location (e.g. `~/.cache/screen-demo/<key>/edl.json`).
-
-### 3b. Choose music that fits
-
-Music is part of the edit, not an afterthought. Before rendering:
-- If the user named a track or vibe, honor it. If not, **propose a specific track (with source link) and say why it fits** — don't silently pick one.
-- Match genre and tempo to the content, e.g.:
-
-| Demo type | Fits | Avoid |
-|---|---|---|
-| Dev tool / terminal workflow | minimal electronic, lo-fi beats | orchestral, vocals |
-| Business / hiring / SaaS pitch | upbeat corporate, light house | lo-fi sleepy beats, heavy EDM |
-| Consumer app, playful | indie pop, funk | dark ambient |
-| Data/AI "wow" reveal | cinematic electronic build | anything with lyrics |
-
-- Tempo should roughly match cut density: fast-forward-heavy reels want energy; calm narrated walkthroughs want restraint.
-- Search Pixabay Music by mood ("corporate upbeat", "lo-fi chill", "cinematic tech") rather than taking the first result.
-- The `synth` pink-noise bed is a last-resort fallback — never ship it in a final deliverable without telling the user.
+Write the EDL to a sensible location (e.g. `~/.cache/video-edit/<key>/edl.json`).
 
 ### 4. Render
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/pipeline.py render <edl.json> \
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py render <edl.json> \
   --out <output.mp4> \
   --music-file <path>          # or --music-url <url>
   --music-volume-db -22         # optional, default -18
@@ -127,17 +109,15 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/screen-demo/scripts/pipeline.py render <edl
 
 ### 5. Quality check + report back
 
-Before declaring done, verify the render (ffprobe + spot-check frames with `ffmpeg -ss <t> -frames:v 1`):
-- **Sharpness:** output is 1080p by default; screen text must be legible. If it isn't, check the EDL `source` points at the original recording.
-- **Framing:** extract a frame from the last 2 s — it must be full-frame (no leftover zoom crop).
-- **Music:** the bed fits the content type and ducks under narration.
+Before declaring done, verify the render (ffprobe + spot-check frames with
+`ffmpeg -ss <t> -frames:v 1`) against the checks in the job's guide.
 
 Print the output path and total duration. If quality issues are visible (caption errors, wrong segment, etc.), iterate on the EDL and re-render — the cached prep means re-renders are fast (the bulk of time is the per-segment cut pass).
 
 ## Architecture
 
 ```
-$WORKSPACE/.screen-demo-cache/<source-hash>/   (or ~/.cache/screen-demo/ if no $WORKSPACE)
+$WORKSPACE/.video-edit-cache/<source-hash>/   (or ~/.cache/video-edit/ if no $WORKSPACE)
   proxy_720p.mp4    ← 720p proxy
   audio16k.wav      ← 16 kHz mono audio
   transcript.srt    ← mlx_whisper timestamps (host, multilingual)
@@ -166,17 +146,6 @@ See `examples/demo-narrated.edl.json`. Top-level keys:
 - **Subtitles.** Transcription runs internally for orchestrator context only. No burn-in.
 - **Cursor zoom-on-click.** Would require a macOS sidecar logger at record time. Out of scope.
 - **AI music generation in this container.** ACE-Step pyproject hard-pins CUDA/MPS wheels — won't install on CPU-only aarch64 Linux. Use `--music-file` or `--music-url`. See `stages/music.py` `GENERATION_NOTE` for Mac/GPU install path if the user wants it there.
-
-## Free-for-commercial music sources
-
-Two URL types are supported by `--music-url`:
-- **Direct CDN audio URLs** (`.mp3`/`.wav`/`.m4a`/`.ogg`/`.flac`) — downloaded with `curl` + realistic User-Agent.
-- **Page URLs** (YouTube, Vimeo, etc.) — extracted via `yt-dlp`.
-
-Recommended sources:
-- **Pixabay Music** — https://pixabay.com/music/ — Pixabay Content License (commercial OK, no attribution). Open the track page, click ⋯ on the player → "Copy audio URL" (or right-click the player → "Copy audio address"). That gives you a `https://cdn.pixabay.com/audio/.../track.mp3` URL to pass to `--music-url`.
-- **YouTube Audio Library** — https://studio.youtube.com/channel/UC/music — many CC0 tracks; paste the YouTube URL.
-- **Uppbeat** — https://uppbeat.io/ — free with attribution; download and pass via `--music-file`.
 
 ## Tools (all permissive licenses, all local)
 
