@@ -93,7 +93,11 @@
       </div>
     </div>
     <div id="code" class="code" tabindex="0"></div>
-    <button id="ask-lines" class="float-btn" hidden>Ask about these lines</button>
+    <div id="ask-lines" class="float-bar" role="group" aria-label="Selected lines" hidden>
+      <span id="ask-lines-label" class="small"></span>
+      <button id="ask-lines-go" type="button" class="ctl ctl-sm">Ask about these lines</button>
+      <button id="ask-lines-close" type="button" class="ctl ctl-sm" title="Clear the selection (Esc)" aria-label="Clear the selection">✕</button>
+    </div>
   </section>
   <div id="detail-resize" class="resizer" role="separator" aria-orientation="vertical"
        aria-controls="detail" aria-label="Resize the right panel (arrow keys; double-click resets)"
@@ -461,7 +465,9 @@
             <dt><kbd>Tab</kbd> <kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Pick from the file list while typing <kbd>@</kbd></dd>
             <dt><kbd>Ctrl</kbd>+<kbd>Enter</kbd></dt><dd>Send the message</dd>
             <dt>Click a changed line</dt><dd>Add its whole block to the message</dd>
-            <dt>Click a line number</dt><dd>Select that line; <kbd>Shift</kbd>+click another to extend</dd>
+            <dt>Click a line number</dt><dd>Select that line to ask about it (a <b>+</b> shows on hover); drag
+              down the numbers, or <kbd>Shift</kbd>+click another, to select several. Nothing goes into the
+              chat until you press Ask about these lines; <kbd>Esc</kbd> or ✕ clears the selection.</dd>
             <dt>💡 Explain</dt><dd>Ask for an explanation of one block, shown above it</dd>
           </dl>
         </section>

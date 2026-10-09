@@ -381,6 +381,11 @@ body.resizing { cursor: col-resize; user-select: none; }
   padding-top: 1px;
 }
 .code td.ln:hover { color: var(--accent); }
+/* The line numbers are where lines are picked to ask about: a + shows on the row under the pointer. */
+.code td.ln.new { position: relative; padding-left: 14px; }
+.code tr[data-n]:hover td.ln.new::before {
+  content: "+"; position: absolute; left: 2px; top: 0; font-weight: 700; color: var(--accent);
+}
 .code td.mark, .code td.dots { width: 1%; padding: 0 2px; user-select: none; }
 .code td.src { width: 100%; }
 .code.split td.src { width: 50%; }
@@ -434,16 +439,12 @@ mark.wd-del { background: var(--del-word); color: inherit; border-radius: 2px; }
 .dot.HIGH { background: var(--high); }
 .dot.MEDIUM { background: var(--medium); }
 .notice { padding: var(--s4); color: var(--muted); }
-.float-btn {
-  position: absolute;
-  z-index: 5;
-  background: var(--accent);
-  color: var(--on-accent);
-  border-color: var(--accent);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-  animation: rise var(--t-fast) var(--ease);
+.float-bar {
+  position: absolute; z-index: 5; display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 10px; background: var(--panel); border: 1px solid var(--accent); border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2); animation: rise var(--t-fast) var(--ease);
 }
-
+.float-bar #ask-lines-go { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 /* --- right panel ------------------------------------------------------------------ */
 
 .tabs { display: flex; gap: var(--s1); border-bottom: 1px solid var(--border); }

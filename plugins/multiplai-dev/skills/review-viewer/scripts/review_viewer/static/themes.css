@@ -250,12 +250,12 @@
 :root[data-theme] :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 :root[data-theme] textarea:focus, :root[data-theme] input:focus { outline: 2px solid var(--accent); outline-offset: 0; }
 :root[data-theme] #send, :root[data-theme] .step-nav button,
-:root[data-theme] .float-btn { box-shadow: 3px 3px 0 var(--shadow); }
+:root[data-theme] .float-bar { box-shadow: 3px 3px 0 var(--shadow); }
 :root[data-theme] #send:hover, :root[data-theme] .step-nav button:hover:not(:disabled) {
   background: var(--sel-bg); color: var(--sel-text); border-color: var(--sel-bg);
 }
 :root[data-theme] #send:active { transform: translate(3px, 3px); box-shadow: none; }
-:root[data-theme] .float-btn { background: var(--sel-bg); color: var(--sel-text); border-color: var(--sel-bg); }
+:root[data-theme] .float-bar #ask-lines-go { background: var(--sel-bg); color: var(--sel-text); border-color: var(--sel-bg); }
 :root[data-theme] .composer { box-shadow: 0 -6px 0 var(--shadow); }
 :root[data-theme] .chat { background: var(--panel); color: var(--text); }
 :root[data-theme] .chat-fab, :root[data-theme] .fab-note { border-radius: 0; box-shadow: 4px 4px 0 var(--shadow); border: 2px solid var(--border); }

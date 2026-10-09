@@ -2013,15 +2013,29 @@
 
   // --- asking about selected lines ------------------------------------------------
 
-  function setPick(a, b, x, y) {
+  /* Selects lines a..b of the open file to ask about, and shows the bar
+   * under the last of them. Nothing goes into the chat until Ask is pressed. */
+  function setPick(a, b) {
     const [start, end] = L.lineRange(a, b);
     state.pick = { path: state.view.path, start: start, end: end };
     renderCode();
-    const btn = $("ask-lines");
-    const centre = btn.parentElement.getBoundingClientRect();
-    btn.style.left = Math.max(8, Math.min(x - centre.left, centre.width - 200)) + "px";
-    btn.style.top = Math.max(8, y - centre.top + 12) + "px";
-    btn.hidden = false;
+    const bar = $("ask-lines");
+    $("ask-lines-label").textContent = start === end ? "Line " + start : "Lines " + start + "–" + end;
+    bar.hidden = false;
+    const row = $("code").querySelector('tr[data-n="' + end + '"]');
+    const box = bar.parentElement.getBoundingClientRect();
+    const at = row ? row.getBoundingClientRect() : box;
+    bar.style.left = "48px";
+    bar.style.top = Math.max(8, Math.min(at.bottom - box.top + 4, box.height - 48)) + "px";
+  }
+
+  /* While the mouse is held on the line numbers, rows it passes join the range. */
+  function markPicked(a, b) {
+    const [start, end] = L.lineRange(a, b);
+    for (const tr of $("code").querySelectorAll("tr[data-n]")) {
+      const n = Number(tr.getAttribute("data-n"));
+      tr.classList.toggle("picked", n >= start && n <= end);
+    }
   }
 
   function clearPickState() {
@@ -2043,32 +2057,34 @@
     return row ? Number(row.getAttribute("data-n")) : null;
   }
 
-  function onCodeMouseUp(ev) {
-    if (ev.target.closest("td.ln, .dot")) return;
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed) return;
-    const a = rowNumber(sel.anchorNode);
-    const b = rowNumber(sel.focusNode);
-    if (a == null || b == null) return;
-    setPick(a, b, ev.clientX, ev.clientY);
-  }
-
-  function onCodeClick(ev) {
+  /* A press on a line number starts a selection (Shift extends the one there
+   * is); dragging down the numbers extends it; letting go shows the bar.
+   * Clicks and text selections in the code itself never touch the chat. */
+  function onGutterDown(ev) {
+    if (ev.button !== 0 || !state.view) return;
     const cell = ev.target.closest("td.ln");
-    if (!cell) {
-      // A click (not a drag) on an added or deleted row puts its whole
-      // contiguous block into the question.
-      const hit = ev.target.closest("tr.add[data-ri], tr.del[data-ri], td.src.add[data-ri], td.src.del[data-ri]");
-      const sel = window.getSelection();
-      if (!hit || ev.target.closest(".dot, button") || (sel && !sel.isCollapsed)) return;
-      const block = L.diffBlock(state.view.rows, Number(hit.getAttribute("data-ri")));
-      if (block) insertRef(state.view.path, block);
-      return;
-    }
+    if (!cell) return;
     const n = rowNumber(cell);
     if (n == null) return;
-    const start = ev.shiftKey && state.pick && state.pick.path === state.view.path ? state.pick.start : n;
-    setPick(start, n, ev.clientX, ev.clientY);
+    ev.preventDefault();  // no text selection while dragging the numbers
+    const anchor = ev.shiftKey && state.pick && state.pick.path === state.view.path ? state.pick.start : n;
+    state.pickDrag = { anchor: anchor, last: n };
+    markPicked(anchor, n);
+  }
+
+  function onGutterOver(ev) {
+    if (!state.pickDrag) return;
+    const n = rowNumber(ev.target);
+    if (n == null || n === state.pickDrag.last) return;
+    state.pickDrag.last = n;
+    markPicked(state.pickDrag.anchor, n);
+  }
+
+  function onGutterUp() {
+    const drag = state.pickDrag;
+    if (!drag) return;
+    state.pickDrag = null;
+    setPick(drag.anchor, drag.last);
   }
 
   function askAboutPick() {
@@ -2337,7 +2353,9 @@
       state.fileFilter = ev.target.value;
       renderFiles();
     });
-    $("code").addEventListener("mouseup", onCodeMouseUp);
+    $("code").addEventListener("mousedown", onGutterDown);
+    $("code").addEventListener("mouseover", onGutterOver);
+    window.addEventListener("mouseup", onGutterUp);
     $("file-prev").addEventListener("click", () => goFile(-1));
     const code = $("code");
     const setCodeWidth = () => code.style.setProperty("--code-w", code.clientWidth + "px");
@@ -2345,8 +2363,8 @@
     new ResizeObserver(setCodeWidth).observe(code);
     window.addEventListener("resize", setCodeWidth);
     $("file-next").addEventListener("click", () => goFile(1));
-    $("code").addEventListener("click", onCodeClick);
-    $("ask-lines").addEventListener("click", askAboutPick);
+    $("ask-lines-go").addEventListener("click", askAboutPick);
+    $("ask-lines-close").addEventListener("click", clearPick);
     $("tab-finding").addEventListener("click", () => setTab("finding"));
     $("tab-summary").addEventListener("click", () => setTab("summary"));
     $("tab-walk").addEventListener("click", () => setTab("walk"));
