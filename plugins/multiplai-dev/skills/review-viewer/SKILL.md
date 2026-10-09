@@ -271,6 +271,19 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   the review labels it a `repeat` of a finding rejected in an earlier round.
 - The steps show on a **Reviews** tab. Clicking a file opens the first step
   that anchors it, so anchor each step on every file it explains.
+- When the review wrote a `checks.json` beside `findings.json` (review 0.26
+  and later), a **Checked** tab shows what the review checked: a checklist
+  (one row per finder, per finding with its verdict and gate outcome, per
+  merge group), then one collapsible entry per agent, in the order they
+  started, with what it was given, every file it read, search it ran and URL
+  it fetched, and the findings or verdict it produced. Each citation shows
+  whether the gate found its quote at head and how the agent came to those
+  lines (`read`, `searched`, `diff`, `prompt`, `fetched`, or `not-seen`, shown as a
+  warning). Rejected findings appear only here, with the rule that rejected
+  them. A read of a changed file opens in the code pane; URLs are plain text.
+  The Findings tab lists the verifier's own citations and a "Checked by" link
+  to its entry. An older review, or a `checks.json` that does not validate or
+  names other commits, opens without the tab.
 - Publish early, then finish: `put` the overview and first steps with
   `"complete": false`, then the rest, and finally `"complete": true`.
 
@@ -369,4 +382,6 @@ These are the only messages to give for these cases:
   (generated from `scripts/review_viewer/models.py`).
 - `schema/walkthrough.v1.schema.json` — the `walkthrough.json` v1 contract
   the session writes.
+- `schema/checks.v1.schema.json` — the `checks.json` v1 contract the review
+  writes beside `findings.json` (generated from the same `models.py`).
 - `scripts/CLAUDE.md` — module map, mailbox protocol, logging events.

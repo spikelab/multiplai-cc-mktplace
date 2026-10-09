@@ -10,8 +10,9 @@
             changes no review)
 
 stdout contract: progress summary lines, a `summary: <path>` line per finished
-target, then for review/batch/resume a final `findings: <path>[ <path>...]`
-line listing every findings.json written.
+target, then for review/batch/resume a `findings: <path>[ <path>...]` line
+listing every findings.json written, and a final `checks: <path>[ <path>...]`
+line listing the checks.json beside each.
 
 Exit codes: 0 done; 1 a target failed; 2 bad input, unresolvable target, or
 post refused; 3 repository not trusted; 4 the budget circuit breaker stopped
@@ -179,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
                                                    session_id=args.session_id))
             render.write_rollups(out)
             print(f"findings: {path}")
+            print(f"checks: {path.parent / 'checks.json'}")
             return 0
 
         if args.command == "resume":
@@ -187,6 +189,7 @@ def main(argv: list[str] | None = None) -> int:
                                                    session_id=args.session_id))
             render.write_rollups(target_dir.parent)
             print(f"findings: {path}")
+            print(f"checks: {path.parent / 'checks.json'}")
             return 0
 
         if args.command == "assess-only":
@@ -229,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
                 specs, out, load_config(out, max_cost_usd=max_cost), parallel=args.parallel,
                 session_id=args.session_id))
             print("findings: " + " ".join(str(p) for p in written))
+            print("checks: " + " ".join(str(p.parent / "checks.json") for p in written))
             return 1 if failures else 0
     except orchestrator.ReviewError as e:
         print(f"ERROR: {e}", file=sys.stderr)

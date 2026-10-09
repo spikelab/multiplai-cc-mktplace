@@ -165,10 +165,27 @@ the cost, the severity counts, one line per HIGH and MEDIUM finding with its
 status, and one line per finding that was dropped and why. Then give the output
 directory. Do not paste `review-<slug>.md`; the viewer shows the full findings.
 
+The last stdout line, `checks: <path> [<path> ...]`, names each target's
+`checks.json`: the record of what the review checked, so a review that finds
+nothing still shows what it looked at. It holds one entry per agent call, in
+the order they started: what the agent was given (the diff's file list, the
+rules files, whether the PR description and branch rules were included),
+every tool call it made (each file read with its line range, each search,
+each URL fetched, each web query; inputs only, never what a tool returned),
+its turns and cost, and what it concluded. A finder's entry lists every
+finding it returned, kept or not, with its fate (`kept`, `deduped`, `merged`,
+or `rejected` with the gate rule); a verifier's entry has its verdict and its
+own citations. Every citation carries two marks: `gate` (`pass`/`fail` at the
+head commit, or `web`) and `seen` (`read`, `searched`, `diff`, `prompt`, `fetched`,
+or `not-seen` when the agent cites lines it never read, searched or was shown).
+`checks-<slug>.md` beside it is the same record as markdown, and review-viewer
+shows it on its Checked tab. `findings.json` also carries each finding's
+`verifier_citations`.
+
 ### 3. Hand the findings to review-viewer
 
 Unless the user said not to, invoke `multiplai-dev:review-viewer` with every
-path on the final `findings: <path> [<path> ...]` line, and follow that skill's
+path on the `findings: <path> [<path> ...]` line, and follow that skill's
 steps: start its server, give the user its `open:` line, arm the inbox watch,
 and answer questions.
 

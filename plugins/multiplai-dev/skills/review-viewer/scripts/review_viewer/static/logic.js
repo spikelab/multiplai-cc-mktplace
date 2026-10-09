@@ -949,6 +949,70 @@
     return typeof url === "string" && /^https:\/\/github\.com\/[^\s"'<>]+$/.test(url) ? url : null;
   }
 
+  // --- the Checked tab: checks.json v1 ------------------------------------------
+
+  /* Agents in the order they started; ties keep file order. */
+  function agentOrder(checks) {
+    const agents = (checks && checks.agents) || [];
+    return agents.map((a, i) => [a, i])
+      .sort((x, y) => (x[0].started_at < y[0].started_at ? -1 : x[0].started_at > y[0].started_at ? 1 : x[1] - y[1]))
+      .map((p) => p[0]);
+  }
+
+  /* One row per finder call: ran or failed, distinct files read, findings returned and their fates. */
+  function finderRows(checks) {
+    return agentOrder(checks).filter((a) => a.stage === "find").map((a) => {
+      const fates = { kept: 0, deduped: 0, merged: 0, rejected: 0 };
+      for (const f of a.findings || []) fates[f.fate] = (fates[f.fate] || 0) + 1;
+      const read = new Set((a.calls || []).filter((c) => c.tool === "Read").map((c) => c.target));
+      return Object.assign({ subject: a.subject, ran: a.error ? "failed" : "ran", filesRead: read.size,
+        returned: (a.findings || []).length }, fates);
+    });
+  }
+
+  /* One row per finding a finder returned (deduped copies left out): its verdict and what the gates did. */
+  function checkedFindingRows(checks) {
+    const agents = agentOrder(checks);
+    const verifiers = new Map(agents.filter((a) => a.stage === "verify").map((a) => [a.subject, a]));
+    const rows = [];
+    const seen = new Set();
+    for (const a of agents) {
+      if (a.stage !== "find") continue;
+      for (const f of a.findings || []) {
+        if (f.fate === "deduped" || seen.has(f.id)) continue;
+        seen.add(f.id);
+        const v = verifiers.get(f.id);
+        const verdict = v ? (v.verdict ? v.verdict.status : "failed") : "not verified";
+        const gate = f.fate === "rejected" ? "rejected: " + (f.rule || "other")
+          : v && v.verdict && v.verdict.lowered ? "lowered by verdict_gate" : "passed";
+        rows.push({ id: f.id, finder: a.subject, severity: f.severity, claim: f.claim, fate: f.fate,
+          into: f.into || null, verdict: verdict, gate: gate });
+      }
+    }
+    return rows;
+  }
+
+  /* Merge groups: which findings each one merged. */
+  function mergeRows(checks) {
+    return agentOrder(checks).filter((a) => a.stage === "merge")
+      .map((a) => ({ subject: a.subject, outcome: a.outcome, failed: !!a.error }));
+  }
+
+  /* The index (in agentOrder) of the verifier that checked finding *id*, or -1. */
+  function verifierIndex(checks, id) {
+    return agentOrder(checks).findIndex((a) => a.stage === "verify" && a.subject === id);
+  }
+
+  /* A Read of a changed file opens in the code pane; any other path or URL stays text. */
+  function callLinksToDiff(call, files) {
+    return !!call && call.tool === "Read" && (files || []).indexOf(call.target) >= 0;
+  }
+
+  /* A citation the gate could not find at head, or one the agent never read, searched or was shown. */
+  function citationWarning(c) {
+    return !!c && (c.gate === "fail" || c.seen === "not-seen");
+  }
+
   const api = {
     SEVERITIES: SEVERITIES, joinParts: joinParts, groupReplies: groupReplies,
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
@@ -975,6 +1039,9 @@
     riskInputs: riskInputs, riskLevel: riskLevel, TIER_NAMES: TIER_NAMES,
     currentBlock: currentBlock, stepCurrent: stepCurrent,
     paletteMatch: paletteMatch, viewedCount: viewedCount,
+    agentOrder: agentOrder, finderRows: finderRows, checkedFindingRows: checkedFindingRows,
+    mergeRows: mergeRows, verifierIndex: verifierIndex, callLinksToDiff: callLinksToDiff,
+    citationWarning: citationWarning,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ReviewLogic = api;

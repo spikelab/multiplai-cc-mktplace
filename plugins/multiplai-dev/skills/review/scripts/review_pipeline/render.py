@@ -13,7 +13,7 @@ import logging
 import re
 from pathlib import Path
 
-from .export import to_findings_file
+from .export import to_checks_file, to_findings_file
 from .models import SEVERITIES, ReviewState
 from .target import github_web_base
 
@@ -180,10 +180,11 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
 
 
 def write_review(state: ReviewState, target_dir: Path, *, deployed: str | None = None) -> Path:
-    """Write the full review and its short summary; return the full review's path."""
+    """Write the full review, its short summary and the checks record; return the full review's path."""
     path = target_dir / f"review-{state.target.slug}.md"
     path.write_text(render_review(state, deployed=deployed), encoding="utf-8")
     summary_path(state, target_dir).write_text(render_summary(state), encoding="utf-8")
+    (target_dir / f"checks-{state.target.slug}.md").write_text(render_checks(state), encoding="utf-8")
     return path
 
 
@@ -257,6 +258,120 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
             who = "refuted" if fd["status"] == "refuted" else "rejected by a gate"
             out.append(f"- {who}: `{fd['file']}:{fd['line_start']}` — {_short(fd['claim'], 90)}{why}")
     out += ["", f"Full review, with every reason: `review-{t.slug}.md`", ""]
+    return "\n".join(out)
+
+
+# --- checks ----------------------------------------------------------------------
+
+
+def _cell(text: str) -> str:
+    return _one_line(text).replace("|", "\\|")
+
+
+def finder_rows(agents: list[dict]) -> list[dict]:
+    """One row per finder call: ran or failed, files read, findings returned and their fates."""
+    rows = []
+    for a in agents:
+        if a["stage"] != "find":
+            continue
+        fates = [f["fate"] for f in a["findings"]]
+        rows.append({
+            "subject": a["subject"], "ran": "failed" if a["error"] else "ran",
+            "files_read": len({c["target"] for c in a["calls"] if c["tool"] == "Read"}),
+            "returned": len(fates), **{k: fates.count(k) for k in ("kept", "deduped", "merged", "rejected")},
+        })
+    return rows
+
+
+def finding_rows(agents: list[dict]) -> list[dict]:
+    """One row per finding a finder returned (deduped copies left out): its verdict and gate outcome."""
+    verdicts = {a["subject"]: a for a in agents if a["stage"] == "verify"}
+    rows, seen = [], set()
+    for a in agents:
+        for f in a["findings"] if a["stage"] == "find" else []:
+            if f["fate"] == "deduped" or f["id"] in seen:
+                continue
+            seen.add(f["id"])
+            v = verdicts.get(f["id"])
+            verdict = (v["verdict"] or {}).get("status") if v and v["verdict"] else ("failed" if v else "")
+            if f["fate"] == "rejected":
+                gate = f"rejected: {f.get('rule') or 'other'}"
+            elif v and v["verdict"] and v["verdict"]["lowered"]:
+                gate = "lowered by verdict_gate"
+            else:
+                gate = "passed"
+            rows.append({"id": f["id"], "finder": a["subject"], "severity": f["severity"], "claim": f["claim"],
+                         "verdict": verdict or "not verified", "gate": gate,
+                         "fate": f["fate"] + (f" into {f['into']}" if f.get("into") else "")})
+    return rows
+
+
+def _citation_lines(c: dict, web: str | None, head: str) -> list[str]:
+    where = (f"web source: <{c['path']}>" if c["gate"] == "web"
+             else code_link(web, head, c["path"], c["line_start"], c["line_end"]))
+    warn = " ⚠" if c["gate"] == "fail" or c["seen"] == "not-seen" else ""
+    return [f"- {where} — gate: {c['gate']}, seen: {c['seen']}{warn}", "", _fence(c["quote"]), ""]
+
+
+def render_checks(state: ReviewState, *, checks_file: dict | None = None) -> str:
+    """`checks-<slug>.md`: the checklist, then one section per agent in the order it started."""
+    data = checks_file or to_checks_file(state)
+    t = state.target
+    web, head = github_web_base(t.remote_url), t.head_sha
+    agents = data["agents"]
+    out = [f"# Checked — {t.label or t.slug}", "",
+           f"{len(agents)} agent calls, {len(data['gates'])} gate results, "
+           f"{t.base_sha[:10]}..{t.head_sha[:10]}.", "", "## Checklist", "", "### Finders", ""]
+    finders = finder_rows(agents)
+    if finders:
+        out += ["| finder | ran | files read | returned | kept | deduped | merged | rejected |",
+                "|---|---|---|---|---|---|---|---|"]
+        out += [f"| {r['subject']} | {r['ran']} | {r['files_read']} | {r['returned']} | {r['kept']} | "
+                f"{r['deduped']} | {r['merged']} | {r['rejected']} |" for r in finders]
+    else:
+        out.append("No finder ran.")
+    out += ["", "### Findings", ""]
+    rows = finding_rows(agents)
+    if rows:
+        out += ["| finding | finder | severity | verdict | gate | fate | claim |", "|---|---|---|---|---|---|---|"]
+        out += [f"| `{r['id']}` | {r['finder']} | {r['severity']} | {r['verdict']} | {r['gate']} | "
+                f"{_cell(r['fate'])} | {_cell(_short(r['claim'], 90))} |" for r in rows]
+    else:
+        out.append("No finder returned a finding.")
+    merges = [a for a in agents if a["stage"] == "merge"]
+    if merges:
+        out += ["", "### Merge groups", "", "| group | outcome |", "|---|---|"]
+        out += [f"| {_cell(a['subject'])} | {_cell(a['outcome'])} |" for a in merges]
+    out += ["", "## Agents", ""]
+    for a in agents:
+        out += [f"### {a['stage']}: {a['subject']} — {_one_line(a['outcome'])}", ""]
+        out.append(f"- **Given:** {', '.join(a['given']) or '(nothing listed)'}")
+        out.append(f"- **Turns:** {a['turns']}; **cost:** ${a['cost_usd']:.2f}; "
+                   f"**ran:** {a['started_at']} → {a['ended_at']}")
+        if a["error"]:
+            out.append(f"- **Error:** {_one_line(a['error'])}")
+        out += ["", f"**Tool calls ({len(a['calls'])}):**", ""]
+        out += [f"- {c['tool']} `{c['target']}`" + (f" — {c['detail']}" if c["detail"] else "")
+                for c in a["calls"]] or ["- none"]
+        out.append("")
+        for f in a["findings"]:
+            fate = f["fate"] + (f" into `{f['into']}`" if f.get("into") else "") + \
+                (f" ({f['rule']})" if f.get("rule") else "")
+            out += [f"#### `{f['id']}` {f['severity']} — {_one_line(f['claim'])}", "",
+                    f"**Fate:** {fate}", "", f"**Failure scenario:** {_one_line(f['failure_scenario'])}", ""]
+            for c in f["citations"]:
+                out += _citation_lines(c, web, head)
+        if a["verdict"]:
+            v = a["verdict"]
+            lowered = " (lowered by verdict_gate)" if v["lowered"] else ""
+            out += [f"**Verdict:** {v['status']}{lowered}. {_one_line(v['reason'])}", ""]
+            for c in v["citations"]:
+                out += _citation_lines(c, web, head)
+    if data["gates"]:
+        failed = [g for g in data["gates"] if not g["passed"]]
+        out += ["## Gates", "", f"{len(data['gates'])} results, {len(failed)} failed.", ""]
+        out += [f"- `{g['finding_id']}` {g['gate']}: {g['rule']}" for g in failed]
+        out.append("")
     return "\n".join(out)
 
 

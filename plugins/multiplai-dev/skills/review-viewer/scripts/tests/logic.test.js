@@ -625,6 +625,74 @@ test("riskInputs combines the repo tiers, the session's tier and the findings", 
   assert.equal(L.riskInputs({}, { assessments: [] }, [], {}, []), null);
 });
 
+// --- the Checked tab ------------------------------------------------------------
+
+const cite = (gate, seen) => ({ path: "a.py", line_start: 1, line_end: 1, quote: "x", gate: gate, seen: seen });
+const CHECKS = {
+  agents: [
+    { stage: "verify", subject: "aaaaaaaaaa", started_at: "2026-10-09T10:00:05Z", calls: [], findings: [],
+      outcome: "unverifiable (answered confirmed)", error: "",
+      verdict: { status: "unverifiable", reason: "r", citations: [], lowered: true } },
+    { stage: "find", subject: "diff-bugs", started_at: "2026-10-09T10:00:00Z", error: "", outcome: "3 findings",
+      calls: [{ tool: "Read", target: "a.py", detail: "whole file" }, { tool: "Read", target: "a.py", detail: "lines 1-5" },
+        { tool: "Read", target: "b.py", detail: "whole file" }, { tool: "Grep", target: "x", detail: "in ." }],
+      findings: [
+        { id: "aaaaaaaaaa", claim: "A", severity: "HIGH", fate: "kept", citations: [cite("pass", "read")] },
+        { id: "bbbbbbbbbb", claim: "B", severity: "LOW", fate: "rejected", rule: "quote not at cited lines",
+          citations: [cite("fail", "not-seen")] },
+        { id: "cccccccccc", claim: "C", severity: "MEDIUM", fate: "merged", into: "aaaaaaaaaa", citations: [] },
+      ] },
+    { stage: "find", subject: "callers", started_at: "2026-10-09T10:00:00Z", error: "x", outcome: "failed: timeout",
+      calls: [], findings: [] },
+    { stage: "find", subject: "tests", started_at: "2026-10-09T10:00:01Z", error: "", outcome: "1 finding", calls: [],
+      findings: [{ id: "aaaaaaaaaa", claim: "A", severity: "HIGH", fate: "deduped", into: "aaaaaaaaaa", citations: [] }] },
+    { stage: "merge", subject: "aaaaaaaaaa,cccccccccc", started_at: "2026-10-09T10:00:09Z", error: "",
+      outcome: "merged cccccccccc into aaaaaaaaaa", calls: [], findings: [] },
+  ],
+  gates: [],
+};
+
+test("agents are ordered by start time, ties keeping file order", () => {
+  assert.deepEqual(L.agentOrder(CHECKS).map((a) => a.subject),
+    ["diff-bugs", "callers", "tests", "aaaaaaaaaa", "aaaaaaaaaa,cccccccccc"]);
+  assert.deepEqual(L.agentOrder(null), []);
+});
+
+test("the checklist has one row per finder with files read and fates", () => {
+  const rows = L.finderRows(CHECKS);
+  assert.deepEqual(rows[0], { subject: "diff-bugs", ran: "ran", filesRead: 2, returned: 3,
+    kept: 1, deduped: 0, merged: 1, rejected: 1 });
+  assert.equal(rows[1].ran, "failed");
+  assert.equal(rows[2].deduped, 1);
+});
+
+test("the checklist has one row per finding with its verdict and gate, deduped copies left out", () => {
+  const rows = L.checkedFindingRows(CHECKS);
+  assert.deepEqual(rows.map((r) => [r.id, r.verdict, r.gate]), [
+    ["aaaaaaaaaa", "unverifiable", "lowered by verdict_gate"],
+    ["bbbbbbbbbb", "not verified", "rejected: quote not at cited lines"],
+    ["cccccccccc", "not verified", "passed"],
+  ]);
+  assert.equal(rows[2].into, "aaaaaaaaaa");
+});
+
+test("merge rows, the verifier of a finding, and which reads link to the diff", () => {
+  assert.deepEqual(L.mergeRows(CHECKS), [{ subject: "aaaaaaaaaa,cccccccccc",
+    outcome: "merged cccccccccc into aaaaaaaaaa", failed: false }]);
+  assert.equal(L.verifierIndex(CHECKS, "aaaaaaaaaa"), 3);
+  assert.equal(L.verifierIndex(CHECKS, "bbbbbbbbbb"), -1);
+  assert.equal(L.callLinksToDiff({ tool: "Read", target: "a.py" }, ["a.py"]), true);
+  assert.equal(L.callLinksToDiff({ tool: "Read", target: "c.py" }, ["a.py"]), false);
+  assert.equal(L.callLinksToDiff({ tool: "WebFetch", target: "a.py" }, ["a.py"]), false);
+});
+
+test("a failed gate or an unseen citation is a warning", () => {
+  assert.equal(L.citationWarning(cite("pass", "read")), false);
+  assert.equal(L.citationWarning(cite("fail", "read")), true);
+  assert.equal(L.citationWarning(cite("web", "not-seen")), true);
+  assert.equal(L.citationWarning(cite("pass", "diff")), false);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

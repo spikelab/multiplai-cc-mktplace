@@ -88,9 +88,12 @@ def agents(monkeypatch):
 
 
 def _findings_line(out: str) -> list[Path]:
-    last = out.strip().splitlines()[-1]
-    assert last.startswith("findings: ")
-    return [Path(p) for p in last[len("findings: "):].split()]
+    """The `findings:` line, which is followed by the final `checks:` line."""
+    *_, line, last = out.strip().splitlines()
+    assert line.startswith("findings: ")
+    findings = [Path(p) for p in line[len("findings: "):].split()]
+    assert last == "checks: " + " ".join(str(p.parent / "checks.json") for p in findings)
+    return findings
 
 
 def _review_args(repo, base, head, out, *extra):
