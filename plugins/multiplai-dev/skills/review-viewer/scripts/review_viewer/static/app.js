@@ -767,30 +767,51 @@
       box.appendChild(emptyState("✓", "No code review for these commits: this is the plain diff. " +
         "Select lines in the code to ask about them."));
     }
+    const undecided = L.undecidedCount(findings, state.detail.decisions);
+    if (undecided.total) {
+      box.appendChild(el("p", { class: "muted undecided",
+        text: undecided.open + " of " + undecided.total + " findings still need a decision" }));
+    }
     for (const sev of L.SEVERITIES) {
       const items = grouped.groups[sev] || [];
       if (!items.length) continue;
       box.appendChild(el("h2", { class: "sev-h " + sev, text: sev + " (" + items.length + ")" }));
-      for (const f of items) {
-        box.appendChild(el("button", {
-          class: "finding-item " + sev + (f.id === state.selected ? " selected" : "") +
-            (L.isHidden(f, state.detail.decisions) ? " hidden-finding" : ""),
-          "data-id": f.id,
-          onclick: async () => {
-            await selectFinding(f.id);
-            $("finding-detail").scrollIntoView({ block: "start", behavior: "smooth" });
-          },
-        }, [
-          el("span", { class: "badge " + sev, text: f.status }),
-          state.detail.decisions[f.id] ? el("span", {
-            class: "badge " + state.detail.decisions[f.id].decision,
-            text: state.detail.decisions[f.id].decision,
-          }) : null,
-          el("span", { class: "claim", text: f.claim }),
-          el("span", { class: "where", text: f.file + ":" + f.line_start }),
-        ]));
-      }
+      for (const f of items) box.appendChild(findingItem(f));
     }
+    if (grouped.folded.length) {
+      // Repeats of rejected findings and low-value ones: still findings, still
+      // decidable, collapsed so the rest come first.
+      const open = grouped.folded.some((f) => f.id === state.selected);
+      box.appendChild(el("details", { class: "folded-group", open: open }, [
+        el("summary", { text: "Repeats and low-value (" + grouped.folded.length + ")" }),
+        ...grouped.folded.map((f) => findingItem(f, true)),
+      ]));
+    }
+  }
+
+  function findingItem(f, folded) {
+    const sev = f.severity;
+    const d = L.effectiveDecision(f, state.detail.decisions);
+    const label = L.assessLabel(f);
+    return el("button", {
+      class: "finding-item " + sev + (f.id === state.selected ? " selected" : "") +
+        (L.isHidden(f, state.detail.decisions) ? " hidden-finding" : ""),
+      "data-id": f.id,
+      onclick: async () => {
+        await selectFinding(f.id);
+        $("finding-detail").scrollIntoView({ block: "start", behavior: "smooth" });
+      },
+    }, [
+      el("span", { class: "badge " + sev, text: f.status }),
+      label && label !== "useful" ? el("span", { class: "badge assess " + label, text: label }) : null,
+      d ? el("span", {
+        class: "badge " + d.decision,
+        text: d.decision + (d.implied ? " (earlier round)" : ""),
+      }) : null,
+      el("span", { class: "claim", text: f.claim }),
+      el("span", { class: "where", text: f.file + ":" + f.line_start }),
+      folded ? el("span", { class: "assess-reason", text: L.assessmentText(f.assessment) }) : null,
+    ]);
   }
 
   // --- file status, counts, viewed ----------------------------------------------
@@ -1022,6 +1043,11 @@
       el("span", { class: "badge", text: f.status }),
     ]));
     box.appendChild(el("h2", { text: f.claim }));
+    const assessed = L.assessmentText(f.assessment);
+    if (assessed) {
+      box.appendChild(el("div", { class: "label", text: "Assessment: " + L.assessLabel(f) }));
+      box.appendChild(el("p", { text: assessed }));
+    }
     for (const node of findingFacts(f)) box.appendChild(node);
     const steps = L.stepsForFinding(state.walk, f.id);
     if (steps.length) {

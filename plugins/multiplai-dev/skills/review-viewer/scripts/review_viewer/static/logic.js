@@ -85,26 +85,83 @@
     return HIDDEN_STATUSES.has(finding.status) || !!(d && d.decision === "reject");
   }
 
+  /* Assess labels whose findings fold into a collapsed group after the rest. */
+  const FOLDED_LABELS = new Set(["repeat", "low-value"]);
+
+  /* The review's assess label for a finding, or "" for a file written before
+   * the assess stage existed. */
+  function assessLabel(finding) {
+    return (finding && finding.assessment && finding.assessment.label) || "";
+  }
+
+  function isFolded(finding) {
+    return FOLDED_LABELS.has(assessLabel(finding));
+  }
+
   /* Findings by severity, in the input order within each severity. Refuted
-   * and rejected findings are left out unless showHidden. */
+   * and rejected findings are left out unless showHidden. Findings labelled
+   * repeat or low-value go to `folded` instead (severity order), shown after
+   * the rest in a collapsed group. */
   function groupFindings(findings, decisions, showHidden) {
     const groups = { HIGH: [], MEDIUM: [], LOW: [] };
+    const folded = [];
     let hidden = 0;
     for (const f of findings || []) {
       if (isHidden(f, decisions)) {
         hidden += 1;
         if (!showHidden) continue;
       }
-      (groups[f.severity] || (groups[f.severity] = [])).push(f);
+      if (isFolded(f)) folded.push(f);
+      else (groups[f.severity] || (groups[f.severity] = [])).push(f);
     }
-    return { groups: groups, hidden: hidden };
+    const rank = (f) => { const i = SEVERITIES.indexOf(f.severity); return i < 0 ? SEVERITIES.length : i; };
+    folded.sort((a, b) => rank(a) - rank(b));
+    return { groups: groups, hidden: hidden, folded: folded };
   }
 
-  /* Ids in the order the sidebar shows them. */
+  /* Ids in the order the sidebar shows them: the severity groups, then the folded group. */
   function findingOrder(grouped) {
     const ids = [];
     for (const sev of SEVERITIES) for (const f of grouped.groups[sev] || []) ids.push(f.id);
+    for (const f of grouped.folded || []) ids.push(f.id);
     return ids;
+  }
+
+  /* The decision that counts for a finding: the one recorded, else, for a
+   * repeat of a finding rejected in an earlier round, that rejection (marked
+   * `implied`; the page never writes it to decisions.json). */
+  function effectiveDecision(finding, decisions) {
+    const d = decisions && decisions[finding.id];
+    if (d) return d;
+    const a = finding.assessment;
+    if (a && a.label === "repeat") return { decision: "reject", note: a.earlier_note || "", implied: true };
+    return null;
+  }
+
+  /* How many shown (not refuted or rejected) findings still need a decision. */
+  function undecidedCount(findings, decisions) {
+    let open = 0, total = 0;
+    for (const f of findings || []) {
+      if (HIDDEN_STATUSES.has(f.status)) continue;
+      total += 1;
+      if (!effectiveDecision(f, decisions)) open += 1;
+    }
+    return { open: open, total: total };
+  }
+
+  /* One line saying how the review assessed a finding, or "" for useful and none. */
+  function assessmentText(a) {
+    if (!a || !a.label || a.label === "useful") return "";
+    if (a.label === "repeat" || a.label === "still-open") {
+      let earlier = a.earlier_id ? a.earlier_id : "an earlier finding";
+      if (a.earlier_round) earlier += " (round " + String(a.earlier_round).slice(0, 12) + ")";
+      const decision = a.earlier_decision || "no decision";
+      const note = a.earlier_note ? ": " + a.earlier_note : "";
+      const head = a.label === "repeat" ? "Repeats " + earlier + ", which you rejected" + note
+        : "Still open from " + earlier + ", your decision " + decision + note;
+      return head + (a.reason ? ". " + a.reason : "");
+    }
+    return "Low value: " + (a.reason || "no reason given");
   }
 
   /* The id `delta` steps from `current`, clamped to the list (j/k). */
@@ -389,7 +446,7 @@
     const tests = ((walk.assessments || []).find((a) => a.topic === "tests") || {}).verdict || null;
     const open = { HIGH: 0, MEDIUM: 0 };
     for (const f of findings || []) {
-      const d = decisions && decisions[f.id];
+      const d = effectiveDecision(f, decisions);
       if (f.status === "confirmed" && !(d && d.decision === "reject") && f.severity in open) open[f.severity] += 1;
     }
     const checks = badge("checks");
@@ -896,6 +953,8 @@
     SEVERITIES: SEVERITIES, joinParts: joinParts, groupReplies: groupReplies,
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
     isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder,
+    assessLabel: assessLabel, isFolded: isFolded, effectiveDecision: effectiveDecision,
+    undecidedCount: undecidedCount, assessmentText: assessmentText,
     stepFinding: stepFinding, anchorLabel: anchorLabel, escapeHtml: escapeHtml,
     splitHighlighted: splitHighlighted, lineRange: lineRange,
     stepOrder: stepOrder, moveStep: moveStep, stepPosition: stepPosition,

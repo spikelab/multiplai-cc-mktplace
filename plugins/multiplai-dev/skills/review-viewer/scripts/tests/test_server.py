@@ -502,3 +502,26 @@ def test_pr_route_without_a_pr_returns_null(start_live):
     live = start_live()
     status, res = live.request("GET", f"/api/targets/{live.slug}/pr")
     assert status == 200 and res["pr"] is None
+
+
+def test_findings_with_and_without_assessment_both_serve(start_live, findings_path):
+    """A findings.json from before the assess stage has no `assessment`; one after has it."""
+    plain = start_live()
+    status, detail = plain.request("GET", f"/api/targets/{plain.slug}")
+    assert status == 200 and all("assessment" not in f or f["assessment"] is None
+                                 for f in detail["findings"]["findings"])
+
+    data = json.loads(findings_path.read_text())
+    data["findings"][0]["assessment"] = {
+        "label": "repeat", "reason": "the same defect as before", "earlier_id": "abcdef0123",
+        "earlier_round": "1" * 40, "earlier_decision": "reject", "earlier_note": "by design"}
+    data["findings"][1]["assessment"] = {"label": "low-value", "reason": "[speculative] r"}
+    labelled = findings_path.parent.parent / "labelled" / "findings.json"
+    labelled.parent.mkdir()
+    labelled.write_text(json.dumps(data))
+    live = start_live(path=labelled)
+    status, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert status == 200
+    got = [f.get("assessment") for f in detail["findings"]["findings"]]
+    assert got[0]["label"] == "repeat" and got[0]["earlier_note"] == "by design"
+    assert got[1]["label"] == "low-value" and got[1]["earlier_id"] is None
