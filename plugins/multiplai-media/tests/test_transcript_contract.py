@@ -3,7 +3,8 @@
 Both converters must produce {language, engine, words: [{text, start, end,
 speaker?}]}; speaker labels must survive; and source (a), the transcribe skill,
 must win over source (b), prep's own mlx_whisper, whenever it advertises
-word-level JSON. A fake transcribe.sh on PATH stands in for the skill.
+word-level JSON. A fake transcribe.sh in place of the sibling skill's script
+stands in for the skill.
 """
 from __future__ import annotations
 
@@ -68,17 +69,33 @@ def _fake_transcribe(bin_dir: Path, help_text: str) -> Path:
 
 
 def test_transcribe_skill_with_word_flag_is_chosen_first(tmp_path: Path, monkeypatch) -> None:
-    fake = _fake_transcribe(tmp_path / "bin", f"Usage: transcribe.sh <audio> [out] {tx.WORDS_JSON_FLAG}")
-    monkeypatch.setenv("PATH", f"{fake.parent}:/usr/bin:/bin")
+    fake = _fake_transcribe(tmp_path / "skill", f"Usage: transcribe.sh <audio> [out] {tx.WORDS_JSON_FLAG}")
+    monkeypatch.setattr(tx, "_SIBLING_TRANSCRIBE", fake)
     source, script = tx.choose_source()
     assert source == "transcribe-skill"
     assert script == fake
 
 
 def test_transcribe_skill_without_word_flag_falls_back_to_mlx_whisper(tmp_path: Path, monkeypatch) -> None:
-    fake = _fake_transcribe(tmp_path / "bin", "Usage: transcribe.sh <audio_file> [output_file] [--language <code>]")
-    monkeypatch.setenv("PATH", f"{fake.parent}:/usr/bin:/bin")
+    fake = _fake_transcribe(tmp_path / "skill", "Usage: transcribe.sh <audio_file> [output_file] [--language <code>]")
+    monkeypatch.setattr(tx, "_SIBLING_TRANSCRIBE", fake)
     assert tx.choose_source() == ("mlx_whisper", None)
+
+
+def test_a_transcribe_sh_on_path_is_never_run(tmp_path: Path, monkeypatch) -> None:
+    # Only the plugin's own transcribe skill is trusted; a same-named script
+    # elsewhere on PATH must not even be asked for --help.
+    marker = tmp_path / "ran"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stray = bin_dir / "transcribe.sh"
+    stray.write_text(f"#!/bin/bash\ntouch {marker}\necho {tx.WORDS_JSON_FLAG}\n")
+    stray.chmod(stray.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.setattr(tx, "_SIBLING_TRANSCRIBE", tmp_path / "absent" / "transcribe.sh")
+    assert tx.transcribe_skill_script() is None
+    assert tx.choose_source() == ("mlx_whisper", None)
+    assert not marker.exists()
 
 
 def test_transcribe_skill_argv_asks_for_words() -> None:
@@ -114,3 +131,72 @@ def test_cache_key_has_no_spaces(tmp_path: Path) -> None:
     key = prep._source_key(src)
     assert " " not in key and "(" not in key
     assert key.startswith("My-Show-ep-4-6-ott-")
+
+
+# --- prep._transcript_contract: reuse, both sources, and no words -------------
+
+def _no_transcriber(*_a, **_k):
+    raise AssertionError("must not transcribe")
+
+
+def test_contract_reuses_an_existing_transcript_without_transcribing(tmp_path: Path, monkeypatch) -> None:
+    c = tx.from_transcribe_skill(json.loads((_FIX / "transcribe-skill-words.json").read_text()))
+    tx.write(c, tmp_path / "transcript.json")
+    monkeypatch.setattr(tx, "choose_source", _no_transcriber)
+    monkeypatch.setattr(prep, "_transcribe", _no_transcriber)
+    monkeypatch.setattr(prep.subprocess, "run", _no_transcriber)
+    got, path = prep._transcript_contract(tmp_path / "a.wav", tmp_path, "", None, None)
+    assert got == c and path == tmp_path / "transcript.json"
+
+
+def test_contract_from_the_transcribe_skill_writes_json_and_srt(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(tx, "choose_source", lambda: ("transcribe-skill", Path("/s/transcribe.sh")))
+    seen: list[list[str]] = []
+
+    def fake_run(argv, *a, **k):
+        seen.append(argv)
+        (tmp_path / "transcribe-words.json").write_text((_FIX / "transcribe-skill-words.json").read_text())
+
+    monkeypatch.setattr(prep.subprocess, "run", fake_run)
+    monkeypatch.setattr(prep, "_transcribe", _no_transcriber)
+    got, path = prep._transcript_contract(tmp_path / "a.wav", tmp_path, "", "it", None)
+    assert seen == [tx.transcribe_skill_argv(Path("/s/transcribe.sh"), tmp_path / "a.wav",
+                                             tmp_path / "transcribe-words.json", "it")]
+    assert tx.load(path) == got and got["engine"] == "transcribe-skill:parakeet-tdt-v3"
+    assert (tmp_path / "transcript.srt").read_text() == tx.to_srt(got)
+
+
+def _fake_whisper(tmp_path: Path, monkeypatch, data: dict, srt: str | None) -> None:
+    def fake_transcribe(audio, dst_stem, prompt_hint="", language=None, model=None):
+        raw = Path(str(dst_stem) + ".json")
+        raw.write_text(json.dumps(data))
+        if srt is not None:
+            (tmp_path / "whisper.srt").write_text(srt)
+        return raw
+
+    monkeypatch.setattr(tx, "choose_source", lambda: ("mlx_whisper", None))
+    monkeypatch.setattr(prep, "_transcribe", fake_transcribe)
+
+
+def test_contract_from_mlx_whisper_copies_its_srt(tmp_path: Path, monkeypatch) -> None:
+    _fake_whisper(tmp_path, monkeypatch, json.loads((_FIX / "whisper-words.json").read_text()),
+                  srt="1\n00:00:00,120 --> 00:00:01,000\nHello\n")
+    got, path = prep._transcript_contract(tmp_path / "a.wav", tmp_path, "", "en", None)
+    assert got["engine"].startswith("mlx_whisper:") and len(got["words"]) == 8
+    assert tx.load(path) == got
+    assert (tmp_path / "transcript.srt").read_text() == "1\n00:00:00,120 --> 00:00:01,000\nHello\n"
+
+
+def test_contract_from_mlx_whisper_without_srt_writes_one(tmp_path: Path, monkeypatch) -> None:
+    _fake_whisper(tmp_path, monkeypatch, json.loads((_FIX / "whisper-words.json").read_text()), srt=None)
+    got, _ = prep._transcript_contract(tmp_path / "a.wav", tmp_path, "", "en", None)
+    assert (tmp_path / "transcript.srt").read_text() == tx.to_srt(got)
+
+
+def test_contract_with_no_words_raises_and_writes_no_transcript(tmp_path: Path, monkeypatch) -> None:
+    # Word timestamps off: segments carry no `words`.
+    _fake_whisper(tmp_path, monkeypatch,
+                  {"language": "it", "segments": [{"start": 0, "end": 2, "text": " Ciao"}]}, srt=None)
+    with pytest.raises(RuntimeError, match="no word timings"):
+        prep._transcript_contract(tmp_path / "a.wav", tmp_path, "", "it", None)
+    assert not (tmp_path / "transcript.json").exists()

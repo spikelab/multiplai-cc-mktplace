@@ -75,3 +75,19 @@ def test_segment_starts_match_the_render_crossfade_offsets() -> None:
     offsets = [float(x) for x in re.findall(r"xfade=transition=fade:duration=[\d.]+:offset=([\d.]+)", fc)]
     starts = [p.out_start for p in timeline.place_segments(edl)]
     assert starts == offsets
+
+
+def test_total_duration_counts_the_default_crossfade_at_every_join() -> None:
+    # Two 20 s segments, no declared transition: render crossfades for 0.5 s,
+    # so the reel is 39.5 s, and the music bed is trimmed to that.
+    edl = _edl([Segment(0, 20), Segment(30, 50)])
+    assert edl.total_duration() == pytest.approx(39.5)
+    assert edl.total_duration() == pytest.approx(timeline.place_segments(edl)[-1].out_end)
+
+
+def test_total_duration_matches_the_render_with_a_title_card() -> None:
+    # The title card's join (after=-1) is undeclared here, so it fades 0.5 s.
+    edl = EDL.load(_SCRIPTS.parent / "examples" / "demo-narrated.edl.json")
+    assert edl.total_duration() == pytest.approx(timeline.place_segments(edl)[-1].out_end)
+    seg_d = sum(s.duration for s in edl.segments)
+    assert edl.total_duration() == pytest.approx(edl.title.duration + seg_d - 0.5 - 9 * 0.4)

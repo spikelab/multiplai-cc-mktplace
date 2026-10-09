@@ -10,7 +10,7 @@ _SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "video-edit" / "s
 sys.path.insert(0, str(_SCRIPTS))
 
 from stages import composite, layouts as L  # noqa: E402
-from stages.edl import EDL, Focus, Layout, Output, Panel, Segment  # noqa: E402
+from stages.edl import EDL, Focus, Layout, Output, Panel, Segment, Zoom  # noqa: E402
 
 W, H = 1080, 1920
 A = L.Rect(36, 200, 920, 744)
@@ -154,3 +154,93 @@ def test_segment_video_uses_a_graph_for_stack_and_a_chain_for_a_panel() -> None:
     assert v0.startswith("[0:v]trim=duration=4,setpts=PTS-STARTPTS[vin];[vin]split=2")
     assert v0.endswith("[vfit]fps=30,trim=duration=4.0[v]")
     assert v1 == "[0:v]trim=duration=3,setpts=PTS-STARTPTS,crop=418:744:966:200,scale=1080:1920,setsar=1,fps=30,trim=duration=3.0[v]"
+
+
+@pytest.mark.parametrize("frame", ["A", "stack", "speaker"])
+def test_validate_rejects_zoom_on_a_framed_segment(frame) -> None:
+    # The zoom crop runs before the panel crop, whose rectangle is in source
+    # pixels: the panel would point past the zoomed frame's edge.
+    layout = Layout(panels={"A": Panel(36, 200, 920, 744), "B": Panel(966, 200, 918, 744)},
+                    speakers={"S0": "A"})
+    edl = _reel(segments=[Segment(0, 10, frame=frame, zoom=Zoom(scale=1.5))], layout=layout)
+    with pytest.raises(ValueError, match="both zoom and frame"):
+        edl.validate(source_size=(1920, 1080),
+                     words=[{"text": "x", "start": 0, "end": 1, "speaker": "S0"}])
+
+
+def test_zoom_without_a_frame_is_still_allowed() -> None:
+    edl = _reel(segments=[Segment(0, 10, zoom=Zoom(scale=1.5)), Segment(10, 20)], fit="crop")
+    assert edl.validate(source_size=(1920, 1080)) == []
+
+
+_AB = {"A": Panel(36, 200, 920, 744), "B": Panel(966, 200, 918, 744)}
+
+
+def test_segment_video_fit_crop_is_a_chain_around_the_focus() -> None:
+    edl = _reel(segments=[Segment(2, 6, focus=Focus(0.25, 0.5))], fit="crop")
+    v = composite._segment_video(edl, edl.segments[0], None, "#000000")
+    assert v == ("[0:v]trim=duration=4,setpts=PTS-STARTPTS,"
+                 f"{L.crop_chain(W, H, 0.25, 0.5)},fps=30,trim=duration=4.0[v]")
+
+
+def test_segment_video_fit_blur_is_a_graph_between_vin_and_vfit() -> None:
+    edl = _reel(segments=[Segment(2, 6)], fit="blur")
+    v = composite._segment_video(edl, edl.segments[0], None, "#000000")
+    assert v == (f"[0:v]trim=duration=4,setpts=PTS-STARTPTS[vin];{L.blur_graph(W, H)};"
+                 "[vfit]fps=30,trim=duration=4.0[v]")
+
+
+def test_segment_video_speaker_follows_the_labelled_words() -> None:
+    edl = _reel(segments=[Segment(10, 20, frame="speaker")],
+                layout=Layout(panels=dict(_AB), speakers={"S0": "A", "S1": "B"}))
+    words = [_w("a", 10.0, 13.0, "S0"), _w("b", 15.2, 18.0, "S1")]
+    v = composite._segment_video(edl, edl.segments[0], words, "#000000")
+    runs = L.speaker_runs(words, 10, 20, {"S0": "A", "S1": "B"})
+    assert runs == [(0.0, 5.2, "A"), (5.2, 10, "B")]
+    assert v == (f"[0:v]trim=duration=10,setpts=PTS-STARTPTS[vin];"
+                 f"{L.speaker_graph(runs, {k: L.Rect(p.x, p.y, p.w, p.h) for k, p in _AB.items()}, W, H)};"
+                 "[vfit]fps=30,trim=duration=10.0[v]")
+
+
+def test_segment_video_speaker_without_words_in_the_span_shows_the_first_panel() -> None:
+    edl = _reel(segments=[Segment(10, 20, frame="speaker")],
+                layout=Layout(panels={"B": _AB["B"], "A": _AB["A"]}, speakers={"S0": "A"}))
+    v = composite._segment_video(edl, edl.segments[0], [_w("x", 30.0, 31.0, "S0")], "#000000")
+    assert v == (f"[0:v]trim=duration=10,setpts=PTS-STARTPTS[vin];"
+                 f"[vin]{L.panel_chain(A, W, H)}[vfit];"
+                 "[vfit]fps=30,trim=duration=10.0[v]")
+
+
+@pytest.mark.parametrize("panels,missing", [({"A": _AB["A"]}, "B"), ({"B": _AB["B"]}, "A")])
+def test_validate_rejects_stack_without_both_panels(panels, missing) -> None:
+    edl = _reel(segments=[Segment(0, 10, frame="stack")], layout=Layout(panels=panels))
+    with pytest.raises(ValueError, match=f'frame "stack".*missing: {missing}'):
+        edl.validate()
+
+
+def test_validate_rejects_a_speaker_missing_from_the_mapping() -> None:
+    edl = _reel(segments=[Segment(0, 10, frame="speaker")],
+                layout=Layout(panels=dict(_AB), speakers={"S0": "A", "S1": "B"}))
+    words = [_w("a", 0, 1, "S0"), _w("b", 1, 2, "S2")]
+    with pytest.raises(ValueError, match="unmapped: S2"):
+        edl.validate(words=words)
+
+
+def test_validate_rejects_speaker_frame_with_no_mapping() -> None:
+    edl = _reel(segments=[Segment(0, 10, frame="speaker")], layout=Layout(panels=dict(_AB)))
+    with pytest.raises(ValueError, match="unmapped: S0"):
+        edl.validate(words=[_w("a", 0, 1, "S0")])
+
+
+def test_validate_rejects_a_mapping_to_a_panel_that_does_not_exist() -> None:
+    edl = _reel(segments=[Segment(0, 10, frame="speaker")],
+                layout=Layout(panels=dict(_AB), speakers={"S0": "C"}))
+    with pytest.raises(ValueError, match="panels that do not exist: C"):
+        edl.validate(words=[_w("a", 0, 1, "S0")])
+
+
+def test_validate_accepts_a_complete_speaker_setup() -> None:
+    edl = _reel(segments=[Segment(0, 10, frame="speaker")],
+                layout=Layout(panels=dict(_AB), speakers={"S0": "A", "S1": "B"}))
+    assert edl.validate(source_size=(1920, 1080),
+                        words=[_w("a", 0, 1, "S0"), _w("b", 1, 2, "S1")]) == []

@@ -87,8 +87,9 @@ the file you need to read next.**
 
 **Transcript:** prep writes `transcript.json` — every word with its `start` and
 `end` (and `speaker`, when the source has speaker labels) — and everything
-later reads it. It comes from the `transcribe` skill when that skill can emit
-word timings, else from prep's own `mlx_whisper` call; `context.md` names the
+later reads it. It comes from this plugin's `transcribe` skill (its own
+`transcribe.sh`, never one found on PATH) when that skill can emit word
+timings, else from prep's own `mlx_whisper` call; `context.md` names the
 engine. If the large-v3 model fails to load on the host, stop and tell the
 user rather than switching to a smaller model.
 
@@ -215,7 +216,7 @@ See `examples/demo-narrated.edl.json`. Top-level keys:
 
 Keys for reels (see `references/reels.md`):
 - `layout` — `{panels: {A: {x, y, w, h}, B: …}, speakers: {"SPEAKER_0": "A", …}}`, rectangles in source pixels
-- segment `frame` — `"stack"` (A over B), a panel name (that panel cropped to the output aspect), or `"speaker"` (follows the transcript's speaker labels)
+- segment `frame` — `"stack"` (A over B), a panel name (that panel cropped to the output aspect), or `"speaker"` (follows the transcript's speaker labels); a segment with a `frame` takes no `zoom` (render refuses the pair)
 - segment `focus` — `{x, y}` 0..1, the point a crop keeps in view
 - `captions` — `{words_per_line, max_chars, position_y, highlight, size}` — word-timed captions burned in from the transcript
 - `headline` — `{text, start, end}` in output time, shown at the top
