@@ -17,7 +17,7 @@ the [`multiplai`](../../README.md) marketplace.
 |-------|--------------|
 | `transcribe` | Transcribe audio files (.mp3, .m4a, .wav, …) to text using mlx-whisper. |
 | `youtube-transcript` | Download transcripts from YouTube videos — subtitle download (fast) with audio-transcription fallback. |
-| `video-edit` | Edit an existing video: turn a screen recording into a 1–3 minute landscape product demo, or a long interview into vertical 9:16 reels with speaker framing, word-timed captions, a headline and optional brand styling — ffmpeg + PySceneDetect editing, mlx-whisper transcription. Free and local, no SaaS. |
+| `video-edit` | Edit an existing video: turn a screen recording into a 1–3 minute landscape product demo, or a long interview into vertical 9:16 reels with speaker framing, word-timed captions, a headline and optional brand styling; review renders in a local page where you click the picture to comment — ffmpeg + PySceneDetect editing, mlx-whisper transcription. Free and local, no SaaS. |
 | `excalidraw` | Generate and iteratively refine Excalidraw diagrams for architecture and design exploration. |
 | `host-browser` | Drive the user's real logged-in Chrome on the macOS host (via the `ab`/agent-browser bridge) — logins, forms, JS/bot-walled pages, signups. |
 

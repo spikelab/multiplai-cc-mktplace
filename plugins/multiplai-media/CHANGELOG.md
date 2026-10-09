@@ -21,6 +21,19 @@ a tag.
 
 Nothing yet.
 
+## [0.5.0] - 2026-10-09
+
+### Added
+
+- **Review renders by clicking on them.** `pipeline.py review <dir>` serves a
+  page on this machine that plays every render in a directory. Click the
+  picture to pause and comment on that moment and spot; edit or delete
+  comments, then send them all at once. The session watches for the batch,
+  makes the changes and renders the next version, which appears in the
+  page's version menu without a reload. The page loads nothing from the
+  internet, and every request needs a per-start access token that is never
+  printed.
+
 ## [0.4.0] - 2026-10-09
 
 ### Added
