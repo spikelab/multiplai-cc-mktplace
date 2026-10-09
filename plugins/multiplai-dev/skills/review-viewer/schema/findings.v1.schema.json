@@ -122,6 +122,21 @@
           ],
           "default": null,
           "title": "Verdict Reason"
+        },
+        "verifier_citations": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Citation"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verifier Citations"
         }
       },
       "required": [

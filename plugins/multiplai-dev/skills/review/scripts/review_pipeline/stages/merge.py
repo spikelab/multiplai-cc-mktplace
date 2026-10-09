@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import logging
 
-from .. import sdk
-from ..models import SEVERITIES, DuplicateSet, Finding, Merged, MergeOutput, ReviewState
+from .. import checks, sdk
+from ..models import SEVERITIES, AgentCheck, DuplicateSet, Finding, Merged, MergeOutput, ReviewState
 from ..prompts import merge as prompt
 from . import RunContext, bounded
 
@@ -108,6 +108,23 @@ def merge_set(members: list[Finding], state: ReviewState) -> Finding:
     return survivor.model_copy(update={"severity": severity, "citations": citations, "finders": finders})
 
 
+def _record_merges(state: ReviewState, groups: list[list[Finding]]) -> None:
+    """Each merge entry's outcome, and the `merged` fate in the finders' entries."""
+    into = {m.finding.id: m.into for m in state.merged}
+    outcomes: dict[str, list[str]] = {}
+    for m in state.merged:
+        for group in groups:
+            if m.finding.id in {f.id for f in group}:
+                outcomes.setdefault(group_key(group), []).append(f"merged {m.finding.id} into {m.into}")
+    for check in state.checks:
+        if check.stage == "merge" and not check.error:
+            check.outcome = "; ".join(outcomes.get(check.subject, [])) or "no duplicates"
+        elif check.stage == "find":
+            for entry in check.findings:
+                if entry.get("fate") == "kept" and entry.get("id") in into:
+                    entry.update(fate="merged", into=into[entry["id"]])
+
+
 async def run_merge(state: ReviewState, ctx: RunContext) -> ReviewState:
     if state.past("merge"):
         return state
@@ -119,24 +136,38 @@ async def run_merge(state: ReviewState, ctx: RunContext) -> ReviewState:
     async def one(group: list[Finding]) -> None:
         nonlocal failures
         where = f"{group[0].file}:{group[0].line_start}-{max(f.line_end for f in group)}"
-        try:
-            out = await sdk.agent_call_structured(
-                prompt.build(target, group), MergeOutput,
-                allowed_tools=sdk.MERGER_TOOLS, model=cfg.merger_model, effort=cfg.effort,
-                max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="merge",
-            )
-        except sdk.RepoTrustError:
-            raise
-        except sdk.AgentCallError as e:
-            log.error("merge agent failed for %s", where, exc_info=True)
+        started = checks.now()
+        with sdk.recording() as rec:
+            try:
+                out = await sdk.agent_call_structured(
+                    prompt.build(target, group), MergeOutput,
+                    allowed_tools=sdk.MERGER_TOOLS, model=cfg.merger_model, effort=cfg.effort,
+                    max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="merge",
+                )
+                error = ""
+            except sdk.RepoTrustError:
+                raise
+            except sdk.AgentCallError as e:
+                log.error("merge agent failed for %s", where, exc_info=True)
+                error = f"merge {where}: {str(e).splitlines()[0][:200]}"
+        check = AgentCheck(
+            stage="merge", subject=group_key(group), given=[f"findings ({len(group)})"],
+            calls=[checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls],
+            turns=rec.turns, cost_usd=round(rec.cost_usd, 6), started_at=started, ended_at=checks.now(),
+            outcome="no duplicates",
+        )
+        if error:
             failures += 1
-            state.errors.append(f"merge {where}: {str(e).splitlines()[0][:200]}")
+            state.errors.append(error)
+            check.error, check.outcome = error, f"failed: {checks.failure_kind(error)}"
             # Stored as an empty answer: the group stays unmerged, and a
             # resume does not pay to ask again.
             state.merge_answers[group_key(group)] = []
+            state.checks.append(check)
             return
         # Stored as each answer arrives, so a budget stop keeps it.
         state.merge_answers[group_key(group)] = out.duplicate_sets
+        state.checks.append(check)
         if ctx.progress:
             dupes = sum(len(ids) - 1 for ids, _ in usable_sets(group, out.duplicate_sets))
             ctx.progress.line(f"  merge {where}: {len(group)} findings, {dupes} duplicates")
@@ -160,6 +191,7 @@ async def run_merge(state: ReviewState, ctx: RunContext) -> ReviewState:
                 state.merged.append(Merged(finding=m, into=merged.id,
                                            reason=f"{why}: {reason}" if reason.strip() else why))
     state.findings = [replaced.get(f.id, f) for f in state.findings if f.id not in removed]
+    _record_merges(state, groups)
 
     ctx.counts = {"groups": len(groups), "merged": len(removed), "agent_failures": failures}
     state.stage = "merge"
