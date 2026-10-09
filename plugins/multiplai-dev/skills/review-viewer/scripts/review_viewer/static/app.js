@@ -1290,11 +1290,22 @@
         setTimeout(() => { copy.textContent = "Copy as markdown"; }, 1500);
       }).catch(() => showToast("Could not copy."));
     });
+    const download = el("button", { class: "ctl ctl-sm", type: "button", text: "Download .md",
+      title: "Save this finding as a markdown file, to attach or send" });
+    download.addEventListener("click", () => {
+      const md = L.findingMarkdown(f, state.detail.findings.target, L.explanationText(f.assessment));
+      const a = el("a", { href: URL.createObjectURL(new Blob([md + "\n"], { type: "text/markdown" })),
+        download: L.findingFileName(f) });
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+    });
     box.appendChild(el("div", { class: "finding-head" }, [
       el("span", { class: "badge " + f.severity, text: f.severity }),
       el("span", { class: "badge", text: f.status }),
       topicBadge(f),
       copy,
+      download,
     ]));
     box.appendChild(el("h2", { text: f.claim }));
     // The failure scenario first, so the problem reads before anything about

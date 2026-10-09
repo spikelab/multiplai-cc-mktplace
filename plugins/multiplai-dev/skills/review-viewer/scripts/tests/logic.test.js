@@ -956,6 +956,11 @@ test("a finding's topic is the verifier's, else a guess from its path", () => {
   assert.equal(L.findingTopic({ file: "a.py" }).guessed, true);
 });
 
+test("a downloaded finding is named by severity, file name and id", () => {
+  assert.equal(L.findingFileName({ id: "a1b2c3d4e5", severity: "MEDIUM", file: "docs/history notes.md" }),
+    "finding-medium-history-notes.md-a1b2c3d4e5.md");
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

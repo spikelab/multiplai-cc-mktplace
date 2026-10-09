@@ -224,6 +224,12 @@
     return out.join("\n");
   }
 
+  /* The file name a downloaded finding gets: its severity, file name and id. */
+  function findingFileName(f) {
+    const base = String(f.file || "finding").split("/").pop().replace(/[^\w.-]+/g, "-").slice(0, 60);
+    return "finding-" + String(f.severity || "").toLowerCase() + "-" + base + "-" + f.id + ".md";
+  }
+
   /* The ids j/k step through: the list as shown, plus `current` in its place
    * when a decision just hid it, so j goes on to the finding after it. */
   function navOrder(findings, decisions, showHidden, current) {
@@ -1252,7 +1258,7 @@
     SEVERITIES: SEVERITIES, joinParts: joinParts, groupReplies: groupReplies,
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
     isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder, navOrder: navOrder,
-    githubBlobUrl: githubBlobUrl, findingTopic: findingTopic, findingMarkdown: findingMarkdown,
+    githubBlobUrl: githubBlobUrl, findingFileName: findingFileName, findingTopic: findingTopic, findingMarkdown: findingMarkdown,
     assessLabel: assessLabel, isFolded: isFolded, effectiveDecision: effectiveDecision,
     undecidedCount: undecidedCount, assessmentText: assessmentText, explanationText: explanationText,
     stepFinding: stepFinding, anchorLabel: anchorLabel, escapeHtml: escapeHtml,

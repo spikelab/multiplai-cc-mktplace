@@ -40,7 +40,8 @@ time, not derived from a tag.
 - review-viewer: **Copy as markdown** on a finding copies it for whoever will
   fix it: claim, file and lines (with a GitHub link when the remote is on
   GitHub), failure scenario, explanation, expected behaviour, verdict and
-  cited code.
+  cited code. **Download .md** saves the same text as a file, to
+  attach or send.
 
 ### Changed
 - review-viewer: **Needs you** is its own tab, with a count, instead of a
