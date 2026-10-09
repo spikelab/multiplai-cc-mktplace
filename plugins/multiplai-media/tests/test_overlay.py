@@ -109,8 +109,12 @@ def test_container_without_ab_does_not_mention_the_container(tmp_path, monkeypat
     monkeypatch.setenv("MULTIPLAI_CONTAINER", "1")
     with pytest.raises(overlay.OverlayError) as e:
         overlay.choose_backend()
-    assert "agent-browser" in str(e.value)
-    assert "container" not in str(e.value).lower() and "kit" not in str(e.value).lower()
+    msg = str(e.value)
+    # the fix it names must work here: installing agent-browser beside a missing
+    # `ab` does not, because this branch only looks for `ab`
+    assert "on a Mac" in msg and "npm i -g agent-browser" in msg
+    assert "where this runs" not in msg
+    assert "container" not in msg.lower() and "kit" not in msg.lower()
 
 
 # --- the browser conversation --------------------------------------------------------

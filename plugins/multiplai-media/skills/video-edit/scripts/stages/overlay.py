@@ -93,8 +93,8 @@ def choose_backend(pid: int | None = None) -> Backend:
         if not ab:
             raise OverlayError(
                 "Motion graphics need a browser, and no `ab` command is on PATH to reach one. "
-                "Install agent-browser where this runs (npm i -g agent-browser) and run the "
-                "render there.")
+                "They render through agent-browser on macOS: run the render on a Mac with "
+                "agent-browser installed (`npm i -g agent-browser`).")
         ws = os.environ.get("WORKSPACE")
         return Backend("ab", [ab, "--session", session], Path(ws).resolve() if ws else None)
     if sys.platform == "darwin":
