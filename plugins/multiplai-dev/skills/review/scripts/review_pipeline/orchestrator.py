@@ -19,6 +19,7 @@ from multiplai_core.log_utils import log_event
 from . import budget, target as target_mod
 from .config import ReviewConfig
 from .export import write_findings_file
+from .gates import gated_need
 from .models import SEVERITIES, ReviewState
 from .progress import ProgressWriter
 from .render import summary_path, write_review, write_rollups
@@ -152,13 +153,14 @@ def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
     gate = target_mod.target_gate(resolved, diff)
     if not gate.passed:
         raise ReviewError(f"{spec.repo}: {gate.reason}")
-    info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in)
+    needs: list = []
+    info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in, needs=needs)
     target_dir = out_dir / info.slug
     info = target_mod.write_target_files(info, diff or "", target_dir)
     progress_log = target_dir / "progress.log"
     if progress_log.exists():
         progress_log.unlink()  # a fresh review starts a fresh progress file
-    return ReviewState(target=info), target_dir
+    return ReviewState(target=info, needs=[gated_need(n) for n in needs]), target_dir
 
 
 async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, session_id: str = "") -> Path:

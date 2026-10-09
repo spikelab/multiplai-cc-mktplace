@@ -25,7 +25,7 @@ REAL_BRANCH_RULES = target.branch_rules
 
 @pytest.fixture(autouse=True)
 def no_gh_branch_rules(monkeypatch):
-    monkeypatch.setattr(target, "branch_rules", lambda repo, branch: None)
+    monkeypatch.setattr(target, "branch_rules", lambda repo, branch, needs=None: None)
 
 CLAIM_HIGH = "Rate-plan eligibility depends on the hardcoded keyword 'dolcebot'"
 CLAIM_MEDIUM = "eligible_rate_plans lower-cases the title but not the keyword"
