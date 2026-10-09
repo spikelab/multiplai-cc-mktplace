@@ -291,3 +291,41 @@ def test_default_out_is_the_workspace_inbox_else_home_never_cwd(tmp_path, monkey
     (ws / "INBOX").mkdir(parents=True)
     (cfg / ".workspace").write_text(str(ws))
     assert default_out() == ws / "INBOX" / "reviews"
+
+
+# --- rounds ----------------------------------------------------------------------
+
+
+def _fake_round(target_dir: Path, head_sha: str) -> None:
+    """A findings.json and review markdown as an earlier round on *head_sha* left them."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "findings.json").write_text(json.dumps(
+        {"schema_version": 1, "generated_at": "2026-01-01T00:00:00Z", "producer": "test",
+         "target": {"head_sha": head_sha}, "findings": []}))
+    (target_dir / f"review-{target_dir.name}.md").write_text("# earlier round\n")
+
+
+def test_a_run_on_a_new_head_keeps_the_earlier_round(fixture_repo, tmp_path, agents):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    target_dir = out / f"booking-engine--{base}..{head}"
+    old_head = "a" * 40
+    _fake_round(target_dir, old_head)
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    kept = target_dir / "rounds" / old_head[:12]
+    assert json.loads((kept / "findings.json").read_text())["target"]["head_sha"] == old_head
+    assert (kept / f"review-{target_dir.name}.md").read_text() == "# earlier round\n"
+    assert json.loads((target_dir / "findings.json").read_text())["target"]["head_sha"] == head
+
+
+def test_a_repeat_run_and_a_resume_on_the_same_head_keep_no_round(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    target_dir = out / f"booking-engine--{base}..{head}"
+    agents(kill_at="merge")
+    with pytest.raises(RuntimeError):
+        main(_review_args(repo, base, head, out))
+    assert main(["resume", str(target_dir), "--trust-repo"]) == 0
+    assert main(_review_args(repo, base, head, out)) == 0  # a second full run on the same head
+    assert not (target_dir / "rounds").exists()

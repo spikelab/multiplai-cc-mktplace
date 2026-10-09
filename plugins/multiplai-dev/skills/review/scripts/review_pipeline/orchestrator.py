@@ -16,7 +16,7 @@ import yaml
 
 from multiplai_core.log_utils import log_event
 
-from . import budget, target as target_mod
+from . import budget, rounds, target as target_mod
 from .config import ReviewConfig
 from .export import write_findings_file
 from .models import SEVERITIES, ReviewState
@@ -154,6 +154,11 @@ def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
         raise ReviewError(f"{spec.repo}: {gate.reason}")
     info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in)
     target_dir = out_dir / info.slug
+    # A new head in a directory an earlier round wrote: keep that round's
+    # findings before this run writes over them. The same head keeps nothing.
+    kept = rounds.keep_round(target_dir, info.slug, info.head_sha)
+    if kept is not None:
+        log.info("kept the earlier round of %s in %s", info.slug, kept)
     info = target_mod.write_target_files(info, diff or "", target_dir)
     progress_log = target_dir / "progress.log"
     if progress_log.exists():
