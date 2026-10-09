@@ -20,6 +20,31 @@ from .target import github_web_base
 log = logging.getLogger(__name__)
 
 SHOWN_STATUSES = ("confirmed", "unverifiable")
+# Assess labels whose findings are listed after the others, in their own section.
+FOLDED_LABELS = ("repeat", "low-value")
+
+
+def assess_label(fd: dict) -> str:
+    """The finding's assess label, or "" when the file has none (written before the stage)."""
+    return str((fd.get("assessment") or {}).get("label") or "")
+
+
+def assessment_line(fd: dict) -> str:
+    """One line saying how the assess stage labelled the finding, or "" for `useful` and none."""
+    a = fd.get("assessment") or {}
+    label = a.get("label")
+    if label in (None, "", "useful"):
+        return ""
+    reason = _one_line(a.get("reason") or "")
+    if label in ("repeat", "still-open"):
+        earlier = f"`{a.get('earlier_id')}`" if a.get("earlier_id") else "an earlier finding"
+        if a.get("earlier_round"):
+            earlier += f" (round {str(a['earlier_round'])[:12]})"
+        decision = a.get("earlier_decision") or "no decision"
+        note = f": {_one_line(a['earlier_note'])}" if a.get("earlier_note") else ""
+        what = "repeats" if label == "repeat" else "still open from"
+        return f"**Assessment:** {label} — {what} {earlier}, your decision {decision}{note}. {reason}".rstrip()
+    return f"**Assessment:** {label} — {reason}".rstrip()
 
 
 def code_link(web_base: str | None, head_sha: str, path: str, start: int, end: int) -> str:
@@ -47,6 +72,8 @@ def finding_section(fd: dict, *, web_base: str | None, head_sha: str,
     """One finding. *finders* are the finders that reported it, from the pipeline state."""
     lines_ = f"{fd['line_start']}" if fd["line_start"] == fd["line_end"] else f"{fd['line_start']}-{fd['line_end']}"
     out = [f"### {fd['severity']} — {fd['file']}:{lines_} — {_one_line(fd['claim'])}", ""]
+    if assessment_line(fd):
+        out += [assessment_line(fd), ""]
 
     status = fd["status"]
     if original_severity and original_severity != fd["severity"]:
@@ -111,14 +138,26 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
     finders = {f.id: f.finders for f in state.findings}
 
     shown = [f for f in findings if f["status"] in SHOWN_STATUSES]
+    folded = [f for f in shown if assess_label(f) in FOLDED_LABELS]
+    shown = [f for f in shown if assess_label(f) not in FOLDED_LABELS]
     if not shown:
-        out += ["No confirmed or unverifiable findings.", ""]
+        out += ["No confirmed or unverifiable findings." if not folded else
+                "Every confirmed or unverifiable finding is a repeat or low-value; see below.", ""]
     for severity in SEVERITIES:
         group = [f for f in shown if f["severity"] == severity]
         if not group:
             continue
         out += [f"## {severity}", ""]
         for fd in group:
+            out.append(finding_section(fd, web_base=web, head_sha=head,
+                                       original_severity=state.original_severity.get(fd["id"]),
+                                       finders=finders.get(fd["id"])))
+    if folded:
+        out += ["## Repeats and low-value findings", "",
+                "Each is still a confirmed or unverifiable finding: the assess stage marked it as a repeat of "
+                "one you rejected in an earlier round, or as not worth acting on, with its reason. Nothing "
+                "was deleted.", ""]
+        for fd in folded:
             out.append(finding_section(fd, web_base=web, head_sha=head,
                                        original_severity=state.original_severity.get(fd["id"]),
                                        finders=finders.get(fd["id"])))
@@ -187,19 +226,27 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
                f"{sum(1 for f in dropped if f['status'] == 'refuted')} refuted by the verifier, "
                f"{sum(1 for f in dropped if f['status'] == 'rejected')} rejected by the gates"
                + (f", {len(state.merged)} merged into another finding as duplicates." if state.merged else "."))
+    labels = [assess_label(f) for f in shown]
+    if any(labels):
+        out.append(f"Assessed: {labels.count('repeat')} repeats of rejected findings, "
+                   f"{labels.count('low-value')} low-value, {labels.count('still-open')} still open from "
+                   f"earlier rounds (repeats and low-value are listed last in the full review).")
     if state.errors:
         out.append("Agent failures: " + "; ".join(_short(e) for e in state.errors))
 
+    listed = [f for f in shown if assess_label(f) not in FOLDED_LABELS]
     for severity in ("HIGH", "MEDIUM"):
-        group = [f for f in shown if f["severity"] == severity]
+        group = [f for f in listed if f["severity"] == severity]
         if not group:
             continue
         out += ["", f"## {severity}", ""]
         for fd in group:
             lines_ = f"{fd['line_start']}" if fd["line_start"] == fd["line_end"] else f"{fd['line_start']}-{fd['line_end']}"
-            out.append(f"- `{fd['file']}:{lines_}` — {_short(fd['claim'])} ({fd['status']})")
-    if counts["LOW"]:
-        out += ["", f"{counts['LOW']} LOW findings are in the full review."]
+            still = ", still open" if assess_label(fd) == "still-open" else ""
+            out.append(f"- `{fd['file']}:{lines_}` — {_short(fd['claim'])} ({fd['status']}{still})")
+    low = sum(1 for f in listed if f["severity"] == "LOW")
+    if low:
+        out += ["", f"{low} LOW findings are in the full review."]
     if dropped:
         out += ["", "## Dropped", ""]
         for fd in dropped:
