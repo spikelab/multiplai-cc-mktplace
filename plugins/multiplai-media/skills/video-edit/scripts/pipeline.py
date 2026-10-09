@@ -59,6 +59,26 @@ def cmd_prep(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_timeline(args: argparse.Namespace) -> int:
+    """Print the transcript in output time: what the render will say, and when."""
+    from stages import timeline, transcript as tx
+    edl = EDL.load(args.edl)
+    path = Path(args.transcript) if args.transcript else composite.transcript_path(edl)
+    words = timeline.map_words(tx.load(path)["words"], timeline.place_segments(edl))
+    line: list[dict] = []
+    for i, w in enumerate(words):
+        line.append(w)
+        nxt = words[i + 1] if i + 1 < len(words) else None
+        if nxt is None or len(line) >= 12 or w["text"].endswith((".", "?", "!")) \
+                or nxt["start"] - w["end"] > 0.6:
+            who = f" {line[0]['speaker']}:" if line[0].get("speaker") else ""
+            print(f"[{line[0]['start']:7.2f}–{line[-1]['end']:7.2f}] (src {line[0]['src_start']:.2f})"
+                  f"{who} {' '.join(x['text'] for x in line)}")
+            line = []
+    print(f"\n{len(words)} words; output duration {edl.total_duration():.2f}s")
+    return 0
+
+
 def cmd_make(args: argparse.Namespace) -> int:
     """make is a thin wrapper for orchestrators. The skill's SKILL.md instructs
     the consuming Claude to run prep, author the EDL, then render — this entry
@@ -103,6 +123,12 @@ def main() -> int:
                     help="override the mlx_whisper model (default: mlx-community/whisper-large-v3-mlx "
                          "for a non-English --language, else mlx-community/whisper-medium-mlx)")
     pp.set_defaults(func=cmd_prep)
+
+    tl = sub.add_parser("timeline", help="print the transcript in output time for an EDL")
+    tl.add_argument("edl", help="path to EDL JSON")
+    tl.add_argument("--transcript", default=None,
+                    help="transcript.json (default: the EDL's `transcript`, else the prep cache for its source)")
+    tl.set_defaults(func=cmd_timeline)
 
     m = sub.add_parser("make", help="natural-language → reel (orchestrator workflow)")
     m.add_argument("source", help="path to screen recording (.mov/.mp4)")
