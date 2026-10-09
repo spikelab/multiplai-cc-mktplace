@@ -61,8 +61,9 @@ def map_span(start: float, end: float, placed: list[Placed]) -> tuple[float, flo
     """Output span of a word [start, end].
 
     A word that straddles a cut belongs to the segment holding most of it and
-    is clipped to that segment's edge. None when no kept, unmuted segment
-    holds any of it.
+    is clipped to that segment's edge. A word whisper gave no length
+    (start == end) belongs to the segment it falls in. None when no kept,
+    unmuted segment holds any of it.
     """
     best: Placed | None = None
     best_overlap = 0.0
@@ -70,6 +71,8 @@ def map_span(start: float, end: float, placed: list[Placed]) -> tuple[float, flo
         overlap = min(end, p.src_end) - max(start, p.src_start)
         if overlap > best_overlap:
             best, best_overlap = p, overlap
+    if best is None and end <= start:
+        best = next((p for p in placed if p.src_start <= start < p.src_end), None)
     if best is None or best.muted:
         return None
     s = max(start, best.src_start)

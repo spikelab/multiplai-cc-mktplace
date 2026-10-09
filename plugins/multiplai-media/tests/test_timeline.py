@@ -91,3 +91,16 @@ def test_total_duration_matches_the_render_with_a_title_card() -> None:
     assert edl.total_duration() == pytest.approx(timeline.place_segments(edl)[-1].out_end)
     seg_d = sum(s.duration for s in edl.segments)
     assert edl.total_duration() == pytest.approx(edl.title.duration + seg_d - 0.5 - 9 * 0.4)
+
+
+def test_a_word_with_no_length_is_kept_in_the_segment_it_falls_in() -> None:
+    # whisper gives some words start == end ("you 1744.04–1744.04" in a
+    # keynote); they must still reach the captions.
+    edl = _edl([Segment(0, 10), Segment(20, 30)], transitions=[Transition(after=0, duration=0.5)])
+    placed = timeline.place_segments(edl)
+    assert timeline.map_span(4.0, 4.0, placed) == pytest.approx((4.0, 4.0))
+    assert timeline.map_span(22.0, 22.0, placed) == pytest.approx((11.5, 11.5))
+    assert timeline.map_span(15.0, 15.0, placed) is None          # inside the cut
+    words = [{"text": t, "start": s, "end": e} for t, s, e in
+             [("why", 1.0, 1.3), ("do", 1.3, 2.0), ("you", 2.0, 2.0), ("hate", 2.0, 2.2)]]
+    assert [w["text"] for w in timeline.map_words(words, placed)] == ["why", "do", "you", "hate"]
