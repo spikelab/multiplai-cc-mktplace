@@ -78,6 +78,7 @@ class Output:
     crf: int = 18
     audio_bitrate: str = "192k"
     fit: str = "pad"            # "pad" | "blur" | "crop" — how a segment without a frame fills the output
+    audio_rate: Optional[int] = None    # resample the final audio (reels: 48000)
 
 
 FITS = ("pad", "blur", "crop")

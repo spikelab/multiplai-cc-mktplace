@@ -124,6 +124,19 @@ def cmd_snap(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check(args: argparse.Namespace) -> int:
+    """Spec-check a rendered MP4 (and optionally its EDL's text placement)."""
+    from stages import platform
+    results = platform.evaluate(platform.probe(args.mp4))
+    if args.edl:
+        results += platform.lint_text_boxes(EDL.load(args.edl))
+    for r in results:
+        print(f"{r.status:4}  {r.name}: {r.detail}")
+    failed = [r for r in results if r.status == platform.FAIL]
+    print(f"\n{'FAIL' if failed else 'PASS'}: {args.mp4} ({len(failed)} failing checks, preset {args.preset})")
+    return 1 if failed else 0
+
+
 def cmd_make(args: argparse.Namespace) -> int:
     """make is a thin wrapper for orchestrators. The skill's SKILL.md instructs
     the consuming Claude to run prep, author the EDL, then render — this entry
@@ -187,6 +200,13 @@ def main() -> int:
     sn.add_argument("start", type=float)
     sn.add_argument("end", type=float)
     sn.set_defaults(func=cmd_snap)
+
+    ck = sub.add_parser("check", help="spec-check a rendered MP4 for a platform preset")
+    ck.add_argument("mp4", help="rendered video")
+    ck.add_argument("--preset", default="reels", choices=["reels"],
+                    help="reels: 1080x1920 H.264/AAC for Instagram, Facebook and TikTok")
+    ck.add_argument("--edl", default=None, help="also lint the EDL's caption and headline placement")
+    ck.set_defaults(func=cmd_check)
 
     m = sub.add_parser("make", help="natural-language → reel (orchestrator workflow)")
     m.add_argument("source", help="path to screen recording (.mov/.mp4)")

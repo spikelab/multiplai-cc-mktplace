@@ -405,6 +405,7 @@ def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
         "-c:v", "libx264", "-preset", "medium", "-crf", str(edl.output.crf),
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", edl.output.audio_bitrate,
+        *(["-ar", str(edl.output.audio_rate)] if edl.output.audio_rate else []),
         "-movflags", "+faststart",
         str(out_path),
     ]
