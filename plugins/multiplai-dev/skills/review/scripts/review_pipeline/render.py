@@ -71,6 +71,20 @@ def finding_section(fd: dict, *, web_base: str | None, head_sha: str,
     return "\n".join(out)
 
 
+def duration(seconds: float) -> str:
+    """`Xm Ys`, or `Ys` under a minute."""
+    total = int(round(seconds))
+    minutes, secs = divmod(total, 60)
+    return f"{minutes}m {secs}s" if minutes else f"{secs}s"
+
+
+def cost_line(run: dict) -> str:
+    """Cost, calls, tokens and wall time, all from `findings.json`'s `run` object."""
+    calls = run["calls"]
+    return (f"${run['cost_usd']:.2f} over {calls} agent call{'' if calls == 1 else 's'}, "
+            f"{run['tokens']['total']:,} tokens, {duration(run['wall_seconds'])} wall time")
+
+
 def _counts(findings: list[dict]) -> dict[str, int]:
     shown = [f for f in findings if f["status"] in SHOWN_STATUSES]
     return {s: sum(1 for f in shown if f["severity"] == s) for s in SEVERITIES}
@@ -102,8 +116,8 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
     rejected = sum(1 for f in findings if f["status"] == "rejected")
     out.append(f"- **Findings:** {counts['HIGH']} HIGH, {counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW; "
                f"{refuted} refuted, {rejected} rejected by the gates (see the appendix)")
-    if state.budget.get("cost_usd") is not None:
-        out.append(f"- **Model cost:** ${float(state.budget['cost_usd']):.2f} over {state.budget.get('calls', 0)} agent calls")
+    if data.get("run"):
+        out.append(f"- **Model cost:** {cost_line(data['run'])}")
     if state.errors:
         out.append("- **Agent failures:** " + "; ".join(_one_line(e) for e in state.errors))
     out += ["", "## Findings", ""]
@@ -181,8 +195,8 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
 
     out = [f"# Review summary — {t.label or t.slug}", ""]
     out.append(f"{len(t.commits)} commits, {len(t.files)} files, {t.base_sha[:10]}..{t.head_sha[:10]}.")
-    if state.budget.get("cost_usd") is not None:
-        out.append(f"Cost ${float(state.budget['cost_usd']):.2f} over {state.budget.get('calls', 0)} agent calls.")
+    if data.get("run"):
+        out.append(f"Cost {cost_line(data['run'])}.")
     out.append(f"Findings: {counts['HIGH']} HIGH, {counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW. Dropped: "
                f"{sum(1 for f in dropped if f['status'] == 'refuted')} refuted by the verifier, "
                f"{sum(1 for f in dropped if f['status'] == 'rejected')} rejected by the gates"

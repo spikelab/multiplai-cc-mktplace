@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import jsonschema
+import pytest
 
 from conftest import CLAIM_HIGH, CLAIM_MEDIUM, CLAIM_REFUTED, CLAIM_REJECTED, EXPECTED_HIGH, EXPECTED_MEDIUM, SCHEMA
 from review_pipeline.export import plugin_version, to_findings_file, write_findings_file
@@ -68,3 +69,64 @@ def test_written_file_has_sorted_keys_and_two_space_indent(canned_state, tmp_pat
 def test_ids_are_unique(canned_state):
     ids = [f["id"] for f in to_findings_file(canned_state)["findings"]]
     assert len(ids) == len(set(ids)) == 4
+
+
+def _two_stage_resumed_state(canned_state):
+    """find:diff-bugs and verify, with a budget stop during verify and a resume an hour later."""
+    from review_pipeline.models import Interval
+
+    def iv(a, b):
+        return Interval(started_at=f"2026-10-01T{a}.000Z", ended_at=f"2026-10-01T{b}.000Z")
+
+    canned_state.budget = {
+        "calls": 3, "input_tokens": 30, "output_tokens": 6, "cache_read_tokens": 300, "cache_creation_tokens": 3,
+        "cost_usd": 1.5, "max_usd": 10.0,
+        "by_label": {"find:diff-bugs": 1.0, "verify": 0.5},
+        "by_stage": {
+            "find:diff-bugs": {"calls": 1, "input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 100,
+                               "cache_creation_tokens": 1, "cost_usd": 1.0, "no_usage_calls": 0},
+            "verify": {"calls": 2, "input_tokens": 20, "output_tokens": 4, "cache_read_tokens": 200,
+                       "cache_creation_tokens": 2, "cost_usd": 0.5, "no_usage_calls": 0},
+        },
+    }
+    canned_state.timings = {
+        # 10:00-10:02 first run (stopped during verify), 11:00-11:01 the resume.
+        "run": [iv("10:00:00", "10:02:00"), iv("11:00:00", "11:01:00")],
+        "find": [iv("10:00:00", "10:01:00")],
+        "find:diff-bugs": [iv("10:00:00", "10:00:40")],
+        "verify": [iv("10:01:00", "10:02:00"), iv("11:00:00", "11:00:30")],
+    }
+    canned_state.run_config = {"stages": {"find": {"model": "session default", "effort": "session default"},
+                                          "verify": {"model": "claude-x", "effort": "high"}},
+                               "concurrency": 4, "max_turns": 60}
+    canned_state.budget_stops = 1
+    canned_state.errors = ["finder history: timed out"]
+    return canned_state
+
+
+def test_run_sums_its_stages_and_wall_time_leaves_out_the_gap(canned_state):
+    run = to_findings_file(_two_stage_resumed_state(canned_state))["run"]
+    assert run["cost_usd"] == pytest.approx(sum(s["cost_usd"] for s in run["stages"])) == pytest.approx(1.5)
+    assert run["calls"] == sum(s["calls"] for s in run["stages"]) == 3
+    assert run["tokens"]["total"] == sum(s["tokens"]["total"] for s in run["stages"]) == 339
+    assert run["wall_seconds"] == 180  # 2 min + 1 min; the hour between runs is not counted
+    assert (run["started_at"], run["ended_at"]) == ("2026-10-01T10:00:00.000Z", "2026-10-01T11:01:00.000Z")
+
+
+def test_every_run_field_is_filled_from_the_state(canned_state):
+    run = to_findings_file(_two_stage_resumed_state(canned_state))["run"]
+    assert run["tokens"] == {"input": 30, "output": 6, "cache_read": 300, "cache_write": 3, "total": 339}
+    assert (run["max_usd"], run["stopped_by_budget"], run["errors"]) == (10.0, True, 1)
+    assert [s["name"] for s in run["stages"]] == ["find:diff-bugs", "verify"]  # the find interval has finder rows
+    finder, verify = run["stages"]
+    assert (finder["stage"], finder["wall_seconds"], finder["model"]) == ("find", 40, "session default")
+    assert (verify["wall_seconds"], verify["model"], verify["effort"]) == (90, "claude-x", "high")
+    assert verify["tokens"] == {"input": 20, "output": 4, "cache_read": 200, "cache_write": 2, "total": 226}
+    assert run["counts"] == {"found": 4, "rejected": 1, "refuted": 1, "unverifiable": 1, "merged": 0}
+
+
+def test_findings_file_with_and_without_run_validates(canned_state):
+    data = to_findings_file(_two_stage_resumed_state(canned_state))
+    jsonschema.validate(data, _schema())
+    del data["run"]
+    jsonschema.validate(data, _schema())

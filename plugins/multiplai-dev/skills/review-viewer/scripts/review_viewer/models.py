@@ -81,12 +81,60 @@ class Target(_Strict):
     files_changed: list[str]
 
 
+class RunTokens(_Strict):
+    input: int = Field(ge=0)
+    output: int = Field(ge=0)
+    cache_read: int = Field(ge=0)
+    cache_write: int = Field(ge=0)
+    total: int = Field(ge=0)
+
+
+class RunStage(_Strict):
+    """One row of the per-stage table: a finder (`find:<dimension>`), `verify` or `merge`."""
+    name: str
+    stage: str
+    calls: int = Field(ge=0)
+    tokens: RunTokens
+    cost_usd: float = Field(ge=0)
+    wall_seconds: float = Field(ge=0)
+    model: str  # the configured model, or "session default"
+    effort: str
+
+
+class RunCounts(_Strict):
+    found: int = Field(ge=0)
+    rejected: int = Field(ge=0)  # by the gates
+    refuted: int = Field(ge=0)
+    unverifiable: int = Field(ge=0)
+    merged: int = Field(ge=0)
+
+
+class Run(_Strict):
+    """What one review cost and how long it ran, from the review's final state.
+
+    Cost and tokens are what the SDK returned; a call that returned no usage
+    counts as 0 and adds a line to the review's errors.
+    """
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    wall_seconds: float = Field(ge=0)  # running time only: the gap before a resume is left out
+    calls: int = Field(ge=0)
+    tokens: RunTokens
+    cost_usd: float = Field(ge=0)
+    max_usd: float | None = None  # the budget ceiling; None = no ceiling
+    stopped_by_budget: bool  # the ceiling stopped the review at least once before it finished
+    stages: list[RunStage]
+    counts: RunCounts
+    errors: int = Field(ge=0)  # lines in the review's error list
+
+
 class FindingsFile(_Strict):
     schema_version: Literal[1]
     generated_at: datetime
     producer: str
     target: Target
     findings: list[Finding]
+    run: Run | None = None  # absent in files written before multiplai-dev 0.28
 
 
 def finding_id(file: str, line_start: int, claim: str) -> str:
