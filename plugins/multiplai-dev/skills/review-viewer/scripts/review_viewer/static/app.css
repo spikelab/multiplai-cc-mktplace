@@ -806,6 +806,18 @@ pre:hover > .copy-btn, .copy-btn:focus-visible { opacity: 1; }
 
 /* --- dialogs: Go to, and ? ------------------------------------------------------------- */
 
+.share-dlg { width: min(720px, calc(100vw - 32px)); padding: var(--s4); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px; }
+.share-body { display: flex; flex-direction: column; gap: var(--s2); }
+.share-where { display: flex; flex-direction: column; gap: var(--s1); }
+.share-choice { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); }
+.share-field { display: flex; flex-direction: column; gap: 2px; }
+.share-text { width: 100%; font: var(--fs-sm) var(--mono); resize: vertical; min-height: 200px; }
+.share-foot { display: flex; align-items: center; gap: var(--s2); justify-content: flex-end; }
+.share-foot > span { margin-right: auto; }
+.share-sent summary { cursor: pointer; }
+.share-sent pre { white-space: pre-wrap; max-height: 240px; overflow: auto; font-size: var(--fs-xs); }
+
 dialog { color: var(--text); }
 dialog[open] { animation: pop var(--t-med) var(--ease); }
 dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
@@ -886,3 +898,5 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
   }
   .spinner { animation: spin 2s linear infinite !important; }
 }
+.ctl.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.ctl.primary:disabled { opacity: .5; }

@@ -34,8 +34,9 @@ from . import netinfo, registry
 from .gitdata import (DEFINITION_NAME_RE, REPO_FILES_MAX, GitError, PathNotInReview, TargetError,
                       allowed_paths, definitions, file_view, pr_status, repo_files)
 from .stats import PR_BADGE_IDS, pr_badges
-from .mailbox import Mailbox, new_question_id, utc_now, write_private
-from .models import Anchor, ChecksFile, FindingsFile, InboxRow, Walkthrough, findings_digest, load_checks
+from .mailbox import Mailbox, MailboxError, new_question_id, utc_now, write_private
+from .models import (SHARE_RECIPIENT_RE, SHARE_TEXT_MAX, Anchor, ChecksFile, FindingsFile, InboxRow,
+                     Walkthrough, findings_digest, load_checks)
 from .walkthrough import Served, served_path, walkthrough_path
 
 log = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ COMPONENT = "review-viewer"
 MAX_QUESTION_CHARS = 8000
 MAX_BODY_BYTES = 64 * 1024
 STEP_ID_RE = re.compile(r"^[a-z0-9-]{1,40}$")
+SHARE_RECIPIENT = re.compile(SHARE_RECIPIENT_RE)
 REJECT_LOG_INTERVAL = 60.0
 # However many pages ask, GitHub is asked about one PR at most this often.
 PR_REFRESH_S = 60.0
@@ -81,6 +83,9 @@ class TargetState:
     # The review's checks.json, when one sits beside its findings.json and
     # describes the same commits; None hides the page's Checked tab.
     checks: ChecksFile | None = None
+    # The PR this review is of: `pr["number"]` when serve resolved a PR, else
+    # the `target.pr` the review recorded in review-state.json. None: not a PR.
+    pr_number: int | None = None
     # Every file git lists at head (gitdata.repo_files), for the page's
     # "Show all files in the repo"; [] when git could not list them.
     repo_files: list[str] = field(default_factory=list)
@@ -137,6 +142,9 @@ class Viewer:
     httpd: ViewerHTTPServer | None = None
     stop_reason: str | None = None
     stopped: threading.Event = field(default_factory=threading.Event)
+    # `serve --share slack`: the session that started the viewer has the
+    # multiplai-messaging:slack skill, so the page may ask it to send to Slack.
+    share_slack: bool = False
     _rejects: dict[int, float] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -360,7 +368,9 @@ def make_handler(viewer: Viewer):
                         "decisions": state.mailbox.read_decisions(),
                         "viewed": state.mailbox.read_viewed(),
                         "questions": [r for r in state.mailbox.read_inbox()
-                                      if r.get("kind") == "question"],
+                                      if r.get("kind") in ("question", "share")],
+                        "share": {"github": state.pr_number is not None, "pr": state.pr_number,
+                                  "slack": viewer.share_slack},
                         "pr": state.pr,
                         "notice": state.notice,
                         "stats": state.stats,
@@ -373,6 +383,8 @@ def make_handler(viewer: Viewer):
                     return self._decision(body)
                 if route == "/api/viewed":
                     return self._viewed(body)
+                if route == "/api/share":
+                    return self._share(body)
                 if route == "/api/shutdown":
                     reason = body.get("reason")
                     reason = reason if reason in STOP_MESSAGES else "stop"
@@ -460,6 +472,44 @@ def make_handler(viewer: Viewer):
                       finding_id=finding_id, decision=decision)
             self._json({"id": row.id, "decision": entry.model_dump(mode="json")})
 
+        def _share(self, body: dict) -> None:
+            """The page's Send button: ask the session to post a finding to the
+            PR or to Slack. Nothing is posted here; the row goes to the inbox."""
+            state = self._target(body.get("target"))
+            finding_id = body.get("finding_id")
+            finding = next((f for f in state.findings.findings if f.id == finding_id), None)
+            if finding is None:
+                raise _Reject(404, "unknown finding")
+            to, where, text = body.get("to"), body.get("where"), body.get("text")
+            if to not in ("github", "slack"):
+                raise _Reject(400, "to must be github or slack")
+            if not isinstance(text, str) or not text.strip() or len(text) > SHARE_TEXT_MAX:
+                raise _Reject(400, f"text must be 1-{SHARE_TEXT_MAX} characters")
+            if to == "github":
+                if state.pr_number is None:
+                    raise _Reject(403, "this review is not of a PR")
+                if where not in ("pr", "line"):
+                    raise _Reject(400, "where must be pr or line")
+                if where == "line" and finding.file not in state.findings.target.files_changed:
+                    raise _Reject(400, "a line comment needs a file the PR changes")
+            else:
+                if not viewer.share_slack:
+                    raise _Reject(403, "the Slack skill is not installed in this session")
+                if not isinstance(where, str) or not SHARE_RECIPIENT.match(where.strip()):
+                    raise _Reject(400, "name one person or #channel, on one line")
+                where = where.strip()
+            row = InboxRow(id=new_question_id(), ts=utc_now(), target=state.slug, kind="share",
+                           finding_id=finding_id, text=text, to=to, where=where)
+            try:
+                state.mailbox.append_inbox(row)
+            except MailboxError:
+                raise _Reject(400, "the text is too large to send")
+            dest = f"PR #{state.pr_number}" + (" line" if where == "line" else "") if to == "github" else "Slack"
+            log_event(COMPONENT, "share", f"share {row.id}: finding {finding_id} to {dest}",
+                      session_id=viewer.session_id, target=state.slug, finding_id=finding_id,
+                      to=to, chars=len(text))
+            self._json({"id": row.id})
+
         def _viewed(self, body: dict) -> None:
             state = self._target(body.get("target"))
             path = body.get("path")
@@ -474,7 +524,8 @@ def make_handler(viewer: Viewer):
 
 
 def build_viewer(findings: list[tuple[FindingsFile, Path]], *, agent: str, session_id: str,
-                 idle_minutes: float, meta: dict[str, dict] | None = None) -> Viewer:
+                 idle_minutes: float, meta: dict[str, dict] | None = None,
+                 share_slack: bool = False) -> Viewer:
     """`meta` maps a target slug to `{"pr", "notice", "stats"}`: PR metadata
     for the page header, the note that a review exists for other commits, and
     the measured badges (`stats.change_stats`). None goes into findings.json."""
@@ -492,9 +543,23 @@ def build_viewer(findings: list[tuple[FindingsFile, Path]], *, agent: str, sessi
                                               pr=extra.get("pr"), notice=extra.get("notice"),
                                               stats=extra.get("stats"),
                                               checks=checks_beside(ff, Path(box).parent),
-                                              repo_files=listed)
+                                              repo_files=listed,
+                                              pr_number=pr_number_of(extra, Path(box).parent))
     return Viewer(targets=targets, token=secrets.token_urlsafe(32), agent=agent,
-                  session_id=session_id, idle_minutes=idle_minutes)
+                  session_id=session_id, idle_minutes=idle_minutes, share_slack=share_slack)
+
+
+def pr_number_of(meta: dict, review_dir: Path) -> int | None:
+    """The PR a target is of: the one serve resolved, else the `target.pr` the
+    review skill recorded in review-state.json beside findings.json."""
+    pr = meta.get("pr")
+    if isinstance(pr, dict) and isinstance(pr.get("number"), int):
+        return pr["number"]
+    try:
+        n = json.loads((review_dir / "review-state.json").read_text(encoding="utf-8"))["target"]["pr"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else None
 
 
 def bind(viewer: Viewer, host: str, first_port: int, span: int) -> ViewerHTTPServer | None:

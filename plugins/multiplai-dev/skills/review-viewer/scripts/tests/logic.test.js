@@ -1000,6 +1000,28 @@ test("cmd/ctrl+click takes the whole identifier under the pointer", () => {
   assert.equal(L.identifierAt("abc", 99).name, "abc", "an offset past the end is clamped");
 });
 
+test("the GitHub and Slack buttons work only where the session can send", () => {
+  const f = { file: "app/a.py", line_start: 4 };
+  const none = L.shareOptions({ github: false, pr: null, slack: false }, f, ["app/a.py"]);
+  assert.deepEqual([none.github.enabled, none.line.enabled, none.slack.enabled], [false, false, false]);
+  assert.equal(none.github.why, "This review is not of a PR");
+  assert.equal(none.slack.why, "The Slack skill is not installed in this session");
+  const all = L.shareOptions({ github: true, pr: 278, slack: true }, f, ["app/a.py"]);
+  assert.deepEqual([all.github.enabled, all.line.enabled, all.slack.enabled], [true, true, true]);
+  assert.equal(all.github.why, "Comment on PR #278");
+  assert.equal(all.line.why, "Comment on app/a.py:4");
+  // A finding in a file the PR does not change can go on the PR, not on a line.
+  const outside = L.shareOptions({ github: true, pr: 278, slack: false }, { file: "lib/u.py", line_start: 1 }, ["app/a.py"]);
+  assert.deepEqual([outside.github.enabled, outside.line.enabled], [true, false]);
+  assert.match(outside.line.why, /does not change lib\/u\.py/);
+  assert.equal(L.shareOptions(null, f, []).github.enabled, false, "a server without the share field");
+});
+
+test("a Slack share puts the note above the finding", () => {
+  assert.equal(L.shareText("  Marco, this one  ", "### finding"), "Marco, this one\n\n### finding");
+  assert.equal(L.shareText("", "### finding"), "### finding");
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

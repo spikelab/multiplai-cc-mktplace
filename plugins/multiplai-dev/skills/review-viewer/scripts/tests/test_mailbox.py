@@ -154,3 +154,37 @@ def test_create_tightens_existing_files(tmp_path):
     Mailbox(d).create()
     assert stat.S_IMODE((d / "outbox.jsonl").stat().st_mode) == 0o600
     assert stat.S_IMODE(d.stat().st_mode) == 0o700
+
+
+# --- share rows: the page's Send button ----------------------------------------------
+
+def _share(**kw) -> InboxRow:
+    base = dict(id="q-1", ts="t", target="t", kind="share", finding_id="b561bd34ce", text="### finding")
+    return InboxRow(**{**base, **kw})
+
+
+def test_share_row_carries_where_it_goes(box):
+    row = _share(to="slack", where="#reviews")
+    box.append_inbox(row)
+    got = box.read_inbox()[-1]
+    assert (got["kind"], got["to"], got["where"], got["text"]) == ("share", "slack", "#reviews", "### finding")
+    assert _share(to="github", where="line").where == "line"
+
+
+def test_share_row_refuses_an_unknown_destination_or_a_multiline_recipient():
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        _share(to="email", where="x")
+    for bad in ("", "a\nb", "a\tb", "x" * 101):
+        with pytest.raises(ValidationError):
+            _share(to="slack", where=bad)
+
+
+def test_older_rows_without_share_fields_still_load():
+    row = InboxRow(id="q-1", ts="t", target="t", kind="question", text="x")
+    assert row.to is None and row.where is None
+
+
+def test_a_share_row_over_the_row_limit_is_refused(box):
+    with pytest.raises(MailboxError):
+        box.append_inbox(_share(to="slack", where="#r", text="€" * 30_000))

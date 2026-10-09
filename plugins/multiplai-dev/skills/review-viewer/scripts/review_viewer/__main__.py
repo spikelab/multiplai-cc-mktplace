@@ -343,7 +343,7 @@ def cmd_serve(args) -> int:
         return done
 
     viewer = server.build_viewer(loaded, agent=args.agent, session_id=args.session_id,
-                                 idle_minutes=args.idle, meta=meta)
+                                 idle_minutes=args.idle, meta=meta, share_slack="slack" in args.share)
     host = netinfo.bind_host()
     last = args.port + registry.PORT_SPAN - 1
     if server.bind(viewer, host, args.port, registry.PORT_SPAN) is None:
@@ -661,6 +661,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--repo-root", help="read git from here instead of target.repo_path")
     s.add_argument("--port", type=int, default=registry.PORT_START,
                    help=f"first port to try (default {registry.PORT_START}; 20 are tried)")
+    s.add_argument("--share", action="append", choices=["slack"], default=[],
+                   help="slack: this session has the multiplai-messaging:slack skill, so the page may "
+                        "ask it to send a finding to Slack (GitHub needs no flag: it is offered for a PR)")
     s.add_argument("--idle", type=float, default=0.0,
                    help="minutes with no open page before the server exits "
                         "(default 0 = never; it runs until `stop` or its container ends)")

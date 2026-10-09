@@ -637,3 +637,72 @@ def test_definitions_stop_at_the_cap(start_live, tmp_path, monkeypatch):
     assert len(hits) == gitdata.DEFINITIONS_MAX == 50
     # A path the file route would not serve is never a hit.
     assert gitdata.definitions(target, "dup", {"app/main.py"}) == []
+
+
+# --- send a finding to the PR or to Slack -------------------------------------------------
+
+def _share_body(live, **kw):
+    return {"target": live.slug, "finding_id": HIGH, "to": "slack", "where": "#reviews",
+            "text": "### [HIGH] a finding", **kw}
+
+
+def test_share_flags_in_the_detail(start_live):
+    live = start_live()
+    _, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert detail["share"] == {"github": False, "pr": None, "slack": False}
+    live.viewer.share_slack = True
+    live.viewer.targets[live.slug].pr_number = 7
+    _, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert detail["share"] == {"github": True, "pr": 7, "slack": True}
+
+
+def test_share_is_refused_when_the_destination_is_not_available(start_live):
+    live = start_live()
+    status, body = live.request("POST", "/api/share", _share_body(live))
+    assert status == 403 and "Slack skill" in body["error"]
+    status, body = live.request("POST", "/api/share", _share_body(live, to="github", where="pr"))
+    assert status == 403 and "not of a PR" in body["error"]
+    assert not any(r.get("kind") == "share" for r in live.viewer.targets[live.slug].mailbox.read_inbox())
+
+
+def test_share_validation(start_live):
+    from review_viewer.models import SHARE_TEXT_MAX
+    live = start_live()
+    live.viewer.share_slack = True
+    live.viewer.targets[live.slug].pr_number = 7
+    post = lambda **kw: live.request("POST", "/api/share", _share_body(live, **kw))[0]  # noqa: E731
+    assert post(to="email") == 400
+    assert post(finding_id="0000000000") == 404
+    assert post(finding_id=None) == 404
+    assert post(text="") == 400 and post(text="   ") == 400
+    assert post(text="x" * (SHARE_TEXT_MAX + 1)) in (400, 413)
+    assert post(where="") == 400 and post(where="a\nb") == 400 and post(where=None) == 400
+    assert post(to="github", where="#reviews") == 400
+    assert live.request("POST", "/api/share", _share_body(live), token="bad")[0] == 401
+
+
+def test_share_writes_one_inbox_row_for_the_session(start_live):
+    live = start_live()
+    live.viewer.share_slack = True
+    live.viewer.targets[live.slug].pr_number = 7
+    status, res = live.request("POST", "/api/share", _share_body(live, where="  Marco Rossi "))
+    assert status == 200
+    status, res2 = live.request("POST", "/api/share", _share_body(live, to="github", where="line"))
+    assert status == 200
+    rows = [r for r in live.viewer.targets[live.slug].mailbox.read_inbox() if r["kind"] == "share"]
+    assert [(r["id"], r["to"], r["where"]) for r in rows] == [
+        (res["id"], "slack", "Marco Rossi"), (res2["id"], "github", "line")]
+    assert rows[0]["text"] == "### [HIGH] a finding" and rows[0]["finding_id"] == HIGH
+    # The page gets them back with its questions, so replies thread under them.
+    _, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert {q["id"] for q in detail["questions"]} >= {res["id"], res2["id"]}
+
+
+def test_pr_number_is_read_from_the_review_state(tmp_path):
+    from review_viewer.server import pr_number_of
+    assert pr_number_of({"pr": {"number": 12}}, tmp_path) == 12
+    assert pr_number_of({}, tmp_path) is None
+    (tmp_path / "review-state.json").write_text(json.dumps({"target": {"pr": 278}}), encoding="utf-8")
+    assert pr_number_of({}, tmp_path) == 278
+    (tmp_path / "review-state.json").write_text(json.dumps({"target": {"pr": None}}), encoding="utf-8")
+    assert pr_number_of({}, tmp_path) is None

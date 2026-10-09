@@ -399,12 +399,19 @@ class Anchor(_Strict):
     line_end: int = Field(ge=1)
 
 
+# A `share` row's text: the finding as markdown, edited in the page's dialog.
+SHARE_TEXT_MAX = 20_000
+# A Slack recipient as typed: a person, a @handle or a #channel. The session
+# resolves it; this only keeps it to one short line.
+SHARE_RECIPIENT_RE = r"^[^\x00-\x1f\x7f]{1,100}$"
+
+
 class InboxRow(_Strict):
     v: Literal[1] = 1
     id: str
     ts: str
     target: str
-    kind: Literal["question", "decision"]
+    kind: Literal["question", "decision", "share"]
     finding_id: str | None = None
     anchor: Anchor | None = None
     text: str
@@ -413,6 +420,11 @@ class InboxRow(_Strict):
     # Sent by a block's light-bulb button: explain exactly `anchor`. The page
     # shows the answer in a strip above that block, not in the thread.
     explain: bool = False
+    # kind "share" only: the page's Send button asks the session to post
+    # `text`, unchanged, to the PR (`where` "pr" or "line") or to Slack
+    # (`where` is the recipient). Pressing Send is the confirmation.
+    to: Literal["github", "slack"] | None = None
+    where: str | None = Field(default=None, pattern=SHARE_RECIPIENT_RE)
 
 
 class OutboxRow(_Strict):

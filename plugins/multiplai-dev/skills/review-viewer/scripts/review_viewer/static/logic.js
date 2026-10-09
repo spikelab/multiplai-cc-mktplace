@@ -224,6 +224,30 @@
     return out.join("\n");
   }
 
+  /* Whether a finding's GitHub and Slack buttons work, and why not. `share`
+   * is the server's {github, pr, slack}; `changed` the changed files. A line
+   * comment needs the finding's file in the PR's diff, or GitHub refuses it.
+   * {github, line, slack}: each {enabled, why}. */
+  function shareOptions(share, finding, changed) {
+    const s = share || {};
+    const github = s.github ? { enabled: true, why: "Comment on PR #" + s.pr }
+      : { enabled: false, why: "This review is not of a PR" };
+    const inDiff = !!finding && (changed || []).indexOf(finding.file) >= 0;
+    const line = !github.enabled ? github
+      : inDiff ? { enabled: true, why: "Comment on " + finding.file + ":" + finding.line_start }
+        : { enabled: false, why: "The PR does not change " + ((finding && finding.file) || "this file") +
+          ", so GitHub takes no comment on its lines" };
+    const slack = s.slack ? { enabled: true, why: "Send to a person or a channel on Slack" }
+      : { enabled: false, why: "The Slack skill is not installed in this session" };
+    return { github: github, line: line, slack: slack };
+  }
+
+  /* The text a Slack share sends: the optional note, a blank line, the finding. */
+  function shareText(note, body) {
+    const n = String(note || "").trim();
+    return n ? n + "\n\n" + body : body;
+  }
+
   /* The file name a downloaded finding gets: its severity, file name and id. */
   function findingFileName(f) {
     const base = String(f.file || "finding").split("/").pop().replace(/[^\w.-]+/g, "-").slice(0, 60);
@@ -1316,7 +1340,7 @@
     SEVERITIES: SEVERITIES, joinParts: joinParts, groupReplies: groupReplies,
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
     isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder, navOrder: navOrder,
-    githubBlobUrl: githubBlobUrl, findingFileName: findingFileName, findingTopic: findingTopic, findingMarkdown: findingMarkdown,
+    githubBlobUrl: githubBlobUrl, findingFileName: findingFileName, shareOptions: shareOptions, shareText: shareText, findingTopic: findingTopic, findingMarkdown: findingMarkdown,
     assessLabel: assessLabel, isFolded: isFolded, effectiveDecision: effectiveDecision,
     undecidedCount: undecidedCount, assessmentText: assessmentText, explanationText: explanationText,
     stepFinding: stepFinding, anchorLabel: anchorLabel, escapeHtml: escapeHtml,

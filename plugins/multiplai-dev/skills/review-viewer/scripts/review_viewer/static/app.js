@@ -1347,12 +1347,20 @@
       a.click();
       setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
     });
+    const opts = L.shareOptions(state.detail.share, f, state.detail.files);
+    const shareBtn = (to, label) => el("button", {
+      class: "ctl ctl-sm share-btn", type: "button", text: label, disabled: !opts[to].enabled,
+      title: opts[to].enabled ? opts[to].why + ": you see the text before it goes" : opts[to].why,
+      onclick: () => openShare(f, to),
+    });
     box.appendChild(el("div", { class: "finding-head" }, [
       el("span", { class: "badge " + f.severity, text: f.severity }),
       el("span", { class: "badge", text: f.status }),
       topicBadge(f),
       copy,
       download,
+      shareBtn("github", "GitHub"),
+      shareBtn("slack", "Slack"),
     ]));
     box.appendChild(el("h2", { text: f.claim }));
     // The failure scenario first, so the problem reads before anything about
@@ -1386,6 +1394,89 @@
     }
     box.appendChild(decisionBox(f));
     renderThread();
+  }
+
+  // --- send a finding to the PR or to Slack -----------------------------------------
+
+  /* The dialog shows exactly the text that will go, editable. Send writes a
+   * `share` row; the session posts the text unchanged and replies with the
+   * link. The page never posts anything itself. */
+  function openShare(f, to) {
+    const dlg = $("share");
+    const opts = L.shareOptions(state.detail.share, f, state.detail.files);
+    if (!opts[to].enabled) return;
+    const agent = state.who ? state.who.agent : "the session";
+    const text = el("textarea", { id: "share-text", class: "share-text", rows: "14", spellcheck: "false",
+      "aria-label": "The text that will be sent" });
+    text.value = L.findingMarkdown(f, state.detail.findings.target, L.explanationText(f.assessment));
+    const count = el("span", { class: "muted small" });
+    const send = el("button", { class: "ctl primary", type: "button", text: "Send" });
+    let where = null;
+    let note = null;
+    const fields = [];
+    if (to === "github") {
+      const pr = state.detail.share.pr;
+      const radio = (value, label, o) => el("label", { class: "share-choice" + (o.enabled ? "" : " muted"), title: o.why }, [
+        el("input", { type: "radio", name: "share-where", value: value, disabled: !o.enabled,
+          checked: value === "pr" }), label]);
+      fields.push(el("div", { class: "share-where", role: "radiogroup", "aria-label": "Where on GitHub" }, [
+        radio("pr", "A comment on PR #" + pr, opts.github),
+        radio("line", "A comment on the line, " + f.file + ":" + f.line_start + ", at " +
+          state.detail.findings.target.head_sha.slice(0, 8), opts.line),
+      ]));
+      where = () => (dlg.querySelector("input[name=share-where]:checked") || {}).value;
+    } else {
+      const who = el("input", { type: "text", class: "share-to", placeholder: "A person, @handle or #channel",
+        "aria-label": "Send to", maxlength: "100" });
+      note = el("input", { type: "text", class: "share-note", placeholder: "A note above the finding (optional)",
+        "aria-label": "Note" });
+      fields.push(el("label", { class: "share-field" }, [el("span", { class: "label", text: "To" }), who]),
+        el("label", { class: "share-field" }, [el("span", { class: "label", text: "Note" }), note]));
+      where = () => who.value.trim();
+      who.addEventListener("input", () => update());
+    }
+    const final = () => (to === "slack" ? L.shareText(note.value, text.value) : text.value);
+    const update = () => {
+      const n = final().length;
+      count.textContent = L.formatTokens(n) + " of 20,000 characters";
+      send.disabled = !text.value.trim() || n > 20000 || !where();
+    };
+    text.addEventListener("input", update);
+    send.addEventListener("click", async () => {
+      send.disabled = true;
+      const body = { target: state.slug, finding_id: f.id, to: to, where: where(), text: final() };
+      try {
+        const res = await api("/api/share", body);
+        state.questions.push({ id: res.id, ts: new Date().toISOString(), kind: "share", finding_id: f.id,
+          to: to, where: body.where, text: body.text });
+        dlg.close();
+        state.chatJustOpened = true;
+        setChatOpen(true);
+        renderThread();
+        schedulePoll(0);
+      } catch (err) {
+        showToast("Could not send: " + err.message);
+        update();
+      }
+    });
+    dlg.replaceChildren(
+      el("div", { class: "help-head" }, [
+        el("h2", { id: "share-title", text: to === "github" ? "Comment on GitHub" : "Send on Slack" }),
+        el("button", { class: "ctl", type: "button", "aria-label": "Cancel", text: "Esc", onclick: () => dlg.close() }),
+      ]),
+      el("div", { class: "share-body" }, fields.concat([
+        el("div", { class: "label", text: "The text that will be sent (edit it here)" }),
+        text,
+        el("p", { class: "muted small", text: "Send asks " + agent + " to post this text as it is, " +
+          (to === "github" ? "as your GitHub account" : "as your Slack account") +
+          ", and to reply in the chat with a link to it. Pressing Send is your go-ahead: nothing is asked again." }),
+        el("div", { class: "share-foot" }, [count,
+          el("button", { class: "ctl", type: "button", text: "Cancel", onclick: () => dlg.close() }), send]),
+      ])));
+    update();
+    if ($("palette").open) $("palette").close();
+    dlg.showModal();
+    (to === "slack" ? dlg.querySelector(".share-to") : text).focus();
   }
 
   // --- accept / reject / defer -------------------------------------------------
@@ -1430,6 +1521,12 @@
 
   /* What a chat message was about, for its label. */
   function chatContext(q) {
+    if (q.kind === "share") {
+      const f = state.findingsById.get(q.finding_id);
+      const what = f ? f.file + ":" + f.line_start : q.finding_id;
+      if (q.to === "slack") return "Send on Slack to " + q.where + ": " + what;
+      return q.where === "line" ? "Comment on GitHub at " + what : "Comment on GitHub PR: " + what;
+    }
     if (q.anchor) return L.walkAnchorLabel(q.anchor);
     if (q.step_id) {
       const st = state.walk && state.walk.steps.find((x) => x.id === q.step_id);
@@ -1483,7 +1580,10 @@
             el("span", { class: "who", text: "You" }),
             q.ts ? el("time", { datetime: q.ts, text: clock(q.ts) }) : null,
           ]),
-          el("div", { class: "q", text: q.text }),
+          q.kind === "share"
+            ? el("details", { class: "q share-sent" }, [el("summary", { text: "The text sent (" + q.text.length + " characters)" }),
+              el("pre", { text: q.text })])
+            : el("div", { class: "q", text: q.text }),
         ]),
         el("div", { class: "a-wrap" }, [
           el("div", { class: "msg-meta" }, [
@@ -2603,6 +2703,7 @@
       requestAnimationFrame(() => { scrollQueued = false; updateBlockLine(); });
     }, { passive: true });
     $("help-close").addEventListener("click", () => $("help").close());
+    $("share").addEventListener("click", (ev) => { if (ev.target === $("share")) $("share").close(); });
     // A click on the backdrop lands on the dialog itself, outside its content.
     $("help").addEventListener("click", (ev) => { if (ev.target === $("help")) $("help").close(); });
     // Links between help sections scroll the dialog; the address bar stays as it is.
@@ -2630,7 +2731,7 @@
         else openPalette();
         return;
       }
-      if ($("palette").open) return;
+      if ($("palette").open || $("share").open) return;
       if (ev.key === "Escape" && !$("def-pop").hidden) {
         ev.preventDefault();
         closeDefinitions();
