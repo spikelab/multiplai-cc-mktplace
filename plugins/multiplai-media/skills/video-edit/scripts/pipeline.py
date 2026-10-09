@@ -7,6 +7,7 @@ Subcommands:
 """
 from __future__ import annotations
 import argparse
+import signal
 import sys
 from pathlib import Path
 
@@ -168,6 +169,13 @@ def cmd_review(args: argparse.Namespace) -> int:
         print(f"URL: {u}  (needs the token: open {box.open_html} or append ?t=<token from {box.token_file}>)")
     print(f"OPEN: {box.open_html}")
     print(f"MAILBOX: {box.comments}", flush=True)
+
+    def _stop(_signum, _frame):
+        raise KeyboardInterrupt
+    # Stopping a background task sends SIGTERM (or SIGHUP), not Ctrl-C;
+    # without this the token files would outlive the server.
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGHUP, _stop)
     try:
         httpd.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:
