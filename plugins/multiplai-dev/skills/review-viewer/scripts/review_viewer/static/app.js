@@ -486,7 +486,45 @@
 
   // --- summary ---------------------------------------------------------------------
 
+  /* A suggested command, in a code block with a Copy button. Written by a
+   * model or the pipeline, so it is labelled to be read before running, and
+   * nothing here runs it. */
+  function needCommand(command) {
+    if (!command) return el("p", { class: "muted small", text: "No command is known." });
+    const box = el("div", {}, [
+      el("div", { class: "muted small", text: "suggested by the review: read it before running" }),
+      el("pre", {}, [el("code", { text: command })]),
+    ]);
+    addCopyButtons(box);
+    return box;
+  }
+
+  function renderNeeds() {
+    const box = $("needs");
+    const items = L.needsItems(state.detail.findings);
+    box.hidden = !items.length;
+    box.replaceChildren();
+    if (!items.length) return;
+    box.appendChild(el("h3", { text: "Needs you" }));
+    box.appendChild(el("p", { class: "muted small", text: "The review could not get these. Run a command yourself " +
+      "to settle what it blocks." }));
+    const ul = el("ul");
+    for (const n of items) {
+      const blocks = n.findingId
+        ? el("button", { class: "cite-link", text: n.blocks,
+            onclick: () => { setTab("finding"); selectFinding(n.findingId); } })
+        : el("span", { text: n.blocks });
+      ul.appendChild(el("li", {}, [
+        el("div", { text: n.what }),
+        el("div", { class: "muted small" }, ["Blocks: ", blocks, " · Why: " + n.cause]),
+        needCommand(n.command),
+      ]));
+    }
+    box.appendChild(ul);
+  }
+
   function renderSummary() {
+    renderNeeds();
     const agent = state.who ? state.who.agent : "the session";
     const risk = renderRisk();
     const badges = L.summaryBadges(state.detail.stats, state.walk);
@@ -1005,6 +1043,13 @@
     if (f.verdict_reason) out.push(el("div", { class: "label", text: "Verdict" }), el("p", { text: f.verdict_reason }));
     out.push(el("div", { class: "label", text: "Cited code" }));
     for (const c of f.citations) out.push(citationLink(c));
+    if (f.needs && f.needs.length) {
+      out.push(el("div", { class: "label", text: "Needs you" }));
+      for (const n of L.needsItems({ needs: f.needs, findings: [] })) {
+        out.push(el("div", { class: "needs" }, [el("div", { text: n.what }),
+          el("div", { class: "muted small", text: "Why: " + n.cause }), needCommand(n.command)]));
+      }
+    }
     return out;
   }
 

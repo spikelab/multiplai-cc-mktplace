@@ -92,6 +92,13 @@
           "title": "Line Start",
           "type": "integer"
         },
+        "needs": {
+          "items": {
+            "$ref": "#/$defs/Need"
+          },
+          "title": "Needs",
+          "type": "array"
+        },
         "severity": {
           "enum": [
             "HIGH",
@@ -176,6 +183,51 @@
         "description"
       ],
       "title": "Fix",
+      "type": "object"
+    },
+    "Need": {
+      "additionalProperties": false,
+      "description": "Information the review could not get, and one command a person could run to get it.\n\n`blocks` is a finding id, or \"review\" for a gap in the review as a whole.\n`command` was written by a model or by the pipeline; the page shows it to\nbe read before running, and nothing runs it.",
+      "properties": {
+        "blocks": {
+          "title": "Blocks",
+          "type": "string"
+        },
+        "cause": {
+          "enum": [
+            "no-access",
+            "lookup-failed",
+            "unreachable"
+          ],
+          "title": "Cause",
+          "type": "string"
+        },
+        "command": {
+          "default": "",
+          "title": "Command",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "verifier",
+            "finder",
+            "pipeline"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "what": {
+          "title": "What",
+          "type": "string"
+        }
+      },
+      "required": [
+        "what",
+        "blocks",
+        "cause",
+        "source"
+      ],
+      "title": "Need",
       "type": "object"
     },
     "Premise": {
@@ -285,6 +337,13 @@
       "format": "date-time",
       "title": "Generated At",
       "type": "string"
+    },
+    "needs": {
+      "items": {
+        "$ref": "#/$defs/Need"
+      },
+      "title": "Needs",
+      "type": "array"
     },
     "producer": {
       "title": "Producer",

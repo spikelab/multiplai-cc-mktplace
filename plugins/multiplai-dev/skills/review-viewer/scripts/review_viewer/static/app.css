@@ -534,6 +534,12 @@ pre.sketch {
 .qbadge.concern { border-color: var(--del-mark); color: var(--del-mark); }
 .qbadge.open { box-shadow: inset 0 -2px currentColor; font-weight: 600; }
 .badge-detail { border-left: 3px solid var(--border); padding: 2px var(--s3); margin: 0 0 var(--s3); font-size: var(--fs-md); animation: rise var(--t-med) var(--ease); }
+.needs { border-left: 3px solid var(--medium); padding: 2px var(--s3); margin: 0 0 var(--s4); }
+.needs h3 { margin: 0 0 var(--s1); font-size: var(--fs-md); }
+.needs ul { list-style: none; margin: 0; padding: 0; }
+.needs li { margin: 0 0 var(--s3); }
+.needs pre { position: relative; margin: var(--s1) 0 0; padding: var(--s2); overflow-x: auto; border: 1px solid var(--border); }
+.needs pre .copy-btn { opacity: 1; }
 .pr-desc { margin-top: var(--s4); border-top: 1px solid var(--border); padding-top: var(--s2); }
 .pr-desc > summary { cursor: pointer; font-weight: 600; }
 .coverage { font-size: var(--fs-sm); color: var(--muted); margin: var(--s3) 0; }

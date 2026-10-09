@@ -68,7 +68,38 @@ def finding_section(fd: dict, *, web_base: str | None, head_sha: str,
     out += [f"**Failure scenario:** {_one_line(fd['failure_scenario'])}", ""]
     if fd.get("expected_behaviour"):
         out += [f"**Expected behaviour:** {_one_line(fd['expected_behaviour'])}", ""]
+    if fd.get("needs"):
+        out += ["**Needs you** (commands suggested by the review: read each before running it):", ""]
+        out += need_lines(fd["needs"], blocks=False) + [""]
     return "\n".join(out)
+
+
+CAUSE_WORDS = {
+    "no-access": "the review has no access",
+    "lookup-failed": "a lookup failed",
+    "unreachable": "not reachable on the web",
+}
+
+
+def need_lines(needs: list[dict], findings: list[dict] | None = None, *, blocks: bool = True) -> list[str]:
+    """One markdown bullet per need: what is missing, what it blocks, why, and the command.
+
+    With *findings*, a need that blocks a finding names its file and line.
+    *blocks* False leaves out what it blocks (under the finding itself).
+    """
+    where = {f["id"]: f"`{f['file']}:{f['line_start']}`" for f in findings or []}
+    out = []
+    for n in needs:
+        what = _one_line(n["what"]).rstrip(".") + "."
+        cause = CAUSE_WORDS.get(n["cause"], n["cause"])
+        if blocks:
+            on = "the review" if n["blocks"] == "review" else where.get(n["blocks"], f"finding `{n['blocks']}`")
+            line = f"- {what} Blocks {on}; {cause}."
+        else:
+            line = f"- {what} Why: {cause}."
+        line += f" Run: `{n['command']}`" if n.get("command") else " No command is known."
+        out.append(line)
+    return out
 
 
 def _counts(findings: list[dict]) -> dict[str, int]:
@@ -106,6 +137,12 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
         out.append(f"- **Model cost:** ${float(state.budget['cost_usd']):.2f} over {state.budget.get('calls', 0)} agent calls")
     if state.errors:
         out.append("- **Agent failures:** " + "; ".join(_one_line(e) for e in state.errors))
+    review_needs = [n for n in data.get("needs", []) if n["blocks"] == "review"]
+    if review_needs:
+        out += ["", "## Needs you", "",
+                "What the review could not check. Each command was suggested by the review: read it before "
+                "running it.", ""]
+        out += need_lines(review_needs)
     out += ["", "## Findings", ""]
 
     finders = {f.id: f.finders for f in state.findings}
@@ -187,6 +224,12 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
                f"{sum(1 for f in dropped if f['status'] == 'refuted')} refuted by the verifier, "
                f"{sum(1 for f in dropped if f['status'] == 'rejected')} rejected by the gates"
                + (f", {len(state.merged)} merged into another finding as duplicates." if state.merged else "."))
+    if data.get("needs"):
+        out += ["", "## Needs you", "",
+                "The review could not get these. Each command was suggested by the review: read it before "
+                "running it.", ""]
+        out += need_lines(data["needs"], findings)
+        out.append("")
     if state.errors:
         out.append("Agent failures: " + "; ".join(_short(e) for e in state.errors))
 

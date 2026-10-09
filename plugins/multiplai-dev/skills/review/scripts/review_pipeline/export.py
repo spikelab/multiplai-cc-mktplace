@@ -15,6 +15,12 @@ A finding merged into another by the merge stage is not exported: it is gone
 from `state.findings`, and the finding it went into carries its citations.
 `expected_behaviour` comes from the verifier and is written for confirmed and
 unverifiable findings only; a refuted or rejected finding has none.
+
+`needs` (what the review could not get, each with a command for a person) is
+written only when there are some: at the top level every need, and on each
+finding the needs that block it. A need that blocked a finding merged away
+moves to the finding it was merged into. A file without needs has neither
+key, as before.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import SEVERITIES, Citation, Finding, ReviewState
+from .models import SEVERITIES, Citation, Finding, Need, ReviewState
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +68,26 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
     }
 
 
+def _need(n: Need) -> dict:
+    return {"what": n.what, "blocks": n.blocks, "cause": n.cause, "command": n.command, "source": n.source}
+
+
+def exported_needs(state: ReviewState) -> list[Need]:
+    """`state.needs` with `blocks` following merges, each need once."""
+    into = {m.finding.id: m.into for m in state.merged}
+    out, seen = [], set()
+    for n in state.needs:
+        blocks = n.blocks
+        while blocks in into:
+            blocks = into[blocks]
+        n = n.model_copy(update={"blocks": blocks})
+        key = (n.what, n.blocks, n.command)
+        if key not in seen:
+            seen.add(key)
+            out.append(n)
+    return out
+
+
 def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None) -> dict:
     t = state.target
     rows: list[dict] = []
@@ -84,8 +110,14 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
         seen.add(row["id"])
         unique.append(row)
 
+    needs = exported_needs(state)
+    for row in unique:
+        mine = [_need(n) for n in needs if n.blocks == row["id"]]
+        if mine:
+            row["needs"] = mine
+
     when = (generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    return {
+    data = {
         "schema_version": 1,
         "generated_at": when.isoformat(timespec="seconds").replace("+00:00", "Z"),
         "producer": producer(),
@@ -100,6 +132,9 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
         },
         "findings": unique,
     }
+    if needs:
+        data["needs"] = [_need(n) for n in needs]
+    return data
 
 
 def write_findings_file(state: ReviewState, target_dir: Path) -> Path:
