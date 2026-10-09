@@ -144,8 +144,11 @@ all comments in one batch.
    path (`<dir>/review/open.html`): opening that file sends the browser to
    the page with its access token. **Never print or read out the token**; it
    is in `open.html` and `server.token` only, both deleted when the server
-   stops. Inside a container the server binds `0.0.0.0` and the first URL is
-   the one the host can reach.
+   stops. Inside a container the server binds `0.0.0.0`; the first URL is
+   `<hostname>.orb.local` under OrbStack, otherwise the container IP, and
+   `open.html` links every URL in case the first does not load. Set
+   `VIDEO_EDIT_REVIEW_URL_HOST` (e.g. `localhost` for a port published with
+   `-p`) to put that host first.
 
 2. **Watch the mailbox** with the Monitor tool, one event per comment:
 

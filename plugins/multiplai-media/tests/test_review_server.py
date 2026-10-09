@@ -232,6 +232,45 @@ def test_token_files_are_private_and_removed_on_unpublish(server) -> None:
     assert not box.token_file.exists() and not box.open_html.exists()
 
 
+# --- which URL open.html sends the browser to --------------------------------------
+
+@pytest.fixture
+def container(monkeypatch):
+    monkeypatch.setenv("MULTIPLAI_CONTAINER", "1")
+    monkeypatch.delenv("VIDEO_EDIT_REVIEW_URL_HOST", raising=False)
+    monkeypatch.setattr(rs.socket, "gethostname", lambda: "box")
+    monkeypatch.setattr(rs, "_first_address", lambda: "10.0.0.7")
+    return monkeypatch
+
+
+def test_orbstack_name_comes_first_when_it_resolves(container) -> None:
+    container.setattr(rs, "_resolves", lambda name: name == "box.orb.local")
+    assert rs.display_urls(8765) == ["http://box.orb.local:8765/", "http://10.0.0.7:8765/"]
+
+
+def test_plain_docker_leads_with_the_container_ip(container) -> None:
+    container.setattr(rs, "_resolves", lambda name: False)
+    assert rs.display_urls(8765) == ["http://10.0.0.7:8765/"]
+
+
+def test_url_host_override_comes_first(container) -> None:
+    container.setattr(rs, "_resolves", lambda name: False)
+    container.setenv("VIDEO_EDIT_REVIEW_URL_HOST", "localhost")
+    assert rs.display_urls(8765) == ["http://localhost:8765/", "http://10.0.0.7:8765/"]
+
+
+def test_container_with_nothing_to_offer_falls_back_to_loopback(container) -> None:
+    container.setattr(rs, "_resolves", lambda name: False)
+    container.setattr(rs, "_first_address", lambda: None)
+    assert rs.display_urls(8765) == ["http://127.0.0.1:8765/"]
+
+
+def test_open_page_redirects_to_the_first_url_and_links_every_url() -> None:
+    html = rs.open_page_html(["http://a:1/", "http://b:1/"], "tok")
+    assert 'content="0; url=http://a:1/?t=tok"' in html
+    assert 'href="http://a:1/?t=tok"' in html and 'href="http://b:1/?t=tok"' in html
+
+
 def test_page_loads_nothing_from_a_cdn() -> None:
     static = _SCRIPTS / "static"
     for f in static.iterdir():
