@@ -430,7 +430,7 @@ def test_a_run_on_a_new_head_keeps_the_earlier_round(fixture_repo, tmp_path, age
     assert json.loads((target_dir / "findings.json").read_text())["target"]["head_sha"] == head
 
 
-def test_a_repeat_run_and_a_resume_on_the_same_head_keep_no_round(fixture_repo, tmp_path, agents, capsys):
+def test_a_resume_keeps_no_round_and_a_rerun_on_the_same_head_keeps_one(fixture_repo, tmp_path, agents, capsys):
     repo, base, head = fixture_repo
     out = tmp_path / "out"
     target_dir = out / f"booking-engine--{base}..{head}"
@@ -438,5 +438,9 @@ def test_a_repeat_run_and_a_resume_on_the_same_head_keep_no_round(fixture_repo, 
     with pytest.raises(RuntimeError):
         main(_review_args(repo, base, head, out))
     assert main(["resume", str(target_dir), "--trust-repo"]) == 0
-    assert main(_review_args(repo, base, head, out)) == 0  # a second full run on the same head
     assert not (target_dir / "rounds").exists()
+    first = json.loads((target_dir / "findings.json").read_text())["generated_at"]
+    assert main(_review_args(repo, base, head, out)) == 0  # a second full run on the same head
+    (kept,) = (target_dir / "rounds").iterdir()
+    assert kept.name == head[:12]
+    assert json.loads((kept / "findings.json").read_text())["generated_at"] == first

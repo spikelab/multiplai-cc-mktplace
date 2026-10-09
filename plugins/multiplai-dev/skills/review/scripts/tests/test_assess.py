@@ -98,7 +98,55 @@ def test_load_rounds_keeps_the_latest_copy_of_each_id_with_its_decision(tmp_path
     assert earlier[a.id].head_sha == OLD_HEAD and earlier[a.id].note == "not a problem here"
     assert [e.id for e in rounds.rejected(list(earlier.values()))] == [a.id]
     assert [e.id for e in rounds.accepted_or_open(list(earlier.values()))] == [b.id]
-    assert rounds.load_rounds(tmp_path, current_head=OLD_HEAD)[0].head_sha == OLDER_HEAD
+    # A round on the current head counts: a rerun keeps one to compare with.
+    assert {e.head_sha for e in rounds.load_rounds(tmp_path, current_head=OLD_HEAD)} == {OLD_HEAD}
+
+
+def test_a_rerun_on_the_same_head_keeps_each_round_in_its_own_directory(tmp_path):
+    def finish(when: str) -> None:
+        (tmp_path / "findings.json").write_text(json.dumps({"generated_at": when, "target": {"head_sha": OLD_HEAD},
+                                                            "findings": []}))
+    finish("2026-01-01T00:00:00Z")
+    first = rounds.keep_round(tmp_path, "t", OLD_HEAD)
+    assert first == tmp_path / "rounds" / OLD_HEAD[:12]
+    assert rounds.keep_round(tmp_path, "t", OLD_HEAD) == first  # started again before it finished: one copy
+    finish("2026-01-02T00:00:00Z")
+    second = rounds.keep_round(tmp_path, "t", OLD_HEAD)
+    assert second == tmp_path / "rounds" / f"{OLD_HEAD[:12]}-2"
+    assert json.loads((first / "findings.json").read_text())["generated_at"] == "2026-01-01T00:00:00Z"
+    assert json.loads((second / "findings.json").read_text())["generated_at"] == "2026-01-02T00:00:00Z"
+    finish("2026-01-03T00:00:00Z")
+    assert rounds.keep_round(tmp_path, "t", "3" * 40) == tmp_path / "rounds" / f"{OLD_HEAD[:12]}-3"
+
+
+def test_a_same_head_rerun_reads_the_decisions_made_on_the_round_it_replaces(tmp_path):
+    a = at("decided while the last run was shown")
+    write_round(tmp_path, OLD_HEAD, [a], when="2026-01-01T00:00:00Z")
+    # The rerun has not exported: findings.json is still the kept round's.
+    (tmp_path / "findings.json").write_text(json.dumps({"generated_at": "2026-01-01T00:00:00Z",
+                                                        "target": {"head_sha": OLD_HEAD}, "findings": []}))
+    _decisions(tmp_path, **{a.id: ("reject", "2026-01-01T09:00:00Z")})
+    assert [e.decision for e in rounds.load_rounds(tmp_path, OLD_HEAD)] == ["reject"]
+    # Once the rerun has exported, a decision made on its findings is not read back as the earlier round's.
+    (tmp_path / "findings.json").write_text(json.dumps({"generated_at": "2026-01-01T06:00:00Z",
+                                                        "target": {"head_sha": OLD_HEAD}, "findings": []}))
+    assert [e.decision for e in rounds.load_rounds(tmp_path, OLD_HEAD)] == [""]
+
+
+def test_a_repeat_carries_the_earlier_rejection_onto_its_own_id(tmp_path):
+    reworded = at("the same defect, worded another way")
+    d = tmp_path / "rounds" / OLD_HEAD[:12]
+    d.mkdir(parents=True)
+    row = {**_finding(reworded, "confirmed", "r", "e"),
+           "assessment": {"label": "repeat", "reason": "same", "earlier_id": "abcdef0123",
+                          "earlier_round": OLDER_HEAD, "earlier_decision": "reject", "earlier_note": "by design"}}
+    (d / "findings.json").write_text(json.dumps({"generated_at": "2026-01-02T00:00:00Z",
+                                                 "target": {"head_sha": OLD_HEAD}, "findings": [row]}))
+    (e,) = rounds.load_rounds(tmp_path)
+    assert (e.id, e.decision, e.note) == (reworded.id, "reject", "by design")
+    # The person's own decision on the new id wins.
+    _decisions(tmp_path, **{reworded.id: ("accept", "2026-01-01T00:00:00Z")})
+    assert rounds.load_rounds(tmp_path)[0].decision == "accept"
 
 
 def test_keep_round_never_overwrites_a_round_already_kept(tmp_path):
@@ -517,6 +565,31 @@ def test_a_finding_rejected_in_round_one_comes_back_reworded_and_is_labelled_rep
         "earlier_note": "negative levels are the sensor's idle state"}
     summary = next(target_dir.glob("summary-*.md")).read_text()
     assert reworded.claim[:30] not in summary  # a repeat is neither listed nor counted
+
+    # Round three reruns the same head and gets round two's wording back. Round two
+    # is kept although the head did not change, and the rejection carried onto the
+    # reworded id matches it in Python: no repeats agent is asked.
+    round_two_head = data["target"]["head_sha"]
+    current["round"] = "two"
+    repeats_asked = []
+    real_agent = agent
+
+    async def agent_round_three(prompt, schema, *, budget_label="", **kwargs):
+        if budget_label.startswith("repeats"):
+            repeats_asked.append(budget_label)
+        return await real_agent(prompt, schema, budget_label=budget_label, **kwargs)
+
+    monkeypatch.setattr(sdk, "agent_call_structured", agent_round_three)
+    assert main(args) == 0
+    assert (target_dir / "rounds" / round_two_head[:12] / "findings.json").is_file()
+    assert repeats_asked == []
+    data = json.loads((target_dir / "findings.json").read_text())
+    (row,) = [f for f in data["findings"] if f["id"] == reworded.id]
+    assert row["assessment"]["label"] == "repeat"
+    assert row["assessment"]["earlier_id"] == reworded.id
+    assert row["assessment"]["earlier_round"] == round_two_head
+    assert row["assessment"]["earlier_decision"] == "reject"
+    assert row["assessment"]["earlier_note"] == "negative levels are the sensor's idle state"
 
 
 def test_assess_only_labels_a_saved_review_and_changes_nothing_in_it(tmp_path, monkeypatch, capsys):

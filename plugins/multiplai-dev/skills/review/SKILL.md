@@ -27,12 +27,16 @@ Python between them:
    reported it. The findings merged away are listed in the review's appendix
    with the finding they went into.
 4. **repeats** — when this PR (or branch) was reviewed before, each earlier
-   round is kept in `<out>/<slug>/rounds/<head sha, 12 chars>/`. Every finding
-   is checked against the findings the user rejected in those rounds
-   (`viewer/decisions.json`): the same id matches in Python, the rest go to
-   one agent that says which describe the same defect. A match is labelled
-   `repeat`, with the earlier round, the decision and the note. Skipped when
-   nothing was rejected before.
+   round is kept in `<out>/<slug>/rounds/<head sha, 12 chars>/`, also when
+   the new run is on the same commit (a second round of one commit goes to
+   `<sha>-2/`). Every finding is checked against the findings the user
+   rejected in those rounds (`viewer/decisions.json`): the same id matches in
+   Python, the rest go to one agent that says which describe the same defect,
+   however they are worded. A match is labelled `repeat`, with the earlier
+   round, the decision and the note, and the rejection carries over to the
+   new wording, so the next round matches it by id. A repeat is not listed or
+   counted in the review or the viewer. Skipped when nothing was rejected
+   before.
 5. **assess** — one agent reads the remaining findings together, with the PR
    description, the earlier rounds' accepted and undecided findings and the
    user's notes, and labels each `useful`, `still-open` (the same defect as an
