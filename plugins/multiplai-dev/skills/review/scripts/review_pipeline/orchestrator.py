@@ -25,7 +25,7 @@ from .progress import ProgressWriter
 from .render import summary_path, write_review, write_rollups, write_runs
 from .stages import RunContext
 from .stages.assess import run_assess
-from .stages.find import run_find
+from .stages.find import file_chars, file_groups, finder_dimensions, run_find
 from .stages.merge import run_merge
 from .stages.repeats import run_repeats
 from .stages.verify import run_verify
@@ -55,6 +55,9 @@ class TargetSpec:
     deployed_in: str | None = None
     base_branch: str | None = None
     fetch: bool = False
+    tree: str | None = None  # a commit-ish: review every file at it, not a change
+    path: str | None = None  # with tree: only this directory
+    dir: str | None = None   # a directory not under git, copied and reviewed as a tree
 
 
 def _count_line(counts: dict[str, int]) -> str:
@@ -156,19 +159,37 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
 
 
 def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
-    """Resolve and gate the target, then write its directory. Raises ReviewError."""
+    """Resolve and gate the target, then write its directory. Raises ReviewError.
+
+    A `--dir` target is first copied into `<out>/<slug>/source/` and committed
+    there (`import_dir`), then reviewed as a tree at that commit.
+    """
+    repo, tree, name, src = spec.repo, spec.tree, None, None
+    info = None
+    needs: list = []
     try:
-        resolved = target_mod.resolve(spec.repo, branch=spec.branch, pr=spec.pr, range_=spec.range,
-                                      base_branch=spec.base_branch, fetch=spec.fetch)
-        diff = (target_mod.diff_text(resolved.repo, resolved.base_sha, resolved.head_sha)
-                if resolved.base_sha and resolved.head_sha and not resolved.problem else None)
+        if spec.dir:
+            src = Path(spec.dir).expanduser().resolve()
+            name = target_mod.dir_name(src)
+            repo = str(target_mod.import_dir(src, out_dir / target_mod.sanitize_slug(f"{name}--tree")))
+            tree = "HEAD"
+        resolved = target_mod.resolve(repo, branch=spec.branch, pr=spec.pr, range_=spec.range, tree=tree,
+                                      path=spec.path, base_branch=spec.base_branch, fetch=spec.fetch)
+        diff = None
+        if resolved.kind == "tree":
+            if resolved.head_sha and not resolved.problem:
+                label = f"{src}: whole tree at {resolved.head_sha[:8]}" if src else None
+                info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in,
+                                               name=name, label=label, needs=needs)
+        elif resolved.base_sha and resolved.head_sha and not resolved.problem:
+            diff = target_mod.diff_text(resolved.repo, resolved.base_sha, resolved.head_sha)
     except target_mod.TargetError as e:
         raise ReviewError(str(e)) from e
-    gate = target_mod.target_gate(resolved, diff)
+    gate = target_mod.target_gate(resolved, diff, info.files if info else None)
     if not gate.passed:
-        raise ReviewError(f"{spec.repo}: {gate.reason}")
-    needs: list = []
-    info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in, needs=needs)
+        raise ReviewError(f"{spec.dir or spec.repo}: {gate.reason}")
+    if info is None:
+        info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in, needs=needs)
     target_dir = out_dir / info.slug
     # A new head in a directory an earlier round wrote: keep that round's
     # findings before this run writes over them. The same head keeps nothing.
@@ -176,14 +197,36 @@ def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
     if kept is not None:
         log.info("kept the earlier round of %s in %s", info.slug, kept)
     info = target_mod.write_target_files(info, diff or "", target_dir)
-    progress_log = target_dir / "progress.log"
-    if progress_log.exists():
-        progress_log.unlink()  # a fresh review starts a fresh progress file
     return ReviewState(target=info, needs=[gated_need(n) for n in needs]), target_dir
+
+
+def plan_text(state: ReviewState, config: ReviewConfig) -> str:
+    """What a review of this target would run: one line per file group, then the total line."""
+    t = state.target
+    groups = file_groups(t)
+    dims = finder_dimensions(t, config)
+    lines = []
+    for i, group in enumerate(groups, 1):
+        chars = sum(file_chars(t, f) for f in group)
+        where = f" ({group[0]} .. {group[-1]})" if len(group) > 1 else (f" ({group[0]})" if group else "")
+        lines.append(f"group {i}: {len(group)} files, {chars} characters{where}")
+    lines.append(f"groups: {len(groups)}  finder calls: {len(groups) * len(dims)}  files skipped: {len(t.skipped)}")
+    return "\n".join(lines) + "\n"
+
+
+def plan_only(spec: TargetSpec, out_dir: Path, config: ReviewConfig) -> tuple[str, Path]:
+    """Resolve the target and write `plan.txt` beside `skipped.txt`; no model call, no ledger."""
+    state, target_dir = prepare(spec, out_dir)
+    text = plan_text(state, config)
+    path = target_dir / "plan.txt"
+    path.write_text(text, encoding="utf-8")
+    return text, path
 
 
 async def review(spec: TargetSpec, out_dir: Path, config: ReviewConfig, *, session_id: str = "") -> Path:
     state, target_dir = prepare(spec, out_dir)
+    # A fresh review starts a fresh progress file; --plan-only leaves the last one alone.
+    (target_dir / "progress.log").unlink(missing_ok=True)
     return await run_state(state, target_dir, config, session_id=session_id)
 
 

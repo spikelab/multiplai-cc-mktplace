@@ -20,10 +20,10 @@ def build(target: TargetInfo, findings: list[Finding]) -> str:
         for f in findings
     ], indent=1)
     return "\n\n".join([
-        "Several reviewers checked the same change independently, so the same defect can be reported "
-        "more than once in different words. These findings are anchored on overlapping lines, or "
-        "cite overlapping lines of some file, possibly from different files. Decide which of them "
-        "describe the same defect.",
+        f"Several reviewers checked the same {'code' if target.is_tree else 'change'} independently, so the "
+        "same defect can be reported more than once in different words. These findings are anchored on "
+        "overlapping lines, or cite overlapping lines of some file, possibly from different files. Decide "
+        "which of them describe the same defect.",
         workspace_block(target),
         f"Findings:\n{listed}",
         "Two findings describe the same defect when they point at the same faulty code and the same "

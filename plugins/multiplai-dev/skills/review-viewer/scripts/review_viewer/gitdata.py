@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -582,6 +583,31 @@ def _pick_repo(spec: TargetSpec, repo: Path | None, cwd: Path) -> Path:
     return chosen
 
 
+def pick_repo(repo: Path | None, cwd: Path) -> Path:
+    """The clone a tree target reads: --repo, else the top of the working directory's repository."""
+    chosen = Path(repo).expanduser().resolve() if repo is not None else cwd.resolve()
+    top = _try(chosen, "rev-parse", "--show-toplevel")
+    if not top:
+        raise TargetError(f"{chosen} is not a git repository" + ("" if repo else "; pass --repo <path>"))
+    return Path(top).resolve()
+
+
+def tree_path(given: Path, top: Path, path: str | None) -> str | None:
+    """The directory a tree target reviews when --repo names *given* inside the clone at *top*.
+
+    Same rule as `review_pipeline.target.tree_root`, so both find one slug: a
+    subdirectory is the directory under review, and *path* is relative to it.
+    """
+    given = Path(given).expanduser().resolve()
+    if given == top or top not in given.parents:
+        return path
+    prefix = given.relative_to(top).as_posix()
+    sub = (path or "").strip().strip("/")
+    while sub.startswith("./"):
+        sub = sub[2:]
+    return prefix if sub in ("", ".") else posixpath.normpath(f"{prefix}/{sub}")
+
+
 def _base_ref(repo: Path, base_branch: str | None) -> str:
     """`origin/<default>`, or the local `<default>` when there is no origin copy."""
     name = base_branch or default_branch(repo)
@@ -718,6 +744,39 @@ def resolve_target(spec: TargetSpec, repo: Path | None, *, base_branch: str | No
         slug=f"{slug_part(chosen.name)}--{base[:8]}..{right[:8]}",
         label=f"{chosen.name} {spec.text}", repo_path=str(chosen), remote_url=None,
         base_sha=base, head_sha=right, files_changed=_changed_files(chosen, base, right)))
+
+
+# git's empty tree. A review whose base_sha is this reviews a whole tree (or a
+# directory of it) as it stands, not a change: every file reads as added and
+# there are no commits. Same constant as review_pipeline.target.EMPTY_TREE.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def is_tree_review(target: Target) -> bool:
+    return target.base_sha == EMPTY_TREE
+
+
+def tree_target(repo: Path, commit: str = "HEAD", path: str | None = None) -> Target:
+    """A Target for every file at *commit* (under *path*), against the empty tree.
+
+    Slug and label follow the review pipeline's `--tree` rule, so a review of
+    the same tree is found by `find_review`.
+    """
+    head = rev_parse(repo, commit or "HEAD")
+    if not head:
+        raise TargetError(f"{commit} does not resolve to a commit in {repo}")
+    sub = (path or "").strip().strip("/")
+    while sub.startswith("./"):
+        sub = sub[2:]
+    sub = "" if sub in ("", ".") else sub
+    spec = ["--", sub] if sub else []
+    files = [f for f in git(repo, "ls-tree", "-r", "-z", "--name-only", head, *spec).split("\0") if f]
+    if not files:
+        raise TargetError(f"no file under {sub or 'the tree'} at {head[:12]}")
+    slug = sanitize_slug(f"{repo.name}--tree" + (f"-{sub}" if sub else ""))
+    label = f"{repo.name}: {sub or 'whole tree'} at {head[:8]}"
+    return Target(slug=slug, label=label, repo_path=str(repo), remote_url=remote_url(repo),
+                  base_sha=EMPTY_TREE, head_sha=head, files_changed=files)
 
 
 def diff_findings(target: Target) -> FindingsFile:

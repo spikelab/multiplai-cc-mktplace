@@ -476,6 +476,10 @@
 
   function renderRisk() {
     const pill = $("risk-pill");
+    if (L.isTreeReview(state.detail.findings.target)) {
+      pill.hidden = true;  // a tree review is not a change: there is nothing to merge
+      return null;
+    }
     const risk = currentRisk();
     pill.hidden = false;
     pill.className = "risk-pill " + (risk ? RISK_BADGE[risk.level] : "pending");
@@ -542,7 +546,8 @@
     box.replaceChildren();
     const groups = [["risk", "Risk of merging"],
       ["measured", "Measured from git" + (state.detail.pr ? " and GitHub" : "")],
-      ["assessed", "Assessed by " + agent]];
+      ["assessed", "Assessed by " + agent]]
+      .filter(([source]) => source !== "risk" || !L.isTreeReview(state.detail.findings.target));
     for (const [source, title] of groups) {
       const mine = badges.filter((b) => b.source === source);
       const row = el("div", { class: "badge-row" }, [el("div", { class: "label", text: title })]);
@@ -833,7 +838,9 @@
     $("hidden-label").textContent = "Show refuted and rejected (" + grouped.hidden + ")";
     $("show-hidden").parentElement.hidden = !grouped.hidden;
     if (!findings.length) {
-      box.appendChild(emptyState("✓", "No code review for these commits: this is the plain diff. " +
+      box.appendChild(emptyState("✓", (L.isTreeReview(state.detail.findings.target)
+        ? "No findings for this tree: every file is shown as added. "
+        : "No code review for these commits: this is the plain diff. ") +
         "Select lines in the code to ask about them."));
     }
     const undecided = L.undecidedCount(findings, state.detail.decisions);

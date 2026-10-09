@@ -625,6 +625,12 @@ test("riskInputs combines the repo tiers, the session's tier and the findings", 
   assert.equal(L.riskInputs({}, { assessments: [] }, [], {}, []), null);
 });
 
+test("a review whose base is the empty tree is a tree review", () => {
+  assert.equal(L.isTreeReview({ base_sha: L.EMPTY_TREE, head_sha: "a".repeat(40) }), true);
+  assert.equal(L.isTreeReview({ base_sha: "b".repeat(40), head_sha: "a".repeat(40) }), false);
+  assert.equal(L.isTreeReview(null), false);
+});
+
 test("the Needs you block is hidden without needs, and each item says what it blocks", () => {
   assert.deepEqual(L.needsItems({ findings: [] }), []);
   assert.deepEqual(L.needsItems(null), []);

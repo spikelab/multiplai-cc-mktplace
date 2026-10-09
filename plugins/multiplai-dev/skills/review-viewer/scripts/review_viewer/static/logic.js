@@ -448,6 +448,17 @@
     return out;
   }
 
+  // --- a whole tree, not a change ---------------------------------------------------
+
+  /* git's empty tree. A review with this base reviews code as it stands (review
+   * --tree / --dir): every file reads as added, there are no commits, and there
+   * is nothing to merge, so the page shows no risk of merging. */
+  const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+  function isTreeReview(target) {
+    return !!target && target.base_sha === EMPTY_TREE;
+  }
+
   // --- the risk of merging -----------------------------------------------------
 
   const TIER_NAMES = ["docs, tests or tooling", "one feature", "a shared module or interface",
@@ -1122,6 +1133,7 @@
     tokens: tokens, wordDiff: wordDiff, changePairs: changePairs, markRanges: markRanges,
     splitLines: splitLines, oldNumbers: oldNumbers, enclosingScope: enclosingScope, stepBlock: stepBlock,
     riskInputs: riskInputs, riskLevel: riskLevel, TIER_NAMES: TIER_NAMES,
+    EMPTY_TREE: EMPTY_TREE, isTreeReview: isTreeReview,
     currentBlock: currentBlock, stepCurrent: stepCurrent,
     paletteMatch: paletteMatch, viewedCount: viewedCount,
     formatUsd: formatUsd, formatTokens: formatTokens, formatSeconds: formatSeconds,

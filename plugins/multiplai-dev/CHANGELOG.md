@@ -17,6 +17,32 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-10-09
+
+### Added
+- review: review code that is not a change. `--tree [COMMIT]` reviews every
+  file of a repository at a commit (default `HEAD`), `--tree --path <dir>` one
+  directory of it, and `--dir <path>` a directory that is not under git, which
+  is copied into the output directory and committed there (the source is never
+  written to; reviewing it again keeps the earlier commit, and two directories
+  with the same name get separate reviews). Binary files, files over 200 000 characters, lockfiles and files
+  marked `linguist-generated` or `linguist-vendored` are left out and listed in
+  `skipped.txt`. The files are split into groups of up to 100 000 characters,
+  one top-level directory at a time, and each finder runs once per group;
+  `history` does not run. Findings pass the same gates as a change review; a
+  problem in a file outside the review, a skipped one included, is reported
+  as `pre-existing`. A `--repo` that is a subdirectory of a repository reviews
+  that subdirectory, with `--path` relative to it.
+  `checks.json` and the Checked tab have one entry per finder per group
+  (`<dimension>@<group>`), and a finder's row in `run` sums its groups' time.
+- review: `--plan-only` prints the file groups and how many finder calls the
+  review would make, writes `plan.txt`, and stops before any model call. For a
+  tree or directory, the session runs it first and asks before a run of more
+  than 20 finder calls.
+- review-viewer: `serve --tree [<commit>] [--path <dir>]` opens a tree review
+  of that directory only; a subdirectory `--repo` opens that directory. Every file shows as added, the commit list is empty,
+  and the "Risk of merging" pill is hidden.
+
 ## [0.29.0] - 2026-10-09
 
 ### Added

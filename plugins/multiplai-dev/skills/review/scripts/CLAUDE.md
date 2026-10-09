@@ -20,9 +20,9 @@ cd plugins/multiplai-dev/skills/review/scripts && \
 
 | Module | Does |
 |---|---|
-| `__main__.py` | CLI: `review`, `batch`, `rollup`, `resume`, `post`, `assess-only`. Calls `setup_logging` once. Owns the stdout contract and the exit codes. |
+| `__main__.py` | CLI: `review` (also `--tree`, `--dir`, `--plan-only`), `batch`, `rollup`, `resume`, `post`, `assess-only`. Calls `setup_logging` once. Owns the stdout contract and the exit codes. |
 | `models.py` | Pipeline models. `Finding.citations` has `min_length=1`; `Finding.id` is computed with the v1 rule, never taken from a model. `Finding.finders` lists every finder that reported it. `STAGES` is the run order (target, find, verify, merge, repeats, assess, export, render, done); `Repeat` and `Assessment` hold the repeats and assess stages' results; `ReviewState` maps the removed `prescribe`/`check_fix` stages of an old checkpoint to `verify`. `AgentCheck` (one agent call: stage, subject, given, calls, outcome, turns, cost, times, error, plus `findings` for a finder and `verdict` for a verifier) and `GateCheck` (one gate result) go in `ReviewState.checks` / `gate_checks`, empty in older checkpoints. `Need` (what the review could not get: `what`, `blocks` a finding id or `"review"`, `cause`, `command`, `source`) is kept in `state.needs`; `NeedAsk` is the shape an agent answers in (`Verdict.needs`, `FinderOutput.needs`), with an unknown `cause` read as `no-access`. |
-| `target.py` | Resolves `--branch` / `--pr` / `--range` to shas, writes `diff.patch`, `commits.txt`, `files.txt`; `target_gate`; `snapshot_head()` (`git archive` of head into `<slug>/tree/`). For `--pr`, also the PR title and body and `branch_rules()` (the base branch's GitHub rules; `[]` when GitHub reports none, `None` with a warning when `gh` or the API fails). A failed rules lookup, and a `gh pr view` that returns an empty title or base branch, also become a `lookup-failed` `Need` with the command a person would run (`build_target(needs=)`). Fixed argv, no shell, no checkout. |
+| `target.py` | Resolves `--branch` / `--pr` / `--range` / `--tree` to shas, writes `diff.patch`, `commits.txt`, `files.txt` (and `skipped.txt` for a tree); a tree's base is `EMPTY_TREE`, its repository is the top of the working tree (`tree_root()`: a subdirectory `--repo` becomes the reviewed path, `--path` joined below it) and `tree_files()` lists its files less the skipped ones (submodules included); `import_dir()` copies a `--dir` source into `<slug>/source/` and commits it there; `target_gate`; `snapshot_head()` (`git archive` of head into `<slug>/tree/`). For `--pr`, also the PR title and body and `branch_rules()` (the base branch's GitHub rules; `[]` when GitHub reports none, `None` with a warning when `gh` or the API fails). A failed rules lookup, and a `gh pr view` that returns an empty title or base branch, also become a `lookup-failed` `Need` with the command a person would run (`build_target(needs=)`). Fixed argv, no shell, no checkout. |
 | `gates.py` | `citation_gate`, `finding_gate`, `verdict_gate`, `need_gate`, and `reason_kind` (which rule a reason names; the only gate text that reaches logs and `checks.json`). The first three take `TargetInfo` and return `GateResult`; `gated_need()` applies `need_gate` and blanks a failing command. A web citation (`Citation.is_web`) is skipped, not checked: it may not be first, and it does not confirm. |
 | `sdk.py` | `recording()`: a ContextVar block in which `_run` adds each attempt's tool calls (`multiplai_core.ToolCall`), turns and cost to a `CallRecord`, the re-ask included; the stages open one around each call. `agent_call_structured`: trust gate, an allow-list with its complement denied (`Read`/`Grep`/`Glob` for every stage, plus `WebFetch`/`WebSearch` for finders and verifiers), one re-ask on a bad answer: a no-tools, one-turn reformat of the text returned, or a re-run of the prompt when the run itself failed. `parse_answer` says so when an answer holds no JSON at all. The only caller of `run_agent`. |
 | `checks.py` | Pure functions for the record of what was checked: `summarise_call` (a tool call as `{tool, target, detail}`, repo-relative, inputs only), `diff_hunks`, `seen` (`read`/`searched`/`diff`/`prompt`/`fetched`/`not-seen` for a citation, from the agent's calls and the lines its prompt held: the diff, or a verifier's finding citations), `marked_citation` (adds `gate` and `seen`), `prompt_labels` (the `given` list). |
@@ -37,6 +37,49 @@ cd plugins/multiplai-dev/skills/review/scripts && \
 | `post.py` | One `gh pr comment`; with `--decisions`, only findings whose decision is `accept`; without it, never a `repeat`. |
 | `orchestrator.py` | target → find → verify → merge → repeats → assess → export (`findings.json`, `checks.json`) → render, saving `review-state.json` after each; `prepare` keeps the earlier round first; `resume`; `batch`; `assess_only` and `assess_report` for the `assess-only` command. |
 | `state.py`, `progress.py` | Atomic checkpoint; the tailable `progress.log` (`STARTED`, `STAGE`, `DONE`, `FAILED`). |
+
+## Tree reviews
+
+`--tree [COMMIT] [--path DIR]` and `--dir PATH` review code that is not a
+change. `TargetInfo.kind` is `"tree"` and `base_sha` is git's empty tree
+(`target.EMPTY_TREE`), which `findings.json` v1 accepts unchanged; review-viewer
+knows a tree review by that base.
+
+- `import_dir()` copies the directory (less `IMPORT_EXCLUDES` and any `.git`)
+  into `<slug>/source/`, not `<slug>/tree/`: `tree/` is the agents' snapshot,
+  deleted at the end of a run, and the copy is the repository the review and
+  the viewer read afterwards. The slug's name is `dir_name()`:
+  `<basename>-<6 hex of the absolute path>`, so two directories with one
+  basename never share a `source/`. A later run keeps the earlier commits: it
+  replaces the copy's files, reuses HEAD when nothing changed, and otherwise
+  commits on top, so the head an earlier `findings.json` names stays readable.
+  `check_out_dir()` refuses an `--out` inside the source before `__main__`
+  creates it. `review` (not `prepare`, which `--plan-only` also calls) deletes
+  the last `progress.log`.
+- `stages/find.file_groups()` splits the files at `GROUP_MAX_CHARS` (100 000)
+  and at each top-level directory below the reviewed path; a change review is
+  one group, so its path is unchanged. Each dimension runs once per group and
+  its result is stored in `finder_results` under `"<dimension>@<group index>"`;
+  change reviews keep plain dimension keys, so old checkpoints still load.
+  Each call's `AgentCheck` has that key as its `subject`. Its timing goes
+  under `find:<dimension>`, the budget label, and each call ends the
+  interval it opened (groups of one dimension run at once), so that row's
+  time is the sum over its groups.
+  `history` does not run on a tree.
+- `target.tree_root()` reads a tree from the top of the working tree: `git
+  ls-tree` run in a subdirectory lists names relative to it, while `git show
+  <sha>:<path>` and `git archive` read from the top, so a subdirectory
+  `--repo` would make every citation fail. The subdirectory becomes the
+  reviewed path, `--path` is joined below it, and a path that leaves the
+  repository is refused. review-viewer's `gitdata.tree_path()` restates the
+  rule, so `serve --tree --repo <subdir>` finds the same slug.
+- `prompts/find.build(..., files=)` gives a tree finder the group's file list
+  instead of the commits, description, settings, files and diff blocks, with
+  the task worded from `DIMENSION_TASKS_TREE`. `FILE_RULE_TREE` says `file`
+  is one of the listed files and any other file (a skipped one included) is
+  `pre-existing`, which is what `finding_gate` lets through.
+- `orchestrator.plan_only()` (`review --plan-only`) writes `plan.txt` and makes
+  no agent call and no ledger.
 
 ## Why the agents read a snapshot
 

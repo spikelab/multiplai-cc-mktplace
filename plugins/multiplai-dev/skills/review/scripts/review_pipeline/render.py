@@ -162,12 +162,18 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
     out.append(f"- **Repo:** {Path(t.repo_path).name}" + (f" ({web})" if web else f" (`{t.repo_path}`)"))
     if t.tickets:
         out.append(f"- **Tickets:** {', '.join(t.tickets)}")
-    out.append(f"- **Base commit:** {commit_link(t.base_sha)}")
-    out.append(f"- **Head commit:** {commit_link(head)}")
-    out.append(f"- **Commits:** {len(t.commits)}")
-    out += [f"  - {commit_link(sha)} {_one_line(subject)}" for sha, subject in t.commits]
-    out.append(f"- **Files changed:** {len(t.files)}")
-    out += [f"  - `{f}`" for f in t.files]
+    if t.is_tree:
+        # Not a change: no base commit and no commits, only the files as they stand at head.
+        where = "the whole tree" if t.ref in ("", ".") else f"`{t.ref}`"
+        out.append(f"- **Reviewed:** {where} at {commit_link(head)}, not a change")
+        out.append(f"- **Files reviewed:** {len(t.files)}; {len(t.skipped)} skipped (`skipped.txt`)")
+    else:
+        out.append(f"- **Base commit:** {commit_link(t.base_sha)}")
+        out.append(f"- **Head commit:** {commit_link(head)}")
+        out.append(f"- **Commits:** {len(t.commits)}")
+        out += [f"  - {commit_link(sha)} {_one_line(subject)}" for sha, subject in t.commits]
+        out.append(f"- **Files changed:** {len(t.files)}")
+        out += [f"  - `{f}`" for f in t.files]
     if t.deployed_in:
         out.append(f"- **Deployed in {t.deployed_in}:** {deployed or 'unknown'}")
     refuted = sum(1 for f in findings if f["status"] == "refuted")
@@ -271,7 +277,10 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
     dropped = [f for f in findings if f["status"] in ("refuted", "rejected")]
 
     out = [f"# Review summary — {t.label or t.slug}", ""]
-    out.append(f"{len(t.commits)} commits, {len(t.files)} files, {t.base_sha[:10]}..{t.head_sha[:10]}.")
+    if t.is_tree:
+        out.append(f"{len(t.files)} files reviewed as they stand at {t.head_sha[:10]}, {len(t.skipped)} skipped.")
+    else:
+        out.append(f"{len(t.commits)} commits, {len(t.files)} files, {t.base_sha[:10]}..{t.head_sha[:10]}.")
     if data.get("run"):
         out.append(f"Cost {cost_line(data['run'])}.")
     out.append(f"Findings: {counts['HIGH']} HIGH, {counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW. Dropped: "

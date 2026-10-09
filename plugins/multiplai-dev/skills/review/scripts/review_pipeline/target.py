@@ -1,4 +1,8 @@
-"""Resolve what is being reviewed: a branch, a PR or a commit range.
+"""Resolve what is being reviewed: a branch, a PR, a commit range, or a whole tree.
+
+A tree target (`--tree`, `--dir`) is a commit with no base: `base_sha` is git's
+empty tree, so every file reads as added, and the files under review are the
+files at head (under `--path`), less the ones `tree_files` skips.
 
 Read-only over the reviewed repository. Every call is a fixed argv with
 `shell=False`. Nothing here checks out, merges or writes to the repo, and
@@ -7,10 +11,12 @@ nothing fetches unless the caller passes `fetch=True`.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -25,6 +31,21 @@ log = logging.getLogger(__name__)
 # User or repo config must not change what we parse.
 _GIT = ["git", "-c", "color.ui=never", "-c", "core.quotepath=off"]
 _DIFF_FLAGS = ["--no-color", "--no-ext-diff", "--no-textconv"]
+
+
+# `git hash-object -t tree /dev/null`: git accepts it wherever a base commit goes.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+# A tree review leaves these out of the files under review, each with a reason
+# in skipped.txt: they are large, machine-written, or not text.
+TREE_MAX_CHARS = 200_000
+LOCKFILES = frozenset({
+    "uv.lock", "poetry.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock",
+    "Gemfile.lock", "go.sum",
+})
+GENERATED_ATTRS = ("linguist-generated", "linguist-vendored")
+# Directories `--dir` does not copy: installed dependencies and build output.
+IMPORT_EXCLUDES = ("node_modules", ".venv", "venv", "__pycache__", "dist", "build")
 
 
 class TargetError(Exception):
@@ -105,6 +126,7 @@ class Resolved:
     title: str = ""
     description: str = ""
     base_ref: str = ""
+    path: str = ""  # tree targets: the directory under review, "" for the whole tree
     # Lookups that failed or came back empty, as asks for a person.
     needs: list[Need] = field(default_factory=list)
 
@@ -174,18 +196,61 @@ def branch_rules(repo: Path, branch: str, needs: list[Need] | None = None) -> li
     return [r for r in rules if isinstance(r, dict)] if isinstance(rules, list) else None
 
 
+def normalise_path(path: str | None) -> str:
+    """A repo-relative directory as git prints paths: no `./`, no trailing `/`; "" for the root."""
+    p = (path or "").strip().replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    p = p.strip("/")
+    return "" if p in ("", ".") else p
+
+
+def tree_root(repo: Path, path: str | None) -> tuple[Path, str]:
+    """(the top of *repo*'s working tree, the directory under review relative to it).
+
+    git lists names relative to the directory it runs in but `git show
+    <sha>:<path>` reads them from the root, so a tree target always reads from
+    the top. When *repo* is a subdirectory, the directory under review is that
+    subdirectory, with *path* (relative to *repo*) joined below it. A
+    repository with no working tree (bare) is read as given.
+    """
+    proc = git(repo, "rev-parse", "--show-toplevel", check=False)
+    top_text = proc.stdout.strip() if proc.returncode == 0 else ""
+    top = Path(top_text).resolve() if top_text else repo
+    prefix = repo.relative_to(top).as_posix() if top != repo and top in repo.parents else ""
+    joined = normalise_path("/".join(p for p in (prefix, normalise_path(path)) if p))
+    sub = normalise_path(posixpath.normpath(joined)) if joined else ""
+    if sub == ".." or sub.startswith("../"):
+        raise TargetError(f"--path {path} is outside the repository {top}")
+    return top, sub
+
+
 def resolve(repo: str | Path, *, branch: str | None = None, pr: int | None = None,
-            range_: str | None = None, base_branch: str | None = None,
-            fetch: bool = False) -> Resolved:
-    """Turn exactly one of branch / pr / range into base and head shas."""
+            range_: str | None = None, tree: str | None = None, path: str | None = None,
+            base_branch: str | None = None, fetch: bool = False) -> Resolved:
+    """Turn exactly one of branch / pr / range / tree into base and head shas.
+
+    A tree has no base: `base_sha` is `EMPTY_TREE`, `head_sha` the commit *tree*
+    names, and `ref` the directory under review (*path*, or "." for all of it).
+    A tree's `repo` is the top of the working tree; a *repo* below it becomes
+    the directory under review, with *path* below that (`tree_root`).
+    """
     repo = Path(repo).expanduser().resolve()
-    chosen = [x for x in (branch, pr, range_) if x not in (None, "")]
+    chosen = [x for x in (branch, pr, range_, tree) if x not in (None, "")]
     if len(chosen) != 1:
-        raise TargetError("pass exactly one of --branch, --pr, --range")
+        raise TargetError("pass exactly one of --branch, --pr, --range, --tree")
+    if path and not tree:
+        raise TargetError("--path goes with --tree")
     if not (repo / ".git").exists() and git(repo, "rev-parse", "--git-dir", check=False).returncode != 0:
         raise TargetError(f"{repo} is not a git repository")
     if fetch:
         git(repo, "fetch", "--quiet", "origin")
+
+    if tree:
+        repo, sub = tree_root(repo, path)
+        head = rev_parse(repo, tree)
+        problem = "" if head else f"{tree} does not resolve to a commit"
+        return Resolved(repo, "tree", sub or ".", EMPTY_TREE, head, problem=problem, path=sub)
 
     if branch:
         head = rev_parse(repo, f"origin/{branch}")
@@ -238,28 +303,118 @@ def diff_text(repo: Path, base: str, head: str) -> str:
     return git(repo, "diff", *_DIFF_FLAGS, f"{base}..{head}").stdout
 
 
-def target_gate(resolved: Resolved, diff: str | None) -> GateResult:
-    """Base found, head found, diff non-empty."""
+def target_gate(resolved: Resolved, diff: str | None, files: list[str] | None = None) -> GateResult:
+    """Base found, head found, diff non-empty. A tree target needs one file left to review instead of a diff."""
     if resolved.problem:
         return GateResult(passed=False, reason=resolved.problem, action="exit")
     if not resolved.base_sha:
         return GateResult(passed=False, reason="base commit not found", action="exit")
     if not resolved.head_sha:
         return GateResult(passed=False, reason="head commit not found", action="exit")
+    if resolved.kind == "tree":
+        if not files:
+            where = f"under {resolved.path}" if resolved.path else "in the tree"
+            return GateResult(passed=False, reason=f"no file {where} at {resolved.head_sha[:12]} is left to "
+                                                   f"review (see skipped.txt)", action="exit")
+        return GateResult(passed=True)
     if not diff or not diff.strip():
         return GateResult(passed=False, reason="the diff between base and head is empty", action="exit")
     return GateResult(passed=True)
 
 
+def _check_attrs(repo: Path, head: str, paths: list[str]) -> dict[str, str]:
+    """{path: the attribute set} for paths with linguist-generated or -vendored set at *head*.
+
+    `git check-attr --source` needs git 2.40; an older git skips this check
+    with a warning rather than failing the review.
+    """
+    if not paths:
+        return {}
+    proc = subprocess.run(
+        [*_GIT, "-C", str(repo), "check-attr", "-z", "--stdin", "--source", head, *GENERATED_ATTRS],
+        input="\0".join(paths) + "\0", capture_output=True, text=True, env=_env(), shell=False, check=False,
+    )
+    if proc.returncode != 0:
+        log.warning("git check-attr --source failed; not skipping generated files: %s", proc.stderr.strip()[:300])
+        return {}
+    parts = proc.stdout.split("\0")
+    out: dict[str, str] = {}
+    for i in range(0, len(parts) - 2, 3):
+        path, attr, value = parts[i], parts[i + 1], parts[i + 2]
+        if value in ("set", "true") and path not in out:
+            out[path] = attr
+    return out
+
+
+def _chars_at(repo: Path, head: str, path: str) -> int:
+    """Characters in *path* at *head*, decoded like `gates._show` (bytes that are not UTF-8 count as one each)."""
+    proc = subprocess.run([*_GIT, "-C", str(repo), "show", f"{head}:{path}"], capture_output=True,
+                          stdin=subprocess.DEVNULL, env=_env(), shell=False, check=False)
+    return len(proc.stdout.decode("utf-8", errors="replace"))
+
+
+def tree_files(repo: Path, head: str, path: str = "") -> tuple[list[str], list[tuple[str, str]]]:
+    """(files to review, [(file, reason) skipped]) at *head*, under *path*, in path order.
+
+    Skipped: binary files, files over TREE_MAX_CHARS characters, lockfiles by
+    name, files with linguist-generated or linguist-vendored set, and submodules.
+    """
+    spec = ["--", path] if path else []
+    listed = [f for f in git(repo, "ls-tree", "-r", "-z", "--name-only", head, *spec).stdout.split("\0") if f]
+    sizes: dict[str, int] = {}
+    for rec in git(repo, "ls-tree", "-r", "-l", "-z", head, *spec).stdout.split("\0"):
+        meta, _, name = rec.partition("\t")
+        fields = meta.split()
+        if name and len(fields) == 4 and fields[3].isdigit():
+            sizes[name] = int(fields[3])
+    binary = set()
+    for rec in git(repo, "diff", *_DIFF_FLAGS, "--numstat", "-z", EMPTY_TREE, head, *spec).stdout.split("\0"):
+        added, _, rest = rec.partition("\t")
+        if added == "-":
+            binary.add(rest.partition("\t")[2])
+    generated = _check_attrs(repo, head, listed)
+    keep: list[str] = []
+    skipped: list[tuple[str, str]] = []
+    for f in sorted(listed):
+        if f in binary:
+            skipped.append((f, "binary"))
+        elif sizes.get(f, 0) > TREE_MAX_CHARS and _chars_at(repo, head, f) > TREE_MAX_CHARS:
+            skipped.append((f, f"over {TREE_MAX_CHARS} characters"))
+        elif f.rsplit("/", 1)[-1] in LOCKFILES:
+            skipped.append((f, "lockfile"))
+        elif f in generated:
+            skipped.append((f, f"{generated[f]} is set"))
+        elif f not in sizes:
+            skipped.append((f, "submodule"))  # ls-tree prints no size for a gitlink
+        else:
+            keep.append(f)
+    return keep, skipped
+
+
 def build_target(resolved: Resolved, *, tickets: list[str] | None = None,
-                 deployed_in: str | None = None, needs: list[Need] | None = None) -> TargetInfo:
+                 deployed_in: str | None = None, name: str | None = None,
+                 label: str | None = None, needs: list[Need] | None = None) -> TargetInfo:
     """Everything about the target except files written to disk.
 
-    Every lookup that failed, here or in `resolve`, is appended to *needs*.
+    *name* replaces the repository's directory name in the slug and label (a
+    `--dir` review names the source directory, not its copy); *label* replaces
+    the label outright. Every lookup that failed, here or in `resolve`, is
+    appended to *needs*.
     """
     if needs is not None:
         needs.extend(resolved.needs)
     repo, base, head = resolved.repo, resolved.base_sha, resolved.head_sha
+    if resolved.kind == "tree":
+        files, skipped = tree_files(repo, head, resolved.path)
+        repo_name = name or repo.name
+        slug = sanitize_slug(f"{repo_name}--tree" + (f"-{resolved.path}" if resolved.path else ""))
+        what = resolved.path or "whole tree"
+        return TargetInfo(
+            repo_path=str(repo), remote_url=remote_url(repo), base_sha=base, head_sha=head,
+            commits=[], files=files, skipped=skipped, slug=slug,
+            label=label or f"{repo_name}: {what} at {head[:8]}", kind="tree", ref=resolved.ref,
+            tickets=list(tickets or []), deployed_in=deployed_in,
+        )
     commits = []
     for line in git(repo, "log", "--format=%H%x00%s", f"{base}..{head}").stdout.splitlines():
         if "\0" in line:
@@ -279,14 +434,104 @@ def build_target(resolved: Resolved, *, tickets: list[str] | None = None,
 
 
 def write_target_files(target: TargetInfo, diff: str, target_dir: Path) -> TargetInfo:
-    """Write diff.patch (and the commit and file lists) under *target_dir*."""
+    """Write diff.patch (and the commit and file lists) under *target_dir*.
+
+    A tree target has no diff: diff.patch is empty, and skipped.txt lists each
+    file left out with its reason.
+    """
     target_dir.mkdir(parents=True, exist_ok=True)
     diff_path = target_dir / "diff.patch"
     diff_path.write_text(diff, encoding="utf-8")
     (target_dir / "commits.txt").write_text(
         "".join(f"{sha} {subject}\n" for sha, subject in target.commits), encoding="utf-8")
     (target_dir / "files.txt").write_text("".join(f"{f}\n" for f in target.files), encoding="utf-8")
+    if target.kind == "tree":
+        (target_dir / "skipped.txt").write_text(
+            "".join(f"{f}\t{why}\n" for f, why in target.skipped), encoding="utf-8")
     return target.model_copy(update={"diff_path": str(diff_path)})
+
+
+_IMPORT_ENV = {
+    "GIT_AUTHOR_NAME": "review_pipeline", "GIT_AUTHOR_EMAIL": "review@localhost",
+    "GIT_COMMITTER_NAME": "review_pipeline", "GIT_COMMITTER_EMAIL": "review@localhost",
+    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+}
+
+
+def dir_name(src: Path) -> str:
+    """The name a `--dir` review uses for *src* in its slug: `<basename>-<6 hex of its absolute path>`.
+
+    Two directories with the same basename get different slugs, so one
+    review never replaces the other's `source/` repository.
+    """
+    return f"{src.name}-{hashlib.sha256(str(src).encode()).hexdigest()[:6]}"
+
+
+def _import_git(dest: Path, src: Path, *args: str) -> subprocess.CompletedProcess:
+    proc = subprocess.run([*_GIT, "-C", str(dest), *args], capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, env=dict(_env(), **_IMPORT_ENV), shell=False, check=False)
+    ok = proc.returncode == 0 or (args[0] == "diff" and proc.returncode == 1)  # diff --quiet: 1 = changed
+    if not ok:
+        raise TargetError(f"git {args[0]} in the copy of {src} failed: {proc.stderr.strip()}")
+    return proc
+
+
+def check_out_dir(src: str | Path, out: Path) -> None:
+    """Raise TargetError when *out* is *src* or inside it: a `--dir` review never writes to its source."""
+    src, out = Path(src).expanduser().resolve(), Path(out).expanduser().resolve()
+    if out == src or src in out.parents:
+        raise TargetError(f"the output directory {out} is inside {src}; pass --out somewhere else")
+
+
+def import_dir(path: str | Path, target_dir: Path) -> Path:
+    """Copy a directory that is not under git into `<target_dir>/source/` and commit it there.
+
+    The copy leaves out IMPORT_EXCLUDES (and any `.git`), and `git add` honours
+    a `.gitignore` copied with it. Commits have a fixed author and no user git
+    config. Nothing is written to *path*. Returns the copy, which is then
+    reviewed as `--tree HEAD`. The copy is not `<target_dir>/tree/`: that is
+    the agents' snapshot, deleted when a run ends.
+
+    An earlier import is kept, so the commit an earlier review's
+    `findings.json` and `review-state.json` name stays readable: the working
+    files of `source/` are replaced with a fresh copy, and a new commit is
+    added on top of the old one only when the contents changed. When they did
+    not, HEAD is reused and the review gets the same head sha.
+    """
+    src = Path(path).expanduser().resolve()
+    if not src.is_dir():
+        raise TargetError(f"{src} is not a directory")
+    inside = git(src, "rev-parse", "--show-toplevel", check=False)
+    if inside.returncode == 0 and inside.stdout.strip():
+        top = Path(inside.stdout.strip()).resolve()
+        rel = src.relative_to(top).as_posix() if src != top else "."
+        raise TargetError(f"{src} is inside the git repository {top}; review it with "
+                          f"--repo {top} --tree --path {rel}")
+    check_out_dir(src, target_dir)
+    dest = (target_dir / "source").resolve()
+    kept = (dest / ".git").is_dir()
+    try:
+        if dest.exists() and not kept:
+            shutil.rmtree(dest)  # a copy that was never committed holds nothing a review names
+        for child in (dest.iterdir() if kept else ()):
+            if child.name == ".git":
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src, dest, symlinks=True, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns(*IMPORT_EXCLUDES, ".git"))
+    except OSError as e:  # shutil.Error is an OSError
+        raise TargetError(f"cannot copy {src} into {dest}: {e}") from e
+    if not kept:
+        _import_git(dest, src, "init", "-q", "-b", "main")
+    _import_git(dest, src, "add", "-A")
+    if kept and _import_git(dest, src, "diff", "--cached", "--quiet").returncode == 0:
+        return dest  # same contents as the last import: keep its commit
+    _import_git(dest, src, "commit", "-q", "--allow-empty", "-m", f"Import {src.name} for review")
+    return dest
 
 
 def deployed(target: TargetInfo) -> str | None:
