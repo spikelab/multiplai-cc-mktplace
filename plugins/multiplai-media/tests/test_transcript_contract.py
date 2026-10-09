@@ -244,3 +244,20 @@ def test_a_short_audio_track_is_reported() -> None:
     assert prep.audio_length_warning(1756.47, 1756.2) is None
     msg = prep.audio_length_warning(1756.47, 1704.46)
     assert msg and "1704.5s" in msg and "1756.5s" in msg
+
+
+def test_audio_gaps_finds_long_packets_and_jumps() -> None:
+    d = 0.02322
+    packets = [(i * d, d) for i in range(100)]
+    packets[50] = (50 * d, 4.04)                       # a packet that claims 4 s
+    packets = packets[:51] + [(p + 4.04 - d, dd) for p, dd in packets[51:]]
+    packets[80] = (packets[80][0] + 0.5, d)            # a 0.5 s jump before packet 80
+    packets = packets[:81] + [(p + 0.5, dd) for p, dd in packets[81:]]
+    gaps = prep.audio_gaps(packets)
+    assert gaps == [{"at": round(50 * d + d, 3), "length": round(4.04 - d, 3)},
+                    {"at": round(packets[79][0] + d, 3), "length": 0.5}]
+
+
+def test_audio_gaps_is_empty_for_a_clean_track() -> None:
+    assert prep.audio_gaps([(i * 0.02, 0.02) for i in range(50)]) == []
+    assert prep.audio_gaps([]) == []

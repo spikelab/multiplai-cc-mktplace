@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import os
 import shlex
 import subprocess
@@ -136,9 +137,27 @@ def _segment_video(edl: EDL, seg, words: list[dict] | None, bg: str) -> str:
     return f"[0:v]{','.join(pre)}[vin];{graph};[vfit]{','.join(post)}[v]"
 
 
+# Fills a source's audio dropouts with silence, as prep does for the WAV it
+# transcribes. Without it a dropout stays a jump in the segment's audio
+# timestamps, and anything that plays the samples end to end hears the rest
+# of the segment early by the dropout's length.
+AUDIO_GAP_FILL = "aresample=async=1:first_pts=0"
+
+
+def _audio_gaps(edl: EDL) -> list[dict]:
+    """The source's audio dropouts, as prep recorded them; none when the
+    source or its prep cache is missing."""
+    if not Path(edl.source).exists():
+        return []
+    from stages.prep import cache_dir_for
+    path = cache_dir_for(edl.source) / "audio_gaps.json"
+    return json.loads(path.read_text())["gaps"] if path.exists() else []
+
+
 def _cut_segments(edl: EDL, work: Path, words: list[dict] | None = None,
                   bg: str = layouts.DEFAULT_BG) -> list[Path]:
     out = []
+    gaps = _audio_gaps(edl)
     for i, seg in enumerate(edl.segments):
         p = work / f"seg{i:02d}.mp4"
         mute = seg.mute or seg.speed > 4.0
@@ -156,6 +175,8 @@ def _cut_segments(edl: EDL, work: Path, words: list[dict] | None = None,
                 f"atrim=duration={seg.src_duration}",
                 "asetpts=PTS-STARTPTS",
             ]
+            if any(g["at"] < seg.src_end and g["at"] + g["length"] > seg.src_start for g in gaps):
+                afilters.insert(0, AUDIO_GAP_FILL)
             if seg.speed != 1.0:
                 afilters.append(_atempo_chain(seg.speed))
             afilters.append(f"atrim=duration={out_dur}")

@@ -108,8 +108,10 @@ speech, re-run prep without the hint. Then fix what was still misheard with
 `pipeline.py correct <cache> corrections.json` before any caption is rendered
 (`references/reels.md` step 2).
 
-**Audio dropouts:** prep fills gaps in the source's audio timestamps with
-silence, so word times stay on source time, and prints a warning if the
+**Audio dropouts:** some recordings have gaps in their audio timestamps.
+prep records them in `audio_gaps.json` and fills them with silence, so word
+times stay on source time; render fills them too, in each segment that has
+one, so the reel's audio stays in step with its picture. prep warns if the
 extracted audio's length still differs from the source's.
 
 **Language:** `--language` takes an ISO code (`it`, `es`, `fr`, …). Omit it to let

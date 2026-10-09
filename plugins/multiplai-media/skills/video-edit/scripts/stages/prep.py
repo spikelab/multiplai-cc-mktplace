@@ -155,6 +155,52 @@ def _extract_audio(proxy: Path, dst: Path) -> None:
     ], check=True)
 
 
+# A jump in the audio timestamps longer than this is a dropout.
+AUDIO_GAP_MIN_S = 0.1
+
+
+def audio_gaps(packets: list[tuple[float, float]]) -> list[dict]:
+    """The dropouts in an audio track, from its packets' (pts, duration):
+    a packet that claims more time than a packet holds, or a jump between
+    one packet's end and the next one's start. Each is {"at", "length"} in
+    source seconds; render fills them with silence (composite)."""
+    if not packets:
+        return []
+    durations = sorted(d for _p, d in packets)
+    typical = durations[len(durations) // 2]
+    gaps = []
+    for i, (pts, dur) in enumerate(packets):
+        if dur - typical > AUDIO_GAP_MIN_S:
+            gaps.append({"at": round(pts + typical, 3), "length": round(dur - typical, 3)})
+        if i + 1 < len(packets):
+            jump = packets[i + 1][0] - (pts + dur)
+            if jump > AUDIO_GAP_MIN_S:
+                gaps.append({"at": round(pts + dur, 3), "length": round(jump, 3)})
+    return gaps
+
+
+def _audio_packets(source: Path) -> list[tuple[float, float]]:
+    out = subprocess.check_output(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+         "packet=pts_time,duration_time", "-of", "csv=p=0", str(source)], text=True)
+    rows = []
+    for line in out.splitlines():
+        parts = line.split(",")
+        try:
+            rows.append((float(parts[0]), float(parts[1])))
+        except (ValueError, IndexError):
+            continue
+    return rows
+
+
+def _write_audio_gaps(source: Path, dst: Path) -> list[dict]:
+    if dst.exists():
+        return json.loads(dst.read_text())["gaps"]
+    gaps = audio_gaps(_audio_packets(source))
+    dst.write_text(json.dumps({"gaps": gaps}, indent=1))
+    return gaps
+
+
 def audio_length_warning(source_s: float, audio_s: float) -> str | None:
     """A warning when the transcribed audio is not as long as the source:
     its word times would not be source times."""
@@ -594,6 +640,10 @@ def prep(source: str | Path, prompt_hint: str = "",
     _make_proxy(src, proxy)
     print(f"→ prep: {'reusing' if audio.exists() else 'extracting'} audio")
     _extract_audio(proxy, audio)
+    gaps = _write_audio_gaps(src, cache / "audio_gaps.json")
+    if gaps:
+        print(f"→ prep: {len(gaps)} audio dropouts ({sum(g['length'] for g in gaps):.1f}s in all), "
+              "filled with silence here and in render")
     warning = audio_length_warning(duration, _ffprobe_duration(audio))
     if warning:
         print(warning)
