@@ -157,6 +157,7 @@ def rules_repo(tmp_path: Path, claude_md: str = "Use tabs.\n"):
     (repo / "CLAUDE.md").write_text(claude_md)
     (repo / "coding-standards.md").write_text("Name every constant.\n")
     (repo / "pkg" / "coding-standards.md").write_text("No mocks of the clock.\n")
+    (repo / "pkg" / "CLAUDE.md").write_text("Prefer pathlib.\n")
     (repo / "pkg" / "x.py").write_text("X = 1\n")
     git("add", "-A")
     git("commit", "-q", "-m", "base")
@@ -170,8 +171,10 @@ def rules_repo(tmp_path: Path, claude_md: str = "Use tabs.\n"):
 def test_conventions_chain_puts_coding_standards_before_claude_md(tmp_path):
     chain = conventions_chain(rules_repo(tmp_path))
     headings = [line for line in chain.splitlines() if line.startswith("### ")]
-    assert headings == ["### coding-standards.md", "### pkg/coding-standards.md", "### CLAUDE.md"]
-    assert "Name every constant." in chain and "No mocks of the clock." in chain and "Use tabs." in chain
+    assert headings == ["### coding-standards.md", "### pkg/coding-standards.md", "### CLAUDE.md",
+                        "### pkg/CLAUDE.md"]
+    for rule in ("Name every constant.", "No mocks of the clock.", "Use tabs.", "Prefer pathlib."):
+        assert rule in chain
 
 
 def test_conventions_chain_skips_claude_md_first_when_over_the_cap(tmp_path, monkeypatch):
@@ -181,6 +184,8 @@ def test_conventions_chain_skips_claude_md_first_when_over_the_cap(tmp_path, mon
     assert "Name every constant." in chain and "No mocks of the clock." in chain
     assert "### CLAUDE.md\n\n[skipped: the rules above already fill the prompt budget]" in chain
     assert "Use tabs." not in chain
+    # A skipped block does not stop the walk: the smaller pkg/CLAUDE.md still fits after it.
+    assert "### pkg/CLAUDE.md\n\nPrefer pathlib." in chain
 
 
 # --- verify ----------------------------------------------------------------------
