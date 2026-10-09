@@ -3,7 +3,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 _HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
@@ -30,13 +30,25 @@ class Focus:
 
 
 @dataclass
+class FocusKey:
+    """One point of a moving focus: at source time t, keep (x, y) in view.
+    Between keys the point moves in a straight line; before the first and
+    after the last it holds still."""
+    t: float                    # source seconds, inside the segment
+    x: float = 0.5
+    y: float = 0.5
+
+
+@dataclass
 class Segment:
     src_start: float
     src_end: float
     speed: float = 1.0          # >1 = faster, <1 = slower
     zoom: Optional[Zoom] = None
     mute: bool = False          # replace audio with silence (auto-on for speed>4)
-    focus: Optional[Focus] = None   # crop centre for fit "crop" (in the frame) or a panel frame (in the panel)
+    # crop centre for fit "crop" (in the frame) or a panel frame (in the panel);
+    # a list of FocusKey follows a subject that moves
+    focus: Optional[Union[Focus, list[FocusKey]]] = None
     frame: Optional[str] = None     # "stack" | a panel name ("A", "B") | "speaker"
     fit: Optional[str] = None       # "pad" | "blur" | "crop": overrides output.fit for this segment
 
@@ -178,7 +190,9 @@ class EDL:
             seg = Segment(**s)
             if z:
                 seg.zoom = Zoom(**z)
-            if f:
+            if isinstance(f, list):
+                seg.focus = [FocusKey(**k) for k in f]
+            elif f:
                 seg.focus = Focus(**f)
             return seg
 
@@ -314,6 +328,24 @@ class EDL:
                                      f"time ({max(a.start, b.start):.2f}–{min(a.end, b.end):.2f}s); "
                                      "move one, shorten one, or give them separate regions.")
 
+    def _validate_focus_keys(self, i: int, s: Segment) -> None:
+        keys = s.focus if isinstance(s.focus, list) else []
+        if not keys:
+            raise ValueError(f"segment {i} has an empty focus list; give at least one {{t, x, y}}.")
+        if s.frame in ("stack", "speaker") or (s.frame is None and (s.fit or self.output.fit) != "crop"):
+            raise ValueError(
+                f"segment {i}: focus keyframes move a crop window, so they need fit \"crop\" or a "
+                f"single panel frame; this segment uses {'frame ' + repr(s.frame) if s.frame else 'fit ' + repr(s.fit or self.output.fit)}.")
+        for k in keys:
+            if not (s.src_start <= k.t <= s.src_end):
+                raise ValueError(f"segment {i}: focus key at t={k.t} is outside the segment "
+                                 f"({s.src_start}–{s.src_end}, source seconds).")
+            if not (0 <= k.x <= 1 and 0 <= k.y <= 1):
+                raise ValueError(f"segment {i}: focus key at t={k.t} has x={k.x}, y={k.y}; both must be 0–1.")
+        times = [k.t for k in keys]
+        if any(b <= a for a, b in zip(times, times[1:])):
+            raise ValueError(f"segment {i}: focus key times must go up: {times}.")
+
     def _validate_framing(self, source_size: Optional[tuple[int, int]],
                           words: Optional[list[dict]]) -> list[str]:
         warnings: list[str] = []
@@ -327,6 +359,9 @@ class EDL:
             if s.frame is not None:
                 raise ValueError(f"segment {i} sets both fit {s.fit!r} and frame {s.frame!r}; fit "
                                  "fills the output with the whole frame, so drop one of them.")
+        for i, s in enumerate(self.segments):
+            if isinstance(s.focus, list):
+                self._validate_focus_keys(i, s)
         for t in self.transitions:
             if t.duration < 0:
                 raise ValueError(f"transition after {t.after} has a negative duration ({t.duration}).")

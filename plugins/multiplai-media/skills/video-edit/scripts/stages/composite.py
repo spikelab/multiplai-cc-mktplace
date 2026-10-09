@@ -97,14 +97,23 @@ def _segment_video(edl: EDL, seg, words: list[dict] | None, bg: str) -> str:
     post.append(f"fps={fps}")
     post.append(f"trim=duration={seg.duration}")
 
-    fx, fy = (seg.focus.x, seg.focus.y) if seg.focus else (0.5, 0.5)
+    fx, fy = 0.5, 0.5
+    mx = my = ""
+    moving = isinstance(seg.focus, list)
+    if isinstance(seg.focus, list):
+        # Keyframe times are source seconds; the crop runs after the trim,
+        # where t starts at 0 for this segment.
+        mx = layouts.lerp_expr([(k.t - seg.src_start, k.x) for k in seg.focus])
+        my = layouts.lerp_expr([(k.t - seg.src_start, k.y) for k in seg.focus])
+    elif seg.focus:
+        fx, fy = seg.focus.x, seg.focus.y
     panels = {k: layouts.Rect(p.x, p.y, p.w, p.h)
               for k, p in (edl.layout.panels.items() if edl.layout else [])}
     chain = graph = None
     fit = seg.fit or edl.output.fit
     if seg.frame is None:
         if fit == "crop":
-            chain = layouts.crop_chain(W, H, fx, fy)
+            chain = layouts.crop_chain(W, H, mx, my) if moving else layouts.crop_chain(W, H, fx, fy)
         elif fit == "blur":
             graph = layouts.blur_graph(W, H)
         else:
@@ -117,6 +126,8 @@ def _segment_video(edl: EDL, seg, words: list[dict] | None, bg: str) -> str:
         if not runs:
             runs = [(0.0, seg.src_duration, sorted(panels)[0])]
         graph = layouts.speaker_graph(runs, panels, W, H, (fx, fy))
+    elif moving:
+        chain = layouts.panel_chain_moving(panels[seg.frame], W, H, mx, my)
     else:
         chain = layouts.panel_chain(panels[seg.frame], W, H, fx, fy)
 
