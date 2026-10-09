@@ -625,6 +625,29 @@ test("riskInputs combines the repo tiers, the session's tier and the findings", 
   assert.equal(L.riskInputs({}, { assessments: [] }, [], {}, []), null);
 });
 
+test("the Needs you block is hidden without needs, and each item says what it blocks", () => {
+  assert.deepEqual(L.needsItems({ findings: [] }), []);
+  assert.deepEqual(L.needsItems(null), []);
+  assert.deepEqual(L.needsItems({ findings: [], needs: [] }), []);
+  const ff = {
+    findings: [{ id: "a1b2c3d4e5", file: "app.py", line_start: 7, claim: "The timeout is ignored." }],
+    needs: [
+      { what: "The vendor's probe defaults.", blocks: "a1b2c3d4e5", cause: "unreachable", command: "", source: "verifier" },
+      { what: "Rules on main.", blocks: "review", cause: "lookup-failed", command: "gh api repos/o/r/rules/branches/main", source: "pipeline" },
+      { what: "x", blocks: "ffffffffff", cause: "no-access", command: "", source: "verifier" },
+    ],
+  };
+  const items = L.needsItems(ff);
+  assert.equal(items.length, 3);
+  assert.equal(items[0].findingId, "a1b2c3d4e5");
+  assert.equal(items[0].blocks, "app.py:7 — The timeout is ignored.");
+  assert.equal(items[0].cause, "not reachable on the web");
+  assert.equal(items[1].findingId, null);
+  assert.equal(items[1].blocks, "the review");
+  assert.equal(items[1].command, "gh api repos/o/r/rules/branches/main");
+  assert.equal(items[2].blocks, "finding ffffffffff");
+});
+
 const RUN = {
   started_at: "2026-10-01T10:00:00Z", ended_at: "2026-10-01T10:07:12Z", wall_seconds: 432.4,
   calls: 16, tokens: { input: 1200, output: 3400, cache_read: 1418951, cache_write: 0, total: 1423551 },

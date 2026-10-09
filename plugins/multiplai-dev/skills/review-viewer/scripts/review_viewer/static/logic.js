@@ -409,6 +409,31 @@
     return new Set(((step && step.anchors) || []).map(function (a) { return a.path; }));
   }
 
+  const NEED_CAUSES = {
+    "no-access": "the review has no access",
+    "lookup-failed": "a lookup failed",
+    "unreachable": "not reachable on the web",
+  };
+
+  /* The Summary tab's "Needs you" items, from a findings file. An empty list
+   * hides the block: older files have no `needs`. A need that blocks a finding
+   * the file holds links to it; any other blocks the review as a whole. */
+  function needsItems(findingsFile) {
+    const needs = (findingsFile && Array.isArray(findingsFile.needs)) ? findingsFile.needs : [];
+    const byId = new Map(((findingsFile && findingsFile.findings) || []).map((f) => [f.id, f]));
+    return needs.map((n) => {
+      const f = byId.get(n.blocks) || null;
+      return {
+        what: String(n.what || ""),
+        findingId: f ? f.id : null,
+        blocks: f ? f.file + ":" + f.line_start + " — " + f.claim : n.blocks === "review" ? "the review" : "finding " + n.blocks,
+        cause: NEED_CAUSES[n.cause] || String(n.cause || ""),
+        command: String(n.command || ""),
+        source: String(n.source || ""),
+      };
+    });
+  }
+
   /* Badges for the Summary tab: measured ones from the server, then the
    * session's assessments, each tagged with where it came from. */
   function summaryBadges(stats, walk) {
@@ -1089,7 +1114,7 @@
     foldRows: foldRows, expandFold: expandFold, fileOrder: fileOrder,
     neighbourFile: neighbourFile, navFiles: navFiles,
     stepsForFile: stepsForFile, skippedReason: skippedReason, stepFiles: stepFiles,
-    summaryBadges: summaryBadges,
+    summaryBadges: summaryBadges, needsItems: needsItems,
     diffBlock: diffBlock, formatRef: formatRef, parseRefs: parseRefs, refAnchor: refAnchor,
     completion: completion, matchFiles: matchFiles,
     blockStarts: blockStarts, blockKey: blockKey, explainByBlock: explainByBlock,

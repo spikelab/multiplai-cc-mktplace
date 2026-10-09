@@ -23,6 +23,12 @@ finding with no verdict, such as a gate-rejected one, has no such key.
 
 `checks.json` (the `checks.v1` contract beside it) is the record of every
 agent call: `AgentCheck` and `GateCheck` from the state, mapped the same way.
+
+`needs` (what the review could not get, each with a command for a person) is
+written only when there are some: at the top level every need, and on each
+finding the needs that block it. A need that blocked a finding merged away
+moves to the finding it was merged into. A file without needs has neither
+key, as before.
 """
 
 from __future__ import annotations
@@ -35,7 +41,7 @@ from pathlib import Path
 from . import timings
 from .budget import TOKEN_FIELDS, empty_stage
 from .config import DIMENSIONS
-from .models import SEVERITIES, STAGES, AgentCheck, Assessment, Citation, Finding, ReviewState
+from .models import SEVERITIES, STAGES, AgentCheck, Assessment, Citation, Finding, Need, ReviewState
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +77,26 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
         "verdict_reason": reason,
         "expected_behaviour": expected or None,
     }
+
+
+def _need(n: Need) -> dict:
+    return {"what": n.what, "blocks": n.blocks, "cause": n.cause, "command": n.command, "source": n.source}
+
+
+def exported_needs(state: ReviewState) -> list[Need]:
+    """`state.needs` with `blocks` following merges, each need once."""
+    into = {m.finding.id: m.into for m in state.merged}
+    out, seen = [], set()
+    for n in state.needs:
+        blocks = n.blocks
+        while blocks in into:
+            blocks = into[blocks]
+        n = n.model_copy(update={"blocks": blocks})
+        key = (n.what, n.blocks, n.command)
+        if key not in seen:
+            seen.add(key)
+            out.append(n)
+    return out
 
 
 def _tokens(rec: dict) -> dict:
@@ -202,7 +228,13 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
         seen.add(row["id"])
         unique.append(row)
 
-    return {
+    needs = exported_needs(state)
+    for row in unique:
+        mine = [_need(n) for n in needs if n.blocks == row["id"]]
+        if mine:
+            row["needs"] = mine
+
+    data = {
         "schema_version": 1,
         "generated_at": _timestamp(generated_at),
         "producer": producer(),
@@ -210,6 +242,9 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
         "findings": unique,
         "run": run_record(state),
     }
+    if needs:
+        data["needs"] = [_need(n) for n in needs]
+    return data
 
 
 def _write(data: dict, path: Path) -> Path:

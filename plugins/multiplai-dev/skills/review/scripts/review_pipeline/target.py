@@ -15,10 +15,10 @@ import re
 import shutil
 import subprocess
 import tarfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from .models import GateResult, TargetInfo
+from .models import GateResult, Need, TargetInfo
 
 log = logging.getLogger(__name__)
 
@@ -105,6 +105,13 @@ class Resolved:
     title: str = ""
     description: str = ""
     base_ref: str = ""
+    # Lookups that failed or came back empty, as asks for a person.
+    needs: list[Need] = field(default_factory=list)
+
+
+def _first_line(text: str) -> str:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    return lines[0][:300] if lines else "no error message"
 
 
 PR_VIEW_FIELDS = "headRefOid,baseRefOid,headRefName,baseRefName,title,body"
@@ -125,29 +132,44 @@ def _pr_view(repo: Path, number: int) -> dict:
     return json.loads(proc.stdout)
 
 
-def branch_rules(repo: Path, branch: str) -> list[dict] | None:
+def branch_rules(repo: Path, branch: str, needs: list[Need] | None = None) -> list[dict] | None:
     """GitHub's rules on *branch* (rulesets and classic protection, merged by GitHub).
 
     `gh api` fills `{owner}` and `{repo}` from the repository's origin. `[]`
     means GitHub reports no rules. A missing `gh`, a non-GitHub remote or an
     API error gives None and a warning: the review goes on without this
-    context rather than failing.
+    context rather than failing. A failed call also appends a `Need` to
+    *needs*, with the command a person would run to read the rules.
     """
     gh = shutil.which("gh")
     if gh is None or not branch or github_web_base(remote_url(repo)) is None:
         return None
+    endpoint = f"repos/{{owner}}/{{repo}}/rules/branches/{branch}"
     proc = subprocess.run(
-        [gh, "api", f"repos/{{owner}}/{{repo}}/rules/branches/{branch}"],
+        [gh, "api", endpoint],
         cwd=repo, capture_output=True, text=True, stdin=subprocess.DEVNULL, shell=False, check=False,
     )
+
+    def need(error: str) -> None:
+        if needs is not None:
+            # The command is the call made above, placeholders included: gh fills
+            # them the same way when it runs in the repository, so a fork clone or
+            # `gh repo set-default` resolves to the repository the pipeline asked.
+            needs.append(Need(
+                what=f"GitHub's rules on the base branch `{branch}`, so the review can tell whether CI "
+                     f"blocks a merge. Run the command in `{repo}`. The review went on without them: {error}",
+                cause="lookup-failed", command=f"gh api {endpoint}", source="pipeline"))
+
     if proc.returncode != 0:
         log.warning("gh api rules/branches/%s failed; reviewing without branch rules: %s",
                     branch, proc.stderr.strip()[:300])
+        need(_first_line(proc.stderr))
         return None
     try:
         rules = json.loads(proc.stdout)
     except ValueError:
         log.warning("gh api rules/branches/%s returned no JSON; reviewing without branch rules", branch)
+        need("gh api returned no JSON")
         return None
     return [r for r in rules if isinstance(r, dict)] if isinstance(rules, list) else None
 
@@ -184,9 +206,24 @@ def resolve(repo: str | Path, *, branch: str | None = None, pr: int | None = Non
             problem = f"PR #{pr} head {info['headRefOid'][:12]} is not in this clone (pass --fetch)"
         elif not base:
             problem = f"PR #{pr} base {info['baseRefOid'][:12]} is not in this clone (pass --fetch)"
-        return Resolved(repo, "pr", str(pr), base, head, pr=int(pr), problem=problem,
-                        title=(info.get("title") or "").strip(), description=(info.get("body") or "").strip(),
-                        base_ref=info.get("baseRefName") or "")
+        resolved = Resolved(repo, "pr", str(pr), base, head, pr=int(pr), problem=problem,
+                            title=(info.get("title") or "").strip(),
+                            description=(info.get("body") or "").strip(),
+                            base_ref=info.get("baseRefName") or "")
+        # A PR always has a title and a base branch; empty means gh returned less than it should.
+        # (An empty body is normal and is not asked for.)
+        missing = [name for name, value in (("title", resolved.title), ("baseRefName", resolved.base_ref))
+                   if not value]
+        if missing:
+            # The same call `_pr_view` made, from the same directory, with no --repo: gh
+            # picks the repository the same way it did for the pipeline.
+            resolved.needs.append(Need(
+                what=f"PR #{pr}'s {' and '.join(missing)}: `gh pr view` returned "
+                     f"{'them' if len(missing) > 1 else 'it'} empty, so the review went on without "
+                     f"{'them' if len(missing) > 1 else 'it'}. Run the command in `{repo}`",
+                cause="lookup-failed", command=f"gh pr view {pr} --json {','.join(missing)}",
+                source="pipeline"))
+        return resolved
 
     range_ = range_ or ""
     if ".." not in range_ or range_.count("..") != 1 or "..." in range_:
@@ -215,8 +252,13 @@ def target_gate(resolved: Resolved, diff: str | None) -> GateResult:
 
 
 def build_target(resolved: Resolved, *, tickets: list[str] | None = None,
-                 deployed_in: str | None = None) -> TargetInfo:
-    """Everything about the target except files written to disk."""
+                 deployed_in: str | None = None, needs: list[Need] | None = None) -> TargetInfo:
+    """Everything about the target except files written to disk.
+
+    Every lookup that failed, here or in `resolve`, is appended to *needs*.
+    """
+    if needs is not None:
+        needs.extend(resolved.needs)
     repo, base, head = resolved.repo, resolved.base_sha, resolved.head_sha
     commits = []
     for line in git(repo, "log", "--format=%H%x00%s", f"{base}..{head}").stdout.splitlines():
@@ -232,7 +274,7 @@ def build_target(resolved: Resolved, *, tickets: list[str] | None = None,
         commits=commits, files=files, slug=slug, label=label, kind=resolved.kind,
         ref=resolved.ref, pr=resolved.pr, tickets=list(tickets or []), deployed_in=deployed_in,
         title=resolved.title, description=resolved.description, base_ref=resolved.base_ref,
-        branch_rules=branch_rules(repo, resolved.base_ref) if resolved.base_ref else None,
+        branch_rules=branch_rules(repo, resolved.base_ref, needs) if resolved.base_ref else None,
     )
 
 

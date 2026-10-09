@@ -56,8 +56,12 @@ citation paths) — anything else is 404.
 ## Protocol 1: `findings.json` v1
 
 See `models.py` or the committed schema. Unknown keys are rejected at every
-level. Line numbers are 1-based, at `head_sha`. `finding_id` is the first 10
-hex of `sha1(f"{file}\0{line_start}\0{claim}")`.
+level. `needs` (top level, and on each finding) is optional: what the review
+could not get, each with a suggested command. The page shows the top-level
+list as the Summary tab's **Needs you** block (`logic.needsItems`) and a
+finding's own under it; nothing runs a command. Line numbers are 1-based, at
+`head_sha`. `finding_id` is the first 10 hex of
+`sha1(f"{file}\0{line_start}\0{claim}")`.
 
 `findings.json` may carry `verifier_citations` per finding (review 0.26+): the
 lines the verifier read. `allowed_paths()` includes their paths, and the

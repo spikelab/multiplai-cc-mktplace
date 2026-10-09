@@ -55,6 +55,18 @@ class Fix(_Strict):
     open_questions: list[str] = Field(default_factory=list)
 
 
+class Need(_Strict):
+    """Information the review could not get, and one command a person could run to get it.
+
+    `blocks` is a finding id, or "review" for a gap in the review as a whole.
+    `command` was written by a model or by the pipeline; the page shows it to
+    be read before running, and nothing runs it.
+    """
+    what: str
+    blocks: str
+    cause: Literal["no-access", "lookup-failed", "unreachable"]
+    command: str = ""
+    source: Literal["verifier", "finder", "pipeline"]
 class Assessment(_Strict):
     """The review's own judgement of a finding against the rest of the review
     and earlier rounds (multiplai-dev 0.27+). Older files have none.
@@ -87,6 +99,8 @@ class Finding(_Strict):
     # without proposing code. None for refuted and rejected findings.
     expected_behaviour: str | None = None
     fix: Fix | None = None  # older files only; see Premise
+    # What the review could not read to settle this finding. Absent in older files.
+    needs: list[Need] = Field(default_factory=list)
     # The lines the verifier itself read to reach its verdict. Absent in
     # files written before multiplai-dev 0.26.
     verifier_citations: list[Citation] | None = None
@@ -159,6 +173,8 @@ class FindingsFile(_Strict):
     producer: str
     target: Target
     findings: list[Finding]
+    # Every need of the review, the findings' and its own. Absent in older files.
+    needs: list[Need] = Field(default_factory=list)
     run: Run | None = None  # absent in files written before multiplai-dev 0.28
 
 

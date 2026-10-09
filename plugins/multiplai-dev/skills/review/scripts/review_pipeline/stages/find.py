@@ -6,8 +6,8 @@ import logging
 from pathlib import PurePosixPath
 
 from .. import checks, sdk, timings
-from ..gates import file_at_head, finding_gate, reason_kind
-from ..models import (AgentCheck, Finding, FinderOutput, FinderResult, GateCheck, Rejected, ReviewState,
+from ..gates import file_at_head, finding_gate, gated_need, reason_kind
+from ..models import (AgentCheck, Finding, FinderOutput, FinderResult, GateCheck, Need, Rejected, ReviewState,
                       TargetInfo)
 from ..prompts import DIFF_PROMPT_CHARS
 from ..prompts import find as prompt
@@ -119,7 +119,7 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
         findings = [_normalise(f, dimension, target, ctx) for f in out.findings]
         check.outcome = f"{len(findings)} finding{'' if len(findings) == 1 else 's'}"
         check.findings = [finding_entry(f, rec.tool_calls, hunks, target, ctx) for f in findings]
-        return FinderResult(findings=findings), check
+        return FinderResult(findings=findings, needs=[n for n in out.needs if n.what.strip()]), check
 
     async def one(dimension: str) -> None:
         # Stored as each finder returns: a budget stop mid-stage keeps what
@@ -173,6 +173,10 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
                 entry.update(fate="rejected", rule=reason_kind(gate.reason))
 
     state.findings = kept
+    # What the finders could not check blocks no one finding: it is a gap in the review.
+    state.needs.extend(gated_need(Need(what=n.what, blocks="review", cause=n.cause, command=n.command,
+                                       source="finder"))
+                       for r in results for n in r.needs)
     ctx.counts = {"found": len(kept) + len([r for r in state.rejected if r.stage == "find"]),
                   "kept": len(kept), "rejected": len([r for r in state.rejected if r.stage == "find"]),
                   "finder_failures": len(failures)}

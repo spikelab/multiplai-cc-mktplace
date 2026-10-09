@@ -210,6 +210,15 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   full under the step, so the step's text explains the code and never restates
   a finding: no finding ids, no "Finding …:" paragraphs. `put` rejects a step
   whose text names a finding id.
+- When the review could not get something it needed, the **Summary** tab
+  opens with a **Needs you** block (from `needs` in `findings.json`): what is
+  missing, what it blocks (a link to the finding, or the review), why, and
+  the suggested command in a code block with a Copy button, labelled
+  "suggested by the review: read it before running". The Findings tab shows a
+  finding's own needs under it. The page runs nothing; the block is hidden
+  for a review with no needs. If the user asks about one, give the command as
+  `! <command>` for them to run, never run it yourself (the review skill's
+  step 2 says why).
 - The page shows the overview and, for a PR, its description on a
   **Summary** tab, under badges. The server measures some badges from git and
   GitHub: size, tests changed, commit hygiene, TODOs, lock files, and for a
