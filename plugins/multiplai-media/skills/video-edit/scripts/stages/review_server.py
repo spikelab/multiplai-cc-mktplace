@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import mimetypes
 import os
 import re
@@ -186,8 +187,10 @@ def validate_comment(c: Any, known: set[tuple[str, int]]) -> dict:
         t, x, y = float(c["t"]), float(c["x"]), float(c["y"])
     except (KeyError, TypeError, ValueError):
         raise ValueError("t, x and y must be numbers") from None
-    if t < 0 or not (0 <= x <= 1 and 0 <= y <= 1):
-        raise ValueError("t must be >= 0 and x, y within 0..1")
+    # float() takes "nan" and "inf", and json.loads takes bare NaN and Infinity;
+    # every comparison with NaN is false, so test finiteness first.
+    if not all(map(math.isfinite, (t, x, y))) or t < 0 or not (0 <= x <= 1 and 0 <= y <= 1):
+        raise ValueError("t must be a finite number >= 0 and x, y within 0..1")
     text = c.get("text")
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
         raise ValueError(f"text must be 1..{MAX_TEXT} characters")

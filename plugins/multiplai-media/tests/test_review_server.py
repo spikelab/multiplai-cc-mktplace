@@ -178,6 +178,14 @@ def test_invalid_comment_rejects_the_whole_batch(server, bad) -> None:
     assert (server["box"] / "comments.jsonl").read_text() == ""
 
 
+@pytest.mark.parametrize("t", ["nan", "inf", "Infinity", float("nan"), float("inf")])
+def test_non_finite_time_is_rejected(server, t) -> None:
+    # A float in the list goes out as a bare NaN / Infinity token, which json.loads accepts.
+    res, _ = _post(server, [{"video": "clip-01", "version": 1, "t": t, "x": 0.5, "y": 0.5, "text": "when?"}])
+    assert res.status == 400
+    assert (server["box"] / "comments.jsonl").read_text() == ""
+
+
 def test_post_needs_json_content_type(server) -> None:
     res, _ = _req(server, "POST", "/api/comments", {"Content-Type": "text/plain", **_auth(server)}, b"{}")
     assert res.status == 415
