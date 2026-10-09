@@ -34,32 +34,65 @@ MERGE_LINE_GAP = 2
 MERGED_STATUSES = ("confirmed", "unverifiable")
 
 
-def overlap_groups(state: ReviewState) -> list[list[Finding]]:
-    """Groups of 2+ shown findings in one file whose ranges overlap or nearly touch.
+def _near(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
+    """Two line ranges overlap or are at most MERGE_LINE_GAP lines apart."""
+    return a_start <= b_end + MERGE_LINE_GAP and b_start <= a_end + MERGE_LINE_GAP
 
-    Overlap is chained: a group is every finding reachable from another by
-    one overlap. Groups come in file order of first appearance, members in
-    line order.
+
+def linked(a: Finding, b: Finding) -> bool:
+    """Two findings may be one defect: their anchors overlap in one file, or any
+    repository citation of one overlaps any repository citation of the other.
+
+    The second test catches one defect reported from two files: a finding
+    anchored in a test and one anchored in the code it tests, both citing the
+    same line of a third file. Web citations never link findings.
     """
-    by_file: dict[str, list[Finding]] = {}
-    for f in state.findings:
-        if getattr(state.verdicts.get(f.id), "status", "") in MERGED_STATUSES:
-            by_file.setdefault(f.file, []).append(f)
-    groups: list[list[Finding]] = []
-    for findings in by_file.values():
-        current: list[Finding] = []
-        end = 0
-        for f in sorted(findings, key=lambda f: (f.line_start, f.line_end)):
-            if current and f.line_start <= end + MERGE_LINE_GAP:
-                current.append(f)
-                end = max(end, f.line_end)
-                continue
-            if len(current) > 1:
-                groups.append(current)
-            current, end = [f], f.line_end
-        if len(current) > 1:
-            groups.append(current)
+    if a.file == b.file and _near(a.line_start, a.line_end, b.line_start, b.line_end):
+        return True
+    return any(ca.path == cb.path and _near(ca.line_start, ca.line_end, cb.line_start, cb.line_end)
+               for ca in a.citations if not ca.is_web
+               for cb in b.citations if not cb.is_web)
+
+
+def link_groups(findings: list[Finding]) -> list[list[Finding]]:
+    """Groups of 2+ of *findings*, chained by `linked`.
+
+    A group is every finding reachable from another by one link. Groups come
+    in the order their first member appears in *findings*; members are in
+    file order of first appearance, then line order.
+    """
+    parent = list(range(len(findings)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(findings)):
+        for j in range(i + 1, len(findings)):
+            if linked(findings[i], findings[j]):
+                parent[root(j)] = root(i)
+    members: dict[int, list[int]] = {}
+    for i in range(len(findings)):
+        members.setdefault(root(i), []).append(i)
+    file_order: dict[str, int] = {}
+    for f in findings:
+        file_order.setdefault(f.file, len(file_order))
+    groups = []
+    for idx in sorted(members.values(), key=min):
+        if len(idx) < 2:
+            continue
+        groups.append(sorted((findings[i] for i in idx),
+                             key=lambda f: (file_order[f.file], f.line_start, f.line_end)))
     return groups
+
+
+def overlap_groups(state: ReviewState) -> list[list[Finding]]:
+    """Groups of 2+ shown (confirmed or unverifiable) findings that `linked` chains together."""
+    shown = [f for f in state.findings
+             if getattr(state.verdicts.get(f.id), "status", "") in MERGED_STATUSES]
+    return link_groups(shown)
 
 
 def group_key(group: list[Finding]) -> str:
