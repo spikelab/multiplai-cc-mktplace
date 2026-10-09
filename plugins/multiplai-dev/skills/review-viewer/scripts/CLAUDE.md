@@ -21,14 +21,14 @@ The page-logic tests need `node`; they fail (not skip) without it.
 |---|---|
 | `__main__.py` | CLI: `serve` (findings files, or `--target`), `reply`, `pending`, `list`, `stop`, `walkthrough put\|status`, `validate`, `export-schema`. Calls `setup_logging` once. Owns the stdout contract. `find_review()` looks for a review of the same commits. |
 | `models.py` | The `findings.json` v1, `checks.json` v1 and `walkthrough.json` v1 pydantic models (source of truth for the three files in `../schema/`), `finding_id()`, `load_checks()`, and the mailbox row models. |
-| `gitdata.py` | Git: `parse_target()` / `resolve_target()` (PR, branch, worktree, `a..b`, `a...b`; same base/head rules as `review_pipeline/target.py`, restated because that member is not importable here), `parse_unified()`, `file_view()`, `allowed_paths()`, `diff_target()`, `tree_target()` (every file at a commit against `EMPTY_TREE`, for `serve --tree`; `is_tree_review()` knows a tree review by that base; `tree_path()` turns a subdirectory `--repo` into the reviewed path, the rule of `review_pipeline.target.tree_root`). Fixed argv, no shell, stdin closed. The only writes to a repo are the fetches named in `../SKILL.md`. |
+| `gitdata.py` | Git: `parse_target()` / `resolve_target()` (PR, branch, worktree, `a..b`, `a...b`; same base/head rules as `review_pipeline/target.py`, restated because that member is not importable here), `parse_unified()`, `file_view()` (an unchanged file is served whole with no diff), `allowed_paths()`, `repo_files()` (`ls-tree -r` at head, blobs only, under the tree pathspec; the page cuts the list at `REPO_FILES_MAX`), `definitions()` (`git grep -E` at head for `definition_pattern(name)`, kept to allowed paths, at most `DEFINITIONS_MAX`), `diff_target()`, `tree_target()` (every file at a commit against `EMPTY_TREE`, for `serve --tree`; `is_tree_review()` knows a tree review by that base; `tree_path()` turns a subdirectory `--repo` into the reviewed path, the rule of `review_pipeline.target.tree_root`). Fixed argv, no shell, stdin closed. The only writes to a repo are the fetches named in `../SKILL.md`. |
 | `stats.py` | measured badges: `classify()` a path (lock, generated, test, docs, code), `change_stats()` from `git diff --numstat`, `--name-status` and `git log` (no commits for a tree review, measured over its directory), the size/tests/commits thresholds, PR badges, `per_file` (status letter and line counts per changed file, for the file list), and `tiers` read from a repo's `.review-risk.toml` for the risk score. |
 | `walkthrough.py` | `check()` a walkthrough against the served target, `coverage()`, `put()` by atomic replace. |
 | `mailbox.py` | Append-only JSONL rows, `decisions.json` and `viewed.json` by atomic replace; the directory is 0700 and every file 0600. |
 | `server.py` | `ThreadingHTTPServer` subclass (`allow_reuse_address = False`), request checks, routes, idle watchdog. |
 | `registry.py` | Finds live viewers: probes each mailbox's recorded port with that mailbox's token, in parallel. A token is never sent to any other port. |
 | `netinfo.py` | Container detection (degradation contract rule 2), bind host, URLs to print. |
-| `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `theme.js` (applies the saved theme and light/dark mode before first paint as `data-theme`/`data-mode`, fills the Theme menu, drives the mode button; saves choices in a cookie on the widest parent domain the browser accepts, so every viewer's port and container shares them, and exposes that store as `window.ReviewPrefs`), `logic.js` (pure functions, tested under node; `riskLevel` holds the risk rules; `runBlock`/`runTotal` and the number formats behind the Run block at the end of the Summary tab; `helpSection` for the help dialog), `app.js`, `app.css` (every size from the tokens at its top), `themes.css` (every rule scoped to `html[data-theme]`), the bundled `font-*.woff2` and `FONTS-LICENSE.txt`. |
+| `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `theme.js` (applies the saved theme and light/dark mode before first paint as `data-theme`/`data-mode`, fills the Theme menu, drives the mode button; saves choices in a cookie on the widest parent domain the browser accepts, so every viewer's port and container shares them, and exposes that store as `window.ReviewPrefs`), `logic.js` (pure functions, tested under node; `riskLevel` holds the risk rules; `runBlock`/`runTotal` and the number formats behind the Run block at the end of the Summary tab; `helpSection` for the help dialog; `shownFindings`/`shownFile` drop gate-rejected, low-value and repeat findings, and every list and count goes through them; `sidebarGroups`, `identifierAt`, `shareOptions`), `app.js`, `app.css` (every size from the tokens at its top), `themes.css` (every rule scoped to `html[data-theme]`), the bundled `font-*.woff2` and `FONTS-LICENSE.txt`. |
 
 After changing `models.py`, run `python -m review_viewer export-schema` and
 commit the three schemas; `test_models.py` and `test_checks.py` fail while
@@ -51,7 +51,10 @@ its transcript, which is kept. `test_server.py` greps for it.
 
 `GET /` and `/static/*` need no token and contain no review data. The file
 route serves only paths in `allowed_paths()` (changed files, finding files,
-citation paths) — anything else is 404.
+citation paths, and every file `repo_files()` lists at head, for **Show all
+files**) — anything else is 404. `GET /api/targets/<slug>/definitions?name=`
+takes a name matching `DEFINITION_NAME_RE` (else 400) and returns `{name,
+hits}` from `definitions()`, only in allowed paths.
 
 ## Protocol 1: `findings.json` v1
 
@@ -99,7 +102,7 @@ schemas has no entry in the help.
 
 | File | Writer | Row |
 |---|---|---|
-| `inbox.jsonl` | server | `{"v":1,"id":"q-<utc>-<4 hex>","ts","target","kind":"question"\|"decision","finding_id","anchor":{"path","side":"head"\|"base","line_start","line_end"}\|null,"text","decision","step_id","explain":bool}` (`explain`: from a block's 💡 button; needs `anchor`) |
+| `inbox.jsonl` | server | `{"v":1,"id":"q-<utc>-<4 hex>","ts","target","kind":"question"\|"decision"\|"share","finding_id","anchor":{"path","side":"head"\|"base","line_start","line_end"}\|null,"text","decision","step_id","explain":bool,"to":"github"\|"slack"\|null,"where":str\|null}` (`explain`: from a block's 💡 button; needs `anchor`. A `share` row is written by `POST /api/share`: `to` github with `where` `pr` or `line` (refused with 403 unless the review is of a PR, read from `pr.number` or `review-state.json`), or slack with `where` the recipient (refused unless `serve --share slack`); `text` is what the page's dialog sent, at most `SHARE_TEXT_MAX`) |
 | `outbox.jsonl` | `reply` | `{"v":1,"reply_to","ts","text","done"}` |
 | `decisions.json` | server | `{finding_id: {"decision","note","ts"}}` |
 | `viewed.json` | server | `{path: ts}`, one entry per changed file ticked "viewed"; written by `POST /api/viewed`, never read by the session |
@@ -131,7 +134,8 @@ at publish time and left in place — it holds no secret):
    at `head_sha` (`side: head`) or `base_sha` (`side: base`).
 3. Every `finding_ids` entry is a loaded finding.
 4. With `complete: true`: every changed file is anchored or in `skipped`, and
-   every `confirmed` or `unverifiable` finding is linked from a step.
+   every `confirmed` or `unverifiable` finding is linked from a step, except
+   those labelled `low-value` or `repeat`, which the page never shows.
 5. Step ids are unique. (`skipped` paths must be changed files too.)
 6. At most one assessment per topic (except `other`); with `complete: true`,
    the `commits` and `tests` assessments exist.
@@ -208,6 +212,7 @@ holds question, answer or walkthrough text.
 | `reply` | `reply to q-… (final)` | `target, reply_to, chars, done` |
 | `walkthrough` | `walkthrough for <slug>: 5 steps (complete)` | `target, steps, complete` |
 | `decision` | `finding 3fa2c91b0e rejected` | `target, finding_id, decision` |
+| `share` | `share q-…: finding 3fa2c91b0e to PR #7 line` | `target, finding_id, to, chars` |
 | `idle_stop` | `viewer stopped after 30 min with no open page` | `idle_minutes` |
 | `stop` | `viewer stopped by stop --box` | `reason` |
 | `rejected_request` | `refused request: bad token` (WARNING, at most once a minute per status) | `status, route` |
@@ -223,7 +228,7 @@ commit and a PR head under `refs/pull/7/head`, for target resolution;
 
 | File | Covers |
 |---|---|
-| `test_gitdata.py` | diff parsing, file views, `parse_target`/`resolve_target` |
+| `test_gitdata.py` | diff parsing, file views (unchanged, binary and large files too), `repo_files`, `definitions` per language form, `parse_target`/`resolve_target` |
 | `test_stats.py` | path classes, numstat parsing (renames, binary), each badge's thresholds, check counts, stats on the fixture repo |
 | `test_tree_review.py` | `serve --tree [--path]`, a subdirectory `--repo`, no commits, every file added on a live server |
 | `test_walkthrough.py` | each `walkthrough put` rule, the CLI, the route, `step_id` questions |

@@ -14,15 +14,13 @@ exists for the same commits — its findings grouped by severity. Questions and
 decisions typed into the page are appended to a mailbox file this session
 watches; you answer with one command and the answer appears in the page.
 
-When the review labelled its findings (multiplai-dev 0.27+), the list shows
-`useful` and `still-open` findings first and folds `repeat` (the same defect
-as one the user rejected in an earlier round) and `low-value` findings into a
-collapsed **Repeats and low-value** group at the end, each with its badge and
-reason; a repeat shows the earlier round, decision and note. A repeat counts
-as rejected, marked "(earlier round)", in the "still need a decision" line and
-the merge-risk badge until the user decides it; the page never writes that
-decision to `decisions.json`. Every folded finding can still be opened,
-accepted, rejected or deferred. An older `findings.json` shows as before.
+The page never shows or counts three kinds of finding: those a gate rejected
+(`status: "rejected"`), and those the review labelled `low-value` or `repeat`
+(the same defect as one the user rejected in an earlier round). They are left
+out of the Findings list, every count, the code markers, Go to and the risk
+score; the Checked tab still lists the gate-rejected ones. `findings.json`
+keeps them, and the review's markdown appendix lists them. When the user asks
+about a finding the page does not show, read it from `findings.json`.
 
 ## What this skill does on the machine
 
@@ -275,9 +273,9 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   would take. It searches text, not types or imports. A plain click in the
   code does nothing.
 - The Findings list holds only what still needs a decision: an accepted,
-  rejected or deferred finding leaves it, like a refuted or gate-rejected one,
-  and **Show decided, refuted and rejected** brings them back. j/k go on from
-  a finding a decision just hid.
+  rejected or deferred finding leaves it, like a refuted one, and **Show
+  decided and refuted** brings them back. j/k go on from a finding a decision
+  just hid.
 - Lines are picked to ask about on the line numbers only (a + shows on
   hover): click, drag down the numbers, or Shift+click to extend. A bar with
   **Ask about these lines** and ✕ appears; nothing goes into the chat until

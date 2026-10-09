@@ -42,6 +42,27 @@ time, not derived from a tag.
   GitHub), failure scenario, explanation, expected behaviour, verdict and
   cited code. **Download .md** saves the same text as a file, to
   attach or send.
+- review-viewer: **Show all files** above the file list shows every file in
+  the repository at the reviewed commit, grouped by directory, with the
+  files the change did not touch greyed. Opening one shows the file whole,
+  with no diff. Directories fold, and the filter and Go to (Cmd/Ctrl+K)
+  search all files while it is on. Large repositories are cut at 20,000
+  files, with a note saying so.
+- review-viewer: Cmd+click (Ctrl+click on Linux and Windows) on a name in
+  the code lists where it is defined at the reviewed commit, from a text
+  search for definitions (`def`, `class`, `function`, `const`, `func`,
+  `type`, SQL `CREATE FUNCTION` and the like, and `NAME =`). Each result
+  opens that file at the line. Holding the key underlines the name under
+  the pointer. It finds only definitions written in a recognisable form, in
+  files the page may show.
+- review-viewer: **GitHub** and **Slack** buttons on a finding open a dialog
+  with the finding as markdown, which you can edit, and the choice of a PR
+  comment or a comment on the finding's line (for a review of a PR), or a
+  Slack recipient and an optional note. **Send** in the dialog is the
+  confirmation: the session posts the text exactly as written, once, and
+  asks nothing more in the terminal. Slack needs the `multiplai-messaging`
+  Slack skill in the session (`serve --share slack`); without it, or for a
+  review that is not of a PR, the button says why it is off.
 
 ### Changed
 - review-viewer: **Needs you** is its own tab, with a count, instead of a
@@ -50,8 +71,28 @@ time, not derived from a tag.
   claim shows once above its needs; the review's own gaps come first.
 - review-viewer: an accepted or deferred finding now leaves the Findings
   list, as a rejected one already did, so the list holds only what still
-  needs a decision. The checkbox is now **Show decided, refuted and
-  rejected**. j/k go on from a finding a decision just hid.
+  needs a decision. The checkbox is now **Show decided and refuted**.
+  j/k go on from a finding a decision just hid.
+- review-viewer: findings a gate rejected, and findings the review labelled
+  low-value or a repeat of one you rejected, are no longer shown at all. No
+  list, count, code marker, Go to result or risk score includes them, and a
+  complete walkthrough need not link them. The Checked tab still lists the
+  gate-rejected ones with the rule that rejected them. Before, repeats and
+  low-value findings sat in a folded group and were counted.
+- review: `review-<slug>.md`, `summary-<slug>.md` and the `<SEV>-only.md`
+  rollups list and count only findings to act on: confirmed or unverifiable,
+  and not low-value or a repeat. Low-value and repeat findings move to the
+  appendix of `review-<slug>.md`, with the refuted, gate-rejected and merged
+  ones; the summary no longer lists dropped findings. `findings.json` keeps
+  every finding.
+- review: a rerun on the same commit now keeps the previous run as an
+  earlier round (`rounds/<sha>/`, then `<sha>-2/` for a second one), so it
+  is checked for repeats against your decisions on that run. Before, a
+  same-commit rerun had nothing to compare with.
+- review: a finding labelled a repeat of one you rejected takes that
+  rejection under its new wording. The next round matches the same wording
+  by id, with no agent call, and the repeat stays hidden however many rounds
+  it comes back.
 - review-viewer: lines are picked to ask about on the line numbers only. A +
   shows on hover; click, drag down the numbers, or Shift+click to extend. A
   bar with **Ask about these lines** and ✕ appears, and Esc or ✕ clears it.
