@@ -134,15 +134,35 @@ def _make_proxy(source: Path, dst: Path) -> None:
     ], check=True)
 
 
+# A recording can carry audio dropouts: packets whose timestamps jump seconds
+# ahead of the samples they hold (one call recording had 13, 52 s in all).
+# A WAV has no timestamps, so a plain decode joins the audio either side of
+# each dropout and every later word is transcribed too early. aresample
+# async=1 fills each dropout with silence, so WAV time is source time.
+AUDIO_FILTER = "aresample=async=1:first_pts=0"
+# How far the WAV's length may differ from the source's before prep warns.
+AUDIO_LENGTH_TOLERANCE_S = 0.5
+
+
 def _extract_audio(proxy: Path, dst: Path) -> None:
     if dst.exists():
         return
     subprocess.run([
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(proxy),
-        "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+        "-vn", "-af", AUDIO_FILTER, "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
         str(dst),
     ], check=True)
+
+
+def audio_length_warning(source_s: float, audio_s: float) -> str | None:
+    """A warning when the transcribed audio is not as long as the source:
+    its word times would not be source times."""
+    if abs(source_s - audio_s) <= AUDIO_LENGTH_TOLERANCE_S:
+        return None
+    return (f"⚠ prep: the extracted audio is {audio_s:.1f}s but the source is {source_s:.1f}s; "
+            "word times will drift from the video. Delete audio16k.wav and the transcript in "
+            "the cache and run prep again.")
 
 
 def _silencedetect(audio: Path) -> list[CutCandidate]:
@@ -574,6 +594,9 @@ def prep(source: str | Path, prompt_hint: str = "",
     _make_proxy(src, proxy)
     print(f"→ prep: {'reusing' if audio.exists() else 'extracting'} audio")
     _extract_audio(proxy, audio)
+    warning = audio_length_warning(duration, _ffprobe_duration(audio))
+    if warning:
+        print(warning)
     contract, contract_path = _transcript_contract(audio, cache, prompt_hint, language, model)
 
     sentences = clips.build_sentences(contract["words"])

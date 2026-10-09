@@ -226,3 +226,21 @@ def test_a_first_token_without_a_leading_space_stays_a_word() -> None:
     data = {"segments": [{"words": [{"word": "Ciao", "start": 0.0, "end": 0.3},
                                     {"word": " a", "start": 0.3, "end": 0.4}]}]}
     assert [w["text"] for w in tx.from_whisper_json(data, engine="t")["words"]] == ["Ciao", "a"]
+
+
+def test_audio_extraction_fills_dropouts_with_silence(tmp_path: Path, monkeypatch) -> None:
+    # Packets that jump seconds ahead must become silence, not be joined up,
+    # or every later word is timed early.
+    calls: list[list[str]] = []
+    monkeypatch.setattr(prep.subprocess, "run", lambda cmd, *a, **k: calls.append(list(cmd)))
+    prep._extract_audio(tmp_path / "proxy_720p.mp4", tmp_path / "audio16k.wav")
+    cmd = calls[0]
+    assert cmd[cmd.index("-af") + 1] == "aresample=async=1:first_pts=0"
+    assert cmd.index("-af") < cmd.index("-ar")
+
+
+def test_a_short_audio_track_is_reported() -> None:
+    assert prep.audio_length_warning(1756.47, 1756.47) is None
+    assert prep.audio_length_warning(1756.47, 1756.2) is None
+    msg = prep.audio_length_warning(1756.47, 1704.46)
+    assert msg and "1704.5s" in msg and "1756.5s" in msg
