@@ -1,7 +1,7 @@
 """The ffmpeg commands render() builds for a screencast EDL must not drift.
 
-`fixtures/demo-narrated.ffmpeg.json` was captured from `main` before the
-skill was renamed from screen-demo to video-edit (0.3.0). Every later change
+`fixtures/demo-narrated.ffmpeg.json` was captured from `main` (0.2.5) before
+the skill took the name video-edit in 0.3.0. Every later change
 to composite.py adds features behind new EDL keys; an EDL that uses none of
 them must still produce byte-for-byte the same ffmpeg argv. subprocess.run is
 replaced, so no ffmpeg runs; the font lookup is pinned so the test does not
