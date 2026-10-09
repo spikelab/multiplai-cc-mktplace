@@ -6,7 +6,12 @@ copies that round's files to `rounds/<old head_sha[:12]>/`. Nothing there is
 ever deleted or overwritten.
 
 The person's decisions live in `viewer/decisions.json` (written by
-review-viewer), one entry per finding id, and persist across rounds.
+review-viewer), one entry per finding id, and persist across rounds. Because
+they are keyed by id alone, a decision is applied to an earlier round's copy
+of a finding only when it was made before a later round replaced that one
+(its `ts` is not after the next round's `generated_at`). A decision made while
+the current round was shown is never read back as an earlier one. A decision
+or round with no readable time is applied, as before 0.27.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ import json
 import logging
 import shutil
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -75,10 +81,29 @@ class EarlierFinding:
         return self.finding["id"]
 
 
+def _when(text) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _made_by(decision: dict, until: datetime | None) -> dict:
+    """*decision* when it was made no later than *until*, else {} (made in a later round)."""
+    ts = _when(decision.get("ts") or "")
+    if until is None or ts is None or ts <= until:
+        return decision
+    return {}
+
+
 def load_rounds(target_dir: Path, current_head: str = "") -> list[EarlierFinding]:
     """Every finding in `rounds/*/findings.json`, the latest round's copy of each id.
 
     Rounds are ordered by `generated_at`. A round for *current_head* is skipped.
+    Each copy gets the person's decision only when it was made before the next
+    round was generated; for the last earlier round, the next round is the
+    top-level `findings.json` when it is *current_head*'s (a finished review,
+    as `assess-only` reads it), else no limit (a run that has not exported).
     """
     rounds = []
     for path in sorted((target_dir / ROUNDS_DIR).glob("*/findings.json")):
@@ -90,13 +115,18 @@ def load_rounds(target_dir: Path, current_head: str = "") -> list[EarlierFinding
             continue
         rounds.append((str(data.get("generated_at") or ""), head, data.get("findings") or []))
     rounds.sort(key=lambda r: r[0])
+    current = _read_json(target_dir / "findings.json") or {}
+    current_at = None
+    if current_head and str((current.get("target") or {}).get("head_sha") or "") == current_head:
+        current_at = _when(current.get("generated_at") or "")
+    ends = [_when(r[0]) for r in rounds[1:]] + [current_at]
     decisions = load_decisions(target_dir)
     by_id: dict[str, EarlierFinding] = {}
-    for _, head, findings in rounds:
+    for (_, head, findings), until in zip(rounds, ends):
         for f in findings:
             if not isinstance(f, dict) or not f.get("id"):
                 continue
-            d = decisions.get(f["id"]) or {}
+            d = _made_by(decisions.get(f["id"]) or {}, until)
             by_id[f["id"]] = EarlierFinding(finding=f, head_sha=head, decision=str(d.get("decision") or ""),
                                             note=str(d.get("note") or ""))
     return list(by_id.values())

@@ -42,7 +42,8 @@ time, not derived from a tag.
   accepted one.
 - review: `assess-only <dirs> --report <file>` runs the two new stages on saved
   reviews and reports each label beside the decision you already recorded,
-  without changing the reviews.
+  without changing the reviews. A review that goes over the cost limit or
+  fails is listed as skipped, and the report still covers the others.
 - review-viewer: repeats and low-value findings fold into a collapsed group
   after the others, each with its reason. A repeat counts as rejected (from an
   earlier round) in the new "still need a decision" line and the merge-risk

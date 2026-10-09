@@ -36,7 +36,7 @@ Python between them:
 5. **assess** — one agent reads the remaining findings together, with the PR
    description, the earlier rounds' accepted and undecided findings and the
    user's notes, and labels each `useful`, `still-open` (the same defect as an
-   earlier finding that was accepted or not decided, so not fixed yet) or
+   earlier finding that was accepted, deferred or not decided, so not fixed yet) or
    `low-value` (true but not worth acting on, for one named rule: context,
    covered or speculative). It may name more duplicates, merged as in step 3.
    Python checks every label; a bad one becomes `useful`. Skipped when fewer
@@ -201,7 +201,12 @@ exits 2 when the target is not a PR or the decisions file is missing.
   report: each finding's recorded decision beside its label, and how many
   rejected and accepted findings were labelled `repeat` or `low-value`. It
   costs one or two agent calls per review and changes nothing in the review
-  directories. Use it to check the labels against real decisions.
+  directories. A review that goes over `--max-cost-usd` or fails is listed
+  under "Skipped" with the reason, and the report still covers the others.
+  A decision counts for an earlier round only if it was made before the
+  next round was generated, so a finding rejected while the current round
+  was shown is not read back as an earlier rejection. Use it to check the
+  labels against real decisions.
 
 - `rollup [findings.json ...]` rewrites `HIGH-only.md`, `MEDIUM-only.md` and
   `LOW-only.md` in `--out` from the given files (default: every

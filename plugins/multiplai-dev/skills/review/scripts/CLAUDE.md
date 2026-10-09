@@ -27,7 +27,7 @@ cd plugins/multiplai-dev/skills/review/scripts && \
 | `sdk.py` | `agent_call_structured`: trust gate, an allow-list with its complement denied (`Read`/`Grep`/`Glob` for every stage, plus `WebFetch`/`WebSearch` for finders and verifiers), one re-ask on a bad answer: a no-tools, one-turn reformat of the text returned, or a re-run of the prompt when the run itself failed. `parse_answer` says so when an answer holds no JSON at all. The only caller of `run_agent`. |
 | `budget.py` | Per-target ledger in a `ContextVar` (a batch runs targets concurrently) and the circuit breaker. |
 | `config.py` | `review.yaml` > `multiplai.conf` > session model, for per-stage models, effort, concurrency. |
-| `rounds.py` | Earlier rounds: `keep_round` copies the last round's `findings.json`, review markdown and `checks.json` to `rounds/<head[:12]>/` when a run starts on a new head (never on the same head, never overwriting); `load_rounds` reads them with the person's decisions from `viewer/decisions.json`. |
+| `rounds.py` | Earlier rounds: `keep_round` copies the last round's `findings.json`, review markdown and `checks.json` to `rounds/<head[:12]>/` when a run starts on a new head (never on the same head, never overwriting); `load_rounds` reads them with the person's decisions from `viewer/decisions.json`, giving a round's copy of a finding a decision only when its `ts` is not after the next round's `generated_at` (for the last kept round, the top-level `findings.json` when it is the current head's), because decisions are keyed by id alone. |
 | `stages/` | `find`, `verify`, `merge`, `repeats`, `assess`. Each `run_<stage>(state, ctx)` returns at once when the state is past it and skips items it already has. Each stores an agent's answer in the state as it returns (`finder_results`, `verdicts`, `merge_answers`), so the checkpoint saved at a budget stop keeps it. `find.conventions_chain` reads every `coding-standards.md` on the path from the root to each changed file's directory, then every `CLAUDE.md` on the same path, so the `CONVENTIONS_MAX_CHARS` cap skips `CLAUDE.md` text first. |
 | `prompts/` | One module per stage; shared blocks in `__init__.py`: `workspace_block(web=)`, `description_block` (PR title and body inside an `<untrusted-content>` fence, as claims to check), `settings_block` (the base branch's rules, and the sentence "a red run can be merged" when no `required_status_checks` rule exists). |
 | `export.py` | `ReviewState` → `findings.json` v1, key by key (the contract rejects unknown keys). Merged-away findings and `Finding.finders` are not exported; the v1 shape did not change for them. A shown finding's `Assessment` is exported as the optional `assessment` object. |
@@ -102,7 +102,7 @@ finding or changes a verdict or a severity; both run on the merger's model.
   `low-value` (rules `context`, `covered`, `speculative`). Skipped with fewer
   than two such findings and no earlier rounds. `gate_assessments` turns any
   label that fails (unknown id, unknown label, an `earlier_id` not in
-  `rounds/`, `still-open` without an accepted or undecided earlier finding,
+  `rounds/`, `still-open` without an accepted, deferred or undecided earlier finding,
   `low-value` naming no rule, a finding left out) into `useful` with a line
   in `state.errors`. Its `duplicate_sets` go through the merge stage's
   `apply_duplicate_sets` (`usable_sets`, `merge_set`). The raw answer is

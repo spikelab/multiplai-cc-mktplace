@@ -6,14 +6,14 @@ with an `Assessment` in `state.assessments`:
 - `repeat`: matched by the repeats stage to a finding the person rejected in
   an earlier round. Not sent to the agent.
 - `still-open`: the same defect as an earlier finding the person accepted or
-  has not decided, so it is not fixed yet.
+  has not decided (deferred counts as not decided), so it is not fixed yet.
 - `low-value`: true, but not worth acting on, for one named rule
   (`prompts.assess.LOW_VALUE_RULES`: context, covered, speculative).
 - `useful`: everything else, and the fallback for anything the gate rejects.
 
 `gate_assessments` checks the agent's answer in Python: every id is a shown
 finding; an `earlier_id` exists in `rounds/`; `still-open` needs an
-`earlier_id` the person accepted or has not decided; `low-value` needs a
+`earlier_id` the person accepted, deferred or has not decided; `low-value` needs a
 reason naming a rule. A finding left out, or a label that fails, becomes
 `useful` with a line in `state.errors`.
 
@@ -39,6 +39,8 @@ from .repeats import earlier_findings, shown_findings
 log = logging.getLogger(__name__)
 
 LABELS = ("useful", "still-open", "low-value")
+# What `rounds.accepted_or_open` gives the agent: accepted, deferred (not decided yet), or no decision.
+OPEN_DECISIONS = ("accept", "defer", "")
 _RULE = re.compile(r"\b(" + "|".join(prompt.LOW_VALUE_RULES) + r")\b", re.IGNORECASE)
 
 
@@ -64,7 +66,7 @@ def gate_assessments(items: list[AssessItem], candidates: list[Finding],
             why = f"earlier_id {item.earlier_id} is not in an earlier round"
         elif item.label == "still-open" and e is None:
             why = "still-open without an earlier_id"
-        elif item.label == "still-open" and e.decision not in ("accept", ""):
+        elif item.label == "still-open" and e.decision not in OPEN_DECISIONS:
             why = f"still-open, but the person's decision on {e.id} is {e.decision}"
         elif item.label == "low-value" and not _RULE.search(item.reason or ""):
             why = "low-value without naming a rule (context, covered, speculative)"

@@ -12,8 +12,8 @@ LOW_VALUE_RULES = ("context", "covered", "speculative")
 
 RULES = """\
 Labels. Give every finding exactly one:
-- `still-open`: the same defect as an earlier finding the person accepted or has not decided, so it
-  is not fixed yet. Set `earlier_id` to that earlier finding's id. This is useful, not noise.
+- `still-open`: the same defect as an earlier finding the person accepted, deferred or has not
+  decided, so it is not fixed yet. Set `earlier_id` to that earlier finding's id. This is useful, not noise.
 - `low-value`: true, but not worth acting on, for one of the three reasons below. `reason` starts
   with the rule's name in brackets, `[context]`, `[covered]` or `[speculative]`, then says why.
 - `useful`: everything else. When in doubt, `useful`.

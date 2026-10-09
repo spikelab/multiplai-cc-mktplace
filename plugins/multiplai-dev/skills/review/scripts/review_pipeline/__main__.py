@@ -199,8 +199,19 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     result = asyncio.run(orchestrator.assess_only(
                         target_dir, load_config(target_dir.parent, max_cost_usd=max_cost)))
+                except sdk.RepoTrustError:
+                    raise
+                except orchestrator.budget.BudgetExceededError as e:
+                    # One review over budget skips that review only; the others' results are kept.
+                    skipped.append(f"{target_dir.name}: stopped at the cost limit ({e})")
+                    continue
                 except orchestrator.ReviewError as e:
                     skipped.append(f"{target_dir.name}: {e}")
+                    continue
+                except Exception as e:  # noqa: BLE001 — one failed review must not lose the report
+                    log.error("assess-only failed for %s", target_dir, exc_info=True)
+                    first = (str(e).splitlines() or [""])[0][:200]
+                    skipped.append(f"{target_dir.name}: failed ({type(e).__name__}: {first})")
                     continue
                 results.append(result)
                 print(f"{target_dir.name}: {len(result.rows)} findings labelled (${result.cost_usd:.2f})", flush=True)

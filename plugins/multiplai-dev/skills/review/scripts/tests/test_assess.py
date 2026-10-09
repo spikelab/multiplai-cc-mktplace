@@ -18,7 +18,7 @@ from review_pipeline.models import (AssessItem, AssessOutput, DuplicateSet, Find
                                     ReviewState, Verdict)
 from review_pipeline.render import render_review, render_summary
 from review_pipeline.stages import RunContext
-from review_pipeline.stages.assess import run_assess
+from review_pipeline.stages.assess import gate_assessments, run_assess
 from review_pipeline.stages.repeats import gate_matches, run_repeats
 
 OLD_HEAD = "1" * 40
@@ -99,6 +99,45 @@ def test_load_rounds_keeps_the_latest_copy_of_each_id_with_its_decision(tmp_path
     assert [e.id for e in rounds.rejected(list(earlier.values()))] == [a.id]
     assert [e.id for e in rounds.accepted_or_open(list(earlier.values()))] == [b.id]
     assert rounds.load_rounds(tmp_path, current_head=OLD_HEAD)[0].head_sha == OLDER_HEAD
+
+
+def test_keep_round_never_overwrites_a_round_already_kept(tmp_path):
+    kept = tmp_path / "rounds" / OLD_HEAD[:12]
+    kept.mkdir(parents=True)
+    (kept / "findings.json").write_text('{"original": true}')
+    (tmp_path / "findings.json").write_text(json.dumps({"generated_at": "2026-01-03T00:00:00Z",
+                                                        "target": {"head_sha": OLD_HEAD}, "findings": []}))
+    (tmp_path / "review-t.md").write_text("# review")
+    assert rounds.keep_round(tmp_path, "t", "3" * 40) == kept
+    assert (kept / "findings.json").read_text() == '{"original": true}'
+    assert (kept / "review-t.md").read_text() == "# review"  # a file not kept yet is still copied
+
+
+def _decisions(target_dir: Path, **by_id: tuple[str, str]) -> None:
+    path = target_dir / "viewer" / "decisions.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({fid: {"decision": d, "note": "", "ts": ts} for fid, (d, ts) in by_id.items()}))
+
+
+def test_a_decision_made_while_a_later_round_was_shown_is_not_read_back_as_earlier(tmp_path):
+    current_head = "3" * 40
+    early, late, middle = at("decided in round one"), at("decided in the current round"), at("decided in round two")
+    write_round(tmp_path, OLDER_HEAD, [middle], when="2026-01-01T00:00:00Z")
+    write_round(tmp_path, OLD_HEAD, [early, late], when="2026-01-02T00:00:00Z")
+    (tmp_path / "findings.json").write_text(json.dumps({"generated_at": "2026-01-03T00:00:00Z",
+                                                        "target": {"head_sha": current_head}, "findings": []}))
+    _decisions(tmp_path, **{early.id: ("reject", "2026-01-02T12:00:00Z"),
+                            late.id: ("reject", "2026-01-03T09:00:00Z"),
+                            middle.id: ("reject", "2026-01-01T18:00:00Z")})
+    got = {e.id: e.decision for e in rounds.load_rounds(tmp_path, current_head)}
+    assert got == {early.id: "reject", late.id: "", middle.id: "reject"}
+    # Round one's copy of a finding decided only in round two's time does not count for round one.
+    _decisions(tmp_path, **{middle.id: ("reject", "2026-01-02T06:00:00Z"), late.id: ("reject", "2026-01-03T09:00:00Z")})
+    assert {e.id: e.decision for e in rounds.load_rounds(tmp_path, current_head)}[middle.id] == ""
+    # A run that has not exported yet (findings.json is still the last round's): no limit on the last round.
+    (tmp_path / "findings.json").write_text(json.dumps({"generated_at": "2026-01-02T00:00:00Z",
+                                                        "target": {"head_sha": OLD_HEAD}, "findings": []}))
+    assert {e.id: e.decision for e in rounds.load_rounds(tmp_path, current_head)}[late.id] == "reject"
 
 
 # --- repeats ---------------------------------------------------------------------
@@ -238,8 +277,6 @@ async def test_assess_keeps_labels_that_pass_the_gate(target_info, ctx, fake):
     (lambda ids, e: AssessItem(id=ids[0], label="noise"), "unknown label"),
     (lambda ids, e: AssessItem(id=ids[0], label="useful", earlier_id="9999999999"), "is not in an earlier round"),
     (lambda ids, e: AssessItem(id=ids[0], label="still-open", reason="r"), "still-open without an earlier_id"),
-    (lambda ids, e: AssessItem(id=ids[0], label="still-open", earlier_id=e["deferred"]),
-     "decision on"),
     (lambda ids, e: AssessItem(id=ids[0], label="low-value", reason="not worth it"), "without naming a rule"),
 ])
 async def test_each_assess_gate_rule_turns_a_bad_label_into_useful(target_info, ctx, fake, item, error):
@@ -298,6 +335,42 @@ async def test_assess_is_skipped_for_one_finding_and_no_earlier_rounds(target_in
     only = at("only")
     state = await run_assess(state_with(target_info, only, stage="repeats"), ctx)
     assert calls.calls == [] and state.assessments[only.id].label == "useful" and state.stage == "assess"
+
+
+@pytest.mark.parametrize("decision", ["defer", ""])
+async def test_still_open_on_a_deferred_or_undecided_earlier_finding_is_kept(target_info, ctx, fake, decision):
+    state, a, b, c = three(target_info)
+    earlier = at("earlier, not decided", file="settings.py", line=9)
+    write_round(ctx.target_dir, OLD_HEAD, [earlier])
+    if decision:
+        decide(ctx.target_dir, **{earlier.id: (decision, "")})
+    fake(assess=[AssessOutput(assessments=[AssessItem(id=b.id, label="still-open", reason="r", earlier_id=earlier.id)]
+                              + [AssessItem(id=i, label="useful") for i in (a.id, c.id)])])
+    state = await run_assess(state, ctx)
+    assert (state.assessments[b.id].label, state.assessments[b.id].earlier_decision) == ("still-open", decision)
+    assert state.errors == []
+
+
+def test_still_open_on_a_rejected_earlier_finding_fails_the_gate():
+    f = at("now")
+    rejected = rounds.EarlierFinding(finding={"id": "e0e0e0e0e0", "status": "confirmed"}, head_sha=OLD_HEAD,
+                                     decision="reject", note="")
+    labels, errors = gate_assessments([AssessItem(id=f.id, label="still-open", earlier_id="e0e0e0e0e0")],
+                                      [f], [rejected])
+    assert labels[f.id].label == "useful"
+    assert errors == [f"{f.id}: still-open, but the person's decision on e0e0e0e0e0 is reject; labelled useful"]
+
+
+async def test_one_finding_with_an_earlier_round_still_goes_to_the_assess_agent(target_info, ctx, fake):
+    only = at("only", file="settings.py", line=3)
+    earlier = at("the same defect, accepted", file="settings.py", line=3, severity="MEDIUM")
+    write_round(ctx.target_dir, OLD_HEAD, [earlier])
+    decide(ctx.target_dir, **{earlier.id: ("accept", "")})
+    calls = fake(assess=[AssessOutput(assessments=[
+        AssessItem(id=only.id, label="still-open", reason="not fixed", earlier_id=earlier.id)])])
+    state = await run_assess(state_with(target_info, only, stage="repeats"), ctx)
+    assert [label for label, _ in calls.calls] == ["assess"]
+    assert state.assessments[only.id].label == "still-open" and state.errors == []
 
 
 # --- export, render, post ----------------------------------------------------------
@@ -502,3 +575,33 @@ def test_assess_only_labels_a_saved_review_and_changes_nothing_in_it(tmp_path, m
     assert "other: no viewer/decisions.json" in text
     after = {p.name: p.read_bytes() for p in target_dir.iterdir() if p.is_file()}
     assert after == before and not (target_dir / "assess-tree").exists()
+
+
+def test_assess_only_keeps_the_report_when_one_review_goes_over_budget_or_fails(tmp_path, monkeypatch, capsys):
+    from review_pipeline import budget, orchestrator
+    from review_pipeline.__main__ import main
+
+    dirs = {}
+    for name in ("done", "costly", "broken"):
+        d = tmp_path / "out" / name
+        decide(d, **{"aaaaaaaaaa": ("accept", "")})
+        dirs[name] = d
+
+    async def assess_only(target_dir, config):
+        if target_dir.name == "costly":
+            raise budget.BudgetExceededError("spent $2.00 of $1.00", diagnosis="assess: $2.00")
+        if target_dir.name == "broken":
+            raise RuntimeError("snapshot failed\ntrace")
+        return orchestrator.AssessOnly(target_dir=target_dir, cost_usd=0.5, rows=[
+            {"id": "aaaaaaaaaa", "severity": "LOW", "claim": "c", "decision": "accept", "note": "",
+             "label": "useful", "reason": ""}])
+
+    monkeypatch.setattr(orchestrator, "assess_only", assess_only)
+    report = tmp_path / "report.md"
+    code = main(["assess-only", *(str(d) for d in dirs.values()), "--report", str(report), "--trust-repo"])
+    out, err = capsys.readouterr()
+    assert code == 0 and f"report: {report}" in out and "resume" not in (out + err).lower()
+    text = report.read_text()
+    assert "| done | `aaaaaaaaaa`" in text and "Cost: $0.50 over 1 reviews" in text
+    assert "- costly: stopped at the cost limit (spent $2.00 of $1.00)" in text
+    assert "- broken: failed (RuntimeError: snapshot failed)" in text
