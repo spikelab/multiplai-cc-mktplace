@@ -94,6 +94,40 @@ class Finding(_Model):
         return Finding.model_validate({**self.model_dump(), **changes})
 
 
+NEED_CAUSES: tuple[str, ...] = ("no-access", "lookup-failed", "unreachable")
+
+
+class NeedAsk(_Model):
+    """What an agent says it could not get: the `needs` items in its answer.
+
+    An unknown `cause` becomes `no-access` rather than failing the parse: a
+    need is a request to a person, and losing it over a label would hide it.
+    """
+    what: str
+    cause: str = "no-access"
+    command: str = ""
+
+    @field_validator("cause", mode="before")
+    @classmethod
+    def _known_cause(cls, value) -> str:
+        return value if value in NEED_CAUSES else "no-access"
+
+
+class Need(BaseModel):
+    """Information the review needed and could not get, and how a person would get it.
+
+    `blocks` is a finding id, or "review" for what the finders and the
+    pipeline's own lookups could not check. `command` is one read-only shell
+    command, or "" when none is known or `need_gate` blanked it. The pipeline
+    never runs it.
+    """
+    what: str
+    blocks: str = "review"
+    cause: Literal["no-access", "lookup-failed", "unreachable"] = "no-access"
+    command: str = ""
+    source: Literal["verifier", "finder", "pipeline"] = "pipeline"
+
+
 class Verdict(_Model):
     finding_id: str = ""
     status: Literal["confirmed", "refuted", "unverifiable"]
@@ -102,6 +136,8 @@ class Verdict(_Model):
     # What correct behaviour looks like, in one sentence, without proposing a
     # code change. Exported on the finding as `expected_behaviour`.
     expected_behaviour: str = ""
+    # What the verifier could not read, each with a command a person could run.
+    needs: list[NeedAsk] = Field(default_factory=list)
 
 
 class DuplicateSet(_Model):
@@ -152,6 +188,7 @@ class FinderResult(BaseModel):
     """One finder's normalised findings, before dedupe and the gates."""
     findings: list[Finding] = Field(default_factory=list)
     error: str = ""  # set when the finder failed; its findings are then empty
+    needs: list[NeedAsk] = Field(default_factory=list)  # what it could not check
 
 
 class Merged(BaseModel):
@@ -176,6 +213,8 @@ class ReviewState(BaseModel):
     finder_results: dict[str, FinderResult] = Field(default_factory=dict)
     original_severity: dict[str, str] = Field(default_factory=dict)  # lowered findings only
     errors: list[str] = Field(default_factory=list)  # agent failures, shown in the review header
+    # Information the review could not get, each with a command for a person.
+    needs: list[Need] = Field(default_factory=list)
     budget: dict = Field(default_factory=dict)
 
     @field_validator("stage", mode="before")
@@ -193,6 +232,7 @@ class ReviewState(BaseModel):
 
 class FinderOutput(_Model):
     findings: list[Finding] = Field(default_factory=list)
+    needs: list[NeedAsk] = Field(default_factory=list)
 
 
 class MergeOutput(_Model):
