@@ -13,7 +13,7 @@ import functools
 import logging
 import subprocess
 
-from .models import SEVERITIES, Citation, Finding, GateResult, TargetInfo, Verdict
+from .models import SEVERITIES, Citation, Finding, GateResult, Need, TargetInfo, Verdict
 from .target import _GIT, _env
 
 log = logging.getLogger(__name__)
@@ -112,3 +112,53 @@ def verdict_gate(target: TargetInfo, verdict: Verdict) -> GateResult:
         reasons.append(f"{citation.path}:{citation.line_start}: {result.reason}")
     return GateResult(passed=False, action="downgrade",
                       reason="verifier confirmed, but none of its citations reproduce (" + "; ".join(reasons) + ")")
+
+
+# --- needs --------------------------------------------------------------------
+
+NEED_COMMAND_MAX_CHARS = 300
+# Shell syntax that chains, pipes, redirects or substitutes. `&` covers `&&`
+# and a command sent to the background; `|` covers `||`.
+_NEED_FORBIDDEN = (";", "&", "|", ">", "<", "`", "$(")
+NEED_CLIS = frozenset({
+    "gh", "gcloud", "bq", "kubectl", "aws", "az", "terraform", "curl", "pip", "npm", "uv", "git",
+    "psql", "mysql",
+})
+TERRAFORM_READ_VERBS = frozenset({"show", "state", "output", "providers", "version"})
+
+
+def need_gate(need: Need) -> GateResult:
+    """The need's command is one short line, starts with a known CLI, and chains nothing.
+
+    Not a security boundary: the session never runs these commands itself. It
+    keeps each ask readable and safe to copy. On failure the caller blanks the
+    command and keeps the need.
+    """
+    command = need.command.strip()
+    if not command:
+        return GateResult(passed=True)
+    if "\n" in command or "\r" in command:
+        return GateResult(passed=False, reason="command is more than one line", action="blank")
+    if len(command) >= NEED_COMMAND_MAX_CHARS:
+        return GateResult(passed=False, reason=f"command is {NEED_COMMAND_MAX_CHARS} characters or more",
+                          action="blank")
+    for token in _NEED_FORBIDDEN:
+        if token in command:
+            return GateResult(passed=False, reason=f"command contains {token!r}", action="blank")
+    words = command.split()
+    if words[0] not in NEED_CLIS:
+        return GateResult(passed=False, reason=f"{words[0]!r} is not a known read-only CLI", action="blank")
+    if words[0] == "terraform" and (len(words) < 2 or words[1] not in TERRAFORM_READ_VERBS):
+        return GateResult(passed=False, reason="terraform is allowed only with show, state, output, "
+                          "providers or version", action="blank")
+    return GateResult(passed=True)
+
+
+def gated_need(need: Need) -> Need:
+    """*need* with its command stripped, or blanked when `need_gate` fails. Never dropped."""
+    need = need.model_copy(update={"command": need.command.strip(), "what": need.what.strip()})
+    result = need_gate(need)
+    if not result.passed:
+        log.info("need_gate blanked a command: %s", result.reason)
+        return need.model_copy(update={"command": ""})
+    return need
