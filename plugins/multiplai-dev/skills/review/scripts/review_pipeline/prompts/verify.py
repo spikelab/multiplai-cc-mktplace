@@ -14,7 +14,8 @@ SCHEMA = """\
  "expected_behaviour": "one sentence: what correct behaviour would be",
  "needs": [{"what": "one sentence naming the information you could not read",
             "cause": "no-access" | "unreachable",
-            "command": "one read-only shell command that fetches it, or empty"}]}"""
+            "command": "one read-only shell command that fetches it, or empty",
+            "where": "where a person finds it when no single command does, or empty"}]}"""
 
 NEEDS_RULES = """\
 When your answer is `unverifiable` because something could not be read, fill `needs`: one item per
@@ -27,7 +28,11 @@ with normal access to this project would run to get it, on one line, with no pip
 - `gcloud run services describe <service> --region <region> --format json`
 - `pip download tavily-python==0.8.4 --no-deps`
 Fill in the real names you read in the repository. Leave `command` empty when you know of no such
-command. Leave `needs` empty for any other answer."""
+command. `where` tells a person where to find it when no such command gets it: the console page and
+its path (Console > Dataform > <repository> > Workflow execution logs), the API method, the
+dashboard, the file outside this repository, or the team that owns it, with the real names filled
+in. Fill `where` whenever `command` is empty; never leave both empty. Leave `needs` empty for any
+other answer."""
 
 
 def build(target: TargetInfo, finding: Finding) -> str:

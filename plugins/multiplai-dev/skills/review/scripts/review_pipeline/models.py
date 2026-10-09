@@ -106,6 +106,7 @@ class NeedAsk(_Model):
     what: str
     cause: str = "no-access"
     command: str = ""
+    where: str = ""
 
     @field_validator("cause", mode="before")
     @classmethod
@@ -119,12 +120,15 @@ class Need(BaseModel):
     `blocks` is a finding id, or "review" for what the finders and the
     pipeline's own lookups could not check. `command` is one read-only shell
     command, or "" when none is known or `need_gate` blanked it. The pipeline
-    never runs it.
+    never runs it. `where` says where a person would look when one command
+    does not get it: a console page, a dashboard, a file outside the repo, or
+    the team that owns it; "" when the agent named none.
     """
     what: str
     blocks: str = "review"
     cause: Literal["no-access", "lookup-failed", "unreachable"] = "no-access"
     command: str = ""
+    where: str = ""
     source: Literal["verifier", "finder", "pipeline"] = "pipeline"
 
 

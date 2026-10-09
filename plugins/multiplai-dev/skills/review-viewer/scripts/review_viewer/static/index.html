@@ -106,12 +106,12 @@
       <button id="tab-summary" role="tab" aria-controls="summary">Summary</button>
       <button id="tab-walk" role="tab" aria-controls="walkthrough">Reviews <span id="walk-count" class="count"></span></button>
       <button id="tab-finding" role="tab" aria-controls="finding">Findings <span id="finding-count" class="count"></span></button>
+      <button id="tab-needs" role="tab" aria-controls="needs" hidden>Needs you <span id="needs-count" class="count"></span></button>
       <button id="tab-checked" role="tab" aria-controls="checked" hidden>Checked <span id="checked-count" class="count"></span></button>
     </div>
     <button id="detail-hide" class="ctl ctl-sm hide-btn" type="button" title="Hide this panel (Ctrl+Alt+B)" aria-label="Hide the review panel">›</button>
     </div>
     <div id="summary" role="tabpanel" class="panel">
-      <section id="needs" class="needs" hidden></section>
       <div id="badges" class="badges"></div>
       <div id="badge-detail" class="badge-detail md" hidden></div>
       <div id="walk-overview" class="md"></div>
@@ -130,6 +130,7 @@
       <div id="findings" class="finding-list"></div>
       <div id="finding-detail" class="finding-detail"></div>
     </div>
+    <div id="needs" role="tabpanel" class="panel needs-panel" hidden></div>
     <div id="checked" role="tabpanel" class="panel" hidden></div>
   </aside>
 </main>
@@ -394,16 +395,19 @@
 
     <section id="help-needs" class="help-sec" tabindex="-1" aria-labelledby="help-h-needs">
       <h3 id="help-h-needs">Needs you</h3>
-      <p>Shown at the top of the Summary tab when the review could not get something it needed. Each item
-        says what is missing; what it blocks (a finding, which links to it, or the review as a whole); why
-        (the review has no access, a lookup failed, or it is not reachable on the web); and a command a
-        person with access could run to get it.</p>
+      <p>A tab of its own, shown when the review could not get something it needed. Items are grouped by
+        what they block: the review as a whole first, then each finding, which links to it. Each item says
+        what is missing; why (the review has no access, a lookup failed, or it is not reachable on the web);
+        a command a person with access could run to get it, where to look when no one command gets it
+        (a console page, a dashboard, a team), or both.</p>
+      <p>When the review named neither, <b>Ask the session</b> puts a question about the item in the chat,
+        for you to read and send.</p>
       <p>A verifier lists what kept it from settling its finding. A finder's gaps, and a failed GitHub
         lookup of the PR or its branch rules, block the review as a whole. A finding's own needs also show
         under it on the Findings tab.</p>
       <p>The page runs nothing: read a command before you run it. Code keeps a command only when it is one
         short line, has no pipes, redirects or chained commands, and is a known read-only form; otherwise the item
-        says no command is known.</p>
+        shows where to look instead, when the review named a place.</p>
     </section>
 
     <section id="help-run" class="help-sec" tabindex="-1" aria-labelledby="help-h-run">

@@ -396,13 +396,17 @@
   }
 
   const TABS = { summary: ["tab-summary", "summary"], walk: ["tab-walk", "walkthrough"], finding: ["tab-finding", "finding"],
-    checked: ["tab-checked", "checked"] };
+    needs: ["tab-needs", "needs"], checked: ["tab-checked", "checked"] };
 
   function renderTabs() {
     if (state.view) renderFileNav();
     const checks = state.detail && state.detail.checks;
     if (state.tab === "checked" && !checks) state.tab = "summary";
     $("tab-checked").hidden = !checks;
+    const needs = state.detail ? L.needsItems(state.detail.findings).length : 0;
+    if (state.tab === "needs" && !needs) state.tab = "summary";
+    $("tab-needs").hidden = !needs;
+    $("needs-count").textContent = needs ? String(needs) : "";
     $("checked-count").textContent = checks ? String(checks.agents.length) : "";
     for (const [name, [tab, panel]] of Object.entries(TABS)) {
       const on = state.tab === name;
@@ -507,41 +511,56 @@
 
   // --- summary ---------------------------------------------------------------------
 
-  /* A suggested command, in a code block with a Copy button. Written by a
-   * model or the pipeline, so it is labelled to be read before running, and
-   * nothing here runs it. */
-  function needCommand(command) {
-    if (!command) return el("p", { class: "muted small", text: "No command is known." });
-    const box = el("div", {}, [
-      el("div", { class: "muted small", text: "suggested by the review: read it before running" }),
-      el("pre", {}, [el("code", { text: command })]),
-    ]);
-    addCopyButtons(box);
-    return box;
+  /* How a person gets what a need asks for: the suggested command, in a code
+   * block with a Copy button; where to look; or, when the review named
+   * neither, a button that puts a question about it in the chat. The command
+   * was written by a model or the pipeline, so it is labelled to be read
+   * before running, and nothing here runs it. */
+  function needAction(n) {
+    const out = [];
+    if (n.command) {
+      const box = el("div", {}, [
+        el("div", { class: "muted small", text: "suggested by the review: read it before running" }),
+        el("pre", {}, [el("code", { text: n.command })]),
+      ]);
+      addCopyButtons(box);
+      out.push(box);
+    }
+    if (n.where) out.push(el("div", { class: "need-where" }, [el("span", { class: "muted small", text: "Where to look: " }), n.where]));
+    if (!n.command && !n.where) {
+      out.push(el("div", { class: "need-ask" }, [
+        el("span", { class: "muted small", text: "The review named no command and no place to look. " }),
+        el("button", { class: "ctl ctl-sm", type: "button", text: "Ask the session",
+          title: "Put a question about this in the chat, for you to send",
+          onclick: () => { $("question").value = L.needQuestion(n); setChatOpen(true); renderAskAbout(); renderFab(); } }),
+      ]));
+    }
+    return out;
   }
 
   function renderNeeds() {
     const box = $("needs");
-    const items = L.needsItems(state.detail.findings);
-    box.hidden = !items.length;
+    const groups = L.needsGroups(state.detail.findings);
     box.replaceChildren();
-    if (!items.length) return;
+    if (!groups.length) return;
     box.appendChild(el("h3", { class: "label-help" }, [el("span", { text: "Needs you" }), helpButton("needs", "Needs you")]));
-    box.appendChild(el("p", { class: "muted small", text: "The review could not get these. Run a command yourself " +
+    box.appendChild(el("p", { class: "muted small", text: "The review could not get these. Get each one yourself " +
       "to settle what it blocks." }));
-    const ul = el("ul");
-    for (const n of items) {
-      const blocks = n.findingId
-        ? el("button", { class: "cite-link", text: n.blocks,
-            onclick: () => { setTab("finding"); selectFinding(n.findingId); } })
-        : el("span", { text: n.blocks });
-      ul.appendChild(el("li", {}, [
-        el("div", { text: n.what }),
-        el("div", { class: "muted small" }, ["Blocks: ", blocks, " · Why: " + n.cause]),
-        needCommand(n.command),
-      ]));
+    for (const g of groups) {
+      const head = g.findingId
+        ? el("button", { class: "cite-link", text: g.blocks,
+            onclick: () => { setTab("finding"); selectFinding(g.findingId); } })
+        : el("span", { text: "the review as a whole" });
+      const ul = el("ul");
+      for (const n of g.items) {
+        ul.appendChild(el("li", {}, [
+          el("div", { text: n.what }),
+          el("div", { class: "muted small", text: "Why: " + n.cause }),
+        ].concat(needAction(n))));
+      }
+      box.appendChild(el("section", { class: "needs" }, [
+        el("div", { class: "need-blocks" }, [el("b", { text: "Blocks " }), head]), ul]));
     }
-    box.appendChild(ul);
   }
 
   function renderSummary() {
@@ -1235,7 +1254,7 @@
         out.push(el("div", { class: "label", text: "Needs you" }));
         for (const n of L.needsItems({ needs: f.needs, findings: [] })) {
           out.push(el("div", { class: "needs" }, [el("div", { text: n.what }),
-            el("div", { class: "muted small", text: "Why: " + n.cause }), needCommand(n.command)]));
+            el("div", { class: "muted small", text: "Why: " + n.cause })].concat(needAction(n))));
         }
       } else if (part === "verifier-cited") {
         out.push(el("div", { class: "label", text: "The verifier's citations" }));
@@ -1259,10 +1278,21 @@
       el("span", { class: "badge", text: f.status }),
     ]));
     box.appendChild(el("h2", { text: f.claim }));
-    // With a verifier entry on the Checked tab, the link replaces the citation
+    // The failure scenario first, so the problem reads before anything about
+    // it; then the review's explanation; then the rest of the facts. With a
+    // verifier entry on the Checked tab, a link to it replaces the citation
     // lists (the entry shows what the verifier read and cited); without one,
     // findingParts keeps the lists.
     const shown = L.findingParts(f, state.detail.checks, "finding");
+    const add = (nodes) => { for (const node of nodes) box.appendChild(node); };
+    add(findingFacts(f, ["scenario"]));
+    const explained = L.explanationText(f.assessment);
+    if (explained) {
+      const label = L.assessLabel(f);
+      box.appendChild(el("div", { class: "label", text: "Explanation" + (label ? " (" + label + ")" : "") }));
+      box.appendChild(el("p", { text: explained }));
+    }
+    add(findingFacts(f, shown.parts.filter((p) => p !== "scenario")));
     const vi = shown.checkedBy;
     if (vi >= 0) {
       box.appendChild(el("div", { class: "label", text: "Checked by" }));
@@ -1270,12 +1300,6 @@
         [el("span", { text: "The verifier's entry on the Checked tab: what it read and cited" }),
           el("span", { "aria-hidden": "true", text: " →" })]));
     }
-    const assessed = L.assessmentText(f.assessment);
-    if (assessed) {
-      box.appendChild(el("div", { class: "label", text: "Assessment: " + L.assessLabel(f) }));
-      box.appendChild(el("p", { text: assessed }));
-    }
-    for (const node of findingFacts(f, shown.parts)) box.appendChild(node);
     const steps = L.stepsForFinding(state.walk, f.id);
     if (steps.length) {
       box.appendChild(el("div", { class: "label", text: "Explained in the walkthrough" }));
@@ -2308,6 +2332,7 @@
     $("tab-summary").addEventListener("click", () => setTab("summary"));
     $("tab-walk").addEventListener("click", () => setTab("walk"));
     $("tab-checked").addEventListener("click", () => setTab("checked"));
+    $("tab-needs").addEventListener("click", () => setTab("needs"));
     $("help-btn").addEventListener("click", () => openHelp("top"));
     $("keys-btn").addEventListener("click", () => openHelp("keys"));
     $("palette-input").addEventListener("input", () => { state.palette.index = 0; renderPalette(); });

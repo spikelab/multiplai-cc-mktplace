@@ -266,6 +266,8 @@
 :root[data-theme] .tabs { border-bottom: 2px solid var(--border); }
 :root[data-theme] .tabs button.active { background: var(--sel-bg); color: var(--sel-text); border-bottom-color: var(--sel-bg); }
 :root[data-theme] .tabs button.active .muted { color: inherit; opacity: 0.8; }
+/* A tab count keeps full opacity: the muted colour, or 0.8 of the tab text, is under 3:1 on some themes' --sel-bg. */
+:root[data-theme] .tabs button.active .count { color: inherit; }
 :root[data-theme] .file-row.selected { background: var(--sel-bg); box-shadow: none; }
 :root[data-theme] .file-row.selected .file-btn, :root[data-theme] .file-row.selected .counts span,
 :root[data-theme] .file-row.selected .fstatus { color: var(--sel-text); }

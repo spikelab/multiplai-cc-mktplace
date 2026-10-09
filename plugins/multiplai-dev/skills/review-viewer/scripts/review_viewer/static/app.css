@@ -564,6 +564,10 @@ pre.sketch {
 .needs li { margin: 0 0 var(--s3); }
 .needs pre { position: relative; margin: var(--s1) 0 0; padding: var(--s2); overflow-x: auto; border: 1px solid var(--border); }
 .needs pre .copy-btn { opacity: 1; }
+.needs-panel > h3 { margin: 0 0 var(--s1); font-size: var(--fs-md); }
+.need-blocks { margin: 0 0 var(--s2); font-size: var(--fs-sm); }
+.need-where, .need-ask { margin: var(--s1) 0 0; }
+.need-ask .ctl { margin-left: var(--s1); }
 .pr-desc { margin-top: var(--s4); border-top: 1px solid var(--border); padding-top: var(--s2); }
 .pr-desc > summary { cursor: pointer; font-weight: 600; }
 .run-block { margin-top: var(--s4); border-top: 1px solid var(--border); padding-top: var(--s2); font-size: var(--fs-sm); }

@@ -219,15 +219,23 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   full under the step, so the step's text explains the code and never restates
   a finding: no finding ids, no "Finding …:" paragraphs. `put` rejects a step
   whose text names a finding id.
-- When the review could not get something it needed, the **Summary** tab
-  opens with a **Needs you** block (from `needs` in `findings.json`): what is
-  missing, what it blocks (a link to the finding, or the review), why, and
-  the suggested command in a code block with a Copy button, labelled
-  "suggested by the review: read it before running". The Findings tab shows a
-  finding's own needs under it. The page runs nothing; the block is hidden
-  for a review with no needs. If the user asks about one, give the command as
-  `! <command>` for them to run, never run it yourself (the review skill's
-  step 2 says why).
+- When the review could not get something it needed, a **Needs you** tab
+  appears (from `needs` in `findings.json`), with a count. It groups the items
+  by what they block: the review as a whole first, then each finding (a link
+  to it). Each item says what is missing and why, then the suggested command
+  in a code block with a Copy button, labelled "suggested by the review: read
+  it before running", and where to look (`where`) when the review named a
+  place. An item with neither has an **Ask the session** button that puts a
+  question about it in the chat for the user to send: answer it by working
+  out, from the repository, where a person would get the information. The
+  Findings tab shows a finding's own needs under it. The page runs nothing;
+  the tab is hidden for a review with no needs. If the user asks about one,
+  give the command as `! <command>` for them to run, never run it yourself
+  (the review skill's step 2 says why).
+- A finding on the Findings tab reads: its claim, the **Failure scenario**,
+  the **Explanation** (the review's assessment and its reason), expected
+  behaviour, verdict, cited code, needs, then **Checked by**, **Explained in
+  the walkthrough**, and the decision.
 - The page shows the overview and, for a PR, its description on a
   **Summary** tab, under badges. The server measures some badges from git and
   GitHub: size, tests changed, commit hygiene, TODOs, lock files, and for a
@@ -308,7 +316,7 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
 - A **?** button in the header opens a help dialog that says what the review
   did step by step, what each finder looks for, what every Checked tab column
   and mark means, what a merge group is, the verdicts and labels, the
-  **Needs you** block and the **Run** block, then the keyboard shortcuts
+  **Needs you** tab and the **Run** block, then the keyboard shortcuts
   (also behind the ⌨ button and the `?` key). A small **?** beside each
   Checked tab heading, and beside Needs you and Run, opens the help at that
   section. If the user asks what a term on the page means, the help is the

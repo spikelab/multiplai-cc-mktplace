@@ -115,6 +115,10 @@ test("assessment text names the earlier round, decision and note", () => {
   assert.equal(L.assessmentText({ label: "still-open", earlier_id: "y", earlier_decision: "accept", reason: "" }),
     "Still open from y, your decision accept");
   assert.equal(L.assessmentText({ label: "low-value", reason: "[covered] by b" }), "Low value: [covered] by b");
+  assert.equal(L.explanationText({ label: "useful", reason: "r" }), "r");
+  assert.equal(L.explanationText({ label: "useful" }), "");
+  assert.equal(L.explanationText(null), "");
+  assert.equal(L.explanationText({ label: "low-value", reason: "[covered] by b" }), "Low value: [covered] by b");
 });
 
 test("j/k stepping clamps at both ends", () => {
@@ -652,6 +656,31 @@ test("the Needs you block is hidden without needs, and each item says what it bl
   assert.equal(items[1].blocks, "the review");
   assert.equal(items[1].command, "gh api repos/o/r/rules/branches/main");
   assert.equal(items[2].blocks, "finding ffffffffff");
+  assert.equal(items[0].where, "");
+});
+
+test("the Needs you tab groups items by what they block, the review's own gaps first", () => {
+  assert.deepEqual(L.needsGroups(null), []);
+  const ff = {
+    findings: [{ id: "a1b2c3d4e5", file: "app.py", line_start: 7, claim: "The timeout is ignored." }],
+    needs: [
+      { what: "Probe defaults.", blocks: "a1b2c3d4e5", cause: "unreachable", command: "", source: "verifier",
+        where: "The vendor's docs, Health checks page" },
+      { what: "Rules on main.", blocks: "review", cause: "lookup-failed", command: "gh api x", source: "pipeline" },
+      { what: "Deployed config.", blocks: "a1b2c3d4e5", cause: "no-access", command: "", source: "verifier" },
+    ],
+  };
+  const groups = L.needsGroups(ff);
+  assert.deepEqual(groups.map((g) => [g.blocks, g.findingId, g.items.length]),
+    [["the review", null, 1], ["app.py:7 — The timeout is ignored.", "a1b2c3d4e5", 2]]);
+  assert.equal(groups[1].items[0].where, "The vendor's docs, Health checks page");
+});
+
+test("asking the session about a need names it and what it blocks", () => {
+  const q = L.needQuestion({ what: "The column type.", blocks: "app.py:7 — The timeout is ignored." });
+  assert.match(q, /The column type\./);
+  assert.match(q, /It blocks: app\.py:7 — The timeout is ignored\./);
+  assert.match(L.needQuestion({ what: "w", blocks: "the review" }), /It blocks: the review as a whole/);
 });
 
 const RUN = {

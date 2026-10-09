@@ -292,7 +292,7 @@
     },
     "Need": {
       "additionalProperties": false,
-      "description": "Information the review could not get, and one command a person could run to get it.\n\n`blocks` is a finding id, or \"review\" for a gap in the review as a whole.\n`command` was written by a model or by the pipeline; the page shows it to\nbe read before running, and nothing runs it.",
+      "description": "Information the review could not get, and how a person would get it.\n\n`blocks` is a finding id, or \"review\" for a gap in the review as a whole.\n`command` was written by a model or by the pipeline; the page shows it to\nbe read before running, and nothing runs it. `where` says where to look\nwhen one command does not get it (a console page, a dashboard, a team);\nfiles before multiplai-dev 0.32 have none.",
       "properties": {
         "blocks": {
           "title": "Blocks",
@@ -323,6 +323,11 @@
         },
         "what": {
           "title": "What",
+          "type": "string"
+        },
+        "where": {
+          "default": "",
+          "title": "Where",
           "type": "string"
         }
       },

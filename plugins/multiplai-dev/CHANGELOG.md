@@ -17,6 +17,39 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-10-09
+
+### Added
+- review: each need can now say where to look (`where`) when no single
+  command gets the information: a console page and its path, a dashboard, a
+  file outside the repository, or the team that owns it. The finder and
+  verifier prompts ask for it whenever the command is empty and tell the
+  agent never to leave both empty. `findings.json` carries it on every need
+  (an older file without it still loads), and `review-<slug>.md` and
+  `summary-<slug>.md` print it as "Where to look:". A need with neither now
+  says "The review named no command and no place to look." instead of "No
+  command is known."
+- review-viewer: an item on the **Needs you** tab with no command and no
+  place to look has an **Ask the session** button. It puts a question about
+  the item in the chat, for you to read and send.
+
+### Changed
+- review-viewer: **Needs you** is its own tab, with a count, instead of a
+  block at the top of the Summary tab, so the Summary opens on what the
+  change is about. Items are grouped by what they block, so a finding's
+  claim shows once above its needs; the review's own gaps come first.
+- review-viewer: a finding on the Findings tab now reads in this order: the
+  claim, **Failure scenario**, **Explanation** (the review's assessment and
+  its reason, previously labelled "Assessment" and hidden for a useful
+  finding), expected behaviour, verdict, cited code, needs, **Checked by**,
+  **Explained in the walkthrough**, then the decision.
+
+### Fixed
+- review-viewer: the count on the selected tab (Reviews, Findings, Checked)
+  is legible again. It kept the muted text colour on the tab's selected
+  background, 1.2:1 contrast on Solarized; it now takes the tab's own text
+  colour.
+
 ## [0.31.0] - 2026-10-09
 
 ### Added

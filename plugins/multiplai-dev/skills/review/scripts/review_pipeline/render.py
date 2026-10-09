@@ -109,7 +109,7 @@ CAUSE_WORDS = {
 
 
 def need_lines(needs: list[dict], findings: list[dict] | None = None, *, blocks: bool = True) -> list[str]:
-    """One markdown bullet per need: what is missing, what it blocks, why, and the command.
+    """One markdown bullet per need: what is missing, what it blocks, why, the command and where to look.
 
     With *findings*, a need that blocks a finding names its file and line.
     *blocks* False leaves out what it blocks (under the finding itself).
@@ -124,7 +124,12 @@ def need_lines(needs: list[dict], findings: list[dict] | None = None, *, blocks:
             line = f"- {what} Blocks {on}; {cause}."
         else:
             line = f"- {what} Why: {cause}."
-        line += f" Run: `{n['command']}`" if n.get("command") else " No command is known."
+        if n.get("command"):
+            line += f" Run: `{n['command']}`"
+        if n.get("where"):
+            line += f" Where to look: {_one_line(n['where']).rstrip('.')}."
+        if not n.get("command") and not n.get("where"):
+            line += " The review named no command and no place to look."
         out.append(line)
     return out
 

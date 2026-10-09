@@ -164,6 +164,13 @@
     return "Low value: " + (a.reason || "no reason given");
   }
 
+  /* The finding page's Explanation: the review's reason for a useful finding,
+   * which assessmentText leaves out, and assessmentText for every other label. */
+  function explanationText(a) {
+    if (a && a.label === "useful") return a.reason || "";
+    return assessmentText(a);
+  }
+
   /* The id `delta` steps from `current`, clamped to the list (j/k). */
   function stepFinding(order, current, delta) {
     if (!order.length) return null;
@@ -415,9 +422,9 @@
     "unreachable": "not reachable on the web",
   };
 
-  /* The Summary tab's "Needs you" items, from a findings file. An empty list
-   * hides the block: older files have no `needs`. A need that blocks a finding
-   * the file holds links to it; any other blocks the review as a whole. */
+  /* The "Needs you" items, from a findings file. An empty list hides the tab:
+   * older files have no `needs`. A need that blocks a finding the file holds
+   * links to it; any other blocks the review as a whole. */
   function needsItems(findingsFile) {
     const needs = (findingsFile && Array.isArray(findingsFile.needs)) ? findingsFile.needs : [];
     const byId = new Map(((findingsFile && findingsFile.findings) || []).map((f) => [f.id, f]));
@@ -429,9 +436,32 @@
         blocks: f ? f.file + ":" + f.line_start + " — " + f.claim : n.blocks === "review" ? "the review" : "finding " + n.blocks,
         cause: NEED_CAUSES[n.cause] || String(n.cause || ""),
         command: String(n.command || ""),
+        where: String(n.where || ""),
         source: String(n.source || ""),
       };
     });
+  }
+
+  /* The "Needs you" tab's groups: one per thing blocked, so a finding's long
+   * claim shows once above its needs. The review's own gaps come first, then
+   * findings in the order their first need appears. */
+  function needsGroups(findingsFile) {
+    const groups = new Map();
+    for (const n of needsItems(findingsFile)) {
+      const key = n.findingId || n.blocks;
+      if (!groups.has(key)) groups.set(key, { blocks: n.blocks, findingId: n.findingId, items: [] });
+      groups.get(key).items.push(n);
+    }
+    const all = Array.from(groups.values());
+    return all.filter((g) => g.blocks === "the review").concat(all.filter((g) => g.blocks !== "the review"));
+  }
+
+  /* The message the page puts in the chat when a need gives no command and no
+   * place to look: it asks the session how a person would get the information. */
+  function needQuestion(n) {
+    const blocks = n.blocks === "the review" ? "the review as a whole" : n.blocks;
+    return "The review could not get this, and named no command or place to look: " + n.what +
+      "\nIt blocks: " + blocks + "\nWhere would I find it, and what exactly should I run or open?";
   }
 
   /* Badges for the Summary tab: measured ones from the server, then the
@@ -1161,7 +1191,7 @@
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
     isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder,
     assessLabel: assessLabel, isFolded: isFolded, effectiveDecision: effectiveDecision,
-    undecidedCount: undecidedCount, assessmentText: assessmentText,
+    undecidedCount: undecidedCount, assessmentText: assessmentText, explanationText: explanationText,
     stepFinding: stepFinding, anchorLabel: anchorLabel, escapeHtml: escapeHtml,
     splitHighlighted: splitHighlighted, lineRange: lineRange,
     stepOrder: stepOrder, moveStep: moveStep, stepPosition: stepPosition,
@@ -1172,7 +1202,8 @@
     foldRows: foldRows, expandFold: expandFold, fileOrder: fileOrder,
     neighbourFile: neighbourFile, navFiles: navFiles,
     stepsForFile: stepsForFile, skippedReason: skippedReason, stepFiles: stepFiles,
-    summaryBadges: summaryBadges, needsItems: needsItems,
+    summaryBadges: summaryBadges, needsItems: needsItems, needsGroups: needsGroups,
+    needQuestion: needQuestion,
     diffBlock: diffBlock, formatRef: formatRef, parseRefs: parseRefs, refAnchor: refAnchor,
     completion: completion, matchFiles: matchFiles,
     blockStarts: blockStarts, blockKey: blockKey, explainByBlock: explainByBlock,

@@ -56,16 +56,19 @@ class Fix(_Strict):
 
 
 class Need(_Strict):
-    """Information the review could not get, and one command a person could run to get it.
+    """Information the review could not get, and how a person would get it.
 
     `blocks` is a finding id, or "review" for a gap in the review as a whole.
     `command` was written by a model or by the pipeline; the page shows it to
-    be read before running, and nothing runs it.
+    be read before running, and nothing runs it. `where` says where to look
+    when one command does not get it (a console page, a dashboard, a team);
+    files before multiplai-dev 0.32 have none.
     """
     what: str
     blocks: str
     cause: Literal["no-access", "lookup-failed", "unreachable"]
     command: str = ""
+    where: str = ""
     source: Literal["verifier", "finder", "pipeline"]
 class Assessment(_Strict):
     """The review's own judgement of a finding against the rest of the review

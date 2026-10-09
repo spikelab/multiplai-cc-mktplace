@@ -149,7 +149,7 @@ async def test_unverifiable_answer_with_a_need_is_stored_and_exported(target_inf
     jsonschema.validate(data, json.loads(SCHEMA.read_text()))
     row = next(f for f in data["findings"] if f["id"] == medium.id)
     assert row["needs"] == [{"what": TAVILY_NEED.what, "blocks": medium.id, "cause": "unreachable",
-                             "command": TAVILY_NEED.command, "source": "verifier"}]
+                             "command": TAVILY_NEED.command, "where": "", "source": "verifier"}]
     assert data["needs"] == row["needs"]
 
 
@@ -202,6 +202,23 @@ async def test_finder_needs_are_stored_as_blocking_the_review(target_info, ctx, 
     assert state.needs == [Need(what=TAVILY_NEED.what, blocks="review", cause="unreachable",
                                 command=TAVILY_NEED.command, source="finder")]
     assert state.finder_results["diff-bugs"].needs == [TAVILY_NEED]
+
+
+async def test_a_need_without_a_command_carries_where_to_look_into_the_file_and_the_summary(
+        target_info, ctx, monkeypatch):
+    medium = medium_finding()
+    ask = NeedAsk(what="The Dataform workflow invocation history.", cause="no-access",
+                  where=" Console > Dataform > DolceDataform > Workflow execution logs ")
+    prompts = use(monkeypatch, {"verify": [Verdict(status="unverifiable", reason="r", needs=[ask])]})
+    state = await run_verify(ReviewState(target=target_info, stage="find", findings=[medium]), ctx)
+    assert "never leave both empty" in prompts[0]
+    assert state.needs[0].where == "Console > Dataform > DolceDataform > Workflow execution logs"
+    data = to_findings_file(state)
+    jsonschema.validate(data, json.loads(SCHEMA.read_text()))
+    assert data["needs"][0]["where"] == "Console > Dataform > DolceDataform > Workflow execution logs"
+    text = render_review(state)
+    assert "Where to look: Console > Dataform > DolceDataform > Workflow execution logs." in text
+    assert "named no command" not in text
 
 
 def test_finder_answer_with_needs_parses_and_an_unknown_cause_becomes_no_access():
@@ -337,11 +354,13 @@ def test_summary_has_a_needs_you_section_after_the_counts(canned_state):
     assert lines[counts + 2] == "## Needs you"
     assert "Run: `gh api repos/example/booking-engine/rules/branches/main`" in text
     assert "Blocks the review; a lookup failed." in text
-    assert "Blocks `rateplan_service.py:" in text and "No command is known." in text
+    assert "Blocks `rateplan_service.py:" in text
+    assert "The review named no command and no place to look." in text
     assert "## Needs you" not in render_summary(canned_state)
 
 
 def test_review_lists_each_findings_needs_under_it_and_the_reviews_own(canned_state):
     text = render_review(_with_needs(canned_state))
     assert "## Needs you" in text and text.index("## Needs you") < text.index("## Findings")
-    assert "The production channel title. Why: the review has no access. No command is known." in text
+    assert ("The production channel title. Why: the review has no access. "
+            "The review named no command and no place to look.") in text

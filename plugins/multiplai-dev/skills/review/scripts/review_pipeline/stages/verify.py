@@ -103,7 +103,7 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
             state.gate_checks.append(gate_check)
         if verdict.status == "unverifiable":
             state.needs.extend(gated_need(Need(what=n.what, blocks=finding.id, cause=n.cause,
-                                               command=n.command, source="verifier"))
+                                               command=n.command, where=n.where, source="verifier"))
                                for n in verdict.needs if n.what.strip())
         return verdict
 

@@ -80,7 +80,8 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
 
 
 def _need(n: Need) -> dict:
-    return {"what": n.what, "blocks": n.blocks, "cause": n.cause, "command": n.command, "source": n.source}
+    return {"what": n.what, "blocks": n.blocks, "cause": n.cause, "command": n.command, "where": n.where,
+            "source": n.source}
 
 
 def exported_needs(state: ReviewState) -> list[Need]:
