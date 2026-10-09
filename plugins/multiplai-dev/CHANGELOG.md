@@ -17,6 +17,33 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-09
+
+### Added
+- review: every review now writes a record of what it checked, so a review
+  that finds nothing still shows what it looked at. `checks.json` and
+  `checks-<slug>.md`, beside `findings.json`, list every agent the review ran,
+  in the order they started: what it was given, every file it read (with the
+  line range), every search, URL fetched and web query, its turns and cost, and
+  what it concluded. A finder's entry lists every finding it returned, with
+  what became of it (kept, a duplicate, merged, or rejected by a gate and
+  which rule); a verifier's entry has its verdict and its own citations. Each
+  citation says whether its quote is at the reviewed commit and whether the
+  agent actually read, searched or was shown those lines. The record holds
+  what the agents asked their tools for, never what the tools returned. The
+  review's last output line is now `checks: <path>`.
+- review: `findings.json` carries each finding's `verifier_citations`, the
+  lines the verifier read to reach its verdict.
+- review-viewer: a **Checked** tab shows that record: a checklist of finders,
+  findings and merge groups, then one entry per agent. Rejected findings
+  appear here with the rule that rejected them. The Findings tab lists the
+  verifier's citations and links to the verifier's entry. Reviews made before
+  this version open as before, without the tab.
+
+### Changed
+- Requires multiplai-core at `ee8715c` or later (`AgentRunResult.tool_calls`);
+  the lockfile moves to it.
+
 ## [0.25.0] - 2026-10-09
 
 ### Added

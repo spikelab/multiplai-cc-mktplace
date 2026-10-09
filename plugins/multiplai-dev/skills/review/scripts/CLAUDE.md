@@ -21,18 +21,19 @@ cd plugins/multiplai-dev/skills/review/scripts && \
 | Module | Does |
 |---|---|
 | `__main__.py` | CLI: `review`, `batch`, `rollup`, `resume`, `post`. Calls `setup_logging` once. Owns the stdout contract and the exit codes. |
-| `models.py` | Pipeline models. `Finding.citations` has `min_length=1`; `Finding.id` is computed with the v1 rule, never taken from a model. `Finding.finders` lists every finder that reported it. `STAGES` is the run order; `ReviewState` maps the removed `prescribe`/`check_fix` stages of an old checkpoint to `verify`. |
+| `models.py` | Pipeline models. `Finding.citations` has `min_length=1`; `Finding.id` is computed with the v1 rule, never taken from a model. `Finding.finders` lists every finder that reported it. `STAGES` is the run order; `ReviewState` maps the removed `prescribe`/`check_fix` stages of an old checkpoint to `verify`. `AgentCheck` (one agent call: stage, subject, given, calls, outcome, turns, cost, times, error, plus `findings` for a finder and `verdict` for a verifier) and `GateCheck` (one gate result) go in `ReviewState.checks` / `gate_checks`, empty in older checkpoints. |
 | `target.py` | Resolves `--branch` / `--pr` / `--range` to shas, writes `diff.patch`, `commits.txt`, `files.txt`; `target_gate`; `snapshot_head()` (`git archive` of head into `<slug>/tree/`). For `--pr`, also the PR title and body and `branch_rules()` (the base branch's GitHub rules; `[]` when GitHub reports none, `None` with a warning when `gh` or the API fails). Fixed argv, no shell, no checkout. |
-| `gates.py` | `citation_gate`, `finding_gate`, `verdict_gate`. Each takes `TargetInfo` and returns `GateResult`. A web citation (`Citation.is_web`) is skipped, not checked: it may not be first, and it does not confirm. |
-| `sdk.py` | `agent_call_structured`: trust gate, an allow-list with its complement denied (`Read`/`Grep`/`Glob` for every stage, plus `WebFetch`/`WebSearch` for finders and verifiers), one re-ask on a bad answer: a no-tools, one-turn reformat of the text returned, or a re-run of the prompt when the run itself failed. `parse_answer` says so when an answer holds no JSON at all. The only caller of `run_agent`. |
+| `gates.py` | `citation_gate`, `finding_gate`, `verdict_gate`, and `reason_kind` (which rule a reason names; the only gate text that reaches logs and `checks.json`). Each takes `TargetInfo` and returns `GateResult`. A web citation (`Citation.is_web`) is skipped, not checked: it may not be first, and it does not confirm. |
+| `sdk.py` | `recording()`: a ContextVar block in which `_run` adds each attempt's tool calls (`multiplai_core.ToolCall`), turns and cost to a `CallRecord`, the re-ask included; the stages open one around each call. `agent_call_structured`: trust gate, an allow-list with its complement denied (`Read`/`Grep`/`Glob` for every stage, plus `WebFetch`/`WebSearch` for finders and verifiers), one re-ask on a bad answer: a no-tools, one-turn reformat of the text returned, or a re-run of the prompt when the run itself failed. `parse_answer` says so when an answer holds no JSON at all. The only caller of `run_agent`. |
+| `checks.py` | Pure functions for the record of what was checked: `summarise_call` (a tool call as `{tool, target, detail}`, repo-relative, inputs only), `diff_hunks`, `seen` (`read`/`searched`/`diff`/`fetched`/`not-seen` for a citation, from the agent's calls and the diff its prompt held), `marked_citation` (adds `gate` and `seen`), `prompt_labels` (the `given` list). |
 | `budget.py` | Per-target ledger in a `ContextVar` (a batch runs targets concurrently) and the circuit breaker. |
 | `config.py` | `review.yaml` > `multiplai.conf` > session model, for per-stage models, effort, concurrency. |
-| `stages/` | `find`, `verify`, `merge`. Each `run_<stage>(state, ctx)` returns at once when the state is past it and skips items it already has. Each stores an agent's answer in the state as it returns (`finder_results`, `verdicts`, `merge_answers`), so the checkpoint saved at a budget stop keeps it. `find.conventions_chain` reads every `coding-standards.md` on the path from the root to each changed file's directory, then every `CLAUDE.md` on the same path, so the `CONVENTIONS_MAX_CHARS` cap skips `CLAUDE.md` text first. |
+| `stages/` | `find`, `verify`, `merge`. Each `run_<stage>(state, ctx)` returns at once when the state is past it and skips items it already has. Each stores an agent's answer in the state as it returns (`finder_results`, `verdicts`, `merge_answers`), with its `AgentCheck` beside it, so the checkpoint saved at a budget stop keeps both and a resume records no call twice. `find` sets each returned finding's fate and records a `GateCheck` per gated finding; `verify` one per verdict; `merge` marks merged findings in their finder's entry. `find.conventions_blocks` reads every `coding-standards.md` on the path from the root to each changed file's directory, then every `CLAUDE.md` on the same path, so the `CONVENTIONS_MAX_CHARS` cap skips `CLAUDE.md` text first; it returns each path with whether it fit, and `conventions_chain` joins the text. |
 | `prompts/` | One module per stage; shared blocks in `__init__.py`: `workspace_block(web=)`, `description_block` (PR title and body inside an `<untrusted-content>` fence, as claims to check), `settings_block` (the base branch's rules, and the sentence "a red run can be merged" when no `required_status_checks` rule exists). |
-| `export.py` | `ReviewState` → `findings.json` v1, key by key (the contract rejects unknown keys). Merged-away findings and `Finding.finders` are not exported; the v1 shape did not change for them. |
-| `render.py` | `review-<slug>.md`, the short `summary-<slug>.md` the session pastes into chat, and the `<SEV>-only.md` rollups, all from v1 dicts. |
+| `export.py` | `ReviewState` → `findings.json` v1, key by key (the contract rejects unknown keys), with the optional `verifier_citations`. Merged-away findings and `Finding.finders` are not exported; the v1 shape did not change for them. `write_checks_file` writes `checks.json` (`../../review-viewer/schema/checks.v1.schema.json`): agents ordered by `started_at`, then gate results. |
+| `render.py` | `review-<slug>.md`, the short `summary-<slug>.md` the session pastes into chat, `checks-<slug>.md` (`render_checks`: the checklist, then one section per agent), and the `<SEV>-only.md` rollups, all from the exported dicts. |
 | `post.py` | One `gh pr comment`; with `--decisions`, only findings whose decision is `accept`. |
-| `orchestrator.py` | target → find → verify → merge → export → render, saving `review-state.json` after each; `resume`; `batch`. |
+| `orchestrator.py` | target → find → verify → merge → export (`findings.json`, `checks.json`) → render, saving `review-state.json` after each; `resume`; `batch`. |
 | `state.py`, `progress.py` | Atomic checkpoint; the tailable `progress.log` (`STARTED`, `STAGE`, `DONE`, `FAILED`). |
 
 ## Why the agents read a snapshot
@@ -81,8 +82,9 @@ runs after verify:
 `setup_logging("review-pipeline", propagate_loggers=("review_pipeline", "multiplai_core"))`
 writes `review-pipeline.log`. `log_event("review", …)` fires `start`, `stage`,
 `gate_reject`, `budget_stop`, `done`, `post`. No field holds finding or prompt
-text: `gate_reject` records which rule fired (`orchestrator.reason_kind`), not
-the reason string.
+text: `gate_reject` records which rule fired (`gates.reason_kind`), not
+the reason string. The record of what was checked goes to `checks.json` and
+`checks-<slug>.md` only, never to a log line.
 
 ## Tests
 
@@ -90,6 +92,8 @@ the reason string.
 `tests/fixtures/settings_consumer_repo/{base,head}` with fixed dates, so its
 shas are stable. Every agent call is monkeypatched; nothing here calls a model.
 `test_export.py` validates against
-`../../review-viewer/schema/findings.v1.schema.json`, and `test_models.py`
+`../../review-viewer/schema/findings.v1.schema.json`, `test_checks.py` validates
+`checks.json` against `checks.v1.schema.json` beside it (its stage tests feed
+the recorder the way `_run` does), and `test_models.py`
 checks this package's `finding_id` against the ids in the viewer's own
 fixture. The package never imports `review_viewer`.
