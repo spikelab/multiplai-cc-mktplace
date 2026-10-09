@@ -133,3 +133,39 @@ def test_budget_state_round_trip():
     b = budget.ReviewBudget(max_usd=10)
     b.load_state(a.to_state())
     assert (b.cost_usd, b.calls, b.by_label) == (0.25, 1, {"verify": 0.25})
+
+
+def test_by_stage_holds_calls_tokens_and_cost_per_label_and_sums_to_the_totals():
+    a = budget.ReviewBudget(max_usd=10)
+    a.record(SimpleNamespace(input_tokens=10, output_tokens=2, cache_read_tokens=100,
+                             cache_creation_tokens=5, cost_usd=0.5), label="find:tests")
+    a.record(SimpleNamespace(input_tokens=1, output_tokens=1, cost_usd=0.25), label="verify")
+    a.record(SimpleNamespace(input_tokens=3, output_tokens=4, cost_usd=0.25), label="verify")
+    assert a.by_stage["verify"] == {"calls": 2, "input_tokens": 4, "output_tokens": 5, "cache_read_tokens": 0,
+                                    "cache_creation_tokens": 0, "cost_usd": 0.5, "no_usage_calls": 0}
+    stages = a.by_stage.values()
+    assert sum(s["calls"] for s in stages) == a.calls == 3
+    assert sum(s["cost_usd"] for s in stages) == pytest.approx(a.cost_usd)
+    for f in budget.TOKEN_FIELDS:
+        assert sum(s[f] for s in stages) == getattr(a, f)
+    b = budget.ReviewBudget(max_usd=10)
+    b.load_state(a.to_state())
+    assert b.by_stage == a.by_stage and b.by_label == a.by_label
+
+
+def test_a_call_with_no_usage_is_counted_with_zero_cost():
+    a = budget.ReviewBudget(max_usd=10)
+    a.record(SimpleNamespace(), label="merge")
+    assert (a.calls, a.cost_usd, a.no_usage_calls) == (1, 0.0, 1)
+    assert a.by_stage["merge"]["no_usage_calls"] == 1
+
+
+def test_an_old_ledger_without_by_stage_loads_and_keeps_counting():
+    old = {"calls": 9, "input_tokens": 100, "output_tokens": 20, "cache_read_tokens": 0,
+           "cache_creation_tokens": 0, "cost_usd": 1.25, "by_label": {"verify": 1.25}, "max_usd": 50.0}
+    a = budget.ReviewBudget(max_usd=50)
+    a.load_state(old)
+    assert (a.calls, a.cost_usd, a.by_stage, a.no_usage_calls) == (9, 1.25, {}, 0)
+    a.record(SimpleNamespace(input_tokens=1, cost_usd=0.5), label="verify")
+    assert a.calls == 10 and a.by_stage["verify"]["calls"] == 1
+    assert a.by_label["verify"] == pytest.approx(1.75)

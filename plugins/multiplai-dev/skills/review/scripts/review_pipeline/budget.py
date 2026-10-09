@@ -21,6 +21,14 @@ DEFAULT_MAX_USD = 50.0
 WARN_FRACTION = 0.8
 
 
+TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens")
+
+
+def empty_stage() -> dict:
+    """One stage label's record: calls, the four token counts, cost, and calls with no usage."""
+    return {"calls": 0, **dict.fromkeys(TOKEN_FIELDS, 0), "cost_usd": 0.0, "no_usage_calls": 0}
+
+
 class BudgetExceededError(Exception):
     """The target has spent its ceiling. Carries where the money went."""
 
@@ -40,6 +48,11 @@ class ReviewBudget:
     cost_usd: float = 0.0
     calls: int = 0
     by_label: dict[str, float] = field(default_factory=dict)  # {stage label: usd}
+    # {stage label: empty_stage() record}. Absent from a ledger saved before
+    # 0.28, so after a resume its sums cover only the calls made since.
+    by_stage: dict[str, dict] = field(default_factory=dict)
+    # Calls whose run returned no usage at all: counted, with 0 tokens and $0.
+    no_usage_calls: int = 0
     _warned: bool = False
 
     @property
@@ -49,15 +62,22 @@ class ReviewBudget:
     def record(self, usage, *, label: str = "") -> None:
         """Add one call's usage (`AgentUsage` or anything shaped like it). Never raises."""
         try:
-            self.calls += 1
-            self.input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
-            self.output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
-            self.cache_read_tokens += int(getattr(usage, "cache_read_tokens", 0) or 0)
-            self.cache_creation_tokens += int(getattr(usage, "cache_creation_tokens", 0) or 0)
+            tokens = {f: int(getattr(usage, f, 0) or 0) for f in TOKEN_FIELDS}
             cost = float(getattr(usage, "cost_usd", 0.0) or 0.0)
+            no_usage = usage is None or (not any(tokens.values()) and not cost)
+            self.calls += 1
+            for f, n in tokens.items():
+                setattr(self, f, getattr(self, f) + n)
             self.cost_usd += cost
+            self.no_usage_calls += int(no_usage)
             if label:
                 self.by_label[label] = self.by_label.get(label, 0.0) + cost
+                stage = self.by_stage.setdefault(label, empty_stage())
+                stage["calls"] += 1
+                for f, n in tokens.items():
+                    stage[f] += n
+                stage["cost_usd"] += cost
+                stage["no_usage_calls"] += int(no_usage)
         except Exception as e:  # pragma: no cover — accounting must never break a run
             log.warning("Budget accounting failed for a call (ignored): %s", e)
 
@@ -95,6 +115,8 @@ class ReviewBudget:
             "cache_creation_tokens": self.cache_creation_tokens,
             "cost_usd": round(self.cost_usd, 6),
             "by_label": {k: round(v, 6) for k, v in self.by_label.items()},
+            "by_stage": {k: {**v, "cost_usd": round(v["cost_usd"], 6)} for k, v in self.by_stage.items()},
+            "no_usage_calls": self.no_usage_calls,
             "max_usd": self.max_usd,
         }
 
@@ -109,6 +131,13 @@ class ReviewBudget:
         self.cache_creation_tokens = int(data.get("cache_creation_tokens", 0) or 0)
         self.cost_usd = float(data.get("cost_usd", 0.0) or 0.0)
         self.by_label = {k: float(v) for k, v in (data.get("by_label") or {}).items()}
+        self.by_stage = {}
+        for label, rec in (data.get("by_stage") or {}).items():
+            stage = empty_stage()
+            for key in stage:
+                stage[key] = float(rec.get(key, 0) or 0) if key == "cost_usd" else int(rec.get(key, 0) or 0)
+            self.by_stage[label] = stage
+        self.no_usage_calls = int(data.get("no_usage_calls", 0) or 0)
 
 
 _current: contextvars.ContextVar[ReviewBudget | None] = contextvars.ContextVar("review_budget", default=None)
