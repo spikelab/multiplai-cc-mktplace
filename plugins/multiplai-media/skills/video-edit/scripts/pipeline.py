@@ -108,6 +108,22 @@ def cmd_frame(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_snap(args: argparse.Namespace) -> int:
+    """Snap a proposed clip to whole sentences, then to the nearest pause."""
+    import json
+    from stages import clips
+    cache = prep_stage.cache_dir_for(args.source)
+    sent_path, sil_path = cache / "sentences.json", cache / "silences.json"
+    for f in (sent_path, sil_path):
+        if not f.exists():
+            raise SystemExit(f"{f} not found — run `pipeline.py prep {args.source}` first.")
+    sentences = clips.sentences_from_json(json.loads(sent_path.read_text()))
+    silences = [tuple(x) for x in json.loads(sil_path.read_text())]
+    start, end = clips.snap(args.start, args.end, sentences, silences)
+    print(f"SNAPPED: {start:.3f} {end:.3f} ({end - start:.1f}s)")
+    return 0
+
+
 def cmd_make(args: argparse.Namespace) -> int:
     """make is a thin wrapper for orchestrators. The skill's SKILL.md instructs
     the consuming Claude to run prep, author the EDL, then render — this entry
@@ -165,6 +181,12 @@ def main() -> int:
     fr.add_argument("--grid", action="store_true", help="overlay a 100 px grid labelled in source pixels")
     fr.add_argument("--out", default=None, help="output PNG (default: ./frame-<t>s.png)")
     fr.set_defaults(func=cmd_frame)
+
+    sn = sub.add_parser("snap", help="snap clip edges to sentences, then to the nearest pause")
+    sn.add_argument("source", help="the source recording prep ran on")
+    sn.add_argument("start", type=float)
+    sn.add_argument("end", type=float)
+    sn.set_defaults(func=cmd_snap)
 
     m = sub.add_parser("make", help="natural-language → reel (orchestrator workflow)")
     m.add_argument("source", help="path to screen recording (.mov/.mp4)")
