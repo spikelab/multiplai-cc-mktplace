@@ -36,6 +36,10 @@ def fetch(url: str, out_dir: Path, max_seconds: int | None, run=subprocess.run) 
     if not shutil.which("yt-dlp"):
         raise RuntimeError("yt-dlp is not on PATH; install it with `pip install yt-dlp`, or pass a local file.")
     out_dir.mkdir(parents=True, exist_ok=True)
+    # A reference left by an earlier URL would make yt-dlp skip the download
+    # (or sit beside the new one and be picked first): clear it.
+    for old in out_dir.glob("reference.*"):
+        old.unlink()
     run(fetch_argv(url, out_dir, max_seconds), check=True)
     found = sorted(out_dir.glob("reference.*"))
     if not found:
