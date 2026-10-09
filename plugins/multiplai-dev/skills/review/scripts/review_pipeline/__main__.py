@@ -1,6 +1,8 @@
 """CLI for the review pipeline.
 
-  review  — one target (--branch, --pr or --range)
+  review  — one target (--branch, --pr or --range), or code that is not a change
+            (--tree [COMMIT] [--path DIR], or --dir DIR for a directory not under git);
+            --plan-only prints the file groups and finder calls and stops
   batch   — a YAML list of targets, then rollups
   rollup  — regenerate HIGH/MEDIUM/LOW-only.md from existing findings.json files
   resume  — continue a review from its review-state.json
@@ -8,7 +10,9 @@
 
 stdout contract: progress summary lines, a `summary: <path>` line per finished
 target, then for review/batch/resume a final `findings: <path>[ <path>...]`
-line listing every findings.json written.
+line listing every findings.json written. `review --plan-only` prints one line
+per file group, a `groups: <n>  finder calls: <n>  files skipped: <n>` line and
+a final `plan: <path>` line, and calls no model.
 
 Exit codes: 0 done; 1 a target failed; 2 bad input, unresolvable target, or
 post refused; 3 repository not trusted; 4 the budget circuit breaker stopped
@@ -79,12 +83,22 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--out", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="command", required=True, metavar="{" + ",".join(SUBCOMMANDS) + "}")
 
-    rv = sub.add_parser("review", parents=[common], help="Review one branch, PR or commit range")
-    rv.add_argument("--repo", required=True, help="Path to the repository")
+    rv = sub.add_parser("review", parents=[common],
+                        help="Review one branch, PR or commit range, or a whole tree or directory")
+    rv.add_argument("--repo", help="Path to the repository (every target but --dir)")
     which = rv.add_mutually_exclusive_group(required=True)
     which.add_argument("--branch", help="Review origin/<branch> against its merge-base with the default branch")
     which.add_argument("--pr", type=int, help="Review a GitHub PR (needs gh)")
     which.add_argument("--range", dest="range_", metavar="BASE..HEAD", help="Review a commit range")
+    which.add_argument("--tree", nargs="?", const="HEAD", metavar="COMMIT",
+                       help="Review every file at COMMIT (default HEAD), not a change")
+    which.add_argument("--dir", metavar="PATH",
+                       help="Review a directory that is not under git: it is copied into the output "
+                            "directory and committed there, never written to")
+    rv.add_argument("--path", help="With --tree: review only this directory of the repository")
+    rv.add_argument("--plan-only", action="store_true",
+                    help="Print the file groups and how many finder calls the review would make, "
+                         "write plan.txt, and stop before any model call")
     rv.add_argument("--base-branch", help="Default branch for --branch (default: origin/HEAD)")
     rv.add_argument("--fetch", action="store_true", help="git fetch origin first (never done otherwise)")
     rv.add_argument("--ticket", action="append", default=[], help="Ticket id for the header (repeatable)")
@@ -152,6 +166,31 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return 0
 
+    if args.command == "review":
+        if bool(args.dir) == bool(args.repo):
+            print("ERROR: pass --repo <path> with --branch, --pr, --range or --tree, or --dir <path> alone",
+                  file=sys.stderr)
+            return 2
+        if args.path and args.tree is None:
+            print("ERROR: --path goes with --tree", file=sys.stderr)
+            return 2
+        spec = orchestrator.TargetSpec(repo=args.repo or "", branch=args.branch, pr=args.pr, range=args.range_,
+                                       tickets=args.ticket, deployed_in=args.deployed_in,
+                                       base_branch=args.base_branch, fetch=args.fetch,
+                                       tree=args.tree, path=args.path, dir=args.dir)
+        if args.plan_only:
+            # Reads git only: nothing reaches a model, so no trust is needed and no ledger is kept.
+            try:
+                out.mkdir(parents=True, exist_ok=True)
+                config = load_config(out, max_cost_usd=args.max_cost_usd or None)
+                text, plan_path = orchestrator.plan_only(spec, out, config)
+            except orchestrator.ReviewError as e:
+                print(f"ERROR: {e}", file=sys.stderr)
+                return 2
+            print(text, end="")
+            print(f"plan: {plan_path}")
+            return 0
+
     if not sdk.repo_is_trusted():
         print(TRUST_MESSAGE, file=sys.stderr)
         return 3
@@ -161,9 +200,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "review":
             out.mkdir(parents=True, exist_ok=True)
             print(f"out: {out}", flush=True)
-            spec = orchestrator.TargetSpec(repo=args.repo, branch=args.branch, pr=args.pr, range=args.range_,
-                                           tickets=args.ticket, deployed_in=args.deployed_in,
-                                           base_branch=args.base_branch, fetch=args.fetch)
             path = asyncio.run(orchestrator.review(spec, out, load_config(out, max_cost_usd=max_cost),
                                                    session_id=args.session_id))
             render.write_rollups(out)
