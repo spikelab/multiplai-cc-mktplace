@@ -12,7 +12,8 @@ from conftest import DEF_CITATION, KEYWORD_CITATION, SCHEMA, high_finding
 from review_pipeline import budget, sdk
 from review_pipeline.__main__ import main
 from review_pipeline.config import DIMENSIONS
-from review_pipeline.models import DuplicateSet, FinderOutput, MergeOutput, ReviewState, Verdict
+from review_pipeline.models import (AssessOutput, DuplicateSet, FinderOutput, MergeOutput, RepeatsOutput,
+                                    ReviewState, Verdict)
 
 
 def reworded_finding():
@@ -40,6 +41,8 @@ class FakeAgents:
         self.cost = cost
         self.budget_stop_at = budget_stop_at
         self.two_groups = two_groups
+        self.assess_answer: AssessOutput | None = None
+        self.repeats_answer: RepeatsOutput | None = None
 
     async def __call__(self, prompt, schema, *, budget_label="", **kwargs):
         sdk.require_trusted_repo()
@@ -68,6 +71,10 @@ class FakeAgents:
         if stage == "merge":
             return MergeOutput(duplicate_sets=[DuplicateSet(
                 finding_ids=[high_finding().id, reworded_finding().id], reason="the same literal keyword")])
+        if stage == "assess":
+            return self.assess_answer or AssessOutput()
+        if stage == "repeats":
+            return self.repeats_answer or RepeatsOutput()
         raise AssertionError(budget_label)
 
 
@@ -81,9 +88,12 @@ def agents(monkeypatch):
 
 
 def _findings_line(out: str) -> list[Path]:
-    last = out.strip().splitlines()[-1]
-    assert last.startswith("findings: ")
-    return [Path(p) for p in last[len("findings: "):].split()]
+    """The `findings:` line, which is followed by the final `checks:` line."""
+    *_, line, last = out.strip().splitlines()
+    assert line.startswith("findings: ")
+    findings = [Path(p) for p in line[len("findings: "):].split()]
+    assert last == "checks: " + " ".join(str(p.parent / "checks.json") for p in findings)
+    return findings
 
 
 def _review_args(repo, base, head, out, *extra):
@@ -242,7 +252,7 @@ def test_a_budget_stop_during_merge_keeps_the_answers_and_resume_asks_only_the_r
                                                two_groups=True)
     assert before[-1] == "merge" and before.count("merge") == 1
     assert saved.stage == "verify" and len(saved.merge_answers) == 1
-    assert resumed == ["merge"]
+    assert resumed == ["merge", "assess"]  # three findings remain, so assess runs once
 
 
 def test_rollup_subcommand(fixture_repo, tmp_path, agents, capsys):
@@ -393,3 +403,40 @@ def test_calls_with_no_usage_leave_one_budget_line_that_a_resume_replaces(target
     budget_lines = [e for e in state.errors if e.startswith("budget:")]
     assert budget_lines == ["budget: 2 agent calls returned no usage; their cost and tokens are counted as 0"]
     assert state.errors[0] == "verify: something else"
+
+# --- rounds ----------------------------------------------------------------------
+
+
+def _fake_round(target_dir: Path, head_sha: str) -> None:
+    """A findings.json and review markdown as an earlier round on *head_sha* left them."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "findings.json").write_text(json.dumps(
+        {"schema_version": 1, "generated_at": "2026-01-01T00:00:00Z", "producer": "test",
+         "target": {"head_sha": head_sha}, "findings": []}))
+    (target_dir / f"review-{target_dir.name}.md").write_text("# earlier round\n")
+
+
+def test_a_run_on_a_new_head_keeps_the_earlier_round(fixture_repo, tmp_path, agents):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    target_dir = out / f"booking-engine--{base}..{head}"
+    old_head = "a" * 40
+    _fake_round(target_dir, old_head)
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    kept = target_dir / "rounds" / old_head[:12]
+    assert json.loads((kept / "findings.json").read_text())["target"]["head_sha"] == old_head
+    assert (kept / f"review-{target_dir.name}.md").read_text() == "# earlier round\n"
+    assert json.loads((target_dir / "findings.json").read_text())["target"]["head_sha"] == head
+
+
+def test_a_repeat_run_and_a_resume_on_the_same_head_keep_no_round(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    target_dir = out / f"booking-engine--{base}..{head}"
+    agents(kill_at="merge")
+    with pytest.raises(RuntimeError):
+        main(_review_args(repo, base, head, out))
+    assert main(["resume", str(target_dir), "--trust-repo"]) == 0
+    assert main(_review_args(repo, base, head, out)) == 0  # a second full run on the same head
+    assert not (target_dir / "rounds").exists()

@@ -22,7 +22,7 @@ SEVERITIES: tuple[str, ...] = ("HIGH", "MEDIUM", "LOW")
 
 # Stage names in run order. `ReviewState.stage` holds the last one completed.
 STAGES: tuple[str, ...] = (
-    "target", "find", "verify", "merge", "export", "render", "done",
+    "target", "find", "verify", "merge", "repeats", "assess", "export", "render", "done",
 )
 # Stages a checkpoint written before 0.22 can name. Both ran after verify, so
 # a resumed review of that age continues with merge.
@@ -165,6 +165,60 @@ class Interval(BaseModel):
     """One stretch of running time; `ended_at` is empty until it ends."""
     started_at: str
     ended_at: str = ""
+class AgentCheck(BaseModel):
+    """What one agent call was given, what it did, and what it concluded.
+
+    Built only from what `run_agent` already returns: tool names and inputs,
+    never tool results or file contents. `findings` (finders) and `verdict`
+    (verifiers) hold the same kinds of agent text `findings.json` holds.
+    """
+    stage: str  # find | verify | merge
+    subject: str  # the dimension, the finding id, or the merge group_key
+    given: list[str] = Field(default_factory=list)  # labels of the prompt's input blocks
+    calls: list[dict] = Field(default_factory=list)  # {tool, target, detail}
+    outcome: str = ""
+    turns: int = 0
+    cost_usd: float = 0.0
+    started_at: str = ""
+    ended_at: str = ""
+    error: str = ""  # empty on success
+    # Finders: every finding returned, before dedupe and gates, each with its
+    # citations marked `gate` and `seen`, and its `fate`.
+    findings: list[dict] = Field(default_factory=list)
+    # Verifiers: status, reason, citations (marked), and whether verdict_gate lowered it.
+    verdict: dict | None = None
+
+
+class GateCheck(BaseModel):
+    finding_id: str
+    gate: str  # finding_gate | verdict_gate
+    passed: bool
+    rule: str = ""  # which rule fired (gates.reason_kind); empty when passed
+
+
+class Repeat(BaseModel):
+    """A shown finding that describes the same defect as one the person rejected in an earlier round."""
+    rejected_id: str
+    reason: str
+    round: str  # head_sha of the earlier round the rejected finding came from
+    note: str = ""  # the person's note on that rejection
+    by: Literal["id", "agent"] = "agent"  # matched on the same id in Python, or by the repeats agent
+
+
+AssessLabel = Literal["useful", "still-open", "low-value", "repeat"]
+
+
+class Assessment(BaseModel):
+    """How a shown finding relates to the rest of the review and to earlier rounds.
+
+    Never changes a verdict or a severity, and never removes a finding.
+    """
+    label: AssessLabel
+    reason: str = ""
+    earlier_id: str = ""  # the earlier round's finding it repeats or is still open from
+    earlier_round: str = ""  # head_sha of that round
+    earlier_decision: str = ""  # the person's decision on it: accept, reject, defer, or "" for none
+    earlier_note: str = ""
 
 
 class ReviewState(BaseModel):
@@ -180,6 +234,16 @@ class ReviewState(BaseModel):
     # Each finder's result by dimension, stored as it returns, so a budget
     # stop during find keeps it and a resumed find runs only the rest.
     finder_results: dict[str, FinderResult] = Field(default_factory=dict)
+    # Shown findings that repeat a finding rejected in an earlier round, by id,
+    # stored as the repeats stage finds them; `repeats_checked` lists the ids
+    # already sent to the repeats agent, so a resume does not ask again.
+    repeats: dict[str, Repeat] = Field(default_factory=dict)
+    repeats_checked: list[str] = Field(default_factory=list)
+    # The assess stage's label per shown finding, by id. `assess_answer` is the
+    # agent's answer, stored as it arrives (empty when the call failed), so a
+    # resume does not ask twice.
+    assessments: dict[str, Assessment] = Field(default_factory=dict)
+    assess_answer: "AssessOutput | None" = None
     original_severity: dict[str, str] = Field(default_factory=dict)  # lowered findings only
     errors: list[str] = Field(default_factory=list)  # agent failures, shown in the review header
     budget: dict = Field(default_factory=dict)
@@ -190,6 +254,11 @@ class ReviewState(BaseModel):
     run_config: dict = Field(default_factory=dict)
     # How many times the budget circuit breaker stopped this review.
     budget_stops: int = 0
+    # The record of what was checked: one entry per agent call, in the order
+    # they returned, and one per gate result. Empty in checkpoints written
+    # before 0.26, which still load.
+    checks: list[AgentCheck] = Field(default_factory=list)
+    gate_checks: list[GateCheck] = Field(default_factory=list)
 
     @field_validator("stage", mode="before")
     @classmethod
@@ -210,3 +279,28 @@ class FinderOutput(_Model):
 
 class MergeOutput(_Model):
     duplicate_sets: list[DuplicateSet] = Field(default_factory=list)
+
+
+class RepeatMatch(_Model):
+    id: str
+    rejected_id: str
+    reason: str = ""
+
+
+class RepeatsOutput(_Model):
+    matches: list[RepeatMatch] = Field(default_factory=list)
+
+
+class AssessItem(_Model):
+    id: str
+    label: str
+    reason: str = ""
+    earlier_id: str = ""
+
+
+class AssessOutput(_Model):
+    assessments: list[AssessItem] = Field(default_factory=list)
+    duplicate_sets: list[DuplicateSet] = Field(default_factory=list)
+
+
+ReviewState.model_rebuild()

@@ -93,7 +93,8 @@ def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MA
 
 SESSION_DEFAULT = "session default"
 # The config field that sets each stage's model.
-STAGE_MODELS = {"find": "finder_model", "verify": "verifier_model", "merge": "merger_model"}
+STAGE_MODELS = {"find": "finder_model", "verify": "verifier_model", "merge": "merger_model",
+                "repeats": "merger_model", "assess": "merger_model"}
 
 
 def run_config(cfg: ReviewConfig) -> dict:

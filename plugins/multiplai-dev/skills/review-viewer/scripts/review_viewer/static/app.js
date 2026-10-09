@@ -326,6 +326,7 @@
     renderTabs();
     renderWalk();
     renderSummary();
+    renderChecked();
     schedulePrRefresh();
     state.walkSince = Date.now();
     const walkGen = state.pollGen;
@@ -394,10 +395,15 @@
     renderThread();
   }
 
-  const TABS = { summary: ["tab-summary", "summary"], walk: ["tab-walk", "walkthrough"], finding: ["tab-finding", "finding"] };
+  const TABS = { summary: ["tab-summary", "summary"], walk: ["tab-walk", "walkthrough"], finding: ["tab-finding", "finding"],
+    checked: ["tab-checked", "checked"] };
 
   function renderTabs() {
     if (state.view) renderFileNav();
+    const checks = state.detail && state.detail.checks;
+    if (state.tab === "checked" && !checks) state.tab = "summary";
+    $("tab-checked").hidden = !checks;
+    $("checked-count").textContent = checks ? String(checks.agents.length) : "";
     for (const [name, [tab, panel]] of Object.entries(TABS)) {
       const on = state.tab === name;
       $(tab).setAttribute("aria-selected", String(on));
@@ -792,30 +798,51 @@
       box.appendChild(emptyState("✓", "No code review for these commits: this is the plain diff. " +
         "Select lines in the code to ask about them."));
     }
+    const undecided = L.undecidedCount(findings, state.detail.decisions);
+    if (undecided.total) {
+      box.appendChild(el("p", { class: "muted undecided",
+        text: undecided.open + " of " + undecided.total + " findings still need a decision" }));
+    }
     for (const sev of L.SEVERITIES) {
       const items = grouped.groups[sev] || [];
       if (!items.length) continue;
       box.appendChild(el("h2", { class: "sev-h " + sev, text: sev + " (" + items.length + ")" }));
-      for (const f of items) {
-        box.appendChild(el("button", {
-          class: "finding-item " + sev + (f.id === state.selected ? " selected" : "") +
-            (L.isHidden(f, state.detail.decisions) ? " hidden-finding" : ""),
-          "data-id": f.id,
-          onclick: async () => {
-            await selectFinding(f.id);
-            $("finding-detail").scrollIntoView({ block: "start", behavior: "smooth" });
-          },
-        }, [
-          el("span", { class: "badge " + sev, text: f.status }),
-          state.detail.decisions[f.id] ? el("span", {
-            class: "badge " + state.detail.decisions[f.id].decision,
-            text: state.detail.decisions[f.id].decision,
-          }) : null,
-          el("span", { class: "claim", text: f.claim }),
-          el("span", { class: "where", text: f.file + ":" + f.line_start }),
-        ]));
-      }
+      for (const f of items) box.appendChild(findingItem(f));
     }
+    if (grouped.folded.length) {
+      // Repeats of rejected findings and low-value ones: still findings, still
+      // decidable, collapsed so the rest come first.
+      const open = grouped.folded.some((f) => f.id === state.selected);
+      box.appendChild(el("details", { class: "folded-group", open: open }, [
+        el("summary", { text: "Repeats and low-value (" + grouped.folded.length + ")" }),
+        ...grouped.folded.map((f) => findingItem(f, true)),
+      ]));
+    }
+  }
+
+  function findingItem(f, folded) {
+    const sev = f.severity;
+    const d = L.effectiveDecision(f, state.detail.decisions);
+    const label = L.assessLabel(f);
+    return el("button", {
+      class: "finding-item " + sev + (f.id === state.selected ? " selected" : "") +
+        (L.isHidden(f, state.detail.decisions) ? " hidden-finding" : ""),
+      "data-id": f.id,
+      onclick: async () => {
+        await selectFinding(f.id);
+        $("finding-detail").scrollIntoView({ block: "start", behavior: "smooth" });
+      },
+    }, [
+      el("span", { class: "badge " + sev, text: f.status }),
+      label && label !== "useful" ? el("span", { class: "badge assess " + label, text: label }) : null,
+      d ? el("span", {
+        class: "badge " + d.decision,
+        text: d.decision + (d.implied ? " (earlier round)" : ""),
+      }) : null,
+      el("span", { class: "claim", text: f.claim }),
+      el("span", { class: "where", text: f.file + ":" + f.line_start }),
+      folded ? el("span", { class: "assess-reason", text: L.assessmentText(f.assessment) }) : null,
+    ]);
   }
 
   // --- file status, counts, viewed ----------------------------------------------
@@ -996,6 +1023,118 @@
     }
   }
 
+  // --- checked: what every agent was given, did and concluded (checks.json) --------
+
+  function table(head, rows) {
+    return el("table", { class: "checks-table" }, [
+      el("thead", {}, [el("tr", {}, head.map((h) => el("th", { text: h })))]),
+      el("tbody", {}, rows.map((cells) => el("tr", {}, cells.map((c) =>
+        el("td", {}, [typeof c === "object" && c !== null ? c : String(c)]))))),
+    ]);
+  }
+
+  /* A finding id: a link to the Findings tab when the review shows it. */
+  function findingRef(id) {
+    if (!state.findingsById.has(id)) return el("span", { class: "mono", text: id });
+    return el("button", { class: "cite-link mono", text: id, onclick: () => selectFinding(id) });
+  }
+
+  /* A path, a pattern, a URL or a query an agent used. Only a changed file links to the code
+   * pane; a URL is never a link, so the page does not send anyone where an agent chose. */
+  function callTarget(call) {
+    if (L.callLinksToDiff(call, state.detail.files)) {
+      return el("button", { class: "cite-link mono", text: call.target, onclick: () => openFile(call.target) });
+    }
+    return el("span", { class: "mono", text: call.target });
+  }
+
+  function markedCitation(c) {
+    const inDiff = c.gate !== "web" && state.detail.files.indexOf(c.path) >= 0;
+    const where = inDiff
+      ? el("button", { class: "cite-link mono", text: L.anchorLabel(c), onclick: () => openFile(c.path, c.line_start, c.line_end) })
+      : el("span", { class: "mono", text: c.gate === "web" ? c.path : L.anchorLabel(c) });
+    const warn = L.citationWarning(c);
+    return el("div", { class: "check-cite" + (warn ? " warn" : "") }, [
+      el("div", {}, [where, el("span", { class: "badge", title: "citation_gate at the head commit", text: "gate: " + c.gate }),
+        el("span", { class: "badge", title: "how the agent came to these lines", text: "seen: " + c.seen }),
+        warn ? el("span", { class: "warn-mark", text: "⚠" }) : null]),
+      el("pre", { class: "quote", text: c.quote }),
+    ]);
+  }
+
+  function findingEvent(f) {
+    const fate = f.fate === "kept" ? findingRef(f.id)
+      : el("span", {}, [f.fate + (f.rule ? " (" + f.rule + ")" : ""), f.into ? " into " : "", f.into ? findingRef(f.into) : null]);
+    return el("div", { class: "check-event" + (f.fate === "rejected" ? " warn" : "") }, [
+      el("div", {}, [el("span", { class: "badge " + f.severity, text: f.severity }), " ", el("strong", { text: f.claim })]),
+      el("div", { class: "muted small" }, ["Fate: ", fate]),
+      el("p", { text: f.failure_scenario }),
+    ].concat((f.citations || []).map(markedCitation)));
+  }
+
+  function agentEntry(a, i) {
+    const body = [
+      el("div", { class: "label", text: "Given" }),
+      el("p", { text: (a.given || []).join(", ") || "(nothing listed)" }),
+      el("div", { class: "label", text: "Tool calls (" + a.calls.length + ")" }),
+      a.calls.length ? el("ul", { class: "check-calls" }, a.calls.map((c) => el("li", {}, [
+        el("span", { class: "tool", text: c.tool + " " }), callTarget(c), c.detail ? el("span", { class: "muted", text: " — " + c.detail }) : null,
+      ]))) : el("p", { class: "muted", text: "None." }),
+    ];
+    if (a.findings && a.findings.length) {
+      body.push(el("div", { class: "label", text: "Findings returned" }));
+      for (const f of a.findings) body.push(findingEvent(f));
+    }
+    if (a.verdict) {
+      body.push(el("div", { class: "label", text: "Verdict" }),
+        el("p", {}, [el("strong", { text: a.verdict.status + (a.verdict.lowered ? " (lowered by verdict_gate)" : "") + ". " }), a.verdict.reason]));
+      for (const c of a.verdict.citations) body.push(markedCitation(c));
+      if (state.findingsById.has(a.subject)) body.push(el("p", {}, ["Finding: ", findingRef(a.subject)]));
+    }
+    if (a.error) body.push(el("p", { class: "notice", text: a.error }));
+    body.push(el("p", { class: "muted small", text: a.turns + " turns, $" + a.cost_usd.toFixed(2) + ", " +
+      a.started_at + " → " + a.ended_at }));
+    return el("details", { id: "agent-" + i, class: "agent" + (a.error ? " failed" : "") }, [
+      el("summary", {}, [el("span", { class: "badge", text: a.stage }), " ", el("span", { class: "mono", text: a.subject }),
+        " — " + a.outcome]),
+    ].concat(body));
+  }
+
+  function renderChecked() {
+    const box = $("checked");
+    const checks = state.detail && state.detail.checks;
+    box.replaceChildren();
+    if (!checks) return;
+    box.appendChild(el("div", { class: "label", text: "Finders" }));
+    const finders = L.finderRows(checks);
+    box.appendChild(finders.length
+      ? table(["finder", "ran", "files read", "returned", "kept", "deduped", "merged", "rejected"],
+        finders.map((r) => [r.subject, r.ran, r.filesRead, r.returned, r.kept, r.deduped, r.merged, r.rejected]))
+      : el("p", { class: "muted", text: "No finder ran." }));
+    box.appendChild(el("div", { class: "label", text: "Findings" }));
+    const rows = L.checkedFindingRows(checks);
+    box.appendChild(rows.length
+      ? table(["finding", "finder", "verdict", "gate", "fate"],
+        rows.map((r) => [findingRef(r.id), r.finder, r.verdict, r.gate, r.fate + (r.into ? " into " + r.into : "")]))
+      : el("p", { class: "muted", text: "No finder returned a finding." }));
+    const merges = L.mergeRows(checks);
+    if (merges.length) {
+      box.appendChild(el("div", { class: "label", text: "Merge groups" }));
+      box.appendChild(table(["group", "outcome"], merges.map((m) => [m.subject, m.outcome])));
+    }
+    box.appendChild(el("div", { class: "label", text: "Agents, in the order they started" }));
+    L.agentOrder(checks).forEach((a, i) => box.appendChild(agentEntry(a, i)));
+  }
+
+  /* Open agent entry *i* on the Checked tab: the "Checked by" link. */
+  function showAgent(i) {
+    setTab("checked");
+    const node = $("agent-" + i);
+    if (!node) return;
+    node.open = true;
+    node.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
+  }
+
   // --- finding detail ----------------------------------------------------------
 
   async function selectFinding(id, opts) {
@@ -1030,6 +1169,10 @@
     if (f.verdict_reason) out.push(el("div", { class: "label", text: "Verdict" }), el("p", { text: f.verdict_reason }));
     out.push(el("div", { class: "label", text: "Cited code" }));
     for (const c of f.citations) out.push(citationLink(c));
+    if (f.verifier_citations && f.verifier_citations.length) {
+      out.push(el("div", { class: "label", text: "The verifier's citations" }));
+      for (const c of f.verifier_citations) out.push(citationLink(c));
+    }
     return out;
   }
 
@@ -1047,7 +1190,19 @@
       el("span", { class: "badge", text: f.status }),
     ]));
     box.appendChild(el("h2", { text: f.claim }));
+    const assessed = L.assessmentText(f.assessment);
+    if (assessed) {
+      box.appendChild(el("div", { class: "label", text: "Assessment: " + L.assessLabel(f) }));
+      box.appendChild(el("p", { text: assessed }));
+    }
     for (const node of findingFacts(f)) box.appendChild(node);
+    const checks = state.detail.checks;
+    const vi = checks ? L.verifierIndex(checks, f.id) : -1;
+    if (vi >= 0) {
+      box.appendChild(el("div", { class: "label", text: "Checked by" }));
+      box.appendChild(el("button", { class: "cite-link", text: "the verifier's entry on the Checked tab",
+        onclick: () => showAgent(vi) }));
+    }
     const steps = L.stepsForFinding(state.walk, f.id);
     if (steps.length) {
       box.appendChild(el("div", { class: "label", text: "Explained in the walkthrough" }));
@@ -2053,6 +2208,7 @@
     $("tab-finding").addEventListener("click", () => setTab("finding"));
     $("tab-summary").addEventListener("click", () => setTab("summary"));
     $("tab-walk").addEventListener("click", () => setTab("walk"));
+    $("tab-checked").addEventListener("click", () => setTab("checked"));
     $("help-btn").addEventListener("click", toggleHelp);
     $("palette-input").addEventListener("input", () => { state.palette.index = 0; renderPalette(); });
     $("palette-input").addEventListener("keydown", onPaletteKey);

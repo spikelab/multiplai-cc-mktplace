@@ -20,7 +20,7 @@ The page-logic tests need `node`; they fail (not skip) without it.
 | Module | Does |
 |---|---|
 | `__main__.py` | CLI: `serve` (findings files, or `--target`), `reply`, `pending`, `list`, `stop`, `walkthrough put\|status`, `validate`, `export-schema`. Calls `setup_logging` once. Owns the stdout contract. `find_review()` looks for a review of the same commits. |
-| `models.py` | The `findings.json` v1 and `walkthrough.json` v1 pydantic models (source of truth for both files in `../schema/`), `finding_id()`, and the mailbox row models. |
+| `models.py` | The `findings.json` v1, `checks.json` v1 and `walkthrough.json` v1 pydantic models (source of truth for the three files in `../schema/`), `finding_id()`, `load_checks()`, and the mailbox row models. |
 | `gitdata.py` | Git: `parse_target()` / `resolve_target()` (PR, branch, worktree, `a..b`, `a...b`; same base/head rules as `review_pipeline/target.py`, restated because that member is not importable here), `parse_unified()`, `file_view()`, `allowed_paths()`, `diff_target()`. Fixed argv, no shell, stdin closed. The only writes to a repo are the fetches named in `../SKILL.md`. |
 | `stats.py` | measured badges: `classify()` a path (lock, generated, test, docs, code), `change_stats()` from `git diff --numstat`, `--name-status` and `git log`, the size/tests/commits thresholds, PR badges, `per_file` (status letter and line counts per changed file, for the file list), and `tiers` read from a repo's `.review-risk.toml` for the risk score. |
 | `walkthrough.py` | `check()` a walkthrough against the served target, `coverage()`, `put()` by atomic replace. |
@@ -31,7 +31,8 @@ The page-logic tests need `node`; they fail (not skip) without it.
 | `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `theme.js` (applies the saved theme and light/dark mode before first paint as `data-theme`/`data-mode`, fills the Theme menu, drives the mode button; saves choices in a cookie on the widest parent domain the browser accepts, so every viewer's port and container shares them, and exposes that store as `window.ReviewPrefs`), `logic.js` (pure functions, tested under node; `riskLevel` holds the risk rules; `runBlock`/`runTotal` and the number formats behind the Summary tab's Run block), `app.js`, `app.css` (every size from the tokens at its top), `themes.css` (every rule scoped to `html[data-theme]`), the bundled `font-*.woff2` and `FONTS-LICENSE.txt`. |
 
 After changing `models.py`, run `python -m review_viewer export-schema` and
-commit both schemas; `test_models.py` fails while either differs.
+commit the three schemas; `test_models.py` and `test_checks.py` fail while
+any differs.
 
 ## The token rule
 
@@ -57,6 +58,25 @@ citation paths) — anything else is 404.
 See `models.py` or the committed schema. Unknown keys are rejected at every
 level. Line numbers are 1-based, at `head_sha`. `finding_id` is the first 10
 hex of `sha1(f"{file}\0{line_start}\0{claim}")`.
+
+`findings.json` may carry `verifier_citations` per finding (review 0.26+): the
+lines the verifier read. `allowed_paths()` includes their paths, and the
+Findings tab lists them under the finder's citations.
+
+## Protocol 1a: `checks.json` v1 (optional)
+
+The review writes it beside `findings.json`: `agents` (each agent call's
+stage, subject, `given` labels, `calls` as `{tool, target, detail}` — inputs
+only, never tool results — outcome, turns, cost, times, error, plus
+`findings` for a finder and `verdict` for a verifier, every citation marked
+`gate` and `seen`) and `gates`. `server.checks_beside()` loads it when it
+validates and names the same base and head as the findings; otherwise it logs
+a warning and the target has none. `/api/targets/<slug>` returns it as
+`checks` (null when absent), next to the findings, which are served
+unchanged. The page's Checked tab is shown only when `checks` is set; its
+grouping and ordering live in `logic.js` (`agentOrder`, `finderRows`,
+`checkedFindingRows`, `mergeRows`, `verifierIndex`, `callLinksToDiff`,
+`citationWarning`).
 
 ## Protocol 2: the mailbox (`<dir of findings.json>/viewer/`)
 
@@ -191,4 +211,5 @@ commit and a PR head under `refs/pull/7/head`, for target resolution;
 | `test_walkthrough.py` | each `walkthrough put` rule, the CLI, the route, `step_id` questions |
 | `test_serve_targets.py` | review lookup (match, stale, none) and the `walkthrough:` stdout line |
 | `test_server.py`, `test_mailbox.py`, `test_models.py`, `test_logging.py`, `test_netinfo.py` | the server, mailbox, contracts, logs, container detection |
+| `test_checks.py` | the `checks.v1` contract, loading it beside findings (present, absent, invalid, other commits), `verifier_citations` |
 | `logic.test.js` (via `test_logic_js.py`) | the page's pure functions, under node |

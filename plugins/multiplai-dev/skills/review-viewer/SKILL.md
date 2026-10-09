@@ -14,6 +14,16 @@ exists for the same commits — its findings grouped by severity. Questions and
 decisions typed into the page are appended to a mailbox file this session
 watches; you answer with one command and the answer appears in the page.
 
+When the review labelled its findings (multiplai-dev 0.27+), the list shows
+`useful` and `still-open` findings first and folds `repeat` (the same defect
+as one the user rejected in an earlier round) and `low-value` findings into a
+collapsed **Repeats and low-value** group at the end, each with its badge and
+reason; a repeat shows the earlier round, decision and note. A repeat counts
+as rejected, marked "(earlier round)", in the "still need a decision" line and
+the merge-risk badge until the user decides it; the page never writes that
+decision to `decisions.json`. Every folded finding can still be opened,
+accepted, rejected or deferred. An older `findings.json` shows as before.
+
 ## What this skill does on the machine
 
 - **Opens a local network port.** It runs a small HTTP server (Python stdlib)
@@ -257,9 +267,23 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   reverted, tier 3 has a `tests` concern, or PR checks fail. Otherwise
   **Medium** if tier 3, tier 2 without a `tests` good, a confirmed MEDIUM
   finding is open, the diff is large, or it cannot be reverted. Otherwise
-  **Low**. A finding stays open until it is rejected in the page.
+  **Low**. A finding stays open until it is rejected in the page, or until
+  the review labels it a `repeat` of a finding rejected in an earlier round.
 - The steps show on a **Reviews** tab. Clicking a file opens the first step
   that anchors it, so anchor each step on every file it explains.
+- When the review wrote a `checks.json` beside `findings.json` (review 0.26
+  and later), a **Checked** tab shows what the review checked: a checklist
+  (one row per finder, per finding with its verdict and gate outcome, per
+  merge group), then one collapsible entry per agent, in the order they
+  started, with what it was given, every file it read, search it ran and URL
+  it fetched, and the findings or verdict it produced. Each citation shows
+  whether the gate found its quote at head and how the agent came to those
+  lines (`read`, `searched`, `diff`, `prompt`, `fetched`, or `not-seen`, shown as a
+  warning). Rejected findings appear only here, with the rule that rejected
+  them. A read of a changed file opens in the code pane; URLs are plain text.
+  The Findings tab lists the verifier's own citations and a "Checked by" link
+  to its entry. An older review, or a `checks.json` that does not validate or
+  names other commits, opens without the tab.
 - Publish early, then finish: `put` the overview and first steps with
   `"complete": false`, then the rest, and finally `"complete": true`.
 
@@ -368,4 +392,6 @@ older file. The server reads these numbers from the file and computes nothing.
   (generated from `scripts/review_viewer/models.py`).
 - `schema/walkthrough.v1.schema.json` — the `walkthrough.json` v1 contract
   the session writes.
+- `schema/checks.v1.schema.json` — the `checks.json` v1 contract the review
+  writes beside `findings.json` (generated from the same `models.py`).
 - `scripts/CLAUDE.md` — module map, mailbox protocol, logging events.

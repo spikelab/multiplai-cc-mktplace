@@ -122,11 +122,39 @@ def test_every_run_field_is_filled_from_the_state(canned_state):
     assert (finder["stage"], finder["wall_seconds"], finder["model"]) == ("find", 40, "session default")
     assert (verify["wall_seconds"], verify["model"], verify["effort"]) == (90, "claude-x", "high")
     assert verify["tokens"] == {"input": 20, "output": 4, "cache_read": 200, "cache_write": 2, "total": 226}
-    assert run["counts"] == {"found": 4, "rejected": 1, "refuted": 1, "unverifiable": 1, "merged": 0}
+    assert run["counts"] == {"found": 4, "rejected": 1, "refuted": 1, "unverifiable": 1, "merged": 0,
+                             "repeats": 0, "low_value": 0}
 
 
 def test_findings_file_with_and_without_run_validates(canned_state):
     data = to_findings_file(_two_stage_resumed_state(canned_state))
     jsonschema.validate(data, _schema())
     del data["run"]
+    jsonschema.validate(data, _schema())
+
+def test_exported_checks_validate_against_the_viewer_checks_schema(canned_state, tmp_path):
+    from review_pipeline.export import write_checks_file
+    from review_pipeline.models import AgentCheck, GateCheck
+
+    high = canned_state.findings[0]
+    marked = {**high.citations[0].model_dump(), "gate": "pass", "seen": "diff"}
+    canned_state.checks = [AgentCheck(
+        stage="find", subject="diff-bugs", given=["diff (3 files)"],
+        calls=[{"tool": "Read", "target": "rateplan_service.py", "detail": "lines 1-6"}], outcome="1 finding",
+        turns=2, cost_usd=0.3, started_at="2026-10-09T10:00:00.000Z", ended_at="2026-10-09T10:00:05.000Z",
+        findings=[{"id": high.id, "claim": high.claim, "severity": high.severity,
+                   "failure_scenario": high.failure_scenario, "citations": [marked], "fate": "kept"}])]
+    canned_state.gate_checks = [GateCheck(finding_id=high.id, gate="finding_gate", passed=True)]
+    data = json.loads(write_checks_file(canned_state, tmp_path).read_text(encoding="utf-8"))
+    jsonschema.validate(data, json.loads((SCHEMA.parent / "checks.v1.schema.json").read_text(encoding="utf-8")))
+
+
+def test_run_counts_repeats_and_low_value_from_the_assessments(canned_state):
+    from review_pipeline.models import Assessment
+
+    a, b = canned_state.findings[0], canned_state.findings[1]
+    canned_state.assessments = {a.id: Assessment(label="repeat", reason="r"),
+                                b.id: Assessment(label="low-value", reason="[covered] r")}
+    data = to_findings_file(canned_state)
+    assert (data["run"]["counts"]["repeats"], data["run"]["counts"]["low_value"]) == (1, 1)
     jsonschema.validate(data, _schema())
