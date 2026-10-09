@@ -20,19 +20,20 @@ cd plugins/multiplai-dev/skills/review/scripts && \
 
 | Module | Does |
 |---|---|
-| `__main__.py` | CLI: `review`, `batch`, `rollup`, `resume`, `post`. Calls `setup_logging` once. Owns the stdout contract and the exit codes. |
-| `models.py` | Pipeline models. `Finding.citations` has `min_length=1`; `Finding.id` is computed with the v1 rule, never taken from a model. `Finding.finders` lists every finder that reported it. `STAGES` is the run order; `ReviewState` maps the removed `prescribe`/`check_fix` stages of an old checkpoint to `verify`. |
+| `__main__.py` | CLI: `review`, `batch`, `rollup`, `resume`, `post`, `assess-only`. Calls `setup_logging` once. Owns the stdout contract and the exit codes. |
+| `models.py` | Pipeline models. `Finding.citations` has `min_length=1`; `Finding.id` is computed with the v1 rule, never taken from a model. `Finding.finders` lists every finder that reported it. `STAGES` is the run order (target, find, verify, merge, repeats, assess, export, render, done); `Repeat` and `Assessment` hold the repeats and assess stages' results; `ReviewState` maps the removed `prescribe`/`check_fix` stages of an old checkpoint to `verify`. |
 | `target.py` | Resolves `--branch` / `--pr` / `--range` to shas, writes `diff.patch`, `commits.txt`, `files.txt`; `target_gate`; `snapshot_head()` (`git archive` of head into `<slug>/tree/`). For `--pr`, also the PR title and body and `branch_rules()` (the base branch's GitHub rules; `[]` when GitHub reports none, `None` with a warning when `gh` or the API fails). Fixed argv, no shell, no checkout. |
 | `gates.py` | `citation_gate`, `finding_gate`, `verdict_gate`. Each takes `TargetInfo` and returns `GateResult`. A web citation (`Citation.is_web`) is skipped, not checked: it may not be first, and it does not confirm. |
 | `sdk.py` | `agent_call_structured`: trust gate, an allow-list with its complement denied (`Read`/`Grep`/`Glob` for every stage, plus `WebFetch`/`WebSearch` for finders and verifiers), one re-ask on a bad answer: a no-tools, one-turn reformat of the text returned, or a re-run of the prompt when the run itself failed. `parse_answer` says so when an answer holds no JSON at all. The only caller of `run_agent`. |
 | `budget.py` | Per-target ledger in a `ContextVar` (a batch runs targets concurrently) and the circuit breaker. |
 | `config.py` | `review.yaml` > `multiplai.conf` > session model, for per-stage models, effort, concurrency. |
-| `stages/` | `find`, `verify`, `merge`. Each `run_<stage>(state, ctx)` returns at once when the state is past it and skips items it already has. Each stores an agent's answer in the state as it returns (`finder_results`, `verdicts`, `merge_answers`), so the checkpoint saved at a budget stop keeps it. `find.conventions_chain` reads every `coding-standards.md` on the path from the root to each changed file's directory, then every `CLAUDE.md` on the same path, so the `CONVENTIONS_MAX_CHARS` cap skips `CLAUDE.md` text first. |
+| `rounds.py` | Earlier rounds: `keep_round` copies the last round's `findings.json`, review markdown and `checks.json` to `rounds/<head[:12]>/` when a run starts on a new head (never on the same head, never overwriting); `load_rounds` reads them with the person's decisions from `viewer/decisions.json`. |
+| `stages/` | `find`, `verify`, `merge`, `repeats`, `assess`. Each `run_<stage>(state, ctx)` returns at once when the state is past it and skips items it already has. Each stores an agent's answer in the state as it returns (`finder_results`, `verdicts`, `merge_answers`), so the checkpoint saved at a budget stop keeps it. `find.conventions_chain` reads every `coding-standards.md` on the path from the root to each changed file's directory, then every `CLAUDE.md` on the same path, so the `CONVENTIONS_MAX_CHARS` cap skips `CLAUDE.md` text first. |
 | `prompts/` | One module per stage; shared blocks in `__init__.py`: `workspace_block(web=)`, `description_block` (PR title and body inside an `<untrusted-content>` fence, as claims to check), `settings_block` (the base branch's rules, and the sentence "a red run can be merged" when no `required_status_checks` rule exists). |
-| `export.py` | `ReviewState` → `findings.json` v1, key by key (the contract rejects unknown keys). Merged-away findings and `Finding.finders` are not exported; the v1 shape did not change for them. |
-| `render.py` | `review-<slug>.md`, the short `summary-<slug>.md` the session pastes into chat, and the `<SEV>-only.md` rollups, all from v1 dicts. |
-| `post.py` | One `gh pr comment`; with `--decisions`, only findings whose decision is `accept`. |
-| `orchestrator.py` | target → find → verify → merge → export → render, saving `review-state.json` after each; `resume`; `batch`. |
+| `export.py` | `ReviewState` → `findings.json` v1, key by key (the contract rejects unknown keys). Merged-away findings and `Finding.finders` are not exported; the v1 shape did not change for them. A shown finding's `Assessment` is exported as the optional `assessment` object. |
+| `render.py` | `review-<slug>.md`, the short `summary-<slug>.md` the session pastes into chat, and the `<SEV>-only.md` rollups, all from v1 dicts. `repeat` and `low-value` findings get their own section after the others, and only a count in the summary. |
+| `post.py` | One `gh pr comment`; with `--decisions`, only findings whose decision is `accept`; without it, never a `repeat`. |
+| `orchestrator.py` | target → find → verify → merge → repeats → assess → export → render, saving `review-state.json` after each; `prepare` keeps the earlier round first; `resume`; `batch`; `assess_only` and `assess_report` for the `assess-only` command. |
 | `state.py`, `progress.py` | Atomic checkpoint; the tailable `progress.log` (`STARTED`, `STAGE`, `DONE`, `FAILED`). |
 
 ## Why the agents read a snapshot
@@ -61,9 +62,12 @@ of the normalised claim match (`dedupe_key`), and records the dropped copy's
 finder in `finders`. Reworded duplicates get through, so `stages/merge.py`
 runs after verify:
 
-- `overlap_groups` takes the `confirmed` and `unverifiable` findings, per file,
-  and chains every pair whose line ranges overlap or are at most
-  `MERGE_LINE_GAP` (2) lines apart. Groups of two or more go to one agent each.
+- `overlap_groups` takes the `confirmed` and `unverifiable` findings and
+  chains every pair that `linked` accepts: their anchors are in one file and
+  overlap or are at most `MERGE_LINE_GAP` (2) lines apart, or any repository
+  citation of one overlaps (within the same gap) any repository citation of
+  the other, in any file. Web citations never link. Groups of two or more go
+  to one agent each.
 - The agent returns `duplicate_sets` of ids. `usable_sets` keeps only ids in
   the group, each id once, sets of two or more.
 - `merge_set` keeps one member (confirmed before unverifiable, then the most
@@ -75,6 +79,40 @@ runs after verify:
 - Answers are stored in `state.merge_answers` by `group_key` as they arrive,
   so a resume asks no group twice. A failed agent call stores an empty answer
   (the group stays unmerged) and adds a line to `state.errors`.
+
+## The assess stage
+
+Two stages after merge judge the findings as a set. Neither deletes a
+finding or changes a verdict or a severity; both run on the merger's model.
+
+- **Rounds.** A PR is reviewed into the same `<out>/<slug>/`, so
+  `orchestrator.prepare` calls `rounds.keep_round` before a new head writes
+  over the last round. `viewer/decisions.json` (review-viewer's, keyed by
+  finding id) already persists across rounds and stays where it is.
+- **`repeats`** (`stages/repeats.py`) builds the rejected list (findings in
+  `rounds/*/findings.json` whose decision is `reject`), skips when it is
+  empty, matches equal ids in Python, and sends the rest to one agent.
+  `gate_matches` keeps a match only when the id is a shown finding not yet
+  matched, `rejected_id` is on the list and `reason` is not empty; dropped
+  ones go to `state.errors`. Matches go to `state.repeats`, and the ids asked
+  about to `state.repeats_checked`, as the answer arrives. The finders never
+  see the rejected list: a repeat is shown, labelled, not hidden.
+- **`assess`** (`stages/assess.py`, rules in `prompts/assess.py`) labels the
+  shown findings that are not repeats: `useful`, `still-open` or
+  `low-value` (rules `context`, `covered`, `speculative`). Skipped with fewer
+  than two such findings and no earlier rounds. `gate_assessments` turns any
+  label that fails (unknown id, unknown label, an `earlier_id` not in
+  `rounds/`, `still-open` without an accepted or undecided earlier finding,
+  `low-value` naming no rule, a finding left out) into `useful` with a line
+  in `state.errors`. Its `duplicate_sets` go through the merge stage's
+  `apply_duplicate_sets` (`usable_sets`, `merge_set`). The raw answer is
+  stored in `state.assess_answer`, so a resume asks nothing twice; a failed
+  call stores an empty answer and leaves every finding `useful`.
+- Both labels end up in `state.assessments` (repeats as `repeat`), exported
+  per finding as `assessment`.
+- Neither stage's answers have been tuned against recorded decisions. Run
+  `assess-only` over the saved reviews first (see `review/SKILL.md`), and
+  only then change the prompt.
 
 ## Logging
 
