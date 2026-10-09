@@ -224,14 +224,44 @@ def test_cached_overlay_is_not_rendered_again(tmp_path) -> None:
     assert got == cached
 
 
+def _fake_ffmpeg(calls: list, fail: bool = False):
+    def run(cmd, **k):
+        calls.append(cmd)
+        Path(cmd[-1]).parent.mkdir(parents=True, exist_ok=True)
+        Path(cmd[-1]).write_bytes(b"half" if fail else b"mov")
+        if fail:
+            raise overlay.subprocess.CalledProcessError(1, cmd)
+    return run
+
+
 def test_encode_is_prores_4444_with_alpha(tmp_path) -> None:
     calls = []
-    overlay.encode_prores(tmp_path, 30, tmp_path / "o.mov", run=lambda cmd, **k: calls.append(cmd))
+    out = overlay.encode_prores(tmp_path, 30, tmp_path / "o.mov", run=_fake_ffmpeg(calls))
     cmd = calls[0]
     assert cmd[cmd.index("-c:v") + 1] == "prores_ks"
     assert cmd[cmd.index("-profile:v") + 1] == "4444"
     assert cmd[cmd.index("-pix_fmt") + 1] == "yuva444p10le"
     assert cmd[cmd.index("-i") + 1] == str(tmp_path / "f_%05d.png")
+    assert cmd[-1] != str(out)                      # ffmpeg writes a temporary name …
+    assert out.read_bytes() == b"mov"               # … renamed into place on success
+    assert not Path(cmd[-1]).exists()
+
+
+def test_failed_encode_leaves_no_cached_overlay(tmp_path, monkeypatch) -> None:
+    html = tmp_path / "card.html"
+    html.write_text(PAGE)
+    backend = overlay.Backend("ab", ["ab"], None)
+    monkeypatch.setattr(overlay, "render_frames", lambda *a, **k: 1)
+    calls: list = []
+    with pytest.raises(overlay.subprocess.CalledProcessError):
+        overlay.render_overlay(html, 640, 360, 30, 2.0, tmp_path / "cache", backend=backend,
+                               run=_fake_ffmpeg(calls, fail=True), log=lambda s: None)
+    out_dir = tmp_path / "cache" / "overlays" / overlay.content_hash(PAGE, 640, 360, 30, 2.0)
+    assert not list(out_dir.glob("*.mov"))
+    # the next render encodes again instead of reusing a half-written file
+    out = overlay.render_overlay(html, 640, 360, 30, 2.0, tmp_path / "cache", backend=backend,
+                                 run=_fake_ffmpeg(calls), log=lambda s: None)
+    assert out.read_bytes() == b"mov" and len(calls) == 2
 
 
 # --- EDL overlays ------------------------------------------------------------------------

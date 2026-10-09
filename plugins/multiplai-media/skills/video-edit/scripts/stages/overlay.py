@@ -185,10 +185,20 @@ def render_frames(html: str, width: int, height: int, fps: int, duration: float,
 
 
 def encode_prores(frames_dir: Path, fps: int, out: Path, run: Runner = subprocess.run) -> Path:
-    run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-         "-framerate", str(fps), "-i", str(frames_dir / "f_%05d.png"),
-         "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le",
-         str(out)], check=True)
+    """Encode to a temporary name and rename it to `out` only once ffmpeg
+    succeeds, so a failed or interrupted encode never leaves a file at `out`
+    that render_overlay would take for a cached overlay."""
+    partial = out.with_name(f"{out.stem}.partial{out.suffix}")
+    partial.unlink(missing_ok=True)
+    try:
+        run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+             "-framerate", str(fps), "-i", str(frames_dir / "f_%05d.png"),
+             "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le",
+             str(partial)], check=True)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    os.replace(partial, out)
     return out
 
 
