@@ -41,7 +41,16 @@ def cmd_render(args: argparse.Namespace) -> int:
     print(f"→ rendering {len(edl.segments)} segments → {out}")
     if edl.music and edl.music.file:
         print(f"→ music bed: {edl.music.file} @ {edl.music.volume_db} dB")
-    composite.render(edl, out, work_dir=Path(args.work_dir) if args.work_dir else None)
+    # ffmpeg writes a hidden partial file that is renamed only once it
+    # finishes, so a review page watching the folder never offers a
+    # half-written render.
+    part = out.with_name(f".{out.stem}.partial{out.suffix}")
+    try:
+        composite.render(edl, part, work_dir=Path(args.work_dir) if args.work_dir else None)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    part.replace(out)
     print(f"✓ wrote {out} ({out.stat().st_size/1e6:.1f} MB)")
     return 0
 

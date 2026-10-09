@@ -133,6 +133,14 @@ def test_videos_lists_clips_with_versions(server) -> None:
     ]
 
 
+def test_videos_skip_a_render_still_being_written(tmp_path: Path) -> None:
+    (tmp_path / "clip-01.mp4").write_bytes(b"")
+    (tmp_path / ".clip-01.v2.partial.mp4").write_bytes(b"")
+    assert rs.list_videos(tmp_path) == [
+        {"clip": "clip-01", "versions": [{"version": 1, "name": "clip-01.mp4"}]}]
+    assert rs.next_version_path(tmp_path, "clip-01") == tmp_path / "clip-01.v2.mp4"
+
+
 def test_next_version_path(tmp_path: Path) -> None:
     (tmp_path / "a.mp4").write_bytes(b"")
     (tmp_path / "a.v3.mp4").write_bytes(b"")
