@@ -76,3 +76,45 @@ def test_a_tree_review_opens_with_every_file_added_and_no_commits(fixture_repo, 
         assert kinds <= {"add", "gap"} and "add" in kinds, (path, kinds)
     stats = change_stats(Target.model_validate(data["target"]))
     assert stats.commits == [] and not any(b.id == "risk" for b in stats.badges)
+
+
+def _tree_review(dirs, name, repo, head, slug, files):
+    """A findings.json for a tree review of *slug* at *head*, written to `<dirs>/<name>/`."""
+    from conftest import FIXTURE
+
+    data = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    data["target"].update(repo_path=str(repo), base_sha=EMPTY_TREE, head_sha=head, slug=slug,
+                          label=slug, files_changed=files)
+    data["findings"] = []
+    out = dirs / name / "findings.json"
+    out.parent.mkdir(parents=True)
+    out.write_text(json.dumps(data), encoding="utf-8")
+    return out
+
+
+def test_find_review_matches_a_tree_review_only_of_the_same_directory(fixture_repo, tmp_path):
+    from review_viewer.__main__ import find_review
+
+    repo, _, head = fixture_repo
+    reviews = tmp_path / "reviews"
+    whole = _tree_review(reviews, "whole", repo, head, "fixture-repo--tree", _files_at(repo, head))
+    app = _tree_review(reviews, "app", repo, head, "fixture-repo--tree-app", _files_at(repo, head, "app"))
+    assert find_review(tree_target(repo, "HEAD", "app"), [reviews])[:2] == ("match", app)
+    assert find_review(tree_target(repo, "HEAD"), [reviews])[:2] == ("match", whole)
+    # Same commit, but no review of this directory: none, not the newest tree review.
+    other = sorted({f.split("/", 1)[0] for f in _files_at(repo, head) if "/" in f} - {"app"})[0]
+    assert find_review(tree_target(repo, "HEAD", other), [reviews]) == ("none", None, None)
+
+
+def test_change_stats_of_a_tree_limited_by_path_counts_only_that_directory(fixture_repo):
+    repo, _, head = fixture_repo
+    app = _files_at(repo, head, "app")
+    stats = change_stats(tree_target(repo, "HEAD", "app"))
+    assert app and len(app) < len(_files_at(repo, head))
+    assert stats.files == len(app)
+    assert set(stats.per_file) == set(app)
+    whole = change_stats(tree_target(repo, "HEAD"))
+    # The fixture's only file outside app/ is a binary one: the whole tree counts it, app/ does not.
+    assert stats.added == sum(f["added"] or 0 for f in stats.per_file.values())
+    assert (stats.binary, whole.binary) == (0, 1) and stats.files < whole.files
+    assert sum(k["files"] for k in stats.by_kind.values()) == len(app)

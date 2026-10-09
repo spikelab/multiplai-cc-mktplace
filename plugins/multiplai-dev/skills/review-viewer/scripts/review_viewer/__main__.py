@@ -33,7 +33,7 @@ from multiplai_core.log_utils import log_event, setup_logging
 from pydantic import ValidationError
 
 from . import gitdata, netinfo, registry, server, stats, walkthrough
-from .gitdata import (GitError, Resolved, TargetError, TargetSpec, diff_findings, parse_target,
+from .gitdata import (EMPTY_TREE, GitError, Resolved, TargetError, TargetSpec, diff_findings, parse_target,
                       resolve_target)
 from .mailbox import MAX_ROW_BYTES, Mailbox, MailboxError, utc_now
 from .models import (SCHEMA_PATH, WALKTHROUGH_SCHEMA_PATH, FindingsFile, OutboxRow,
@@ -95,7 +95,12 @@ def find_review(target, dirs: list[Path]) -> tuple[str, Path | None, FindingsFil
     ("match", path, findings) when one names the same base and head;
     ("stale", path, findings) when one has the same slug but other commits;
     ("none", None, None) otherwise. Newest file wins within each kind.
+
+    Every tree review has the empty tree as its base, so for a tree target the
+    commits alone do not say which directory was reviewed: a match must also
+    have the same slug, which names the directory (`<repo>--tree-<path>`).
     """
+    tree = target.base_sha == EMPTY_TREE
     candidates: list[Path] = []
     for d in dirs:
         candidates.extend(p for p in Path(d).glob("*/findings.json") if p.is_file())
@@ -108,7 +113,7 @@ def find_review(target, dirs: list[Path]) -> tuple[str, Path | None, FindingsFil
             log.warning("skipping %s while looking for a review: %s", path, exc)
             continue
         t = ff.target
-        if (t.base_sha, t.head_sha) == (target.base_sha, target.head_sha):
+        if (t.base_sha, t.head_sha) == (target.base_sha, target.head_sha) and (not tree or t.slug == target.slug):
             return "match", path, ff
         if stale is None and t.slug == target.slug:
             stale = (path, ff)
