@@ -21,6 +21,32 @@ a tag.
 
 Nothing yet.
 
+## [0.6.0] - 2026-10-09
+
+### Added
+
+- **Motion graphics on any edit.** An EDL can list `overlays`: HTML pages
+  animated with CSS (stat cards, lower thirds, labels) shown over the video
+  for a span of seconds. `panel` overlays cover a region; `keyed` overlays
+  drop their green (or chosen key) background so the video shows around the
+  graphic. They render through a headless browser — agent-browser on a Mac,
+  or the host browser where one is reachable — at about 5 s per second of
+  overlay, and are cached, so re-renders after other EDL changes cost
+  nothing extra. Render refuses overlays outside the video or covering the
+  same part of the frame at the same time.
+- **Overlay styles.** Two ready styles (`clean-tech`, `flat-vector`) and a
+  documented format for your own; every overlay follows one, and the
+  session asks which when you have not said.
+- **Styles from a video you like.** `pipeline.py contact-sheet <video-or-url>`
+  turns a reference video into 4×4 sheets of labelled frames (scene changes
+  plus one every few seconds); the session reads them, drafts a style file
+  and shows it to you before saving.
+- **It remembers your corrections.** At the end of a job the session
+  proposes the corrections that should stick as preference lines; the ones
+  you approve go to `video-edit-preferences.md` in your Claude config
+  directory, outside the plugin, and every later job reads them first
+  (`pipeline.py prefs show`).
+
 ## [0.5.0] - 2026-10-09
 
 ### Added

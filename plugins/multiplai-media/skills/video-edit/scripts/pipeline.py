@@ -195,6 +195,39 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_contact_sheet(args: argparse.Namespace) -> int:
+    """Tile frames of a video (or a URL) into 4x4 sheets for deriving a style."""
+    from stages import contact_sheet
+    try:
+        sheets = contact_sheet.make(args.source, Path(args.out), every=args.every,
+                                    max_seconds=args.max_seconds or None)
+    except (RuntimeError, FileNotFoundError) as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+    for s in sheets:
+        print(f"SHEET: {s}")
+    print(f"TIMES: {Path(args.out) / 'sheets.json'}")
+    return 0 if sheets else 1
+
+
+def cmd_prefs(args: argparse.Namespace) -> int:
+    """Show the preferences file, or append lines the user approved."""
+    from stages import preferences
+    if args.action == "add":
+        try:
+            p = preferences.append(args.text)
+        except ValueError as e:
+            print(f"✗ {e}", file=sys.stderr)
+            return 1
+        print(f"PREFS: appended {len(args.text)} line(s) to {p}")
+        return 0
+    text = preferences.read()
+    print(f"PREFS: {preferences.path()}" + ("" if text else " (none yet)"))
+    if text:
+        print(text, end="")
+    return 0
+
+
 def cmd_make(args: argparse.Namespace) -> int:
     """make is a thin wrapper for orchestrators. The skill's SKILL.md instructs
     the consuming Claude to run prep, author the EDL, then render — this entry
@@ -277,6 +310,19 @@ def main() -> int:
     rv.add_argument("--next-version", metavar="CLIP", default=None,
                     help="print the path for CLIP's next version and exit")
     rv.set_defaults(func=cmd_review)
+
+    cs = sub.add_parser("contact-sheet", help="tile a reference video's frames into 4x4 sheets")
+    cs.add_argument("source", help="video file or URL (fetched with yt-dlp)")
+    cs.add_argument("--out", required=True, help="directory for the sheets")
+    cs.add_argument("--every", type=float, default=5.0, help="seconds between interval frames (default 5)")
+    cs.add_argument("--max-seconds", type=int, default=600,
+                    help="only the first N seconds (default 600; 0 = all)")
+    cs.set_defaults(func=cmd_contact_sheet)
+
+    pf = sub.add_parser("prefs", help="show the user's video-edit preferences, or append approved ones")
+    pf.add_argument("action", choices=["show", "add"])
+    pf.add_argument("text", nargs="*", help="with add: one preference per argument (only after the user approves)")
+    pf.set_defaults(func=cmd_prefs)
 
     m = sub.add_parser("make", help="natural-language → reel (orchestrator workflow)")
     m.add_argument("source", help="path to screen recording (.mov/.mp4)")

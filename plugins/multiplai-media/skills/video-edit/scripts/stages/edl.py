@@ -1,8 +1,11 @@
 from __future__ import annotations
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+_HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
 @dataclass
@@ -108,6 +111,37 @@ class Captions:
 
 
 @dataclass
+class Region:
+    x: int                      # output pixels
+    y: int
+    w: int
+    h: int
+
+
+OVERLAY_MODES = ("panel", "keyed")
+
+
+@dataclass
+class Overlay:
+    """A motion graphic (an HTML page, stages/overlay.py) shown from start to end.
+
+    `panel` covers its region with the page as rendered; `keyed` removes the
+    page's `key_color` background first (colorkey + despill), so the video
+    shows around the graphic. Without a region it covers the whole frame.
+    """
+    html: str
+    start: float                # output time
+    end: float
+    mode: str = "keyed"
+    region: Optional[Region] = None
+    key_color: str = "#00FF00"
+    style: Optional[str] = None  # the style file the page follows (references/styles/)
+
+    def rect(self, width: int, height: int) -> Region:
+        return self.region or Region(0, 0, width, height)
+
+
+@dataclass
 class Headline:
     text: str
     start: float = 0.0          # output time
@@ -128,6 +162,7 @@ class EDL:
     captions: Optional[Captions] = None
     headline: Optional[Headline] = None
     brand: Optional[str] = None         # path to a brand.json (stages/brand.py)
+    overlays: list[Overlay] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: str | Path) -> "EDL":
@@ -146,6 +181,10 @@ class EDL:
                 seg.focus = Focus(**f)
             return seg
 
+        def mk_overlay(o: dict) -> Overlay:
+            r = o.pop("region", None)
+            return Overlay(**o, region=Region(**r) if r else None)
+
         def mk_layout(d: dict) -> Layout:
             return Layout(panels={k: Panel(**v) for k, v in d.get("panels", {}).items()},
                           speakers=dict(d.get("speakers", {})))
@@ -163,6 +202,7 @@ class EDL:
             captions=Captions(**d["captions"]) if d.get("captions") is not None else None,
             headline=Headline(**d["headline"]) if d.get("headline") else None,
             brand=d.get("brand"),
+            overlays=[mk_overlay(dict(o)) for o in d.get("overlays", [])],
         )
 
     def xfade_before(self, segment_index: int) -> float:
@@ -195,6 +235,9 @@ class EDL:
         """
         warnings: list[str] = []
         warnings += self._validate_framing(source_size, words)
+        self._validate_overlays()
+        warnings += [f"overlay {i} ({Path(o.html).name}) names no style; ask the user which style to follow"
+                     for i, o in enumerate(self.overlays) if not o.style]
 
         src = Path(self.source)
         if src.name.startswith("proxy_") or ".video-edit-cache" in src.parts or (
@@ -229,6 +272,41 @@ class EDL:
                 "part of the screen. Prefer full-frame with a few zoomed money shots."
             )
         return warnings
+
+    def output_duration(self) -> float:
+        from stages.timeline import place_segments   # timeline imports this module
+        placed = place_segments(self)
+        return placed[-1].out_end if placed else (self.title.duration if self.title else 0.0)
+
+    def _validate_overlays(self) -> None:
+        if not self.overlays:
+            return
+        W, H = self.output.width, self.output.height
+        total = self.output_duration()
+        for i, o in enumerate(self.overlays):
+            name = f"overlay {i} ({Path(o.html).name})"
+            if o.mode not in OVERLAY_MODES:
+                raise ValueError(f"{name}: mode {o.mode!r} is not one of {', '.join(OVERLAY_MODES)}.")
+            if not (0 <= o.start < o.end <= total + 1e-3):
+                raise ValueError(f"{name}: {o.start}–{o.end}s must lie within the video (0–{total:.2f}s) "
+                                 "and end after it starts.")
+            r = o.rect(W, H)
+            if r.w <= 0 or r.h <= 0 or r.x < 0 or r.y < 0 or r.x + r.w > W or r.y + r.h > H:
+                raise ValueError(f"{name}: region {r.x},{r.y} {r.w}x{r.h} is not inside the {W}x{H} frame.")
+            if r.w % 2 or r.h % 2:
+                raise ValueError(f"{name}: region width and height must be even, got {r.w}x{r.h}.")
+            if o.mode == "keyed" and not _HEX.match(o.key_color):
+                raise ValueError(f"{name}: key_color {o.key_color!r} is not #RRGGBB.")
+        for i, a in enumerate(self.overlays):
+            for j in range(i + 1, len(self.overlays)):
+                b = self.overlays[j]
+                ra, rb = a.rect(W, H), b.rect(W, H)
+                same_time = a.start < b.end and b.start < a.end
+                same_place = ra.x < rb.x + rb.w and rb.x < ra.x + ra.w and ra.y < rb.y + rb.h and rb.y < ra.y + ra.h
+                if same_time and same_place:
+                    raise ValueError(f"overlays {i} and {j} cover the same part of the frame at the same "
+                                     f"time ({max(a.start, b.start):.2f}–{min(a.end, b.end):.2f}s); "
+                                     "move one, shorten one, or give them separate regions.")
 
     def _validate_framing(self, source_size: Optional[tuple[int, int]],
                           words: Optional[list[dict]]) -> list[str]:
