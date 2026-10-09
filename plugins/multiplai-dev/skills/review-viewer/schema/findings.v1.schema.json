@@ -1,5 +1,84 @@
 {
   "$defs": {
+    "Assessment": {
+      "additionalProperties": false,
+      "description": "The review's own judgement of a finding against the rest of the review\nand earlier rounds (multiplai-dev 0.27+). Older files have none.\n\n`repeat`: the same defect as a finding the person rejected in an earlier\nround (`earlier_*` say which, with the decision and note). `still-open`:\nthe same defect as an earlier finding that was accepted or not decided.\n`low-value`: true, but not worth acting on, for the reason given.\n`useful`: everything else. A label never removes a finding.",
+      "properties": {
+        "earlier_decision": {
+          "anyOf": [
+            {
+              "enum": [
+                "accept",
+                "reject",
+                "defer"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Earlier Decision"
+        },
+        "earlier_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Earlier Id"
+        },
+        "earlier_note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Earlier Note"
+        },
+        "earlier_round": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Earlier Round"
+        },
+        "label": {
+          "enum": [
+            "useful",
+            "still-open",
+            "low-value",
+            "repeat"
+          ],
+          "title": "Label",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "title": "Assessment",
+      "type": "object"
+    },
     "Citation": {
       "additionalProperties": false,
       "properties": {
@@ -34,6 +113,17 @@
     "Finding": {
       "additionalProperties": false,
       "properties": {
+        "assessment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Assessment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "citations": {
           "items": {
             "$ref": "#/$defs/Citation"

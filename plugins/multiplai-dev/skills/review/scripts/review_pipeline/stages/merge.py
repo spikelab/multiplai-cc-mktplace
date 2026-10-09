@@ -34,32 +34,65 @@ MERGE_LINE_GAP = 2
 MERGED_STATUSES = ("confirmed", "unverifiable")
 
 
-def overlap_groups(state: ReviewState) -> list[list[Finding]]:
-    """Groups of 2+ shown findings in one file whose ranges overlap or nearly touch.
+def _near(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
+    """Two line ranges overlap or are at most MERGE_LINE_GAP lines apart."""
+    return a_start <= b_end + MERGE_LINE_GAP and b_start <= a_end + MERGE_LINE_GAP
 
-    Overlap is chained: a group is every finding reachable from another by
-    one overlap. Groups come in file order of first appearance, members in
-    line order.
+
+def linked(a: Finding, b: Finding) -> bool:
+    """Two findings may be one defect: their anchors overlap in one file, or any
+    repository citation of one overlaps any repository citation of the other.
+
+    The second test catches one defect reported from two files: a finding
+    anchored in a test and one anchored in the code it tests, both citing the
+    same line of a third file. Web citations never link findings.
     """
-    by_file: dict[str, list[Finding]] = {}
-    for f in state.findings:
-        if getattr(state.verdicts.get(f.id), "status", "") in MERGED_STATUSES:
-            by_file.setdefault(f.file, []).append(f)
-    groups: list[list[Finding]] = []
-    for findings in by_file.values():
-        current: list[Finding] = []
-        end = 0
-        for f in sorted(findings, key=lambda f: (f.line_start, f.line_end)):
-            if current and f.line_start <= end + MERGE_LINE_GAP:
-                current.append(f)
-                end = max(end, f.line_end)
-                continue
-            if len(current) > 1:
-                groups.append(current)
-            current, end = [f], f.line_end
-        if len(current) > 1:
-            groups.append(current)
+    if a.file == b.file and _near(a.line_start, a.line_end, b.line_start, b.line_end):
+        return True
+    return any(ca.path == cb.path and _near(ca.line_start, ca.line_end, cb.line_start, cb.line_end)
+               for ca in a.citations if not ca.is_web
+               for cb in b.citations if not cb.is_web)
+
+
+def link_groups(findings: list[Finding]) -> list[list[Finding]]:
+    """Groups of 2+ of *findings*, chained by `linked`.
+
+    A group is every finding reachable from another by one link. Groups come
+    in the order their first member appears in *findings*; members are in
+    file order of first appearance, then line order.
+    """
+    parent = list(range(len(findings)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(findings)):
+        for j in range(i + 1, len(findings)):
+            if linked(findings[i], findings[j]):
+                parent[root(j)] = root(i)
+    members: dict[int, list[int]] = {}
+    for i in range(len(findings)):
+        members.setdefault(root(i), []).append(i)
+    file_order: dict[str, int] = {}
+    for f in findings:
+        file_order.setdefault(f.file, len(file_order))
+    groups = []
+    for idx in sorted(members.values(), key=min):
+        if len(idx) < 2:
+            continue
+        groups.append(sorted((findings[i] for i in idx),
+                             key=lambda f: (file_order[f.file], f.line_start, f.line_end)))
     return groups
+
+
+def overlap_groups(state: ReviewState) -> list[list[Finding]]:
+    """Groups of 2+ shown (confirmed or unverifiable) findings that `linked` chains together."""
+    shown = [f for f in state.findings
+             if getattr(state.verdicts.get(f.id), "status", "") in MERGED_STATUSES]
+    return link_groups(shown)
 
 
 def group_key(group: list[Finding]) -> str:
@@ -108,9 +141,18 @@ def merge_set(members: list[Finding], state: ReviewState) -> Finding:
     return survivor.model_copy(update={"severity": severity, "citations": citations, "finders": finders})
 
 
+def mark_merged(state: ReviewState) -> None:
+    """Set the `merged` fate, with `into`, on every finder entry whose finding was merged away."""
+    into = {m.finding.id: m.into for m in state.merged}
+    for check in state.checks:
+        if check.stage == "find":
+            for entry in check.findings:
+                if entry.get("fate") == "kept" and entry.get("id") in into:
+                    entry.update(fate="merged", into=into[entry["id"]])
+
+
 def _record_merges(state: ReviewState, groups: list[list[Finding]]) -> None:
     """Each merge entry's outcome, and the `merged` fate in the finders' entries."""
-    into = {m.finding.id: m.into for m in state.merged}
     outcomes: dict[str, list[str]] = {}
     for m in state.merged:
         for group in groups:
@@ -119,10 +161,38 @@ def _record_merges(state: ReviewState, groups: list[list[Finding]]) -> None:
     for check in state.checks:
         if check.stage == "merge" and not check.error:
             check.outcome = "; ".join(outcomes.get(check.subject, [])) or "no duplicates"
-        elif check.stage == "find":
-            for entry in check.findings:
-                if entry.get("fate") == "kept" and entry.get("id") in into:
-                    entry.update(fate="merged", into=into[entry["id"]])
+    mark_merged(state)
+
+
+def apply_duplicate_sets(state: ReviewState, answers: list[tuple[list[Finding], list[DuplicateSet]]],
+                         *, by: str = "") -> set[str]:
+    """Merge each usable set of each (group, answer) into one finding; return the ids merged away.
+
+    *by* names the stage in each merged finding's reason when it is not merge.
+    """
+    order = {f.id: i for i, f in enumerate(state.findings)}
+    by_id = {f.id: f for f in state.findings}
+    replaced: dict[str, Finding] = {}
+    removed: set[str] = set()
+    for group, sets in answers:
+        for ids, reason in usable_sets(group, sets):
+            ids = [i for i in ids if i in by_id and i not in removed]
+            if len(ids) < 2:
+                continue
+            members = sorted((replaced.get(i, by_id[i]) for i in ids), key=lambda f: order[f.id])
+            merged = merge_set(members, state)
+            replaced[merged.id] = merged
+            for m in members:
+                if m.id == merged.id:
+                    continue
+                removed.add(m.id)
+                why = f"the same defect as {merged.id} ({merged.file}:{merged.line_start})"
+                if by:
+                    why = f"{by}: {why}"
+                state.merged.append(Merged(finding=m, into=merged.id,
+                                           reason=f"{why}: {reason}" if reason.strip() else why))
+    state.findings = [replaced.get(f.id, f) for f in state.findings if f.id not in removed]
+    return removed
 
 
 async def run_merge(state: ReviewState, ctx: RunContext) -> ReviewState:
@@ -174,23 +244,7 @@ async def run_merge(state: ReviewState, ctx: RunContext) -> ReviewState:
 
     await bounded(todo, one, cfg.concurrency)
 
-    order = {f.id: i for i, f in enumerate(state.findings)}
-    by_id = {f.id: f for f in state.findings}
-    replaced: dict[str, Finding] = {}
-    removed: set[str] = set()
-    for group in groups:
-        for ids, reason in usable_sets(group, state.merge_answers.get(group_key(group), [])):
-            members = sorted((by_id[i] for i in ids), key=lambda f: order[f.id])
-            merged = merge_set(members, state)
-            replaced[merged.id] = merged
-            for m in members:
-                if m.id == merged.id:
-                    continue
-                removed.add(m.id)
-                why = f"the same defect as {merged.id} ({merged.file}:{merged.line_start})"
-                state.merged.append(Merged(finding=m, into=merged.id,
-                                           reason=f"{why}: {reason}" if reason.strip() else why))
-    state.findings = [replaced.get(f.id, f) for f in state.findings if f.id not in removed]
+    removed = apply_duplicate_sets(state, [(g, state.merge_answers.get(group_key(g), [])) for g in groups])
     _record_merges(state, groups)
 
     ctx.counts = {"groups": len(groups), "merged": len(removed), "agent_failures": failures}

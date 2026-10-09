@@ -1,0 +1,44 @@
+{
+  "note": "Made-up findings with the shape of a real round: two duplicate pairs, each pair anchored in different files but citing the same line of a third file, and one unrelated finding. All paths and text are invented.",
+  "findings": [
+    {
+      "claim": "Running the sensor rollout before the shared bucket policy removes the reader's access to the archive",
+      "severity": "MEDIUM", "file": "stations/README.md", "line_start": 7, "line_end": 7,
+      "failure_scenario": "An operator follows the README order; the archive reader gets 403 until the policy is reapplied.",
+      "citations": [{"path": "stations/README.md", "line_start": 7, "line_end": 7, "quote": "Apply stations/ before policy/."}]
+    },
+    {
+      "claim": "The rollout order in the stations README revokes the archive reader's grant",
+      "severity": "LOW", "file": "stations/reader_access.tf", "line_start": 7, "line_end": 10,
+      "failure_scenario": "Applying stations first replaces the bucket binding; the reader loses access.",
+      "citations": [
+        {"path": "stations/reader_access.tf", "line_start": 7, "line_end": 10, "quote": "resource \"bucket_binding\" \"reader\" {"},
+        {"path": "stations/README.md", "line_start": 7, "line_end": 7, "quote": "Apply stations/ before policy/."}
+      ]
+    },
+    {
+      "claim": "The grant test reads only the reader binding, so a grant made through another resource still passes",
+      "severity": "MEDIUM", "file": "policy/reader_access.tf", "line_start": 34, "line_end": 39,
+      "failure_scenario": "A second binding grants write; the test inspects only the reader binding and passes.",
+      "citations": [
+        {"path": "policy/reader_access.tf", "line_start": 34, "line_end": 39, "quote": "resource \"bucket_binding\" \"reader\" {"},
+        {"path": "policy/tests/reader.tftest.hcl", "line_start": 46, "line_end": 46, "quote": "condition = bucket_binding.reader.role == \"viewer\""}
+      ]
+    },
+    {
+      "claim": "The access test asserts only on bucket_binding.reader",
+      "severity": "LOW", "file": "policy/tests/reader.tftest.hcl", "line_start": 2, "line_end": 4,
+      "failure_scenario": "Write access granted elsewhere is never checked.",
+      "citations": [
+        {"path": "policy/tests/reader.tftest.hcl", "line_start": 2, "line_end": 4, "quote": "run \"reader_is_read_only\" {"},
+        {"path": "policy/tests/reader.tftest.hcl", "line_start": 46, "line_end": 46, "quote": "condition = bucket_binding.reader.role == \"viewer\""}
+      ]
+    },
+    {
+      "claim": "The station tag binding is checked by name only",
+      "severity": "LOW", "file": "stations/tags.tf", "line_start": 29, "line_end": 32,
+      "failure_scenario": "A binding with the right name but the wrong value passes.",
+      "citations": [{"path": "stations/tags.tf", "line_start": 29, "line_end": 32, "quote": "tag_value = var.station_tag"}]
+    }
+  ]
+}

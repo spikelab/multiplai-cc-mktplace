@@ -1,6 +1,8 @@
 """`post`: one PR comment with the HIGH and MEDIUM findings.
 
 With `--decisions`, only findings whose recorded decision is `accept` go in.
+Without it, a finding the assess stage labelled `repeat` (the same defect as
+one rejected in an earlier round) is left out; accepting it brings it back.
 The viewer keeps one entry per finding id, so the entry is the latest
 decision. The skill runs this only on an explicit yes typed in the terminal.
 """
@@ -32,6 +34,8 @@ def select(findings: list[dict], decisions: dict | None) -> list[dict]:
     chosen = [f for f in findings if f["severity"] in POSTED_SEVERITIES and f["status"] in SHOWN_STATUSES]
     if decisions is not None:
         chosen = [f for f in chosen if (decisions.get(f["id"]) or {}).get("decision") == "accept"]
+    else:
+        chosen = [f for f in chosen if (f.get("assessment") or {}).get("label") != "repeat"]
     order = {s: i for i, s in enumerate(POSTED_SEVERITIES)}
     return sorted(chosen, key=lambda f: order[f["severity"]])
 

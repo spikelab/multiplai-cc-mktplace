@@ -14,7 +14,10 @@ and the pipeline's models carry more than it allows.
 A finding merged into another by the merge stage is not exported: it is gone
 from `state.findings`, and the finding it went into carries its citations.
 `expected_behaviour` comes from the verifier and is written for confirmed and
-unverifiable findings only; a refuted or rejected finding has none.
+unverifiable findings only; a refuted or rejected finding has none. The same
+goes for `assessment`, the assess stage's label (`useful`, `still-open`,
+`low-value`, or `repeat` of a finding rejected in an earlier round), which is
+optional: files written before the stage existed have none.
 `verifier_citations` (optional in v1) holds the lines the verifier read; a
 finding with no verdict, such as a gate-rejected one, has no such key.
 
@@ -29,7 +32,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import SEVERITIES, AgentCheck, Citation, Finding, ReviewState
+from .models import SEVERITIES, AgentCheck, Assessment, Citation, Finding, ReviewState
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +70,17 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
     }
 
 
+def _assessment(a: Assessment) -> dict:
+    return {
+        "label": a.label,
+        "reason": a.reason,
+        "earlier_id": a.earlier_id or None,
+        "earlier_round": a.earlier_round or None,
+        "earlier_decision": a.earlier_decision or None,
+        "earlier_note": a.earlier_note or None,
+    }
+
+
 def _target(state: ReviewState) -> dict:
     t = state.target
     return {
@@ -95,6 +109,9 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
         row = _finding(f, status, reason, expected)
         if verdict:
             row["verifier_citations"] = [_citation(c) for c in verdict.citations]
+        assessment = state.assessments.get(f.id)
+        if assessment is not None and status in ("confirmed", "unverifiable"):
+            row["assessment"] = _assessment(assessment)
         rows.append(row)
     rank = {s: i for i, s in enumerate(SEVERITIES)}
     order = {"confirmed": 0, "unverifiable": 1, "refuted": 2}

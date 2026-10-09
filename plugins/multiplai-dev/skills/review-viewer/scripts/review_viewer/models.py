@@ -55,6 +55,23 @@ class Fix(_Strict):
     open_questions: list[str] = Field(default_factory=list)
 
 
+class Assessment(_Strict):
+    """The review's own judgement of a finding against the rest of the review
+    and earlier rounds (multiplai-dev 0.27+). Older files have none.
+
+    `repeat`: the same defect as a finding the person rejected in an earlier
+    round (`earlier_*` say which, with the decision and note). `still-open`:
+    the same defect as an earlier finding that was accepted or not decided.
+    `low-value`: true, but not worth acting on, for the reason given.
+    `useful`: everything else. A label never removes a finding."""
+    label: Literal["useful", "still-open", "low-value", "repeat"]
+    reason: str = ""
+    earlier_id: str | None = None
+    earlier_round: str | None = None  # head_sha of the earlier round
+    earlier_decision: Literal["accept", "reject", "defer"] | None = None
+    earlier_note: str | None = None
+
+
 class Finding(_Strict):
     id: str = Field(pattern=r"^[0-9a-f]{10}$")
     severity: Literal["HIGH", "MEDIUM", "LOW"]
@@ -73,6 +90,7 @@ class Finding(_Strict):
     # The lines the verifier itself read to reach its verdict. Absent in
     # files written before multiplai-dev 0.26.
     verifier_citations: list[Citation] | None = None
+    assessment: Assessment | None = None
 
 
 class Target(_Strict):

@@ -72,6 +72,51 @@ test("findings group by severity and hide refuted/rejected", () => {
   assert.deepEqual(L.findingOrder(all), ["b", "c", "d", "a"]);
 });
 
+test("repeats and low-value findings fold after the rest, most severe first", () => {
+  const fs = [
+    { id: "a", severity: "LOW", status: "confirmed", assessment: { label: "low-value", reason: "[speculative] r" } },
+    { id: "b", severity: "HIGH", status: "confirmed", assessment: { label: "useful" } },
+    { id: "c", severity: "MEDIUM", status: "confirmed", assessment: { label: "repeat", earlier_id: "x" } },
+    { id: "d", severity: "MEDIUM", status: "unverifiable", assessment: { label: "still-open", earlier_id: "y" } },
+    { id: "e", severity: "LOW", status: "confirmed" },
+  ];
+  const g = L.groupFindings(fs, {}, false);
+  assert.deepEqual(g.folded.map((f) => f.id), ["c", "a"]);
+  assert.deepEqual(L.findingOrder(g), ["b", "d", "e", "c", "a"]);
+  // A file written before the assess stage has no labels: nothing folds.
+  const old = L.groupFindings([{ id: "e", severity: "LOW", status: "confirmed" }], {}, false);
+  assert.deepEqual(old.folded, []);
+  assert.deepEqual(L.findingOrder(old), ["e"]);
+});
+
+test("a repeat counts as decided (rejected) until the person decides otherwise", () => {
+  const repeat = { id: "c", severity: "HIGH", status: "confirmed",
+    assessment: { label: "repeat", earlier_id: "x", earlier_note: "by design" } };
+  const plain = { id: "b", severity: "LOW", status: "confirmed" };
+  const refuted = { id: "r", severity: "LOW", status: "refuted" };
+  assert.deepEqual(L.effectiveDecision(repeat, {}), { decision: "reject", note: "by design", implied: true });
+  assert.equal(L.effectiveDecision(plain, {}), null);
+  assert.equal(L.effectiveDecision(repeat, { c: { decision: "accept" } }).decision, "accept");
+  assert.deepEqual(L.undecidedCount([repeat, plain, refuted], {}), { open: 1, total: 2 });
+  assert.deepEqual(L.undecidedCount([repeat, plain], { c: { decision: "accept" }, b: { decision: "defer" } }),
+    { open: 0, total: 2 });
+  // The merge-risk count treats it as rejected too.
+  const walk = { risk: { tier: 1, tier_why: "w", revertable: true, revert_why: "x" }, assessments: [] };
+  assert.equal(L.riskInputs({}, walk, [repeat], {}, []).openHigh, 0);
+  assert.equal(L.riskInputs({}, walk, [repeat], { c: { decision: "accept" } }, []).openHigh, 1);
+});
+
+test("assessment text names the earlier round, decision and note", () => {
+  assert.equal(L.assessmentText(null), "");
+  assert.equal(L.assessmentText({ label: "useful", reason: "r" }), "");
+  assert.equal(L.assessmentText({ label: "repeat", earlier_id: "abcdef0123", earlier_round: "1".repeat(40),
+    earlier_decision: "reject", earlier_note: "by design", reason: "same defect" }),
+  "Repeats abcdef0123 (round 111111111111), which you rejected: by design. same defect");
+  assert.equal(L.assessmentText({ label: "still-open", earlier_id: "y", earlier_decision: "accept", reason: "" }),
+    "Still open from y, your decision accept");
+  assert.equal(L.assessmentText({ label: "low-value", reason: "[covered] by b" }), "Low value: [covered] by b");
+});
+
 test("j/k stepping clamps at both ends", () => {
   const order = ["a", "b", "c"];
   assert.equal(L.stepFinding(order, "a", 1), "b");

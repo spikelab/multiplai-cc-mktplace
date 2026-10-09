@@ -14,6 +14,16 @@ exists for the same commits — its findings grouped by severity. Questions and
 decisions typed into the page are appended to a mailbox file this session
 watches; you answer with one command and the answer appears in the page.
 
+When the review labelled its findings (multiplai-dev 0.27+), the list shows
+`useful` and `still-open` findings first and folds `repeat` (the same defect
+as one the user rejected in an earlier round) and `low-value` findings into a
+collapsed **Repeats and low-value** group at the end, each with its badge and
+reason; a repeat shows the earlier round, decision and note. A repeat counts
+as rejected, marked "(earlier round)", in the "still need a decision" line and
+the merge-risk badge until the user decides it; the page never writes that
+decision to `decisions.json`. Every folded finding can still be opened,
+accepted, rejected or deferred. An older `findings.json` shows as before.
+
 ## What this skill does on the machine
 
 - **Opens a local network port.** It runs a small HTTP server (Python stdlib)
@@ -257,7 +267,8 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   reverted, tier 3 has a `tests` concern, or PR checks fail. Otherwise
   **Medium** if tier 3, tier 2 without a `tests` good, a confirmed MEDIUM
   finding is open, the diff is large, or it cannot be reverted. Otherwise
-  **Low**. A finding stays open until it is rejected in the page.
+  **Low**. A finding stays open until it is rejected in the page, or until
+  the review labels it a `repeat` of a finding rejected in an earlier round.
 - The steps show on a **Reviews** tab. Clicking a file opens the first step
   that anchors it, so anchor each step on every file it explains.
 - When the review wrote a `checks.json` beside `findings.json` (review 0.26

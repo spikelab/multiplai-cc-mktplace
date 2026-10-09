@@ -1,4 +1,4 @@
-"""target → find → verify → merge → export → render.
+"""target → find → verify → merge → repeats → assess → export → render.
 
 `review-state.json` is written after every stage; `resume` reloads it and
 continues from the first stage not yet done.
@@ -16,7 +16,7 @@ import yaml
 
 from multiplai_core.log_utils import log_event
 
-from . import budget, target as target_mod
+from . import budget, rounds, target as target_mod
 from .config import ReviewConfig
 from .export import write_checks_file, write_findings_file
 from .gates import reason_kind
@@ -24,8 +24,10 @@ from .models import SEVERITIES, ReviewState
 from .progress import ProgressWriter
 from .render import summary_path, write_review, write_rollups
 from .stages import RunContext
+from .stages.assess import run_assess
 from .stages.find import run_find
 from .stages.merge import run_merge
+from .stages.repeats import run_repeats
 from .stages.verify import run_verify
 from .state import load_state, save_state
 
@@ -35,6 +37,8 @@ STAGE_FUNCTIONS = (
     ("find", run_find),
     ("verify", run_verify),
     ("merge", run_merge),
+    ("repeats", run_repeats),
+    ("assess", run_assess),
 )
 
 class ReviewError(Exception):
@@ -72,7 +76,8 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
 
     snapshot = target_mod.snapshot_head(t, target_dir / "tree")
     diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
-    ctx = RunContext(config=config, snapshot=snapshot, diff=diff, progress=progress, session_id=session_id)
+    ctx = RunContext(config=config, snapshot=snapshot, diff=diff, progress=progress, session_id=session_id,
+                     target_dir=target_dir)
     save_state(state, target_dir)
 
     for name, fn in STAGE_FUNCTIONS:
@@ -141,6 +146,11 @@ def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
         raise ReviewError(f"{spec.repo}: {gate.reason}")
     info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in)
     target_dir = out_dir / info.slug
+    # A new head in a directory an earlier round wrote: keep that round's
+    # findings before this run writes over them. The same head keeps nothing.
+    kept = rounds.keep_round(target_dir, info.slug, info.head_sha)
+    if kept is not None:
+        log.info("kept the earlier round of %s in %s", info.slug, kept)
     info = target_mod.write_target_files(info, diff or "", target_dir)
     progress_log = target_dir / "progress.log"
     if progress_log.exists():
@@ -158,6 +168,83 @@ async def resume(target_dir: Path, config: ReviewConfig, *, session_id: str = ""
     if state is None:
         raise ReviewError(f"no readable review-state.json in {target_dir}")
     return await run_state(state, target_dir, config, session_id=session_id)
+
+
+# --- the assess stage alone, on a saved review ------------------------------------
+
+FOLDED = ("repeat", "low-value")
+
+
+@dataclass
+class AssessOnly:
+    """The assess stage's labels for one saved review, beside the person's decisions."""
+    target_dir: Path
+    rows: list[dict] = field(default_factory=list)  # id, severity, claim, decision, note, label, reason
+    cost_usd: float = 0.0
+    errors: list[str] = field(default_factory=list)
+
+
+async def assess_only(target_dir: Path, config: ReviewConfig) -> AssessOnly:
+    """Run repeats and assess on a finished review's findings, without changing the review.
+
+    Reads `review-state.json` and `viewer/decisions.json`, runs both stages on
+    a copy of the state, and returns each shown finding's label beside the
+    decision already recorded for it. The decisions of this round are not
+    shown to the agent: only earlier rounds' are. Writes nothing; raises
+    ReviewError when there is no readable state.
+    """
+    loaded = load_state(target_dir / "review-state.json")
+    if loaded is None:
+        raise ReviewError(f"no readable review-state.json in {target_dir}")
+    state = loaded.model_copy(deep=True)
+    state.stage, state.errors = "merge", []
+    state.repeats, state.repeats_checked, state.assessments, state.assess_answer = {}, [], {}, None
+    ledger = budget.start(config.max_cost_usd)
+    snapshot = target_mod.snapshot_head(state.target, target_dir / "assess-tree")
+    ctx = RunContext(config=config, snapshot=snapshot, diff="", target_dir=target_dir)
+    try:
+        state = await run_repeats(state, ctx)
+        state = await run_assess(state, ctx)
+    finally:
+        shutil.rmtree(snapshot, ignore_errors=True)
+    decisions = rounds.load_decisions(target_dir)
+    result = AssessOnly(target_dir=target_dir, cost_usd=ledger.cost_usd, errors=list(state.errors))
+    for f in state.findings:
+        a = state.assessments.get(f.id)
+        if a is None:
+            continue
+        d = decisions.get(f.id) or {}
+        result.rows.append({"id": f.id, "severity": f.severity, "claim": f.claim,
+                            "decision": d.get("decision") or "", "note": d.get("note") or "",
+                            "label": a.label, "reason": a.reason})
+    return result
+
+
+def assess_report(results: list[AssessOnly], skipped: list[str]) -> str:
+    """Markdown: one row per finding (decision, label, reason), then the two counts that matter."""
+    def cell(text) -> str:
+        return " ".join(str(text).split()).replace("|", "\\|")
+
+    out = ["# Assess stage measured against recorded decisions", "",
+           "| Review | Finding | Severity | Decision | Label | Reason |", "|---|---|---|---|---|---|"]
+    for r in results:
+        for row in r.rows:
+            out.append(f"| {r.target_dir.name} | `{row['id']}` {cell(row['claim'])[:100]} | {row['severity']} | "
+                       f"{row['decision'] or 'none'} | {row['label']} | {cell(row['reason'])} |")
+    rows = [row for r in results for row in r.rows]
+    right = sum(1 for row in rows if row["decision"] == "reject" and row["label"] in FOLDED)
+    wrong = sum(1 for row in rows if row["decision"] == "accept" and row["label"] in FOLDED)
+    rejected = sum(1 for row in rows if row["decision"] == "reject")
+    accepted = sum(1 for row in rows if row["decision"] == "accept")
+    out += ["", f"- Rejected findings labelled repeat or low-value: {right} of {rejected}",
+            f"- Accepted findings labelled repeat or low-value (wrongly folded): {wrong} of {accepted}",
+            f"- Cost: ${sum(r.cost_usd for r in results):.2f} over {len(results)} reviews"]
+    errors = [f"{r.target_dir.name}: {e}" for r in results for e in r.errors]
+    if errors:
+        out += ["", "Errors:", ""] + [f"- {cell(e)}" for e in errors]
+    if skipped:
+        out += ["", "Skipped:", ""] + [f"- {s}" for s in skipped]
+    return "\n".join(out) + "\n"
 
 
 def load_batch(path: Path) -> list[TargetSpec]:

@@ -1,6 +1,6 @@
 ---
 name: review
-description: Reviews a branch, PR or commit range with a Python pipeline that finds, verifies and merges duplicate review findings, rejecting in code any finding whose cited lines are not at the reviewed commit. Writes a markdown review, severity rollups and a findings.json, then opens the findings in review-viewer.
+description: Reviews a branch, PR or commit range with a Python pipeline that finds, verifies, merges duplicate and labels repeated or low-value review findings, rejecting in code any finding whose cited lines are not at the reviewed commit. Writes a markdown review, severity rollups and a findings.json, then opens the findings in review-viewer.
 when_to_use: 'Triggers: review this branch, review PR, deep review, /multiplai-dev:review'
 model: opus
 effort: medium
@@ -20,11 +20,32 @@ Python between them:
    change.
 3. **merge** — the finders work independently, so one defect is often
    reported several times in different words. Confirmed and unverifiable
-   findings in the same file whose lines overlap (or come within two lines) are
-   grouped, and one agent per group says which describe the same defect. Each
-   such set becomes one finding with the highest severity, every citation and
-   every finder that reported it. The findings merged away are listed in the
-   review's appendix with the finding they went into.
+   findings are grouped when their lines overlap (or come within two lines)
+   in one file, or when they cite overlapping lines of any file, and one agent
+   per group says which describe the same defect. Each such set becomes one
+   finding with the highest severity, every citation and every finder that
+   reported it. The findings merged away are listed in the review's appendix
+   with the finding they went into.
+4. **repeats** — when this PR (or branch) was reviewed before, each earlier
+   round is kept in `<out>/<slug>/rounds/<head sha, 12 chars>/`. Every finding
+   is checked against the findings the user rejected in those rounds
+   (`viewer/decisions.json`): the same id matches in Python, the rest go to
+   one agent that says which describe the same defect. A match is labelled
+   `repeat`, with the earlier round, the decision and the note. Skipped when
+   nothing was rejected before.
+5. **assess** — one agent reads the remaining findings together, with the PR
+   description, the earlier rounds' accepted and undecided findings and the
+   user's notes, and labels each `useful`, `still-open` (the same defect as an
+   earlier finding that was accepted, deferred or not decided, so not fixed yet) or
+   `low-value` (true but not worth acting on, for one named rule: context,
+   covered or speculative). It may name more duplicates, merged as in step 3.
+   Python checks every label; a bad one becomes `useful`. Skipped when fewer
+   than two findings remain and there are no earlier rounds.
+
+   Neither step deletes a finding or changes a verdict or a severity. The
+   review lists `repeat` and `low-value` findings in their own section after
+   the others, the summary counts them, and review-viewer folds them into a
+   collapsed group. The user still decides every one.
 
 The review proposes no fixes. Fixing a finding is a separate step that
 changes the code and runs the tests.
@@ -191,6 +212,18 @@ through the viewer's page is never approval to post, commit or edit. `post`
 exits 2 when the target is not a PR or the decisions file is missing.
 
 ## Other commands
+
+- `assess-only <out>/<slug> [...] --report <file.md> --trust-repo` runs the
+  repeats and assess stages on saved reviews that have decisions and writes a
+  report: each finding's recorded decision beside its label, and how many
+  rejected and accepted findings were labelled `repeat` or `low-value`. It
+  costs one or two agent calls per review and changes nothing in the review
+  directories. A review that goes over `--max-cost-usd` or fails is listed
+  under "Skipped" with the reason, and the report still covers the others.
+  A decision counts for an earlier round only if it was made before the
+  next round was generated, so a finding rejected while the current round
+  was shown is not read back as an earlier rejection. Use it to check the
+  labels against real decisions.
 
 - `rollup [findings.json ...]` rewrites `HIGH-only.md`, `MEDIUM-only.md` and
   `LOW-only.md` in `--out` from the given files (default: every
