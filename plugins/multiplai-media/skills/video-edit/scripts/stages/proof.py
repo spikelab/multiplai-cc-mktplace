@@ -6,7 +6,7 @@ join, each panel switch of a `frame: "speaker"` segment). Under each tile it
 prints the output time, the source time and segment, the caption on screen
 then, and the speaker label of the words being said, when the transcript
 has labels. It is what the session looks at before reporting a reel
-(references/reels.md step 5), so every label comes from the same
+(references/reels.md step 7), so every label comes from the same
 arithmetic the render used: timeline.place_segments for the times, the
 caption grouping of captions.build_ass for the text.
 """

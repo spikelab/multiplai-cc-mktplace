@@ -1,8 +1,10 @@
 """Map source time to output time through an EDL.
 
-The render lays segments end to end after the optional title card, and each
-join is a crossfade that overlaps the two neighbours by the transition's
-duration (composite.build_filter_complex). place_segments() repeats that
+The render lays segments end to end after the optional title card. A join
+is a crossfade that overlaps the two neighbours by the transition's
+duration, or a hard cut (no overlap) between segments contiguous in the
+source or under a transition of duration 0 (EDL.xfade_before,
+composite.build_filter_complex). place_segments() repeats that
 arithmetic in the same order, so a caption timed here lands on the frame the
 render produces. A source time inside a cut, or inside a muted segment
 (speed > 4, or `mute`), has no output time: its audio is not heard.
