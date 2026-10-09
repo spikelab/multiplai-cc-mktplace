@@ -235,7 +235,21 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
 - A finding on the Findings tab reads: its claim, the **Failure scenario**,
   the **Explanation** (the review's assessment and its reason), expected
   behaviour, verdict, cited code, needs, then **Checked by**, **Explained in
-  the walkthrough**, and the decision.
+  the walkthrough**, and the decision. A badge says what it is about (the
+  verifier's `topic`: code, tests, docs, config, infra, data, security,
+  performance or process; in italics when guessed from the path for an older
+  review), and **Copy as markdown** copies the finding (claim, where, with a
+  GitHub link when the remote is on GitHub, failure scenario, explanation,
+  expected behaviour, verdict, cited code) for whoever will fix it.
+- The Findings list holds only what still needs a decision: an accepted,
+  rejected or deferred finding leaves it, like a refuted or gate-rejected one,
+  and **Show decided, refuted and rejected** brings them back. j/k go on from
+  a finding a decision just hid.
+- Lines are picked to ask about on the line numbers only (a + shows on
+  hover): click, drag down the numbers, or Shift+click to extend. A bar with
+  **Ask about these lines** and ✕ appears; nothing goes into the chat until
+  Ask is pressed. Clicking or selecting text in the code does nothing to the
+  chat.
 - The page shows the overview and, for a PR, its description on a
   **Summary** tab, under badges. The server measures some badges from git and
   GitHub: size, tests changed, commit hygiene, TODOs, lock files, and for a

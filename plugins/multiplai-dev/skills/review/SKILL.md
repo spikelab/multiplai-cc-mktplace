@@ -90,6 +90,10 @@ and view forms), `curl` (GET or HEAD, no data, no output file), and
 stays. This is not a security boundary: nothing runs these commands on its
 own (step 2).
 
+The verifier also labels what each finding is about (`topic`: code, tests,
+docs, config, infra, data, security, performance or process); the viewer shows
+it as a badge.
+
 An `unverifiable` finding with a need is lowered one step but not below MEDIUM,
 so it does not sink below findings a person can already act on. Needs are in
 `findings.json` (top-level `needs`, and `needs` on each finding they block),

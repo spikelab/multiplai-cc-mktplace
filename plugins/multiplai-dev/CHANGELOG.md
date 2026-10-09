@@ -32,12 +32,30 @@ time, not derived from a tag.
 - review-viewer: an item on the **Needs you** tab with no command and no
   place to look has an **Ask the session** button. It puts a question about
   the item in the chat, for you to read and send.
+- review: the verifier labels what each finding is about (`topic`: code,
+  tests, docs, config, infra, data, security, performance or process),
+  exported in `findings.json`. review-viewer shows it as a badge on the list
+  and the finding; for an older review it guesses from the file path and
+  shows the guess in italics.
+- review-viewer: **Copy as markdown** on a finding copies it for whoever will
+  fix it: claim, file and lines (with a GitHub link when the remote is on
+  GitHub), failure scenario, explanation, expected behaviour, verdict and
+  cited code.
 
 ### Changed
 - review-viewer: **Needs you** is its own tab, with a count, instead of a
   block at the top of the Summary tab, so the Summary opens on what the
   change is about. Items are grouped by what they block, so a finding's
   claim shows once above its needs; the review's own gaps come first.
+- review-viewer: an accepted or deferred finding now leaves the Findings
+  list, as a rejected one already did, so the list holds only what still
+  needs a decision. The checkbox is now **Show decided, refuted and
+  rejected**. j/k go on from a finding a decision just hid.
+- review-viewer: lines are picked to ask about on the line numbers only. A +
+  shows on hover; click, drag down the numbers, or Shift+click to extend. A
+  bar with **Ask about these lines** and ✕ appears, and Esc or ✕ clears it.
+  Clicking a changed line no longer puts its block into the chat, and
+  selecting code text no longer opens a popup.
 - review-viewer: a finding on the Findings tab now reads in this order: the
   claim, **Failure scenario**, **Explanation** (the review's assessment and
   its reason, previously labelled "Assessment" and hidden for a useful
