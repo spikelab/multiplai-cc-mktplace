@@ -161,6 +161,37 @@ class Merged(BaseModel):
     reason: str
 
 
+class AgentCheck(BaseModel):
+    """What one agent call was given, what it did, and what it concluded.
+
+    Built only from what `run_agent` already returns: tool names and inputs,
+    never tool results or file contents. `findings` (finders) and `verdict`
+    (verifiers) hold the same kinds of agent text `findings.json` holds.
+    """
+    stage: str  # find | verify | merge
+    subject: str  # the dimension, the finding id, or the merge group_key
+    given: list[str] = Field(default_factory=list)  # labels of the prompt's input blocks
+    calls: list[dict] = Field(default_factory=list)  # {tool, target, detail}
+    outcome: str = ""
+    turns: int = 0
+    cost_usd: float = 0.0
+    started_at: str = ""
+    ended_at: str = ""
+    error: str = ""  # empty on success
+    # Finders: every finding returned, before dedupe and gates, each with its
+    # citations marked `gate` and `seen`, and its `fate`.
+    findings: list[dict] = Field(default_factory=list)
+    # Verifiers: status, reason, citations (marked), and whether verdict_gate lowered it.
+    verdict: dict | None = None
+
+
+class GateCheck(BaseModel):
+    finding_id: str
+    gate: str  # finding_gate | verdict_gate
+    passed: bool
+    rule: str = ""  # which rule fired (gates.reason_kind); empty when passed
+
+
 class ReviewState(BaseModel):
     target: TargetInfo
     stage: str = "target"  # last stage completed
@@ -177,6 +208,11 @@ class ReviewState(BaseModel):
     original_severity: dict[str, str] = Field(default_factory=dict)  # lowered findings only
     errors: list[str] = Field(default_factory=list)  # agent failures, shown in the review header
     budget: dict = Field(default_factory=dict)
+    # The record of what was checked: one entry per agent call, in the order
+    # they returned, and one per gate result. Empty in checkpoints written
+    # before 0.26, which still load.
+    checks: list[AgentCheck] = Field(default_factory=list)
+    gate_checks: list[GateCheck] = Field(default_factory=list)
 
     @field_validator("stage", mode="before")
     @classmethod

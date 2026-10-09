@@ -19,6 +19,7 @@ from multiplai_core.log_utils import log_event
 from . import budget, target as target_mod
 from .config import ReviewConfig
 from .export import write_findings_file
+from .gates import reason_kind
 from .models import SEVERITIES, ReviewState
 from .progress import ProgressWriter
 from .render import summary_path, write_review, write_rollups
@@ -35,21 +36,6 @@ STAGE_FUNCTIONS = (
     ("verify", run_verify),
     ("merge", run_merge),
 )
-
-# The gate reasons that may reach activity.jsonl. A raw reason can quote a
-# citation; the log records only which rule fired.
-_REASON_KINDS = (
-    "quote not at cited lines", "path not at head", "empty quote", "is not a changed file",
-    "unknown severity", "no citations", "confirmed without citing", "none of its citations reproduce",
-)
-
-
-def reason_kind(reason: str) -> str:
-    for kind in _REASON_KINDS:
-        if kind in reason:
-            return kind
-    return "other"
-
 
 class ReviewError(Exception):
     """Bad input or an unresolvable target. Exit code 2."""
