@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """video-edit pipeline entry point.
 
-Subcommands:
+Subcommands (see --help for all):
   render <edl.json>             Deterministic render (walking skeleton).
+  correct <cache> <fixes.json>  Fix misheard words before they become captions.
   make <source> --prompt TEXT   Natural-language → EDL → render (not yet implemented).
 """
 from __future__ import annotations
@@ -66,6 +67,23 @@ def cmd_prep(args: argparse.Namespace) -> int:
     print(f"TRANSCRIPT: {result.transcript_json_path} ({result.transcript_engine})")
     print(f"DURATION: {result.src_duration:.1f}")
     print(f"PROXY: {result.proxy_path}")
+    return 0
+
+
+def cmd_correct(args: argparse.Namespace) -> int:
+    """Apply a corrections file to a prep cache's transcript, then rebuild
+    what prep derives from it (sentences, retakes, context.md)."""
+    from stages import corrections
+    cache = Path(args.cache)
+    try:
+        source = corrections.source_of(cache)
+        path = corrections.correct(cache, Path(args.corrections))
+    except (corrections.CorrectionError, FileNotFoundError) as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+    print(f"CORRECTED: {path} (original kept in {path.with_name('transcript.raw.json')})")
+    result = prep_stage.prep(source)
+    print(f"CONTEXT: {result.context_path}")
     return 0
 
 
@@ -272,6 +290,11 @@ def main() -> int:
                     help="override the mlx_whisper model (default: mlx-community/whisper-large-v3-mlx "
                          "for a non-English --language, else mlx-community/whisper-medium-mlx)")
     pp.set_defaults(func=cmd_prep)
+
+    co = sub.add_parser("correct", help="fix misheard words in a prep cache's transcript before captioning")
+    co.add_argument("cache", help="the prep cache directory (prep prints it)")
+    co.add_argument("corrections", help='JSON list of {"at": <source s>, "from": "...", "to": "..."}')
+    co.set_defaults(func=cmd_correct)
 
     tl = sub.add_parser("timeline", help="print the transcript in output time for an EDL")
     tl.add_argument("edl", help="path to EDL JSON")
