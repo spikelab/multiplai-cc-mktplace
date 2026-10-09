@@ -29,7 +29,7 @@ def test_merged_findings_are_listed_in_the_appendix_and_finders_on_the_survivor(
                                       reason=f"the same defect as {high.id} (rateplan_service.py:1): same literal"))
     text = render_review(canned_state)
     assert "**Reported by:** diff-bugs, callers" in text
-    appendix = text.split("## Appendix — rejected, refuted and merged", 1)[1]
+    appendix = text.split("## Appendix — not listed above", 1)[1]
     assert "**merged** (HIGH) `rateplan_service.py:1-1` — Rate plans match a literal keyword" in appendix
     assert f"Merged into `{high.id}`: the same defect as {high.id}" in appendix
     assert "1 merged into another finding as duplicates." in render_summary(canned_state)
@@ -59,8 +59,16 @@ def test_citations_without_github_remote_are_path_lines(canned_state):
     assert "`rateplan_service.py:1`" in text and "github.com" not in text
 
 
+def test_header_counts_only_listed_findings(canned_state):
+    text = render_review(canned_state)
+    assert ("- **Findings:** 1 HIGH, 0 MEDIUM, 1 LOW (refuted, gate-rejected, low-value and repeat findings "
+            "are only in the appendix)") in text
+    body = text.split("## Appendix", 1)[0]
+    assert CLAIM_REFUTED not in body and CLAIM_REJECTED not in body
+
+
 def test_appendix_lists_rejected_and_refuted_with_reasons(canned_state):
-    appendix = render_review(canned_state).split("## Appendix — rejected, refuted and merged", 1)[1]
+    appendix = render_review(canned_state).split("## Appendix — not listed above", 1)[1]
     assert CLAIM_REFUTED in appendix and "line 5 sets the id" in appendix
     assert CLAIM_REJECTED in appendix and "quote not at cited lines" in appendix
     assert CLAIM_HIGH not in appendix
@@ -71,17 +79,15 @@ def test_summary_is_short_and_says_how_the_review_went(canned_state):
     lines = text.splitlines()
     assert len(lines) <= 25
     assert "Cost $1.25 over 9 agent calls, 0 tokens, 0s wall time." in text
-    assert "Findings: 1 HIGH, 0 MEDIUM, 1 LOW. Dropped: 1 refuted" in text
-    assert "1 refuted by the verifier, 1 rejected by the gates" in text
+    assert "Findings: 1 HIGH, 0 MEDIUM, 1 LOW." in text
     (high_line,) = [l for l in lines if l.startswith("- `rateplan_service.py")]
     assert high_line.endswith("(confirmed)")
     assert "1 LOW findings are in the full review." in text
-    dropped = text.split("## Dropped", 1)[1]
-    assert "refuted:" in dropped and CLAIM_REFUTED.split(". ")[0][:40] in dropped
-    assert "line 5 sets the id" not in dropped  # the verifier's reason stays in the full review
-    assert "rejected by a gate:" in dropped and "quote not at cited lines" in dropped
+    # Refuted and gate-rejected findings are neither listed nor counted here.
+    assert "refuted" not in text.lower() and "rejected" not in text.lower() and "Dropped" not in text
+    assert CLAIM_REFUTED.split(". ")[0][:40] not in text and CLAIM_REJECTED[:40] not in text
     assert CLAIM_MEDIUM not in text  # lowered to LOW: counted, not listed
-    assert lines[-1] == f"Full review, with every reason: `review-{canned_state.target.slug}.md`"
+    assert lines[-1] == f"Full review, with every reason and what was left out: `review-{canned_state.target.slug}.md`"
 
 
 def test_summary_truncates_long_claims_and_lists_agent_failures(canned_state):

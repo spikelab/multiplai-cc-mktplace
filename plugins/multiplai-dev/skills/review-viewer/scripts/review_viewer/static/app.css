@@ -572,10 +572,7 @@ pre.sketch {
 .check-cite .quote { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--fs-sm) var(--mono); }
 .warn-mark { color: var(--medium); font-weight: 700; }
 .badge.assess { font-style: italic; }
-.finding-item .assess-reason { display: block; font-size: var(--fs-xs); color: var(--muted); margin-top: 2px; }
 .finding-list .undecided { margin: 0 0 var(--s2); font-size: var(--fs-sm); }
-.folded-group { margin-top: var(--s3); }
-.folded-group > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-sm); padding: var(--s1) 0; }
 .decide { margin-top: var(--s5); padding-top: var(--s3); border-top: 1px solid var(--border); }
 .decide .decision-note { width: 100%; height: var(--ctl-h); margin-top: var(--s2); }
 .decide-row { display: flex; gap: var(--s2); margin-top: var(--s2); }

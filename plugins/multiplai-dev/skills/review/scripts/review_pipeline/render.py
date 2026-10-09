@@ -20,13 +20,28 @@ from .target import github_web_base
 log = logging.getLogger(__name__)
 
 SHOWN_STATUSES = ("confirmed", "unverifiable")
-# Assess labels whose findings are listed after the others, in their own section.
-FOLDED_LABELS = ("repeat", "low-value")
+# Assess labels whose findings are never listed or counted: low-value, and a
+# repeat of a finding the person rejected in an earlier round. They go to the
+# review's appendix with the refuted and gate-rejected ones; findings.json
+# keeps them all.
+HIDDEN_LABELS = ("repeat", "low-value")
 
 
 def assess_label(fd: dict) -> str:
     """The finding's assess label, or "" when the file has none (written before the stage)."""
     return str((fd.get("assessment") or {}).get("label") or "")
+
+
+def listed(findings: list[dict]) -> list[dict]:
+    """The findings the markdown lists and counts: confirmed or unverifiable,
+    and not labelled low-value or repeat."""
+    return [f for f in findings if f["status"] in SHOWN_STATUSES and assess_label(f) not in HIDDEN_LABELS]
+
+
+def not_listed(findings: list[dict]) -> list[dict]:
+    """Everything `listed` leaves out, for the review's appendix."""
+    keep = {id(f) for f in listed(findings)}
+    return [f for f in findings if id(f) not in keep]
 
 
 def assessment_line(fd: dict) -> str:
@@ -149,7 +164,7 @@ def cost_line(run: dict) -> str:
 
 
 def _counts(findings: list[dict]) -> dict[str, int]:
-    shown = [f for f in findings if f["status"] in SHOWN_STATUSES]
+    shown = listed(findings)
     return {s: sum(1 for f in shown if f["severity"] == s) for s in SEVERITIES}
 
 
@@ -181,10 +196,10 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
         out += [f"  - `{f}`" for f in t.files]
     if t.deployed_in:
         out.append(f"- **Deployed in {t.deployed_in}:** {deployed or 'unknown'}")
-    refuted = sum(1 for f in findings if f["status"] == "refuted")
-    rejected = sum(1 for f in findings if f["status"] == "rejected")
-    out.append(f"- **Findings:** {counts['HIGH']} HIGH, {counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW; "
-               f"{refuted} refuted, {rejected} rejected by the gates (see the appendix)")
+    hidden = not_listed(findings)
+    out.append(f"- **Findings:** {counts['HIGH']} HIGH, {counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW"
+               + (" (refuted, gate-rejected, low-value and repeat findings are only in the appendix)"
+                  if hidden else ""))
     if data.get("run"):
         out.append(f"- **Model cost:** {cost_line(data['run'])}")
     if state.errors:
@@ -199,12 +214,9 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
 
     finders = {f.id: f.finders for f in state.findings}
 
-    shown = [f for f in findings if f["status"] in SHOWN_STATUSES]
-    folded = [f for f in shown if assess_label(f) in FOLDED_LABELS]
-    shown = [f for f in shown if assess_label(f) not in FOLDED_LABELS]
+    shown = listed(findings)
     if not shown:
-        out += ["No confirmed or unverifiable findings." if not folded else
-                "Every confirmed or unverifiable finding is a repeat or low-value; see below.", ""]
+        out += ["No findings to act on." + (" The appendix lists what was left out." if hidden else ""), ""]
     for severity in SEVERITIES:
         group = [f for f in shown if f["severity"] == severity]
         if not group:
@@ -214,25 +226,22 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
             out.append(finding_section(fd, web_base=web, head_sha=head,
                                        original_severity=state.original_severity.get(fd["id"]),
                                        finders=finders.get(fd["id"])))
-    if folded:
-        out += ["## Repeats and low-value findings", "",
-                "Each is still a confirmed or unverifiable finding: the assess stage marked it as a repeat of "
-                "one you rejected in an earlier round, or as not worth acting on, with its reason. Nothing "
-                "was deleted.", ""]
-        for fd in folded:
-            out.append(finding_section(fd, web_base=web, head_sha=head,
-                                       original_severity=state.original_severity.get(fd["id"]),
-                                       finders=finders.get(fd["id"])))
 
-    out += ["## Appendix — rejected, refuted and merged", ""]
-    dropped = [f for f in findings if f["status"] in ("refuted", "rejected")]
-    if not dropped and not state.merged:
-        out += ["Nothing was rejected, refuted or merged.", ""]
-    for fd in dropped:
+    out += ["## Appendix — not listed above", "",
+            "The record of what the review left out: findings a gate rejected, the verifier refuted, the "
+            "assess stage labelled low-value or a repeat of one you rejected, and duplicates merged into "
+            "another. None is counted above.", ""]
+    if not hidden and not state.merged:
+        out += ["Nothing was left out.", ""]
+    for fd in hidden:
         lines_ = f"{fd['line_start']}-{fd['line_end']}"
-        who = "the verifier" if fd["status"] == "refuted" else "a gate"
-        out.append(f"- **{fd['status']}** ({fd['severity']}) `{fd['file']}:{lines_}` — {_one_line(fd['claim'])}  ")
-        out.append(f"  Reason from {who}: {_one_line(fd.get('verdict_reason') or '')}")
+        kind = fd["status"] if fd["status"] not in SHOWN_STATUSES else assess_label(fd)
+        out.append(f"- **{kind}** ({fd['severity']}) `{fd['file']}:{lines_}` — {_one_line(fd['claim'])}  ")
+        if fd["status"] not in SHOWN_STATUSES:
+            who = "the verifier" if fd["status"] == "refuted" else "a gate"
+            out.append(f"  Reason from {who}: {_one_line(fd.get('verdict_reason') or '')}")
+        else:
+            out.append(f"  {assessment_line(fd).removeprefix('**Assessment:** ')}")
     for m in state.merged:
         f = m.finding
         out.append(f"- **merged** ({f.severity}) `{f.file}:{f.line_start}-{f.line_end}` — {_one_line(f.claim)}  ")
@@ -271,15 +280,16 @@ def summary_path(state: ReviewState, target_dir: Path) -> Path:
 def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> str:
     """How the review went, short enough to read in chat.
 
-    One line per HIGH and MEDIUM finding, a count for LOW, and one line per
-    finding the verifier refuted or a gate rejected.
+    One line per HIGH and MEDIUM finding and a count for LOW. Refuted,
+    gate-rejected, low-value and repeat findings are neither listed nor
+    counted; the full review's appendix has them.
     """
     data = findings_file or to_findings_file(state)
     t = state.target
     findings = data["findings"]
     counts = _counts(findings)
-    shown = [f for f in findings if f["status"] in SHOWN_STATUSES]
-    dropped = [f for f in findings if f["status"] in ("refuted", "rejected")]
+    shown = listed(findings)
+    shown_ids = {f["id"] for f in shown}
 
     out = [f"# Review summary — {t.label or t.slug}", ""]
     if t.is_tree:
@@ -288,27 +298,23 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
         out.append(f"{len(t.commits)} commits, {len(t.files)} files, {t.base_sha[:10]}..{t.head_sha[:10]}.")
     if data.get("run"):
         out.append(f"Cost {cost_line(data['run'])}.")
-    out.append(f"Findings: {counts['HIGH']} HIGH, {counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW. Dropped: "
-               f"{sum(1 for f in dropped if f['status'] == 'refuted')} refuted by the verifier, "
-               f"{sum(1 for f in dropped if f['status'] == 'rejected')} rejected by the gates"
-               + (f", {len(state.merged)} merged into another finding as duplicates." if state.merged else "."))
-    labels = [assess_label(f) for f in shown]
-    if any(labels):
-        out.append(f"Assessed: {labels.count('repeat')} repeats of rejected findings, "
-                   f"{labels.count('low-value')} low-value, {labels.count('still-open')} still open from "
-                   f"earlier rounds (repeats and low-value are listed last in the full review).")
-    if data.get("needs"):
+    out.append(f"Findings: {counts['HIGH']} HIGH, {counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW."
+               + (f" {len(state.merged)} merged into another finding as duplicates." if state.merged else ""))
+    still = sum(1 for f in shown if assess_label(f) == "still-open")
+    if still:
+        out.append(f"{still} still open from earlier rounds.")
+    needs = [n for n in data.get("needs", []) if n["blocks"] == "review" or n["blocks"] in shown_ids]
+    if needs:
         out += ["", "## Needs you", "",
                 "The review could not get these. Each command was suggested by the review: read it before "
                 "running it.", ""]
-        out += need_lines(data["needs"], findings)
+        out += need_lines(needs, findings)
         out.append("")
     if state.errors:
         out.append("Agent failures: " + "; ".join(_short(e) for e in state.errors))
 
-    listed = [f for f in shown if assess_label(f) not in FOLDED_LABELS]
     for severity in ("HIGH", "MEDIUM"):
-        group = [f for f in listed if f["severity"] == severity]
+        group = [f for f in shown if f["severity"] == severity]
         if not group:
             continue
         out += ["", f"## {severity}", ""]
@@ -316,19 +322,10 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
             lines_ = f"{fd['line_start']}" if fd["line_start"] == fd["line_end"] else f"{fd['line_start']}-{fd['line_end']}"
             still = ", still open" if assess_label(fd) == "still-open" else ""
             out.append(f"- `{fd['file']}:{lines_}` — {_short(fd['claim'])} ({fd['status']}{still})")
-    low = sum(1 for f in listed if f["severity"] == "LOW")
+    low = counts["LOW"]
     if low:
         out += ["", f"{low} LOW findings are in the full review."]
-    if dropped:
-        out += ["", "## Dropped", ""]
-        for fd in dropped:
-            # A verifier's reason often opens by conceding part of the claim, so
-            # its first sentence misleads; the full reason is in the review's appendix.
-            # A gate's reason is one mechanical sentence and fits.
-            why = "" if fd["status"] == "refuted" else f" ({_one_line(fd.get('verdict_reason') or '')})"
-            who = "refuted" if fd["status"] == "refuted" else "rejected by a gate"
-            out.append(f"- {who}: `{fd['file']}:{fd['line_start']}` — {_short(fd['claim'], 90)}{why}")
-    out += ["", f"Full review, with every reason: `review-{t.slug}.md`", ""]
+    out += ["", f"Full review, with every reason and what was left out: `review-{t.slug}.md`", ""]
     return "\n".join(out)
 
 
@@ -463,7 +460,7 @@ def render_rollup(severity: str, files: list[dict]) -> str:
     sections, total, targets = [], 0, 0
     for data in files:
         t = data["target"]
-        group = [f for f in data["findings"] if f["severity"] == severity and f["status"] in SHOWN_STATUSES]
+        group = [f for f in listed(data["findings"]) if f["severity"] == severity]
         if not group:
             continue
         targets += 1
@@ -474,7 +471,7 @@ def render_rollup(severity: str, files: list[dict]) -> str:
             sections.append(finding_section(fd, web_base=web, head_sha=t["head_sha"]))
     head = [f"# {severity} findings — {total} across {targets} of {len(files)} targets", ""]
     if not sections:
-        head.append(f"No confirmed or unverifiable {severity} findings.")
+        head.append(f"No {severity} findings to act on.")
     return "\n".join(head + sections) + "\n"
 
 

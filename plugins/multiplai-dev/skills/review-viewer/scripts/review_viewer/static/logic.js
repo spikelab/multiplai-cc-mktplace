@@ -8,7 +8,7 @@
   "use strict";
 
   const SEVERITIES = ["HIGH", "MEDIUM", "LOW"];
-  const HIDDEN_STATUSES = new Set(["refuted", "rejected"]);
+  const HIDDEN_STATUSES = new Set(["refuted"]);
 
   /* Join the parts of one answer. Parts split by `reply` to fit the row size
    * limit end on a line break and are joined as they are; separate replies
@@ -80,15 +80,9 @@
     return out;
   }
 
-  /* Refuted and gate-rejected findings, and any finding you decided (accept,
-   * reject or defer), leave the list, so what is left is what still needs you. */
-  function isHidden(finding, decisions) {
-    const d = decisions && decisions[finding.id];
-    return HIDDEN_STATUSES.has(finding.status) || !!(d && d.decision);
-  }
-
-  /* Assess labels whose findings fold into a collapsed group after the rest. */
-  const FOLDED_LABELS = new Set(["repeat", "low-value"]);
+  /* Assess labels whose findings the page never shows or counts: low-value,
+   * and repeat (the same defect as one you rejected in an earlier round). */
+  const DROPPED_LABELS = new Set(["repeat", "low-value"]);
 
   /* The review's assess label for a finding, or "" for a file written before
    * the assess stage existed. */
@@ -96,36 +90,53 @@
     return (finding && finding.assessment && finding.assessment.label) || "";
   }
 
-  function isFolded(finding) {
-    return FOLDED_LABELS.has(assessLabel(finding));
+  /* The findings the page shows and counts. Gate-rejected findings (status
+   * `rejected`), and those labelled low-value or repeat, are left out of the
+   * list, every count, the code markers, the palette and the risk score;
+   * findings.json keeps them, and the Checked tab still lists what the gates
+   * rejected. */
+  function shownFindings(findings) {
+    return (findings || []).filter((f) => f.status !== "rejected" && !DROPPED_LABELS.has(assessLabel(f)));
   }
 
-  /* Findings by severity, in the input order within each severity. Refuted,
-   * rejected and decided findings are left out unless showHidden. Findings labelled
-   * repeat or low-value go to `folded` instead (severity order), shown after
-   * the rest in a collapsed group. */
+  /* A findings file with only the shown findings, and only the needs that
+   * block the review or a shown finding. */
+  function shownFile(ff) {
+    const findings = shownFindings(ff && ff.findings);
+    const ids = new Set(findings.map((f) => f.id));
+    const all = new Set(((ff && ff.findings) || []).map((f) => f.id));
+    const needs = ((ff && ff.needs) || []).filter((n) => ids.has(n.blocks) || !all.has(n.blocks));
+    return Object.assign({}, ff, { findings: findings, needs: needs });
+  }
+
+  /* Refuted findings, and any finding you decided (accept, reject or defer),
+   * leave the list, so what is left is what still needs you. */
+  function isHidden(finding, decisions) {
+    const d = decisions && decisions[finding.id];
+    return HIDDEN_STATUSES.has(finding.status) || !!(d && d.decision);
+  }
+
+  /* The shown findings by severity, in the input order within each severity.
+   * Refuted and decided findings are left out unless showHidden; `hidden`
+   * counts them. Gate-rejected, low-value and repeat findings are never here
+   * (shownFindings). */
   function groupFindings(findings, decisions, showHidden) {
     const groups = { HIGH: [], MEDIUM: [], LOW: [] };
-    const folded = [];
     let hidden = 0;
-    for (const f of findings || []) {
+    for (const f of shownFindings(findings)) {
       if (isHidden(f, decisions)) {
         hidden += 1;
         if (!showHidden) continue;
       }
-      if (isFolded(f)) folded.push(f);
-      else (groups[f.severity] || (groups[f.severity] = [])).push(f);
+      (groups[f.severity] || (groups[f.severity] = [])).push(f);
     }
-    const rank = (f) => { const i = SEVERITIES.indexOf(f.severity); return i < 0 ? SEVERITIES.length : i; };
-    folded.sort((a, b) => rank(a) - rank(b));
-    return { groups: groups, hidden: hidden, folded: folded };
+    return { groups: groups, hidden: hidden };
   }
 
-  /* Ids in the order the sidebar shows them: the severity groups, then the folded group. */
+  /* Ids in the order the list shows them: HIGH, MEDIUM, LOW. */
   function findingOrder(grouped) {
     const ids = [];
     for (const sev of SEVERITIES) for (const f of grouped.groups[sev] || []) ids.push(f.id);
-    for (const f of grouped.folded || []) ids.push(f.id);
     return ids;
   }
 
@@ -140,10 +151,10 @@
     return null;
   }
 
-  /* How many shown (not refuted or rejected) findings still need a decision. */
+  /* How many shown, not refuted findings still need a decision, of how many. */
   function undecidedCount(findings, decisions) {
     let open = 0, total = 0;
-    for (const f of findings || []) {
+    for (const f of shownFindings(findings)) {
       if (HIDDEN_STATUSES.has(f.status)) continue;
       total += 1;
       if (!effectiveDecision(f, decisions)) open += 1;
@@ -339,7 +350,7 @@
       for (const id of s.finding_ids || []) linked.add(id);
     }
     for (const k of (walk && walk.skipped) || []) covered.add(k.path);
-    const must = (findings || []).filter(function (f) {
+    const must = shownFindings(findings).filter(function (f) {
       return f.status === "confirmed" || f.status === "unverifiable";
     });
     return {
@@ -639,7 +650,7 @@
     const badge = (id) => ((stats && stats.badges) || []).find((b) => b.id === id);
     const tests = ((walk.assessments || []).find((a) => a.topic === "tests") || {}).verdict || null;
     const open = { HIGH: 0, MEDIUM: 0 };
-    for (const f of findings || []) {
+    for (const f of shownFindings(findings)) {
       const d = effectiveDecision(f, decisions);
       if (f.status === "confirmed" && !(d && d.decision === "reject") && f.severity in open) open[f.severity] += 1;
     }
@@ -1341,7 +1352,7 @@
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
     isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder, navOrder: navOrder,
     githubBlobUrl: githubBlobUrl, findingFileName: findingFileName, shareOptions: shareOptions, shareText: shareText, findingTopic: findingTopic, findingMarkdown: findingMarkdown,
-    assessLabel: assessLabel, isFolded: isFolded, effectiveDecision: effectiveDecision,
+    assessLabel: assessLabel, shownFindings: shownFindings, shownFile: shownFile, effectiveDecision: effectiveDecision,
     undecidedCount: undecidedCount, assessmentText: assessmentText, explanationText: explanationText,
     stepFinding: stepFinding, anchorLabel: anchorLabel, escapeHtml: escapeHtml,
     splitHighlighted: splitHighlighted, lineRange: lineRange,

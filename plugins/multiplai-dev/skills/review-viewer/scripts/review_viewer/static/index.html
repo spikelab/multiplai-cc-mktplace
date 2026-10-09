@@ -133,7 +133,7 @@
       <div id="walk-step" class="walk-step"></div>
     </div>
     <div id="finding" role="tabpanel" class="panel" hidden>
-      <label class="toggle"><input type="checkbox" id="show-hidden"> <span id="hidden-label">Show decided, refuted and rejected</span></label>
+      <label class="toggle"><input type="checkbox" id="show-hidden"> <span id="hidden-label">Show decided and refuted</span></label>
       <div id="findings" class="finding-list"></div>
       <div id="finding-detail" class="finding-detail"></div>
     </div>
@@ -379,16 +379,16 @@
         <dt><code>unverifiable</code></dt><dd>It depends on something the verifier could not read, the code
           does not settle it, or the verifier's call failed. Its severity was lowered one step.</dd>
         <dt><code>refuted</code></dt><dd>The verifier showed it cannot happen. Hidden unless you tick
-          Show decided, refuted and rejected.</dd>
-        <dt><code>rejected</code></dt><dd>The check in code rejected it before any verifier saw it. Hidden
-          the same way, as is every finding you accept, reject or defer, so the list holds only what
-          still needs a decision.</dd>
+          Show decided and refuted, as is every finding you accept, reject or defer, so the list holds
+          only what still needs a decision.</dd>
+        <dt><code>rejected</code></dt><dd>The check in code rejected it before any verifier saw it. Never
+          shown on the Findings tab or counted; the Checked tab lists it with the rule that rejected it.</dd>
       </dl>
       <p>The assess step's label shows as a badge. A finding without one was labelled useful, or the review
         is older than labels.</p>
       <dl>
-        <dt><code>repeat</code></dt><dd>The same defect as a finding you rejected in an earlier round. It
-          counts as rejected, marked "earlier round", until you decide again.</dd>
+        <dt><code>repeat</code></dt><dd>The same defect as a finding you rejected in an earlier round.
+          Never shown or counted: your earlier rejection stands.</dd>
         <dt><code>still-open</code></dt><dd>The same defect as an earlier-round finding you accepted,
           deferred or have not decided: it is not fixed yet.</dd>
         <dt><code>low-value</code></dt><dd>True, but not worth acting on, for one of three reasons named at
@@ -396,10 +396,13 @@
           file or a note on an earlier decision says the affected thing does not matter.
           <code>[covered]</code>: fixing another finding fixes this one too. <code>[speculative]</code>: it
           fails only after a future change nobody has proposed, and the code is correct now; this does not
-          apply when the change's own tests, comments or description promise to catch such a change.</dd>
+          apply when the change's own tests, comments or description promise to catch such a change.
+          Never shown or counted.</dd>
       </dl>
-      <p>Repeats and low-value findings are folded into a closed group after the rest. Accept, Reject or
-        Defer records your decision; a later round of the review reads it.</p>
+      <p>Gate-rejected, repeat and low-value findings stay in <code>findings.json</code> and in the
+        review's markdown appendix; the page leaves them out of the list, every count, the code markers,
+        Go to and the risk score. Accept, Reject or Defer records your decision; a later round of the
+        review reads it.</p>
     </section>
 
     <section id="help-needs" class="help-sec" tabindex="-1" aria-labelledby="help-h-needs">

@@ -27,6 +27,8 @@
     slug: null,
     detail: null,
     findingsById: new Map(),
+    shown: [],
+    shownFile: null,
     selected: null,
     filePath: null,
     view: null,
@@ -305,7 +307,11 @@
     state.pollGen += 1;
     state.slug = slug;
     state.detail = await api(targetUrl());
-    state.findingsById = new Map(state.detail.findings.findings.map((f) => [f.id, f]));
+    // Gate-rejected, low-value and repeat findings are never shown or counted
+    // (L.shownFindings); everything below reads state.shown.
+    state.shownFile = L.shownFile(state.detail.findings);
+    state.shown = state.shownFile.findings;
+    state.findingsById = new Map(state.shown.map((f) => [f.id, f]));
     state.changed = new Set(state.detail.files);
     state.dirToggled = new Map();
     renderAllFilesToggle();
@@ -345,7 +351,7 @@
       renderSummary();
     }, WALK_WAIT_MS + 50);
     await Promise.all([pollOnce(), pollWalk()]);
-    const first = L.findingOrder(L.groupFindings(state.detail.findings.findings, state.detail.decisions, state.showHidden))[0];
+    const first = L.findingOrder(L.groupFindings(state.shown, state.detail.decisions, state.showHidden))[0];
     if (first) await selectFinding(first, { stay: true });
     else {
       renderDetail();
@@ -412,7 +418,7 @@
     const checks = state.detail && state.detail.checks;
     if (state.tab === "checked" && !checks) state.tab = "summary";
     $("tab-checked").hidden = !checks;
-    const needs = state.detail ? L.needsItems(state.detail.findings).length : 0;
+    const needs = state.detail ? L.needsItems(state.shownFile).length : 0;
     if (state.tab === "needs" && !needs) state.tab = "summary";
     $("tab-needs").hidden = !needs;
     $("needs-count").textContent = needs ? String(needs) : "";
@@ -427,7 +433,8 @@
     $("walk-count").textContent = state.walk ? String(n) : "";
     $("walk-count").classList.toggle("live", !state.walk || !state.walk.complete);
     $("walk-count").title = !state.walk ? "Waiting for the session" : state.walk.complete ? "" : "Still being written";
-    const nf = state.detail ? state.detail.findings.findings.length : 0;
+    // The same number as "N of M findings still need a decision": M.
+    const nf = state.detail ? L.undecidedCount(state.shown, state.detail.decisions).total : 0;
     $("finding-count").textContent = nf ? String(nf) : "";
   }
 
@@ -473,7 +480,7 @@
 
   /* The risk score, or null until the walkthrough has its risk block. */
   function currentRisk() {
-    const r = L.riskInputs(state.detail.stats, state.walk, state.detail.findings.findings,
+    const r = L.riskInputs(state.detail.stats, state.walk, state.shown,
       state.detail.decisions, state.detail.findings.target.files_changed);
     return r ? Object.assign({ inputs: r }, L.riskLevel(r)) : null;
   }
@@ -549,7 +556,7 @@
 
   function renderNeeds() {
     const box = $("needs");
-    const groups = L.needsGroups(state.detail.findings);
+    const groups = L.needsGroups(state.shownFile);
     box.replaceChildren();
     if (!groups.length) return;
     box.appendChild(el("h3", { class: "label-help" }, [el("span", { text: "Needs you" }), helpButton("needs", "Needs you")]));
@@ -628,7 +635,7 @@
     } else {
       renderMarkdown(overview, state.walk.overview_md);
       overview.insertBefore(el("div", { class: "label", text: "Overview" }), overview.firstChild);
-      const cov = L.walkCoverage(state.walk, state.detail.files, state.detail.findings.findings);
+      const cov = L.walkCoverage(state.walk, state.detail.files, state.shown);
       overview.appendChild(el("p", { class: "coverage", text: "The reviews cover " + cov.files + " of " + cov.filesTotal +
         " changed files" + (cov.findingsTotal ? " and link " + cov.findings + " of " + cov.findingsTotal + " findings" : "") + "." }));
       if (!state.walk.complete) {
@@ -700,7 +707,7 @@
     renderWalk();
     renderSummary();
     if (!state.tabChosen && walk && state.tab === "walk" && !state.stepId && walk.steps.length) {
-      await selectStep(walk.steps[0].id, { open: !state.filePath || !state.detail.findings.findings.length });
+      await selectStep(walk.steps[0].id, { open: !state.filePath || !state.shown.length });
     }
   }
 
@@ -872,15 +879,19 @@
   function renderFindingList() {
     const box = $("findings");
     box.replaceChildren();
-    const findings = state.detail.findings.findings;
+    const findings = state.shown;
     const grouped = L.groupFindings(findings, state.detail.decisions, state.showHidden);
-    $("hidden-label").textContent = "Show decided, refuted and rejected (" + grouped.hidden + ")";
+    $("hidden-label").textContent = "Show decided and refuted (" + grouped.hidden + ")";
     $("show-hidden").parentElement.hidden = !grouped.hidden;
     if (!findings.length) {
-      box.appendChild(emptyState("✓", (L.isTreeReview(state.detail.findings.target)
-        ? "No findings for this tree: every file is shown as added. "
-        : "No code review for these commits: this is the plain diff. ") +
-        "Select lines in the code to ask about them."));
+      const all = state.detail.findings.findings.length;
+      box.appendChild(emptyState("✓", (all
+        ? "Nothing to show: the review's " + all + " finding" + (all === 1 ? " was" : "s were") +
+          " rejected by its checks or labelled low-value or repeat; findings.json keeps them. "
+        : L.isTreeReview(state.detail.findings.target)
+          ? "No findings for this tree: every file is shown as added. "
+          : "No code review for these commits: this is the plain diff. ") +
+        "Pick line numbers in the code to ask about them."));
     }
     const undecided = L.undecidedCount(findings, state.detail.decisions);
     if (undecided.total) {
@@ -893,15 +904,6 @@
       box.appendChild(el("h2", { class: "sev-h " + sev, text: sev + " (" + items.length + ")" }));
       for (const f of items) box.appendChild(findingItem(f));
     }
-    if (grouped.folded.length) {
-      // Repeats of rejected findings and low-value ones: still findings, still
-      // decidable, collapsed so the rest come first.
-      const open = grouped.folded.some((f) => f.id === state.selected);
-      box.appendChild(el("details", { class: "folded-group", open: open }, [
-        el("summary", { text: "Repeats and low-value (" + grouped.folded.length + ")" }),
-        ...grouped.folded.map((f) => findingItem(f, true)),
-      ]));
-    }
   }
 
   /* What the finding is about; a guess from the path is in italics and says so. */
@@ -911,7 +913,7 @@
       title: t.guessed ? "What it is about, guessed from the file path" : "What it is about, as the verifier labelled it" });
   }
 
-  function findingItem(f, folded) {
+  function findingItem(f) {
     const sev = f.severity;
     const d = L.effectiveDecision(f, state.detail.decisions);
     const label = L.assessLabel(f);
@@ -933,7 +935,6 @@
       }) : null,
       el("span", { class: "claim", text: f.claim }),
       el("span", { class: "where", text: f.file + ":" + f.line_start }),
-      folded ? el("span", { class: "assess-reason", text: L.assessmentText(f.assessment) }) : null,
     ]);
   }
 
@@ -1324,7 +1325,7 @@
     box.replaceChildren();
     const f = state.selected && state.findingsById.get(state.selected);
     if (!f) {
-      if (state.detail.findings.findings.length) box.appendChild(emptyState("☝", "Pick a finding above, or press j."));
+      if (state.shown.length) box.appendChild(emptyState("☝", "Pick a finding above, or press j."));
       renderThread();
       return;
     }
@@ -1758,7 +1759,7 @@
   }
 
   function findingsIn(path) {
-    return state.detail.findings.findings.filter((f) => f.file === path &&
+    return state.shown.filter((f) => f.file === path &&
       (state.showHidden || !L.isHidden(f, state.detail.decisions)));
   }
 
@@ -2513,7 +2514,7 @@
     ((state.walk && state.walk.steps) || []).forEach((st, i) => {
       out.push({ kind: "review", label: st.title, sub: "review " + (i + 1), step: st.id });
     });
-    for (const f of state.detail.findings.findings) {
+    for (const f of state.shown) {
       if (!state.showHidden && L.isHidden(f, state.detail.decisions)) continue;
       out.push({ kind: f.severity, label: f.claim, sub: f.file + ":" + f.line_start, finding: f.id });
     }
@@ -2750,7 +2751,7 @@
       }
       if (typing || ev.metaKey || ev.ctrlKey || ev.altKey) return;
       if (ev.key === "j" || ev.key === "k") {
-        const order = L.navOrder(state.detail.findings.findings, state.detail.decisions, state.showHidden, state.selected);
+        const order = L.navOrder(state.shown, state.detail.decisions, state.showHidden, state.selected);
         const next = L.stepFinding(order, state.selected, ev.key === "j" ? 1 : -1);
         if (state.tab !== "finding") setTab("finding");
         if (next && next !== state.selected) selectFinding(next);

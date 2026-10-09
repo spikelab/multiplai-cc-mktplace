@@ -78,38 +78,54 @@ test("findings group by severity and hide refuted, rejected and decided", () => 
   assert.equal(L.stepFinding(L.navOrder(fs, decisions, false, "e"), "e", 1), "a");
 });
 
-test("repeats and low-value findings fold after the rest, most severe first", () => {
+test("gate-rejected, low-value and repeat findings are never shown or counted", () => {
   const fs = [
     { id: "a", severity: "LOW", status: "confirmed", assessment: { label: "low-value", reason: "[speculative] r" } },
     { id: "b", severity: "HIGH", status: "confirmed", assessment: { label: "useful" } },
-    { id: "c", severity: "MEDIUM", status: "confirmed", assessment: { label: "repeat", earlier_id: "x" } },
+    { id: "c", severity: "HIGH", status: "confirmed", assessment: { label: "repeat", earlier_id: "x" } },
     { id: "d", severity: "MEDIUM", status: "unverifiable", assessment: { label: "still-open", earlier_id: "y" } },
     { id: "e", severity: "LOW", status: "confirmed" },
+    { id: "g", severity: "HIGH", status: "rejected" },
+    { id: "r", severity: "LOW", status: "refuted" },
   ];
+  assert.deepEqual(L.shownFindings(fs).map((f) => f.id), ["b", "d", "e", "r"]);
   const g = L.groupFindings(fs, {}, false);
-  assert.deepEqual(g.folded.map((f) => f.id), ["c", "a"]);
-  assert.deepEqual(L.findingOrder(g), ["b", "d", "e", "c", "a"]);
-  // A file written before the assess stage has no labels: nothing folds.
-  const old = L.groupFindings([{ id: "e", severity: "LOW", status: "confirmed" }], {}, false);
-  assert.deepEqual(old.folded, []);
-  assert.deepEqual(L.findingOrder(old), ["e"]);
+  assert.equal(g.folded, undefined, "no folded group any more");
+  assert.deepEqual(L.findingOrder(g), ["b", "d", "e"]);
+  assert.equal(g.hidden, 1, "only the refuted one waits behind the checkbox");
+  assert.deepEqual(L.findingOrder(L.groupFindings(fs, {}, true)), ["b", "d", "e", "r"]);
+  // Decided findings still hide behind the checkbox, so a decision can be undone.
+  const decided = L.groupFindings(fs, { b: { decision: "reject" } }, false);
+  assert.deepEqual([L.findingOrder(decided), decided.hidden], [["d", "e"], 2]);
+  assert.deepEqual(L.navOrder(fs, {}, false, "c"), ["b", "d", "e"], "j/k never lands on a dropped one");
+  // Every count agrees with the list.
+  assert.deepEqual(L.undecidedCount(fs, {}), { open: 3, total: 3 });
+  const walk = { risk: { tier: 1, tier_why: "w", revertable: true, revert_why: "x" }, assessments: [] };
+  assert.equal(L.riskInputs({}, walk, fs, {}, []).openHigh, 1, "the repeat and the gate-rejected HIGH do not count");
+  assert.equal(L.walkCoverage({ steps: [], skipped: [] }, [], fs).findingsTotal, 3, "b, d and e");
+  // A file written before the assess stage has no labels: nothing is dropped but gate rejections.
+  assert.deepEqual(L.findingOrder(L.groupFindings([{ id: "e", severity: "LOW", status: "confirmed" }], {}, false)), ["e"]);
 });
 
-test("a repeat counts as decided (rejected) until the person decides otherwise", () => {
+test("needs that block a dropped finding are dropped with it", () => {
+  const ff = {
+    findings: [{ id: "b", severity: "HIGH", status: "confirmed", file: "x", line_start: 1, claim: "B" },
+      { id: "a", severity: "LOW", status: "confirmed", assessment: { label: "low-value" } }],
+    needs: [{ what: "w1", blocks: "review", cause: "no-access" }, { what: "w2", blocks: "b", cause: "no-access" },
+      { what: "w3", blocks: "a", cause: "no-access" }],
+  };
+  const shown = L.shownFile(ff);
+  assert.deepEqual(shown.findings.map((f) => f.id), ["b"]);
+  assert.deepEqual(L.needsItems(shown).map((n) => n.what), ["w1", "w2"]);
+  assert.equal(ff.findings.length, 2, "the file itself is left as it is");
+});
+
+test("an explicit decision still overrides an earlier round's", () => {
   const repeat = { id: "c", severity: "HIGH", status: "confirmed",
     assessment: { label: "repeat", earlier_id: "x", earlier_note: "by design" } };
-  const plain = { id: "b", severity: "LOW", status: "confirmed" };
-  const refuted = { id: "r", severity: "LOW", status: "refuted" };
   assert.deepEqual(L.effectiveDecision(repeat, {}), { decision: "reject", note: "by design", implied: true });
-  assert.equal(L.effectiveDecision(plain, {}), null);
+  assert.equal(L.effectiveDecision({ id: "b" }, {}), null);
   assert.equal(L.effectiveDecision(repeat, { c: { decision: "accept" } }).decision, "accept");
-  assert.deepEqual(L.undecidedCount([repeat, plain, refuted], {}), { open: 1, total: 2 });
-  assert.deepEqual(L.undecidedCount([repeat, plain], { c: { decision: "accept" }, b: { decision: "defer" } }),
-    { open: 0, total: 2 });
-  // The merge-risk count treats it as rejected too.
-  const walk = { risk: { tier: 1, tier_why: "w", revertable: true, revert_why: "x" }, assessments: [] };
-  assert.equal(L.riskInputs({}, walk, [repeat], {}, []).openHigh, 0);
-  assert.equal(L.riskInputs({}, walk, [repeat], { c: { decision: "accept" } }, []).openHigh, 1);
 });
 
 test("assessment text names the earlier round, decision and note", () => {

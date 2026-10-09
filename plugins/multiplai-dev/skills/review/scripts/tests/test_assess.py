@@ -407,18 +407,21 @@ def test_findings_json_with_and_without_assessment_validates(target_info, canned
         "earlier_decision": "reject", "earlier_note": "by design"}
 
 
-def test_review_lists_repeats_and_low_value_last_and_summary_counts_them(target_info):
+def test_repeats_and_low_value_go_only_to_the_appendix_and_are_not_counted(target_info):
     state = _labelled_state(target_info)
     review = render_review(state)
-    folded = review.index("## Repeats and low-value findings")
     appendix = review.index("## Appendix")
-    assert review.index("## HIGH") < folded < appendix
-    assert folded < review.index(medium_finding().claim) < appendix
-    assert folded < review.index("a low one") < appendix
-    assert "**Assessment:** repeat — repeats `abcdef0123` (round 111111111111), your decision reject: by design." in review
+    assert "Repeats and low-value" not in review
+    assert review.index("## HIGH") < appendix
+    assert appendix < review.index(medium_finding().claim)
+    assert appendix < review.index("a low one")
+    assert "- **Findings:** 1 HIGH, 0 MEDIUM, 0 LOW" in review
+    assert "repeat — repeats `abcdef0123` (round 111111111111), your decision reject: by design." in review
+    assert "- **repeat** (MEDIUM)" in review and "- **low-value** (LOW)" in review
     summary = render_summary(state)
-    assert "Assessed: 1 repeats of rejected findings, 1 low-value, 0 still open" in summary
-    assert medium_finding().claim[:30] not in summary  # a repeat MEDIUM moves to the count
+    assert "Findings: 1 HIGH, 0 MEDIUM, 0 LOW." in summary
+    assert "repeat" not in summary and "low-value" not in summary
+    assert medium_finding().claim[:30] not in summary
     assert "LOW findings are in the full review" not in summary  # the only LOW is low-value
 
 
@@ -513,7 +516,7 @@ def test_a_finding_rejected_in_round_one_comes_back_reworded_and_is_labelled_rep
         "earlier_round": round_one_head, "earlier_decision": "reject",
         "earlier_note": "negative levels are the sensor's idle state"}
     summary = next(target_dir.glob("summary-*.md")).read_text()
-    assert "Assessed: 1 repeats of rejected findings" in summary
+    assert reworded.claim[:30] not in summary  # a repeat is neither listed nor counted
 
 
 def test_assess_only_labels_a_saved_review_and_changes_nothing_in_it(tmp_path, monkeypatch, capsys):
