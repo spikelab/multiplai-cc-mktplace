@@ -17,6 +17,22 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-09
+
+### Added
+- review: the `conventions` finder reads `coding-standards.md` files as well as
+  `CLAUDE.md`, from the repo root down to each changed file's directory. A
+  `coding-standards.md` holds rules for the reviewer only, so they stay out of
+  the context of the agent writing the code. Its rules are enforced even when
+  they state no consequence. All `coding-standards.md` files go in before any
+  `CLAUDE.md`, so when the rules pass the 40 000-character cap, `CLAUDE.md` text
+  is skipped first.
+- review: the `tests` finder also reports tests the change adds or edits that
+  cannot catch a change in behaviour: a test asserting a value copied from the
+  code, one that reads a source file as text instead of running it, and one that
+  mocks the dependency whose failure the code must handle. These are LOW at most,
+  unless the test is the only one touching the changed behaviour.
+
 ## [0.24.0] - 2026-10-01
 
 ### Changed
