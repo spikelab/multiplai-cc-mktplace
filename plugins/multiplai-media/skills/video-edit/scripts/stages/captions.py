@@ -1,9 +1,13 @@
 """Word-timed captions and a headline, written as one ASS subtitle file.
 
 Captions show a few words at a time and colour the word being spoken. The
-rules follow what short-form editors converge on: at most 3 words / 22
-characters on screen, a new caption at every pause, never one caption across
-a silence longer than 0.3 s. whisper's word timings sometimes start a word
+rules follow what short-form editors converge on: at most 22 characters on
+screen, a new caption at every sentence end and every pause, never one
+caption across a silence longer than 0.3 s. Inside those limits a line breaks
+where the speech does: after a comma, semicolon or colon rather than in the
+middle of a phrase, and never leaving one word alone on a line unless that
+word ends a sentence or a pause follows it. Only punctuation and timing
+decide this, so it works for any language. whisper's word timings sometimes start a word
 before the previous one ended; a forward-only pass makes every event start
 no earlier than the one before it ends, so two captions never overlap.
 
@@ -23,21 +27,118 @@ MIN_EVENT_S = 0.05
 SENTENCE_END = (".", "?", "!", "…")
 
 
-def group_words(words: list[dict], words_per_line: int = 3, max_chars: int = 22,
-                max_gap: float = MAX_GAP_S) -> list[list[dict]]:
-    groups: list[list[dict]] = []
+CLAUSE_END = (",", ";", ":")
+
+
+def _chars(line: list[dict]) -> int:
+    return len(" ".join(x["text"] for x in line))
+
+
+def _runs(words: list[dict], max_gap: float) -> list[list[dict]]:
+    """Split at every sentence end and every pause longer than max_gap: no
+    caption line crosses one."""
+    runs: list[list[dict]] = []
     cur: list[dict] = []
     for w in words:
-        if cur:
-            text_len = len(" ".join(x["text"] for x in cur + [w]))
-            if (len(cur) >= words_per_line or text_len > max_chars
-                    or w["start"] - cur[-1]["end"] > max_gap
-                    or cur[-1]["text"].endswith(SENTENCE_END)):
-                groups.append(cur)
-                cur = []
+        if cur and (w["start"] - cur[-1]["end"] > max_gap or cur[-1]["text"].endswith(SENTENCE_END)):
+            runs.append(cur)
+            cur = []
         cur.append(w)
     if cur:
-        groups.append(cur)
+        runs.append(cur)
+    return runs
+
+
+def _clause_end_ahead(run: list[dict], i: int, cur: list[dict], max_chars: int) -> bool:
+    """True when the line can grow, within max_chars, to a clause end or to
+    the end of the run (a sentence end or a pause)."""
+    line = list(cur)
+    for j in range(i, len(run)):
+        line.append(run[j])
+        if _chars(line) > max_chars:
+            return False
+        if run[j]["text"].endswith(CLAUSE_END) or j == len(run) - 1:
+            return True
+    return False
+
+
+def _break_line(cur: list[dict], w: dict, max_chars: int) -> tuple[list[dict], list[dict]]:
+    """Where to end the line `cur` now that `w` must start a new one: after
+    the last clause end in it, when that leaves at least 2 words on each
+    line and the carried words still fit with `w`; else after all of `cur`."""
+    for k in range(len(cur) - 2, 0, -1):
+        if cur[k]["text"].endswith(CLAUSE_END) and _chars(cur[k + 1:] + [w]) <= max_chars:
+            return cur[:k + 1], cur[k + 1:]
+    return cur, []
+
+
+def _split_run(run: list[dict], words_per_line: int, max_chars: int) -> list[list[dict]]:
+    lines: list[list[dict]] = []
+    cur: list[dict] = []
+    for i, w in enumerate(run):
+        if cur:
+            if _chars(cur + [w]) > max_chars:
+                done, cur = _break_line(cur, w, max_chars)
+                lines.append(done)
+            elif len(cur) >= words_per_line:
+                # A soft cap: past it the line still grows to a clause end
+                # that fits, and otherwise breaks at the last one in it.
+                if cur[-1]["text"].endswith(CLAUSE_END):
+                    lines.append(cur)
+                    cur = []
+                elif not _clause_end_ahead(run, i, cur, max_chars):
+                    done, cur = _break_line(cur, w, max_chars)
+                    lines.append(done)
+        cur.append(w)
+    if cur:
+        lines.append(cur)
+    return _no_lone_words(lines, max_chars)
+
+
+def _no_lone_words(lines: list[list[dict]], max_chars: int) -> list[list[dict]]:
+    """Give a one-word line a neighbour from the same run: join it to the
+    line before or after, or borrow one word from it, whichever fits. Joining
+    the side its clause belongs to comes first."""
+    lines = [list(x) for x in lines]
+    i = 0
+    while i < len(lines):
+        if len(lines) > 1 and len(lines[i]) == 1:
+            prev = lines[i - 1] if i > 0 else None
+            nxt = lines[i + 1] if i + 1 < len(lines) else None
+            word = lines[i][0]
+            moves = []
+            if prev is not None:
+                moves += [("join_prev", prev + [word]), ("borrow_prev", prev[-1:] + [word])]
+            if nxt is not None:
+                moves += [("join_next", [word] + nxt), ("borrow_next", [word] + nxt[:1])]
+            if prev is not None and prev[-1]["text"].endswith(CLAUSE_END):
+                moves.sort(key=lambda m: not m[0].endswith("next"))
+            for kind, line in moves:
+                if _chars(line) > max_chars:
+                    continue
+                if kind == "borrow_prev" and len(prev) < 3 or kind == "borrow_next" and len(nxt) < 3:
+                    continue
+                if kind == "join_prev":
+                    lines[i - 1:i + 1] = [line]
+                    i -= 1
+                elif kind == "join_next":
+                    lines[i:i + 2] = [line]
+                elif kind == "borrow_prev":
+                    lines[i - 1:i + 1] = [prev[:-1], line]
+                else:
+                    lines[i:i + 2] = [line, nxt[1:]]
+                break
+        i += 1
+    return lines
+
+
+def group_words(words: list[dict], words_per_line: int = 5, max_chars: int = 22,
+                max_gap: float = MAX_GAP_S) -> list[list[dict]]:
+    """Caption lines. A sentence end or a pause longer than max_gap always
+    ends a line; max_chars is a hard limit; words_per_line is a soft cap."""
+    groups: list[list[dict]] = []
+    for run in _runs(words, max_gap):
+        groups.extend(_split_run(run, words_per_line, max_chars))
     return groups
 
 

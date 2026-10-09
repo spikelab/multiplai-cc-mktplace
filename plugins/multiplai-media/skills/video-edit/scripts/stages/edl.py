@@ -103,7 +103,7 @@ class Layout:
 
 @dataclass
 class Captions:
-    words_per_line: int = 3
+    words_per_line: int = 5     # a soft cap; max_chars is the hard limit (stages/captions.py)
     max_chars: int = 22
     position_y: float = 0.68    # vertical centre of the caption line, fraction of output height
     highlight: bool = True      # colour the word being spoken
