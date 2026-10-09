@@ -47,6 +47,24 @@ def place_segments(edl: EDL) -> list[Placed]:
     return placed
 
 
+def segment_lines(edl: EDL, placed: list[Placed]) -> list[str]:
+    """One line per segment: where it sits in the output, how it is framed,
+    and how it joins the one before (a hard cut is 0.00 s)."""
+    lines = []
+    for p in placed:
+        seg = edl.segments[p.index]
+        framing = seg.frame or f"fit {seg.fit or edl.output.fit}"
+        if isinstance(seg.focus, list):
+            framing += f", {len(seg.focus)} focus keys"
+        join = ""
+        if p.index > 0 or edl.title:
+            d = _xfade(edl, p.index)
+            join = f"  joins with a {'hard cut' if d == 0 else 'crossfade'} ({d:.2f}s)"
+        lines.append(f"seg {p.index}: src {p.src_start:.2f}–{p.src_end:.2f} → out "
+                     f"{p.out_start:.2f}–{p.out_end:.2f}  {framing}{join}")
+    return lines
+
+
 def to_output(t: float, placed: list[Placed]) -> float | None:
     """Output time of source time t, or None when t is cut or muted."""
     for p in placed:

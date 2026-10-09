@@ -140,3 +140,16 @@ def test_render_uses_concat_for_a_hard_cut_and_agrees_with_the_timeline() -> Non
 def test_the_title_card_join_is_never_a_hard_cut_by_default() -> None:
     edl = _edl([Segment(0, 10)], title=Title(line1="Hi", duration=3.0))
     assert edl.xfade_before(0) == 0.5
+
+
+def test_segment_lines_name_each_join_and_its_length() -> None:
+    edl = EDL.from_dict({"source": "/r/talk.mp4", "output": {"fit": "crop"}, "segments": [
+        {"src_start": 10, "src_end": 16, "fit": "blur"},
+        {"src_start": 16, "src_end": 30, "focus": [{"t": 16, "x": 0.4}, {"t": 30, "x": 0.6}]},
+        {"src_start": 40, "src_end": 45}]})
+    lines = timeline.segment_lines(edl, timeline.place_segments(edl))
+    assert lines == [
+        "seg 0: src 10.00–16.00 → out 0.00–6.00  fit blur",
+        "seg 1: src 16.00–30.00 → out 6.00–20.00  fit crop, 2 focus keys  joins with a hard cut (0.00s)",
+        "seg 2: src 40.00–45.00 → out 19.50–24.50  fit crop  joins with a crossfade (0.50s)",
+    ]

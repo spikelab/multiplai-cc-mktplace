@@ -130,11 +130,16 @@ def cmd_shots(args: argparse.Namespace) -> int:
 
 
 def cmd_timeline(args: argparse.Namespace) -> int:
-    """Print the transcript in output time: what the render will say, and when."""
+    """Print each segment's place in the output and its join, then the
+    transcript in output time: what the render will say, and when."""
     from stages import timeline, transcript as tx
     edl = EDL.load(args.edl)
     path = Path(args.transcript) if args.transcript else composite.transcript_path(edl)
-    words = timeline.map_words(tx.load(path)["words"], timeline.place_segments(edl))
+    placed = timeline.place_segments(edl)
+    for line in timeline.segment_lines(edl, placed):
+        print(line)
+    print()
+    words = timeline.map_words(tx.load(path)["words"], placed)
     line: list[dict] = []
     for i, w in enumerate(words):
         line.append(w)
