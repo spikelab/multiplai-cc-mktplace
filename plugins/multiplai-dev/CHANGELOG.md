@@ -17,6 +17,43 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-10-09
+
+### Added
+- review: earlier rounds are kept. When a PR (or branch) is reviewed again on
+  a new head, the last round's `findings.json`, review and `checks.json` are
+  copied to `<out>/<slug>/rounds/<head>/` before the new run writes over them.
+  Nothing there is deleted.
+- review: a `repeats` stage after merge checks every finding against the ones
+  you rejected in earlier rounds (your `viewer/decisions.json`). The same id
+  matches directly; one agent finds the reworded ones. A match is labelled
+  `repeat`, with the earlier round, your decision and your note.
+- review: an `assess` stage reads the remaining findings together, with the PR
+  description, the earlier rounds and your notes, and labels each `useful`,
+  `still-open` (the same defect as an earlier finding you accepted or left
+  open) or `low-value` (true but not worth acting on, for a named reason:
+  context, covered or speculative). It may also merge more duplicates. Labels
+  are checked in code; a bad one becomes `useful`. At most two more agent
+  calls per review, none when there is nothing to compare.
+- review: `findings.json` carries each finding's `assessment` (optional; older
+  files still validate). The review lists repeats and low-value findings in
+  their own section at the end; the summary counts them and lists only useful
+  and still-open findings by name. `post` leaves repeats out unless you
+  accepted one.
+- review: `assess-only <dirs> --report <file>` runs the two new stages on saved
+  reviews and reports each label beside the decision you already recorded,
+  without changing the reviews.
+- review-viewer: repeats and low-value findings fold into a collapsed group
+  after the others, each with its reason. A repeat counts as rejected (from an
+  earlier round) in the new "still need a decision" line and the merge-risk
+  badge until you decide it; you can still accept, reject or defer it.
+
+### Changed
+- review: the merge stage also groups findings anchored in different files
+  when they cite overlapping lines of any file, so one defect reported from a
+  test and from the code it tests reaches the merge agent. This can add merge
+  calls.
+
 ## [0.25.0] - 2026-10-09
 
 ### Added
