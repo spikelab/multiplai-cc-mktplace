@@ -319,3 +319,37 @@ def test_run_config_records_session_default_for_unset_models(fixture_repo, tmp_p
     assert state.run_config["stages"]["verify"]["model"] == "claude-x"
     assert state.run_config["stages"]["merge"]["model"] == "claude-x"
     assert state.run_config["concurrency"] == 2
+
+
+def test_rollup_writes_runs_jsonl_and_counts_files_without_run(fixture_repo, tmp_path, agents, capsys):
+    import shutil
+    import subprocess
+
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    agents(cost=0.75)
+    assert main(_review_args(repo, base, head, out)) == 0
+    new = out / f"booking-engine--{base}..{head}" / "findings.json"
+    old = out / "older-review" / "findings.json"
+    old.parent.mkdir()
+    data = json.loads(new.read_text())
+    expected_cost = data["run"]["cost_usd"]
+    del data["run"]  # as written before multiplai-dev 0.28
+    old.write_text(json.dumps(data))
+    capsys.readouterr()
+
+    assert main(["--out", str(out), "rollup"]) == 0
+    stdout = capsys.readouterr().out
+    assert "(1 review, 1 skipped: no run recorded)" in stdout
+    lines = (out / "runs.jsonl").read_text().splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["target"] == {"label": data["target"]["label"], "slug": data["target"]["slug"],
+                             "head_sha": head}
+    assert set(row) == {"target", "generated_at", "producer", "run"}
+    assert row["run"]["cost_usd"] == expected_cost == pytest.approx(0.75 * row["run"]["calls"])
+    if shutil.which("jq") is None:
+        pytest.skip("jq is not installed")
+    total = subprocess.run(["jq", "-s", "map(.run.cost_usd) | add", str(out / "runs.jsonl")],
+                           capture_output=True, text=True, check=True).stdout.strip()
+    assert float(total) == pytest.approx(expected_cost)

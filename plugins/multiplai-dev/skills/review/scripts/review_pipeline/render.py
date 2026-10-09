@@ -270,3 +270,35 @@ def write_rollups(out_dir: Path, paths: list[Path] | None = None) -> list[Path]:
         path.write_text(render_rollup(severity, files), encoding="utf-8")
         written.append(path)
     return written
+
+
+# --- runs.jsonl ----------------------------------------------------------------
+
+RUNS_FILE = "runs.jsonl"
+
+
+def write_runs(out_dir: Path, paths: list[Path] | None = None) -> tuple[Path, int, int]:
+    """`runs.jsonl` in *out_dir*: one line per findings.json that has a `run`.
+
+    Each line holds the target's label, slug and head sha, `generated_at`,
+    `producer` and the whole `run` object, so one `jq -s` answers questions
+    across reviews. Returns (path, lines written, files skipped for having no
+    `run`). Unreadable files are skipped with a warning and not counted.
+    """
+    if paths is None:
+        paths = sorted(out_dir.glob("*/findings.json"))
+    lines, skipped = [], 0
+    for data in load_findings_files(paths):
+        if not data.get("run"):
+            skipped += 1
+            continue
+        t = data.get("target") or {}
+        lines.append(json.dumps({
+            "target": {"label": t.get("label"), "slug": t.get("slug"), "head_sha": t.get("head_sha")},
+            "generated_at": data.get("generated_at"),
+            "producer": data.get("producer"),
+            "run": data["run"],
+        }, sort_keys=True, ensure_ascii=False))
+    path = out_dir / RUNS_FILE
+    path.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+    return path, len(lines), skipped

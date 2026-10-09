@@ -21,7 +21,7 @@ from .config import ReviewConfig, run_config
 from .export import write_findings_file
 from .models import SEVERITIES, ReviewState
 from .progress import ProgressWriter
-from .render import summary_path, write_review, write_rollups
+from .render import summary_path, write_review, write_rollups, write_runs
 from .stages import RunContext
 from .stages.find import run_find
 from .stages.merge import run_merge
@@ -250,4 +250,5 @@ async def batch(specs: list[TargetSpec], out_dir: Path, config: ReviewConfig, *,
     written = [p for p in results if p is not None]
     if written:
         write_rollups(out_dir, written)
+        write_runs(out_dir, written)
     return written, failures
