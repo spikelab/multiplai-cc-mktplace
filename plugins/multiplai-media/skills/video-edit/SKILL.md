@@ -9,7 +9,7 @@ Free + local pipeline that turns an existing video into edited outputs. Every
 job follows the same steps: analyse the video (transcript, silences, scene
 changes, motion), decide what to keep, write an edit list (EDL), render it,
 and check the result. Commands: `prep`, `render`, `check`, `review`, `timeline`,
-`snap`, `frame`, `outdir`, `make` (prints the workflow); `pipeline.py <command> --help`
+`snap`, `frame`, `outdir`, `contact-sheet`, `prefs`, `make` (prints the workflow); `pipeline.py <command> --help`
 for each.
 
 ## Pick the job, then load its guide
@@ -18,9 +18,15 @@ for each.
 |---|---|---|
 | a screen recording | one 1–3 min landscape product demo | `references/screencast.md` |
 | a long interview or podcast | several 15–90 s vertical 9:16 reels | `references/reels.md` |
+| any video being edited | animated graphics on top (stat cards, lower thirds), or a style taken from a reference video | `references/motion.md` |
 
 Read the guide for the job before writing the EDL. It holds the rules for
 what to keep, what to cut and how to frame.
+
+**Read the user's preferences first**, every job:
+`python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py prefs show`.
+They are corrections the user approved in earlier jobs ("captions 2 words
+per line"); follow them unless this job's brief says otherwise.
 
 ## Workflow
 
@@ -177,6 +183,21 @@ all comments in one batch.
 
 4. Stop the server (TaskStop, or end the background task) when the user is done.
 
+### 7. Learning loop: keep the corrections that should stick
+
+At the end of a job, list the corrections the user made — in the review
+mailbox and in chat — that would apply to the next job too (a caption size,
+a colour, "never cut mid-laugh"), each as one short preference line. Leave
+out ones about this video's content. Show the list and ask which to keep.
+**Never write without the user's approval.** Then append the approved lines:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py prefs add "Captions: 2 words per line" "…"
+```
+
+They go to `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/multiplai-media/video-edit-preferences.md`,
+outside the plugin, so they survive plugin updates.
+
 ## Architecture
 
 ```
@@ -218,6 +239,7 @@ Keys for reels (see `references/reels.md`):
 - `headline` — `{text, start, end}` in output time, shown at the top
 - `brand` — path to a brand file (fonts, colours, logo)
 - `transcript` — a `transcript.json` other than the prep cache's
+- `overlays` — `[{html, style, start, end, mode: panel|keyed, region: {x, y, w, h}, key_color}]` — HTML/CSS motion graphics in output time (`references/motion.md`)
 
 ## What it does NOT do
 
@@ -236,5 +258,6 @@ Keys for reels (see `references/reels.md`):
 | Scene detection | PySceneDetect | BSD-3 |
 | Transcription (macOS host, multilingual) | mlx_whisper + whisper-large-v3 / whisper-medium | MIT |
 | Captions | libass (ffmpeg `subtitles` filter) | ISC |
-| Music fetching (URL path) | yt-dlp | Unlicense |
+| Music fetching, reference videos (URL path) | yt-dlp | Unlicense |
+| Motion graphics frames | agent-browser (headless Chromium) | Apache-2.0 |
 | Music generation (optional, Mac/GPU only) | ACE-Step / ACE-Step-1.5 | Apache-2.0 / MIT |
