@@ -269,6 +269,7 @@
             "read",
             "searched",
             "diff",
+            "prompt",
             "fetched",
             "not-seen"
           ],

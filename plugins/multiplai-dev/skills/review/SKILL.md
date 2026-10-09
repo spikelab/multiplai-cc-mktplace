@@ -155,8 +155,8 @@ its turns and cost, and what it concluded. A finder's entry lists every
 finding it returned, kept or not, with its fate (`kept`, `deduped`, `merged`,
 or `rejected` with the gate rule); a verifier's entry has its verdict and its
 own citations. Every citation carries two marks: `gate` (`pass`/`fail` at the
-head commit, or `web`) and `seen` (`read`, `searched`, `diff`, `fetched`, or
-`not-seen` when the agent cites lines it never read, searched or was shown).
+head commit, or `web`) and `seen` (`read`, `searched`, `diff`, `prompt`, `fetched`,
+or `not-seen` when the agent cites lines it never read, searched or was shown).
 `checks-<slug>.md` beside it is the same record as markdown, and review-viewer
 shows it on its Checked tab. `findings.json` also carries each finding's
 `verifier_citations`.

@@ -267,7 +267,7 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   started, with what it was given, every file it read, search it ran and URL
   it fetched, and the findings or verdict it produced. Each citation shows
   whether the gate found its quote at head and how the agent came to those
-  lines (`read`, `searched`, `diff`, `fetched`, or `not-seen`, shown as a
+  lines (`read`, `searched`, `diff`, `prompt`, `fetched`, or `not-seen`, shown as a
   warning). Rejected findings appear only here, with the rule that rejected
   them. A read of a changed file opens in the code pane; URLs are plain text.
   The Findings tab lists the verifier's own citations and a "Checked by" link

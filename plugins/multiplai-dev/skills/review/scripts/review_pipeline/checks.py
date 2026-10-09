@@ -12,6 +12,7 @@ page text.
 | `read`     | a `Read` of that path whose range (or the whole file) covers any cited line |
 | `searched` | no such read, but a `Grep` whose path covers the file |
 | `diff`     | neither, but the cited lines fall inside a hunk of the diff the prompt held |
+| `prompt`   | neither, but the prompt held those lines another way (a verifier is given the finding's citations) |
 | `fetched`  | a URL citation the agent fetched with `WebFetch` |
 | `not-seen` | none of the above |
 """
@@ -26,7 +27,7 @@ from .gates import citation_gate
 from .models import Citation, TargetInfo
 from .stages import relative_path
 
-SEEN_MARKS = ("read", "searched", "diff", "fetched", "not-seen")
+SEEN_MARKS = ("read", "searched", "diff", "prompt", "fetched", "not-seen")
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
@@ -117,8 +118,12 @@ def _covers(path: str, file: str) -> bool:
 
 
 def seen(citation: Citation, calls: list, hunks: dict[str, list[tuple[int, int]]],
-         target: TargetInfo, snapshot: Path) -> str:
-    """How the agent came to *citation*'s lines: one of SEEN_MARKS. *calls* are raw ToolCalls."""
+         target: TargetInfo, snapshot: Path, shown: dict[str, list[tuple[int, int]]] | None = None) -> str:
+    """How the agent came to *citation*'s lines: one of SEEN_MARKS. *calls* are raw ToolCalls.
+
+    *hunks* are the diff's new-side ranges the prompt held; *shown* any other
+    ranges it held, by path.
+    """
     if citation.is_web:
         fetched = {_url_key(str(_input(c).get("url", ""))) for c in calls if getattr(c, "name", "") == "WebFetch"}
         return "fetched" if _url_key(citation.path) in fetched else "not-seen"
@@ -136,18 +141,20 @@ def seen(citation: Citation, calls: list, hunks: dict[str, list[tuple[int, int]]
             searched = True
     if searched:
         return "searched"
-    for start, end in hunks.get(citation.path, []):
-        if start <= citation.line_end and end >= citation.line_start:
-            return "diff"
+    for mark, ranges in (("diff", hunks), ("prompt", shown or {})):
+        for start, end in ranges.get(citation.path, []):
+            if start <= citation.line_end and end >= citation.line_start:
+                return mark
     return "not-seen"
 
 
 def marked_citation(citation: Citation, calls: list, hunks: dict[str, list[tuple[int, int]]],
-                    target: TargetInfo, snapshot: Path) -> dict:
+                    target: TargetInfo, snapshot: Path,
+                    shown: dict[str, list[tuple[int, int]]] | None = None) -> dict:
     """A citation with its `gate` (pass/fail/web) and `seen` marks."""
     gate = "web" if citation.is_web else ("pass" if citation_gate(target, citation).passed else "fail")
     return {"path": citation.path, "line_start": citation.line_start, "line_end": citation.line_end,
-            "quote": citation.quote, "gate": gate, "seen": seen(citation, calls, hunks, target, snapshot)}
+            "quote": citation.quote, "gate": gate, "seen": seen(citation, calls, hunks, target, snapshot, shown)}
 
 
 def failure_kind(error: str) -> str:
@@ -179,3 +186,12 @@ def prompt_labels(target: TargetInfo, *, diff: str | None = None, diff_limit: in
     for path, included in rules or []:
         labels.append(f"rules: {path}" if included else f"rules skipped: {path}")
     return labels
+
+
+def cited_ranges(citations: list[Citation]) -> dict[str, list[tuple[int, int]]]:
+    """The repository line ranges *citations* name, by path (web citations have none)."""
+    ranges: dict[str, list[tuple[int, int]]] = {}
+    for c in citations:
+        if not c.is_web:
+            ranges.setdefault(c.path, []).append((c.line_start, c.line_end))
+    return ranges

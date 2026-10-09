@@ -44,7 +44,10 @@ def fake_run(monkeypatch):
     replies: list = []
 
     async def run_agent(prompt, **kwargs):
-        return replies.pop(0)
+        reply = replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
     monkeypatch.setattr(sdk, "run_agent", run_agent)
     return replies
@@ -76,6 +79,25 @@ async def test_a_reask_concatenates_both_attempts(fake_run):
         assert (await sdk.agent_call_structured("p", Value, allowed_tools=sdk.FINDER_TOOLS)).value == 2
     assert [c.name for c in rec.tool_calls] == ["Read", "Glob"]
     assert rec.turns == 5 and rec.cost_usd == pytest.approx(0.6)
+
+
+async def test_a_failed_run_still_records_its_partial_calls_turns_and_cost(fake_run):
+    from pydantic import BaseModel
+
+    from multiplai_core.agent_runner import AgentRunTimeout
+
+    class Value(BaseModel):
+        value: int
+
+    partial = _result("", ToolCall("Read", {"file_path": "a.py"}), turns=7, cost=0.9)
+    fake_run += [AgentRunTimeout("timed out", reason="timed out after 600s", partial=partial),
+                 AgentRunTimeout("timed out", reason="timed out after 600s", partial=partial)]
+    with sdk.recording() as rec:
+        with pytest.raises(sdk.AgentCallError):
+            await sdk.agent_call_structured("p", Value, allowed_tools=sdk.FINDER_TOOLS)
+    # Both attempts timed out, and each one's partial result is recorded.
+    assert [c.name for c in rec.tool_calls] == ["Read", "Read"]
+    assert rec.turns == 14 and rec.cost_usd == pytest.approx(1.8)
 
 
 async def test_without_a_recording_block_nothing_is_kept(fake_run):
@@ -128,6 +150,18 @@ def test_seen(target_info, calls, hunks, cite_, expected):
     path, start, end = cite_
     citation = Citation(path=path, line_start=start, line_end=end, quote="q")
     assert checks.seen(citation, calls, hunks, target_info, Path("/snap")) == expected
+
+
+def test_seen_marks_lines_the_prompt_showed_another_way(target_info):
+    citation = Citation(path="a.py", line_start=50, line_end=51, quote="q")
+    shown = checks.cited_ranges([Citation(path="a.py", line_start=49, line_end=50, quote="q"),
+                                 Citation(path="https://ex.com/doc", line_start=1, line_end=1, quote="q")])
+    assert shown == {"a.py": [(49, 50)]}
+    assert checks.seen(citation, [], {}, target_info, Path("/snap"), shown) == "prompt"
+    assert checks.seen(citation, [], {}, target_info, Path("/snap"), {"a.py": [(1, 10)]}) == "not-seen"
+    # A read still wins over what the prompt held.
+    assert checks.seen(citation, [ToolCall("Read", {"file_path": "a.py"})], {}, target_info, Path("/snap"),
+                       shown) == "read"
 
 
 def test_prompt_labels(target_info):
@@ -233,8 +267,9 @@ async def test_verify_records_the_verdict_its_citations_and_the_gate(target_info
     one, two = state.checks
     assert (one.stage, one.subject, one.outcome) == ("verify", high.id, "confirmed")
     assert one.given == [f"finding {high.id}"]
-    # The read covered lines 1-3: line 1 was read, line 6 was not, and the verifier saw no diff.
-    assert [(c["gate"], c["seen"]) for c in one.verdict["citations"]] == [("pass", "read"), ("pass", "not-seen")]
+    # The read covered lines 1-3, so line 1 was read. Line 6 was not read, but the finding cites it,
+    # so the verifier's prompt showed it.
+    assert [(c["gate"], c["seen"]) for c in one.verdict["citations"]] == [("pass", "read"), ("pass", "prompt")]
     assert one.verdict["lowered"] is False
     assert two.verdict == {"status": "unverifiable", "reason": two.verdict["reason"], "citations": [], "lowered": True}
     assert two.outcome == "unverifiable (answered confirmed)"

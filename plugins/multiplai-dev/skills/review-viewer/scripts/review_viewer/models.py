@@ -106,7 +106,7 @@ class MarkedCitation(_Strict):
     line_end: int = Field(ge=1)
     quote: str
     gate: Literal["pass", "fail", "web"]  # citation_gate at head; a URL is not checked
-    seen: Literal["read", "searched", "diff", "fetched", "not-seen"]  # how the agent came to the lines
+    seen: Literal["read", "searched", "diff", "prompt", "fetched", "not-seen"]  # how the agent came to the lines
 
 
 class ToolCallRecord(_Strict):

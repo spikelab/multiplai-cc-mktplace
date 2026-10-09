@@ -68,10 +68,11 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
                 "reason": f"{result.reason}. The verifier said: {verdict.reason}",
             })
         # The verifier saw no diff: its prompt holds the finding and its cited lines.
+        shown = checks.cited_ranges(finding.citations)
         check.outcome = verdict.status if result.passed else f"{verdict.status} (answered {answered})"
         check.verdict = {
             "status": verdict.status, "reason": verdict.reason,
-            "citations": [checks.marked_citation(c, rec.tool_calls, {}, target, ctx.snapshot)
+            "citations": [checks.marked_citation(c, rec.tool_calls, {}, target, ctx.snapshot, shown)
                           for c in verdict.citations],
             "lowered": not result.passed,
         }
