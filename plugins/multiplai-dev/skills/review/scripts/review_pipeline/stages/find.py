@@ -43,10 +43,11 @@ def file_groups(target: TargetInfo, max_chars: int = GROUP_MAX_CHARS) -> list[li
     """The files under review split into groups for the finders.
 
     A change review is one group holding every changed file, so its path is
-    unchanged. A tree review walks the files in path order and starts a new
-    group when the next file would pass *max_chars* or when the top-level
-    directory (below the reviewed path) changes. A file larger than
-    *max_chars* gets a group of its own.
+    unchanged. A tree review walks the files in path order within each
+    top-level directory (below the reviewed path; files directly in it come
+    first), and starts a new group when the next file would pass *max_chars*
+    or when the top-level directory changes. A file larger than *max_chars*
+    gets a group of its own.
     """
     if not target.is_tree:
         return [list(target.files)]
@@ -54,8 +55,8 @@ def file_groups(target: TargetInfo, max_chars: int = GROUP_MAX_CHARS) -> list[li
     groups: list[list[str]] = []
     current: list[str] = []
     size, top = 0, None
-    for path in sorted(target.files):
-        chars, here = file_chars(target, path), _top_dir(path, root)
+    for here, path in sorted((_top_dir(p, root), p) for p in target.files):
+        chars = file_chars(target, path)
         if current and (size + chars > max_chars or here != top):
             groups.append(current)
             current, size = [], 0
