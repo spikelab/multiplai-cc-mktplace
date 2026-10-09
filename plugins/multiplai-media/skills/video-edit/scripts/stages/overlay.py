@@ -105,8 +105,9 @@ def choose_backend(pid: int | None = None) -> Backend:
                 "install it with `npm i -g agent-browser`, then retry.")
         return Backend("agent-browser", [agent, "--session", session], None)
     raise OverlayError(
-        "Motion graphics render through agent-browser on macOS; this machine "
-        f"({sys.platform}) has no supported browser backend. Render the overlays on a Mac.")
+        "Motion graphics render through agent-browser on macOS (install: "
+        f"`npm i -g agent-browser`); this machine ({sys.platform}) is not supported. "
+        "Render the overlays on a Mac.")
 
 
 def content_hash(html: str, width: int, height: int, fps: int, duration: float) -> str:

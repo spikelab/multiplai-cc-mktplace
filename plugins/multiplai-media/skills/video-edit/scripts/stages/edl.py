@@ -135,6 +135,7 @@ class Overlay:
     mode: str = "keyed"
     region: Optional[Region] = None
     key_color: str = "#00FF00"
+    style: Optional[str] = None  # the style file the page follows (references/styles/)
 
     def rect(self, width: int, height: int) -> Region:
         return self.region or Region(0, 0, width, height)
@@ -222,6 +223,8 @@ class EDL:
         warnings: list[str] = []
         warnings += self._validate_framing(source_size, words)
         self._validate_overlays()
+        warnings += [f"overlay {i} ({Path(o.html).name}) names no style; ask the user which style to follow"
+                     for i, o in enumerate(self.overlays) if not o.style]
 
         src = Path(self.source)
         if src.name.startswith("proxy_") or ".video-edit-cache" in src.parts or (
