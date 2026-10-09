@@ -16,6 +16,7 @@ import io
 import json
 import logging
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -204,6 +205,26 @@ def normalise_path(path: str | None) -> str:
     return "" if p in ("", ".") else p
 
 
+def tree_root(repo: Path, path: str | None) -> tuple[Path, str]:
+    """(the top of *repo*'s working tree, the directory under review relative to it).
+
+    git lists names relative to the directory it runs in but `git show
+    <sha>:<path>` reads them from the root, so a tree target always reads from
+    the top. When *repo* is a subdirectory, the directory under review is that
+    subdirectory, with *path* (relative to *repo*) joined below it. A
+    repository with no working tree (bare) is read as given.
+    """
+    proc = git(repo, "rev-parse", "--show-toplevel", check=False)
+    top_text = proc.stdout.strip() if proc.returncode == 0 else ""
+    top = Path(top_text).resolve() if top_text else repo
+    prefix = repo.relative_to(top).as_posix() if top != repo and top in repo.parents else ""
+    joined = normalise_path("/".join(p for p in (prefix, normalise_path(path)) if p))
+    sub = normalise_path(posixpath.normpath(joined)) if joined else ""
+    if sub == ".." or sub.startswith("../"):
+        raise TargetError(f"--path {path} is outside the repository {top}")
+    return top, sub
+
+
 def resolve(repo: str | Path, *, branch: str | None = None, pr: int | None = None,
             range_: str | None = None, tree: str | None = None, path: str | None = None,
             base_branch: str | None = None, fetch: bool = False) -> Resolved:
@@ -211,6 +232,8 @@ def resolve(repo: str | Path, *, branch: str | None = None, pr: int | None = Non
 
     A tree has no base: `base_sha` is `EMPTY_TREE`, `head_sha` the commit *tree*
     names, and `ref` the directory under review (*path*, or "." for all of it).
+    A tree's `repo` is the top of the working tree; a *repo* below it becomes
+    the directory under review, with *path* below that (`tree_root`).
     """
     repo = Path(repo).expanduser().resolve()
     chosen = [x for x in (branch, pr, range_, tree) if x not in (None, "")]
@@ -224,8 +247,8 @@ def resolve(repo: str | Path, *, branch: str | None = None, pr: int | None = Non
         git(repo, "fetch", "--quiet", "origin")
 
     if tree:
+        repo, sub = tree_root(repo, path)
         head = rev_parse(repo, tree)
-        sub = normalise_path(path)
         problem = "" if head else f"{tree} does not resolve to a commit"
         return Resolved(repo, "tree", sub or ".", EMPTY_TREE, head, problem=problem, path=sub)
 

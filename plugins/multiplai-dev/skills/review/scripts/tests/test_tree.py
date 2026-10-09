@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from conftest import SCHEMA
-from review_pipeline import orchestrator, sdk, target
+from review_pipeline import gates, orchestrator, sdk, target
 from review_pipeline.__main__ import main
 from review_pipeline.config import DIMENSIONS, ReviewConfig
 from review_pipeline.models import Citation, Finding, FinderOutput, MergeOutput, ReviewState, Verdict
@@ -108,6 +108,51 @@ def test_tree_needs_exactly_one_selector_and_path_only_with_tree(tmp_path):
     with pytest.raises(target.TargetError):
         target.resolve(repo, range_="HEAD..HEAD", path="pkg")
     assert target.resolve(repo, tree="nope").problem == "nope does not resolve to a commit"
+
+
+def test_a_subdirectory_repo_is_read_from_the_top_and_reviews_that_subdirectory(tmp_path, capsys):
+    repo = tree_repo(tmp_path)
+    out = tmp_path / "out"
+    assert main(["--out", str(out), "review", "--repo", str(repo / "pkg"), "--tree", "--plan-only"]) == 0
+    target_dir = out / "shop--tree-pkg"  # review-viewer's slug for `serve --tree --repo <repo>/pkg`
+    assert (target_dir / "files.txt").read_text().splitlines() == ["pkg/cart.py", "pkg/tax.py"]
+
+    resolved, info = tree_info(repo / "pkg")
+    assert (resolved.repo, resolved.ref, info.slug) == (repo.resolve(), "pkg", "shop--tree-pkg")
+    cite = Citation(path="pkg/cart.py", line_start=2, line_end=2, quote="return sum(i.price for i in items)")
+    finding = Finding(claim="total() ignores quantity", severity="MEDIUM", file="pkg/cart.py", line_start=2,
+                      line_end=2, failure_scenario="Two of one item are charged once.", citations=[cite])
+    assert gates.citation_gate(info, cite).passed and gates.finding_gate(info, finding).passed
+    snapshot = target.snapshot_head(info, tmp_path / "snap")
+    assert (snapshot / "pkg" / "cart.py").is_file()  # the agents see root-relative paths too
+
+    # --path is relative to a subdirectory --repo; it cannot leave the repository.
+    assert tree_info(repo / "pkg", "./cart.py")[1].files == ["pkg/cart.py"]
+    assert tree_info(repo / "pkg", "../lib")[1].files == ["lib/money.py"]
+    with pytest.raises(target.TargetError, match="outside the repository"):
+        target.resolve(repo / "pkg", tree="HEAD", path="../..")
+
+
+def test_a_submodule_at_head_is_skipped_not_reviewed(tmp_path):
+    repo = tree_repo(tmp_path)
+    head = git(repo, "rev-parse", "HEAD")
+    git(repo, "update-index", "--add", "--cacheinfo", f"160000,{head},vendor/lib")
+    git(repo, "commit", "-q", "-m", "add a submodule")
+    _, info = tree_info(repo)
+    assert ("vendor/lib", "submodule") in info.skipped
+    assert "vendor/lib" not in info.files
+    assert info.files == [".gitattributes", "README.md", "lib/money.py", "pkg/cart.py", "pkg/tax.py"]
+
+
+def test_review_without_exactly_one_of_repo_and_dir_exits_2(tmp_path, capsys):
+    repo = tree_repo(tmp_path)
+    out = tmp_path / "out"
+    for argv in (["--repo", str(repo), "--dir", str(repo / "pkg")], ["--tree"], ["--tree", "HEAD"],
+                 ["--branch", "main"], ["--range", "HEAD..HEAD"]):
+        assert main(["--out", str(out), "review", *argv, "--trust-repo"]) == 2, argv
+        assert "pass --repo <path> with --branch, --pr, --range or --tree, or --dir <path> alone" in \
+            capsys.readouterr().err
+    assert not out.exists()
 
 
 # --- --dir -----------------------------------------------------------------------
@@ -321,6 +366,22 @@ def test_the_tree_prompt_lists_the_group_and_has_no_diff(tmp_path):
     assert "the same code independently" in merge_prompt.build(info, [])
 
 
+def test_the_tree_prompt_and_finding_gate_agree_on_which_file_a_finding_may_name(tmp_path):
+    repo = tree_repo(tmp_path)
+    info = _tree_state(repo).target
+    text = find_prompt.build(info, "diff-bugs", "", files=["pkg/cart.py"])
+    assert "`file` must be one of the files under review listed above" in text
+    assert "including a file the review skipped" in text and "another file in the reviewed directory" not in text
+
+    cite = Citation(path="gen/schema.py", line_start=1, line_end=1, quote="GENERATED = True")
+    on_skipped = Finding(claim="the generated flag is hard-coded", severity="LOW", file="gen/schema.py",
+                         line_start=1, line_end=1, failure_scenario="Regeneration is never detected.",
+                         citations=[cite])
+    assert ("gen/schema.py", "linguist-generated is set") in info.skipped
+    assert not gates.finding_gate(info, on_skipped).passed  # a skipped file is not under review
+    assert gates.finding_gate(info, on_skipped.model_copy(update={"dimension": "pre-existing"})).passed
+
+
 def test_a_change_prompt_is_unchanged_by_the_tree_wording(target_info):
     text = find_prompt.build(target_info, "tests", "+x = 1\n")
     assert "```diff" in text and "Open each one with Read" not in text
@@ -401,6 +462,22 @@ def test_a_second_dir_run_keeps_the_commit_an_earlier_review_names(tmp_path, cap
     assert second.target.head_sha != head
     assert git(copy, "rev-list", "--count", "HEAD") == "2"
     assert git(copy, "show", f"{head}:app.py") == "print('hi')"
+
+
+def test_a_file_deleted_from_the_source_is_gone_from_the_next_import(tmp_path):
+    src = tmp_path / "plain" / "notes-app"
+    write(src, "a.py", "A = 1\n")
+    write(src, "b.py", "B = 1\n")
+    out = tmp_path / "out"
+    first, _ = _dir_review(src, out)
+    assert first.target.files == ["a.py", "b.py"]
+    (src / "b.py").unlink()
+    second, _ = _dir_review(src, out)
+    copy = Path(second.target.repo_path)
+    assert second.target.head_sha != first.target.head_sha
+    assert git(copy, "ls-tree", "-r", "--name-only", second.target.head_sha) == "a.py"
+    assert second.target.files == ["a.py"]
+    assert git(copy, "show", f"{first.target.head_sha}:b.py") == "B = 1"  # the earlier head still reads
 
 
 def test_two_directories_with_one_basename_get_two_reviews(tmp_path):

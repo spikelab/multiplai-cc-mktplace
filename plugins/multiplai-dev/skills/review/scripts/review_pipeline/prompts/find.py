@@ -138,11 +138,11 @@ FILE_RULE = (
 
 FILE_RULE_TREE = (
     "Every finding cites the lines that show the problem, with the exact quote. A finding "
-    "without a quote is discarded by a program, not a person. `file` must be a file under review: "
-    "one listed above, or another file in the reviewed directory. If the problem is in a file outside "
-    "the review that these files call, build or make wrong, set `dimension` to \"pre-existing\" and "
-    "`file` to that file; otherwise leave "
-    "`dimension` empty. Report only what you can show from the code; an empty list is a valid answer."
+    "without a quote is discarded by a program, not a person. `file` must be one of the files under "
+    "review listed above. If the problem is in any other file (one these files call, build or make "
+    "wrong, including a file the review skipped), set `dimension` to \"pre-existing\" and `file` to "
+    "that file; otherwise leave `dimension` empty. Report only what you can show from the code; an "
+    "empty list is a valid answer."
 )
 
 

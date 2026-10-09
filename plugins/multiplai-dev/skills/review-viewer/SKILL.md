@@ -89,7 +89,9 @@ writes). `serve --repo <path> --range <base>..<head>` still works.
 
 For a whole tree rather than a change (the target of `review --tree`), use
 `serve --tree [<commit>] [--path <dir>] --repo /abs/path/to/clone` instead of
-`--target`. A tree review is one whose base is git's empty tree: every file
+`--target`. A `--repo` that is a subdirectory of the clone opens that
+directory, and `--path` is then relative to it, the same rule as
+`review --tree`. A tree review is one whose base is git's empty tree: every file
 shows as added, the commit list is empty, and the "Risk of merging" pill and
 row are hidden, since nothing is being merged. A `review --dir` review opens
 from its `findings.json` like any other review.

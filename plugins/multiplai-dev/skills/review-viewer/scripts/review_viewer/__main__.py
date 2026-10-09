@@ -135,7 +135,8 @@ def _resolve_for_serve(args) -> Resolved | int:
             return EXIT_USAGE
         try:
             chosen = gitdata.pick_repo(repo, cwd)
-            return Resolved(gitdata.tree_target(chosen, args.tree, args.path))
+            path = gitdata.tree_path(repo, chosen, args.path) if repo is not None else args.path
+            return Resolved(gitdata.tree_target(chosen, args.tree, path))
         except TargetError as exc:
             print(f"cannot resolve the target: {exc}", file=sys.stderr)
         except (GitError, ValueError) as exc:

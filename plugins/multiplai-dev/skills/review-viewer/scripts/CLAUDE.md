@@ -21,7 +21,7 @@ The page-logic tests need `node`; they fail (not skip) without it.
 |---|---|
 | `__main__.py` | CLI: `serve` (findings files, or `--target`), `reply`, `pending`, `list`, `stop`, `walkthrough put\|status`, `validate`, `export-schema`. Calls `setup_logging` once. Owns the stdout contract. `find_review()` looks for a review of the same commits. |
 | `models.py` | The `findings.json` v1, `checks.json` v1 and `walkthrough.json` v1 pydantic models (source of truth for the three files in `../schema/`), `finding_id()`, `load_checks()`, and the mailbox row models. |
-| `gitdata.py` | Git: `parse_target()` / `resolve_target()` (PR, branch, worktree, `a..b`, `a...b`; same base/head rules as `review_pipeline/target.py`, restated because that member is not importable here), `parse_unified()`, `file_view()`, `allowed_paths()`, `diff_target()`, `tree_target()` (every file at a commit against `EMPTY_TREE`, for `serve --tree`; `is_tree_review()` knows a tree review by that base). Fixed argv, no shell, stdin closed. The only writes to a repo are the fetches named in `../SKILL.md`. |
+| `gitdata.py` | Git: `parse_target()` / `resolve_target()` (PR, branch, worktree, `a..b`, `a...b`; same base/head rules as `review_pipeline/target.py`, restated because that member is not importable here), `parse_unified()`, `file_view()`, `allowed_paths()`, `diff_target()`, `tree_target()` (every file at a commit against `EMPTY_TREE`, for `serve --tree`; `is_tree_review()` knows a tree review by that base; `tree_path()` turns a subdirectory `--repo` into the reviewed path, the rule of `review_pipeline.target.tree_root`). Fixed argv, no shell, stdin closed. The only writes to a repo are the fetches named in `../SKILL.md`. |
 | `stats.py` | measured badges: `classify()` a path (lock, generated, test, docs, code), `change_stats()` from `git diff --numstat`, `--name-status` and `git log` (no commits for a tree review, measured over its directory), the size/tests/commits thresholds, PR badges, `per_file` (status letter and line counts per changed file, for the file list), and `tiers` read from a repo's `.review-risk.toml` for the risk score. |
 | `walkthrough.py` | `check()` a walkthrough against the served target, `coverage()`, `put()` by atomic replace. |
 | `mailbox.py` | Append-only JSONL rows, `decisions.json` and `viewed.json` by atomic replace; the directory is 0700 and every file 0600. |
@@ -212,7 +212,7 @@ commit and a PR head under `refs/pull/7/head`, for target resolution;
 |---|---|
 | `test_gitdata.py` | diff parsing, file views, `parse_target`/`resolve_target` |
 | `test_stats.py` | path classes, numstat parsing (renames, binary), each badge's thresholds, check counts, stats on the fixture repo |
-| `test_tree_review.py` | `serve --tree [--path]`, no commits, every file added on a live server |
+| `test_tree_review.py` | `serve --tree [--path]`, a subdirectory `--repo`, no commits, every file added on a live server |
 | `test_walkthrough.py` | each `walkthrough put` rule, the CLI, the route, `step_id` questions |
 | `test_serve_targets.py` | review lookup (match, stale, none) and the `walkthrough:` stdout line |
 | `test_server.py`, `test_mailbox.py`, `test_models.py`, `test_logging.py`, `test_netinfo.py` | the server, mailbox, contracts, logs, container detection |

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -589,6 +590,22 @@ def pick_repo(repo: Path | None, cwd: Path) -> Path:
     if not top:
         raise TargetError(f"{chosen} is not a git repository" + ("" if repo else "; pass --repo <path>"))
     return Path(top).resolve()
+
+
+def tree_path(given: Path, top: Path, path: str | None) -> str | None:
+    """The directory a tree target reviews when --repo names *given* inside the clone at *top*.
+
+    Same rule as `review_pipeline.target.tree_root`, so both find one slug: a
+    subdirectory is the directory under review, and *path* is relative to it.
+    """
+    given = Path(given).expanduser().resolve()
+    if given == top or top not in given.parents:
+        return path
+    prefix = given.relative_to(top).as_posix()
+    sub = (path or "").strip().strip("/")
+    while sub.startswith("./"):
+        sub = sub[2:]
+    return prefix if sub in ("", ".") else posixpath.normpath(f"{prefix}/{sub}")
 
 
 def _base_ref(repo: Path, base_branch: str | None) -> str:

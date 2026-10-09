@@ -6,7 +6,7 @@ import json
 import subprocess
 
 from review_viewer.__main__ import _load_targets, build_parser
-from review_viewer.gitdata import EMPTY_TREE, is_tree_review, tree_target
+from review_viewer.gitdata import EMPTY_TREE, is_tree_review, tree_path, tree_target
 from review_viewer.models import Target
 from review_viewer.stats import change_stats, read_commits
 
@@ -47,6 +47,22 @@ def test_serve_tree_path_limits_the_files(fixture_repo, tmp_path, monkeypatch):
     assert ff.target.files_changed == _files_at(repo, head, "app") and ff.target.slug == "fixture-repo--tree-app"
     assert _load("--path", "app", "--repo", str(repo)) == 2  # --path needs --tree
     assert _load("--tree", "--range", "a..b", "--repo", str(repo)) == 2
+
+
+def test_serve_tree_with_a_subdirectory_repo_shows_that_directory_under_the_review_slug(
+        fixture_repo, tmp_path, monkeypatch):
+    repo, _, head = fixture_repo
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    loaded, _ = _load("--tree", "--repo", str(repo / "app"), "--reviews-dir", str(tmp_path / "none"))
+    (ff, _box), = loaded
+    # The slug and root-relative files `review --repo <repo>/app --tree` writes.
+    assert ff.target.slug == "fixture-repo--tree-app" and ff.target.repo_path == str(repo.resolve())
+    assert ff.target.files_changed == _files_at(repo, head, "app")
+    # --path is relative to the subdirectory.
+    first = _files_at(repo, head, "app")[0]
+    assert tree_path(repo / "app", repo.resolve(), "./" + first.split("/", 1)[1]) == first
+    assert tree_path(repo, repo.resolve(), "app") == "app"
 
 
 def test_a_tree_review_has_no_commits(fixture_repo):

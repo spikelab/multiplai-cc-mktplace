@@ -118,7 +118,11 @@ Three targets review code as it stands instead of a diff:
 
 - `--tree [COMMIT]` reviews every file of the repository at a commit
   (default `HEAD`);
-- `--tree --path <dir>` reviews one directory of it;
+- `--tree --path <dir>` reviews one directory of it. A `--repo` that is a
+  subdirectory of the repository reviews that subdirectory, read from the
+  repository's top so every path is relative to the top; `--path` is then
+  relative to the subdirectory. The slug is the one review-viewer's
+  `serve --tree --repo` gives the same directory;
 - `--dir <path>` reviews a directory that is not under git. It is copied into
   `<out>/<slug>/source/` (without `node_modules`, `.venv`, `venv`,
   `__pycache__`, `dist` and `build`, and honouring a `.gitignore` in it) and
@@ -137,7 +141,9 @@ lists each with its reason. A repository does not fit in one prompt, so the
 files are split into groups of up to 100 000 characters, one top-level
 directory at a time, and each finder runs once per group. `history` does not
 run, since there are no commits to compare. Findings carry the same citations
-and pass the same gates as a change review. `post` refuses a tree review: it
+and pass the same gates as a change review: a finding names a file under review, or
+is marked `pre-existing` when the problem is in another file, including one
+that was skipped. `post` refuses a tree review: it
 has no PR.
 
 `--plan-only` resolves the target, prints one line per group and a total line
