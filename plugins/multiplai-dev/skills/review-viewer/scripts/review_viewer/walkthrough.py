@@ -25,6 +25,8 @@ from .models import ASSESSMENT_TITLE_MAX, FindingsFile, Walkthrough
 # repeat (logic.js shownFindings), so they need no step.
 MUST_LINK = ("confirmed", "unverifiable")
 NOT_SHOWN_LABELS = ("low-value", "repeat")
+# A `critical` review shows only these impacts (logic.js shownFindings).
+CRITICAL_IMPACTS = ("breaks-users", "breaks-business")
 # Assessments a walkthrough must carry when it says it is complete.
 MUST_ASSESS = ("commits", "tests")
 # Topics a new walkthrough may no longer use: size is measured, and risk is the
@@ -108,7 +110,8 @@ def coverage(wt: Walkthrough | None, ff: FindingsFile) -> tuple[list[str], list[
         linked = {fid for s in wt.steps for fid in s.finding_ids}
     uncovered = [f for f in files if f not in covered]
     unlinked = [f.id for f in ff.findings if f.status in MUST_LINK and f.id not in linked
-                and not (f.assessment and f.assessment.label in NOT_SHOWN_LABELS)]
+                and not (f.assessment and f.assessment.label in NOT_SHOWN_LABELS)
+                and not (ff.mode == "critical" and f.impact not in CRITICAL_IMPACTS)]
     return uncovered, unlinked
 
 

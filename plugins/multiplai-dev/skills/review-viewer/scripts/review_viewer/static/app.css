@@ -518,6 +518,9 @@ pre.sketch {
 }
 .toggle { display: flex; align-items: center; gap: 6px; margin: 0 0 var(--s3); color: var(--muted); font-size: var(--fs-sm); }
 
+.section-h { font-size: var(--fs-sm); font-weight: 700; margin: var(--s5) 0 var(--s2); padding-bottom: var(--s1);
+  border-bottom: 1px solid var(--border); }
+.finding-list .section-h:first-of-type { margin-top: 0; }
 .sev-h { margin: var(--s4) 0 6px; }
 .sev-h.HIGH { color: var(--high); }
 .sev-h.MEDIUM { color: var(--medium); }
@@ -599,6 +602,10 @@ pre.sketch {
 .need-ask .ctl { margin-left: var(--s1); }
 .badge.topic { border-style: dashed; }
 .badge.topic.guessed { font-style: italic; opacity: .8; }
+.badge.impact { border-style: dotted; }
+.badge.impact.breaks-users, .badge.impact.breaks-business { border-style: solid; font-weight: 700; }
+.mode-pill { font-size: var(--fs-xs); font-weight: 700; padding: 2px var(--s2); border: 1px solid var(--high);
+  color: var(--high); border-radius: var(--radius, 4px); white-space: nowrap; }
 .finding-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .finding-head .copy-finding { margin-left: auto; }
 .pr-desc { margin-top: var(--s4); border-top: 1px solid var(--border); padding-top: var(--s2); }

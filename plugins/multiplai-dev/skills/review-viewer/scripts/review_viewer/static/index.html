@@ -36,6 +36,8 @@
 <header class="top">
   <h1 id="title">Review viewer</h1>
   <span id="pr-info" class="pr-info" hidden></span>
+  <span id="mode-pill" class="mode-pill" hidden
+        title="This review lists only findings the verifier rated as breaking users or the business after merge">Critical only</span>
   <button id="risk-pill" class="risk-pill" type="button" hidden></button>
   <select id="target-select" class="ctl target-select" hidden aria-label="Review target"></select>
   <div class="top-tools">
@@ -369,15 +371,18 @@
 
     <section id="help-findings" class="help-sec" tabindex="-1" aria-labelledby="help-h-findings">
       <h3 id="help-h-findings">Findings, verdicts and labels</h3>
-      <p>The Findings tab lists findings by severity. Picking one moves the code to its lines and shows the
+      <p>The Findings tab lists findings in three sections, <strong>Code</strong>, <strong>Tests</strong>
+        and <strong>Docs</strong>, by the finding's topic (or, for an older review, a guess from its path), and
+        by severity within each. Severity is read within its section: a HIGH under Tests is a serious test
+        gap, not a serious defect in the code. Picking one moves the code to its lines and shows the
         claim, the failure scenario, the expected behaviour and the verdict's reason. When the Checked tab has
         the finding's verifier, a link opens its entry there, with every line it read and cited; otherwise the
         finding lists its cited code and the verifier's citations. Each finding shows a status:</p>
       <dl>
         <dt><code>confirmed</code></dt><dd>The verifier showed the failure can happen, citing lines that
           code found at the reviewed commit.</dd>
-        <dt><code>unverifiable</code></dt><dd>It depends on something the verifier could not read, the code
-          does not settle it, or the verifier's call failed. Its severity was lowered one step.</dd>
+        <dt><code>unverifiable</code></dt><dd>It depends on something the verifier could not read, or the
+          code does not settle it. Its severity was lowered one step.</dd>
         <dt><code>refuted</code></dt><dd>The verifier showed it cannot happen. Hidden unless you tick
           Show decided and refuted, as is every finding you accept, reject or defer, so the list holds
           only what still needs a decision.</dd>
@@ -399,6 +404,25 @@
           apply when the change's own tests, comments or description promise to catch such a change.
           Never shown or counted.</dd>
       </dl>
+      <p>The verifier also rates each finding's <strong>impact</strong>: what goes wrong in production if
+        the change is merged as it is. It shows as a badge beside the topic. A review older than impact has
+        none.</p>
+      <dl>
+        <dt><code>breaks-users</code></dt><dd>People who use the product see a failure, a wrong result, lost
+          or exposed data, on a path they will take.</dd>
+        <dt><code>breaks-business</code></dt><dd>The company is harmed without a user necessarily seeing it:
+          money lost or miscounted, a deploy or job that fails, access granted wider than intended, a record
+          audits or billing rely on that is wrong, or a document that would lead an operator to a wrong
+          action in production.</dd>
+        <dt><code>correctness-only</code></dt><dd>The code is wrong, but no path after merge reaches a user
+          or the business: an edge case no caller reaches, a trap for the next change. Every missing or weak
+          test is rated this.</dd>
+        <dt><code>hygiene</code></dt><dd>Nothing behaves wrongly: naming, dead code, a convention breached
+          with no consequence, a stale comment that misleads nobody.</dd>
+      </dl>
+      <p>A review run with <code>--mode critical</code> shows <strong>Critical only</strong> in the header and
+        lists only <code>breaks-users</code> and <code>breaks-business</code> findings; the rest are in the
+        review's markdown appendix.</p>
       <p>Gate-rejected, repeat and low-value findings stay in <code>findings.json</code> and in the
         review's markdown appendix; the page leaves them out of the list, every count, the code markers,
         Go to and the risk score. Accept, Reject or Defer records your decision; a later round of the

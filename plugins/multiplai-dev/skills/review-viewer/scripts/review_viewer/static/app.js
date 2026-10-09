@@ -397,6 +397,7 @@
         pr.author ? el("span", { class: "muted", text: " by " + pr.author }) : null,
         url ? el("a", { href: url, target: "_blank", rel: "noreferrer noopener", text: " open on GitHub" }) : null);
     }
+    $("mode-pill").hidden = state.detail.findings.mode !== "critical";
     const notice = $("notice");
     notice.textContent = state.detail.notice || "";
     notice.hidden = !state.detail.notice;
@@ -898,11 +899,17 @@
       box.appendChild(el("p", { class: "muted undecided",
         text: undecided.open + " of " + undecided.total + " findings still need a decision" }));
     }
-    for (const sev of L.SEVERITIES) {
-      const items = grouped.groups[sev] || [];
-      if (!items.length) continue;
-      box.appendChild(el("h2", { class: "sev-h " + sev, text: sev + " (" + items.length + ")" }));
-      for (const f of items) box.appendChild(findingItem(f));
+    // Severity is read within a section: a HIGH under Tests is not a HIGH in the code.
+    for (const s of grouped.sections) {
+      const n = L.SEVERITIES.reduce((k, sev) => k + (s.groups[sev] || []).length, 0);
+      if (!n) continue;
+      box.appendChild(el("h2", { class: "section-h", text: s.title + " (" + n + ")" }));
+      for (const sev of L.SEVERITIES) {
+        const items = s.groups[sev] || [];
+        if (!items.length) continue;
+        box.appendChild(el("h3", { class: "sev-h " + sev, text: sev + " (" + items.length + ")" }));
+        for (const f of items) box.appendChild(findingItem(f));
+      }
     }
   }
 
@@ -911,6 +918,13 @@
     const t = L.findingTopic(f);
     return el("span", { class: "badge topic" + (t.guessed ? " guessed" : ""), text: t.topic,
       title: t.guessed ? "What it is about, guessed from the file path" : "What it is about, as the verifier labelled it" });
+  }
+
+  /* What breaks in production if merged as is, as the verifier rated it; none for an older file. */
+  function impactBadge(f) {
+    if (!f.impact) return null;
+    return el("span", { class: "badge impact " + f.impact, text: f.impact,
+      title: "What breaks after merge, as the verifier rated it" });
   }
 
   function findingItem(f) {
@@ -928,6 +942,7 @@
     }, [
       el("span", { class: "badge " + sev, text: f.status }),
       topicBadge(f),
+      impactBadge(f),
       label && label !== "useful" ? el("span", { class: "badge assess " + label, text: label }) : null,
       d ? el("span", {
         class: "badge " + d.decision,
@@ -1358,6 +1373,7 @@
       el("span", { class: "badge " + f.severity, text: f.severity }),
       el("span", { class: "badge", text: f.status }),
       topicBadge(f),
+      impactBadge(f),
       copy,
       download,
       shareBtn("github", "GitHub"),

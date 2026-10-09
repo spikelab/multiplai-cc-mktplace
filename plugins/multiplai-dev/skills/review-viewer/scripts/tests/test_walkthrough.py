@@ -125,6 +125,18 @@ def test_rule4_a_finding_the_page_never_shows_need_not_be_linked(complete, ff, l
     assert walkthrough.coverage(Walkthrough.model_validate(complete), ff) == ([], [])
 
 
+def test_rule4_a_critical_review_needs_only_its_breaks_findings_linked(complete, ff):
+    ff.mode = "critical"
+    for fid, impact in ((HIGH, "breaks-users"), (MEDIUM, "hygiene")):
+        i = next(i for i, f in enumerate(ff.findings) if f.id == fid)
+        ff.findings[i] = type(ff.findings[i]).model_validate({**ff.findings[i].model_dump(), "impact": impact})
+    complete["steps"][1]["finding_ids"] = []
+    complete["steps"][0]["finding_ids"] = []
+    errs = errors_for(complete, ff)
+    assert any(f"finding {HIGH} is not linked" in e for e in errs), errs
+    assert not any(MEDIUM in e for e in errs)
+
+
 def test_step_text_must_not_restate_a_finding(complete, ff):
     complete["steps"][0]["body_md"] = f"**Finding {HIGH} (HIGH):** totals drop the quantity."
     assert errors_for(complete, ff) == [

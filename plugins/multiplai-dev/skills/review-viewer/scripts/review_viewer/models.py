@@ -112,6 +112,10 @@ class Finding(_Strict):
     # 0.32+). Absent in older files; the page then guesses from the path.
     topic: Literal["code", "tests", "docs", "config", "infra", "data", "security", "performance",
                    "process"] | None = None
+    # What breaks in production if the change is merged as is, as the verifier
+    # rated it (multiplai-dev 0.32+). Absent on refuted and rejected findings
+    # and in older files. A `critical` review lists only the two `breaks-*`.
+    impact: Literal["breaks-users", "breaks-business", "correctness-only", "hygiene"] | None = None
 
 
 class Target(_Strict):
@@ -183,6 +187,8 @@ class FindingsFile(_Strict):
     # Every need of the review, the findings' and its own. Absent in older files.
     needs: list[Need] = Field(default_factory=list)
     run: Run | None = None  # absent in files written before multiplai-dev 0.28
+    # The mode the review ran in (multiplai-dev 0.32+); absent means `full`.
+    mode: Literal["full", "critical"] | None = None
 
 
 # --- checks.json v1 ------------------------------------------------------------------

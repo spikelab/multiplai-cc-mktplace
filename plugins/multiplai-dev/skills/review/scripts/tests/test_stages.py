@@ -12,12 +12,13 @@ import pytest
 from conftest import KEYWORD_CITATION, KEYWORD_USE_CITATION, cite, high_finding, medium_finding
 from review_pipeline import sdk, target
 from review_pipeline.config import ReviewConfig
-from review_pipeline.models import Citation, DuplicateSet, Finding, FinderOutput, FinderResult, MergeOutput, ReviewState, Verdict
+from review_pipeline.models import (Citation, DuplicateSet, Finding, FinderOutput, FinderResult, MergeOutput, ReviewState,
+                                    Verdict, VerifierAnswer)
 from review_pipeline.stages import RunContext
 from review_pipeline.stages import find as find_stage
 from review_pipeline.stages.find import conventions_chain, run_find
 from review_pipeline.stages.merge import MERGE_LINE_GAP, group_key, overlap_groups, run_merge
-from review_pipeline.stages.verify import run_verify
+from review_pipeline.stages.verify import VerifyIncomplete, run_verify
 
 
 class Canned:
@@ -195,7 +196,7 @@ def test_conventions_chain_skips_claude_md_first_when_over_the_cap(tmp_path, mon
 async def test_verify_downgrades_uncited_confirmation_and_keeps_refuted(target_info, ctx, monkeypatch):
     high, medium = high_finding(), medium_finding()
     use(monkeypatch, {"verify": [
-        Verdict(status="confirmed", reason="looks right"),  # no citation -> unverifiable
+        Verdict(status="confirmed", impact="breaks-users", reason="looks right"),  # no citation -> unverifiable
         Verdict(status="refuted", reason="line 6 handles it", citations=[KEYWORD_USE_CITATION]),
     ]})
     ctx.config.concurrency = 1  # answers are consumed in finding order
@@ -210,7 +211,7 @@ async def test_verify_downgrades_uncited_confirmation_and_keeps_refuted(target_i
 
 async def test_verify_keeps_a_grounded_confirmation_and_its_expected_behaviour(target_info, ctx, monkeypatch):
     high = high_finding()
-    canned = use(monkeypatch, {"verify": [Verdict(status="confirmed", reason="r", citations=[KEYWORD_CITATION],
+    canned = use(monkeypatch, {"verify": [Verdict(status="confirmed", impact="breaks-users", reason="r", citations=[KEYWORD_CITATION],
                                                   expected_behaviour="Rate plans match the channel's title.")]})
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high]), ctx)
     assert state.verdicts[high.id].status == "confirmed" and state.findings[0].severity == "HIGH"
@@ -221,7 +222,7 @@ async def test_verify_keeps_a_grounded_confirmation_and_its_expected_behaviour(t
 
 async def test_verify_lists_findings_that_carry_no_expected_behaviour(target_info, ctx, monkeypatch):
     high = high_finding()
-    use(monkeypatch, {"verify": [Verdict(status="confirmed", reason="r", citations=[KEYWORD_CITATION])]})
+    use(monkeypatch, {"verify": [Verdict(status="confirmed", impact="breaks-users", reason="r", citations=[KEYWORD_CITATION])]})
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high]), ctx)
     # The confirmation stands; the gap is reported, not hidden.
     assert state.verdicts[high.id].status == "confirmed"
@@ -229,11 +230,56 @@ async def test_verify_lists_findings_that_carry_no_expected_behaviour(target_inf
     assert state.errors == [f"verify: no expected behaviour for 1 finding ({high.id})"]
 
 
-async def test_verifier_failure_is_unverifiable(target_info, ctx, monkeypatch):
+async def test_a_failed_verifier_is_tried_again_and_its_answer_kept(target_info, ctx, monkeypatch):
     high = high_finding()
-    use(monkeypatch, {"verify": [sdk.AgentCallError("timeout")]})
+    canned = use(monkeypatch, {"verify": [sdk.AgentCallError("timeout"), sdk.AgentCallError("timeout"),
+                                          Verdict(status="confirmed", impact="breaks-business", reason="r",
+                                                  citations=[KEYWORD_CITATION])]})
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high]), ctx)
-    assert state.verdicts[high.id].status == "unverifiable"
+    assert [label for label, _ in canned.calls] == ["verify"] * 3
+    assert (state.verdicts[high.id].status, state.verdicts[high.id].impact) == ("confirmed", "breaks-business")
+    assert state.stage == "verify"
+
+
+async def test_a_finding_with_no_answer_after_three_tries_stops_the_run_and_resume_asks_only_it(
+        target_info, ctx, monkeypatch):
+    high, medium = high_finding(), medium_finding()
+    fail = sdk.AgentCallError("timeout")
+    ok = Verdict(status="confirmed", impact="breaks-users", reason="r", citations=[KEYWORD_CITATION])
+    canned = use(monkeypatch, {"verify": [ok, fail, fail, fail]})
+    ctx.config.concurrency = 1
+    state = ReviewState(target=target_info, stage="find", findings=[high, medium])
+    with pytest.raises(VerifyIncomplete) as e:
+        await run_verify(state, ctx)
+    assert e.value.finding_ids == [medium.id] and "after 3 tries" in str(e.value)
+    assert set(state.verdicts) == {high.id}  # no stand-in verdict for the failed one
+    assert state.stage == "find"
+    assert state.checks[-1].error.endswith("(3 tries)")
+    canned.answers["verify"] = [ok.model_copy(update={"citations": [KEYWORD_USE_CITATION]})]
+    canned.calls.clear()
+    state = await run_verify(state, ctx)
+    assert len(canned.calls) == 1 and medium.claim in canned.calls[0][1]
+    assert set(state.verdicts) == {high.id, medium.id} and state.stage == "verify"
+
+
+async def test_an_answer_without_impact_is_not_a_verdict(target_info, ctx, monkeypatch):
+    high = high_finding()
+    use(monkeypatch, {"verify": [Verdict(status="refuted", reason="r", citations=[KEYWORD_USE_CITATION])]})
+    state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high]), ctx)
+    assert state.verdicts[high.id].impact == ""  # refuted needs none
+    with pytest.raises(ValueError, match="impact is required"):
+        VerifierAnswer(status="confirmed", reason="r")
+    with pytest.raises(ValueError, match="impact is required"):
+        VerifierAnswer(status="unverifiable", reason="r", impact="nonsense")  # unknown is none
+
+
+async def test_a_test_finding_never_breaks_users_or_the_business(target_info, ctx, monkeypatch):
+    high = high_finding()
+    use(monkeypatch, {"verify": [Verdict(status="confirmed", impact="breaks-business", topic="tests", reason="r",
+                                         citations=[KEYWORD_CITATION])]})
+    state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high]), ctx)
+    assert state.verdicts[high.id].impact == "correctness-only"
+    assert f"verify: {high.id} is about tests; impact breaks-business lowered to correctness-only" in state.errors
 
 
 # --- merge -----------------------------------------------------------------------
@@ -393,7 +439,7 @@ async def test_a_budget_stop_keeps_the_verdicts_already_paid_for(target_info, ct
     high, medium = high_finding(), medium_finding()
     state = ReviewState(target=target_info, stage="find", findings=[high, medium])
     ctx.config.concurrency = 1
-    use(monkeypatch, {"verify": [Verdict(status="confirmed", reason="r", citations=[KEYWORD_CITATION]),
+    use(monkeypatch, {"verify": [Verdict(status="confirmed", impact="breaks-users", reason="r", citations=[KEYWORD_CITATION]),
                                  budget.BudgetExceededError("stop")]})
     with pytest.raises(budget.BudgetExceededError):
         await run_verify(state, ctx)

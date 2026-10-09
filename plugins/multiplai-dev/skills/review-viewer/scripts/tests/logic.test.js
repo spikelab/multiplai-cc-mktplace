@@ -107,6 +107,37 @@ test("gate-rejected, low-value and repeat findings are never shown or counted", 
   assert.deepEqual(L.findingOrder(L.groupFindings([{ id: "e", severity: "LOW", status: "confirmed" }], {}, false)), ["e"]);
 });
 
+test("the list is split into Code, Tests and Docs, by severity within each", () => {
+  const fs = [
+    { id: "t", severity: "HIGH", status: "confirmed", topic: "tests", file: "a.py" },
+    { id: "c2", severity: "LOW", status: "confirmed", topic: "config", file: "a.yaml" },
+    { id: "d", severity: "MEDIUM", status: "confirmed", file: "docs/run.md" },
+    { id: "c1", severity: "MEDIUM", status: "unverifiable", topic: "code", file: "a.py" },
+  ];
+  const g = L.groupFindings(fs, {}, false);
+  assert.deepEqual(g.sections.map((s) => s.title), ["Code", "Tests", "Docs"]);
+  assert.deepEqual(L.findingOrder(g), ["c1", "c2", "t", "d"], "a HIGH test gap comes after the code findings");
+  assert.equal(L.findingSection({ file: "tests/test_a.py" }), "tests", "no topic: the path guess decides");
+  assert.equal(L.findingSection({ topic: "security", file: "tests/x.py" }), "code");
+  assert.deepEqual(L.navOrder(fs, {}, false, null), ["c1", "c2", "t", "d"]);
+});
+
+test("a critical review shows and counts only findings that break users or the business", () => {
+  const ff = { mode: "critical", findings: [
+    { id: "u", severity: "LOW", status: "confirmed", impact: "breaks-users" },
+    { id: "b", severity: "MEDIUM", status: "unverifiable", impact: "breaks-business" },
+    { id: "c", severity: "HIGH", status: "confirmed", impact: "correctness-only" },
+    { id: "h", severity: "HIGH", status: "confirmed", impact: "hygiene" },
+    { id: "n", severity: "HIGH", status: "confirmed" },
+  ], needs: [{ what: "w", blocks: "c", cause: "no-access" }] };
+  const shown = L.shownFile(ff);
+  assert.deepEqual(shown.findings.map((f) => f.id), ["u", "b"]);
+  assert.deepEqual(shown.needs, [], "a need of a finding the page hides goes with it");
+  assert.deepEqual(L.undecidedCount(shown.findings, {}), { open: 2, total: 2 });
+  assert.deepEqual(L.shownFile(Object.assign({}, ff, { mode: "full" })).findings.length, 5);
+  assert.deepEqual(L.shownFile(Object.assign({}, ff, { mode: undefined })).findings.length, 5, "no mode is full");
+});
+
 test("needs that block a dropped finding are dropped with it", () => {
   const ff = {
     findings: [{ id: "b", severity: "HIGH", status: "confirmed", file: "x", line_start: 1, claim: "B" },
@@ -917,6 +948,7 @@ test("the help explains every value the Checked and Findings tabs can show", () 
     status: findings.Finding.properties.status.enum,
     // `useful` shows no badge, so the help names it in prose only.
     label: findings.Assessment.properties.label.enum.filter((v) => v !== "useful"),
+    impact: findings.Finding.properties.impact.anyOf.find((a) => a.enum).enum,
   };
   for (const [name, values] of Object.entries(groups)) {
     assert.ok(values.length, name + " has values in the schema");

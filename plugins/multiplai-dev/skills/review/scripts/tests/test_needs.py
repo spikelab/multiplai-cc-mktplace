@@ -139,7 +139,7 @@ def test_prepare_puts_the_pipelines_failed_lookups_into_the_state(fixture_repo, 
 
 async def test_unverifiable_answer_with_a_need_is_stored_and_exported(target_info, ctx, monkeypatch):
     medium = medium_finding()
-    prompts = use(monkeypatch, {"verify": [Verdict(status="unverifiable", reason="depends on tavily 0.8.4",
+    prompts = use(monkeypatch, {"verify": [Verdict(status="unverifiable", impact="breaks-users", reason="depends on tavily 0.8.4",
                                                    needs=[TAVILY_NEED])]})
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[medium]), ctx)
     assert "fill `needs`" in prompts[0] and "pip download tavily-python==0.8.4 --no-deps" in prompts[0]
@@ -155,7 +155,7 @@ async def test_unverifiable_answer_with_a_need_is_stored_and_exported(target_inf
 
 async def test_needs_on_a_confirmed_answer_are_not_kept(target_info, ctx, monkeypatch):
     high = high_finding()
-    use(monkeypatch, {"verify": [Verdict(status="confirmed", reason="r", citations=[KEYWORD_CITATION],
+    use(monkeypatch, {"verify": [Verdict(status="confirmed", impact="breaks-users", reason="r", citations=[KEYWORD_CITATION],
                                          expected_behaviour="e", needs=[TAVILY_NEED])]})
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high]), ctx)
     assert state.needs == []
@@ -167,8 +167,8 @@ async def test_needs_on_a_confirmed_answer_are_not_kept(target_info, ctx, monkey
 async def test_unverifiable_finding_with_a_need_stays_at_medium(target_info, ctx, monkeypatch):
     medium, high = medium_finding(), high_finding()
     use(monkeypatch, {"verify": [
-        Verdict(status="unverifiable", reason="needs the vendor's settings", needs=[TAVILY_NEED]),
-        Verdict(status="unverifiable", reason="needs the vendor's settings", needs=[TAVILY_NEED]),
+        Verdict(status="unverifiable", impact="breaks-users", reason="needs the vendor's settings", needs=[TAVILY_NEED]),
+        Verdict(status="unverifiable", impact="breaks-users", reason="needs the vendor's settings", needs=[TAVILY_NEED]),
     ]})
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[medium, high]), ctx)
     by_id = {f.id: f.severity for f in state.findings}
@@ -179,7 +179,7 @@ async def test_unverifiable_finding_with_a_need_stays_at_medium(target_info, ctx
 
 async def test_unverifiable_finding_without_a_need_is_lowered_as_before(target_info, ctx, monkeypatch):
     medium = medium_finding()
-    use(monkeypatch, {"verify": [Verdict(status="unverifiable", reason="the code does not settle it")]})
+    use(monkeypatch, {"verify": [Verdict(status="unverifiable", impact="breaks-users", reason="the code does not settle it")]})
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[medium]), ctx)
     assert state.findings[0].severity == "LOW"
 
@@ -209,7 +209,7 @@ async def test_a_need_without_a_command_carries_where_to_look_into_the_file_and_
     medium = medium_finding()
     ask = NeedAsk(what="The Dataform workflow invocation history.", cause="no-access",
                   where=" Console > Dataform > DolceDataform > Workflow execution logs ")
-    prompts = use(monkeypatch, {"verify": [Verdict(status="unverifiable", reason="r", needs=[ask])]})
+    prompts = use(monkeypatch, {"verify": [Verdict(status="unverifiable", impact="breaks-users", reason="r", needs=[ask])]})
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[medium]), ctx)
     assert "never leave both empty" in prompts[0]
     assert state.needs[0].where == "Console > Dataform > DolceDataform > Workflow execution logs"

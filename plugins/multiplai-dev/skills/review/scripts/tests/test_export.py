@@ -174,3 +174,19 @@ def test_run_counts_repeats_and_low_value_from_the_assessments(canned_state):
     data = to_findings_file(canned_state)
     assert (data["run"]["counts"]["repeats"], data["run"]["counts"]["low_value"]) == (1, 1)
     jsonschema.validate(data, _schema())
+
+
+def test_impact_is_exported_for_shown_findings_and_mode_defaults_to_full(canned_state):
+    import jsonschema
+
+    from conftest import SCHEMA
+    for v in canned_state.verdicts.values():
+        v.impact = "breaks-users"
+    data = to_findings_file(canned_state)
+    assert data["mode"] == "full"
+    by_status = {f["status"]: f for f in data["findings"]}
+    assert by_status["confirmed"]["impact"] == by_status["unverifiable"]["impact"] == "breaks-users"
+    assert "impact" not in by_status["refuted"] and "impact" not in by_status["rejected"]
+    jsonschema.validate(data, json.loads(SCHEMA.read_text()))
+    canned_state.mode = "critical"
+    assert to_findings_file(canned_state)["mode"] == "critical"

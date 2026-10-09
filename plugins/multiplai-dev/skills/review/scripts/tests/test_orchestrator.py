@@ -66,7 +66,7 @@ class FakeAgents:
         if stage == "find":
             return FinderOutput()
         if stage == "verify":
-            return Verdict(status="confirmed", reason="the keyword is the only filter", citations=[KEYWORD_CITATION],
+            return Verdict(status="confirmed", impact="breaks-users", reason="the keyword is the only filter", citations=[KEYWORD_CITATION],
                            expected_behaviour="Rate plans match whatever the channel is titled.")
         if stage == "merge":
             return MergeOutput(duplicate_sets=[DuplicateSet(
@@ -123,7 +123,7 @@ def test_review_end_to_end(fixture_repo, tmp_path, agents, capsys):
     for rollup in ("HIGH-only.md", "MEDIUM-only.md", "LOW-only.md"):
         assert (out / rollup).is_file()
     progress = (target_dir / "progress.log").read_text()
-    assert "STARTED" in progress and "DONE review finished: 1 HIGH" in progress
+    assert "STARTED" in progress and "DONE review finished: Code 1 HIGH" in progress
     assert ReviewState.model_validate_json((target_dir / "review-state.json").read_text()).stage == "done"
     assert "verify done: 2 confirmed, 0 refuted, 0 unverifiable" in stdout
     assert "merge done: 1 groups, 1 merged, 0 agent failures" in stdout
@@ -444,3 +444,39 @@ def test_a_resume_keeps_no_round_and_a_rerun_on_the_same_head_keeps_one(fixture_
     (kept,) = (target_dir / "rounds").iterdir()
     assert kept.name == head[:12]
     assert json.loads((kept / "findings.json").read_text())["generated_at"] == first
+
+
+def test_mode_critical_is_recorded_and_kept_by_resume(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    target_dir = out / f"booking-engine--{base}..{head}"
+    agents(kill_at="merge")
+    with pytest.raises(RuntimeError):
+        main(_review_args(repo, base, head, out, "--mode", "critical"))
+    assert main(["resume", str(target_dir), "--trust-repo"]) == 0
+    data = json.loads((target_dir / "findings.json").read_text())
+    assert data["mode"] == "critical"
+    assert "Critical mode" in next(target_dir.glob("summary-*.md")).read_text()
+
+
+def test_a_verifier_that_never_answers_stops_the_run_with_exit_5(fixture_repo, tmp_path, agents, monkeypatch, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    fake = agents()
+    real = fake.__call__
+
+    async def failing(prompt, schema, *, budget_label="", **kwargs):
+        if budget_label == "verify":
+            raise sdk.AgentCallError("verify: no valid answer after a re-ask")
+        return await real(prompt, schema, budget_label=budget_label, **kwargs)
+
+    monkeypatch.setattr(sdk, "agent_call_structured", failing)
+    assert main(_review_args(repo, base, head, out)) == 5
+    err = capsys.readouterr().err
+    assert "STOPPED: the verifier gave no usable answer" in err and "after 3 tries each" in err
+    assert "resume" in err
+    target_dir = out / f"booking-engine--{base}..{head}"
+    assert not (target_dir / "findings.json").exists()
+    monkeypatch.setattr(sdk, "agent_call_structured", fake)
+    assert main(["resume", str(target_dir), "--trust-repo"]) == 0
+    assert json.loads((target_dir / "findings.json").read_text())["findings"][0]["impact"] == "breaks-users"

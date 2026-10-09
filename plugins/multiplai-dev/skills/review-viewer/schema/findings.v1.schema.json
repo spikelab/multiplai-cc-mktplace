@@ -172,6 +172,24 @@
           "title": "Id",
           "type": "string"
         },
+        "impact": {
+          "anyOf": [
+            {
+              "enum": [
+                "breaks-users",
+                "breaks-business",
+                "correctness-only",
+                "hygiene"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Impact"
+        },
         "line_end": {
           "minimum": 1,
           "title": "Line End",
@@ -719,6 +737,22 @@
       "format": "date-time",
       "title": "Generated At",
       "type": "string"
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "enum": [
+            "full",
+            "critical"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Mode"
     },
     "needs": {
       "items": {

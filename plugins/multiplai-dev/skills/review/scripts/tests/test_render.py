@@ -8,7 +8,7 @@ import pytest
 from conftest import CLAIM_HIGH, CLAIM_MEDIUM, CLAIM_REFUTED, CLAIM_REJECTED, EXPECTED_HIGH
 from review_pipeline import post as post_mod
 from review_pipeline.__main__ import main
-from review_pipeline.export import write_findings_file
+from review_pipeline.export import to_findings_file, write_findings_file
 from review_pipeline.models import Merged
 from review_pipeline.render import render_review, render_summary, write_review, write_rollups
 from review_pipeline.state import save_state
@@ -61,8 +61,8 @@ def test_citations_without_github_remote_are_path_lines(canned_state):
 
 def test_header_counts_only_listed_findings(canned_state):
     text = render_review(canned_state)
-    assert ("- **Findings:** 1 HIGH, 0 MEDIUM, 1 LOW (refuted, gate-rejected, low-value and repeat findings "
-            "are only in the appendix)") in text
+    assert ("- **Findings:** Code 1 HIGH, 0 MEDIUM, 1 LOW; Tests none; Docs none "
+            "(what was left out is only in the appendix)") in text
     body = text.split("## Appendix", 1)[0]
     assert CLAIM_REFUTED not in body and CLAIM_REJECTED not in body
 
@@ -79,10 +79,11 @@ def test_summary_is_short_and_says_how_the_review_went(canned_state):
     lines = text.splitlines()
     assert len(lines) <= 25
     assert "Cost $1.25 over 9 agent calls, 0 tokens, 0s wall time." in text
-    assert "Findings: 1 HIGH, 0 MEDIUM, 1 LOW." in text
-    (high_line,) = [l for l in lines if l.startswith("- `rateplan_service.py")]
+    assert "Findings: Code 1 HIGH, 0 MEDIUM, 1 LOW; Tests none; Docs none." in text
+    (high_line,) = [l for l in lines if l.startswith("- HIGH `rateplan_service.py")]
     assert high_line.endswith("(confirmed)")
-    assert "1 LOW findings are in the full review." in text
+    assert lines.index("## Code") < lines.index(high_line)
+    assert "- 1 LOW in the full review." in text
     # Refuted and gate-rejected findings are neither listed nor counted here.
     assert "refuted" not in text.lower() and "rejected" not in text.lower() and "Dropped" not in text
     assert CLAIM_REFUTED.split(". ")[0][:40] not in text and CLAIM_REJECTED[:40] not in text
@@ -237,3 +238,58 @@ def test_duration_format():
     from review_pipeline.render import duration
 
     assert (duration(0), duration(59.4), duration(60), duration(432)) == ("0s", "59s", "1m 0s", "7m 12s")
+
+
+# --- sections and critical mode ------------------------------------------------
+
+
+def _rated(canned_state, mode: str, **by_claim: tuple[str, str]) -> ReviewState:
+    """canned_state with topic and impact set on the verdicts of the findings whose claim starts with a key."""
+    state = canned_state.model_copy(deep=True)
+    state.mode = mode
+    for f in state.findings:
+        for start, (topic, impact) in by_claim.items():
+            if f.claim.startswith(start):
+                state.verdicts[f.id] = state.verdicts[f.id].model_copy(update={"topic": topic, "impact": impact})
+    return state
+
+
+def test_findings_are_listed_in_code_tests_and_docs_sections_with_their_impact(canned_state):
+    state = _rated(canned_state, "full", **{CLAIM_HIGH[:20]: ("code", "breaks-users"),
+                                            CLAIM_MEDIUM[:20]: ("tests", "correctness-only")})
+    text = render_review(state)
+    assert "- **Findings:** Code 1 HIGH, 0 MEDIUM, 0 LOW; Tests 0 HIGH, 0 MEDIUM, 1 LOW; Docs none" in text
+    assert text.index("## Code") < text.index(CLAIM_HIGH) < text.index("## Tests") < text.index(CLAIM_MEDIUM)
+    assert "**Impact:** breaks-users" in text and "**Impact:** correctness-only" in text
+    assert "Mode:" not in text
+    summary = render_summary(state)
+    lines = summary.splitlines()
+    assert lines.index("## Code") < lines.index("## Tests")
+    assert "- 1 LOW in the full review." in summary
+
+
+def test_critical_mode_lists_only_findings_that_break_users_or_the_business(canned_state, tmp_path):
+    state = _rated(canned_state, "critical", **{CLAIM_HIGH[:20]: ("code", "breaks-business"),
+                                                CLAIM_MEDIUM[:20]: ("code", "hygiene")})
+    text = render_review(state)
+    body, appendix = text.split("## Appendix", 1)
+    assert "- **Mode:** critical." in text
+    assert "- **Findings:** Code 1 HIGH, 0 MEDIUM, 0 LOW; Tests none; Docs none" in text
+    assert CLAIM_HIGH in body and CLAIM_MEDIUM not in body
+    assert "- **not critical** (LOW)" in appendix and "Impact: hygiene; Code section." in appendix
+    summary = render_summary(state)
+    assert "Critical mode: only findings" in summary and CLAIM_MEDIUM[:30] not in summary
+    out = tmp_path / "out"
+    (out / "t").mkdir(parents=True)
+    write_findings_file(state, out / "t")
+    assert json.loads((out / "t" / "findings.json").read_text())["mode"] == "critical"
+    write_rollups(out)
+    assert "No LOW findings to act on." in (out / "LOW-only.md").read_text()
+    assert CLAIM_HIGH in (out / "HIGH-only.md").read_text()
+
+
+def test_post_without_decisions_takes_what_the_review_lists(canned_state):
+    state = _rated(canned_state, "critical", **{CLAIM_HIGH[:20]: ("code", "hygiene")})
+    data = to_findings_file(state)
+    assert post_mod.select(data["findings"], None, data["mode"]) == []
+    assert [f["claim"] for f in post_mod.select(data["findings"], None, "full")] == [CLAIM_HIGH]

@@ -250,7 +250,7 @@ class Fake:
             return FinderOutput()
         if schema is MergeOutput:
             return MergeOutput()
-        return Verdict(status="confirmed", reason="r")
+        return Verdict(status="confirmed", impact="breaks-users", reason="r")
 
 
 def _ctx(tmp_path: Path, dims=DIMENSIONS) -> RunContext:
@@ -422,7 +422,7 @@ def test_a_tree_review_writes_a_findings_file_that_validates(tmp_path, monkeypat
             return FinderOutput(findings=[finding])
         if schema is FinderOutput:
             return FinderOutput()
-        return Verdict(status="confirmed", reason="sum ignores quantity",
+        return Verdict(status="confirmed", impact="breaks-users", reason="sum ignores quantity",
                        citations=[finding.citations[0]], expected_behaviour="Each item counts its quantity.")
 
     monkeypatch.setattr(sdk, "agent_call_structured", agents)

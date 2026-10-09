@@ -11,9 +11,19 @@ below MEDIUM: it is waiting on a person, and should not sink below the
 findings a person can already act on.
 
 A confirmed or unverifiable verdict should carry `expected_behaviour`. One
-without it (the verifier left it out, or the verifier failed) still stands,
-and the stage lists those findings in `state.errors`, so the summary says
-which ones reach the review with no statement of correct behaviour.
+without it still stands, and the stage lists those findings in
+`state.errors`, so the summary says which ones reach the review with no
+statement of correct behaviour.
+
+Every answer but `refuted` must carry `impact` (`VerifierAnswer`); one
+without it fails the parse and is re-asked. A call that still fails is run
+again, up to `VERIFY_TRIES` times per finding. A finding whose every try
+failed gets no verdict: the stage lets the other verifiers finish, keeps
+their verdicts, then raises `VerifyIncomplete`, and `resume` asks only for
+the findings left without one. No finding reaches the review unverified or
+with no impact. A finding about `tests` never breaks users or the business:
+a `breaks-*` impact on one is lowered to `correctness-only`, with a line in
+`state.errors`.
 """
 
 from __future__ import annotations
@@ -22,11 +32,27 @@ import logging
 
 from .. import checks, sdk
 from ..gates import gated_need, reason_kind, verdict_gate
-from ..models import SEVERITIES, AgentCheck, Finding, GateCheck, Need, ReviewState, Verdict, lower_severity
+from ..models import (CRITICAL_IMPACTS, SEVERITIES, AgentCheck, Finding, GateCheck, Need, ReviewState, Verdict,
+                      VerifierAnswer, lower_severity)
 from ..prompts import verify as prompt
 from . import RunContext, bounded, fix_citation
 
 log = logging.getLogger(__name__)
+
+# Verify calls per finding before the run stops for `resume`; each call
+# already re-asks once when its answer does not parse (`sdk.py`).
+VERIFY_TRIES = 3
+
+
+class VerifyIncomplete(Exception):
+    """Some findings have no verdict after VERIFY_TRIES calls each; the rest are kept."""
+
+    def __init__(self, finding_ids: list[str], last_error: str) -> None:
+        n = len(finding_ids)
+        super().__init__(
+            f"the verifier gave no usable answer for {n} finding{'' if n == 1 else 's'} after "
+            f"{VERIFY_TRIES} tries each ({', '.join(finding_ids)}); last error: {last_error}")
+        self.finding_ids = finding_ids
 
 
 def unverifiable_severity(severity: str, *, has_need: bool) -> str:
@@ -44,34 +70,45 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
     target, cfg = state.target, ctx.config
     todo = [f for f in state.findings if f.id not in state.verdicts]
 
-    async def _one(finding: Finding) -> tuple[Verdict, AgentCheck, GateCheck | None]:
+    failed: dict[str, str] = {}
+
+    async def _one(finding: Finding) -> tuple[Verdict | None, AgentCheck, GateCheck | None]:
         started = checks.now()
         given = checks.prompt_labels(target, extra=[f"finding {finding.id}"])
+        answer, error = None, ""
         with sdk.recording() as rec:
-            try:
-                verdict = await sdk.agent_call_structured(
-                    prompt.build(target, finding), Verdict,
-                    allowed_tools=sdk.VERIFIER_TOOLS, model=cfg.verifier_model, effort=cfg.effort,
-                    max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="verify",
-                )
-                error = ""
-            except sdk.RepoTrustError:
-                raise
-            except sdk.AgentCallError as e:
-                log.error("verifier failed for finding %s", finding.id, exc_info=True)
-                error = f"the verifier failed: {str(e).splitlines()[0][:200]}"
+            for attempt in range(1, VERIFY_TRIES + 1):
+                try:
+                    answer = await sdk.agent_call_structured(
+                        prompt.build(target, finding), VerifierAnswer,
+                        allowed_tools=sdk.VERIFIER_TOOLS, model=cfg.verifier_model, effort=cfg.effort,
+                        max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label="verify",
+                    )
+                    break
+                except sdk.RepoTrustError:
+                    raise
+                except sdk.AgentCallError as e:
+                    error = f"the verifier failed: {str(e).splitlines()[0][:200]}"
+                    log.warning("verifier failed for finding %s (try %d/%d): %s", finding.id, attempt,
+                                VERIFY_TRIES, error)
         check = AgentCheck(
             stage="verify", subject=finding.id, given=given,
             calls=[checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls],
             turns=rec.turns, cost_usd=round(rec.cost_usd, 6), started_at=started, ended_at=checks.now(),
         )
-        if error:
-            check.error, check.outcome = error, f"failed: {checks.failure_kind(error)}"
-            return Verdict(finding_id=finding.id, status="unverifiable", reason=error), check, None
-        verdict = verdict.model_copy(update={
+        if answer is None:
+            log.error("verifier failed %d times for finding %s", VERIFY_TRIES, finding.id)
+            check.error = f"{error} ({VERIFY_TRIES} tries)"
+            check.outcome = f"failed: {checks.failure_kind(error)}"
+            return None, check, None
+        verdict = Verdict.model_validate(answer.model_dump()).model_copy(update={
             "finding_id": finding.id,
-            "citations": [fix_citation(c, target, ctx.snapshot) for c in verdict.citations],
+            "citations": [fix_citation(c, target, ctx.snapshot) for c in answer.citations],
         })
+        if verdict.topic == "tests" and verdict.impact in CRITICAL_IMPACTS:
+            state.errors.append(f"verify: {finding.id} is about tests; impact {verdict.impact} lowered to "
+                                "correctness-only")
+            verdict = verdict.model_copy(update={"impact": "correctness-only"})
         answered = verdict.status
         result = verdict_gate(target, verdict)
         gate_check = GateCheck(finding_id=finding.id, gate="verdict_gate", passed=result.passed,
@@ -93,12 +130,15 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
         }
         return verdict, check, gate_check
 
-    async def one(finding: Finding) -> Verdict:
+    async def one(finding: Finding) -> Verdict | None:
         # Stored as each answer arrives: a budget stop mid-stage keeps what
         # was already paid for, and the checkpoint saved then carries it.
         verdict, check, gate_check = await _one(finding)
-        state.verdicts[verdict.finding_id] = verdict
         state.checks.append(check)
+        if verdict is None:
+            failed[finding.id] = check.error
+            return None
+        state.verdicts[verdict.finding_id] = verdict
         if gate_check:
             state.gate_checks.append(gate_check)
         if verdict.status == "unverifiable":
@@ -108,6 +148,8 @@ async def run_verify(state: ReviewState, ctx: RunContext) -> ReviewState:
         return verdict
 
     await bounded(todo, one, cfg.concurrency)
+    if failed:
+        raise VerifyIncomplete(sorted(failed), next(iter(failed.values())))
 
     lowered = []
     waiting = {n.blocks for n in state.needs}

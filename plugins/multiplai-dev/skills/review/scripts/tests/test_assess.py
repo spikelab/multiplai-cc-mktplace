@@ -463,14 +463,14 @@ def test_repeats_and_low_value_go_only_to_the_appendix_and_are_not_counted(targe
     assert review.index("## HIGH") < appendix
     assert appendix < review.index(medium_finding().claim)
     assert appendix < review.index("a low one")
-    assert "- **Findings:** 1 HIGH, 0 MEDIUM, 0 LOW" in review
+    assert "- **Findings:** Code 1 HIGH, 0 MEDIUM, 0 LOW; Tests none; Docs none" in review
     assert "repeat — repeats `abcdef0123` (round 111111111111), your decision reject: by design." in review
     assert "- **repeat** (MEDIUM)" in review and "- **low-value** (LOW)" in review
     summary = render_summary(state)
-    assert "Findings: 1 HIGH, 0 MEDIUM, 0 LOW." in summary
+    assert "Findings: Code 1 HIGH, 0 MEDIUM, 0 LOW; Tests none; Docs none." in summary
     assert "repeat" not in summary and "low-value" not in summary
     assert medium_finding().claim[:30] not in summary
-    assert "LOW findings are in the full review" not in summary  # the only LOW is low-value
+    assert "LOW in the full review" not in summary  # the only LOW is low-value
 
 
 def test_post_leaves_out_repeats_unless_accepted(target_info):
@@ -534,7 +534,7 @@ def test_a_finding_rejected_in_round_one_comes_back_reworded_and_is_labelled_rep
             return schema()
         if stage == "verify":
             f = round_findings[current["round"]]
-            return Verdict(status="confirmed", reason="read it", citations=[f.citations[0]],
+            return Verdict(status="confirmed", impact="breaks-users", reason="read it", citations=[f.citations[0]],
                            expected_behaviour="The alarm rings on a real reading.")
         if stage == "repeats":
             return RepeatsOutput(matches=[RepeatMatch(id=reworded.id, rejected_id=first.id,
@@ -623,7 +623,7 @@ def test_assess_only_labels_a_saved_review_and_changes_nothing_in_it(tmp_path, m
         if stage == "find":
             return schema()
         if stage == "verify":
-            return Verdict(status="confirmed", reason="r", citations=[cite("gauge.py", 2, "return -1")])
+            return Verdict(status="confirmed", impact="breaks-users", reason="r", citations=[cite("gauge.py", 2, "return -1")])
         if stage == "merge":
             return schema()
         return answers[stage]

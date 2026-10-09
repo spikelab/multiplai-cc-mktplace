@@ -95,14 +95,30 @@
    * list, every count, the code markers, the palette and the risk score;
    * findings.json keeps them, and the Checked tab still lists what the gates
    * rejected. */
-  function shownFindings(findings) {
-    return (findings || []).filter((f) => f.status !== "rejected" && !DROPPED_LABELS.has(assessLabel(f)));
+  function shownFindings(findings, mode) {
+    return (findings || []).filter((f) => f.status !== "rejected" && !DROPPED_LABELS.has(assessLabel(f)) &&
+      (mode !== "critical" || CRITICAL_IMPACTS.has(f.impact)));
   }
 
-  /* A findings file with only the shown findings, and only the needs that
-   * block the review or a shown finding. */
+  /* A review run with `--mode critical` lists only findings the verifier rated
+   * as breaking users or the business after merge. */
+  const CRITICAL_IMPACTS = new Set(["breaks-users", "breaks-business"]);
+
+  /* The sections the list is split into; severity is read within a section. */
+  const SECTIONS = ["code", "tests", "docs"];
+  const SECTION_TITLES = { code: "Code", tests: "Tests", docs: "Docs" };
+
+  /* `tests` or `docs` from the finding's topic (or the path guess), else `code`. */
+  function findingSection(f) {
+    const t = findingTopic(f).topic;
+    return t === "tests" || t === "docs" ? t : "code";
+  }
+
+  /* A findings file with only the shown findings (in a critical review, only
+   * the `breaks-*` ones), and only the needs that block the review or a shown
+   * finding. */
   function shownFile(ff) {
-    const findings = shownFindings(ff && ff.findings);
+    const findings = shownFindings(ff && ff.findings, ff && ff.mode);
     const ids = new Set(findings.map((f) => f.id));
     const all = new Set(((ff && ff.findings) || []).map((f) => f.id));
     const needs = ((ff && ff.needs) || []).filter((n) => ids.has(n.blocks) || !all.has(n.blocks));
@@ -116,27 +132,31 @@
     return HIDDEN_STATUSES.has(finding.status) || !!(d && d.decision);
   }
 
-  /* The shown findings by severity, in the input order within each severity.
+  /* The shown findings by section (Code, Tests, Docs), then severity, in the
+   * input order within each.
    * Refuted and decided findings are left out unless showHidden; `hidden`
    * counts them. Gate-rejected, low-value and repeat findings are never here
    * (shownFindings). */
   function groupFindings(findings, decisions, showHidden) {
-    const groups = { HIGH: [], MEDIUM: [], LOW: [] };
+    const sections = SECTIONS.map((name) => ({ section: name, title: SECTION_TITLES[name],
+      groups: { HIGH: [], MEDIUM: [], LOW: [] } }));
     let hidden = 0;
     for (const f of shownFindings(findings)) {
       if (isHidden(f, decisions)) {
         hidden += 1;
         if (!showHidden) continue;
       }
+      const groups = sections[SECTIONS.indexOf(findingSection(f))].groups;
       (groups[f.severity] || (groups[f.severity] = [])).push(f);
     }
-    return { groups: groups, hidden: hidden };
+    return { sections: sections, hidden: hidden };
   }
 
-  /* Ids in the order the list shows them: HIGH, MEDIUM, LOW. */
+  /* Ids in the order the list shows them: Code, Tests, Docs, and HIGH,
+   * MEDIUM, LOW within each. */
   function findingOrder(grouped) {
     const ids = [];
-    for (const sev of SEVERITIES) for (const f of grouped.groups[sev] || []) ids.push(f.id);
+    for (const s of grouped.sections) for (const sev of SEVERITIES) for (const f of s.groups[sev] || []) ids.push(f.id);
     return ids;
   }
 
@@ -1352,7 +1372,8 @@
     isPending: isPending, pollDelay: pollDelay, applyPoll: applyPoll, citationRows: citationRows,
     isHidden: isHidden, groupFindings: groupFindings, findingOrder: findingOrder, navOrder: navOrder,
     githubBlobUrl: githubBlobUrl, findingFileName: findingFileName, shareOptions: shareOptions, shareText: shareText, findingTopic: findingTopic, findingMarkdown: findingMarkdown,
-    assessLabel: assessLabel, shownFindings: shownFindings, shownFile: shownFile, effectiveDecision: effectiveDecision,
+    assessLabel: assessLabel, shownFindings: shownFindings, shownFile: shownFile, findingSection: findingSection,
+    CRITICAL_IMPACTS: CRITICAL_IMPACTS, effectiveDecision: effectiveDecision,
     undecidedCount: undecidedCount, assessmentText: assessmentText, explanationText: explanationText,
     stepFinding: stepFinding, anchorLabel: anchorLabel, escapeHtml: escapeHtml,
     splitHighlighted: splitHighlighted, lineRange: lineRange,

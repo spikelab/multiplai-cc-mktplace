@@ -20,7 +20,7 @@ from review_pipeline.render import render_checks
 from review_pipeline.stages import RunContext
 from review_pipeline.stages.find import run_find
 from review_pipeline.stages.merge import run_merge
-from review_pipeline.stages.verify import run_verify
+from review_pipeline.stages.verify import VerifyIncomplete, run_verify
 from review_pipeline.state import load_state, save_state
 
 CHECKS_SCHEMA = SCHEMA.parent / "checks.v1.schema.json"
@@ -260,8 +260,8 @@ async def test_verify_records_the_verdict_its_citations_and_the_gate(target_info
     high, medium = high_finding(), medium_finding()
     reads = [ToolCall("Read", {"file_path": "rateplan_service.py", "offset": 1, "limit": 3})]
     monkeypatch.setattr(sdk, "agent_call_structured", Recorded({"verify": [
-        Verdict(status="confirmed", reason="r", citations=[KEYWORD_CITATION, KEYWORD_USE_CITATION]),
-        Verdict(status="confirmed", reason="no cite"),  # lowered by verdict_gate
+        Verdict(status="confirmed", impact="breaks-users", reason="r", citations=[KEYWORD_CITATION, KEYWORD_USE_CITATION]),
+        Verdict(status="confirmed", impact="breaks-users", reason="no cite"),  # lowered by verdict_gate
     ]}, {"verify": reads}))
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high, medium]), ctx)
     one, two = state.checks
@@ -278,8 +278,10 @@ async def test_verify_records_the_verdict_its_citations_and_the_gate(target_info
 
 
 async def test_a_failed_verifier_is_recorded_and_gets_no_gate_result(target_info, ctx, monkeypatch):
-    monkeypatch.setattr(sdk, "agent_call_structured", Recorded({"verify": [sdk.AgentCallError("boom")]}))
-    state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high_finding()]), ctx)
+    monkeypatch.setattr(sdk, "agent_call_structured", Recorded({"verify": [sdk.AgentCallError("boom")] * 3}))
+    state = ReviewState(target=target_info, stage="find", findings=[high_finding()])
+    with pytest.raises(VerifyIncomplete):
+        await run_verify(state, ctx)
     assert state.checks[0].error.startswith("the verifier failed") and state.checks[0].verdict is None
     assert state.gate_checks == []
 

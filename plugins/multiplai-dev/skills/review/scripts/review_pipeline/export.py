@@ -21,7 +21,11 @@ optional: files written before the stage existed have none.
 `verifier_citations` (optional in v1) holds the lines the verifier read; a
 finding with no verdict, such as a gate-rejected one, has no such key.
 `topic` (optional) is what the verifier says the finding is about, one of
-`models.TOPICS`; it is left out when the verifier gave none.
+`models.TOPICS`; it is left out when the verifier gave none. `impact`
+(optional, 0.32+) is what the verifier says breaks in production if the
+change is merged as is, one of `models.IMPACTS`; a refuted finding has none.
+`mode` (top level, optional, 0.32+) is the mode the review ran in: `full` or
+`critical`.
 
 `checks.json` (the `checks.v1` contract beside it) is the record of every
 agent call: `AgentCheck` and `GateCheck` from the state, mapped the same way.
@@ -216,6 +220,8 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
             row["verifier_citations"] = [_citation(c) for c in verdict.citations]
             if verdict.topic:
                 row["topic"] = verdict.topic
+            if verdict.impact and status in ("confirmed", "unverifiable"):
+                row["impact"] = verdict.impact
         assessment = state.assessments.get(f.id)
         if assessment is not None and status in ("confirmed", "unverifiable"):
             row["assessment"] = _assessment(assessment)
@@ -246,6 +252,7 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
         "target": _target(state),
         "findings": unique,
         "run": run_record(state),
+        "mode": state.mode,
     }
     if needs:
         data["needs"] = [_need(n) for n in needs]
