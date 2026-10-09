@@ -86,13 +86,22 @@ def from_whisper_json(data: dict, engine: str, language: str | None = None) -> d
     """mlx_whisper `--word-timestamps True --output-format json` → contract.
 
     whisper prefixes each word with its leading space (" Ciao"); that is
-    stripped. Segments without `words` (word timestamps off) contribute nothing.
+    stripped. A token with no leading space continues the word before it
+    ("dell" + "'intelligenza", "sub" + "-milliseconds", "30" + ",000"), so it
+    is joined onto that word, which keeps its start and takes the token's end.
+    Segments without `words` (word timestamps off) contribute nothing.
     """
-    words = []
+    words: list[dict] = []
     for seg in data.get("segments", []):
         for w in seg.get("words", []) or []:
-            cw = _word(w.get("word"), w.get("start"), w.get("end"))
-            if cw:
+            raw = str(w.get("word") or "")
+            cw = _word(raw, w.get("start"), w.get("end"))
+            if not cw:
+                continue
+            if words and not raw[0].isspace():
+                words[-1]["text"] += cw["text"]
+                words[-1]["end"] = max(words[-1]["end"], cw["end"])
+            else:
                 words.append(cw)
     return {"language": language or data.get("language") or "", "engine": engine, "words": words}
 

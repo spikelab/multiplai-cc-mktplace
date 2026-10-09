@@ -200,3 +200,29 @@ def test_contract_with_no_words_raises_and_writes_no_transcript(tmp_path: Path, 
     with pytest.raises(RuntimeError, match="no word timings"):
         prep._transcript_contract(tmp_path / "a.wav", tmp_path, "", "it", None)
     assert not (tmp_path / "transcript.json").exists()
+
+
+def test_a_whisper_token_without_a_leading_space_joins_the_word_before() -> None:
+    # whisper writes "dell'intelligenza" as " dell" + "'intelligenza" and
+    # "sub-milliseconds" as " sub" + "-milliseconds"; the caption must show
+    # one word, not "dell 'intelligenza".
+    data = {"segments": [
+        {"words": [{"word": " dell", "start": 1.0, "end": 1.2},
+                   {"word": "'intelligenza", "start": 1.2, "end": 1.9},
+                   {"word": " in", "start": 2.0, "end": 2.1},
+                   {"word": " sub", "start": 2.1, "end": 2.3}]},
+        {"words": [{"word": "-milliseconds,", "start": 2.3, "end": 2.9},
+                   {"word": " 30", "start": 3.0, "end": 3.2},
+                   {"word": ",000", "start": 3.2, "end": 3.5}]}]}
+    c = tx.from_whisper_json(data, engine="mlx_whisper:test")
+    assert c["words"] == [
+        {"text": "dell'intelligenza", "start": 1.0, "end": 1.9},
+        {"text": "in", "start": 2.0, "end": 2.1},
+        {"text": "sub-milliseconds,", "start": 2.1, "end": 2.9},
+        {"text": "30,000", "start": 3.0, "end": 3.5}]
+
+
+def test_a_first_token_without_a_leading_space_stays_a_word() -> None:
+    data = {"segments": [{"words": [{"word": "Ciao", "start": 0.0, "end": 0.3},
+                                    {"word": " a", "start": 0.3, "end": 0.4}]}]}
+    assert [w["text"] for w in tx.from_whisper_json(data, engine="t")["words"]] == ["Ciao", "a"]
