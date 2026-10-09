@@ -443,6 +443,17 @@
     return el("div", { class: "empty-state" }, [el("span", { class: "big", text: icon }), text]);
   }
 
+  /* A small "?" that opens the help at *topic*'s section; *what* names it for a screen reader. */
+  function helpButton(topic, what) {
+    return el("button", { type: "button", class: "help-q", title: "Help: " + what, "aria-label": "Help: " + what,
+      "aria-haspopup": "dialog", "aria-controls": "help", text: "?", onclick: () => openHelp(topic) });
+  }
+
+  /* A section heading of the right panel, with its "?". */
+  function sectionLabel(text, topic) {
+    return el("div", { class: "label label-help" }, [el("span", { text: text }), helpButton(topic, text)]);
+  }
+
   // --- risk ------------------------------------------------------------------------
 
   const RISK_BADGE = { high: "concern", medium: "note", low: "good" };
@@ -515,7 +526,7 @@
     box.hidden = !items.length;
     box.replaceChildren();
     if (!items.length) return;
-    box.appendChild(el("h3", { text: "Needs you" }));
+    box.appendChild(el("h3", { class: "label-help" }, [el("span", { text: "Needs you" }), helpButton("needs", "Needs you")]));
     box.appendChild(el("p", { class: "muted small", text: "The review could not get these. Run a command yourself " +
       "to settle what it blocks." }));
     const ul = el("ul");
@@ -635,7 +646,7 @@
         el("td", { class: "mono", text: st.name }), el("td", { text: st.calls }), el("td", { text: st.tokens }),
         el("td", { text: st.cost }), el("td", { text: st.time })]))),
     ]);
-    const children = [el("div", { class: "label", text: "Run" }), totals, table];
+    const children = [sectionLabel("Run", "run"), totals, table];
     const total = L.runTotal(state.targets);
     if (total) children.push(el("p", { class: "coverage", text: total }));
     box.replaceChildren(...children);
@@ -755,7 +766,7 @@
             el("span", { class: "claim", text: f.claim }),
             el("span", { class: "where", text: f.file + ":" + f.line_start }),
           ]),
-          el("div", { class: "step-finding-facts" }, findingFacts(f)),
+          el("div", { class: "step-finding-facts" }, findingFacts(f, L.findingParts(f, state.detail.checks, "step").parts)),
         ]));
       }
     }
@@ -1150,13 +1161,13 @@
     const checks = state.detail && state.detail.checks;
     box.replaceChildren();
     if (!checks) return;
-    box.appendChild(el("div", { class: "label", text: "Finders" }));
+    box.appendChild(sectionLabel("Finders", "checked-finders"));
     const finders = L.finderRows(checks);
     box.appendChild(finders.length
       ? table(["finder", "ran", "files read", "returned", "kept", "deduped", "merged", "rejected"],
         finders.map((r) => [r.subject, r.ran, r.filesRead, r.returned, r.kept, r.deduped, r.merged, r.rejected]))
       : el("p", { class: "muted", text: "No finder ran." }));
-    box.appendChild(el("div", { class: "label", text: "Findings" }));
+    box.appendChild(sectionLabel("Findings", "checked-findings"));
     const rows = L.checkedFindingRows(checks);
     box.appendChild(rows.length
       ? table(["finding", "finder", "verdict", "gate", "fate"],
@@ -1164,10 +1175,10 @@
       : el("p", { class: "muted", text: "No finder returned a finding." }));
     const merges = L.mergeRows(checks);
     if (merges.length) {
-      box.appendChild(el("div", { class: "label", text: "Merge groups" }));
+      box.appendChild(sectionLabel("Merge groups", "merges"));
       box.appendChild(table(["group", "outcome"], merges.map((m) => [m.subject, m.outcome])));
     }
-    box.appendChild(el("div", { class: "label", text: "Agents, in the order they started" }));
+    box.appendChild(sectionLabel("Agents, in the order they started", "agents"));
     L.agentOrder(checks).forEach((a, i) => box.appendChild(agentEntry(a, i)));
   }
 
@@ -1203,27 +1214,33 @@
     });
   }
 
-  /* What a finding says beyond its claim: the failure scenario, the expected
-   * behaviour, the verdict and the cited code. Shown on the Findings tab and
-   * under each walkthrough step that links the finding. */
-  function findingFacts(f) {
-    const out = [el("div", { class: "label", text: "Failure scenario" }), el("p", { text: f.failure_scenario })];
-    if (f.expected_behaviour) {
-      out.push(el("div", { class: "label", text: "Expected behaviour" }), el("p", { text: f.expected_behaviour }));
-    }
-    if (f.verdict_reason) out.push(el("div", { class: "label", text: "Verdict" }), el("p", { text: f.verdict_reason }));
-    out.push(el("div", { class: "label", text: "Cited code" }));
-    for (const c of f.citations) out.push(citationLink(c));
-    if (f.needs && f.needs.length) {
-      out.push(el("div", { class: "label", text: "Needs you" }));
-      for (const n of L.needsItems({ needs: f.needs, findings: [] })) {
-        out.push(el("div", { class: "needs" }, [el("div", { text: n.what }),
-          el("div", { class: "muted small", text: "Why: " + n.cause }), needCommand(n.command)]));
+  /* The blocks under a finding's claim, in the order L.findingParts gives:
+   * the failure scenario, the expected behaviour, the verdict, the cited code,
+   * what it needs and the verifier's citations, each only when it applies.
+   * Shown on the Findings tab and under each walkthrough step that links the
+   * finding. */
+  function findingFacts(f, parts) {
+    const out = [];
+    for (const part of parts) {
+      if (part === "scenario") {
+        out.push(el("div", { class: "label", text: "Failure scenario" }), el("p", { text: f.failure_scenario }));
+      } else if (part === "expected") {
+        out.push(el("div", { class: "label", text: "Expected behaviour" }), el("p", { text: f.expected_behaviour }));
+      } else if (part === "verdict") {
+        out.push(el("div", { class: "label", text: "Verdict" }), el("p", { text: f.verdict_reason }));
+      } else if (part === "cited") {
+        out.push(el("div", { class: "label", text: "Cited code" }));
+        for (const c of f.citations) out.push(citationLink(c));
+      } else if (part === "needs") {
+        out.push(el("div", { class: "label", text: "Needs you" }));
+        for (const n of L.needsItems({ needs: f.needs, findings: [] })) {
+          out.push(el("div", { class: "needs" }, [el("div", { text: n.what }),
+            el("div", { class: "muted small", text: "Why: " + n.cause }), needCommand(n.command)]));
+        }
+      } else if (part === "verifier-cited") {
+        out.push(el("div", { class: "label", text: "The verifier's citations" }));
+        for (const c of f.verifier_citations) out.push(citationLink(c));
       }
-    }
-    if (f.verifier_citations && f.verifier_citations.length) {
-      out.push(el("div", { class: "label", text: "The verifier's citations" }));
-      for (const c of f.verifier_citations) out.push(citationLink(c));
     }
     return out;
   }
@@ -1242,19 +1259,23 @@
       el("span", { class: "badge", text: f.status }),
     ]));
     box.appendChild(el("h2", { text: f.claim }));
+    // With a verifier entry on the Checked tab, the link replaces the citation
+    // lists (the entry shows what the verifier read and cited); without one,
+    // findingParts keeps the lists.
+    const shown = L.findingParts(f, state.detail.checks, "finding");
+    const vi = shown.checkedBy;
+    if (vi >= 0) {
+      box.appendChild(el("div", { class: "label", text: "Checked by" }));
+      box.appendChild(el("button", { type: "button", class: "check-link", onclick: () => showAgent(vi) },
+        [el("span", { text: "The verifier's entry on the Checked tab: what it read and cited" }),
+          el("span", { "aria-hidden": "true", text: " →" })]));
+    }
     const assessed = L.assessmentText(f.assessment);
     if (assessed) {
       box.appendChild(el("div", { class: "label", text: "Assessment: " + L.assessLabel(f) }));
       box.appendChild(el("p", { text: assessed }));
     }
-    for (const node of findingFacts(f)) box.appendChild(node);
-    const checks = state.detail.checks;
-    const vi = checks ? L.verifierIndex(checks, f.id) : -1;
-    if (vi >= 0) {
-      box.appendChild(el("div", { class: "label", text: "Checked by" }));
-      box.appendChild(el("button", { class: "cite-link", text: "the verifier's entry on the Checked tab",
-        onclick: () => showAgent(vi) }));
-    }
+    for (const node of findingFacts(f, shown.parts)) box.appendChild(node);
     const steps = L.stepsForFinding(state.walk, f.id);
     if (steps.length) {
       box.appendChild(el("div", { class: "label", text: "Explained in the walkthrough" }));
@@ -2222,10 +2243,36 @@
     if (state.view) redrawCode();
   }
 
-  function toggleHelp() {
+  // --- help ------------------------------------------------------------------------
+
+  let helpReturn = null;
+
+  /* Open the help dialog at *topic*'s section (L.helpSection). showModal makes
+   * the rest of the page inert, so Tab stays inside the dialog, and Esc closes
+   * it natively; the close handler in bindEvents puts focus back. */
+  function openHelp(topic) {
     const dlg = $("help");
-    if (dlg.open) dlg.close();
-    else dlg.showModal();
+    if (!dlg.open) {
+      helpReturn = document.activeElement;
+      if ($("palette").open) $("palette").close();
+      dlg.showModal();
+    }
+    showHelpSection(L.helpSection(topic));
+  }
+
+  /* Scroll the help to one section and move focus to it, so a screen reader reads it next. */
+  function showHelpSection(id) {
+    const target = $(id);
+    if (!target) return;
+    if (id === L.helpSection("top")) $("help-body").scrollTop = 0;
+    else target.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
+    target.focus({ preventScroll: true });
+  }
+
+  /* The ? key: the shortcuts, or close the help when it is open. */
+  function toggleHelp() {
+    if ($("help").open) $("help").close();
+    else openHelp("keys");
   }
 
   // --- events ------------------------------------------------------------------
@@ -2261,7 +2308,8 @@
     $("tab-summary").addEventListener("click", () => setTab("summary"));
     $("tab-walk").addEventListener("click", () => setTab("walk"));
     $("tab-checked").addEventListener("click", () => setTab("checked"));
-    $("help-btn").addEventListener("click", toggleHelp);
+    $("help-btn").addEventListener("click", () => openHelp("top"));
+    $("keys-btn").addEventListener("click", () => openHelp("keys"));
     $("palette-input").addEventListener("input", () => { state.palette.index = 0; renderPalette(); });
     $("palette-input").addEventListener("keydown", onPaletteKey);
     $("palette").addEventListener("click", (ev) => { if (ev.target === $("palette")) $("palette").close(); });
@@ -2280,6 +2328,19 @@
     $("help-close").addEventListener("click", () => $("help").close());
     // A click on the backdrop lands on the dialog itself, outside its content.
     $("help").addEventListener("click", (ev) => { if (ev.target === $("help")) $("help").close(); });
+    // Links between help sections scroll the dialog; the address bar stays as it is.
+    $("help-body").addEventListener("click", (ev) => {
+      const a = ev.target.closest && ev.target.closest('a[href^="#help-"]');
+      if (!a) return;
+      ev.preventDefault();
+      showHelpSection(a.getAttribute("href").slice(1));
+    });
+    $("help").addEventListener("close", () => {
+      // The opener may have been redrawn while the dialog was open (a Checked tab "?").
+      const back = helpReturn && helpReturn.isConnected ? helpReturn : $("help-btn");
+      helpReturn = null;
+      back.focus();
+    });
     document.addEventListener("keydown", (ev) => {
       if ((ev.ctrlKey || ev.metaKey) && !ev.shiftKey && ev.code === "KeyB") {
         ev.preventDefault();

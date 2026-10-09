@@ -17,6 +17,33 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-10-09
+
+### Added
+- review-viewer: a help dialog explains what the page shows. The **?** button
+  in the header opens it: what the review does step by step (finders, a
+  verifier per finding, the checks in code, merge, repeats, assess), what each
+  finder (`diff-bugs`, `callers`, `history`, `conventions`, `tests`) looks
+  for and how a tree review runs them, every column of the Checked tab's
+  tables, what a merge group is, the `gate` and `seen` marks on a citation,
+  the verdicts and labels, and the **Needs you** and **Run** blocks. The
+  keyboard shortcuts are its last section, still opened by the `?` key and
+  now by a ⌨ button. A small **?** beside each Checked tab heading, and beside
+  Needs you and Run, opens the help at that section. Esc closes it and focus
+  goes back to the button that opened it.
+
+### Changed
+- review-viewer: on the Findings tab, a finding the Checked tab has a
+  verifier entry for no longer lists the cited code or the verifier's
+  citations. A "Checked by" link near the top opens that entry instead, with
+  everything the verifier read and cited. A finding with no such entry (a
+  review written without `checks.json`, or a finding no verifier checked)
+  still lists both, as before. Selecting a finding still moves the code pane
+  to its lines, and a walkthrough step still lists both under each finding it
+  links.
+- review-viewer: the Summary tab's **Run** block moved to the bottom, below the
+  PR description.
+
 ## [0.30.0] - 2026-10-09
 
 ### Added

@@ -28,7 +28,7 @@ The page-logic tests need `node`; they fail (not skip) without it.
 | `server.py` | `ThreadingHTTPServer` subclass (`allow_reuse_address = False`), request checks, routes, idle watchdog. |
 | `registry.py` | Finds live viewers: probes each mailbox's recorded port with that mailbox's token, in parallel. A token is never sent to any other port. |
 | `netinfo.py` | Container detection (degradation contract rule 2), bind host, URLs to print. |
-| `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `theme.js` (applies the saved theme and light/dark mode before first paint as `data-theme`/`data-mode`, fills the Theme menu, drives the mode button; saves choices in a cookie on the widest parent domain the browser accepts, so every viewer's port and container shares them, and exposes that store as `window.ReviewPrefs`), `logic.js` (pure functions, tested under node; `riskLevel` holds the risk rules; `runBlock`/`runTotal` and the number formats behind the Summary tab's Run block), `app.js`, `app.css` (every size from the tokens at its top), `themes.css` (every rule scoped to `html[data-theme]`), the bundled `font-*.woff2` and `FONTS-LICENSE.txt`. |
+| `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `theme.js` (applies the saved theme and light/dark mode before first paint as `data-theme`/`data-mode`, fills the Theme menu, drives the mode button; saves choices in a cookie on the widest parent domain the browser accepts, so every viewer's port and container shares them, and exposes that store as `window.ReviewPrefs`), `logic.js` (pure functions, tested under node; `riskLevel` holds the risk rules; `runBlock`/`runTotal` and the number formats behind the Run block at the end of the Summary tab; `helpSection` for the help dialog), `app.js`, `app.css` (every size from the tokens at its top), `themes.css` (every rule scoped to `html[data-theme]`), the bundled `font-*.woff2` and `FONTS-LICENSE.txt`. |
 
 After changing `models.py`, run `python -m review_viewer export-schema` and
 commit the three schemas; `test_models.py` and `test_checks.py` fail while
@@ -64,8 +64,13 @@ finding's own under it; nothing runs a command. Line numbers are 1-based, at
 `sha1(f"{file}\0{line_start}\0{claim}")`.
 
 `findings.json` may carry `verifier_citations` per finding (review 0.26+): the
-lines the verifier read. `allowed_paths()` includes their paths, and the
-Findings tab lists them under the finder's citations.
+lines the verifier read. `allowed_paths()` includes their paths. A
+walkthrough step lists them under the finder's citations. On the Findings
+tab, a finding whose verifier has a `checks.json` entry shows a link to that
+entry instead of both lists; one without (no `checks.json`, or no verifier
+entry) keeps the lists. `logic.findingParts(finding, checks, context)` makes
+that choice and the order of the blocks under the claim; `app.js` renders
+what it returns.
 
 ## Protocol 1a: `checks.json` v1 (optional)
 
@@ -80,7 +85,14 @@ a warning and the target has none. `/api/targets/<slug>` returns it as
 unchanged. The page's Checked tab is shown only when `checks` is set; its
 grouping and ordering live in `logic.js` (`agentOrder`, `finderRows`,
 `checkedFindingRows`, `mergeRows`, `verifierIndex`, `callLinksToDiff`,
-`citationWarning`).
+`citationWarning`, `findingParts`). Each section heading there carries a `?` that opens the
+help dialog (`#help` in `index.html`) at its section; `logic.HELP_SECTIONS`
+maps each topic to a section id. The help's text restates
+`../../review/scripts/CLAUDE.md` and the review's code in plain words: change
+it when the pipeline changes what a column, mark or label means.
+`logic.test.js` fails when a topic names a missing section, a help link is
+broken, or a `seen`, `gate`, fate, verdict, status or label value in the
+schemas has no entry in the help.
 
 ## Protocol 2: the mailbox (`<dir of findings.json>/viewer/`)
 
@@ -217,4 +229,4 @@ commit and a PR head under `refs/pull/7/head`, for target resolution;
 | `test_serve_targets.py` | review lookup (match, stale, none) and the `walkthrough:` stdout line |
 | `test_server.py`, `test_mailbox.py`, `test_models.py`, `test_logging.py`, `test_netinfo.py` | the server, mailbox, contracts, logs, container detection |
 | `test_checks.py` | the `checks.v1` contract, loading it beside findings (present, absent, invalid, other commits), `verifier_citations` |
-| `logic.test.js` (via `test_logic_js.py`) | the page's pure functions, under node |
+| `logic.test.js` (via `test_logic_js.py`) | the page's pure functions, under node, and that the help dialog in `index.html` has every section a `?` opens and defines every value the schemas allow |

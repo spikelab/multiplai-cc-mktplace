@@ -299,9 +299,20 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   lines (`read`, `searched`, `diff`, `prompt`, `fetched`, or `not-seen`, shown as a
   warning). Rejected findings appear only here, with the rule that rejected
   them. A read of a changed file opens in the code pane; URLs are plain text.
-  The Findings tab lists the verifier's own citations and a "Checked by" link
-  to its entry. An older review, or a `checks.json` that does not validate or
-  names other commits, opens without the tab.
+  On the Findings tab, a finding with a verifier entry here shows a
+  "Checked by" link to it instead of the citation lists; selecting the
+  finding still moves the code pane to its lines. A finding with no verifier
+  entry keeps its "Cited code" and verifier citations lists. An older review,
+  or a `checks.json` that does not validate or names other commits, opens
+  without the tab, so every finding keeps its lists.
+- A **?** button in the header opens a help dialog that says what the review
+  did step by step, what each finder looks for, what every Checked tab column
+  and mark means, what a merge group is, the verdicts and labels, the
+  **Needs you** block and the **Run** block, then the keyboard shortcuts
+  (also behind the ⌨ button and the `?` key). A small **?** beside each
+  Checked tab heading, and beside Needs you and Run, opens the help at that
+  section. If the user asks what a term on the page means, the help is the
+  page's own answer; it matches the review skill's `scripts/CLAUDE.md`.
 - Publish early, then finish: `put` the overview and first steps with
   `"complete": false`, then the rest, and finally `"complete": true`.
 
@@ -397,7 +408,8 @@ These are the only messages to give for these cases:
 ## The Run block
 
 When `findings.json` has a `run` object (multiplai-dev 0.28 and later), the
-**Summary** tab shows a **Run** block under the overview: the review's cost
+**Summary** tab ends with a **Run** block, below the overview and the PR
+description: the review's cost
 against its ceiling, tokens by kind, agent calls, wall time, and the model and
 effort per stage, then a table with one row per stage (each finder, `verify`,
 `merge`) giving calls, tokens, cost and time. With several reviews loaded, a
