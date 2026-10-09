@@ -17,7 +17,7 @@ themed skill packs on top.
 /plugin install multiplai-context@multiplai
 ```
 
-*(2-minute demo lands here — recorded with the suite's own screen-demo skill.)*
+*(2-minute demo lands here — recorded with the suite's own video-edit skill.)*
 
 **First recall.** Install, run `/multiplai-context:setup` (two questions),
 restart once, then ask the new session *"What do you know about me?"* — and
@@ -97,7 +97,7 @@ contract](docs/degradation-contract.md)).
 | multiplai-media | youtube-transcript | ✅ | Subtitle path works anywhere. Audio-transcription fallback: 🍎 (Apple-Silicon mlx-whisper) or 🌉. |
 | | excalidraw | ✅ | |
 | | transcribe | 🍎 | mlx-whisper needs Apple Silicon macOS. From the kit container: 🌉. Plain Linux: use whisper.cpp / faster-whisper instead. |
-| | screen-demo | 🍎 | Needs ffmpeg + mlx-whisper on a Mac. From the kit container: 🌉. |
+| | video-edit | 🍎 | Needs ffmpeg + mlx-whisper on a Mac. From the kit container: 🌉. |
 | | host-browser | 🌉 | Drives the host's real Chrome via the `ab` bridge — **and only if you opt in on the host**: container releases after v0.9.6 refuse it unless `~/.local/state/multiplai/host-browser-enabled` exists on the Mac. On a Mac a local CDP Chrome also works, with no gateway and no flag. |
 | multiplai-messaging | slack | 🔑 | Your Slack `xoxp` user token. Full standalone setup docs in the skill. |
 | | gmail | 🔑 | Gmail OAuth credentials. Full standalone setup docs in the skill. |

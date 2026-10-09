@@ -110,7 +110,7 @@ class TestDoesNotFlagCorrectCode:
         assert r.status == "pass"
 
     def test_locally_assigned_shell_var_is_not_an_env_read(self, tmp_path):
-        """screen-demo builds SSH_KEY from other vars; it isn't read from env."""
+        """video-edit builds SSH_KEY from other vars; it isn't read from env."""
         r = report_for(tmp_path, {"go.sh": (
             'SSH_KEY="${TRANSCRIBE_KEY:-/home/agent/.ssh/build_key}"\n'
             'ssh -i "$SSH_KEY" host\n')}, SKILL_MD + "\nUses `TRANSCRIBE_KEY`.\n")

@@ -10,10 +10,11 @@ from stages.edl import EDL
 def _find_font(bold: bool) -> str:
     """Locate a usable TTF/TTC for ffmpeg drawtext across platforms.
 
-    Honors $SCREEN_DEMO_FONT (applied to both weights). Otherwise probes a
-    candidate list covering Linux (DejaVu) and macOS (Helvetica/Arial).
+    Honors $VIDEO_EDIT_FONT (applied to both weights; the old name
+    $SCREEN_DEMO_FONT is still read). Otherwise probes a candidate list
+    covering Linux (DejaVu) and macOS (Helvetica/Arial).
     """
-    override = os.environ.get("SCREEN_DEMO_FONT")
+    override = os.environ.get("VIDEO_EDIT_FONT") or os.environ.get("SCREEN_DEMO_FONT")
     if override:
         return override
     candidates = (
@@ -34,7 +35,7 @@ def _find_font(bold: bool) -> str:
         if Path(c).exists():
             return c
     raise RuntimeError(
-        "No usable font found for title cards. Set $SCREEN_DEMO_FONT to a "
+        "No usable font found for title cards. Set $VIDEO_EDIT_FONT to a "
         ".ttf/.ttc path (checked DejaVu on Linux and Helvetica/Arial on macOS)."
     )
 
@@ -256,7 +257,7 @@ def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
     for w in edl.validate():
         print(f"⚠ EDL warning: {w}")
 
-    work = work_dir or Path(tempfile.mkdtemp(prefix="screen-demo-work-"))
+    work = work_dir or Path(tempfile.mkdtemp(prefix="video-edit-work-"))
     work.mkdir(parents=True, exist_ok=True)
 
     clips = _cut_segments(edl, work)

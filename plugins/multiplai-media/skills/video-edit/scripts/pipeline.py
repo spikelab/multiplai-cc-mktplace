@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""screen-demo pipeline entry point.
+"""video-edit pipeline entry point.
 
 Subcommands:
   render <edl.json>             Deterministic render (walking skeleton).
@@ -67,7 +67,7 @@ def cmd_make(args: argparse.Namespace) -> int:
     print()
     print("Steps:")
     print(f"  1. python scripts/pipeline.py prep {args.source}")
-    print(f"     → writes ~/.cache/screen-demo/<key>/context.md")
+    print(f"     → writes ~/.cache/video-edit/<key>/context.md")
     print(f"  2. (orchestrator) read context.md, author edl.json per user prompt: {args.prompt!r}")
     print(f"  3. python scripts/pipeline.py render edl.json --out {args.out}",
           f"--music-file FILE" if args.music_file else "--music-url URL" if args.music_url else "")
@@ -77,7 +77,7 @@ def cmd_make(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(prog="screen-demo")
+    p = argparse.ArgumentParser(prog="video-edit")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("render", help="render a hand-written EDL to mp4")

@@ -1,7 +1,7 @@
 {
   "name": "multiplai-media",
-  "version": "0.2.5",
-  "description": "Media skill pack: audio transcription, YouTube transcripts, screen-recording demo videos, diagrams, host-browser automation.",
+  "version": "0.3.0",
+  "description": "Media skill pack: audio transcription, YouTube transcripts, video editing (screen-recording demos), diagrams, host-browser automation.",
   "author": {
     "name": "Spike",
     "email": "fsm@spikelab.org"
