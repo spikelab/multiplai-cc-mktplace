@@ -156,10 +156,14 @@ def parse_range(header: str | None, size: int) -> tuple[int, int] | None:
 # --- videos and comments ---------------------------------------------------------
 
 def list_videos(video_dir: Path) -> list[dict]:
-    """[{clip, versions: [{version, name}]}], clips by name, versions ascending."""
+    """[{clip, versions: [{version, name}]}], clips by name, versions ascending.
+
+    Hidden files are skipped: `pipeline.py render` writes to `.<name>.partial.mp4`
+    until ffmpeg finishes.
+    """
     clips: dict[str, list[dict]] = {}
     for f in sorted(video_dir.iterdir()):
-        if f.suffix.lower() not in VIDEO_EXTS or not f.is_file():
+        if f.name.startswith(".") or f.suffix.lower() not in VIDEO_EXTS or not f.is_file():
             continue
         m = VERSION_RE.match(f.stem)
         assert m
