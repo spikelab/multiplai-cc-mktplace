@@ -32,7 +32,7 @@ from pathlib import Path
 from multiplai_core.log_utils import log_event, setup_logging
 from pydantic import ValidationError
 
-from . import netinfo, registry, server, stats, walkthrough
+from . import gitdata, netinfo, registry, server, stats, walkthrough
 from .gitdata import (GitError, Resolved, TargetError, TargetSpec, diff_findings, parse_target,
                       resolve_target)
 from .mailbox import MAX_ROW_BYTES, Mailbox, MailboxError, utc_now
@@ -120,6 +120,21 @@ def find_review(target, dirs: list[Path]) -> tuple[str, Path | None, FindingsFil
 def _resolve_for_serve(args) -> Resolved | int:
     cwd = invocation_path(".")
     repo = invocation_path(args.repo) if args.repo else None
+    if args.path is not None and args.tree is None:
+        print("--path goes with --tree", file=sys.stderr)
+        return EXIT_USAGE
+    if args.tree is not None:
+        if args.target is not None or args.range is not None:
+            print("give --tree, --target or --range, not two of them", file=sys.stderr)
+            return EXIT_USAGE
+        try:
+            chosen = gitdata.pick_repo(repo, cwd)
+            return Resolved(gitdata.tree_target(chosen, args.tree, args.path))
+        except TargetError as exc:
+            print(f"cannot resolve the target: {exc}", file=sys.stderr)
+        except (GitError, ValueError) as exc:
+            print(f"cannot read the tree: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     if args.range is not None:
         if args.target is not None:
             print("give --target or --range, not both", file=sys.stderr)
@@ -172,9 +187,9 @@ def _load_resolved(args, resolved: Resolved):
 def _load_targets(args):
     """([(findings, mailbox)], {slug: {"pr", "notice", "review"}}), or an exit code."""
     loaded: list[tuple[FindingsFile, Path]] = []
-    if args.target is not None or args.range is not None or not args.findings:
+    if args.target is not None or args.range is not None or args.tree is not None or not args.findings:
         if args.findings:
-            print("give findings.json files, or a target (--target, or --repo with --range), "
+            print("give findings.json files, or a target (--target, --tree, or --repo with --range), "
                   "not both", file=sys.stderr)
             return EXIT_USAGE
         resolved = _resolve_for_serve(args)
@@ -624,6 +639,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "unpushed commits of --repo or the current directory")
     s.add_argument("--repo", help="the local clone to read (default: the current directory)")
     s.add_argument("--range", help="same as --target <base>..<head>; needs --repo")
+    s.add_argument("--tree", nargs="?", const="HEAD", metavar="COMMIT",
+                   help="every file at COMMIT (default HEAD), not a change: the target of a "
+                        "review --tree; with --repo, or the current directory")
+    s.add_argument("--path", help="with --tree: only this directory of the repository")
     s.add_argument("--base", help="branch targets: the branch to diff against "
                                   "(default: origin/HEAD's branch, else main)")
     s.add_argument("--fetch", action="store_true",

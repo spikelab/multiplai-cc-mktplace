@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import os
 import re
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import PurePosixPath
 
-from .gitdata import _DIFF_FLAGS, GIT_MISSING, GitError, git
+from .gitdata import _DIFF_FLAGS, EMPTY_TREE, GIT_MISSING, GitError, git
 from .models import Target
 
 log = logging.getLogger(__name__)
@@ -158,7 +159,13 @@ def parse_name_status(out: str) -> dict[str, str]:
 
 
 def read_commits(repo: str, base: str, head: str) -> list[dict]:
-    """Commits in base..head, oldest first: sha, subject, body."""
+    """Commits in base..head, oldest first: sha, subject, body.
+
+    None for a tree review (base is the empty tree): `git log <empty>..head`
+    would list the whole history, and none of it is under review.
+    """
+    if base == EMPTY_TREE:
+        return []
     out = git(repo, "log", "--reverse", "--format=%H%x1f%s%x1f%b%x1e", f"{base}..{head}")
     commits = []
     for rec in out.split("\x1e"):
@@ -344,12 +351,23 @@ def pr_badges(pr: dict | None) -> list[Badge]:
     return out
 
 
+def tree_pathspec(target: Target) -> list[str]:
+    """`["--", <dir>]` for a tree review whose files share a directory, else []."""
+    if target.base_sha != EMPTY_TREE or not target.files_changed:
+        return []
+    common = os.path.commonpath(target.files_changed) if len(target.files_changed) > 1 \
+        else os.path.dirname(target.files_changed[0])
+    return ["--", common] if common else []
+
+
 def change_stats(target: Target, pr: dict | None = None) -> ChangeStats:
     """Measure base..head. Raises GitError when git cannot read the range."""
     repo, base, head = target.repo_path, target.base_sha, target.head_sha
     s = ChangeStats(files=len(target.files_changed))
-    status = parse_name_status(git(repo, "diff", *_DIFF_FLAGS, "--name-status", "-z", base, head))
-    for path, a, d in parse_numstat(git(repo, "diff", *_DIFF_FLAGS, "--numstat", "-z", base, head)):
+    # A tree review of one directory measures that directory, not the whole tree.
+    spec = tree_pathspec(target)
+    status = parse_name_status(git(repo, "diff", *_DIFF_FLAGS, "--name-status", "-z", base, head, *spec))
+    for path, a, d in parse_numstat(git(repo, "diff", *_DIFF_FLAGS, "--numstat", "-z", base, head, *spec)):
         s.per_file[path] = {"status": status.get(path, "M"), "added": a, "deleted": d}
         kind = classify(path)
         k = s.by_kind.setdefault(kind, {"files": 0, "added": 0, "deleted": 0})
@@ -363,7 +381,7 @@ def change_stats(target: Target, pr: dict | None = None) -> ChangeStats:
         s.deleted += d or 0
     s.commits = read_commits(repo, base, head)
     s.tiers, s.tiers_error = repo_tiers(repo, base, list(target.files_changed))
-    s.todos_added = count_todos(git(repo, "diff", *_DIFF_FLAGS, "--unified=0", base, head))
+    s.todos_added = count_todos(git(repo, "diff", *_DIFF_FLAGS, "--unified=0", base, head, *spec))
     s.badges = [Badge("totals", f"{_plural(s.files, 'file')} · +{s.added} −{s.deleted}", "good",
                       ", ".join(f"{k} {v['files']} (+{v['added']} −{v['deleted']})"
                                 for k, v in sorted(s.by_kind.items()))
