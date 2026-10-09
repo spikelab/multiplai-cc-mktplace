@@ -72,6 +72,51 @@ test("findings group by severity and hide refuted/rejected", () => {
   assert.deepEqual(L.findingOrder(all), ["b", "c", "d", "a"]);
 });
 
+test("repeats and low-value findings fold after the rest, most severe first", () => {
+  const fs = [
+    { id: "a", severity: "LOW", status: "confirmed", assessment: { label: "low-value", reason: "[speculative] r" } },
+    { id: "b", severity: "HIGH", status: "confirmed", assessment: { label: "useful" } },
+    { id: "c", severity: "MEDIUM", status: "confirmed", assessment: { label: "repeat", earlier_id: "x" } },
+    { id: "d", severity: "MEDIUM", status: "unverifiable", assessment: { label: "still-open", earlier_id: "y" } },
+    { id: "e", severity: "LOW", status: "confirmed" },
+  ];
+  const g = L.groupFindings(fs, {}, false);
+  assert.deepEqual(g.folded.map((f) => f.id), ["c", "a"]);
+  assert.deepEqual(L.findingOrder(g), ["b", "d", "e", "c", "a"]);
+  // A file written before the assess stage has no labels: nothing folds.
+  const old = L.groupFindings([{ id: "e", severity: "LOW", status: "confirmed" }], {}, false);
+  assert.deepEqual(old.folded, []);
+  assert.deepEqual(L.findingOrder(old), ["e"]);
+});
+
+test("a repeat counts as decided (rejected) until the person decides otherwise", () => {
+  const repeat = { id: "c", severity: "HIGH", status: "confirmed",
+    assessment: { label: "repeat", earlier_id: "x", earlier_note: "by design" } };
+  const plain = { id: "b", severity: "LOW", status: "confirmed" };
+  const refuted = { id: "r", severity: "LOW", status: "refuted" };
+  assert.deepEqual(L.effectiveDecision(repeat, {}), { decision: "reject", note: "by design", implied: true });
+  assert.equal(L.effectiveDecision(plain, {}), null);
+  assert.equal(L.effectiveDecision(repeat, { c: { decision: "accept" } }).decision, "accept");
+  assert.deepEqual(L.undecidedCount([repeat, plain, refuted], {}), { open: 1, total: 2 });
+  assert.deepEqual(L.undecidedCount([repeat, plain], { c: { decision: "accept" }, b: { decision: "defer" } }),
+    { open: 0, total: 2 });
+  // The merge-risk count treats it as rejected too.
+  const walk = { risk: { tier: 1, tier_why: "w", revertable: true, revert_why: "x" }, assessments: [] };
+  assert.equal(L.riskInputs({}, walk, [repeat], {}, []).openHigh, 0);
+  assert.equal(L.riskInputs({}, walk, [repeat], { c: { decision: "accept" } }, []).openHigh, 1);
+});
+
+test("assessment text names the earlier round, decision and note", () => {
+  assert.equal(L.assessmentText(null), "");
+  assert.equal(L.assessmentText({ label: "useful", reason: "r" }), "");
+  assert.equal(L.assessmentText({ label: "repeat", earlier_id: "abcdef0123", earlier_round: "1".repeat(40),
+    earlier_decision: "reject", earlier_note: "by design", reason: "same defect" }),
+  "Repeats abcdef0123 (round 111111111111), which you rejected: by design. same defect");
+  assert.equal(L.assessmentText({ label: "still-open", earlier_id: "y", earlier_decision: "accept", reason: "" }),
+    "Still open from y, your decision accept");
+  assert.equal(L.assessmentText({ label: "low-value", reason: "[covered] by b" }), "Low value: [covered] by b");
+});
+
 test("j/k stepping clamps at both ends", () => {
   const order = ["a", "b", "c"];
   assert.equal(L.stepFinding(order, "a", 1), "b");
@@ -601,6 +646,134 @@ test("the Needs you block is hidden without needs, and each item says what it bl
   assert.equal(items[1].blocks, "the review");
   assert.equal(items[1].command, "gh api repos/o/r/rules/branches/main");
   assert.equal(items[2].blocks, "finding ffffffffff");
+});
+
+const RUN = {
+  started_at: "2026-10-01T10:00:00Z", ended_at: "2026-10-01T10:07:12Z", wall_seconds: 432.4,
+  calls: 16, tokens: { input: 1200, output: 3400, cache_read: 1418951, cache_write: 0, total: 1423551 },
+  cost_usd: 4.105, max_usd: 50, stopped_by_budget: false, errors: 0,
+  stages: [
+    { name: "find:diff-bugs", stage: "find", calls: 1, tokens: { total: 90000 }, cost_usd: 0.5, wall_seconds: 61,
+      model: "session default", effort: "session default" },
+    { name: "find:tests", stage: "find", calls: 2, tokens: { total: 1000 }, cost_usd: 0.25, wall_seconds: 30,
+      model: "session default", effort: "session default" },
+    { name: "verify", stage: "verify", calls: 13, tokens: { total: 1332551 }, cost_usd: 3.355, wall_seconds: 300,
+      model: "claude-x", effort: "high" },
+  ],
+  counts: { found: 5, rejected: 1, refuted: 1, unverifiable: 0, merged: 0 },
+};
+
+test("run numbers: USD to 2 decimals, tokens with separators, seconds as Xm Ys", () => {
+  assert.equal(L.formatUsd(4.105), "$4.11");
+  assert.equal(L.formatUsd(0), "$0.00");
+  assert.equal(L.formatTokens(1423551), "1,423,551");
+  assert.equal(L.formatTokens(999), "999");
+  assert.equal(L.formatTokens(1000), "1,000");
+  assert.equal(L.formatSeconds(432.4), "7m 12s");
+  assert.equal(L.formatSeconds(45), "45s");
+  assert.equal(L.formatSeconds(60), "1m 0s");
+});
+
+test("the Run block is hidden when findings.json has no run", () => {
+  assert.equal(L.runBlock(undefined), null);
+  assert.equal(L.runBlock(null), null);
+});
+
+test("the Run block has totals, one model line per stage, and a row per stage label", () => {
+  const b = L.runBlock(RUN);
+  const totals = Object.fromEntries(b.totals);
+  assert.equal(totals.Cost, "$4.11 of $50.00 ceiling");
+  assert.equal(totals.Tokens, "1,423,551 (input 1,200, output 3,400, cache read 1,418,951, cache write 0)");
+  assert.equal(totals["Agent calls"], "16");
+  assert.equal(totals["Wall time"], "7m 12s");
+  assert.equal(totals.Errors, undefined);
+  assert.deepEqual(b.models, [{ stage: "find", model: "session default", effort: "session default" },
+    { stage: "verify", model: "claude-x", effort: "high" }]);
+  assert.deepEqual(b.stages.map((s) => [s.name, s.calls, s.tokens, s.cost, s.time]), [
+    ["find:diff-bugs", "1", "90,000", "$0.50", "1m 1s"],
+    ["find:tests", "2", "1,000", "$0.25", "30s"],
+    ["verify", "13", "1,332,551", "$3.35", "5m 0s"],
+  ]);
+  const stopped = L.runBlock(Object.assign({}, RUN, { max_usd: null, stopped_by_budget: true, errors: 2 }));
+  const t2 = Object.fromEntries(stopped.totals);
+  assert.equal(t2.Cost, "$4.11 (no ceiling)");
+  assert.match(t2["Wall time"], /stopped by the budget/);
+  assert.equal(t2.Errors, "2");
+});
+
+test("the total line needs two reviews with a run, and skips those without", () => {
+  assert.equal(L.runTotal([{ run: RUN }]), null);
+  assert.equal(L.runTotal([{ run: RUN }, { run: null }]), null);
+  assert.equal(L.runTotal([{ run: RUN }, { run: RUN }, { slug: "old" }]),
+    "All 2 reviews: $8.21, 2,847,102 tokens, 32 agent calls, 14m 25s wall time");
+});
+
+// --- the Checked tab ------------------------------------------------------------
+
+const cite = (gate, seen) => ({ path: "a.py", line_start: 1, line_end: 1, quote: "x", gate: gate, seen: seen });
+const CHECKS = {
+  agents: [
+    { stage: "verify", subject: "aaaaaaaaaa", started_at: "2026-10-09T10:00:05Z", calls: [], findings: [],
+      outcome: "unverifiable (answered confirmed)", error: "",
+      verdict: { status: "unverifiable", reason: "r", citations: [], lowered: true } },
+    { stage: "find", subject: "diff-bugs", started_at: "2026-10-09T10:00:00Z", error: "", outcome: "3 findings",
+      calls: [{ tool: "Read", target: "a.py", detail: "whole file" }, { tool: "Read", target: "a.py", detail: "lines 1-5" },
+        { tool: "Read", target: "b.py", detail: "whole file" }, { tool: "Grep", target: "x", detail: "in ." }],
+      findings: [
+        { id: "aaaaaaaaaa", claim: "A", severity: "HIGH", fate: "kept", citations: [cite("pass", "read")] },
+        { id: "bbbbbbbbbb", claim: "B", severity: "LOW", fate: "rejected", rule: "quote not at cited lines",
+          citations: [cite("fail", "not-seen")] },
+        { id: "cccccccccc", claim: "C", severity: "MEDIUM", fate: "merged", into: "aaaaaaaaaa", citations: [] },
+      ] },
+    { stage: "find", subject: "callers", started_at: "2026-10-09T10:00:00Z", error: "x", outcome: "failed: timeout",
+      calls: [], findings: [] },
+    { stage: "find", subject: "tests", started_at: "2026-10-09T10:00:01Z", error: "", outcome: "1 finding", calls: [],
+      findings: [{ id: "aaaaaaaaaa", claim: "A", severity: "HIGH", fate: "deduped", into: "aaaaaaaaaa", citations: [] }] },
+    { stage: "merge", subject: "aaaaaaaaaa,cccccccccc", started_at: "2026-10-09T10:00:09Z", error: "",
+      outcome: "merged cccccccccc into aaaaaaaaaa", calls: [], findings: [] },
+  ],
+  gates: [],
+};
+
+test("agents are ordered by start time, ties keeping file order", () => {
+  assert.deepEqual(L.agentOrder(CHECKS).map((a) => a.subject),
+    ["diff-bugs", "callers", "tests", "aaaaaaaaaa", "aaaaaaaaaa,cccccccccc"]);
+  assert.deepEqual(L.agentOrder(null), []);
+});
+
+test("the checklist has one row per finder with files read and fates", () => {
+  const rows = L.finderRows(CHECKS);
+  assert.deepEqual(rows[0], { subject: "diff-bugs", ran: "ran", filesRead: 2, returned: 3,
+    kept: 1, deduped: 0, merged: 1, rejected: 1 });
+  assert.equal(rows[1].ran, "failed");
+  assert.equal(rows[2].deduped, 1);
+});
+
+test("the checklist has one row per finding with its verdict and gate, deduped copies left out", () => {
+  const rows = L.checkedFindingRows(CHECKS);
+  assert.deepEqual(rows.map((r) => [r.id, r.verdict, r.gate]), [
+    ["aaaaaaaaaa", "unverifiable", "lowered by verdict_gate"],
+    ["bbbbbbbbbb", "not verified", "rejected: quote not at cited lines"],
+    ["cccccccccc", "not verified", "passed"],
+  ]);
+  assert.equal(rows[2].into, "aaaaaaaaaa");
+});
+
+test("merge rows, the verifier of a finding, and which reads link to the diff", () => {
+  assert.deepEqual(L.mergeRows(CHECKS), [{ subject: "aaaaaaaaaa,cccccccccc",
+    outcome: "merged cccccccccc into aaaaaaaaaa", failed: false }]);
+  assert.equal(L.verifierIndex(CHECKS, "aaaaaaaaaa"), 3);
+  assert.equal(L.verifierIndex(CHECKS, "bbbbbbbbbb"), -1);
+  assert.equal(L.callLinksToDiff({ tool: "Read", target: "a.py" }, ["a.py"]), true);
+  assert.equal(L.callLinksToDiff({ tool: "Read", target: "c.py" }, ["a.py"]), false);
+  assert.equal(L.callLinksToDiff({ tool: "WebFetch", target: "a.py" }, ["a.py"]), false);
+});
+
+test("a failed gate or an unseen citation is a warning", () => {
+  assert.equal(L.citationWarning(cite("pass", "read")), false);
+  assert.equal(L.citationWarning(cite("fail", "read")), true);
+  assert.equal(L.citationWarning(cite("web", "not-seen")), true);
+  assert.equal(L.citationWarning(cite("pass", "diff")), false);
 });
 
 let failed = 0;

@@ -60,6 +60,98 @@ time, not derived from a tag.
   `uv`, `git`, `psql`, `mysql`), and chains, pipes or redirects nothing.
   Otherwise the command is dropped and the need is kept.
 
+## [0.28.0] - 2026-10-09
+
+### Added
+
+- **review: what a review cost, in `findings.json`.** Each review's
+  `findings.json` now has a `run` object: total cost, tokens (input, output,
+  cache read, cache write), agent calls, wall time, the budget ceiling, and
+  one row per stage (each finder, `verify`, `merge`, `repeats`, `assess`)
+  with its calls, tokens, cost, time, and configured model and effort, and
+  counts of what was found, rejected, refuted, merged, labelled `repeat` and
+  labelled `low-value`. Wall time leaves out the gap before a `resume`. A call
+  that returns no usage counts as 0 and is noted in the errors.
+- **review: `runs.jsonl`.** `rollup` (and every review) writes one line per
+  review with a `run` to `runs.jsonl` in the output directory, so "what did
+  reviews cost this month" or "which stage costs most" is one `jq` query.
+  `SKILL.md` gives both. `rollup` prints how many older files it skipped.
+- **review-viewer: a Run block on the Summary tab** showing those numbers,
+  with a line totalling every loaded review. Hidden for older reviews.
+
+### Changed
+
+- **review: the cost line in `summary-<slug>.md` and `review-<slug>.md`** now
+  reads the same `run` object as `findings.json`, adding tokens and wall
+  time, so the summary can no longer disagree with the file.
+
+## [0.27.0] - 2026-10-09
+
+### Added
+- review: earlier rounds are kept. When a PR (or branch) is reviewed again on
+  a new head, the last round's `findings.json`, review and `checks.json` are
+  copied to `<out>/<slug>/rounds/<head>/` before the new run writes over them.
+  Nothing there is deleted.
+- review: a `repeats` stage after merge checks every finding against the ones
+  you rejected in earlier rounds (your `viewer/decisions.json`). The same id
+  matches directly; one agent finds the reworded ones. A match is labelled
+  `repeat`, with the earlier round, your decision and your note.
+- review: an `assess` stage reads the remaining findings together, with the PR
+  description, the earlier rounds and your notes, and labels each `useful`,
+  `still-open` (the same defect as an earlier finding you accepted or left
+  open) or `low-value` (true but not worth acting on, for a named reason:
+  context, covered or speculative). It may also merge more duplicates. Labels
+  are checked in code; a bad one becomes `useful`. At most two more agent
+  calls per review, none when there is nothing to compare. Both stages' agent
+  calls are recorded in `checks.json` and on the Checked tab, and a finding
+  the assess stage merges shows as merged in its finder's entry.
+- review: `findings.json` carries each finding's `assessment` (optional; older
+  files still validate). The review lists repeats and low-value findings in
+  their own section at the end; the summary counts them and lists only useful
+  and still-open findings by name. `post` leaves repeats out unless you
+  accepted one.
+- review: `assess-only <dirs> --report <file>` runs the two new stages on saved
+  reviews and reports each label beside the decision you already recorded,
+  without changing the reviews. A review that goes over the cost limit or
+  fails is listed as skipped, and the report still covers the others.
+- review-viewer: repeats and low-value findings fold into a collapsed group
+  after the others, each with its reason. A repeat counts as rejected (from an
+  earlier round) in the new "still need a decision" line and the merge-risk
+  badge until you decide it; you can still accept, reject or defer it.
+
+### Changed
+- review: the merge stage also groups findings anchored in different files
+  when they cite overlapping lines of any file, so one defect reported from a
+  test and from the code it tests reaches the merge agent. This can add merge
+  calls.
+
+## [0.26.0] - 2026-10-09
+
+### Added
+- review: every review now writes a record of what it checked, so a review
+  that finds nothing still shows what it looked at. `checks.json` and
+  `checks-<slug>.md`, beside `findings.json`, list every agent the review ran,
+  in the order they started: what it was given, every file it read (with the
+  line range), every search, URL fetched and web query, its turns and cost, and
+  what it concluded. A finder's entry lists every finding it returned, with
+  what became of it (kept, a duplicate, merged, or rejected by a gate and
+  which rule); a verifier's entry has its verdict and its own citations. Each
+  citation says whether its quote is at the reviewed commit and whether the
+  agent actually read, searched or was shown those lines. The record holds
+  what the agents asked their tools for, never what the tools returned. The
+  review's last output line is now `checks: <path>`.
+- review: `findings.json` carries each finding's `verifier_citations`, the
+  lines the verifier read to reach its verdict.
+- review-viewer: a **Checked** tab shows that record: a checklist of finders,
+  findings and merge groups, then one entry per agent. Rejected findings
+  appear here with the rule that rejected them. The Findings tab lists the
+  verifier's citations and links to the verifier's entry. Reviews made before
+  this version open as before, without the tab.
+
+### Changed
+- Requires multiplai-core at `ee8715c` or later (`AgentRunResult.tool_calls`);
+  the lockfile moves to it.
+
 ## [0.25.0] - 2026-10-09
 
 ### Added

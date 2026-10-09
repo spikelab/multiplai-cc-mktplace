@@ -1,9 +1,9 @@
-"""The `findings.json` v1 contract, the `walkthrough.json` v1 contract, and the
-mailbox rows.
+"""The `findings.json` v1 contract, the `checks.json` v1 contract, the
+`walkthrough.json` v1 contract, and the mailbox rows.
 
 These pydantic models are the source of truth. `export-schema` writes them to
-`schema/findings.v1.schema.json` and `schema/walkthrough.v1.schema.json`, which
-are committed; producers (the review skill, the session writing a
+`schema/findings.v1.schema.json`, `schema/checks.v1.schema.json` and
+`schema/walkthrough.v1.schema.json`, which are committed; producers (the review skill, the session writing a
 walkthrough) validate against those files. Every model forbids unknown keys, so a
 producer that drifts fails validation instead of losing data silently.
 
@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "schema"
 SCHEMA_PATH = SCHEMA_DIR / "findings.v1.schema.json"
 WALKTHROUGH_SCHEMA_PATH = SCHEMA_DIR / "walkthrough.v1.schema.json"
+CHECKS_SCHEMA_PATH = SCHEMA_DIR / "checks.v1.schema.json"
 
 SHA_PATTERN = r"^[0-9a-f]{40}$"
 
@@ -66,6 +67,21 @@ class Need(_Strict):
     cause: Literal["no-access", "lookup-failed", "unreachable"]
     command: str = ""
     source: Literal["verifier", "finder", "pipeline"]
+class Assessment(_Strict):
+    """The review's own judgement of a finding against the rest of the review
+    and earlier rounds (multiplai-dev 0.27+). Older files have none.
+
+    `repeat`: the same defect as a finding the person rejected in an earlier
+    round (`earlier_*` say which, with the decision and note). `still-open`:
+    the same defect as an earlier finding that was accepted or not decided.
+    `low-value`: true, but not worth acting on, for the reason given.
+    `useful`: everything else. A label never removes a finding."""
+    label: Literal["useful", "still-open", "low-value", "repeat"]
+    reason: str = ""
+    earlier_id: str | None = None
+    earlier_round: str | None = None  # head_sha of the earlier round
+    earlier_decision: Literal["accept", "reject", "defer"] | None = None
+    earlier_note: str | None = None
 
 
 class Finding(_Strict):
@@ -85,6 +101,10 @@ class Finding(_Strict):
     fix: Fix | None = None  # older files only; see Premise
     # What the review could not read to settle this finding. Absent in older files.
     needs: list[Need] = Field(default_factory=list)
+    # The lines the verifier itself read to reach its verdict. Absent in
+    # files written before multiplai-dev 0.26.
+    verifier_citations: list[Citation] | None = None
+    assessment: Assessment | None = None
 
 
 class Target(_Strict):
@@ -97,6 +117,56 @@ class Target(_Strict):
     files_changed: list[str]
 
 
+class RunTokens(_Strict):
+    input: int = Field(ge=0)
+    output: int = Field(ge=0)
+    cache_read: int = Field(ge=0)
+    cache_write: int = Field(ge=0)
+    total: int = Field(ge=0)
+
+
+class RunStage(_Strict):
+    """One row of the per-stage table: a finder (`find:<dimension>`), `verify` or `merge`."""
+    name: str
+    stage: str
+    calls: int = Field(ge=0)
+    tokens: RunTokens
+    cost_usd: float = Field(ge=0)
+    wall_seconds: float = Field(ge=0)
+    model: str  # the configured model, or "session default"
+    effort: str
+
+
+class RunCounts(_Strict):
+    found: int = Field(ge=0)
+    rejected: int = Field(ge=0)  # by the gates
+    refuted: int = Field(ge=0)
+    unverifiable: int = Field(ge=0)
+    merged: int = Field(ge=0)
+    # Labelled by the assess stage; absent in files written before multiplai-dev 0.28.
+    repeats: int | None = Field(default=None, ge=0)
+    low_value: int | None = Field(default=None, ge=0)
+
+
+class Run(_Strict):
+    """What one review cost and how long it ran, from the review's final state.
+
+    Cost and tokens are what the SDK returned; a call that returned no usage
+    counts as 0 and adds a line to the review's errors.
+    """
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    wall_seconds: float = Field(ge=0)  # running time only: the gap before a resume is left out
+    calls: int = Field(ge=0)
+    tokens: RunTokens
+    cost_usd: float = Field(ge=0)
+    max_usd: float | None = None  # the budget ceiling; None = no ceiling
+    stopped_by_budget: bool  # the ceiling stopped the review at least once before it finished
+    stages: list[RunStage]
+    counts: RunCounts
+    errors: int = Field(ge=0)  # lines in the review's error list
+
+
 class FindingsFile(_Strict):
     schema_version: Literal[1]
     generated_at: datetime
@@ -105,6 +175,88 @@ class FindingsFile(_Strict):
     findings: list[Finding]
     # Every need of the review, the findings' and its own. Absent in older files.
     needs: list[Need] = Field(default_factory=list)
+    run: Run | None = None  # absent in files written before multiplai-dev 0.28
+
+
+# --- checks.json v1 ------------------------------------------------------------------
+#
+# Written by the review pipeline beside findings.json: every agent it ran, what
+# each was given, every tool call it made (inputs only, never results), and what
+# it concluded. Optional: a review without it opens without the Checked tab.
+
+
+class MarkedCitation(_Strict):
+    path: str
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
+    quote: str
+    gate: Literal["pass", "fail", "web"]  # citation_gate at head; a URL is not checked
+    seen: Literal["read", "searched", "diff", "prompt", "fetched", "not-seen"]  # how the agent came to the lines
+
+
+class ToolCallRecord(_Strict):
+    tool: str
+    target: str  # a repo-relative path, a search pattern, a URL or a query
+    detail: str = ""
+
+
+class CheckedFinding(_Strict):
+    id: str = Field(pattern=r"^[0-9a-f]{10}$")
+    claim: str
+    severity: Literal["HIGH", "MEDIUM", "LOW"]
+    failure_scenario: str
+    citations: list[MarkedCitation]
+    fate: Literal["kept", "deduped", "merged", "rejected"]
+    into: str | None = None  # deduped or merged into this id
+    rule: str | None = None  # the gate rule that rejected it
+
+
+class CheckedVerdict(_Strict):
+    status: Literal["confirmed", "refuted", "unverifiable"]
+    reason: str
+    citations: list[MarkedCitation]
+    lowered: bool  # verdict_gate turned a confirmation into unverifiable
+
+
+class AgentEntry(_Strict):
+    stage: str = Field(min_length=1)  # find, verify, merge
+    subject: str  # the dimension, the finding id, or the merge group's ids
+    given: list[str]
+    calls: list[ToolCallRecord]
+    outcome: str
+    turns: int = Field(ge=0)
+    cost_usd: float = Field(ge=0)
+    started_at: str
+    ended_at: str
+    error: str = ""
+    findings: list[CheckedFinding] = Field(default_factory=list)
+    verdict: CheckedVerdict | None = None
+
+
+class GateEntry(_Strict):
+    finding_id: str
+    gate: Literal["finding_gate", "verdict_gate"]
+    passed: bool
+    rule: str = ""
+
+
+class ChecksFile(_Strict):
+    schema_version: Literal[1]
+    generated_at: datetime
+    producer: str
+    target: Target
+    agents: list[AgentEntry]
+    gates: list[GateEntry]
+
+
+def load_checks(path: str | Path) -> ChecksFile:
+    """Parse and validate a checks file. Raises pydantic.ValidationError."""
+    return ChecksFile.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+def checks_schema_text() -> str:
+    """The JSON Schema for ChecksFile, in its committed form."""
+    return _schema_text(ChecksFile, "checks.v1.schema.json")
 
 
 def finding_id(file: str, line_start: int, claim: str) -> str:

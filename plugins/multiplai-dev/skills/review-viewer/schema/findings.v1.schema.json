@@ -1,5 +1,84 @@
 {
   "$defs": {
+    "Assessment": {
+      "additionalProperties": false,
+      "description": "The review's own judgement of a finding against the rest of the review\nand earlier rounds (multiplai-dev 0.27+). Older files have none.\n\n`repeat`: the same defect as a finding the person rejected in an earlier\nround (`earlier_*` say which, with the decision and note). `still-open`:\nthe same defect as an earlier finding that was accepted or not decided.\n`low-value`: true, but not worth acting on, for the reason given.\n`useful`: everything else. A label never removes a finding.",
+      "properties": {
+        "earlier_decision": {
+          "anyOf": [
+            {
+              "enum": [
+                "accept",
+                "reject",
+                "defer"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Earlier Decision"
+        },
+        "earlier_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Earlier Id"
+        },
+        "earlier_note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Earlier Note"
+        },
+        "earlier_round": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Earlier Round"
+        },
+        "label": {
+          "enum": [
+            "useful",
+            "still-open",
+            "low-value",
+            "repeat"
+          ],
+          "title": "Label",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "title": "Assessment",
+      "type": "object"
+    },
     "Citation": {
       "additionalProperties": false,
       "properties": {
@@ -34,6 +113,17 @@
     "Finding": {
       "additionalProperties": false,
       "properties": {
+        "assessment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Assessment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "citations": {
           "items": {
             "$ref": "#/$defs/Citation"
@@ -129,6 +219,21 @@
           ],
           "default": null,
           "title": "Verdict Reason"
+        },
+        "verifier_citations": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Citation"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verifier Citations"
         }
       },
       "required": [
@@ -264,6 +369,255 @@
       "title": "Premise",
       "type": "object"
     },
+    "Run": {
+      "additionalProperties": false,
+      "description": "What one review cost and how long it ran, from the review's final state.\n\nCost and tokens are what the SDK returned; a call that returned no usage\ncounts as 0 and adds a line to the review's errors.",
+      "properties": {
+        "calls": {
+          "minimum": 0,
+          "title": "Calls",
+          "type": "integer"
+        },
+        "cost_usd": {
+          "minimum": 0,
+          "title": "Cost Usd",
+          "type": "number"
+        },
+        "counts": {
+          "$ref": "#/$defs/RunCounts"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ended At"
+        },
+        "errors": {
+          "minimum": 0,
+          "title": "Errors",
+          "type": "integer"
+        },
+        "max_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Usd"
+        },
+        "stages": {
+          "items": {
+            "$ref": "#/$defs/RunStage"
+          },
+          "title": "Stages",
+          "type": "array"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "stopped_by_budget": {
+          "title": "Stopped By Budget",
+          "type": "boolean"
+        },
+        "tokens": {
+          "$ref": "#/$defs/RunTokens"
+        },
+        "wall_seconds": {
+          "minimum": 0,
+          "title": "Wall Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "wall_seconds",
+        "calls",
+        "tokens",
+        "cost_usd",
+        "stopped_by_budget",
+        "stages",
+        "counts",
+        "errors"
+      ],
+      "title": "Run",
+      "type": "object"
+    },
+    "RunCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "found": {
+          "minimum": 0,
+          "title": "Found",
+          "type": "integer"
+        },
+        "low_value": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Low Value"
+        },
+        "merged": {
+          "minimum": 0,
+          "title": "Merged",
+          "type": "integer"
+        },
+        "refuted": {
+          "minimum": 0,
+          "title": "Refuted",
+          "type": "integer"
+        },
+        "rejected": {
+          "minimum": 0,
+          "title": "Rejected",
+          "type": "integer"
+        },
+        "repeats": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repeats"
+        },
+        "unverifiable": {
+          "minimum": 0,
+          "title": "Unverifiable",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "found",
+        "rejected",
+        "refuted",
+        "unverifiable",
+        "merged"
+      ],
+      "title": "RunCounts",
+      "type": "object"
+    },
+    "RunStage": {
+      "additionalProperties": false,
+      "description": "One row of the per-stage table: a finder (`find:<dimension>`), `verify` or `merge`.",
+      "properties": {
+        "calls": {
+          "minimum": 0,
+          "title": "Calls",
+          "type": "integer"
+        },
+        "cost_usd": {
+          "minimum": 0,
+          "title": "Cost Usd",
+          "type": "number"
+        },
+        "effort": {
+          "title": "Effort",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "stage": {
+          "title": "Stage",
+          "type": "string"
+        },
+        "tokens": {
+          "$ref": "#/$defs/RunTokens"
+        },
+        "wall_seconds": {
+          "minimum": 0,
+          "title": "Wall Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "stage",
+        "calls",
+        "tokens",
+        "cost_usd",
+        "wall_seconds",
+        "model",
+        "effort"
+      ],
+      "title": "RunStage",
+      "type": "object"
+    },
+    "RunTokens": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_read": {
+          "minimum": 0,
+          "title": "Cache Read",
+          "type": "integer"
+        },
+        "cache_write": {
+          "minimum": 0,
+          "title": "Cache Write",
+          "type": "integer"
+        },
+        "input": {
+          "minimum": 0,
+          "title": "Input",
+          "type": "integer"
+        },
+        "output": {
+          "minimum": 0,
+          "title": "Output",
+          "type": "integer"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "cache_read",
+        "cache_write",
+        "total"
+      ],
+      "title": "RunTokens",
+      "type": "object"
+    },
     "Target": {
       "additionalProperties": false,
       "properties": {
@@ -348,6 +702,17 @@
     "producer": {
       "title": "Producer",
       "type": "string"
+    },
+    "run": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Run"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "schema_version": {
       "const": 1,

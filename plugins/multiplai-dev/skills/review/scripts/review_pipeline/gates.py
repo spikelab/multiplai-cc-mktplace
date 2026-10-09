@@ -20,6 +20,22 @@ from .target import _GIT, _env
 log = logging.getLogger(__name__)
 
 
+# The gate reasons that may reach activity.jsonl and checks.json. A raw reason
+# can quote a citation; the log and the record name only which rule fired.
+_REASON_KINDS = (
+    "quote not at cited lines", "path not at head", "empty quote", "is not a changed file",
+    "unknown severity", "no citations", "first citation is a web source", "confirmed without citing",
+    "none of its citations reproduce",
+)
+
+
+def reason_kind(reason: str) -> str:
+    for kind in _REASON_KINDS:
+        if kind in reason:
+            return kind
+    return "other"
+
+
 def _normalise(text: str) -> str:
     return " ".join(text.split())
 

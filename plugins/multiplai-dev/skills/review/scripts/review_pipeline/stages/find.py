@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 from pathlib import PurePosixPath
 
-from .. import sdk
-from ..gates import file_at_head, finding_gate, gated_need
-from ..models import Finding, FinderOutput, FinderResult, Need, Rejected, ReviewState, TargetInfo
+from .. import checks, sdk, timings
+from ..gates import file_at_head, finding_gate, gated_need, reason_kind
+from ..models import (AgentCheck, Finding, FinderOutput, FinderResult, GateCheck, Need, Rejected, ReviewState,
+                      TargetInfo)
+from ..prompts import DIFF_PROMPT_CHARS
 from ..prompts import find as prompt
 from . import RunContext, bounded, fix_citation, relative_path
 
@@ -16,8 +18,9 @@ log = logging.getLogger(__name__)
 CONVENTIONS_MAX_CHARS = 40_000
 
 
-def conventions_chain(target: TargetInfo) -> str:
-    """Every coding-standards.md, then every CLAUDE.md, from the repo root down to each changed file's directory, at head.
+def conventions_blocks(target: TargetInfo) -> list[tuple[str, bool, str]]:
+    """(path, included, block) for every coding-standards.md, then every CLAUDE.md, from the repo
+    root down to each changed file's directory, at head.
 
     coding-standards.md holds rules written for the reviewer only, so its blocks
     come first: when the text passes CONVENTIONS_MAX_CHARS, CLAUDE.md is skipped first.
@@ -37,11 +40,17 @@ def conventions_chain(target: TargetInfo) -> str:
                 continue
             block = f"### {path}\n\n{text.strip()}\n"
             if total + len(block) > CONVENTIONS_MAX_CHARS:
-                blocks.append(f"### {path}\n\n[skipped: the rules above already fill the prompt budget]\n")
+                blocks.append((path, False,
+                               f"### {path}\n\n[skipped: the rules above already fill the prompt budget]\n"))
                 continue
-            blocks.append(block)
+            blocks.append((path, True, block))
             total += len(block)
-    return "\n".join(blocks)
+    return blocks
+
+
+def conventions_chain(target: TargetInfo) -> str:
+    """The text of `conventions_blocks`, as the conventions finder's prompt holds it."""
+    return "\n".join(block for _, _, block in conventions_blocks(target))
 
 
 def dedupe_key(finding: Finding) -> tuple[str, int, str]:
@@ -59,35 +68,70 @@ def _normalise(finding: Finding, dimension: str, target: TargetInfo, ctx: RunCon
     )
 
 
+def finding_entry(finding: Finding, calls: list, hunks: dict, target: TargetInfo, ctx: RunContext) -> dict:
+    """A finding as the record holds it: its evidence, each citation marked, fate `kept` until judged."""
+    return {
+        "id": finding.id, "claim": finding.claim, "severity": finding.severity,
+        "failure_scenario": finding.failure_scenario,
+        "citations": [checks.marked_citation(c, calls, hunks, target, ctx.snapshot) for c in finding.citations],
+        "fate": "kept",
+    }
+
+
 async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
     if state.past("find"):
         return state
     target, cfg = state.target, ctx.config
-    conventions = conventions_chain(target) if "conventions" in cfg.dimensions else ""
+    rules = conventions_blocks(target) if "conventions" in cfg.dimensions else []
+    conventions = "\n".join(block for _, _, block in rules)
+    hunks = checks.diff_hunks(ctx.diff[:DIFF_PROMPT_CHARS])
     todo = [d for d in cfg.dimensions if d not in state.finder_results]
 
-    async def _one(dimension: str) -> FinderResult:
-        try:
-            out = await sdk.agent_call_structured(
-                prompt.build(target, dimension, ctx.diff, conventions),
-                FinderOutput,
-                allowed_tools=sdk.FINDER_TOOLS, model=cfg.finder_model, effort=cfg.effort,
-                max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label=f"find:{dimension}",
-            )
-        except sdk.RepoTrustError:
-            raise
-        except sdk.AgentCallError as e:
-            log.error("finder %s failed for %s", dimension, target.slug, exc_info=True)
-            return FinderResult(error=f"finder {dimension}: {str(e).splitlines()[0][:200]}")
+    async def _one(dimension: str) -> tuple[FinderResult, AgentCheck]:
+        given = checks.prompt_labels(
+            target, diff=ctx.diff, diff_limit=DIFF_PROMPT_CHARS,
+            rules=[(path, included) for path, included, _ in rules] if dimension == "conventions" else None)
+        started = checks.now()
+        with sdk.recording() as rec:
+            try:
+                out = await sdk.agent_call_structured(
+                    prompt.build(target, dimension, ctx.diff, conventions),
+                    FinderOutput,
+                    allowed_tools=sdk.FINDER_TOOLS, model=cfg.finder_model, effort=cfg.effort,
+                    max_turns=cfg.max_turns, cwd=str(ctx.snapshot), budget_label=f"find:{dimension}",
+                )
+                error = ""
+            except sdk.RepoTrustError:
+                raise
+            except sdk.AgentCallError as e:
+                log.error("finder %s failed for %s", dimension, target.slug, exc_info=True)
+                error = f"finder {dimension}: {str(e).splitlines()[0][:200]}"
+        check = AgentCheck(
+            stage="find", subject=dimension, given=given,
+            calls=[checks.summarise_call(c, target, ctx.snapshot) for c in rec.tool_calls],
+            turns=rec.turns, cost_usd=round(rec.cost_usd, 6), started_at=started, ended_at=checks.now(),
+        )
+        if error:
+            check.error, check.outcome = error, f"failed: {checks.failure_kind(error)}"
+            return FinderResult(error=error), check
         if ctx.progress:
             ctx.progress.line(f"  finder {dimension}: {len(out.findings)} findings")
-        return FinderResult(findings=[_normalise(f, dimension, target, ctx) for f in out.findings],
-                            needs=[n for n in out.needs if n.what.strip()])
+        findings = [_normalise(f, dimension, target, ctx) for f in out.findings]
+        check.outcome = f"{len(findings)} finding{'' if len(findings) == 1 else 's'}"
+        check.findings = [finding_entry(f, rec.tool_calls, hunks, target, ctx) for f in findings]
+        return FinderResult(findings=findings, needs=[n for n in out.needs if n.what.strip()]), check
 
     async def one(dimension: str) -> None:
         # Stored as each finder returns: a budget stop mid-stage keeps what
         # was already paid for, and the checkpoint saved then carries it.
-        state.finder_results[dimension] = await _one(dimension)
+        key = f"find:{dimension}"
+        timings.open_interval(state, key)
+        try:
+            result, check = await _one(dimension)
+        finally:
+            timings.close_interval(state, key)  # a budget stop still ends the interval
+        state.finder_results[dimension] = result
+        state.checks.append(check)
 
     await bounded(todo, one, cfg.concurrency)
 
@@ -98,24 +142,35 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
             del state.finder_results[d]  # a later run tries every finder again
         raise sdk.AgentCallError("every finder failed: " + "; ".join(failures))
 
+    # The record's entry for each dimension's stored result: the last
+    # successful call (a failed earlier attempt has no findings).
+    entries = {c.subject: c.findings for c in state.checks if c.stage == "find" and not c.error}
+
     seen: dict[tuple[str, int, str], Finding] = {}
     kept: list[Finding] = []
-    for result in results:
-        for finding in result.findings:
+    for dimension, result in zip(cfg.dimensions, results):
+        recorded = entries.get(dimension, [])
+        for i, finding in enumerate(result.findings):
+            entry = recorded[i] if i < len(recorded) else {}
             finding = finding.model_copy(deep=True)  # `finders` grows below; the stored result stays as returned
             key = dedupe_key(finding)
             if key in seen:
                 first = seen[key]
                 if finding.finder not in first.finders:
                     first.finders.append(finding.finder)
+                entry.update(fate="deduped", into=first.id)
                 continue
             seen[key] = finding
             gate = finding_gate(target, finding)
+            state.gate_checks.append(GateCheck(finding_id=finding.id, gate="finding_gate", passed=gate.passed,
+                                               rule="" if gate.passed else reason_kind(gate.reason)))
             if gate.passed:
                 kept.append(finding)
+                entry.update(fate="kept")
             else:
                 state.rejected.append(Rejected(finding=finding, reason=gate.reason, stage="find"))
                 ctx.gate_reasons.append(gate.reason)
+                entry.update(fate="rejected", rule=reason_kind(gate.reason))
 
     state.findings = kept
     # What the finders could not check blocks no one finding: it is a gap in the review.

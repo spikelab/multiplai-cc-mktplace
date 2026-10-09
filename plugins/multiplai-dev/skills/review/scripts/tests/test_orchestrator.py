@@ -12,7 +12,8 @@ from conftest import DEF_CITATION, KEYWORD_CITATION, SCHEMA, high_finding
 from review_pipeline import budget, sdk
 from review_pipeline.__main__ import main
 from review_pipeline.config import DIMENSIONS
-from review_pipeline.models import DuplicateSet, FinderOutput, MergeOutput, ReviewState, Verdict
+from review_pipeline.models import (AssessOutput, DuplicateSet, FinderOutput, MergeOutput, RepeatsOutput,
+                                    ReviewState, Verdict)
 
 
 def reworded_finding():
@@ -40,6 +41,8 @@ class FakeAgents:
         self.cost = cost
         self.budget_stop_at = budget_stop_at
         self.two_groups = two_groups
+        self.assess_answer: AssessOutput | None = None
+        self.repeats_answer: RepeatsOutput | None = None
 
     async def __call__(self, prompt, schema, *, budget_label="", **kwargs):
         sdk.require_trusted_repo()
@@ -68,6 +71,10 @@ class FakeAgents:
         if stage == "merge":
             return MergeOutput(duplicate_sets=[DuplicateSet(
                 finding_ids=[high_finding().id, reworded_finding().id], reason="the same literal keyword")])
+        if stage == "assess":
+            return self.assess_answer or AssessOutput()
+        if stage == "repeats":
+            return self.repeats_answer or RepeatsOutput()
         raise AssertionError(budget_label)
 
 
@@ -81,9 +88,12 @@ def agents(monkeypatch):
 
 
 def _findings_line(out: str) -> list[Path]:
-    last = out.strip().splitlines()[-1]
-    assert last.startswith("findings: ")
-    return [Path(p) for p in last[len("findings: "):].split()]
+    """The `findings:` line, which is followed by the final `checks:` line."""
+    *_, line, last = out.strip().splitlines()
+    assert line.startswith("findings: ")
+    findings = [Path(p) for p in line[len("findings: "):].split()]
+    assert last == "checks: " + " ".join(str(p.parent / "checks.json") for p in findings)
+    return findings
 
 
 def _review_args(repo, base, head, out, *extra):
@@ -242,7 +252,7 @@ def test_a_budget_stop_during_merge_keeps_the_answers_and_resume_asks_only_the_r
                                                two_groups=True)
     assert before[-1] == "merge" and before.count("merge") == 1
     assert saved.stage == "verify" and len(saved.merge_answers) == 1
-    assert resumed == ["merge"]
+    assert resumed == ["merge", "assess"]  # three findings remain, so assess runs once
 
 
 def test_rollup_subcommand(fixture_repo, tmp_path, agents, capsys):
@@ -291,3 +301,142 @@ def test_default_out_is_the_workspace_inbox_else_home_never_cwd(tmp_path, monkey
     (ws / "INBOX").mkdir(parents=True)
     (cfg / ".workspace").write_text(str(ws))
     assert default_out() == ws / "INBOX" / "reviews"
+
+
+def test_a_resumed_run_adds_an_interval_instead_of_overwriting(fixture_repo, tmp_path, agents, capsys):
+    saved, _, _ = _stop_then_resume(fixture_repo, tmp_path, agents, capsys, stop_at=7)
+    assert len(saved.timings["run"]) == 1 and saved.timings["run"][0].ended_at  # closed at the stop
+    assert saved.budget_stops == 1
+    target_dir = tmp_path / "out" / f"booking-engine--{fixture_repo[1]}..{fixture_repo[2]}"
+    state = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
+    assert len(state.timings["run"]) == 2 and all(i.ended_at for i in state.timings["run"])
+    assert len(state.timings["verify"]) == 2  # stopped once, resumed once
+    assert len(state.timings["find"]) == 1 and len(state.timings["merge"]) == 1
+    assert {f"find:{d}" for d in DIMENSIONS} <= set(state.timings)
+    assert state.timings["run"][1].started_at >= state.timings["run"][0].ended_at
+
+
+def test_run_config_records_session_default_for_unset_models(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "review.yaml").write_text("verifier_model: claude-x\nconcurrency: 2\n")
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    state = ReviewState.model_validate_json(
+        (out / f"booking-engine--{base}..{head}" / "review-state.json").read_text())
+    assert state.run_config["stages"]["find"] == {"model": "session default", "effort": "session default"}
+    assert state.run_config["stages"]["verify"]["model"] == "claude-x"
+    assert state.run_config["stages"]["merge"]["model"] == "claude-x"
+    assert state.run_config["concurrency"] == 2
+
+
+def test_rollup_writes_runs_jsonl_and_counts_files_without_run(fixture_repo, tmp_path, agents, capsys):
+    import shutil
+    import subprocess
+
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    agents(cost=0.75)
+    assert main(_review_args(repo, base, head, out)) == 0
+    new = out / f"booking-engine--{base}..{head}" / "findings.json"
+    old = out / "older-review" / "findings.json"
+    old.parent.mkdir()
+    data = json.loads(new.read_text())
+    expected_cost = data["run"]["cost_usd"]
+    del data["run"]  # as written before multiplai-dev 0.28
+    old.write_text(json.dumps(data))
+    capsys.readouterr()
+
+    assert main(["--out", str(out), "rollup"]) == 0
+    stdout = capsys.readouterr().out
+    assert "(1 review, 1 skipped: no run recorded)" in stdout
+    lines = (out / "runs.jsonl").read_text().splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["target"] == {"label": data["target"]["label"], "slug": data["target"]["slug"],
+                             "head_sha": head}
+    assert set(row) == {"target", "generated_at", "producer", "run"}
+    assert row["run"]["cost_usd"] == expected_cost == pytest.approx(0.75 * row["run"]["calls"])
+    if shutil.which("jq") is None:
+        pytest.skip("jq is not installed")
+    total = subprocess.run(["jq", "-s", "map(.run.cost_usd) | add", str(out / "runs.jsonl")],
+                           capture_output=True, text=True, check=True).stdout.strip()
+    assert float(total) == pytest.approx(expected_cost)
+
+
+def test_batch_keeps_runs_jsonl_lines_of_earlier_reviews(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    earlier = out / "earlier-review" / "findings.json"
+    earlier.parent.mkdir()
+    data = json.loads((out / f"booking-engine--{base}..{head}" / "findings.json").read_text())
+    data["target"] = {**data["target"], "slug": "earlier-review", "label": "earlier"}
+    earlier.write_text(json.dumps(data))
+    batch_file = tmp_path / "batch.yaml"
+    batch_file.write_text(f"- repo: {repo}\n  branch: feature/db-2038\n")
+    capsys.readouterr()
+
+    assert main(["--out", str(out), "batch", str(batch_file), "--trust-repo"]) == 0
+    slugs = sorted(json.loads(line)["target"]["slug"] for line in (out / "runs.jsonl").read_text().splitlines())
+    assert slugs == sorted([f"booking-engine--{base}..{head}", "booking-engine--feature_db-2038", "earlier-review"])
+
+
+def test_calls_with_no_usage_leave_one_budget_line_that_a_resume_replaces(target_info):
+    from review_pipeline.orchestrator import note_missing_usage
+
+    ledger = budget.ReviewBudget(max_usd=10)
+    state = ReviewState(target=target_info)
+    state.errors = ["verify: something else"]
+    note_missing_usage(state, ledger)
+    assert state.errors == ["verify: something else"]
+
+    ledger.record(None, label="find")
+    note_missing_usage(state, ledger)
+    assert state.errors == ["verify: something else",
+                            "budget: 1 agent call returned no usage; their cost and tokens are counted as 0"]
+
+    ledger.record(SimpleNamespace(), label="verify")  # a resume: the ledger carries on counting
+    note_missing_usage(state, ledger)
+    budget_lines = [e for e in state.errors if e.startswith("budget:")]
+    assert budget_lines == ["budget: 2 agent calls returned no usage; their cost and tokens are counted as 0"]
+    assert state.errors[0] == "verify: something else"
+
+# --- rounds ----------------------------------------------------------------------
+
+
+def _fake_round(target_dir: Path, head_sha: str) -> None:
+    """A findings.json and review markdown as an earlier round on *head_sha* left them."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "findings.json").write_text(json.dumps(
+        {"schema_version": 1, "generated_at": "2026-01-01T00:00:00Z", "producer": "test",
+         "target": {"head_sha": head_sha}, "findings": []}))
+    (target_dir / f"review-{target_dir.name}.md").write_text("# earlier round\n")
+
+
+def test_a_run_on_a_new_head_keeps_the_earlier_round(fixture_repo, tmp_path, agents):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    target_dir = out / f"booking-engine--{base}..{head}"
+    old_head = "a" * 40
+    _fake_round(target_dir, old_head)
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    kept = target_dir / "rounds" / old_head[:12]
+    assert json.loads((kept / "findings.json").read_text())["target"]["head_sha"] == old_head
+    assert (kept / f"review-{target_dir.name}.md").read_text() == "# earlier round\n"
+    assert json.loads((target_dir / "findings.json").read_text())["target"]["head_sha"] == head
+
+
+def test_a_repeat_run_and_a_resume_on_the_same_head_keep_no_round(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    target_dir = out / f"booking-engine--{base}..{head}"
+    agents(kill_at="merge")
+    with pytest.raises(RuntimeError):
+        main(_review_args(repo, base, head, out))
+    assert main(["resume", str(target_dir), "--trust-repo"]) == 0
+    assert main(_review_args(repo, base, head, out)) == 0  # a second full run on the same head
+    assert not (target_dir / "rounds").exists()
