@@ -119,7 +119,9 @@ def cmd_snap(args: argparse.Namespace) -> int:
             raise SystemExit(f"{f} not found — run `pipeline.py prep {args.source}` first.")
     sentences = clips.sentences_from_json(json.loads(sent_path.read_text()))
     silences = [tuple(x) for x in json.loads(sil_path.read_text())]
-    start, end = clips.snap(args.start, args.end, sentences, silences)
+    from stages import transcript as tx
+    words = tx.load(cache / "transcript.json")["words"]
+    start, end = clips.snap(args.start, args.end, sentences, silences, words)
     print(f"SNAPPED: {start:.3f} {end:.3f} ({end - start:.1f}s)")
     return 0
 

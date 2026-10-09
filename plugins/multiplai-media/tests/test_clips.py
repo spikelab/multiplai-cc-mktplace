@@ -75,6 +75,16 @@ def test_snap_never_moves_into_kept_speech() -> None:
     assert clips.snap(1.6, 2.8, sentences, [(1.6, 1.7)])[0] == 1.5
 
 
+def test_snap_uses_word_edges_inside_a_long_unpunctuated_stretch() -> None:
+    words = [w(f"w{i}", i * 0.5, i * 0.5 + 0.45) for i in range(60)]   # one 30 s "sentence"
+    sentences = clips.build_sentences(words)
+    assert len(sentences) == 1
+    # Without words the clip balloons to the whole stretch...
+    assert clips.snap(10.2, 20.2, sentences, []) == (0.0, 29.95)
+    # ...with them it goes to the words under each edge.
+    assert clips.snap(10.2, 20.2, sentences, [], words) == (10.0, 20.45)
+
+
 def test_snap_rejects_an_empty_clip() -> None:
     with pytest.raises(ValueError):
         clips.snap(5.0, 5.0, [], [])

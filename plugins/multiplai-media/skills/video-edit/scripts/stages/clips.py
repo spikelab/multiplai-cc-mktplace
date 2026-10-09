@@ -21,6 +21,10 @@ SOFT_BREAK_S = 8.0
 SOFT_PAUSE_S = 0.5
 MAX_SENTENCE_S = 30.0
 SNAP_WINDOW_S = 0.5
+# Widening an edge to its sentence is right for real sentences and wrong for
+# a 30 s unpunctuated stretch; past this distance the edge goes to the
+# nearest word boundary instead, so it still never cuts a word.
+MAX_WIDEN_S = 4.0
 
 
 @dataclass
@@ -77,19 +81,28 @@ def _nearest_trough(t: float, silences: list[tuple[float, float]]) -> float | No
 
 
 def snap(start: float, end: float, sentences: list[Sentence],
-         silences: list[tuple[float, float]]) -> tuple[float, float]:
+         silences: list[tuple[float, float]],
+         words: list[dict] | None = None) -> tuple[float, float]:
     """Widen [start, end] to whole sentences, then move each edge into a silence.
 
     The start goes to the first sentence that ends after `start`; the end to the
-    last sentence that starts before `end`. An edge only moves to a silence
-    that does not cut back into the kept speech: the start's trough must not be
-    later than the first kept word, the end's not earlier than the last.
+    last sentence that starts before `end`. When that sentence edge is more than
+    MAX_WIDEN_S away and `words` are given, the edge goes to the start of the
+    word under `start` (the end of the word under `end`) instead. An edge only
+    moves to a silence that does not cut back into the kept speech: the start's
+    trough must not be later than the first kept word, the end's not earlier
+    than the last.
     """
     if end <= start:
         raise ValueError(f"clip end {end} is not after start {start}")
     touched = [s for s in sentences if s.end > start and s.start < end]
     s0 = touched[0].start if touched else start
     e0 = touched[-1].end if touched else end
+    if words:
+        if start - s0 > MAX_WIDEN_S:
+            s0 = next((w["start"] for w in words if w["end"] > start), s0)
+        if e0 - end > MAX_WIDEN_S:
+            e0 = next((w["end"] for w in reversed(words) if w["start"] < end), e0)
     ts = _nearest_trough(s0, silences)
     te = _nearest_trough(e0, silences)
     new_start = ts if ts is not None and ts <= s0 else s0

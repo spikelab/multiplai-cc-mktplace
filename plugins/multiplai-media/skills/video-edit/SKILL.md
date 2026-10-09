@@ -8,14 +8,16 @@ description: Edit an existing video into finished outputs — a polished 1-3 min
 Free + local pipeline that turns an existing video into edited outputs. Every
 job follows the same steps: analyse the video (transcript, silences, scene
 changes, motion), decide what to keep, write an edit list (EDL), render it,
-and check the result. Commands: `prep`, `render`, `make` (prints the workflow).
+and check the result. Commands: `prep`, `render`, `check`, `timeline`, `snap`,
+`frame`, `outdir`, `make` (prints the workflow); `pipeline.py <command> --help`
+for each.
 
 ## Pick the job, then load its guide
 
 | The user has… | and wants… | Load |
 |---|---|---|
 | a screen recording | one 1–3 min landscape product demo | `references/screencast.md` |
-| a long interview or podcast | several 15–90 s vertical 9:16 reels | not built yet — tell the user this skill cannot make reels in this version |
+| a long interview or podcast | several 15–90 s vertical 9:16 reels | `references/reels.md` |
 
 Read the guide for the job before writing the EDL. It holds the rules for
 what to keep, what to cut and how to frame.
@@ -69,18 +71,26 @@ not a venv this skill should build for itself.
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py prep <source.mov> \
   --language it \                     # ISO code; omit to auto-detect. NEVER English-only.
-  --model mlx-community/whisper-large-v3-mlx \  # optional; default whisper-medium-mlx
+  --model mlx-community/whisper-large-v3-mlx \  # optional; default: large-v3 unless English
   --prompt-hint "Proper Noun, Other Name"
 ```
 Builds a 720p proxy, extracts 16 kHz audio, transcribes on the host with a
-**multilingual** mlx_whisper model (default `mlx-community/whisper-medium-mlx`),
-runs silencedetect + scenedetect, and profiles on-screen activity (blackdetect +
+**multilingual** mlx_whisper model with word timestamps (`whisper-large-v3`
+when `--language` is not English, else `whisper-medium`), runs silencedetect +
+scenedetect, and profiles on-screen activity (blackdetect +
 a per-second motion score) into a **dead-span table** — black gaps, frozen
 frames, and typing/cursor-only stretches where nothing watchable happens.
 Caches everything under
 `$WORKSPACE/.video-edit-cache/<source-hash>/` (or `~/.cache/video-edit/` when
 no `WORKSPACE`) so re-runs are instant. **Output: prints `CONTEXT: <path>` — that's
 the file you need to read next.**
+
+**Transcript:** prep writes `transcript.json` — every word with its `start` and
+`end` (and `speaker`, when the source has speaker labels) — and everything
+later reads it. It comes from the `transcribe` skill when that skill can emit
+word timings, else from prep's own `mlx_whisper` call; `context.md` names the
+engine. If the large-v3 model fails to load on the host, stop and tell the
+user rather than switching to a smaller model.
 
 **Language:** `--language` takes an ISO code (`it`, `es`, `fr`, …). Omit it to let
 mlx_whisper auto-detect. The model is always multilingual — an `.en` model is
@@ -110,7 +120,9 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py render <edl.
 ### 5. Quality check + report back
 
 Before declaring done, verify the render (ffprobe + spot-check frames with
-`ffmpeg -ss <t> -frames:v 1`) against the checks in the job's guide.
+`ffmpeg -ss <t> -frames:v 1`) against the checks in the job's guide. For a
+vertical reel, `pipeline.py check <mp4> --preset reels --edl <edl>` checks the
+platform requirements and exits 1 on any failure.
 
 Print the output path and total duration. If quality issues are visible (caption errors, wrong segment, etc.), iterate on the EDL and re-render — the cached prep means re-renders are fast (the bulk of time is the per-segment cut pass).
 
@@ -120,7 +132,11 @@ Print the output path and total duration. If quality issues are visible (caption
 $WORKSPACE/.video-edit-cache/<source-hash>/   (or ~/.cache/video-edit/ if no $WORKSPACE)
   proxy_720p.mp4    ← 720p proxy
   audio16k.wav      ← 16 kHz mono audio
-  transcript.srt    ← mlx_whisper timestamps (host, multilingual)
+  transcript.json   ← every word with start/end (and speaker, when labelled)
+  transcript.srt    ← the same, as subtitles
+  sentences.json    ← sentences built from the words (clip edges snap to these)
+  retakes.json      ← sentences said again soon after ("Likely retakes" in context.md)
+  silences.json     ← short pauses (clip edges snap into these)
   scenes.csv        ← PySceneDetect content-mode output
   cuts.json         ← merged silence_end + scene_change candidates
   activity.json     ← per-second motion profile (dead-span classification input)
@@ -139,11 +155,24 @@ See `examples/demo-narrated.edl.json`. Top-level keys:
 - `transitions` — `[{after, kind, duration}]` (currently only `fade`)
 - `logo` — `{path, position: br|bl|tr|tl, scale, start_at}`
 - `music` — `{file}` OR `{prompt}` (prompt is documented but generation is not available in CPU-only Linux containers — pass `file` or `url`)
-- `output` — `{width, height, fps, crf}` (defaults 1920×1080, 30 fps, CRF 18)
+- `output` — `{width, height, fps, crf, fit, audio_rate}` (defaults 1920×1080, 30 fps, CRF 18, fit `pad`)
+  - `fit` — how a segment without a `frame` fills the output: `pad` (letterbox), `blur` (over a blurred copy), `crop` (fill, around the segment's `focus`)
+  - `audio_rate` — resample the final audio (reels: `48000`)
+
+Keys for reels (see `references/reels.md`):
+- `layout` — `{panels: {A: {x, y, w, h}, B: …}, speakers: {"SPEAKER_0": "A", …}}`, rectangles in source pixels
+- segment `frame` — `"stack"` (A over B), a panel name (that panel cropped to the output aspect), or `"speaker"` (follows the transcript's speaker labels)
+- segment `focus` — `{x, y}` 0..1, the point a crop keeps in view
+- `captions` — `{words_per_line, max_chars, position_y, highlight, size}` — word-timed captions burned in from the transcript
+- `headline` — `{text, start, end}` in output time, shown at the top
+- `brand` — path to a brand file (fonts, colours, logo)
+- `transcript` — a `transcript.json` other than the prep cache's
 
 ## What it does NOT do
 
-- **Subtitles.** Transcription runs internally for orchestrator context only. No burn-in.
+- **Subtitles on a screencast.** Captions are a reels feature; a landscape demo gets none unless its EDL asks for `captions`.
+- **Face tracking.** Reels frame speakers from declared panels, or from speaker labels in the transcript — never by detecting faces.
+- **Posting.** It renders files; uploading or scheduling to Instagram, Facebook or TikTok is up to the user.
 - **Cursor zoom-on-click.** Would require a macOS sidecar logger at record time. Out of scope.
 - **AI music generation in this container.** ACE-Step pyproject hard-pins CUDA/MPS wheels — won't install on CPU-only aarch64 Linux. Use `--music-file` or `--music-url`. See `stages/music.py` `GENERATION_NOTE` for Mac/GPU install path if the user wants it there.
 
@@ -153,6 +182,7 @@ See `examples/demo-narrated.edl.json`. Top-level keys:
 |---|---|---|
 | Proxy / composite / encode | ffmpeg | LGPL/GPL |
 | Scene detection | PySceneDetect | BSD-3 |
-| Transcription (macOS host, multilingual) | mlx_whisper + whisper-medium-mlx | MIT |
+| Transcription (macOS host, multilingual) | mlx_whisper + whisper-large-v3 / whisper-medium | MIT |
+| Captions | libass (ffmpeg `subtitles` filter) | ISC |
 | Music fetching (URL path) | yt-dlp | Unlicense |
 | Music generation (optional, Mac/GPU only) | ACE-Step / ACE-Step-1.5 | Apache-2.0 / MIT |
