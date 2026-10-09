@@ -161,6 +161,12 @@ class Merged(BaseModel):
     reason: str
 
 
+class Interval(BaseModel):
+    """One stretch of running time; `ended_at` is empty until it ends."""
+    started_at: str
+    ended_at: str = ""
+
+
 class ReviewState(BaseModel):
     target: TargetInfo
     stage: str = "target"  # last stage completed
@@ -177,6 +183,13 @@ class ReviewState(BaseModel):
     original_severity: dict[str, str] = Field(default_factory=dict)  # lowered findings only
     errors: list[str] = Field(default_factory=list)  # agent failures, shown in the review header
     budget: dict = Field(default_factory=dict)
+    # When the run, each stage and each finder ran (`timings.py`). Each resume
+    # adds an interval, so wall time leaves out the time between runs.
+    timings: dict[str, list[Interval]] = Field(default_factory=dict)
+    # The model, effort and concurrency the last run used, per stage.
+    run_config: dict = Field(default_factory=dict)
+    # How many times the budget circuit breaker stopped this review.
+    budget_stops: int = 0
 
     @field_validator("stage", mode="before")
     @classmethod

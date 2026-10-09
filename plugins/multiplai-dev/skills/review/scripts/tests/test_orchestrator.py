@@ -291,3 +291,31 @@ def test_default_out_is_the_workspace_inbox_else_home_never_cwd(tmp_path, monkey
     (ws / "INBOX").mkdir(parents=True)
     (cfg / ".workspace").write_text(str(ws))
     assert default_out() == ws / "INBOX" / "reviews"
+
+
+def test_a_resumed_run_adds_an_interval_instead_of_overwriting(fixture_repo, tmp_path, agents, capsys):
+    saved, _, _ = _stop_then_resume(fixture_repo, tmp_path, agents, capsys, stop_at=7)
+    assert len(saved.timings["run"]) == 1 and saved.timings["run"][0].ended_at  # closed at the stop
+    assert saved.budget_stops == 1
+    target_dir = tmp_path / "out" / f"booking-engine--{fixture_repo[1]}..{fixture_repo[2]}"
+    state = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
+    assert len(state.timings["run"]) == 2 and all(i.ended_at for i in state.timings["run"])
+    assert len(state.timings["verify"]) == 2  # stopped once, resumed once
+    assert len(state.timings["find"]) == 1 and len(state.timings["merge"]) == 1
+    assert {f"find:{d}" for d in DIMENSIONS} <= set(state.timings)
+    assert state.timings["run"][1].started_at >= state.timings["run"][0].ended_at
+
+
+def test_run_config_records_session_default_for_unset_models(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "review.yaml").write_text("verifier_model: claude-x\nconcurrency: 2\n")
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    state = ReviewState.model_validate_json(
+        (out / f"booking-engine--{base}..{head}" / "review-state.json").read_text())
+    assert state.run_config["stages"]["find"] == {"model": "session default", "effort": "session default"}
+    assert state.run_config["stages"]["verify"]["model"] == "claude-x"
+    assert state.run_config["stages"]["merge"]["model"] == "claude-x"
+    assert state.run_config["concurrency"] == 2

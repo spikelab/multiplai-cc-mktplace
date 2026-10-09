@@ -89,3 +89,22 @@ def load_config(out_dir: Path | None, *, max_cost_usd: float | None = DEFAULT_MA
         log.warning("Ignoring unknown effort %r (expected one of %s)", cfg.effort, ", ".join(sorted(KNOWN_EFFORTS)))
         cfg.effort = None
     return cfg
+
+
+SESSION_DEFAULT = "session default"
+# The config field that sets each stage's model.
+STAGE_MODELS = {"find": "finder_model", "verify": "verifier_model", "merge": "merger_model"}
+
+
+def run_config(cfg: ReviewConfig) -> dict:
+    """What a run used, per stage. An unset model or effort is "session default", never blank.
+
+    This is the configured model. The model the SDK actually ran is not
+    returned by multiplai-core's `run_agent`, so it is not recorded.
+    """
+    return {
+        "stages": {stage: {"model": getattr(cfg, attr) or SESSION_DEFAULT, "effort": cfg.effort or SESSION_DEFAULT}
+                   for stage, attr in STAGE_MODELS.items()},
+        "concurrency": cfg.concurrency,
+        "max_turns": cfg.max_turns,
+    }

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import PurePosixPath
 
-from .. import sdk
+from .. import sdk, timings
 from ..gates import file_at_head, finding_gate
 from ..models import Finding, FinderOutput, FinderResult, Rejected, ReviewState, TargetInfo
 from ..prompts import find as prompt
@@ -86,7 +86,13 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
     async def one(dimension: str) -> None:
         # Stored as each finder returns: a budget stop mid-stage keeps what
         # was already paid for, and the checkpoint saved then carries it.
-        state.finder_results[dimension] = await _one(dimension)
+        key = f"find:{dimension}"
+        timings.open_interval(state, key)
+        try:
+            result = await _one(dimension)
+        finally:
+            timings.close_interval(state, key)  # a budget stop still ends the interval
+        state.finder_results[dimension] = result
 
     await bounded(todo, one, cfg.concurrency)
 
