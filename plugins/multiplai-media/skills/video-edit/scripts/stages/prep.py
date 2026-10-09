@@ -10,6 +10,8 @@ import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from stages import clips, retakes, transcript as tx
+
 
 def _cache_root() -> Path:
     ws = os.environ.get("WORKSPACE")
@@ -22,9 +24,12 @@ MLX_BIN = "mlx_whisper"
 
 # Multilingual by default — NEVER an `.en` model (those are architecturally
 # English-only and emit "(speaking in foreign language)" on anything else).
-# Matches the `transcribe` skill's DEFAULT_MODEL_MULTI. Best quality upgrade:
-# pass model="mlx-community/whisper-large-v3-mlx".
+# English (and an undetected language) keeps the `transcribe` skill's
+# DEFAULT_MODEL_MULTI; any other declared language gets large-v3, because
+# medium's word timings and punctuation are too weak for captions and for
+# snapping clips to sentences.
 MLX_MODEL_MULTI = "mlx-community/whisper-medium-mlx"
+MLX_MODEL_LARGE = "mlx-community/whisper-large-v3-mlx"
 
 # Transcription runs EXCLUSIVELY on the macOS host via mlx_whisper (Metal GPU).
 # In the container there is no local backend — we bridge to the host over SSH.
@@ -86,12 +91,26 @@ class PrepResult:
     transcript_srt_path: str
     cuts_path: str
     context_path: str
+    transcript_json_path: str = ""
+    transcript_engine: str = ""
 
 
 def _source_key(src: Path) -> str:
+    """Cache directory name: a readable stem plus a hash of path, size and mtime.
+
+    The stem keeps only [A-Za-z0-9._-]. The host bridge splits its argv on
+    whitespace, so a cache path with a space in it (from a recording named
+    "My Show (ep 4).mp4") never reaches mlx_whisper intact.
+    """
     st = src.stat()
     h = hashlib.sha1(f"{src.resolve()}|{st.st_size}|{int(st.st_mtime)}".encode()).hexdigest()[:12]
-    return f"{src.stem}-{h}"
+    stem = re.sub(r"[^A-Za-z0-9._]+", "-", src.stem).strip("-")[:60] or "source"
+    return f"{stem}-{h}"
+
+
+def cache_dir_for(source: str | Path) -> Path:
+    """The prep cache directory for a source recording (it may not exist yet)."""
+    return CACHE_ROOT / _source_key(Path(source).resolve())
 
 
 def _ffprobe_duration(path: Path) -> float:
@@ -136,6 +155,31 @@ def _silencedetect(audio: Path) -> list[CutCandidate]:
     for m in re.finditer(r"silence_end:\s+([\d.]+)", p.stderr):
         cuts.append(CutCandidate(t=float(m.group(1)), kind="silence_end"))
     return cuts
+
+
+# Short pauses between phrases, for snapping clip edges (clips.snap). The 1 s
+# silencedetect above finds long gaps; a conversation rarely has those.
+SHORT_SILENCE = "silencedetect=noise=-35dB:d=0.2"
+
+
+def _short_silences(audio: Path) -> list[tuple[float, float]]:
+    p = subprocess.run([
+        "ffmpeg", "-hide_banner", "-i", str(audio),
+        "-vn", "-af", SHORT_SILENCE, "-f", "null", "-",
+    ], capture_output=True, text=True)
+    return parse_silences(p.stderr)
+
+
+def parse_silences(stderr: str) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    start: float | None = None
+    for m in re.finditer(r"silence_(start|end):\s+([\d.]+)", stderr):
+        if m.group(1) == "start":
+            start = float(m.group(2))
+        elif start is not None:
+            out.append((start, float(m.group(2))))
+            start = None
+    return out
 
 
 def _scenedetect_bin() -> str:
@@ -276,20 +320,32 @@ def _dead_spans(profile: list[float], black: list[DeadSpan],
     return sorted(spans + black, key=lambda x: x.start)
 
 
-def _select_model(model: str | None) -> str:
+def _select_model(model: str | None, language: str | None = None) -> str:
     """Never default to an `.en` model — always multilingual so any language
     (Italian, etc.) transcribes correctly. An explicit `model` overrides."""
-    return model or MLX_MODEL_MULTI
+    if model:
+        return model
+    if language and language.lower() not in ("en", "english"):
+        return MLX_MODEL_LARGE
+    return MLX_MODEL_MULTI
 
 
 def _mlx_args(audio: Path, dst_stem: Path, prompt_hint: str,
               language: str | None, model: str | None) -> list[str]:
-    """Build the mlx_whisper argv. SRT output is required — the EDL authoring
-    step depends on real timestamps."""
+    """Build the mlx_whisper argv.
+
+    `--output-format all` writes the JSON with per-word timings (the transcript
+    contract is built from it) and keeps transcript.srt. `--model` is always
+    passed: without it mlx_whisper falls back to a tiny model that writes
+    gibberish for non-English speech. `--condition-on-previous-text False`
+    stops large-v3 falling into a loop that repeats one line for minutes.
+    """
     args = [
         MLX_BIN,
-        "--model", _select_model(model),
-        "--output-format", "srt",
+        "--model", _select_model(model, language),
+        "--word-timestamps", "True",
+        "--condition-on-previous-text", "False",
+        "--output-format", "all",
         "--output-dir", str(dst_stem.parent),
         "--output-name", dst_stem.name,
         "--verbose", "False",
@@ -304,32 +360,32 @@ def _mlx_args(audio: Path, dst_stem: Path, prompt_hint: str,
 
 def _transcribe(audio: Path, dst_stem: Path, prompt_hint: str = "",
                 language: str | None = None, model: str | None = None) -> Path:
-    """Transcribe to SRT on the macOS host via mlx_whisper (Metal GPU).
+    """Transcribe on the macOS host via mlx_whisper (Metal GPU); returns its JSON.
 
     Transcription runs EXCLUSIVELY on the Mac host — either locally (when this
     runs on a Mac with mlx_whisper on PATH) or over the SSH bridge from the
     container. There is no in-container whisper backend and no silent fallback:
     if the bridge is unreachable or the host lacks mlx_whisper, this fails loudly.
     """
-    srt = Path(str(dst_stem) + ".srt")
-    if srt.exists():
-        return srt
+    raw = Path(str(dst_stem) + ".json")
+    if raw.exists():
+        return raw
 
     # Mac-native convenience path: run mlx_whisper directly on Apple Silicon.
     if IS_MAC and shutil.which(MLX_BIN):
-        return _transcribe_mlx_local(audio, dst_stem, srt, prompt_hint, language, model)
+        return _transcribe_mlx_local(audio, dst_stem, raw, prompt_hint, language, model)
 
     # Container path: bridge to the macOS host. This is the ONLY backend here.
-    return _transcribe_ssh(audio, dst_stem, srt, prompt_hint, language, model)
+    return _transcribe_ssh(audio, dst_stem, raw, prompt_hint, language, model)
 
 
-def _transcribe_mlx_local(audio: Path, dst_stem: Path, srt: Path, prompt_hint: str,
+def _transcribe_mlx_local(audio: Path, dst_stem: Path, raw: Path, prompt_hint: str,
                           language: str | None, model: str | None) -> Path:
     cmd = _mlx_args(audio, dst_stem, prompt_hint, language, model)
     subprocess.run(cmd, check=True)
-    if not srt.exists():
-        raise RuntimeError(f"mlx_whisper completed but {srt} not found")
-    return srt
+    if not raw.exists():
+        raise RuntimeError(f"mlx_whisper completed but {raw} not found")
+    return raw
 
 
 def _bridge_error(detail: str) -> RuntimeError:
@@ -340,13 +396,16 @@ def _bridge_error(detail: str) -> RuntimeError:
         "    • mlx_whisper is on PATH on the host  (pip install mlx-whisper)\n"
         f"    • an SSH key exists at {SSH_KEY}  (TRANSCRIBE_KEY/SSH_BUILD_KEY)\n"
         "    • the bridge user is set  (SSH_BUILD_USER or TRANSCRIBE_USER)\n"
+        "    • the model loads on the host (large-v3 for non-English: if it does not,\n"
+        "      fix the host install or pass --model; do not switch to a smaller model\n"
+        "      without telling the user)\n"
         f"    • host {SSH_HOST} is reachable and its gateway allowlists 'mlx_whisper'\n"
         "  Verify manually:\n"
         f"    ssh -i {SSH_KEY} {SSH_USER or '<user>'}@{SSH_HOST} 'command -v mlx_whisper'"
     )
 
 
-def _transcribe_ssh(audio: Path, dst_stem: Path, srt: Path, prompt_hint: str,
+def _transcribe_ssh(audio: Path, dst_stem: Path, raw: Path, prompt_hint: str,
                     language: str | None, model: str | None) -> Path:
     if not SSH_USER:
         raise _bridge_error("no bridge user configured (SSH_BUILD_USER / TRANSCRIBE_USER is empty).")
@@ -367,41 +426,27 @@ def _transcribe_ssh(audio: Path, dst_stem: Path, srt: Path, prompt_hint: str,
             f"ssh to {SSH_USER}@{SSH_HOST} exited {proc.returncode}.\n"
             f"  stderr: {proc.stderr.strip() or '(empty)'}"
         )
-    if not srt.exists():
+    if not raw.exists():
         raise _bridge_error(
-            f"mlx_whisper ran on the host but {srt} was not produced.\n"
+            f"mlx_whisper ran on the host but {raw} was not produced.\n"
             f"  stdout: {proc.stdout.strip() or '(empty)'}\n"
             f"  stderr: {proc.stderr.strip() or '(empty)'}"
         )
-    return srt
-
-
-def _parse_srt(srt: Path) -> list[dict]:
-    out = []
-    txt = srt.read_text()
-    for m in re.finditer(r"(\d+)\n([\d:,]+) --> ([\d:,]+)\n((?:.*\n)+?)\n", txt + "\n\n"):
-        def t2s(t: str) -> float:
-            h, mi, s = t.split(":")
-            s, ms = s.split(",")
-            return int(h) * 3600 + int(mi) * 60 + int(s) + int(ms) / 1000
-        out.append({
-            "idx": int(m.group(1)),
-            "start": t2s(m.group(2)),
-            "end": t2s(m.group(3)),
-            "text": m.group(4).strip().replace("\n", " "),
-        })
-    return out
+    return raw
 
 
 def _write_context(result: PrepResult, segments: list[dict], cuts: list[CutCandidate],
-                   dead: list[DeadSpan], dst: Path) -> None:
+                   dead: list[DeadSpan], dst: Path, likely_retakes: list[dict] | None = None) -> None:
     lines = [
         "# video-edit prep context",
         "",
         f"- source: {result.source}",
         f"- duration: {result.src_duration:.1f}s",
         f"- proxy: {result.proxy_path}",
+        f"- transcript engine: {result.transcript_engine}",
+        f"- transcript (words, JSON): {result.transcript_json_path}",
         f"- transcript (SRT): {result.transcript_srt_path}",
+        f"- sentences (JSON): {Path(result.transcript_json_path).with_name('sentences.json')}",
         f"- cuts (JSON): {result.cuts_path}",
         "",
         "⚠ When authoring the EDL, `source` must be the ORIGINAL recording above —",
@@ -441,6 +486,19 @@ def _write_context(result: PrepResult, segments: list[dict], cuts: list[CutCandi
             "shot (a few seconds), not like footage.",
             "",
         ])
+    if likely_retakes is not None:
+        lines.extend([
+            "## Likely retakes (keep the later take unless the brief says otherwise)",
+            "",
+        ])
+        if likely_retakes:
+            lines.extend(["| first take | text | retake | text |", "|---|---|---|---|"])
+            for r in likely_retakes:
+                lines.append(f"| {r['start']:.1f}–{r['end']:.1f} | {r['text']} | "
+                             f"{r['retake_start']:.1f}–{r['retake_end']:.1f} | {r['retake_text']} |")
+        else:
+            lines.append("None found.")
+        lines.append("")
     lines.extend([
         "## Cut candidates (use as anchors when authoring the EDL)",
         "",
@@ -455,8 +513,45 @@ def _write_context(result: PrepResult, segments: list[dict], cuts: list[CutCandi
         "",
     ])
     for s in segments:
-        lines.append(f"- [{s['start']:.1f}–{s['end']:.1f}] {s['text']}")
+        who = f" {s['speaker']}:" if s.get("speaker") else ""
+        lines.append(f"- [{s['start']:.1f}–{s['end']:.1f}]{who} {s['text']}")
     dst.write_text("\n".join(lines))
+
+
+def _transcript_contract(audio: Path, cache: Path, prompt_hint: str,
+                         language: str | None, model: str | None) -> tuple[dict, Path]:
+    """Build (or reuse) transcript.json from source (a) or (b); see stages/transcript.py."""
+    contract_path = cache / "transcript.json"
+    srt_path = cache / "transcript.srt"
+    if contract_path.exists():
+        contract = tx.load(contract_path)
+        print(f"→ prep: reusing transcript ({contract['engine']})")
+        return contract, contract_path
+    source, script = tx.choose_source()
+    if source == "transcribe-skill":
+        assert script is not None
+        raw = cache / "transcribe-words.json"
+        print(f"→ prep: transcribing with the transcribe skill ({script})")
+        subprocess.run(tx.transcribe_skill_argv(script, audio, raw, language), check=True)
+        contract = tx.from_transcribe_skill(json.loads(raw.read_text()))
+        srt_path.write_text(tx.to_srt(contract))
+    else:
+        _model = _select_model(model, language)
+        where = "locally (Mac)" if (IS_MAC and shutil.which(MLX_BIN)) else f"on host via SSH bridge ({SSH_HOST})"
+        print(f"→ prep: transcribing {where} — model={_model}, language={language or 'auto-detect'}")
+        raw = _transcribe(audio, cache / "whisper", prompt_hint=prompt_hint, language=language, model=model)
+        contract = tx.from_whisper_json(json.loads(raw.read_text()), engine=f"mlx_whisper:{_model}",
+                                        language=language)
+        whisper_srt = cache / "whisper.srt"
+        if whisper_srt.exists():
+            shutil.copyfile(whisper_srt, srt_path)
+        else:
+            srt_path.write_text(tx.to_srt(contract))
+    if not contract["words"]:
+        raise RuntimeError(f"the transcript has no word timings ({raw}); "
+                           "the transcriber ran but returned no words.")
+    tx.write(contract, contract_path)
+    return contract, contract_path
 
 
 def prep(source: str | Path, prompt_hint: str = "",
@@ -472,8 +567,6 @@ def prep(source: str | Path, prompt_hint: str = "",
     duration = _ffprobe_duration(src)
     proxy = cache / "proxy_720p.mp4"
     audio = cache / "audio16k.wav"
-    transcript_stem = cache / "transcript"
-    transcript = Path(str(transcript_stem) + ".srt")
     cuts_path = cache / "cuts.json"
     context_path = cache / "context.md"
 
@@ -481,16 +574,21 @@ def prep(source: str | Path, prompt_hint: str = "",
     _make_proxy(src, proxy)
     print(f"→ prep: {'reusing' if audio.exists() else 'extracting'} audio")
     _extract_audio(proxy, audio)
-    _model = _select_model(model)
-    _lang = language or "auto-detect"
-    where = "locally (Mac)" if (IS_MAC and shutil.which(MLX_BIN)) else f"on host via SSH bridge ({SSH_HOST})"
-    print(f"→ prep: {'reusing' if transcript.exists() else 'transcribing'} {where} — model={_model}, language={_lang}")
-    _transcribe(audio, transcript_stem, prompt_hint=prompt_hint, language=language, model=model)
+    contract, contract_path = _transcript_contract(audio, cache, prompt_hint, language, model)
+
+    sentences = clips.build_sentences(contract["words"])
+    (cache / "sentences.json").write_text(
+        json.dumps(clips.sentences_to_json(sentences), ensure_ascii=False, indent=1) + "\n")
+    likely = retakes.find_retakes(sentences)
+    (cache / "retakes.json").write_text(json.dumps(likely, ensure_ascii=False, indent=1) + "\n")
 
     print("→ prep: detecting cuts (silencedetect + scenedetect)")
     silence_cuts = _silencedetect(audio)
     scene_cuts = _scenedetect(proxy, cache)
     all_cuts = silence_cuts + scene_cuts
+    silences_path = cache / "silences.json"
+    if not silences_path.exists():
+        silences_path.write_text(json.dumps(_short_silences(audio)))
 
     cuts_path.write_text(json.dumps([asdict(c) for c in all_cuts], indent=2))
 
@@ -500,19 +598,22 @@ def prep(source: str | Path, prompt_hint: str = "",
     dead = _dead_spans(profile, black_spans, duration)
     dead_total = sum(s.duration for s in dead)
 
-    segments = _parse_srt(transcript)
     result = PrepResult(
         source=str(src),
         src_duration=duration,
         proxy_path=str(proxy),
         audio_path=str(audio),
-        transcript_srt_path=str(transcript),
+        transcript_srt_path=str(cache / "transcript.srt"),
         cuts_path=str(cuts_path),
         context_path=str(context_path),
+        transcript_json_path=str(contract_path),
+        transcript_engine=contract["engine"],
     )
-    _write_context(result, segments, all_cuts, dead, context_path)
+    _write_context(result, clips.sentences_to_json(sentences), all_cuts, dead, context_path,
+                   likely_retakes=likely)
     print(f"→ prep: context written to {context_path}")
-    print(f"   {len(segments)} transcript segments, {len(all_cuts)} cut candidates")
+    print(f"   {len(contract['words'])} words, {len(sentences)} sentences, "
+          f"{len(likely)} likely retakes, {len(all_cuts)} cut candidates")
     print(f"   {len(dead)} dead spans ({dead_total:.0f}s = "
           f"{100*dead_total/duration:.0f}% of the recording)")
     return result

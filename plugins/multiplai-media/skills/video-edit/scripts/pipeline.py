@@ -53,8 +53,98 @@ def cmd_prep(args: argparse.Namespace) -> int:
         model=args.model,
     )
     print(f"\nCONTEXT: {result.context_path}")
+    print(f"TRANSCRIPT: {result.transcript_json_path} ({result.transcript_engine})")
     print(f"DURATION: {result.src_duration:.1f}")
     print(f"PROXY: {result.proxy_path}")
+    return 0
+
+
+def cmd_timeline(args: argparse.Namespace) -> int:
+    """Print the transcript in output time: what the render will say, and when."""
+    from stages import timeline, transcript as tx
+    edl = EDL.load(args.edl)
+    path = Path(args.transcript) if args.transcript else composite.transcript_path(edl)
+    words = timeline.map_words(tx.load(path)["words"], timeline.place_segments(edl))
+    line: list[dict] = []
+    for i, w in enumerate(words):
+        line.append(w)
+        nxt = words[i + 1] if i + 1 < len(words) else None
+        if nxt is None or len(line) >= 12 or w["text"].endswith((".", "?", "!")) \
+                or nxt["start"] - w["end"] > 0.6:
+            who = f" {line[0]['speaker']}:" if line[0].get("speaker") else ""
+            print(f"[{line[0]['start']:7.2f}–{line[-1]['end']:7.2f}] (src {line[0]['src_start']:.2f})"
+                  f"{who} {' '.join(x['text'] for x in line)}")
+            line = []
+    print(f"\n{len(words)} words; output duration {edl.total_duration():.2f}s")
+    return 0
+
+
+def grid_filter(width: int, height: int, step: int = 100) -> str:
+    """drawgrid every `step` px plus a pixel label on each line, for reading
+    panel rectangles off one frame."""
+    font = composite._find_font(bold=True)
+    parts = [f"drawgrid=w={step}:h={step}:t=1:c=yellow@0.7"]
+    for x in range(step, width, step):
+        parts.append(f"drawtext=fontfile={font}:text={x}:x={x + 3}:y=3:fontsize=16:"
+                     "fontcolor=yellow:box=1:boxcolor=black@0.6")
+    for y in range(step, height, step):
+        parts.append(f"drawtext=fontfile={font}:text={y}:x=3:y={y + 3}:fontsize=16:"
+                     "fontcolor=yellow:box=1:boxcolor=black@0.6")
+    return ",".join(parts)
+
+
+def cmd_frame(args: argparse.Namespace) -> int:
+    """Write one frame as PNG, optionally with a labelled grid in source pixels."""
+    import subprocess
+    out = Path(args.out).resolve() if args.out else Path.cwd() / f"frame-{args.at:g}s.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(args.at),
+           "-i", args.source, "-frames:v", "1"]
+    if args.grid:
+        w, h = composite.probe_size(args.source)
+        cmd += ["-vf", grid_filter(w, h)]
+    subprocess.run(cmd + [str(out)], check=True)
+    print(f"FRAME: {out}")
+    return 0
+
+
+def cmd_snap(args: argparse.Namespace) -> int:
+    """Snap a proposed clip to whole sentences, then to the nearest pause."""
+    import json
+    from stages import clips
+    cache = prep_stage.cache_dir_for(args.source)
+    sent_path, sil_path = cache / "sentences.json", cache / "silences.json"
+    for f in (sent_path, sil_path):
+        if not f.exists():
+            raise SystemExit(f"{f} not found — run `pipeline.py prep {args.source}` first.")
+    sentences = clips.sentences_from_json(json.loads(sent_path.read_text()))
+    silences = [tuple(x) for x in json.loads(sil_path.read_text())]
+    from stages import transcript as tx
+    words = tx.load(cache / "transcript.json")["words"]
+    start, end = clips.snap(args.start, args.end, sentences, silences, words)
+    print(f"SNAPPED: {start:.3f} {end:.3f} ({end - start:.1f}s)")
+    return 0
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    """Spec-check a rendered MP4 (and optionally its EDL's text placement)."""
+    from stages import platform
+    results = platform.evaluate(platform.probe(args.mp4))
+    if args.edl:
+        results += platform.lint_text_boxes(EDL.load(args.edl))
+    for r in results:
+        print(f"{r.status:4}  {r.name}: {r.detail}")
+    failed = [r for r in results if r.status == platform.FAIL]
+    print(f"\n{'FAIL' if failed else 'PASS'}: {args.mp4} ({len(failed)} failing checks, preset {args.preset})")
+    return 1 if failed else 0
+
+
+def cmd_outdir(args: argparse.Namespace) -> int:
+    """Print (and create) the output directory for a job."""
+    from stages import outdir
+    d = outdir.job_dir(args.job)
+    (d / "edl").mkdir(parents=True, exist_ok=True)
+    print(f"OUTDIR: {d}")
     return 0
 
 
@@ -99,9 +189,39 @@ def main() -> int:
                     help="ISO code of the spoken language (e.g. 'it', 'es'). Omit to auto-detect. "
                          "Transcription is always multilingual — never English-only.")
     pp.add_argument("--model", default=None,
-                    help="override the mlx_whisper model (default multilingual "
-                         "mlx-community/whisper-medium-mlx; best quality: mlx-community/whisper-large-v3-mlx)")
+                    help="override the mlx_whisper model (default: mlx-community/whisper-large-v3-mlx "
+                         "for a non-English --language, else mlx-community/whisper-medium-mlx)")
     pp.set_defaults(func=cmd_prep)
+
+    tl = sub.add_parser("timeline", help="print the transcript in output time for an EDL")
+    tl.add_argument("edl", help="path to EDL JSON")
+    tl.add_argument("--transcript", default=None,
+                    help="transcript.json (default: the EDL's `transcript`, else the prep cache for its source)")
+    tl.set_defaults(func=cmd_timeline)
+
+    fr = sub.add_parser("frame", help="write one frame as PNG (with --grid: labelled 100 px grid)")
+    fr.add_argument("source", help="path to the source video")
+    fr.add_argument("--at", type=float, required=True, help="time in seconds")
+    fr.add_argument("--grid", action="store_true", help="overlay a 100 px grid labelled in source pixels")
+    fr.add_argument("--out", default=None, help="output PNG (default: ./frame-<t>s.png)")
+    fr.set_defaults(func=cmd_frame)
+
+    sn = sub.add_parser("snap", help="snap clip edges to sentences, then to the nearest pause")
+    sn.add_argument("source", help="the source recording prep ran on")
+    sn.add_argument("start", type=float)
+    sn.add_argument("end", type=float)
+    sn.set_defaults(func=cmd_snap)
+
+    ck = sub.add_parser("check", help="spec-check a rendered MP4 for a platform preset")
+    ck.add_argument("mp4", help="rendered video")
+    ck.add_argument("--preset", default="reels", choices=["reels"],
+                    help="reels: 1080x1920 H.264/AAC for Instagram, Facebook and TikTok")
+    ck.add_argument("--edl", default=None, help="also lint the EDL's caption and headline placement")
+    ck.set_defaults(func=cmd_check)
+
+    od = sub.add_parser("outdir", help="print and create the output directory for a job")
+    od.add_argument("job", help="job name, e.g. the show and episode")
+    od.set_defaults(func=cmd_outdir)
 
     m = sub.add_parser("make", help="natural-language → reel (orchestrator workflow)")
     m.add_argument("source", help="path to screen recording (.mov/.mp4)")

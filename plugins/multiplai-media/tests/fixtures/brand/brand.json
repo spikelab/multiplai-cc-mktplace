@@ -1,0 +1,8 @@
+{
+  "font_bold_file": "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+  "primary": "#F5F0E6",
+  "accent": "#FF5A36",
+  "background": "#1B2A41",
+  "caption_outline": "#101820",
+  "logo": {"path": "logo.png", "position": "tl", "scale": 0.18}
+}

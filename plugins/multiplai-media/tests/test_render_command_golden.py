@@ -43,3 +43,14 @@ def test_demo_narrated_ffmpeg_commands_unchanged(tmp_path, monkeypatch: pytest.M
 
     got = [[c.replace(str(tmp_path), "<WORK>") for c in cmd] for cmd in calls]
     assert got == json.loads(_GOLDEN.read_text())
+
+
+def test_single_segment_without_title_maps_the_audio_stream(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # One input and no crossfade: the audio is the input's own stream, which
+    # -map must name as 0:a, not as the filter label [0:a].
+    calls: list[list[str]] = []
+    monkeypatch.setattr(composite.subprocess, "run", lambda cmd, *a, **k: calls.append(list(cmd)) or _Done())
+    edl = EDL.from_dict({"source": "/rec/x.mp4", "segments": [{"src_start": 0, "src_end": 5}]})
+    composite.render(edl, Path("<OUT>/reel.mp4"), work_dir=tmp_path)
+    final = calls[-1]
+    assert final[final.index("-map", final.index("-map") + 1) + 1] == "0:a"

@@ -1,0 +1,21 @@
+{
+ "text": " Hello and welcome. Today we talk about boats.",
+ "language": "en",
+ "segments": [
+  {"id": 0, "start": 0.0, "end": 1.6, "text": " Hello and welcome.",
+   "words": [
+    {"word": " Hello", "start": 0.12, "end": 0.48, "probability": 0.98},
+    {"word": " and", "start": 0.5, "end": 0.66, "probability": 0.99},
+    {"word": " welcome.", "start": 0.7, "end": 1.4, "probability": 0.97}
+   ]},
+  {"id": 1, "start": 2.0, "end": 4.1, "text": " Today we talk about boats.",
+   "words": [
+    {"word": " Today", "start": 2.04, "end": 2.4, "probability": 0.95},
+    {"word": " we", "start": 2.42, "end": 2.55, "probability": 0.99},
+    {"word": " talk", "start": 2.58, "end": 2.9, "probability": 0.99},
+    {"word": " about", "start": 2.92, "end": 3.2, "probability": 0.99},
+    {"word": " boats.", "start": 3.22, "end": 3.9, "probability": 0.93},
+    {"word": " ", "start": 3.9, "end": 3.95, "probability": 0.1}
+   ]}
+ ]
+}

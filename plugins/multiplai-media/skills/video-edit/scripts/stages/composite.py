@@ -4,7 +4,8 @@ import shlex
 import subprocess
 import tempfile
 from pathlib import Path
-from stages.edl import EDL
+from stages import brand as brand_mod, layouts
+from stages.edl import EDL, Logo
 
 
 def _find_font(bold: bool) -> str:
@@ -79,33 +80,62 @@ def _zoom_filter(zoom, W: int, H: int) -> str:
     return f"crop={crop_w}:{crop_h}:{x}:{y}"
 
 
-def _cut_segments(edl: EDL, work: Path) -> list[Path]:
-    out = []
+def _segment_video(edl: EDL, seg, words: list[dict] | None, bg: str) -> str:
+    """The segment's video filtergraph, from [0:v] to [v].
+
+    A framing that is a single chain stays one linear chain (so a screencast
+    EDL builds exactly the command it always did); one that needs several
+    copies of the frame becomes a graph between [vin] and [vfit].
+    """
     W, H, fps = edl.output.width, edl.output.height, edl.output.fps
+    pre = [f"trim=duration={seg.src_duration}", "setpts=PTS-STARTPTS"]
+    if seg.zoom:
+        pre.append(_zoom_filter(seg.zoom, W, H))
+    post = []
+    if seg.speed != 1.0:
+        post.append(f"setpts=PTS/{seg.speed}")
+    post.append(f"fps={fps}")
+    post.append(f"trim=duration={seg.duration}")
+
+    fx, fy = (seg.focus.x, seg.focus.y) if seg.focus else (0.5, 0.5)
+    panels = {k: layouts.Rect(p.x, p.y, p.w, p.h)
+              for k, p in (edl.layout.panels.items() if edl.layout else [])}
+    chain = graph = None
+    if seg.frame is None:
+        if edl.output.fit == "crop":
+            chain = layouts.crop_chain(W, H, fx, fy)
+        elif edl.output.fit == "blur":
+            graph = layouts.blur_graph(W, H)
+        else:
+            chain = layouts.pad_chain(W, H, bg)
+    elif seg.frame == "stack":
+        graph = layouts.stack_graph(panels["A"], panels["B"], W, H, bg, fx, fx)
+    elif seg.frame == "speaker":
+        runs = layouts.speaker_runs(words or [], seg.src_start, seg.src_end,
+                                    edl.layout.speakers if edl.layout else {})
+        if not runs:
+            runs = [(0.0, seg.src_duration, sorted(panels)[0])]
+        graph = layouts.speaker_graph(runs, panels, W, H, (fx, fy))
+    else:
+        chain = layouts.panel_chain(panels[seg.frame], W, H, fx, fy)
+
+    if chain is not None:
+        return f"[0:v]{','.join(pre + [chain] + post)}[v]"
+    return f"[0:v]{','.join(pre)}[vin];{graph};[vfit]{','.join(post)}[v]"
+
+
+def _cut_segments(edl: EDL, work: Path, words: list[dict] | None = None,
+                  bg: str = layouts.DEFAULT_BG) -> list[Path]:
+    out = []
     for i, seg in enumerate(edl.segments):
         p = work / f"seg{i:02d}.mp4"
         mute = seg.mute or seg.speed > 4.0
         out_dur = seg.duration
-
-        vfilters = [
-            f"trim=duration={seg.src_duration}",
-            "setpts=PTS-STARTPTS",
-        ]
-        if seg.zoom:
-            vfilters.append(_zoom_filter(seg.zoom, W, H))
-        vfilters.append(
-            f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-            f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=#0a0a0a,setsar=1"
-        )
-        if seg.speed != 1.0:
-            vfilters.append(f"setpts=PTS/{seg.speed}")
-        vfilters.append(f"fps={fps}")
-        vfilters.append(f"trim=duration={out_dur}")
-        vchain = ",".join(vfilters)
+        video = _segment_video(edl, seg, words, bg)
 
         if mute:
             filter_complex = (
-                f"[0:v]{vchain}[v];"
+                f"{video};"
                 f"anullsrc=channel_layout=stereo:sample_rate=48000,"
                 f"atrim=duration={out_dur},asetpts=PTS-STARTPTS[a]"
             )
@@ -118,7 +148,7 @@ def _cut_segments(edl: EDL, work: Path) -> list[Path]:
                 afilters.append(_atempo_chain(seg.speed))
             afilters.append(f"atrim=duration={out_dur}")
             achain = ",".join(afilters)
-            filter_complex = f"[0:v]{vchain}[v]; [0:a]{achain}[a]"
+            filter_complex = f"{video}; [0:a]{achain}[a]"
 
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
@@ -246,23 +276,100 @@ def build_filter_complex(
     return filter_complex, cmd_inputs, video_label, audio_label
 
 
+def _map_label(label: str) -> str:
+    """-map argument for a filter output ("[ax3]") or, when one input passes
+    straight through with no crossfade, its stream ("0:a" — "[0:a]" names a
+    filter output that does not exist and ffmpeg refuses it)."""
+    return label if ":" in label else f"[{label}]"
+
+
 def _xfade_duration_for(edl: EDL, segment_index: int) -> float:
-    for t in edl.transitions:
-        if t.after == segment_index - 1:
-            return t.duration
-    return 0.5
+    return edl.xfade_before(segment_index)
+
+
+def _needs_source_size(edl: EDL) -> bool:
+    return bool(edl.layout) or edl.output.fit != "pad" or edl.output.height > edl.output.width
+
+
+def probe_size(path: str) -> tuple[int, int]:
+    out = subprocess.check_output(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=width,height", "-of", "csv=p=0", path], text=True).strip()
+    w, h = out.split(",")[:2]
+    return int(w), int(h)
+
+
+def _needs_words(edl: EDL) -> bool:
+    return edl.captions is not None or any(s.frame == "speaker" for s in edl.segments)
+
+
+def transcript_path(edl: EDL) -> Path:
+    if edl.transcript:
+        return Path(edl.transcript)
+    from stages.prep import cache_dir_for
+    return cache_dir_for(edl.source) / "transcript.json"
+
+
+def _load_words(edl: EDL) -> list[dict]:
+    path = transcript_path(edl)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"captions and speaker framing need the word transcript, and {path} does not "
+            "exist. Run `pipeline.py prep <source>` first, or set `transcript` in the EDL.")
+    from stages import transcript as tx
+    return tx.load(path)["words"]
+
+
+def _filter_path(p: Path) -> str:
+    s = str(p)
+    if "'" in s:
+        raise ValueError(f"cannot pass a path containing a quote to ffmpeg's subtitles filter: {s}")
+    return "'" + s + "'"
+
+
+def _burn_subtitles(edl: EDL, words: list[dict] | None, brand, work: Path) -> str | None:
+    """Write subs.ass and return the subtitles filter, or None when the EDL has
+    no captions and no headline. Fails when the font cannot draw a character."""
+    if edl.captions is None and edl.headline is None:
+        return None
+    from stages import captions as cap
+    from stages import timeline
+    out_words = timeline.map_words(words or [], timeline.place_segments(edl)) if edl.captions else []
+    font_file = brand.caption_font() or _find_font(bold=True)
+    text = " ".join(w["text"] for w in out_words) + " " + (edl.headline.text if edl.headline else "")
+    missing = cap.missing_glyphs(font_file, text)
+    if missing is None:
+        print(f"⚠ could not check that {font_file} has every character (no fontTools, no "
+              "fc-query); captions may show boxes for missing glyphs.")
+    elif missing:
+        raise ValueError(f"the caption font {font_file} has no glyph for: {' '.join(missing)} — "
+                         "pick a font that covers the transcript's language (brand font_bold_file).")
+    ass = work / "subs.ass"
+    ass.write_text(cap.build_ass(out_words, edl.captions, edl.headline, edl.output.width,
+                                 edl.output.height, cap.font_family(font_file), brand))
+    return f"subtitles=filename={_filter_path(ass)}:fontsdir={_filter_path(Path(font_file).parent)}"
 
 
 def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
-    for w in edl.validate():
+    brand = brand_mod.load(edl.brand) if edl.brand else brand_mod.default()
+    words = _load_words(edl) if _needs_words(edl) else None
+    source_size = probe_size(edl.source) if _needs_source_size(edl) else None
+    for w in edl.validate(source_size=source_size, words=words):
         print(f"⚠ EDL warning: {w}")
+    if brand.logo and not edl.logo:
+        edl.logo = Logo(path=brand.logo.path, position=brand.logo.position,
+                        scale=brand.logo.scale, start_at=0.0)
 
     work = work_dir or Path(tempfile.mkdtemp(prefix="video-edit-work-"))
     work.mkdir(parents=True, exist_ok=True)
 
-    clips = _cut_segments(edl, work)
+    subs = _burn_subtitles(edl, words, brand, work)
+    clips = _cut_segments(edl, work, words, bg=brand.background if edl.brand else layouts.DEFAULT_BG)
     title = _render_title(edl, work)
     filter_complex, cmd_inputs, vlabel, alabel = build_filter_complex(edl, clips, title)
+    if subs:
+        filter_complex += f"; [{vlabel}]{subs}[vsub]"
+        vlabel = "vsub"
 
     music_path = _resolve_music(edl, work)
     if music_path:
@@ -298,10 +405,11 @@ def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         *cmd_inputs,
         "-filter_complex", filter_complex,
-        "-map", f"[{vlabel}]", "-map", f"[{alabel}]",
+        "-map", f"[{vlabel}]", "-map", _map_label(alabel),
         "-c:v", "libx264", "-preset", "medium", "-crf", str(edl.output.crf),
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", edl.output.audio_bitrate,
+        *(["-ar", str(edl.output.audio_rate)] if edl.output.audio_rate else []),
         "-movflags", "+faststart",
         str(out_path),
     ]
