@@ -276,6 +276,13 @@ def build_filter_complex(
     return filter_complex, cmd_inputs, video_label, audio_label
 
 
+def _map_label(label: str) -> str:
+    """-map argument for a filter output ("[ax3]") or, when one input passes
+    straight through with no crossfade, its stream ("0:a" — "[0:a]" names a
+    filter output that does not exist and ffmpeg refuses it)."""
+    return label if ":" in label else f"[{label}]"
+
+
 def _xfade_duration_for(edl: EDL, segment_index: int) -> float:
     for t in edl.transitions:
         if t.after == segment_index - 1:
@@ -401,7 +408,7 @@ def render(edl: EDL, out_path: Path, work_dir: Path | None = None) -> Path:
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         *cmd_inputs,
         "-filter_complex", filter_complex,
-        "-map", f"[{vlabel}]", "-map", f"[{alabel}]",
+        "-map", f"[{vlabel}]", "-map", _map_label(alabel),
         "-c:v", "libx264", "-preset", "medium", "-crf", str(edl.output.crf),
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", edl.output.audio_bitrate,
