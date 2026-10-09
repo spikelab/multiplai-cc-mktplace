@@ -7,6 +7,7 @@ Subcommands:
 """
 from __future__ import annotations
 import argparse
+import signal
 import sys
 from pathlib import Path
 
@@ -40,7 +41,16 @@ def cmd_render(args: argparse.Namespace) -> int:
     print(f"→ rendering {len(edl.segments)} segments → {out}")
     if edl.music and edl.music.file:
         print(f"→ music bed: {edl.music.file} @ {edl.music.volume_db} dB")
-    composite.render(edl, out, work_dir=Path(args.work_dir) if args.work_dir else None)
+    # ffmpeg writes a hidden partial file that is renamed only once it
+    # finishes, so a review page watching the folder never offers a
+    # half-written render.
+    part = out.with_name(f".{out.stem}.partial{out.suffix}")
+    try:
+        composite.render(edl, part, work_dir=Path(args.work_dir) if args.work_dir else None)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    part.replace(out)
     print(f"✓ wrote {out} ({out.stat().st_size/1e6:.1f} MB)")
     return 0
 
@@ -148,6 +158,43 @@ def cmd_outdir(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_review(args: argparse.Namespace) -> int:
+    """Serve the review page for every render in a directory until stopped."""
+    from stages import review_server as rs
+    video_dir = Path(args.dir)
+    if args.next_version:
+        print(f"NEXT: {rs.next_version_path(video_dir, args.next_version)}")
+        return 0
+    mailbox = Path(args.mailbox) if args.mailbox else video_dir / "review"
+    try:
+        httpd, _token, urls = rs.serve(video_dir, mailbox, port=args.port)
+    except (FileNotFoundError, RuntimeError) as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+    box = rs.Mailbox(mailbox.resolve())
+    # The token is in open.html only; never print it (stdout is the transcript).
+    print(f"REVIEW: serving {len(rs.list_videos(video_dir.resolve()))} clip(s) from {video_dir.resolve()}")
+    for u in urls:
+        print(f"URL: {u}  (needs the token: open {box.open_html} or append ?t=<token from {box.token_file}>)")
+    print(f"OPEN: {box.open_html}")
+    print(f"MAILBOX: {box.comments}", flush=True)
+
+    def _stop(_signum, _frame):
+        raise KeyboardInterrupt
+    # Stopping a background task sends SIGTERM (or SIGHUP), not Ctrl-C;
+    # without this the token files would outlive the server.
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGHUP, _stop)
+    try:
+        httpd.serve_forever(poll_interval=0.2)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+        rs.unpublish(mailbox.resolve())
+    return 0
+
+
 def cmd_make(args: argparse.Namespace) -> int:
     """make is a thin wrapper for orchestrators. The skill's SKILL.md instructs
     the consuming Claude to run prep, author the EDL, then render — this entry
@@ -222,6 +269,14 @@ def main() -> int:
     od = sub.add_parser("outdir", help="print and create the output directory for a job")
     od.add_argument("job", help="job name, e.g. the show and episode")
     od.set_defaults(func=cmd_outdir)
+
+    rv = sub.add_parser("review", help="serve a page to watch renders and comment on them by time and position")
+    rv.add_argument("dir", help="directory of rendered videos (clip.mp4, clip.v2.mp4, …)")
+    rv.add_argument("--mailbox", default=None, help="where comments.jsonl goes (default: <dir>/review)")
+    rv.add_argument("--port", type=int, default=8765, help="first port to try (20 tried)")
+    rv.add_argument("--next-version", metavar="CLIP", default=None,
+                    help="print the path for CLIP's next version and exit")
+    rv.set_defaults(func=cmd_review)
 
     m = sub.add_parser("make", help="natural-language → reel (orchestrator workflow)")
     m.add_argument("source", help="path to screen recording (.mov/.mp4)")

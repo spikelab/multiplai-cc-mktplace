@@ -1,6 +1,6 @@
 ---
 name: video-edit
-description: Edit an existing video into finished outputs — a polished 1-3 minute landscape product demo from a raw screen recording (.mov/.mp4), or short 9:16 reels from a long podcast or interview recording. Free + local — uses ffmpeg + PySceneDetect for editing and mlx_whisper on the macOS host (over the SSH bridge) for multilingual transcription. No SaaS, no API keys. The user provides a recording and a prose description ("keep it 90s, hook in first 10s, money shot at 2:30, lo-fi vibe") plus an optional music file/URL; the orchestrating Claude runs prep, authors an EDL, renders the result. Triggers on "make a demo video", "edit this screencast", "turn this recording into a demo", "product demo from screen recording", "screen demo", "make reels from this podcast", "make shorts from this interview", "make TikToks from this video", "clip this video for Instagram", "video-edit skill".
+description: Edit an existing video into finished outputs — a polished 1-3 minute landscape product demo from a raw screen recording (.mov/.mp4), or short 9:16 reels from a long podcast or interview recording. Free + local — uses ffmpeg + PySceneDetect for editing and mlx_whisper on the macOS host (over the SSH bridge) for multilingual transcription. No SaaS, no API keys. The user provides a recording and a prose description ("keep it 90s, hook in first 10s, money shot at 2:30, lo-fi vibe") plus an optional music file/URL; the orchestrating Claude runs prep, authors an EDL, renders the result. Triggers on "make a demo video", "edit this screencast", "turn this recording into a demo", "product demo from screen recording", "screen demo", "make reels from this podcast", "make shorts from this interview", "make TikToks from this video", "clip this video for Instagram", "let me comment on the video", "review the renders", "video-edit skill".
 ---
 
 # video-edit
@@ -8,8 +8,8 @@ description: Edit an existing video into finished outputs — a polished 1-3 min
 Free + local pipeline that turns an existing video into edited outputs. Every
 job follows the same steps: analyse the video (transcript, silences, scene
 changes, motion), decide what to keep, write an edit list (EDL), render it,
-and check the result. Commands: `prep`, `render`, `check`, `timeline`, `snap`,
-`frame`, `outdir`, `make` (prints the workflow); `pipeline.py <command> --help`
+and check the result. Commands: `prep`, `render`, `check`, `review`, `timeline`,
+`snap`, `frame`, `outdir`, `make` (prints the workflow); `pipeline.py <command> --help`
 for each.
 
 ## Pick the job, then load its guide
@@ -127,6 +127,60 @@ platform requirements and exits 1 on any failure.
 
 Print the output path and total duration. If quality issues are visible (caption errors, wrong segment, etc.), iterate on the EDL and re-render — the cached prep means re-renders are fast (the bulk of time is the per-segment cut pass).
 
+### 6. Review loop: the user comments on the video itself
+
+When the user wants to review renders (or the job has several clips), serve
+them a review page instead of asking for timestamps in chat. In the page they
+click the picture to pause and comment on that moment and spot, then send
+all comments in one batch.
+
+1. **Start the server in the background** (Bash with `run_in_background`),
+   pointing it at the directory holding the renders:
+
+   ```bash
+   python3 ${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py review <dir>
+   ```
+
+   It prints `URL:` lines, `OPEN:` and `MAILBOX:`. Give the user the `OPEN:`
+   path (`<dir>/review/open.html`): opening that file sends the browser to
+   the page with its access token. **Never print or read out the token**; it
+   is in `open.html` and `server.token` only, both deleted when the server
+   stops. Inside a container the server binds `0.0.0.0`; the first URL is
+   `<hostname>.orb.local` under OrbStack, otherwise the container IP, and
+   `open.html` links every URL in case the first does not load. Set
+   `VIDEO_EDIT_REVIEW_URL_HOST` (e.g. `localhost` for a port published with
+   `-p`) to put that host first.
+
+2. **Watch the mailbox** with the Monitor tool, one event per comment:
+
+   ```bash
+   tail -n0 -F <dir>/review/comments.jsonl
+   ```
+
+   Each line is `{id, video, version, t, x, y, text, created_at}`: `video` is
+   the clip name, `t` the time in that render in seconds, `x`/`y` the click
+   position as a fraction of the width and height (0,0 is top left). Without
+   the Monitor tool, read the file when the user says they sent comments.
+
+3. **Wait for the batch to finish** (lines arriving within a few seconds of
+   each other belong to one Send all), then map each comment to the EDL:
+   `pipeline.py timeline <edl>` turns `t` back into source time; `y` near the
+   caption line or the headline points at those. Make every change the batch
+   asks for, then render the **next version** of that clip:
+
+   ```bash
+   PIPE=${CLAUDE_PLUGIN_ROOT}/skills/video-edit/scripts/pipeline.py
+   python3 $PIPE review <dir> --next-version clip-01      # NEXT: <dir>/clip-01.v2.mp4
+   python3 $PIPE render <edl> --out <dir>/clip-01.v2.mp4
+   python3 $PIPE check <dir>/clip-01.v2.mp4 --preset reels --edl <edl>
+   ```
+
+   The page notices the new version within 5 s and offers it in its version
+   menu; earlier versions stay so the user can compare. Tell the user in one
+   line what changed in the new version.
+
+4. Stop the server (TaskStop, or end the background task) when the user is done.
+
 ## Architecture
 
 ```
@@ -173,6 +227,7 @@ Keys for reels (see `references/reels.md`):
 
 - **Subtitles on a screencast.** Captions are a reels feature; a landscape demo gets none unless its EDL asks for `captions`.
 - **Face tracking.** Reels frame speakers from declared panels, or from speaker labels in the transcript — never by detecting faces.
+- **Hosted review.** The review page is served from this machine to the user's browser; sharing it with someone elsewhere means putting the renders somewhere they can reach.
 - **Posting.** It renders files; uploading or scheduling to Instagram, Facebook or TikTok is up to the user.
 - **Cursor zoom-on-click.** Would require a macOS sidecar logger at record time. Out of scope.
 - **AI music generation in this container.** ACE-Step pyproject hard-pins CUDA/MPS wheels — won't install on CPU-only aarch64 Linux. Use `--music-file` or `--music-url`. See `stages/music.py` `GENERATION_NOTE` for Mac/GPU install path if the user wants it there.

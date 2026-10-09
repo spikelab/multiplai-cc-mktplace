@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Video review</title>
+<link rel="stylesheet" href="/static/review.css">
+</head>
+<body>
+<header>
+  <h1>Video review</h1>
+  <p id="status" role="status"></p>
+</header>
+<main>
+  <nav id="clips" aria-label="Clips"></nav>
+  <section id="player-col">
+    <div id="stage">
+      <video id="video" preload="metadata" playsinline></video>
+      <div id="markers"></div>
+    </div>
+    <div id="controls">
+      <button id="play" type="button" aria-label="Play">▶</button>
+      <input id="seek" type="range" min="0" max="0" step="0.01" value="0" aria-label="Seek">
+      <span id="time">0:00.0 / 0:00.0</span>
+      <select id="version" aria-label="Version"></select>
+    </div>
+    <form id="composer" hidden>
+        <label for="composer-text" id="composer-label"></label>
+        <textarea id="composer-text" rows="3" placeholder="What should change here?"></textarea>
+        <div class="row">
+          <button type="submit">Add comment</button>
+          <button type="button" id="composer-cancel" class="ghost">Cancel</button>
+        </div>
+      </form>
+    <p class="hint">Click the picture to pause and comment on that spot. Space plays and pauses; ← and → step 1 s.</p>
+  </section>
+  <aside id="comments">
+    <h2>Pending <span id="pending-count"></span></h2>
+    <ol id="pending"></ol>
+    <button id="send" type="button" disabled>Send all</button>
+    <h2>Sent</h2>
+    <ol id="sent"></ol>
+  </aside>
+</main>
+<script src="/static/review.js"></script>
+</body>
+</html>
