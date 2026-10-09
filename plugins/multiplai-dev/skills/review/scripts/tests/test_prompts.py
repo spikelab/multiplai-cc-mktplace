@@ -83,3 +83,23 @@ def test_conventions_finder_is_told_to_look_outside_the_diff(target_info):
 def test_citation_rules_put_the_web_second(target_info):
     prompt = find.build(target_info, "diff-bugs", "diff")
     assert "the first\ncitation is always a file at this commit" in prompt
+
+
+def test_conventions_finder_reads_coding_standards(target_info):
+    prompt = find.build(target_info, "conventions", "diff", conventions="# rules")
+    assert "coding-standards.md" in prompt
+    assert "even where the rule states no consequence" in prompt
+
+
+def test_conventions_finder_says_when_there_are_no_rules(target_info):
+    prompt = find.build(target_info, "conventions", "diff")
+    assert "(no coding-standards.md or CLAUDE.md files found)" in prompt
+
+
+def test_tests_finder_reports_tests_that_cannot_fail(target_info):
+    prompt = find.build(target_info, "tests", "diff")
+    assert "asserts a value copied from the implementation" in prompt  # (a)
+    assert "reads a source file as text" in prompt  # (b)
+    assert "replaces with a mock or stub the exact dependency" in prompt  # (c)
+    assert "Rate such a finding LOW at most" in prompt
+    assert "Do not describe what the tests cover." in prompt
