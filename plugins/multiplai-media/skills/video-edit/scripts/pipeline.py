@@ -5,6 +5,7 @@ Subcommands (see --help for all):
   render <edl.json>             Deterministic render (walking skeleton).
   correct <cache> <fixes.json>  Fix misheard words before they become captions.
   proof <mp4> --edl E --out P   One PNG of the reel, moment by moment, to check before reporting.
+  shots <cache> --from --to     The shots in a range, 3 frames each, for framing a broadcast feed.
   make <source> --prompt TEXT   Natural-language → EDL → render (not yet implemented).
 """
 from __future__ import annotations
@@ -104,6 +105,27 @@ def cmd_proof(args: argparse.Namespace) -> int:
         print(" | ".join(proof.label_lines(tile)))
     print(f"PROOF: {out.resolve()} ({len(shown)} tiles"
           f"{'' if words else '; no transcript, so no captions or speakers in the labels'})")
+    return 0
+
+
+def cmd_shots(args: argparse.Namespace) -> int:
+    """List the shots prep detected in a time range and draw 3 frames of each."""
+    from stages import shots
+    cache = Path(args.cache)
+    scenes_csv, proxy = cache / "scenes.csv", cache / "proxy_720p.mp4"
+    for f in (scenes_csv, proxy):
+        if not f.exists():
+            print(f"✗ {f} not found — run `pipeline.py prep <source>` first.", file=sys.stderr)
+            return 1
+    found = shots.shots_in(shots.read_scenes(scenes_csv), args.start, args.end)
+    if not found:
+        print(f"✗ no shots between {args.start} and {args.end}", file=sys.stderr)
+        return 1
+    for k, (s, e) in enumerate(found, start=1):
+        print(f"SHOT {k}: {s:.2f}–{e:.2f} ({e - s:.1f}s)")
+    out = Path(args.out)
+    shots.make(proxy, found, out, composite._find_font(bold=True))
+    print(f"SHEET: {out.resolve()} (frames just after the start, the middle, just before the end)")
     return 0
 
 
@@ -321,6 +343,13 @@ def main() -> int:
     pr.add_argument("--edl", required=True, help="the EDL it was rendered from")
     pr.add_argument("--out", required=True, help="PNG to write")
     pr.set_defaults(func=cmd_proof)
+
+    sh = sub.add_parser("shots", help="list the shots in a time range and draw 3 frames of each")
+    sh.add_argument("cache", help="the prep cache directory (prep prints it)")
+    sh.add_argument("--from", dest="start", type=float, required=True, help="source seconds")
+    sh.add_argument("--to", dest="end", type=float, required=True, help="source seconds")
+    sh.add_argument("--out", required=True, help="PNG to write")
+    sh.set_defaults(func=cmd_shots)
 
     tl = sub.add_parser("timeline", help="print the transcript in output time for an EDL")
     tl.add_argument("edl", help="path to EDL JSON")
