@@ -2,7 +2,7 @@
 
   review  — one target (--branch, --pr or --range)
   batch   — a YAML list of targets, then rollups
-  rollup  — regenerate HIGH/MEDIUM/LOW-only.md from existing findings.json files
+  rollup  — regenerate HIGH/MEDIUM/LOW-only.md and runs.jsonl from existing findings.json files
   resume  — continue a review from its review-state.json
   post    — one PR comment with the HIGH and MEDIUM findings
   assess-only — run the repeats and assess stages on saved reviews and compare
@@ -102,7 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
     _trust_flag(bt)
     _budget_flag(bt)
 
-    ru = sub.add_parser("rollup", parents=[common], help="Regenerate HIGH/MEDIUM/LOW-only.md from findings.json files")
+    ru = sub.add_parser("rollup", parents=[common], help="Regenerate HIGH/MEDIUM/LOW-only.md and runs.jsonl from findings.json files")
     ru.add_argument("paths", nargs="*", help="findings.json files in order (default: <out>/*/findings.json)")
 
     rs = sub.add_parser("resume", parents=[common], help="Continue a review from <out>/<slug>/review-state.json")
@@ -153,6 +153,8 @@ def main(argv: list[str] | None = None) -> int:
         paths = [Path(p).resolve() for p in args.paths] or None
         written = render.write_rollups(out, paths)
         print("rollups: " + " ".join(str(p) for p in written))
+        runs, n, skipped = render.write_runs(out, paths)
+        print(f"runs: {runs} ({n} review{'' if n == 1 else 's'}, {skipped} skipped: no run recorded)")
         return 0
 
     if args.command == "post":
@@ -179,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
             path = asyncio.run(orchestrator.review(spec, out, load_config(out, max_cost_usd=max_cost),
                                                    session_id=args.session_id))
             render.write_rollups(out)
+            render.write_runs(out)
             print(f"findings: {path}")
             print(f"checks: {path.parent / 'checks.json'}")
             return 0
@@ -188,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
             path = asyncio.run(orchestrator.resume(target_dir, load_config(target_dir.parent, max_cost_usd=max_cost),
                                                    session_id=args.session_id))
             render.write_rollups(target_dir.parent)
+            render.write_runs(target_dir.parent)
             print(f"findings: {path}")
             print(f"checks: {path.parent / 'checks.json'}")
             return 0

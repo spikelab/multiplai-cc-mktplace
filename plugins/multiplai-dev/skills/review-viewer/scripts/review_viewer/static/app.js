@@ -562,6 +562,7 @@
         overview.appendChild(ul);
       }
     }
+    renderRun();
     const pr = state.detail.pr;
     const desc = $("pr-desc");
     desc.hidden = !pr;
@@ -571,6 +572,30 @@
       if ((pr.body || "").trim()) renderMarkdown($("pr-body"), pr.body);
       else $("pr-body").replaceChildren(el("p", { class: "muted", text: "The PR has no description." }));
     }
+  }
+
+  /* The Run block: cost, tokens, calls, time and models, from findings.json's
+   * `run`. Hidden for a review written before it existed. */
+  function renderRun() {
+    const box = $("run-block");
+    const run = L.runBlock(state.detail.findings.run);
+    box.hidden = !run;
+    if (!run) { box.replaceChildren(); return; }
+    const totals = el("dl", { class: "run-totals" });
+    for (const [k, v] of run.totals) totals.append(el("dt", { text: k }), el("dd", { text: v }));
+    for (const m of run.models) {
+      totals.append(el("dt", { text: "Model: " + m.stage }), el("dd", { text: m.model + " · effort " + m.effort }));
+    }
+    const table = el("table", { class: "run-stages" }, [
+      el("thead", {}, el("tr", {}, ["Stage", "Calls", "Tokens", "Cost", "Time"].map((h) => el("th", { text: h })))),
+      el("tbody", {}, run.stages.map((st) => el("tr", {}, [
+        el("td", { class: "mono", text: st.name }), el("td", { text: st.calls }), el("td", { text: st.tokens }),
+        el("td", { text: st.cost }), el("td", { text: st.time })]))),
+    ]);
+    const children = [el("div", { class: "label", text: "Run" }), totals, table];
+    const total = L.runTotal(state.targets);
+    if (total) children.push(el("p", { class: "coverage", text: total }));
+    box.replaceChildren(...children);
   }
 
   // --- walkthrough -----------------------------------------------------------------

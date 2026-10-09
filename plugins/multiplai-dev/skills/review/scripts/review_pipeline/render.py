@@ -98,6 +98,20 @@ def finding_section(fd: dict, *, web_base: str | None, head_sha: str,
     return "\n".join(out)
 
 
+def duration(seconds: float) -> str:
+    """`Xm Ys`, or `Ys` under a minute."""
+    total = int(round(seconds))
+    minutes, secs = divmod(total, 60)
+    return f"{minutes}m {secs}s" if minutes else f"{secs}s"
+
+
+def cost_line(run: dict) -> str:
+    """Cost, calls, tokens and wall time, all from `findings.json`'s `run` object."""
+    calls = run["calls"]
+    return (f"${run['cost_usd']:.2f} over {calls} agent call{'' if calls == 1 else 's'}, "
+            f"{run['tokens']['total']:,} tokens, {duration(run['wall_seconds'])} wall time")
+
+
 def _counts(findings: list[dict]) -> dict[str, int]:
     shown = [f for f in findings if f["status"] in SHOWN_STATUSES]
     return {s: sum(1 for f in shown if f["severity"] == s) for s in SEVERITIES}
@@ -129,8 +143,8 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
     rejected = sum(1 for f in findings if f["status"] == "rejected")
     out.append(f"- **Findings:** {counts['HIGH']} HIGH, {counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW; "
                f"{refuted} refuted, {rejected} rejected by the gates (see the appendix)")
-    if state.budget.get("cost_usd") is not None:
-        out.append(f"- **Model cost:** ${float(state.budget['cost_usd']):.2f} over {state.budget.get('calls', 0)} agent calls")
+    if data.get("run"):
+        out.append(f"- **Model cost:** {cost_line(data['run'])}")
     if state.errors:
         out.append("- **Agent failures:** " + "; ".join(_one_line(e) for e in state.errors))
     out += ["", "## Findings", ""]
@@ -221,8 +235,8 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
 
     out = [f"# Review summary — {t.label or t.slug}", ""]
     out.append(f"{len(t.commits)} commits, {len(t.files)} files, {t.base_sha[:10]}..{t.head_sha[:10]}.")
-    if state.budget.get("cost_usd") is not None:
-        out.append(f"Cost ${float(state.budget['cost_usd']):.2f} over {state.budget.get('calls', 0)} agent calls.")
+    if data.get("run"):
+        out.append(f"Cost {cost_line(data['run'])}.")
     out.append(f"Findings: {counts['HIGH']} HIGH, {counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW. Dropped: "
                f"{sum(1 for f in dropped if f['status'] == 'refuted')} refuted by the verifier, "
                f"{sum(1 for f in dropped if f['status'] == 'rejected')} rejected by the gates"
@@ -418,3 +432,35 @@ def write_rollups(out_dir: Path, paths: list[Path] | None = None) -> list[Path]:
         path.write_text(render_rollup(severity, files), encoding="utf-8")
         written.append(path)
     return written
+
+
+# --- runs.jsonl ----------------------------------------------------------------
+
+RUNS_FILE = "runs.jsonl"
+
+
+def write_runs(out_dir: Path, paths: list[Path] | None = None) -> tuple[Path, int, int]:
+    """`runs.jsonl` in *out_dir*: one line per findings.json that has a `run`.
+
+    Each line holds the target's label, slug and head sha, `generated_at`,
+    `producer` and the whole `run` object, so one `jq -s` answers questions
+    across reviews. Returns (path, lines written, files skipped for having no
+    `run`). Unreadable files are skipped with a warning and not counted.
+    """
+    if paths is None:
+        paths = sorted(out_dir.glob("*/findings.json"))
+    lines, skipped = [], 0
+    for data in load_findings_files(paths):
+        if not data.get("run"):
+            skipped += 1
+            continue
+        t = data.get("target") or {}
+        lines.append(json.dumps({
+            "target": {"label": t.get("label"), "slug": t.get("slug"), "head_sha": t.get("head_sha")},
+            "generated_at": data.get("generated_at"),
+            "producer": data.get("producer"),
+            "run": data["run"],
+        }, sort_keys=True, ensure_ascii=False))
+    path = out_dir / RUNS_FILE
+    path.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+    return path, len(lines), skipped

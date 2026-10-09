@@ -555,6 +555,13 @@ pre.sketch {
 .badge-detail { border-left: 3px solid var(--border); padding: 2px var(--s3); margin: 0 0 var(--s3); font-size: var(--fs-md); animation: rise var(--t-med) var(--ease); }
 .pr-desc { margin-top: var(--s4); border-top: 1px solid var(--border); padding-top: var(--s2); }
 .pr-desc > summary { cursor: pointer; font-weight: 600; }
+.run-block { margin-top: var(--s4); border-top: 1px solid var(--border); padding-top: var(--s2); font-size: var(--fs-sm); }
+.run-totals { display: grid; grid-template-columns: max-content 1fr; gap: 2px var(--s3); margin: 0 0 var(--s3); }
+.run-totals dt { color: var(--muted); }
+.run-totals dd { margin: 0; overflow-wrap: anywhere; }
+.run-stages { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.run-stages th, .run-stages td { padding: 2px var(--s2); text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border); }
+.run-stages th:first-child, .run-stages td:first-child { text-align: left; }
 .coverage { font-size: var(--fs-sm); color: var(--muted); margin: var(--s3) 0; }
 .skipped { margin: var(--s1) 0 0; padding-left: 18px; color: var(--muted); }
 

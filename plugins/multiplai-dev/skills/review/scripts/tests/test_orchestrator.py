@@ -303,6 +303,107 @@ def test_default_out_is_the_workspace_inbox_else_home_never_cwd(tmp_path, monkey
     assert default_out() == ws / "INBOX" / "reviews"
 
 
+def test_a_resumed_run_adds_an_interval_instead_of_overwriting(fixture_repo, tmp_path, agents, capsys):
+    saved, _, _ = _stop_then_resume(fixture_repo, tmp_path, agents, capsys, stop_at=7)
+    assert len(saved.timings["run"]) == 1 and saved.timings["run"][0].ended_at  # closed at the stop
+    assert saved.budget_stops == 1
+    target_dir = tmp_path / "out" / f"booking-engine--{fixture_repo[1]}..{fixture_repo[2]}"
+    state = ReviewState.model_validate_json((target_dir / "review-state.json").read_text())
+    assert len(state.timings["run"]) == 2 and all(i.ended_at for i in state.timings["run"])
+    assert len(state.timings["verify"]) == 2  # stopped once, resumed once
+    assert len(state.timings["find"]) == 1 and len(state.timings["merge"]) == 1
+    assert {f"find:{d}" for d in DIMENSIONS} <= set(state.timings)
+    assert state.timings["run"][1].started_at >= state.timings["run"][0].ended_at
+
+
+def test_run_config_records_session_default_for_unset_models(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "review.yaml").write_text("verifier_model: claude-x\nconcurrency: 2\n")
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    state = ReviewState.model_validate_json(
+        (out / f"booking-engine--{base}..{head}" / "review-state.json").read_text())
+    assert state.run_config["stages"]["find"] == {"model": "session default", "effort": "session default"}
+    assert state.run_config["stages"]["verify"]["model"] == "claude-x"
+    assert state.run_config["stages"]["merge"]["model"] == "claude-x"
+    assert state.run_config["concurrency"] == 2
+
+
+def test_rollup_writes_runs_jsonl_and_counts_files_without_run(fixture_repo, tmp_path, agents, capsys):
+    import shutil
+    import subprocess
+
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    agents(cost=0.75)
+    assert main(_review_args(repo, base, head, out)) == 0
+    new = out / f"booking-engine--{base}..{head}" / "findings.json"
+    old = out / "older-review" / "findings.json"
+    old.parent.mkdir()
+    data = json.loads(new.read_text())
+    expected_cost = data["run"]["cost_usd"]
+    del data["run"]  # as written before multiplai-dev 0.28
+    old.write_text(json.dumps(data))
+    capsys.readouterr()
+
+    assert main(["--out", str(out), "rollup"]) == 0
+    stdout = capsys.readouterr().out
+    assert "(1 review, 1 skipped: no run recorded)" in stdout
+    lines = (out / "runs.jsonl").read_text().splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["target"] == {"label": data["target"]["label"], "slug": data["target"]["slug"],
+                             "head_sha": head}
+    assert set(row) == {"target", "generated_at", "producer", "run"}
+    assert row["run"]["cost_usd"] == expected_cost == pytest.approx(0.75 * row["run"]["calls"])
+    if shutil.which("jq") is None:
+        pytest.skip("jq is not installed")
+    total = subprocess.run(["jq", "-s", "map(.run.cost_usd) | add", str(out / "runs.jsonl")],
+                           capture_output=True, text=True, check=True).stdout.strip()
+    assert float(total) == pytest.approx(expected_cost)
+
+
+def test_batch_keeps_runs_jsonl_lines_of_earlier_reviews(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    agents()
+    assert main(_review_args(repo, base, head, out)) == 0
+    earlier = out / "earlier-review" / "findings.json"
+    earlier.parent.mkdir()
+    data = json.loads((out / f"booking-engine--{base}..{head}" / "findings.json").read_text())
+    data["target"] = {**data["target"], "slug": "earlier-review", "label": "earlier"}
+    earlier.write_text(json.dumps(data))
+    batch_file = tmp_path / "batch.yaml"
+    batch_file.write_text(f"- repo: {repo}\n  branch: feature/db-2038\n")
+    capsys.readouterr()
+
+    assert main(["--out", str(out), "batch", str(batch_file), "--trust-repo"]) == 0
+    slugs = sorted(json.loads(line)["target"]["slug"] for line in (out / "runs.jsonl").read_text().splitlines())
+    assert slugs == sorted([f"booking-engine--{base}..{head}", "booking-engine--feature_db-2038", "earlier-review"])
+
+
+def test_calls_with_no_usage_leave_one_budget_line_that_a_resume_replaces(target_info):
+    from review_pipeline.orchestrator import note_missing_usage
+
+    ledger = budget.ReviewBudget(max_usd=10)
+    state = ReviewState(target=target_info)
+    state.errors = ["verify: something else"]
+    note_missing_usage(state, ledger)
+    assert state.errors == ["verify: something else"]
+
+    ledger.record(None, label="find")
+    note_missing_usage(state, ledger)
+    assert state.errors == ["verify: something else",
+                            "budget: 1 agent call returned no usage; their cost and tokens are counted as 0"]
+
+    ledger.record(SimpleNamespace(), label="verify")  # a resume: the ledger carries on counting
+    note_missing_usage(state, ledger)
+    budget_lines = [e for e in state.errors if e.startswith("budget:")]
+    assert budget_lines == ["budget: 2 agent calls returned no usage; their cost and tokens are counted as 0"]
+    assert state.errors[0] == "verify: something else"
+
 # --- rounds ----------------------------------------------------------------------
 
 

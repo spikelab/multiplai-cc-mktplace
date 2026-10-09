@@ -17,6 +17,31 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-10-09
+
+### Added
+
+- **review: what a review cost, in `findings.json`.** Each review's
+  `findings.json` now has a `run` object: total cost, tokens (input, output,
+  cache read, cache write), agent calls, wall time, the budget ceiling, and
+  one row per stage (each finder, `verify`, `merge`, `repeats`, `assess`)
+  with its calls, tokens, cost, time, and configured model and effort, and
+  counts of what was found, rejected, refuted, merged, labelled `repeat` and
+  labelled `low-value`. Wall time leaves out the gap before a `resume`. A call
+  that returns no usage counts as 0 and is noted in the errors.
+- **review: `runs.jsonl`.** `rollup` (and every review) writes one line per
+  review with a `run` to `runs.jsonl` in the output directory, so "what did
+  reviews cost this month" or "which stage costs most" is one `jq` query.
+  `SKILL.md` gives both. `rollup` prints how many older files it skipped.
+- **review-viewer: a Run block on the Summary tab** showing those numbers,
+  with a line totalling every loaded review. Hidden for older reviews.
+
+### Changed
+
+- **review: the cost line in `summary-<slug>.md` and `review-<slug>.md`** now
+  reads the same `run` object as `findings.json`, adding tokens and wall
+  time, so the summary can no longer disagree with the file.
+
 ## [0.27.0] - 2026-10-09
 
 ### Added

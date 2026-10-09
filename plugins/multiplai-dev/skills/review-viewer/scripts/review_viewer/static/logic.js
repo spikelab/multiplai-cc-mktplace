@@ -949,6 +949,66 @@
     return typeof url === "string" && /^https:\/\/github\.com\/[^\s"'<>]+$/.test(url) ? url : null;
   }
 
+  /* "$4.11": USD to 2 decimals. */
+  function formatUsd(n) {
+    return "$" + (Number(n) || 0).toFixed(2);
+  }
+
+  /* "1,423,551": a whole number with comma thousands separators, whatever the locale. */
+  function formatTokens(n) {
+    return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  }
+
+  /* "7m 12s", or "45s" under a minute. */
+  function formatSeconds(s) {
+    const total = Math.round(Number(s) || 0);
+    const m = Math.floor(total / 60);
+    return m ? m + "m " + (total % 60) + "s" : (total % 60) + "s";
+  }
+
+  /* findings.json's `run` → what the Summary tab's Run block shows, or null
+   * when the file has no `run` (written before multiplai-dev 0.28). */
+  function runBlock(run) {
+    if (!run || typeof run !== "object") return null;
+    const t = run.tokens || {};
+    const totals = [
+      ["Cost", formatUsd(run.cost_usd) + (run.max_usd ? " of " + formatUsd(run.max_usd) + " ceiling" : " (no ceiling)")],
+      ["Tokens", formatTokens(t.total) + " (input " + formatTokens(t.input) + ", output " + formatTokens(t.output) +
+        ", cache read " + formatTokens(t.cache_read) + ", cache write " + formatTokens(t.cache_write) + ")"],
+      ["Agent calls", formatTokens(run.calls)],
+      ["Wall time", formatSeconds(run.wall_seconds) + (run.stopped_by_budget ? " (stopped by the budget and resumed)" : "")],
+    ];
+    if (run.errors) totals.push(["Errors", String(run.errors)]);
+    const models = [];
+    const seen = new Set();
+    for (const st of run.stages || []) {
+      if (seen.has(st.stage)) continue;
+      seen.add(st.stage);
+      models.push({ stage: st.stage, model: st.model, effort: st.effort });
+    }
+    const stages = (run.stages || []).map(function (st) {
+      return { name: st.name, calls: formatTokens(st.calls), tokens: formatTokens((st.tokens || {}).total),
+        cost: formatUsd(st.cost_usd), time: formatSeconds(st.wall_seconds) };
+    });
+    return { totals: totals, models: models, stages: stages };
+  }
+
+  /* One line totalling every review the page holds, or null with fewer than
+   * two reviews that have a `run`. `targets` is /api/targets' list. */
+  function runTotal(targets) {
+    const runs = (targets || []).map(function (t) { return t && t.run; }).filter(Boolean);
+    if (runs.length < 2) return null;
+    let cost = 0, calls = 0, tokens = 0, secs = 0;
+    for (const r of runs) {
+      cost += Number(r.cost_usd) || 0;
+      calls += Number(r.calls) || 0;
+      tokens += Number((r.tokens || {}).total) || 0;
+      secs += Number(r.wall_seconds) || 0;
+    }
+    return "All " + runs.length + " reviews: " + formatUsd(cost) + ", " + formatTokens(tokens) + " tokens, " +
+      formatTokens(calls) + " agent calls, " + formatSeconds(secs) + " wall time";
+  }
+
   // --- the Checked tab: checks.json v1 ------------------------------------------
 
   /* Agents in the order they started; ties keep file order. */
@@ -1039,6 +1099,8 @@
     riskInputs: riskInputs, riskLevel: riskLevel, TIER_NAMES: TIER_NAMES,
     currentBlock: currentBlock, stepCurrent: stepCurrent,
     paletteMatch: paletteMatch, viewedCount: viewedCount,
+    formatUsd: formatUsd, formatTokens: formatTokens, formatSeconds: formatSeconds,
+    runBlock: runBlock, runTotal: runTotal,
     agentOrder: agentOrder, finderRows: finderRows, checkedFindingRows: checkedFindingRows,
     mergeRows: mergeRows, verifierIndex: verifierIndex, callLinksToDiff: callLinksToDiff,
     citationWarning: citationWarning,

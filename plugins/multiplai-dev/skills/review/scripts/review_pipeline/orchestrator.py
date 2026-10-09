@@ -16,13 +16,13 @@ import yaml
 
 from multiplai_core.log_utils import log_event
 
-from . import budget, rounds, target as target_mod
-from .config import ReviewConfig
+from . import budget, rounds, target as target_mod, timings
+from .config import ReviewConfig, run_config
 from .export import write_checks_file, write_findings_file
 from .gates import reason_kind
 from .models import SEVERITIES, ReviewState
 from .progress import ProgressWriter
-from .render import summary_path, write_review, write_rollups
+from .render import summary_path, write_review, write_rollups, write_runs
 from .stages import RunContext
 from .stages.assess import run_assess
 from .stages.find import run_find
@@ -61,6 +61,18 @@ def _count_line(counts: dict[str, int]) -> str:
     return ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in counts.items()) or "nothing to do"
 
 
+NO_USAGE_NOTE = "budget:"
+
+
+def note_missing_usage(state: ReviewState, ledger: budget.ReviewBudget) -> None:
+    """One line in `state.errors` when calls returned no usage; their cost and tokens count as 0."""
+    state.errors = [e for e in state.errors if not e.startswith(NO_USAGE_NOTE)]
+    if ledger.no_usage_calls:
+        n = ledger.no_usage_calls
+        state.errors.append(f"{NO_USAGE_NOTE} {n} agent call{'' if n == 1 else 's'} returned no usage; "
+                            "their cost and tokens are counted as 0")
+
+
 async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, *,
                     session_id: str = "") -> Path:
     """Run every stage not yet done; return the findings.json path."""
@@ -78,6 +90,8 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
     diff = Path(t.diff_path).read_text(encoding="utf-8") if t.diff_path else ""
     ctx = RunContext(config=config, snapshot=snapshot, diff=diff, progress=progress, session_id=session_id,
                      target_dir=target_dir)
+    state.run_config = run_config(config)
+    timings.open_interval(state, "run")
     save_state(state, target_dir)
 
     for name, fn in STAGE_FUNCTIONS:
@@ -85,15 +99,21 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
             continue
         progress.stage(name, "started")
         ctx.counts, ctx.gate_reasons = {}, []
+        timings.open_interval(state, name)
         try:
             state = await fn(state, ctx)
         except budget.BudgetExceededError as e:
+            timings.close_interval(state, name)
+            timings.close_interval(state, "run")
+            state.budget_stops += 1
             state.budget = ledger.to_state()
             save_state(state, target_dir)
             progress.failed(str(e))
             log_event("review", "budget_stop", str(e), session_id=session_id, level="WARNING",
                       target=t.slug, cost_usd=round(e.cost_usd, 4), stage=name)
             raise
+        timings.close_interval(state, name)
+        timings.close_interval(state, "run")  # moved forward at each checkpoint; see timings.py
         state.budget = ledger.to_state()
         save_state(state, target_dir)
         summary = f"{name} done: {_count_line(ctx.counts)}"
@@ -107,6 +127,9 @@ async def run_state(state: ReviewState, target_dir: Path, config: ReviewConfig, 
                       session_id=session_id, target=t.slug, stage=name, count=len(ctx.gate_reasons),
                       reasons=sorted({reason_kind(r) for r in ctx.gate_reasons}))
 
+    timings.close_interval(state, "run")
+    note_missing_usage(state, ledger)
+    state.budget = ledger.to_state()
     findings_path = target_dir / "findings.json"
     if not state.past("export"):
         findings_path = write_findings_file(state, target_dir)
@@ -301,4 +324,7 @@ async def batch(specs: list[TargetSpec], out_dir: Path, config: ReviewConfig, *,
     written = [p for p in results if p is not None]
     if written:
         write_rollups(out_dir, written)
+        # Every review in out_dir, as after `review` and `resume`: a batch must
+        # not drop the lines of reviews it did not run.
+        write_runs(out_dir)
     return written, failures

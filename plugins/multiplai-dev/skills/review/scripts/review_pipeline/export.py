@@ -32,7 +32,10 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import SEVERITIES, AgentCheck, Assessment, Citation, Finding, ReviewState
+from . import timings
+from .budget import TOKEN_FIELDS, empty_stage
+from .config import DIMENSIONS
+from .models import SEVERITIES, STAGES, AgentCheck, Assessment, Citation, Finding, ReviewState
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +70,79 @@ def _finding(f: Finding, status: str, reason: str | None, expected: str | None) 
         "citations": [_citation(c) for c in f.citations],
         "verdict_reason": reason,
         "expected_behaviour": expected or None,
+    }
+
+
+def _tokens(rec: dict) -> dict:
+    values = {f: int(rec.get(f, 0) or 0) for f in TOKEN_FIELDS}
+    return {
+        "input": values["input_tokens"],
+        "output": values["output_tokens"],
+        "cache_read": values["cache_read_tokens"],
+        "cache_write": values["cache_creation_tokens"],
+        "total": sum(values.values()),
+    }
+
+
+def _stage_order(name: str) -> tuple[int, int, str]:
+    stage, _, dimension = name.partition(":")
+    stage_i = STAGES.index(stage) if stage in STAGES else len(STAGES)
+    dim_i = DIMENSIONS.index(dimension) if dimension in DIMENSIONS else len(DIMENSIONS)
+    return (stage_i, dim_i, name)
+
+
+def run_record(state: ReviewState) -> dict:
+    """The `run` object: cost, tokens, time and models, from the final state only.
+
+    One row per budget label (`find:<dimension>`, `verify`, `merge`). A stage's
+    own interval stands in for its rows' time unless the stage has per-label
+    intervals, as the finders do.
+    """
+    ledger = state.budget or {}
+    by_stage: dict[str, dict] = ledger.get("by_stage") or {}
+    names = set(by_stage) | {k for k in state.timings if k != "run"}
+    # `find` has a row per finder; its stage-level interval would repeat them.
+    names -= {n for n in names if ":" not in n and any(m.startswith(n + ":") for m in names)}
+    configured = (state.run_config or {}).get("stages", {})
+    stages = []
+    for name in sorted(names, key=_stage_order):
+        rec = by_stage.get(name) or empty_stage()
+        stage = name.partition(":")[0]
+        cfg = configured.get(stage, {})
+        stages.append({
+            "name": name,
+            "stage": stage,
+            "calls": int(rec.get("calls", 0) or 0),
+            "tokens": _tokens(rec),
+            "cost_usd": round(float(rec.get("cost_usd", 0.0) or 0.0), 6),
+            "wall_seconds": round(timings.wall_seconds(state.timings.get(name, [])), 3),
+            "model": cfg.get("model", "unknown"),
+            "effort": cfg.get("effort", "unknown"),
+        })
+    runs = state.timings.get("run", [])
+    ended = [i.ended_at for i in runs if i.ended_at]
+    statuses = [getattr(state.verdicts.get(f.id), "status", "") for f in state.findings]
+    labels = [a.label for a in state.assessments.values()]
+    return {
+        "started_at": runs[0].started_at if runs else None,
+        "ended_at": ended[-1] if ended else None,
+        "wall_seconds": round(timings.wall_seconds(runs), 3),
+        "calls": int(ledger.get("calls", 0) or 0),
+        "tokens": _tokens(ledger),
+        "cost_usd": round(float(ledger.get("cost_usd", 0.0) or 0.0), 6),
+        "max_usd": ledger.get("max_usd"),
+        "stopped_by_budget": state.budget_stops > 0,
+        "stages": stages,
+        "counts": {
+            "found": len(state.findings) + len(state.merged) + len(state.rejected),
+            "rejected": len(state.rejected),
+            "refuted": statuses.count("refuted"),
+            "unverifiable": statuses.count("unverifiable"),
+            "merged": len(state.merged),
+            "repeats": labels.count("repeat"),
+            "low_value": labels.count("low-value"),
+        },
+        "errors": len(state.errors),
     }
 
 
@@ -132,6 +208,7 @@ def to_findings_file(state: ReviewState, *, generated_at: datetime | None = None
         "producer": producer(),
         "target": _target(state),
         "findings": unique,
+        "run": run_record(state),
     }
 
 
