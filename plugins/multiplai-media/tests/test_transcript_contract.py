@@ -261,3 +261,11 @@ def test_audio_gaps_finds_long_packets_and_jumps() -> None:
 def test_audio_gaps_is_empty_for_a_clean_track() -> None:
     assert prep.audio_gaps([(i * 0.02, 0.02) for i in range(50)]) == []
     assert prep.audio_gaps([]) == []
+
+
+def test_tokens_are_not_joined_in_a_language_written_without_spaces() -> None:
+    data = {"language": "ja", "segments": [{"words": [
+        {"word": "今日", "start": 0.0, "end": 0.4}, {"word": "は", "start": 0.4, "end": 0.5},
+        {"word": "晴れ", "start": 0.5, "end": 0.9}]}]}
+    words = tx.from_whisper_json(data, engine="t")["words"]
+    assert [w["text"] for w in words] == ["今日", "は", "晴れ"]
