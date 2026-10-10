@@ -196,7 +196,7 @@ def test_conventions_chain_skips_claude_md_first_when_over_the_cap(tmp_path, mon
 async def test_verify_downgrades_uncited_confirmation_and_keeps_refuted(target_info, ctx, monkeypatch):
     high, medium = high_finding(), medium_finding()
     use(monkeypatch, {"verify": [
-        Verdict(status="confirmed", impact="breaks-users", reason="looks right"),  # no citation -> unverifiable
+        Verdict(status="confirmed", impact="breaks-users", topic="code", reason="looks right"),  # no citation -> unverifiable
         Verdict(status="refuted", reason="line 6 handles it", citations=[KEYWORD_USE_CITATION]),
     ]})
     ctx.config.concurrency = 1  # answers are consumed in finding order
@@ -211,7 +211,7 @@ async def test_verify_downgrades_uncited_confirmation_and_keeps_refuted(target_i
 
 async def test_verify_keeps_a_grounded_confirmation_and_its_expected_behaviour(target_info, ctx, monkeypatch):
     high = high_finding()
-    canned = use(monkeypatch, {"verify": [Verdict(status="confirmed", impact="breaks-users", reason="r", citations=[KEYWORD_CITATION],
+    canned = use(monkeypatch, {"verify": [Verdict(status="confirmed", impact="breaks-users", topic="code", reason="r", citations=[KEYWORD_CITATION],
                                                   expected_behaviour="Rate plans match the channel's title.")]})
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high]), ctx)
     assert state.verdicts[high.id].status == "confirmed" and state.findings[0].severity == "HIGH"
@@ -222,7 +222,7 @@ async def test_verify_keeps_a_grounded_confirmation_and_its_expected_behaviour(t
 
 async def test_verify_lists_findings_that_carry_no_expected_behaviour(target_info, ctx, monkeypatch):
     high = high_finding()
-    use(monkeypatch, {"verify": [Verdict(status="confirmed", impact="breaks-users", reason="r", citations=[KEYWORD_CITATION])]})
+    use(monkeypatch, {"verify": [Verdict(status="confirmed", impact="breaks-users", topic="code", reason="r", citations=[KEYWORD_CITATION])]})
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high]), ctx)
     # The confirmation stands; the gap is reported, not hidden.
     assert state.verdicts[high.id].status == "confirmed"
@@ -233,7 +233,7 @@ async def test_verify_lists_findings_that_carry_no_expected_behaviour(target_inf
 async def test_a_failed_verifier_is_tried_again_and_its_answer_kept(target_info, ctx, monkeypatch):
     high = high_finding()
     canned = use(monkeypatch, {"verify": [sdk.AgentCallError("timeout"), sdk.AgentCallError("timeout"),
-                                          Verdict(status="confirmed", impact="breaks-business", reason="r",
+                                          Verdict(status="confirmed", impact="breaks-business", topic="code", reason="r",
                                                   citations=[KEYWORD_CITATION])]})
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high]), ctx)
     assert [label for label, _ in canned.calls] == ["verify"] * 3
@@ -245,7 +245,7 @@ async def test_a_finding_with_no_answer_after_three_tries_stops_the_run_and_resu
         target_info, ctx, monkeypatch):
     high, medium = high_finding(), medium_finding()
     fail = sdk.AgentCallError("timeout")
-    ok = Verdict(status="confirmed", impact="breaks-users", reason="r", citations=[KEYWORD_CITATION])
+    ok = Verdict(status="confirmed", impact="breaks-users", topic="code", reason="r", citations=[KEYWORD_CITATION])
     canned = use(monkeypatch, {"verify": [ok, fail, fail, fail]})
     ctx.config.concurrency = 1
     state = ReviewState(target=target_info, stage="find", findings=[high, medium])
@@ -271,6 +271,16 @@ async def test_an_answer_without_impact_is_not_a_verdict(target_info, ctx, monke
         VerifierAnswer(status="confirmed", reason="r")
     with pytest.raises(ValueError, match="impact is required"):
         VerifierAnswer(status="unverifiable", reason="r", impact="nonsense")  # unknown is none
+
+
+def test_an_answer_without_a_known_topic_is_not_a_verdict():
+    # The topic picks the section and the tests-impact cap: a blanked one would file a test gap under Code.
+    with pytest.raises(ValueError, match="topic is required"):
+        VerifierAnswer(status="confirmed", reason="r", impact="breaks-users")
+    with pytest.raises(ValueError, match="topic is required"):
+        VerifierAnswer(status="unverifiable", reason="r", impact="breaks-users", topic="test")  # not "tests"
+    assert VerifierAnswer(status="refuted", reason="r").topic == ""  # refuted needs none
+    assert VerifierAnswer(status="confirmed", reason="r", impact="hygiene", topic=" Tests ").topic == "tests"
 
 
 async def test_a_test_finding_never_breaks_users_or_the_business(target_info, ctx, monkeypatch):
@@ -439,7 +449,7 @@ async def test_a_budget_stop_keeps_the_verdicts_already_paid_for(target_info, ct
     high, medium = high_finding(), medium_finding()
     state = ReviewState(target=target_info, stage="find", findings=[high, medium])
     ctx.config.concurrency = 1
-    use(monkeypatch, {"verify": [Verdict(status="confirmed", impact="breaks-users", reason="r", citations=[KEYWORD_CITATION]),
+    use(monkeypatch, {"verify": [Verdict(status="confirmed", impact="breaks-users", topic="code", reason="r", citations=[KEYWORD_CITATION]),
                                  budget.BudgetExceededError("stop")]})
     with pytest.raises(budget.BudgetExceededError):
         await run_verify(state, ctx)

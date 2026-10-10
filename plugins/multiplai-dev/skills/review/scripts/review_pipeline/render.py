@@ -147,7 +147,8 @@ def finding_section(fd: dict, *, web_base: str | None, head_sha: str,
     if fd.get("expected_behaviour"):
         out += [f"**Expected behaviour:** {_one_line(fd['expected_behaviour'])}", ""]
     if fd.get("needs"):
-        out += ["**Needs you** (commands suggested by the review: read each before running it):", ""]
+        out += ["**Needs you** (each with a command the review suggests, a place to look, or neither: read a "
+                "command before running it):", ""]
         out += need_lines(fd["needs"], blocks=False) + [""]
     return "\n".join(out)
 
@@ -239,8 +240,8 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
     review_needs = [n for n in data.get("needs", []) if n["blocks"] == "review"]
     if review_needs:
         out += ["", "## Needs you", "",
-                "What the review could not check. Each command was suggested by the review: read it before "
-                "running it.", ""]
+                "What the review could not check, each with a command the review suggests, a place to look, "
+                "or neither. Read a command before running it.", ""]
         out += need_lines(review_needs)
     out += ["", "## Findings", ""]
 
@@ -283,6 +284,8 @@ def render_review(state: ReviewState, *, deployed: str | None = None,
             out.append(f"  Impact: {fd.get('impact') or 'not rated'}; {SECTION_TITLES[section(fd)]} section.")
         else:
             out.append(f"  {assessment_line(fd).removeprefix('**Assessment:** ')}")
+        # Its needs are printed nowhere else: the summary leaves them out with the finding.
+        out += [f"  - Needs you: {line[2:]}" for line in need_lines(fd.get("needs", []), blocks=False)]
     for m in state.merged:
         f = m.finding
         out.append(f"- **merged** ({f.severity}) `{f.file}:{f.line_start}-{f.line_end}` — {_one_line(f.claim)}  ")
@@ -324,7 +327,8 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
     Per section (Code, Tests, Docs), one line per HIGH and MEDIUM finding and
     a count for LOW. Refuted, gate-rejected, low-value and repeat findings,
     and in critical mode those not rated `breaks-*`, are neither listed nor
-    counted; the full review's appendix has them.
+    counted; the full review's appendix has them, each with the needs that
+    block it, and the summary says how many such needs it left out.
     """
     data = findings_file or to_findings_file(state)
     t = state.target
@@ -348,12 +352,16 @@ def render_summary(state: ReviewState, *, findings_file: dict | None = None) -> 
     if still:
         out.append(f"{still} still open from earlier rounds.")
     needs = [n for n in data.get("needs", []) if n["blocks"] == "review" or n["blocks"] in shown_ids]
+    left_out = len(data.get("needs", [])) - len(needs)
     if needs:
         out += ["", "## Needs you", "",
-                "The review could not get these. Each command was suggested by the review: read it before "
-                "running it.", ""]
+                "The review could not get these, each with a command the review suggests, a place to look, "
+                "or neither. Read a command before running it.", ""]
         out += need_lines(needs, findings)
         out.append("")
+    if left_out:
+        out.append(f"{left_out} more need{'' if left_out == 1 else 's'} block{'s' if left_out == 1 else ''} "
+                   "findings not listed; the full review's appendix has them under each finding.")
     if state.errors:
         out.append("Agent failures: " + "; ".join(_short(e) for e in state.errors))
 

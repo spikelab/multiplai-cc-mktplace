@@ -260,8 +260,8 @@ async def test_verify_records_the_verdict_its_citations_and_the_gate(target_info
     high, medium = high_finding(), medium_finding()
     reads = [ToolCall("Read", {"file_path": "rateplan_service.py", "offset": 1, "limit": 3})]
     monkeypatch.setattr(sdk, "agent_call_structured", Recorded({"verify": [
-        Verdict(status="confirmed", impact="breaks-users", reason="r", citations=[KEYWORD_CITATION, KEYWORD_USE_CITATION]),
-        Verdict(status="confirmed", impact="breaks-users", reason="no cite"),  # lowered by verdict_gate
+        Verdict(status="confirmed", impact="breaks-users", topic="code", reason="r", citations=[KEYWORD_CITATION, KEYWORD_USE_CITATION]),
+        Verdict(status="confirmed", impact="breaks-users", topic="code", reason="no cite"),  # lowered by verdict_gate
     ]}, {"verify": reads}))
     state = await run_verify(ReviewState(target=target_info, stage="find", findings=[high, medium]), ctx)
     one, two = state.checks

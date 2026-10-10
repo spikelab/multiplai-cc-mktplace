@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from conftest import DEF_CITATION, KEYWORD_CITATION, SCHEMA, high_finding
-from review_pipeline import budget, sdk
+from review_pipeline import budget, orchestrator, sdk
 from review_pipeline.__main__ import main
 from review_pipeline.config import DIMENSIONS
 from review_pipeline.models import (AssessOutput, DuplicateSet, FinderOutput, MergeOutput, RepeatsOutput,
@@ -173,6 +173,29 @@ def test_batch_reviews_every_target_and_writes_rollups(fixture_repo, tmp_path, a
     assert high.startswith("# HIGH findings — 2 across 2 of 2 targets")
     review = (out / "booking-engine--feature_db-2038" / "review-booking-engine--feature_db-2038.md").read_text()
     assert "- **Deployed in main:** no" in review
+
+
+def test_batch_mode_flag_reaches_each_target_and_an_entrys_own_mode_wins(fixture_repo, tmp_path, agents, capsys):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    batch_file = tmp_path / "batch.yaml"
+    batch_file.write_text(
+        f"- repo: {repo}\n  range: {base}..{head}\n"
+        f"- repo: {repo}\n  branch: feature/db-2038\n  mode: full\n"
+    )
+    agents()
+    assert main(["--out", str(out), "batch", str(batch_file), "--mode", "critical", "--trust-repo"]) == 0
+    paths = _findings_line(capsys.readouterr().out)
+    assert [json.loads(p.read_text())["mode"] for p in paths] == ["critical", "full"]
+
+
+def test_batch_entry_mode_overrides_the_default_and_an_unknown_one_stops(tmp_path):
+    batch_file = tmp_path / "batch.yaml"
+    batch_file.write_text("- repo: /r\n  branch: a\n  mode: critical\n- repo: /r\n  branch: b\n")
+    assert [s.mode for s in orchestrator.load_batch(batch_file)] == ["critical", "full"]
+    batch_file.write_text("- repo: /r\n  branch: a\n  mode: urgent\n")
+    with pytest.raises(orchestrator.ReviewError, match="entry 0 has mode 'urgent'"):
+        orchestrator.load_batch(batch_file, "critical")
 
 
 def test_untrusted_repo_exits_3_without_output(fixture_repo, tmp_path, agents, capsys):

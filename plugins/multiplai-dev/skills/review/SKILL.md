@@ -20,9 +20,10 @@ Python between them:
    change, and rates its **impact**: what goes wrong in production if the
    change is merged as it is — `breaks-users`, `breaks-business`,
    `correctness-only` or `hygiene`. A missing or weak test is always
-   `correctness-only`. An answer without an impact is re-asked; a verify call
-   is tried up to three times, and a finding still without a verdict stops
-   the run (exit `5`) instead of reaching the review unverified.
+   `correctness-only`. An answer without an impact, or without a topic from
+   the list below, is re-asked; a verify call is tried up to three times, and
+   a finding still without a verdict stops the run (exit `5`) instead of
+   reaching the review unverified.
 3. **merge** — the finders work independently, so one defect is often
    reported several times in different words. Confirmed and unverifiable
    findings are grouped when their lines overlap (or come within two lines)

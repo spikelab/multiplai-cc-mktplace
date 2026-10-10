@@ -203,8 +203,8 @@ def prepare(spec: TargetSpec, out_dir: Path) -> tuple[ReviewState, Path]:
     if info is None:
         info = target_mod.build_target(resolved, tickets=spec.tickets, deployed_in=spec.deployed_in, needs=needs)
     target_dir = out_dir / info.slug
-    # A new head in a directory an earlier round wrote: keep that round's
-    # findings before this run writes over them. The same head keeps nothing.
+    # A directory an earlier round wrote: keep that round's findings before
+    # this run writes over them, also when this run is on the same head (a rerun).
     kept = rounds.keep_round(target_dir, info.slug, info.head_sha)
     if kept is not None:
         log.info("kept the earlier round of %s in %s", info.slug, kept)

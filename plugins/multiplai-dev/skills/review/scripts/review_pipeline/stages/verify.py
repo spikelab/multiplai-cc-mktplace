@@ -15,15 +15,15 @@ without it still stands, and the stage lists those findings in
 `state.errors`, so the summary says which ones reach the review with no
 statement of correct behaviour.
 
-Every answer but `refuted` must carry `impact` (`VerifierAnswer`); one
-without it fails the parse and is re-asked. A call that still fails is run
-again, up to `VERIFY_TRIES` times per finding. A finding whose every try
-failed gets no verdict: the stage lets the other verifiers finish, keeps
-their verdicts, then raises `VerifyIncomplete`, and `resume` asks only for
-the findings left without one. No finding reaches the review unverified or
-with no impact. A finding about `tests` never breaks users or the business:
-a `breaks-*` impact on one is lowered to `correctness-only`, with a line in
-`state.errors`.
+Every answer but `refuted` must carry `impact` and `topic`
+(`VerifierAnswer`); one without either fails the parse and is re-asked. A
+call that still fails is run again, up to `VERIFY_TRIES` times per finding.
+A finding whose every try failed gets no verdict: the stage lets the other
+verifiers finish, keeps their verdicts, then raises `VerifyIncomplete`, and
+`resume` asks only for the findings left without one. No finding reaches the
+review unverified or with no impact or topic. A finding about `tests` never
+breaks users or the business: a `breaks-*` impact on one is lowered to
+`correctness-only`, with a line in `state.errors`.
 """
 
 from __future__ import annotations

@@ -87,7 +87,9 @@ def build(target: TargetInfo, finding: Finding) -> str:
         "program), `tests`, `docs` (documentation, comments, decision logs), `config`, `infra` "
         "(deployment, CI, cloud resources), `data` (schemas, migrations, stored data), `security`, "
         "`performance`, or `process` (the order of steps a person must follow, such as merge before "
-        "deploy). Pick the one a reader would file it under, not the file's type.",
+        "deploy). Pick the one a reader would file it under, not the file's type. Use one of these words "
+        "exactly (`tests`, not `test`): `topic` is required on every answer but `refuted`, and an answer "
+        "without one from this list is rejected.",
         IMPACT_RULES,
         NEEDS_RULES,
         CITATION_RULES,

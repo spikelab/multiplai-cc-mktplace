@@ -177,16 +177,20 @@ class Verdict(_Model):
 
 
 class VerifierAnswer(Verdict):
-    """The verifier's answer as parsed: `impact` is required unless refuted.
+    """The verifier's answer as parsed: `impact` and `topic` are required unless refuted.
 
-    A missing or unknown impact fails the parse, so `agent_call_structured`
-    re-asks; the stage stores a plain `Verdict`.
+    A missing or unknown impact or topic fails the parse, so
+    `agent_call_structured` re-asks; the stage stores a plain `Verdict`. The
+    topic decides a finding's section and whether its impact is capped, so a
+    blanked one would put a test gap in Code with a `breaks-*` impact.
     """
 
     @model_validator(mode="after")
     def _impact_required(self) -> "VerifierAnswer":
         if self.status != "refuted" and not self.impact:
             raise ValueError(f"impact is required unless status is refuted: one of {', '.join(IMPACTS)}")
+        if self.status != "refuted" and not self.topic:
+            raise ValueError(f"topic is required unless status is refuted: one of {', '.join(TOPICS)}")
         return self
 
 
