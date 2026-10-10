@@ -17,7 +17,7 @@ time, not derived from a tag.
 
 ## [Unreleased]
 
-## [0.32.0] - 2026-10-09
+## [0.32.0] - 2026-10-10
 
 ### Added
 - review: each need can now say where to look (`where`) when no single
@@ -127,9 +127,10 @@ time, not derived from a tag.
   is checked for repeats against your decisions on that run. Before, a
   same-commit rerun had nothing to compare with.
 - review: a verify call that fails is now tried up to three times, and an
-  answer without an impact, or without a topic from the list, is re-asked. A finding still without a verdict
-  stops the run with exit code 5 after the other verifiers finish, keeping
-  their verdicts; `resume` asks again only for that finding. Before, such a
+  answer without an impact, or without a topic from the list, is re-asked.
+  A finding still without a verdict stops the run with exit code 5 after the
+  other verifiers finish, keeping their verdicts; `resume` asks again only
+  for that finding. Before, such a
   finding was recorded as `unverifiable` with the reason "the verifier
   failed", lowered one step, and shown.
 - review: `post` without `--decisions` posts the HIGH and MEDIUM findings
