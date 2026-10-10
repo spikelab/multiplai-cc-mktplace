@@ -53,6 +53,7 @@ PR_REFRESH_S = 60.0
 STOP_MESSAGES = {
     "stop": "viewer stopped by stop --box",
     "findings_changed": "viewer restarted because a findings file changed",
+    "share_changed": "viewer restarted to offer Slack (serve --share slack)",
 }
 
 CSP = ("default-src 'none'; script-src 'self' https://cdnjs.cloudflare.com; "
@@ -158,7 +159,8 @@ class Viewer:
                 "started": self.started, "targets": list(self.targets),
                 "mailboxes": [str(t.mailbox.dir.resolve()) for t in self.targets.values()],
                 "digests": {str(t.mailbox.dir.resolve()): findings_digest(t.findings)
-                            for t in self.targets.values()}}
+                            for t in self.targets.values()},
+                "share_slack": self.share_slack}
 
     def note_reject(self, status: int, route: str, reason: str) -> None:
         """Log a refused request, at most once a minute per status code, so a

@@ -119,6 +119,12 @@
       <button id="tab-checked" role="tab" aria-controls="checked" hidden>Checked <span id="checked-count" class="count"></span></button>
     </div>
     <button id="detail-hide" class="ctl ctl-sm hide-btn" type="button" title="Hide this panel (Ctrl+Alt+B)" aria-label="Hide the review panel">›</button>
+    <div id="finding-nav" class="finding-nav" role="navigation" aria-label="Findings" hidden>
+      <button id="nav-list" type="button" class="ctl ctl-sm" title="Scroll up to the findings list">↑ Back to the list</button>
+      <span id="nav-pos" class="muted small"></span>
+      <button id="nav-prev" type="button" class="ctl ctl-sm" title="Previous finding (k)">‹ Prev</button>
+      <button id="nav-next" type="button" class="ctl ctl-sm" title="Next finding (j)">Next ›</button>
+    </div>
     </div>
     <div id="summary" role="tabpanel" class="panel">
       <div id="badges" class="badges"></div>
@@ -377,7 +383,15 @@
         gap, not a serious defect in the code. Picking one moves the code to its lines and shows the
         claim, the failure scenario, the expected behaviour and the verdict's reason. When the Checked tab has
         the finding's verifier, a link opens its entry there, with every line it read and cited; otherwise the
-        finding lists its cited code and the verifier's citations. Each finding shows a status:</p>
+        finding lists its cited code and the verifier's citations. Code starts open; Tests and Docs fold
+        until you open them or pick a finding in them. Once the list scrolls out of sight, a bar under the tabs
+        leads back to it, with Prev and Next.</p>
+      <p>Accept, reject or defer a finding at the bottom of its page, or press ✓ or ✕ on it in the list
+        (they show on hover). Deciding the open finding opens the next one that still needs a decision and
+        scrolls back to the list; after the last, the finding page is empty. <strong>Accept all</strong>, beside
+        the count, accepts every finding that still needs a decision, after you confirm; refuted and decided
+        findings are left as they are. Hovering a badge shows what its word means. Each finding shows a
+        status:</p>
       <dl>
         <dt><code>confirmed</code></dt><dd>The verifier showed the failure can happen, citing lines that
           code found at the reviewed commit.</dd>
@@ -403,6 +417,20 @@
           fails only after a future change nobody has proposed, and the code is correct now; this does not
           apply when the change's own tests, comments or description promise to catch such a change.
           Never shown or counted.</dd>
+      </dl>
+      <p>The verifier also labels each finding's <strong>topic</strong>, what it is about, which sets its
+        section: <code>tests</code> and <code>docs</code> have their own, every other topic is under Code. A
+        topic in italics was guessed from the file's path, for a review older than topics.</p>
+      <dl>
+        <dt><code>code</code></dt><dd>The behaviour of the program.</dd>
+        <dt><code>tests</code></dt><dd>A missing, weak or wrong test.</dd>
+        <dt><code>docs</code></dt><dd>Documentation, comments or decision logs.</dd>
+        <dt><code>config</code></dt><dd>Configuration: settings, flags, environment.</dd>
+        <dt><code>infra</code></dt><dd>Deployment, CI or cloud resources.</dd>
+        <dt><code>data</code></dt><dd>Schemas, migrations or stored data.</dd>
+        <dt><code>security</code></dt><dd>Who can reach or change what: access, secrets, injection.</dd>
+        <dt><code>performance</code></dt><dd>Speed, memory or cost at the size the code runs at.</dd>
+        <dt><code>process</code></dt><dd>The order of steps a person must follow, such as merge before deploy.</dd>
       </dl>
       <p>The verifier also rates each finding's <strong>impact</strong>: what goes wrong in production if
         the change is merged as it is. It shows as a badge beside the topic. A review older than impact has

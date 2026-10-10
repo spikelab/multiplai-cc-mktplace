@@ -307,15 +307,21 @@ def _reuse_or_replace(args, loaded, boxes: list[Path], label: str,
             return EXIT_USAGE
         wanted = {str(b.resolve()): findings_digest(ff) for ff, b in loaded}
         served_digests = live.get("digests", {})
-        if any(served_digests.get(b) != d for b, d in wanted.items()):
+        changed = any(served_digests.get(b) != d for b, d in wanted.items())
+        # A running viewer cannot start offering Slack: `--share slack` asked of
+        # one started without it restarts it, as a changed findings file does.
+        slack_added = "slack" in args.share and not live.get("share_slack", False)
+        if changed or slack_added:
+            what = "a findings file changed" if changed else "--share slack was asked for"
             token = registry.read_token(box)
-            if not token or not registry.shutdown(live, token, reason="findings_changed") \
+            reason = "findings_changed" if changed else "share_changed"
+            if not token or not registry.shutdown(live, token, reason=reason) \
                     or not _wait_for_cleanup(live.get("mailboxes", [])):
-                print(f"a findings file changed, but the running viewer for {box} did not "
+                print(f"{what}, but the running viewer for {box} did not "
                       f"stop; run: python -m review_viewer stop --box {shlex.quote(str(box))}",
                       file=sys.stderr)
                 return EXIT_USAGE
-            print("a findings file changed; restarted the viewer", flush=True)
+            print(f"{what}; restarted the viewer", flush=True)
             return None
         log_event(COMPONENT, "reuse", f"viewer already running for {', '.join(live['targets'])}; "
                   "reused it", session_id=args.session_id, port=live["port"],

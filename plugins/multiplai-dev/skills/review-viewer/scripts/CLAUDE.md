@@ -28,7 +28,7 @@ The page-logic tests need `node`; they fail (not skip) without it.
 | `server.py` | `ThreadingHTTPServer` subclass (`allow_reuse_address = False`), request checks, routes, idle watchdog. |
 | `registry.py` | Finds live viewers: probes each mailbox's recorded port with that mailbox's token, in parallel. A token is never sent to any other port. |
 | `netinfo.py` | Container detection (degradation contract rule 2), bind host, URLs to print. |
-| `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `theme.js` (applies the saved theme and light/dark mode before first paint as `data-theme`/`data-mode`, fills the Theme menu, drives the mode button; saves choices in a cookie on the widest parent domain the browser accepts, so every viewer's port and container shares them, and exposes that store as `window.ReviewPrefs`), `logic.js` (pure functions, tested under node; `riskLevel` holds the risk rules; `runBlock`/`runTotal` and the number formats behind the Run block at the end of the Summary tab; `helpSection` for the help dialog; `shownFindings`/`shownFile` drop gate-rejected, low-value and repeat findings, and in a `critical` review (`mode` in `findings.json`) every finding whose `impact` is not `breaks-*`; every list and count goes through them; `groupFindings` splits the list into Code, Tests and Docs (`findingSection`, from the topic or its path guess); `sidebarGroups`, `identifierAt`, `shareOptions`), `app.js`, `app.css` (every size from the tokens at its top), `themes.css` (every rule scoped to `html[data-theme]`), the bundled `font-*.woff2` and `FONTS-LICENSE.txt`. |
+| `static/` | `index.html`, `boot.js` (takes the token out of the address bar), `theme.js` (applies the saved theme and light/dark mode before first paint as `data-theme`/`data-mode`, fills the Theme menu, drives the mode button; saves choices in a cookie on the widest parent domain the browser accepts, so every viewer's port and container shares them, and exposes that store as `window.ReviewPrefs`), `logic.js` (pure functions, tested under node; `riskLevel` holds the risk rules; `runBlock`/`runTotal` and the number formats behind the Run block at the end of the Summary tab; `helpSection` for the help dialog; `shownFindings`/`shownFile` drop gate-rejected, low-value and repeat findings, and in a `critical` review (`mode` in `findings.json`) every finding whose `impact` is not `breaks-*`; every list and count goes through them, and `app.js` reads the unfiltered list only to say why the list is empty (`emptyListText`), which `logic.test.js` checks in its source; `groupFindings` splits the list into Code, Tests and Docs (`findingSection`, from the topic or its path guess); `isHidden` takes a decided finding out of the list, `isHiddenInCode` only a refuted one out of the code markers and Go to; `pendingIds` (what Accept all accepts), `afterDecision` (the finding opened after one is decided); `findingBadges` (each badge's tooltip is the help's `<dt>` for its word, read from `#help-findings`); `sidebarGroups`, `identifierAt`, `shareOptions`, `shareRequest`), `app.js`, `app.css` (every size from the tokens at its top), `themes.css` (every rule scoped to `html[data-theme]`), the bundled `font-*.woff2` and `FONTS-LICENSE.txt`. |
 
 After changing `models.py`, run `python -m review_viewer export-schema` and
 commit the three schemas; `test_models.py` and `test_checks.py` fail while
@@ -185,7 +185,9 @@ is how git numbers lines.
 Only page activity resets the idle timer; `/api/whoami` (used by `list`,
 `serve` and `stop`) does not. `serve` on a mailbox whose server is alive
 reuses it when the session and the findings digests match, restarts it when a
-findings file changed, and exits 3 for another or an unidentified session.
+findings file changed or `--share slack` is asked of a viewer whose `whoami`
+says it does not offer Slack, and exits 3 for another or an unidentified
+session.
 
 Plain-diff mode (a `--target` with no review of the same commits) puts the
 mailbox under `<workspace INBOX or ~/.multiplai>/review-viewer/<slug>/viewer/`. A
@@ -234,6 +236,6 @@ commit and a PR head under `refs/pull/7/head`, for target resolution;
 | `test_tree_review.py` | `serve --tree [--path]`, a subdirectory `--repo`, no commits, every file added on a live server |
 | `test_walkthrough.py` | each `walkthrough put` rule, the CLI, the route, `step_id` questions |
 | `test_serve_targets.py` | review lookup (match, stale, none) and the `walkthrough:` stdout line |
-| `test_server.py`, `test_mailbox.py`, `test_models.py`, `test_logging.py`, `test_netinfo.py` | the server, mailbox, contracts, logs, container detection |
+| `test_server.py` (also `serve` in a subprocess: `--share slack` reaching the page, a saved review's `review-state.json` turning GitHub on, a `repo_path` that no longer exists), `test_mailbox.py`, `test_models.py`, `test_logging.py`, `test_netinfo.py` | the server, mailbox, contracts, logs, container detection |
 | `test_checks.py` | the `checks.v1` contract, loading it beside findings (present, absent, invalid, other commits), `verifier_citations` |
-| `logic.test.js` (via `test_logic_js.py`) | the page's pure functions, under node, and that the help dialog in `index.html` has every section a `?` opens and defines every value the schemas allow |
+| `logic.test.js` (via `test_logic_js.py`) | the page's pure functions, under node, and that the help dialog in `index.html` has every section a `?` opens and defines every value the schemas allow. No test loads `app.js` (there is no DOM here), so a few tests read its source to hold its call sites to the tested helpers: the unfiltered findings list, the badges, the share request |

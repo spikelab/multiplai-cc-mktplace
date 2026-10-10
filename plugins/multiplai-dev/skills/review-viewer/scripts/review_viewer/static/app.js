@@ -36,6 +36,8 @@
     openRows: new Map(),
     shownRows: new Set(),
     showHidden: false,
+    // The Findings list's sections a reader opened; Code starts open.
+    openSections: new Set(["code"]),
     fileFilter: "",
     changed: new Set(),
     showAllFiles: false,
@@ -409,6 +411,7 @@
     renderTabs();
     if (state.view) renderCode();
     renderThread();
+    updateFindingNav();
   }
 
   const TABS = { summary: ["tab-summary", "summary"], walk: ["tab-walk", "walkthrough"], finding: ["tab-finding", "finding"],
@@ -885,53 +888,86 @@
     $("hidden-label").textContent = "Show decided and refuted (" + grouped.hidden + ")";
     $("show-hidden").parentElement.hidden = !grouped.hidden;
     if (!findings.length) {
-      const all = state.detail.findings.findings.length;
-      box.appendChild(emptyState("✓", (all
-        ? "Nothing to show: the review's " + all + " finding" + (all === 1 ? " was" : "s were") +
-          " rejected by its checks or labelled low-value or repeat; findings.json keeps them. "
-        : L.isTreeReview(state.detail.findings.target)
+      // The only read of the unfiltered list: to say why nothing is shown.
+      const ff = state.detail.findings;
+      box.appendChild(emptyState("✓", (ff.findings.length
+        ? L.emptyListText(ff) + " "
+        : L.isTreeReview(ff.target)
           ? "No findings for this tree: every file is shown as added. "
           : "No code review for these commits: this is the plain diff. ") +
         "Pick line numbers in the code to ask about them."));
     }
     const undecided = L.undecidedCount(findings, state.detail.decisions);
     if (undecided.total) {
-      box.appendChild(el("p", { class: "muted undecided",
-        text: undecided.open + " of " + undecided.total + " findings still need a decision" }));
+      box.appendChild(el("div", { class: "undecided" }, [
+        el("span", { class: "muted", text: undecided.open + " of " + undecided.total + " findings still need a decision" }),
+        undecided.open ? el("button", { class: "ctl ctl-sm accept-all", type: "button", text: "Accept all " + undecided.open,
+          title: "Accept every finding that still needs a decision; refuted and decided ones are left as they are",
+          onclick: acceptAll }) : null,
+      ]));
+    }
+    if (findings.length && !L.findingOrder(grouped).length) {
+      box.appendChild(emptyState("✓", (undecided.total ? "Every finding has a decision." : "Every finding was refuted.") +
+        " Show decided and refuted brings them back."));
     }
     // Severity is read within a section: a HIGH under Tests is not a HIGH in the code.
+    // Each section folds; Code starts open, and selecting a finding opens its section.
     for (const s of grouped.sections) {
       const n = L.SEVERITIES.reduce((k, sev) => k + (s.groups[sev] || []).length, 0);
       if (!n) continue;
-      box.appendChild(el("h2", { class: "section-h", text: s.title + " (" + n + ")" }));
+      const sec = el("details", { class: "finding-section", "data-section": s.section },
+        [el("summary", { class: "section-h", text: s.title + " (" + n + ")" })]);
+      sec.open = state.openSections.has(s.section);
+      sec.addEventListener("toggle", () => {
+        if (sec.open) state.openSections.add(s.section);
+        else state.openSections.delete(s.section);
+      });
       for (const sev of L.SEVERITIES) {
         const items = s.groups[sev] || [];
         if (!items.length) continue;
-        box.appendChild(el("h3", { class: "sev-h " + sev, text: sev + " (" + items.length + ")" }));
-        for (const f of items) box.appendChild(findingItem(f));
+        sec.appendChild(el("h3", { class: "sev-h " + sev, text: sev + " (" + items.length + ")" }));
+        for (const f of items) sec.appendChild(findingItem(f));
       }
+      box.appendChild(sec);
     }
   }
 
-  /* What the finding is about; a guess from the path is in italics and says so. */
-  function topicBadge(f) {
-    const t = L.findingTopic(f);
-    return el("span", { class: "badge topic" + (t.guessed ? " guessed" : ""), text: t.topic,
-      title: t.guessed ? "What it is about, guessed from the file path" : "What it is about, as the verifier labelled it" });
+  /* The help dialog's definition of a badge word, read from its Findings
+   * section, so a badge's tooltip says what the help says. */
+  let helpDefs = null;
+  function helpDef(word) {
+    if (!helpDefs) {
+      helpDefs = new Map();
+      for (const dt of document.querySelectorAll("#help-findings dt")) {
+        const dd = dt.nextElementSibling;
+        if (dd && dd.tagName === "DD") helpDefs.set(dt.textContent.trim(), dd.textContent.replace(/\s+/g, " ").trim());
+      }
+    }
+    return helpDefs.get(word) || "";
   }
 
-  /* What breaks in production if merged as is, as the verifier rated it; none for an older file. */
-  function impactBadge(f) {
-    if (!f.impact) return null;
-    return el("span", { class: "badge impact " + f.impact, text: f.impact,
-      title: "What breaks after merge, as the verifier rated it" });
+  const BADGE_TITLES = {
+    severity: "Severity, read within its section",
+    status: "The verifier's answer",
+    impact: "What breaks after merge, as the verifier rated it",
+    label: "The assess step's label",
+  };
+
+  /* A finding's badges (L.findingBadges), each with the help's definition as its tooltip. */
+  function findingBadgeEls(f, inList) {
+    return L.findingBadges(f, inList).map((b) => {
+      const head = b.kind === "topic"
+        ? (b.guessed ? "What it is about, guessed from the file path" : "What it is about, as the verifier labelled it")
+        : BADGE_TITLES[b.kind];
+      const def = helpDef(b.value);
+      return el("span", { class: "badge " + b.cls, text: b.value, title: head + (def ? ". " + b.value + ": " + def : "") });
+    });
   }
 
   function findingItem(f) {
     const sev = f.severity;
     const d = L.effectiveDecision(f, state.detail.decisions);
-    const label = L.assessLabel(f);
-    return el("button", {
+    const item = el("button", {
       class: "finding-item " + sev + (f.id === state.selected ? " selected" : "") +
         (L.isHidden(f, state.detail.decisions) ? " hidden-finding" : ""),
       "data-id": f.id,
@@ -939,18 +975,39 @@
         await selectFinding(f.id);
         $("finding-detail").scrollIntoView({ block: "start", behavior: "smooth" });
       },
-    }, [
-      el("span", { class: "badge " + sev, text: f.status }),
-      topicBadge(f),
-      impactBadge(f),
-      label && label !== "useful" ? el("span", { class: "badge assess " + label, text: label }) : null,
+    }, findingBadgeEls(f, true).concat([
       d ? el("span", {
         class: "badge " + d.decision,
         text: d.decision + (d.implied ? " (earlier round)" : ""),
       }) : null,
       el("span", { class: "claim", text: f.claim }),
       el("span", { class: "where", text: f.file + ":" + f.line_start }),
-    ]);
+    ]));
+    // Accept and Reject without opening the finding; shown on hover or focus.
+    const quick = (k, sym) => el("button", { class: "ctl ctl-sm quick-" + k, type: "button", text: sym,
+      title: k[0].toUpperCase() + k.slice(1) + " this finding", "aria-label": k[0].toUpperCase() + k.slice(1) + ": " + f.claim,
+      "aria-pressed": String(!!d && !d.implied && d.decision === k),
+      onclick: () => decide(f.id, k, "", { from: "list" }) });
+    return el("div", { class: "finding-row" }, [item,
+      el("div", { class: "quick-actions" }, [quick("accept", "✓"), quick("reject", "✕")])]);
+  }
+
+  /* Accept every finding that still needs a decision, after one confirmation. */
+  async function acceptAll() {
+    const ids = L.pendingIds(state.shown, state.detail.decisions);
+    if (!ids.length) return;
+    if (!window.confirm("Accept all " + ids.length + " finding" + (ids.length === 1 ? "" : "s") +
+      " that still need a decision? Refuted and decided findings are left as they are.")) return;
+    for (const id of ids) {
+      try {
+        const res = await api("/api/decision", { target: state.slug, finding_id: id, decision: "accept", note: "" });
+        state.detail.decisions[id] = res.decision;
+      } catch (err) {
+        showToast("Could not record a decision: " + err.message);
+        break;
+      }
+    }
+    afterDecide(state.selected);
   }
 
   // --- file status, counts, viewed ----------------------------------------------
@@ -1285,6 +1342,8 @@
 
   async function selectFinding(id, opts) {
     state.selected = id;
+    const picked = state.findingsById.get(id);
+    if (picked) state.openSections.add(L.findingSection(picked));
     if (state.tab !== "finding" && !(opts && opts.stay)) {
       state.tab = "finding";
       renderTabs();
@@ -1292,8 +1351,39 @@
     clearPick();
     renderFindingList();
     renderDetail();
+    updateFindingNav();
     const f = state.findingsById.get(id);
     if (f) await openFile(f.file, f.line_start, f.line_end);
+  }
+
+  /* j/k and the bar's Prev/Next: the finding `delta` steps from the open one. */
+  function stepFindingBy(delta) {
+    const order = L.navOrder(state.shown, state.detail.decisions, state.showHidden, state.selected);
+    const next = L.stepFinding(order, state.selected, delta);
+    if (state.tab !== "finding") setTab("finding");
+    if (next && next !== state.selected) selectFinding(next);
+  }
+
+  /* The bar under the tabs that leads back to the list. It shows on the
+   * Findings tab once the list has scrolled out of sight under the tabs. */
+  function updateFindingNav() {
+    const nav = $("finding-nav");
+    const list = $("findings");
+    const on = state.tab === "finding" && !!state.selected && !!state.detail &&
+      list.getBoundingClientRect().bottom < document.querySelector(".detail-top").getBoundingClientRect().bottom;
+    nav.hidden = !on;
+    if (!on) return;
+    const pending = L.pendingIds(state.shown, state.detail.decisions).length;
+    $("nav-list").textContent = "↑ Back to the list" + (pending ? " (" + pending + " to decide)" : "");
+    const order = L.navOrder(state.shown, state.detail.decisions, state.showHidden, state.selected);
+    const i = order.indexOf(state.selected);
+    $("nav-pos").textContent = i >= 0 ? (i + 1) + " of " + order.length : "";
+    $("nav-prev").disabled = i <= 0;
+    $("nav-next").disabled = i < 0 || i >= order.length - 1;
+  }
+
+  function scrollPanelTop() {
+    $("detail").scrollTo({ top: 0, behavior: reducedMotion() ? "auto" : "smooth" });
   }
 
   function citationLink(c) {
@@ -1340,7 +1430,9 @@
     box.replaceChildren();
     const f = state.selected && state.findingsById.get(state.selected);
     if (!f) {
-      if (state.shown.length) box.appendChild(emptyState("☝", "Pick a finding above, or press j."));
+      if (L.pendingIds(state.shown, state.detail.decisions).length) {
+        box.appendChild(emptyState("☝", "Pick a finding above, or press j."));
+      }
       renderThread();
       return;
     }
@@ -1369,16 +1461,12 @@
       title: opts[to].enabled ? opts[to].why + ": you see the text before it goes" : opts[to].why,
       onclick: () => openShare(f, to),
     });
-    box.appendChild(el("div", { class: "finding-head" }, [
-      el("span", { class: "badge " + f.severity, text: f.severity }),
-      el("span", { class: "badge", text: f.status }),
-      topicBadge(f),
-      impactBadge(f),
+    box.appendChild(el("div", { class: "finding-head" }, findingBadgeEls(f, false).concat([
       copy,
       download,
       shareBtn("github", "GitHub"),
       shareBtn("slack", "Slack"),
-    ]));
+    ])));
     box.appendChild(el("h2", { text: f.claim }));
     // The failure scenario first, so the problem reads before anything about
     // it; then the review's explanation; then the rest of the facts. With a
@@ -1428,7 +1516,7 @@
     text.value = L.findingMarkdown(f, state.detail.findings.target, L.explanationText(f.assessment));
     const count = el("span", { class: "muted small" });
     const send = el("button", { class: "ctl primary", type: "button", text: "Send" });
-    let where = null;
+    let form = null;
     let note = null;
     const fields = [];
     if (to === "github") {
@@ -1441,7 +1529,7 @@
         radio("line", "A comment on the line, " + f.file + ":" + f.line_start + ", at " +
           state.detail.findings.target.head_sha.slice(0, 8), opts.line),
       ]));
-      where = () => (dlg.querySelector("input[name=share-where]:checked") || {}).value;
+      form = () => ({ choice: (dlg.querySelector("input[name=share-where]:checked") || {}).value, text: text.value });
     } else {
       const who = el("input", { type: "text", class: "share-to", placeholder: "A person, @handle or #channel",
         "aria-label": "Send to", maxlength: "100" });
@@ -1449,19 +1537,19 @@
         "aria-label": "Note" });
       fields.push(el("label", { class: "share-field" }, [el("span", { class: "label", text: "To" }), who]),
         el("label", { class: "share-field" }, [el("span", { class: "label", text: "Note" }), note]));
-      where = () => who.value.trim();
+      form = () => ({ to: who.value, note: note.value, text: text.value });
       who.addEventListener("input", () => update());
     }
-    const final = () => (to === "slack" ? L.shareText(note.value, text.value) : text.value);
+    const request = () => L.shareRequest(state.slug, f.id, to, form());
     const update = () => {
-      const n = final().length;
-      count.textContent = L.formatTokens(n) + " of 20,000 characters";
-      send.disabled = !text.value.trim() || n > 20000 || !where();
+      const body = request();
+      count.textContent = L.formatTokens(body.text.length) + " of 20,000 characters";
+      send.disabled = !text.value.trim() || body.text.length > 20000 || !body.where;
     };
     text.addEventListener("input", update);
     send.addEventListener("click", async () => {
       send.disabled = true;
-      const body = { target: state.slug, finding_id: f.id, to: to, where: where(), text: final() };
+      const body = request();
       try {
         const res = await api("/api/share", body);
         state.questions.push({ id: res.id, ts: new Date().toISOString(), kind: "share", finding_id: f.id,
@@ -1506,7 +1594,7 @@
       class: "ctl",
       "aria-pressed": String(!!d && d.decision === k),
       text: k[0].toUpperCase() + k.slice(1),
-      onclick: () => decide(f.id, k, note.value.trim()),
+      onclick: () => decide(f.id, k, note.value.trim(), { from: "page" }),
     }));
     return el("section", { class: "decide" }, [
       el("div", { class: "label", text: "Decision" }),
@@ -1516,18 +1604,38 @@
     ]);
   }
 
-  async function decide(id, decision, note) {
+  async function decide(id, decision, note, opts) {
     try {
       const res = await api("/api/decision", { target: state.slug, finding_id: id, decision: decision, note: note });
       state.detail.decisions[id] = res.decision;
-      renderFindingList();
-      renderDetail();
-      // renderSummary rebuilds the Summary tab's risk badge and calls renderRisk
-      // for the header pill, so both show the score after this decision.
-      renderSummary();
     } catch (err) {
       showToast("Could not record the decision: " + err.message);
+      return;
     }
+    await afterDecide(id, opts);
+  }
+
+  /* After a decision on `id`. When it was the open finding, the next one that
+   * still needs a decision opens, or none after the last, so the finding page
+   * is left empty; a decision made on the finding page scrolls the panel back
+   * up to the list. */
+  async function afterDecide(id, opts) {
+    // renderSummary rebuilds the Summary tab's risk badge and calls renderRisk
+    // for the header pill, so both show the score after this decision.
+    renderSummary();
+    renderTabs();
+    if (id && id === state.selected) {
+      if (!(opts && opts.from === "list")) scrollPanelTop();
+      const next = L.afterDecision(state.shown, state.detail.decisions, id);
+      if (next) {
+        await selectFinding(next);
+        return;
+      }
+      state.selected = null;
+    }
+    renderFindingList();
+    renderDetail();
+    updateFindingNav();
   }
 
   // --- threads ---------------------------------------------------------------
@@ -1776,7 +1884,7 @@
 
   function findingsIn(path) {
     return state.shown.filter((f) => f.file === path &&
-      (state.showHidden || !L.isHidden(f, state.detail.decisions)));
+      (state.showHidden || !L.isHiddenInCode(f)));
   }
 
   /* Above the code: status, path, line counts, viewed, and the layout buttons. */
@@ -2531,7 +2639,7 @@
       out.push({ kind: "review", label: st.title, sub: "review " + (i + 1), step: st.id });
     });
     for (const f of state.shown) {
-      if (!state.showHidden && L.isHidden(f, state.detail.decisions)) continue;
+      if (!state.showHidden && L.isHiddenInCode(f)) continue;
       out.push({ kind: f.severity, label: f.claim, sub: f.file + ":" + f.line_start, finding: f.id });
     }
     return out;
@@ -2659,6 +2767,13 @@
     $("question").addEventListener("input", () => { updateAc(); renderAskAbout(); });
     $("question").addEventListener("click", updateAc);
     $("question").addEventListener("blur", () => setTimeout(closeAc, 100));
+    let navFrame = 0;
+    $("detail").addEventListener("scroll", () => {
+      if (!navFrame) navFrame = requestAnimationFrame(() => { navFrame = 0; updateFindingNav(); });
+    }, { passive: true });
+    $("nav-list").addEventListener("click", scrollPanelTop);
+    $("nav-prev").addEventListener("click", () => stepFindingBy(-1));
+    $("nav-next").addEventListener("click", () => stepFindingBy(1));
     $("show-hidden").addEventListener("change", (ev) => {
       state.showHidden = ev.target.checked;
       renderFindingList();
@@ -2767,10 +2882,7 @@
       }
       if (typing || ev.metaKey || ev.ctrlKey || ev.altKey) return;
       if (ev.key === "j" || ev.key === "k") {
-        const order = L.navOrder(state.shown, state.detail.decisions, state.showHidden, state.selected);
-        const next = L.stepFinding(order, state.selected, ev.key === "j" ? 1 : -1);
-        if (state.tab !== "finding") setTab("finding");
-        if (next && next !== state.selected) selectFinding(next);
+        stepFindingBy(ev.key === "j" ? 1 : -1);
       } else if (ev.key === "]" || ev.key === "[") {
         state.tabChosen = true;
         moveStep(ev.key === "]" ? 1 : -1);

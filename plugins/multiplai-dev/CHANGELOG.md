@@ -85,7 +85,18 @@ time, not derived from a tag.
   **Docs** sections by topic, with severity read within each section. A
   HIGH test gap is listed and counted under Tests, not beside the code
   defects. The counts in `review-<slug>.md`, `summary-<slug>.md` and the
-  final `review finished:` line are per section.
+  final `review finished:` line are per section. In review-viewer each
+  section folds: Code starts open, Tests and Docs folded, and picking a
+  finding opens its section.
+- review-viewer: hovering a finding in the list shows ✓ and ✕ to accept or
+  reject it without opening it, and **Accept all**, beside the "N of M still
+  need a decision" count, accepts every finding that still needs one after
+  a confirmation. Refuted and decided findings are left as they are.
+- review-viewer: once the Findings list scrolls out of sight, a bar under
+  the tabs offers **Back to the list**, with Prev and Next and where you
+  are.
+- review-viewer: hovering a status, topic, impact or label badge shows the
+  help's definition of its word. The help now defines each topic.
 
 ### Changed
 - review-viewer: **Needs you** is its own tab, with a count, instead of a
@@ -95,7 +106,10 @@ time, not derived from a tag.
 - review-viewer: an accepted or deferred finding now leaves the Findings
   list, as a rejected one already did, so the list holds only what still
   needs a decision. The checkbox is now **Show decided and refuted**.
-  j/k go on from a finding a decision just hid.
+  j/k go on from a finding a decision just hid. Deciding the open finding
+  opens the next one that still needs a decision and scrolls back up to the
+  list; after the last, the finding page is empty. A decided finding keeps
+  its marker in the code and its Go to entry; only a refuted one loses them.
 - review-viewer: findings a gate rejected, and findings the review labelled
   low-value or a repeat of one you rejected, are no longer shown at all. No
   list, count, code marker, Go to result or risk score includes them, and a
@@ -113,7 +127,7 @@ time, not derived from a tag.
   is checked for repeats against your decisions on that run. Before, a
   same-commit rerun had nothing to compare with.
 - review: a verify call that fails is now tried up to three times, and an
-  answer without an impact is re-asked. A finding still without a verdict
+  answer without an impact, or without a topic from the list, is re-asked. A finding still without a verdict
   stops the run with exit code 5 after the other verifiers finish, keeping
   their verdicts; `resume` asks again only for that finding. Before, such a
   finding was recorded as `unverifiable` with the reason "the verifier
@@ -137,6 +151,20 @@ time, not derived from a tag.
   **Explained in the walkthrough**, then the decision.
 
 ### Fixed
+- review-viewer: a critical review whose findings are all below
+  `breaks-*` no longer says they "were rejected by its checks or labelled
+  low-value or repeat"; the empty list says how many critical mode left out.
+- review-viewer: `serve --share slack` against a running viewer started
+  without it now restarts that viewer, so the page offers Slack; before, it
+  reused the viewer and the Slack button stayed disabled.
+- review-viewer: changed lines no longer show a pointer cursor, since a
+  plain click on them does nothing.
+- review: the Needs you headings in `review-<slug>.md` and
+  `summary-<slug>.md` no longer say every need has a command. A need that
+  blocks a finding the review does not list (critical mode, low-value,
+  repeat) is printed under that finding in the review's appendix, and the
+  summary says how many it left out; before, it was in `findings.json`
+  only.
 - review-viewer: the count on the selected tab (Reviews, Findings, Checked)
   is legible again. It kept the muted text colour on the tab's selected
   background, 1.2:1 contrast on Solarized; it now takes the tab's own text

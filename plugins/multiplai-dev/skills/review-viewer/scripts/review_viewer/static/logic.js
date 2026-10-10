@@ -182,6 +182,64 @@
     return { open: open, total: total };
   }
 
+  /* Only refuted findings lose their code marker and Go to entry. A decided
+   * finding leaves the list but keeps both, so the lines you accepted to fix
+   * stay easy to reach. */
+  function isHiddenInCode(finding) {
+    return HIDDEN_STATUSES.has(finding.status);
+  }
+
+  /* Ids of the shown, not refuted findings with no decision yet, in list
+   * order: what the list holds with Show decided off, and what Accept all
+   * accepts. */
+  function pendingIds(findings, decisions) {
+    return findingOrder(groupFindings(findings, decisions, false));
+  }
+
+  /* The finding to open once `current` is decided: the next one still
+   * needing a decision after it in list order, else the nearest before it,
+   * else null, so the last decision leaves the finding page empty. */
+  function afterDecision(findings, decisions, current) {
+    const pending = new Set(pendingIds(findings, decisions));
+    const order = findingOrder(groupFindings(findings, decisions, true));
+    const i = order.indexOf(current);
+    for (let j = i + 1; j < order.length; j++) if (pending.has(order[j])) return order[j];
+    for (let j = Math.min(i, order.length) - 1; j >= 0; j--) if (pending.has(order[j])) return order[j];
+    return null;
+  }
+
+  /* Why the Findings list is empty while findings.json has findings: those the
+   * review's checks or labels set aside, and those a critical review leaves
+   * out, each counted. */
+  function emptyListText(ff) {
+    const all = (ff && ff.findings) || [];
+    const kept = shownFindings(all).length;
+    const dropped = all.length - kept;
+    const critical = kept - shownFindings(all, ff && ff.mode).length;
+    const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
+    const parts = [];
+    if (dropped) parts.push(plural(dropped, "was", "were") + " rejected by its checks or labelled low-value or repeat");
+    if (critical) parts.push(plural(critical, "is", "are") + " not rated breaks-users or breaks-business, " +
+      "which a critical review leaves out");
+    return "Nothing to show: of the review's " + plural(all.length, "finding", "findings") + ", " +
+      parts.join(", and ") + "; findings.json keeps them.";
+  }
+
+  /* The badges a finding shows, in order: on its page the severity and then
+   * the status; in the list the status, coloured by severity. Then the topic,
+   * the impact (none in a file older than impact) and the assess label
+   * (none for useful). `value` is the word the help dialog defines. */
+  function findingBadges(f, inList) {
+    const t = findingTopic(f);
+    const label = assessLabel(f);
+    const out = inList ? [{ kind: "status", value: f.status, cls: f.severity }]
+      : [{ kind: "severity", value: f.severity, cls: f.severity }, { kind: "status", value: f.status, cls: "" }];
+    out.push({ kind: "topic", value: t.topic, cls: "topic" + (t.guessed ? " guessed" : ""), guessed: t.guessed });
+    if (f.impact) out.push({ kind: "impact", value: f.impact, cls: "impact " + f.impact });
+    if (label && label !== "useful") out.push({ kind: "label", value: label, cls: "assess " + label });
+    return out;
+  }
+
   /* One line saying how the review assessed a finding, or "" for useful and none. */
   function assessmentText(a) {
     if (!a || !a.label || a.label === "useful") return "";
@@ -277,6 +335,16 @@
   function shareText(note, body) {
     const n = String(note || "").trim();
     return n ? n + "\n\n" + body : body;
+  }
+
+  /* The /api/share body the dialog sends. `form` is what the dialog holds:
+   * for GitHub the radio picked (`pr` or `line`) as `choice`; for Slack the
+   * recipient typed as `to` and the note, which goes above the text. */
+  function shareRequest(slug, findingId, to, form) {
+    const github = to === "github";
+    return { target: slug, finding_id: findingId, to: to,
+      where: github ? form.choice || "" : String(form.to || "").trim(),
+      text: github ? form.text : shareText(form.note, form.text) };
   }
 
   /* The file name a downloaded finding gets: its severity, file name and id. */
@@ -1374,7 +1442,9 @@
     githubBlobUrl: githubBlobUrl, findingFileName: findingFileName, shareOptions: shareOptions, shareText: shareText, findingTopic: findingTopic, findingMarkdown: findingMarkdown,
     assessLabel: assessLabel, shownFindings: shownFindings, shownFile: shownFile, findingSection: findingSection,
     CRITICAL_IMPACTS: CRITICAL_IMPACTS, effectiveDecision: effectiveDecision,
-    undecidedCount: undecidedCount, assessmentText: assessmentText, explanationText: explanationText,
+    undecidedCount: undecidedCount, isHiddenInCode: isHiddenInCode, pendingIds: pendingIds,
+    afterDecision: afterDecision, emptyListText: emptyListText, findingBadges: findingBadges,
+    shareRequest: shareRequest, assessmentText: assessmentText, explanationText: explanationText,
     stepFinding: stepFinding, anchorLabel: anchorLabel, escapeHtml: escapeHtml,
     splitHighlighted: splitHighlighted, lineRange: lineRange,
     stepOrder: stepOrder, moveStep: moveStep, stepPosition: stepPosition,

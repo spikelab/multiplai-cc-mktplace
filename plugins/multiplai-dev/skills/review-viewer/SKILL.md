@@ -10,7 +10,8 @@ Serve a local page for a PR, a branch, unpushed work, a range, or a review.
 The page shows each changed file in full at the head commit with the diff
 marked, a **walkthrough** you write (an overview, then ordered steps, each
 pointing at the lines it explains), and — when a `/multiplai-dev:review` run
-exists for the same commits — its findings grouped by severity. Questions and
+exists for the same commits — its findings in Code, Tests and Docs sections,
+by severity within each. Questions and
 decisions typed into the page are appended to a mailbox file this session
 watches; you answer with one command and the answer appears in the page.
 
@@ -79,7 +80,9 @@ uv run --directory ${CLAUDE_PLUGIN_ROOT}/skills/review-viewer/scripts \
 
 Pass `--share slack` when `multiplai-messaging:slack` is in your skills list;
 without it the page's Slack button is disabled and says the skill is not
-installed. The GitHub button needs no flag: it works when the review is of a
+installed. Re-running `serve --share slack` against a viewer started without
+it restarts that viewer (`--share slack was asked for; restarted the viewer`):
+reopen the page from the new `open:` line. The GitHub button needs no flag: it works when the review is of a
 PR (a PR target, or a review whose `review-state.json` records `target.pr`).
 
 | `<target>` | Shows |
@@ -142,6 +145,8 @@ loaded, and the page says so. Tell the user in one line.
   earlier is still up. Do not arm a second watch if one is still running.
 - `a findings file changed; restarted the viewer`: the review was re-run; the
   page must be reopened from the new `open:` line.
+- `--share slack was asked for; restarted the viewer`: the running viewer did
+  not offer Slack; the page must be reopened from the new `open:` line.
 
 ### 2. Give the user the `open:` line exactly as printed
 
@@ -284,8 +289,19 @@ Take `base_sha` and `head_sha` from `walkthrough status` (below).
   code does nothing.
 - The Findings list holds only what still needs a decision: an accepted,
   rejected or deferred finding leaves it, like a refuted one, and **Show
-  decided and refuted** brings them back. j/k go on from a finding a decision
-  just hid.
+  decided and refuted** brings them back. A decided finding keeps its marker
+  in the code and its Go to entry; only a refuted one loses them. j/k go on
+  from a finding a decision just hid.
+- Code starts open and Tests and Docs folded; picking a finding opens its
+  section. Hovering a finding in the list shows ✓ and ✕ to accept or reject it
+  without opening it, and **Accept all**, beside the count, accepts every
+  finding that still needs a decision after one confirmation (refuted and
+  decided ones are left as they are). Each decision is its own `decision`
+  row (step 5). Deciding the open finding opens the next one that still needs
+  a decision and scrolls back up to the list; after the last, the finding
+  page is empty. Once the list scrolls out of sight, a bar under the tabs
+  leads back to it, with Prev and Next. Hovering a badge shows the help's
+  definition of its word.
 - Lines are picked to ask about on the line numbers only (a + shows on
   hover): click, drag down the numbers, or Shift+click to extend. A bar with
   **Ask about these lines** and ✕ appears; nothing goes into the chat until
@@ -391,7 +407,9 @@ findings no step links. `put` exits 2 and publishes nothing when a step
 anchors a file outside the diff, a line range past the end of the file, an
 unknown finding id, a step whose text names a finding id, a duplicate step id, a `size` or `risk` assessment, an
 assessment title over 32 characters, or — with `complete: true` — leaves
-a changed file uncovered, a confirmed or unverifiable finding unlinked,
+a changed file uncovered, a confirmed or unverifiable finding unlinked
+(except one labelled `low-value` or `repeat`, and in a `critical` review one
+not rated `breaks-users` or `breaks-business`: the page never shows those),
 the `commits` or `tests` assessment missing, or no `risk` block.
 Each message names the step; fix the file and `put` again. The page picks up
 each `put` within seconds; the server is not restarted.

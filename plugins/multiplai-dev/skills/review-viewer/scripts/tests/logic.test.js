@@ -949,6 +949,7 @@ test("the help explains every value the Checked and Findings tabs can show", () 
     // `useful` shows no badge, so the help names it in prose only.
     label: findings.Assessment.properties.label.enum.filter((v) => v !== "useful"),
     impact: findings.Finding.properties.impact.anyOf.find((a) => a.enum).enum,
+    topic: findings.Finding.properties.topic.anyOf.find((a) => a.enum).enum,
   };
   for (const [name, values] of Object.entries(groups)) {
     assert.ok(values.length, name + " has values in the schema");
@@ -1068,6 +1069,113 @@ test("the GitHub and Slack buttons work only where the session can send", () => 
 test("a Slack share puts the note above the finding", () => {
   assert.equal(L.shareText("  Marco, this one  ", "### finding"), "Marco, this one\n\n### finding");
   assert.equal(L.shareText("", "### finding"), "### finding");
+});
+
+// --- deciding, badges and sharing on the Findings tab ---------------------------------
+
+const decidable = [
+  { id: "c1", severity: "HIGH", status: "confirmed", topic: "code", file: "a.py" },
+  { id: "c2", severity: "LOW", status: "confirmed", topic: "code", file: "a.py" },
+  { id: "r", severity: "MEDIUM", status: "refuted", topic: "code", file: "a.py" },
+  { id: "t", severity: "HIGH", status: "confirmed", topic: "tests", file: "t.py" },
+  { id: "g", severity: "HIGH", status: "rejected", file: "a.py" },
+];
+
+test("a decided finding keeps its code marker and Go to entry; a refuted one does not", () => {
+  const byId = Object.fromEntries(decidable.map((f) => [f.id, f]));
+  assert.equal(L.isHidden(byId.c1, { c1: { decision: "accept" } }), true, "it leaves the list");
+  assert.equal(L.isHiddenInCode(byId.c1), false, "but keeps its marker");
+  assert.equal(L.isHiddenInCode(byId.r), true);
+});
+
+test("Accept all takes only the shown findings that still need a decision, in list order", () => {
+  assert.deepEqual(L.pendingIds(decidable, {}), ["c1", "c2", "t"], "not the refuted or the gate-rejected one");
+  assert.deepEqual(L.pendingIds(decidable, { c2: { decision: "defer" } }), ["c1", "t"]);
+  const repeat = { id: "p", severity: "HIGH", status: "confirmed", assessment: { label: "repeat" } };
+  assert.deepEqual(L.pendingIds(decidable.concat([repeat]), {}), ["c1", "c2", "t"], "a repeat is never shown");
+});
+
+test("a decision opens the next finding that needs one, and none after the last", () => {
+  assert.equal(L.afterDecision(decidable, { c1: { decision: "accept" } }, "c1"), "c2");
+  assert.equal(L.afterDecision(decidable, { c2: { decision: "reject" } }, "c2"), "t", "across a section");
+  assert.equal(L.afterDecision(decidable, { t: { decision: "accept" } }, "t"), "c2", "after the last, the nearest one left before it");
+  const all = { c1: { decision: "accept" }, c2: { decision: "accept" }, t: { decision: "reject" } };
+  assert.equal(L.afterDecision(decidable, all, "t"), null, "nothing left: the finding page empties");
+  assert.equal(L.afterDecision(decidable, { c1: { decision: "accept" } }, "zz"), "c2", "an unknown id starts at the top");
+});
+
+test("an empty list says which findings critical mode left out and which the checks did", () => {
+  const critical = { mode: "critical", findings: [
+    { id: "a", severity: "HIGH", status: "confirmed", impact: "correctness-only" },
+    { id: "b", severity: "LOW", status: "confirmed", impact: "hygiene" },
+    { id: "c", severity: "LOW", status: "confirmed", impact: "hygiene" }] };
+  const text = L.emptyListText(critical);
+  assert.match(text, /of the review's 3 findings, 3 are not rated breaks-users or breaks-business/);
+  assert.doesNotMatch(text, /rejected by its checks/, "critical mode alone hid them");
+  const mixed = L.emptyListText({ mode: "critical", findings: critical.findings.concat([
+    { id: "g", severity: "HIGH", status: "rejected", impact: "breaks-users" }]) });
+  assert.match(mixed, /4 findings, 1 was rejected by its checks .*, and 3 are not rated/);
+  assert.match(L.emptyListText({ findings: [{ id: "g", status: "rejected" }] }),
+    /of the review's 1 finding, 1 was rejected by its checks or labelled low-value or repeat; findings.json keeps them/);
+});
+
+test("the list and the finding page show the impact badge, with the other badges in order", () => {
+  const f = { id: "x", severity: "HIGH", status: "confirmed", topic: "tests", impact: "correctness-only",
+    assessment: { label: "still-open" } };
+  const kinds = (bs) => bs.map((b) => b.kind + ":" + b.value);
+  assert.deepEqual(kinds(L.findingBadges(f, true)),
+    ["status:confirmed", "topic:tests", "impact:correctness-only", "label:still-open"]);
+  assert.deepEqual(kinds(L.findingBadges(f, false)),
+    ["severity:HIGH", "status:confirmed", "topic:tests", "impact:correctness-only", "label:still-open"]);
+  assert.equal(L.findingBadges(f, true)[0].cls, "HIGH", "the list colours the status by severity");
+  const old = L.findingBadges({ id: "y", severity: "LOW", status: "confirmed", file: "tests/test_a.py",
+    assessment: { label: "useful" } }, true);
+  assert.deepEqual(kinds(old), ["status:confirmed", "topic:tests"], "no impact, no useful label");
+  assert.equal(old[1].guessed, true);
+});
+
+test("the share request carries the destination the dialog picked", () => {
+  assert.deepEqual(L.shareRequest("s", "f1", "github", { choice: "line", text: "T" }),
+    { target: "s", finding_id: "f1", to: "github", where: "line", text: "T" });
+  assert.equal(L.shareRequest("s", "f1", "github", { choice: undefined, text: "T" }).where, "",
+    "no radio picked: no destination, so Send stays off");
+  assert.deepEqual(L.shareRequest("s", "f1", "slack", { to: "  #eng ", note: "Look", text: "T" }),
+    { target: "s", finding_id: "f1", to: "slack", where: "#eng", text: "Look\n\nT" });
+});
+
+// app.js is not loaded by any test (no DOM here), so these read its source to
+// hold the call sites to the tested helpers.
+const appJs = fs.readFileSync(path.join(STATIC, "app.js"), "utf8");
+
+test("app.js reads the unfiltered findings only to filter them or to say why the list is empty", () => {
+  const reads = [...appJs.matchAll(/state\.detail\.findings(?!\.(?:target|mode|run)\b)[^\n]*/g)].map((m) => m[0]);
+  assert.deepEqual(reads, ["state.detail.findings);", "state.detail.findings;"],
+    "every other list, count, marker, Go to entry and risk input must read state.shown");
+  assert.match(appJs, /state\.shownFile = L\.shownFile\(state\.detail\.findings\);/);
+  assert.match(appJs, /const ff = state\.detail\.findings;\n\s*box\.appendChild\(emptyState\("✓", \(ff\.findings\.length\n\s*\? L\.emptyListText\(ff\)/);
+  assert.doesNotMatch(appJs, /\.findings\.findings/);
+});
+
+test("app.js builds every finding badge, and the share request, through the tested helpers", () => {
+  assert.match(appJs, /function findingItem[\s\S]*?findingBadgeEls\(f, true\)/);
+  assert.match(appJs, /function renderDetail[\s\S]*?findingBadgeEls\(f, false\)/);
+  assert.doesNotMatch(appJs, /class: "badge impact/, "the impact badge comes from L.findingBadges");
+  assert.match(appJs, /name: "share-where"/);
+  assert.match(appJs, /input\[name=share-where\]:checked/);
+  assert.match(appJs, /const request = \(\) => L\.shareRequest\(state\.slug, f\.id, to, form\(\)\);/);
+  assert.match(appJs, /const body = request\(\);\n\s*try \{\n\s*const res = await api\("\/api\/share", body\)/);
+});
+
+test("a badge's tooltip comes from the help: every badge word has an entry in its Findings section", () => {
+  const findingsHelp = (helpHtml.match(/<section id="help-findings"[\s\S]*?<\/section>/) || [""])[0];
+  const words = new Set([...findingsHelp.matchAll(/<dt><code>([^<]+)<\/code><\/dt>/g)].map((m) => m[1]));
+  const findings = JSON.parse(fs.readFileSync(path.join(SCHEMA, "findings.v1.schema.json"), "utf8")).$defs;
+  for (const v of findings.Finding.properties.topic.anyOf.find((a) => a.enum).enum
+    .concat(findings.Finding.properties.impact.anyOf.find((a) => a.enum).enum, ["confirmed", "unverifiable", "refuted",
+      "repeat", "still-open", "low-value"])) {
+    assert.ok(words.has(v), "the Findings help has no <dt> for \"" + v + "\", so its badge has no tooltip");
+  }
+  assert.match(appJs, /document\.querySelectorAll\("#help-findings dt"\)/);
 });
 
 let failed = 0;

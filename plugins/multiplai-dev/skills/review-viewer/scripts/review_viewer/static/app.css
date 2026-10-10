@@ -520,7 +520,7 @@ pre.sketch {
 
 .section-h { font-size: var(--fs-sm); font-weight: 700; margin: var(--s5) 0 var(--s2); padding-bottom: var(--s1);
   border-bottom: 1px solid var(--border); }
-.finding-list .section-h:first-of-type { margin-top: 0; }
+.finding-list .finding-section:first-of-type > .section-h { margin-top: 0; }
 .sev-h { margin: var(--s4) 0 6px; }
 .sev-h.HIGH { color: var(--high); }
 .sev-h.MEDIUM { color: var(--medium); }
@@ -575,7 +575,24 @@ pre.sketch {
 .check-cite .quote { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--fs-sm) var(--mono); }
 .warn-mark { color: var(--medium); font-weight: 700; }
 .badge.assess { font-style: italic; }
-.finding-list .undecided { margin: 0 0 var(--s2); font-size: var(--fs-sm); }
+.finding-list .undecided { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin: 0 0 var(--s2); font-size: var(--fs-sm); }
+.finding-list .accept-all { margin-left: auto; }
+/* Each section folds; its summary is the section heading. */
+.finding-section > summary.section-h { cursor: pointer; list-style-position: inside; }
+.finding-section:not([open]) > summary.section-h { margin-bottom: 0; }
+/* Accept and Reject on a finding without opening it: on hover or keyboard focus. */
+.finding-row { position: relative; }
+.quick-actions { position: absolute; bottom: var(--s2); right: var(--s1); display: flex; gap: var(--s1);
+  opacity: 0; pointer-events: none; transition: opacity var(--t-fast) var(--ease); }
+.finding-row:hover .quick-actions, .finding-row:focus-within .quick-actions { opacity: 1; pointer-events: auto; }
+.quick-actions .ctl { min-width: var(--ctl-h-sm); padding: 0 6px; background: var(--bg); }
+.quick-actions .quick-accept:hover, .quick-actions .quick-accept[aria-pressed="true"] { color: var(--add-mark); border-color: var(--add-mark); }
+.quick-actions .quick-reject:hover, .quick-actions .quick-reject[aria-pressed="true"] { color: var(--del-mark); border-color: var(--del-mark); }
+@media (hover: none) { .quick-actions { opacity: 1; pointer-events: auto; } }
+/* Under the tabs once the list scrolls away: back to the list, and Prev/Next. */
+.finding-nav { display: flex; align-items: center; gap: var(--s2); padding: var(--s1) 0; border-bottom: 1px solid var(--border); }
+.finding-nav[hidden] { display: none; }
+.finding-nav #nav-pos { margin-left: auto; }
 .decide { margin-top: var(--s5); padding-top: var(--s3); border-top: 1px solid var(--border); }
 .decide .decision-note { width: 100%; height: var(--ctl-h); margin-top: var(--s2); }
 .decide-row { display: flex; gap: var(--s2); margin-top: var(--s2); }
@@ -806,7 +823,6 @@ pre:hover > .copy-btn, .copy-btn:focus-visible { opacity: 1; }
 .ac li.active { background: var(--hl-bg); box-shadow: inset 3px 0 var(--hl-bar); }
 .ac-name { font: 600 var(--fs-sm) var(--mono); }
 .ac-dir { font: var(--fs-xs) var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
-.code tr.add td.src, .code tr.del td.src, .code td.src.add, .code td.src.del { cursor: pointer; }
 
 /* --- dialogs: Go to, and ? ------------------------------------------------------------- */
 

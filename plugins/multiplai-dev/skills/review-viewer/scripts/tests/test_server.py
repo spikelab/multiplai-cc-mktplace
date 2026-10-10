@@ -706,3 +706,86 @@ def test_pr_number_is_read_from_the_review_state(tmp_path):
     assert pr_number_of({}, tmp_path) == 278
     (tmp_path / "review-state.json").write_text(json.dumps({"target": {"pr": None}}), encoding="utf-8")
     assert pr_number_of({}, tmp_path) is None
+
+
+# --- serve as the session runs it: the share flags and a gone repository ---------------------
+
+def _serve_process(*args, env_extra=None):
+    """`serve` in a subprocess, read up to its `pending:` line; returns the
+    process and the lines it printed."""
+    env = dict(os.environ, PYTHONUNBUFFERED="1", **(env_extra or {}))
+    proc = subprocess.Popen([PYTHON, "-m", "review_viewer", *args], stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True, env=env)
+    out = []
+    for line in proc.stdout:
+        out.append(line)
+        if line.startswith("pending:"):
+            break
+    return proc, out
+
+
+def _served_detail(box: Path, slug: str) -> dict:
+    import urllib.request
+    token = (box / "server.token").read_text().strip()
+    port = json.loads((box / "server.json").read_text())["port"]
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/targets/{slug}",
+                                 headers={"X-Review-Token": token})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return json.loads(r.read())
+
+
+def _stop_process(proc, box: Path) -> None:
+    from review_viewer import registry
+    try:
+        who = registry.existing(box)
+        if who:
+            registry.shutdown(who, (box / "server.token").read_text().strip())
+        proc.wait(10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+def test_serve_share_slack_reaches_the_page_and_restarts_a_viewer_without_it(start_live):
+    live = start_live(session_id="sess-A")
+    _, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert detail["share"]["slack"] is False
+    proc, out = _serve_process("--session-id", "sess-A", "serve", str(live.findings), "--idle", "0",
+                               "--share", "slack")
+    try:
+        assert "--share slack was asked for; restarted the viewer\n" in out
+        live.thread.join(5)
+        assert not live.thread.is_alive()
+        assert _served_detail(live.box, live.slug)["share"]["slack"] is True
+        # Asked again, with or without the flag, the viewer that offers Slack is reused.
+        for extra in (["--share", "slack"], []):
+            code, again = _serve_in_process("--session-id", "sess-A", "serve", str(live.findings), *extra)
+            assert code == 0 and "reusing" in again
+        assert _served_detail(live.box, live.slug)["share"]["slack"] is True
+    finally:
+        _stop_process(proc, live.box)
+
+
+def test_a_saved_review_of_a_pr_turns_the_github_share_on(findings_path, start_live):
+    (findings_path.parent / "review-state.json").write_text(json.dumps({"target": {"pr": 278}}),
+                                                             encoding="utf-8")
+    live = start_live()
+    _, detail = live.request("GET", f"/api/targets/{live.slug}")
+    assert detail["share"] == {"github": True, "pr": 278, "slack": False}
+    status, _ = live.request("POST", "/api/share", _share_body(live, to="github", where="pr"))
+    assert status == 200
+
+
+def test_serve_starts_when_the_reviewed_repository_is_gone(findings_path, tmp_path):
+    data = json.loads(findings_path.read_text())
+    data["target"]["repo_path"] = str(tmp_path / "deleted-worktree")
+    findings_path.write_text(json.dumps(data))
+    box = findings_path.parent / "viewer"
+    proc, out = _serve_process("--session-id", "sess-G", "serve", str(findings_path), "--idle", "0",
+                               env_extra={"WORKSPACE": str(tmp_path / "ws")})
+    try:
+        assert any(line.startswith("open: file://") for line in out), out
+        detail = _served_detail(box, data["target"]["slug"])
+        assert detail["repo_files"] == []
+    finally:
+        _stop_process(proc, box)
